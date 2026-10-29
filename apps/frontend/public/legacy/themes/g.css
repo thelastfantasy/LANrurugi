@@ -1359,3 +1359,47 @@ textarea {
 .share-perm-read { background-color: rgba(240, 165, 0, 0.18); border-color: rgba(240, 165, 0, 0.45); color: #B06E00; }
 .share-perm-import { background-color: rgba(155, 78, 3, 0.15); border-color: rgba(155, 78, 3, 0.45); color: #9B4E03; }
 .share-perm-download { background-color: rgba(92, 13, 17, 0.15); border-color: rgba(92, 13, 17, 0.45); color: #5C0D11; }
+
+/* Diagnostics (specs/018) severity, in this theme's own palette: the filter chips and the badge on
+   each issue row. Outline-only, so a selected chip stays readable against this theme's field
+   colour. `error` reuses this theme's danger accent, `warning` its amber, `info` its muted blue. */
+.diag-level-error {
+  color: #C0392B;
+  border-color: #C0392B;
+}
+
+.diag-level-warning {
+  color: #F0A500;
+  border-color: #F0A500;
+}
+
+.diag-level-info {
+  color: #4A5D8A;
+  border-color: #4A5D8A;
+}
+
+/* A settled issue's badge: resolved in this theme's green, ignored in its muted grey. The row's
+   title is struck through as well, so the state reads without relying on colour alone. */
+.diag-state-resolved {
+  color: #2E7D4F;
+  border-color: #2E7D4F;
+}
+
+.diag-state-ignored {
+  color: #806769;
+  border-color: #806769;
+}
+
+/* Level as a row tint rather than a badge: it reads at a glance and costs no horizontal space, which
+   is what the badge was squeezing out of the title. */
+.diag-issue-error {
+  background-color: rgba(192, 57, 43, 0.10);
+}
+
+.diag-issue-warning {
+  background-color: rgba(240, 165, 0, 0.13);
+}
+
+.diag-issue-info {
+  background-color: rgba(74, 93, 138, 0.10);
+}

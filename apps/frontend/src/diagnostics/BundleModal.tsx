@@ -4,16 +4,21 @@ import { useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { CheckboxField } from "@/components/common-ui/Form"
+import {
+  DateTimeField,
+  formatLocal,
+  parseLocal,
+} from "@/components/common-ui/Form/DateTimeField"
 import { toast } from "@/toast"
 
 import {
   type BundleSelection,
   type BundleText,
-  submitFeedback,
   useBundleText,
   useDownloadBundle,
   usePreviewBundle,
 } from "./api"
+import { useIssueSelection } from "./selection"
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -27,13 +32,17 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${units[unit]}`
 }
 
+/** The picker edits formatted text, so the state and the filter are both `YYYY-MM-DD HH:MM`. */
 function toLocalInput(millis: number): string {
-  const date = new Date(millis)
-  const pad = (value: number) => String(value).padStart(2, "0")
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
-    date.getHours(),
-  )}:${pad(date.getMinutes())}`
+  return formatLocal(new Date(millis))
 }
+
+/// Quick ranges, since the fields are typed now rather than picked from a calendar.
+const RANGE_PRESETS = [
+  { id: "hour", span: 3_600_000, labelKey: "diagnostics.bundle.lastHour" },
+  { id: "day", span: 86_400_000, labelKey: "diagnostics.bundle.lastDay" },
+  { id: "week", span: 604_800_000, labelKey: "diagnostics.bundle.lastWeek" },
+] as const
 
 export function BundleView() {
   const { t } = useTranslation()
@@ -51,27 +60,33 @@ export function BundleView() {
   const [language, setLanguage] = useState<"zh" | "en">("zh")
   const [title, setTitle] = useState<string | null>(null)
   const [rendered, setRendered] = useState<BundleText | null>(null)
-  const [submitting, setSubmitting] = useState(false)
-  const [submitNote, setSubmitNote] = useState<string | null>(null)
 
   const preview = usePreviewBundle()
   const text = useBundleText()
   const download = useDownloadBundle()
 
+  const picked = useIssueSelection((state) => state.selected)
+  // The fields are local time; the exported text and the server's own log lines are UTC. Saying so
+  // once here is cheaper than a user comparing 10:19 against 01:19 and assuming a bug.
+  const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  // `null` means "no explicit choice yet": arriving with a selection defaults the switch on, and
+  // an empty selection means there is nothing to restrict to.
+  const [onlyPicked, setOnlyPicked] = useState<boolean | null>(null)
+  const restrictToPicked = picked.size > 0 && (onlyPicked ?? true)
   const selection = useMemo<BundleSelection>(
     () => ({
-      from: new Date(from).getTime(),
-      to: new Date(to).getTime(),
+      from: parseLocal(from)?.getTime() ?? 0,
+      to: parseLocal(to)?.getTime() ?? 0,
       levels,
       sources: [],
-      issues: [],
+      issues: restrictToPicked ? [...picked] : [],
       include_ids: [],
       exclude_ids: [],
       categories,
       truncate,
       resolve_stacks: true,
     }),
-    [from, to, levels, categories, truncate],
+    [from, to, levels, categories, truncate, restrictToPicked, picked],
   )
 
   const onError = (error: unknown) =>
@@ -81,28 +96,6 @@ export function BundleView() {
     setLevels((current) =>
       current.includes(level) ? current.filter((value) => value !== level) : [...current, level],
     )
-
-  /// Sends the report to the configured tracker as a user report, so it appears on its feedback
-  /// page and on the matching issue. The server enforces the per-account daily allowance.
-  const submitReport = async () => {
-    setSubmitting(true)
-    setSubmitNote(null)
-    try {
-      const report = rendered ?? (await text.mutateAsync(selection))
-      const chosen = report[language] ?? report.zh
-      const result = await submitFeedback({
-        message: `${chosen.title}\n\n${chosen.body}`,
-      })
-      setSubmitNote(
-        t("diagnostics.bundle.submitted", { remaining: result.remaining_today }),
-      )
-    } catch (error) {
-      onError(error as Error)
-      setSubmitNote(String(error))
-    } finally {
-      setSubmitting(false)
-    }
-  }
 
   const generateText = () =>
     text.mutate(selection, {
@@ -125,32 +118,36 @@ export function BundleView() {
   return (
     <div className="diag-bundle">
       <div className="diag-inline">
-        <label className="diag-field">
-          <span>{t("diagnostics.bundle.from")}</span>
-          <input
-            className="stdinput"
-            type="datetime-local"
-            value={from}
-            onChange={(event) => setFrom(event.target.value)}
-          />
-        </label>
-        <label className="diag-field">
-          <span>{t("diagnostics.bundle.to")}</span>
-          <input
-            className="stdinput"
-            type="datetime-local"
-            value={to}
-            onChange={(event) => setTo(event.target.value)}
-          />
-        </label>
+        <DateTimeField
+          label={t("diagnostics.bundle.from")}
+          value={from}
+          onChange={setFrom}
+        />
+        <DateTimeField label={t("diagnostics.bundle.to")} value={to} onChange={setTo} />
       </div>
-
+      <p className="diag-note">{t("diagnostics.bundle.timezone", { zone: localZone })}</p>
+      <div className="diag-range-presets">
+        {RANGE_PRESETS.map((preset) => (
+          <button
+            key={preset.id}
+            type="button"
+            className="diag-chip"
+            onClick={() => {
+              const now = Date.now()
+              setFrom(toLocalInput(now - preset.span))
+              setTo(toLocalInput(now))
+            }}
+          >
+            {t(preset.labelKey)}
+          </button>
+        ))}
+      </div>
       <div className="diag-chips">
         {(["error", "warning", "info"] as const).map((level) => (
           <button
             key={level}
             type="button"
-            className={`diag-chip diag-chip-${level}${
+            className={`diag-chip diag-level-${level}${
               levels.includes(level) ? " is-on" : ""
             }`}
             onClick={() => toggleLevel(level)}
@@ -160,6 +157,13 @@ export function BundleView() {
         ))}
       </div>
 
+      {picked.size > 0 && (
+        <div className="diag-bundle-picked">
+          <CheckboxField checked={restrictToPicked} onCheckedChange={setOnlyPicked}>
+            {t("diagnostics.bundle.onlyPicked", { count: picked.size })}
+          </CheckboxField>
+        </div>
+      )}
       <div className="diag-inline diag-categories">
         <CheckboxField
           checked={categories.server_logs}
@@ -235,16 +239,7 @@ export function BundleView() {
         >
           {t("diagnostics.bundle.generateText")}
         </button>
-        <button
-          type="button"
-          className="stdbtn"
-          disabled={submitting || text.isPending}
-          onClick={submitReport}
-        >
-          {t("diagnostics.bundle.submit")}
-        </button>
       </div>
-      {submitNote && <p className="diag-note">{submitNote}</p>}
 
       {preview.data && (
         <div className="diag-preview">

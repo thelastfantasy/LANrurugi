@@ -878,16 +878,28 @@ async fn feedback(
         );
     };
     let user_id = feedback_user_id(&identity);
+    let requested = body.get("event_id").and_then(|value| value.as_str());
+    let event_id = match requested {
+        Some(id) => Some(id.to_string()),
+        None => forward::newest_forwarded(&state).await,
+    };
     match forward::submit_user_report(
         &state,
         &clean,
         body.get("email").and_then(|value| value.as_str()),
-        body.get("event_id").and_then(|value| value.as_str()),
+        event_id.as_deref(),
         Some(&user_id),
     )
     .await
     {
-        Ok(()) => Json(json!({ "sent": true, "remaining_today": remaining })).into_response(),
+        Ok(()) => {
+            report::reporter().capture(
+                lanrurugi_storage::diagnostics::Level::Info,
+                "feedback submitted",
+                report::Attrs::new().tag("source", "feedback"),
+            );
+            Json(json!({ "sent": true, "remaining_today": remaining })).into_response()
+        }
         Err(reason) => error(StatusCode::CONFLICT, "diagnostics_feedback", reason),
     }
 }
@@ -898,20 +910,46 @@ async fn get_window(State(state): State<AppState>) -> Response {
     Json(forward::window(&state).await.to_json()).into_response()
 }
 
+/// Recorded when the administrator opens a forwarding window: a deliberate action worth having in
+/// the history next to whatever it captures.
+fn note_window_closed() {
+    report::reporter().capture(
+        lanrurugi_storage::diagnostics::Level::Info,
+        "forwarding window closed",
+        report::Attrs::new(),
+    );
+}
+
+fn note_window_opened(seconds: i64) {
+    report::reporter().capture(
+        lanrurugi_storage::diagnostics::Level::Info,
+        "forwarding window opened",
+        report::Attrs::new().extra("duration_secs", seconds),
+    );
+}
+
 async fn post_window(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
     let duration = body
         .get("duration_secs")
         .and_then(|value| value.as_u64())
         .unwrap_or(0);
     match forward::open_window(&state, duration).await {
-        Ok(window) => Json(window.to_json()).into_response(),
+        Ok(window) => {
+            if window.open {
+                note_window_opened(duration as i64);
+            }
+            Json(window.to_json()).into_response()
+        }
         Err(message) => error(StatusCode::CONFLICT, "diagnostics_window", message),
     }
 }
 
 async fn delete_window(State(state): State<AppState>) -> Response {
     match forward::close_window(&state).await {
-        Ok(window) => Json(window.to_json()).into_response(),
+        Ok(window) => {
+            note_window_closed();
+            Json(window.to_json()).into_response()
+        }
         Err(message) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "diagnostics_window",

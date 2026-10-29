@@ -14,6 +14,9 @@ use crate::AppState;
 
 const COUNTERS: &str = "LANRURUGI_DIAGNOSTICS_FORWARD";
 const DEADLINE_FIELD: &str = "diagnostics_window_deadline";
+/// Ids of events the tracker actually accepted, newest last. A local event id is only usable by the
+/// tracker if that event was forwarded, so this is what a user report may reference.
+const FORWARDED: &str = "LANRURUGI_DIAGNOSTICS_FORWARDED";
 
 /// Allowed window lengths: five minutes, one hour, one day.
 pub const ALLOWED: &[u64] = &[300, 3_600, 86_400];
@@ -202,6 +205,24 @@ pub async fn forward_envelope(state: &AppState, body: &[u8]) {
         .await;
 }
 
+/// Records an event id the tracker accepted, so a later user report can point at a real event
+/// instead of the all-zero "unattached" id (which the tracker renders as a dead link).
+async fn remember_forwarded(state: &AppState, event_id: &str) {
+    let Ok(mut connection) = state.redis.config.get().await else {
+        return;
+    };
+    let _: Result<(), _> = connection.zadd(FORWARDED, event_id, now_ms()).await;
+    // Keep the tail short: only the newest id is ever read, and this must not grow without bound.
+    let _: Result<(), _> = connection.zremrangebyrank(FORWARDED, 0, -201).await;
+}
+
+/// The newest event id the tracker accepted, if any.
+pub async fn newest_forwarded(state: &AppState) -> Option<String> {
+    let mut connection = state.redis.config.get().await.ok()?;
+    let ids: Vec<String> = connection.zrevrange(FORWARDED, 0, 0).await.ok()?;
+    ids.into_iter().next()
+}
+
 /// Submits a user report (Sentry's "feedback") to the tracker: a note the administrator wrote,
 /// optionally tied to one event. Sent with this instance's own DSN, never from a browser.
 pub async fn submit_user_report(
@@ -340,7 +361,10 @@ pub async fn maybe_forward(state: &AppState, event: &DiagnosticEvent) {
         .send()
         .await;
     match result {
-        Ok(response) if response.status().is_success() => bump(state, "sent", None).await,
+        Ok(response) if response.status().is_success() => {
+            remember_forwarded(state, event.id.as_str()).await;
+            bump(state, "sent", None).await
+        }
         Ok(response) => {
             let status = response.status();
             bump(state, "failed", Some(&format!("tracker answered {status}"))).await

@@ -9,6 +9,7 @@ import { BundleView } from "./BundleModal"
 import { DiagnosticsPanel } from "./DiagnosticsPanel"
 import { FeedbackView } from "./FeedbackView"
 import { IssuesView } from "./IssuesModal"
+import { useIssueSelection } from "./selection"
 
 // Short, parallel nouns rather than "直接反馈"-style descriptions: the tab bar reads as one set.
 const TABS = [
@@ -23,9 +24,14 @@ type Tab = (typeof TABS)[number]["id"]
 export function DiagnosticsModal({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
   const [tab, setTab] = useState<Tab>("overview")
+  const clearSelection = useIssueSelection((state) => state.clear)
+  const close = () => {
+    clearSelection()
+    onClose()
+  }
 
   return (
-    <Modal onClose={onClose} width={620} textAlign="left">
+    <Modal onClose={close} width={620} textAlign="left">
       <h2 className="share-modal-title">{t("diagnostics.title")}</h2>
       <div className="diag-tabs" role="tablist">
         {TABS.map((entry) => (

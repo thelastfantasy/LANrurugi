@@ -72,7 +72,14 @@ export function Select<Value extends string>({
         aria-label={ariaLabel}
         style={{ display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 4, ...sizeStyle, ...style }}
       >
-        <BaseSelect.Value />
+        {/* Render the selected item's own label, not just its value text: a caller that puts a glyph
+            in `label` (the diagnostics state filter) otherwise loses it as soon as the popup closes. */}
+        <BaseSelect.Value>
+          {(value: Value | null) => {
+            const selected = items.find((item) => item.value === value)
+            return selected ? selected.label : String(value ?? "")
+          }}
+        </BaseSelect.Value>
         <BaseSelect.Icon>
           <FaCaretDown aria-hidden="true" />
         </BaseSelect.Icon>

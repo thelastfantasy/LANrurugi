@@ -3,6 +3,7 @@ import type { ReactNode } from "react"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
+import { DateTimeField } from "@/components/common-ui/Form/DateTimeField"
 import { useMenuPalette } from "@/hooks/useMenuPalette"
 import {
   buildDateRangeToken,
@@ -148,12 +149,6 @@ export function SearchPanel({
    * box-border is exactly `.stdbtn`'s own height, so the two sit level — plus a width, because
    * `.stdinput`'s own `width: 80%` would stretch across the row.
    */
-  const dateInputStyle: React.CSSProperties = {
-    height: 21,
-    boxSizing: "border-box",
-    width: 116,
-    minWidth: 0,
-  }
 
   return (
     <div style={{ padding: "2px 0 0" }}>
@@ -315,29 +310,27 @@ export function SearchPanel({
       >
         <SectionLabel>{t("library.searchPanelDateAdded")}</SectionLabel>
         <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 12px 8px" }}>
-        <input
-          type="date"
-          className="stdinput"
-          aria-label={t("library.searchPanelDateFrom") ?? undefined}
+        <DateTimeField
+          mode="date"
           value={from}
-          onChange={(event) => setFrom(event.target.value)}
-          style={dateInputStyle}
+          onChange={setFrom}
+          style={{ width: 116, minWidth: 0 }}
         />
         <span style={{ opacity: 0.6 }}>–</span>
-        <input
-          type="date"
-          className="stdinput"
-          aria-label={t("library.searchPanelDateTo") ?? undefined}
+        <DateTimeField
+          mode="date"
           value={to}
-          onChange={(event) => setTo(event.target.value)}
-          style={dateInputStyle}
+          onChange={setTo}
+          style={{ width: 116, minWidth: 0 }}
         />
         <button
           type="button"
           className="stdbtn"
           // Same fixed outer box as the date fields above (`.stdbtn` already *is* 21px tall with an
           // 8pt font, so this only makes the box model explicit on both sides of the row).
-          style={{ height: 21, boxSizing: "border-box" }}
+          // `.stdbtn` carries `margin: 4px 1px 0`; under the row's `align-items: center` that margin
+          // box is what gets centred, leaving the button 2px lower than the fields beside it.
+          style={{ height: 21, boxSizing: "border-box", margin: 0 }}
           disabled={buildDateRangeToken(from, to) === null}
           onClick={() => {
             const token = buildDateRangeToken(from, to)

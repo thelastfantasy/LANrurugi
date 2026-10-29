@@ -1,19 +1,30 @@
 /** The issue list (level/time/source filters, multi-select) and one issue's detail. */
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { CheckboxField } from "@/components/common-ui/Form"
+import { CheckboxField, Select } from "@/components/common-ui/Form"
 
 import {
   type IssueRow,
+  useBulkSetIssueState,
   useDiagnosticsOverview,
   useIssueDetail,
   useIssues,
   useSetIssueState,
 } from "./api"
+import { useIssueSelection } from "./selection"
 
 const LEVELS = ["error", "warning", "info"] as const
+
+/// The state filter's options, each with the same glyph the rows use, so the trigger reads like the
+/// list it controls.
+const STATE_OPTIONS = [
+  { value: "open", icon: "fa-circle-dot", labelKey: "diagnostics.issues.stateOpen" },
+  { value: "resolved", icon: "fa-circle-check", labelKey: "diagnostics.issues.stateResolved" },
+  { value: "ignored", icon: "fa-circle-minus", labelKey: "diagnostics.issues.stateIgnored" },
+  { value: "all", icon: "fa-layer-group", labelKey: "diagnostics.issues.stateAll" },
+] as const
 
 function formatStamp(millis: number): string {
   const date = new Date(millis)
@@ -30,13 +41,15 @@ export function IssuesView() {
   const [state, setState] = useState<"open" | "resolved" | "ignored" | "all">("open")
   const [query, setQuery] = useState("")
   const [sort, setSort] = useState<"recent" | "frequent">("recent")
-  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const selected = useIssueSelection((state) => state.selected)
+  const setMany = useIssueSelection((state) => state.setMany)
+  const toggleSelected = useIssueSelection((state) => state.toggle)
   const [open, setOpen] = useState<string | null>(null)
 
   const params = useMemo(() => {
     const search = new URLSearchParams()
     levels.forEach((level) => search.append("level", level))
-    if (state !== "all") search.set("state", state)
+    search.set("state", state)
     if (query.trim()) search.set("q", query.trim())
     search.set("sort", sort)
     search.set("limit", "100")
@@ -44,30 +57,46 @@ export function IssuesView() {
   }, [levels, state, query, sort])
 
   const issues = useIssues(params)
+  const bulkState = useBulkSetIssueState()
+  const retain = useIssueSelection((state) => state.retain)
+  const counts = useIssues(
+    useMemo(() => {
+      const search = new URLSearchParams()
+      search.set("state", state)
+      search.set("limit", "200")
+      return search
+    }, [state]),
+  )
+  const perLevel = useMemo(() => {
+    const tally: Record<string, number> = {}
+    for (const row of counts.data?.issues ?? []) {
+      tally[row.level] = (tally[row.level] ?? 0) + 1
+    }
+    return tally
+  }, [counts.data])
   const overview = useDiagnosticsOverview()
   const settings = (overview.data?.settings ?? null) as
     | { tracker_configured?: boolean; tracker_host?: string | null; tracker_project?: string | null }
     | null
   const setIssueState = useSetIssueState()
   const rows = issues.data?.issues ?? []
+  const visibleKey = rows.map((row) => row.fingerprint).join(",")
+  // Keep the selection inside what is actually listed; see `retain`.
+  useEffect(() => {
+    // Only once the new list has arrived: a filter change momentarily has no data, and pruning
+    // against that empty set wiped the selection entirely.
+    if (!issues.data) return
+    retain(issues.data.issues.map((row) => row.fingerprint))
+    // `visibleKey` is the stable identity of this list; `rows` itself is a fresh array each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleKey, retain])
 
   const toggleLevel = (level: string) =>
     setLevels((current) =>
       current.includes(level) ? current.filter((value) => value !== level) : [...current, level],
     )
 
-  const toggleRow = (fingerprint: string) =>
-    setSelected((current) => {
-      const next = new Set(current)
-      if (next.has(fingerprint)) next.delete(fingerprint)
-      else next.add(fingerprint)
-      return next
-    })
 
-  const onlyErrors = () => {
-    setLevels(["error"])
-    setSelected(new Set(rows.filter((row) => row.level === "error").map((row) => row.fingerprint)))
-  }
 
   return (
     <div className="diag-issues">
@@ -90,32 +119,50 @@ export function IssuesView() {
             <button
               key={level}
               type="button"
-              className={`diag-chip diag-chip-${level}${levels.includes(level) ? " is-on" : ""}`}
+              className={`diag-chip diag-level-${level}${levels.includes(level) ? " is-on" : ""}`}
               onClick={() => toggleLevel(level)}
             >
               {t(`diagnostics.level.${level}`)}
+              <span className="diag-chip-count">{perLevel[level] ?? 0}</span>
             </button>
           ))}
         </div>
         <div className="diag-filter-row">
-          <select
-            className="stdinput diag-select-state"
-            value={state}
-            onChange={(event) => setState(event.target.value as typeof state)}
-          >
-            <option value="open">{t("diagnostics.issues.stateOpen")}</option>
-            <option value="resolved">{t("diagnostics.issues.stateResolved")}</option>
-            <option value="ignored">{t("diagnostics.issues.stateIgnored")}</option>
-            <option value="all">{t("diagnostics.issues.stateAll")}</option>
-          </select>
-          <select
-            className="stdinput diag-select-sort"
-            value={sort}
-            onChange={(event) => setSort(event.target.value as typeof sort)}
-          >
-            <option value="recent">{t("diagnostics.issues.sortRecent")}</option>
-            <option value="frequent">{t("diagnostics.issues.sortFrequent")}</option>
-          </select>
+          <div className="diag-select-state">
+            <Select
+              value={state}
+              onValueChange={(next) => setState(next as typeof state)}
+              align="start"
+              variant="stdbtn"
+              style={{ width: "100%" }}
+              ariaLabel={t("diagnostics.issues.stateLabel")}
+              items={STATE_OPTIONS.map((option) => ({
+                value: option.value,
+                label: (
+                  <span className={`diag-state-choice diag-state-${option.value}`}>
+                    <i className={`fas ${option.icon}`} aria-hidden="true" />
+                    {t(option.labelKey)}
+                  </span>
+                ),
+              }))}
+            />
+          </div>
+          <div className="diag-select-sort">
+            <Select
+              value={sort}
+              onValueChange={(next) => setSort(next as typeof sort)}
+              align="start"
+              variant="stdbtn"
+              style={{ width: "100%" }}
+              ariaLabel={t("diagnostics.issues.sortLabel")}
+              items={[
+                { value: "recent", label: t("diagnostics.issues.sortRecent") },
+                { value: "frequent", label: t("diagnostics.issues.sortFrequent") },
+              ]}
+            />
+          </div>
+        </div>
+        <div className="diag-filter-row">
           <input
             className="stdinput diag-search"
             type="search"
@@ -127,23 +174,59 @@ export function IssuesView() {
       </div>
 
       <div className="diag-selection-bar">
-        <span className="diag-selection-count">
-          {t("diagnostics.issues.selected", {
-            count: selected.size,
-            total: rows.length,
-          })}
-        </span>
-        <div className="diag-selection-actions">
-        <button type="button" className="stdbtn" onClick={() => setSelected(new Set(rows.map((row) => row.fingerprint)))}>
-          {t("diagnostics.issues.selectAll")}
-        </button>
-        <button type="button" className="stdbtn" onClick={() => setSelected(new Set())}>
-          {t("diagnostics.issues.selectNone")}
-        </button>
-          <button type="button" className="stdbtn" onClick={onlyErrors}>
-            {t("diagnostics.issues.onlyErrors")}
-          </button>
-        </div>
+        <CheckboxField
+          checked={rows.length > 0 && selected.size === rows.length}
+          indeterminate={selected.size > 0 && selected.size < rows.length}
+          onCheckedChange={(checked) =>
+            setMany(
+              rows.map((row) => row.fingerprint),
+              checked,
+            )
+          }
+        >
+          <span className="diag-selection-count">
+            {t("diagnostics.issues.selected", {
+              count: selected.size,
+              total: rows.length,
+            })}
+          </span>
+        </CheckboxField>
+        {selected.size > 0 && (
+          <span className="diag-usage diag-bulk-hint">
+            {t("diagnostics.issues.selectionHint")}
+          </span>
+        )}
+        {selected.size > 0 && (
+          <div className="diag-bulk">
+            <button
+              type="button"
+              className="diag-state-btn"
+              title={t("diagnostics.issues.bulkResolve", { count: selected.size })}
+              aria-label={t("diagnostics.issues.bulkResolve", { count: selected.size })}
+              onClick={() => bulkState.mutate({ fingerprints: [...selected], state: "resolved" })}
+            >
+              <i className="fas fa-circle-check" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="diag-state-btn"
+              title={t("diagnostics.issues.bulkIgnore", { count: selected.size })}
+              aria-label={t("diagnostics.issues.bulkIgnore", { count: selected.size })}
+              onClick={() => bulkState.mutate({ fingerprints: [...selected], state: "ignored" })}
+            >
+              <i className="fas fa-circle-minus" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="diag-state-btn"
+              title={t("diagnostics.issues.bulkReopen", { count: selected.size })}
+              aria-label={t("diagnostics.issues.bulkReopen", { count: selected.size })}
+              onClick={() => bulkState.mutate({ fingerprints: [...selected], state: "open" })}
+            >
+              <i className="fas fa-rotate-left" aria-hidden="true" />
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="diag-issue-list">
@@ -152,7 +235,7 @@ export function IssuesView() {
             key={row.fingerprint}
             row={row}
             checked={selected.has(row.fingerprint)}
-            onToggle={() => toggleRow(row.fingerprint)}
+            onToggle={() => toggleSelected(row.fingerprint)}
             onOpen={() => setOpen(row.fingerprint === open ? null : row.fingerprint)}
             expanded={open === row.fingerprint}
             onResolve={(next) =>
@@ -187,18 +270,43 @@ function IssueLine({
   const detail = useIssueDetail(expanded ? row.fingerprint : null)
 
   return (
-    <div className={`diagnostics-issue diag-issue-${row.level}`}>
+    <div
+      className={`diagnostics-issue diag-issue-${row.level} diag-issue-state-${row.state}`}
+    >
       <div className="diag-issue-row">
         <CheckboxField checked={checked} onCheckedChange={onToggle}>
           <span className="diag-issue-title">{row.title}</span>
         </CheckboxField>
-        <span className={`diag-level diag-level-${row.level}`}>
-          {t(`diagnostics.level.${row.level}`)}
-        </span>
+        {row.state !== "open" && (
+          <span
+            className={`diag-state-icon diag-state-${row.state}`}
+            title={t(`diagnostics.issues.state.${row.state}`)}
+            aria-label={t(`diagnostics.issues.state.${row.state}`)}
+          >
+            <i
+              className={`fas ${
+                row.state === "resolved" ? "fa-circle-check" : "fa-circle-minus"
+              }`}
+              aria-hidden="true"
+            />
+          </span>
+        )}
         <span className="diag-issue-count">×{row.count}</span>
         <span className="diag-issue-time">{formatStamp(row.last_seen)}</span>
-        <button type="button" className="diag-issue-open stdbtn" onClick={onOpen}>
-          {expanded ? t("diagnostics.issues.hide") : t("diagnostics.issues.show")}
+        <button
+          type="button"
+          className="diag-expand"
+          aria-expanded={expanded}
+          aria-label={
+            expanded ? t("diagnostics.issues.hide") : t("diagnostics.issues.show")
+          }
+          title={expanded ? t("diagnostics.issues.hide") : t("diagnostics.issues.show")}
+          onClick={onOpen}
+        >
+          <i
+            className={`fas fa-chevron-${expanded ? "up" : "down"}`}
+            aria-hidden="true"
+          />
         </button>
       </div>
       {expanded && (
@@ -240,15 +348,35 @@ function IssueLine({
               ))}
             </details>
           )}
+          {/* Icon-only so the three fit on one row at phone width; the label stays as the tooltip
+              and the accessible name. */}
           <div className="diag-issue-actions">
-            <button type="button" className="stdbtn" onClick={() => onResolve("resolved")}>
-              {t("diagnostics.issues.resolve")}
+            <button
+              type="button"
+              className="diag-state-btn"
+              title={t("diagnostics.issues.resolve")}
+              aria-label={t("diagnostics.issues.resolve")}
+              onClick={() => onResolve("resolved")}
+            >
+              <i className="fas fa-circle-check" aria-hidden="true" />
             </button>
-            <button type="button" className="stdbtn" onClick={() => onResolve("ignored")}>
-              {t("diagnostics.issues.ignore")}
+            <button
+              type="button"
+              className="diag-state-btn"
+              title={t("diagnostics.issues.ignore")}
+              aria-label={t("diagnostics.issues.ignore")}
+              onClick={() => onResolve("ignored")}
+            >
+              <i className="fas fa-eye-slash" aria-hidden="true" />
             </button>
-            <button type="button" className="stdbtn" onClick={() => onResolve("open")}>
-              {t("diagnostics.issues.reopen")}
+            <button
+              type="button"
+              className="diag-state-btn"
+              title={t("diagnostics.issues.reopen")}
+              aria-label={t("diagnostics.issues.reopen")}
+              onClick={() => onResolve("open")}
+            >
+              <i className="fas fa-rotate-left" aria-hidden="true" />
             </button>
           </div>
         </div>

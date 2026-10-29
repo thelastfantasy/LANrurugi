@@ -184,7 +184,8 @@
 }
 
 .diag-chip {
-  border: 1px solid rgba(128, 128, 128, 0.5);
+  /* `diag-level-*` (per theme) supplies the colour; this only supplies the shape. */
+  border: 1px solid currentColor;
   border-radius: 999px;
   background: transparent;
   padding: 2px 10px;
@@ -195,8 +196,11 @@
 
 .diag-chip.is-on {
   opacity: 1;
-  border-width: 2px;
   font-weight: bold;
+  /* `outline` instead of a thicker border: changing border-width re-lays the box out and pushes the
+     label down by the extra pixels, which is exactly the "text sinks when focused" look. */
+  outline: 2px solid currentColor;
+  outline-offset: -3px;
 }
 
 .diag-selection-bar {
@@ -239,10 +243,48 @@
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
+  /* Rows were stacked flush: the 26px chevron filled its row exactly, so the buttons (and the
+     level badges) of neighbouring issues touched. Padding plus a hairline separates them. */
+  padding: 6px 0;
+}
+
+.diagnostics-issue + .diagnostics-issue {
+  border-top: 1px solid rgba(128, 128, 128, 0.28);
 }
 
 .diag-issue-title {
   font-weight: bold;
+}
+
+/* The row's disclosure control: a small chevron at the end of the line, not a full-width button on
+   a line of its own. `margin-left: auto` pushes it right regardless of how the meta items wrap. */
+/* A bare chevron: every other control in the row already has a frame, and a boxed arrow next to a
+   boxed checkbox read as two checkboxes. The 26px box is kept as the hit area, not as chrome. */
+.diag-expand {
+  margin-left: auto;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.95em;
+  opacity: 0.7;
+}
+
+/* No outline on any state: Firefox on Android keeps `:focus-visible` (and `:hover`) after a tap, so
+   the box reappeared right after expanding. A faint tint marks hover/focus instead, which cannot be
+   mistaken for a second checkbox. */
+.diag-expand:hover,
+.diag-expand:focus,
+.diag-expand:focus-visible {
+  opacity: 1;
+  background-color: rgba(128, 128, 128, 0.16);
+  outline: none;
 }
 
 .diag-issue-count,
@@ -255,19 +297,11 @@
   white-space: nowrap;
 }
 
-.diag-level {
-  font-size: 0.8em;
-  padding: 1px 6px;
-  border-radius: 3px;
-  border: 1px solid currentColor;
-}
-
-.diag-issue-open {
-  margin-left: auto;
-}
-
 .diag-issue-detail {
+  /* Bottom padding keeps the action row clear of the next issue's separator; without it the three
+     buttons sat flush against that hairline and read as one joined block. */
   margin: 8px 0 0 24px;
+  padding-bottom: 12px;
 }
 
 .diag-event + .diag-event {
@@ -385,6 +419,33 @@
   margin: 14px 0 10px;
 }
 
+/* The two date fields side by side even on a phone: they share the row (`flex-basis: 0`) instead of
+   each demanding 220px, and the value is a fixed-width `YYYY/MM/DD HH:MM`, so a slightly smaller
+   font keeps every digit visible rather than truncating it. */
+.diag-bundle .diag-inline {
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+
+.diag-bundle .diag-field {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.diag-bundle .diag-field > input {
+  width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .diag-bundle .diag-field > input {
+    /* Still legible (the dialog's own scale is small) while leaving room for `YYYY/MM/DD HH:MM`. */
+    font-size: 0.9em;
+    padding-left: 4px;
+    padding-right: 2px;
+  }
+}
+
 .diag-bundle .diag-inline {
   margin-top: 12px;
 }
@@ -461,9 +522,27 @@
   min-width: 96px;
 }
 
+/* Four short labels fit one row on a phone if they share the width instead of each claiming 96px:
+   4 × 96 + gaps is wider than the dialog's inner width at 390px. */
+@media (max-width: 640px) {
+  .diag-tabs {
+    gap: 6px;
+    flex-wrap: nowrap;
+  }
+
+  .diag-tab {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 2px 4px;
+    font-size: 0.9em;
+    white-space: nowrap;
+  }
+}
+
 .diag-tab.is-on {
   font-weight: bold;
-  border-width: 3px;
+  outline: 2px solid currentColor;
+  outline-offset: -3px;
 }
 
 .diag-tab-body {
@@ -493,8 +572,9 @@
 }
 
 .diag-search {
-  flex: 1 1 240px;
+  flex: 1 1 auto;
   min-width: 0;
+  width: 100%;
 }
 
 .diag-selection-bar {
@@ -507,11 +587,188 @@
 }
 
 /* The two selects keep a readable width; the search box takes what is left. */
-/* Side by side, half the row each, with the search box taking the full row under them. */
+/* Side by side, half the row each, with the search box taking the full row under them. A fixed
+   160px basis is wider than the dialog's inner width on a phone, which is what wrapped them. */
 .diag-select-state,
 .diag-select-sort {
-  flex: 1 1 160px;
-  min-width: 140px;
+  flex: 1 1 0;
+  min-width: 0;
   max-width: none;
   width: auto;
 }
+
+/* The count makes an empty level obvious: "0" is a fact, a blank list is a question. */
+.diag-chip-count {
+  margin-left: 5px;
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+.diag-chip-count:empty {
+  display: none;
+}
+
+/* On a phone the title is what wraps, pushing the timestamp and the chevron onto a second line.
+   Letting the title shrink and ellipsis instead keeps one compact line per issue; the full title is
+   in the expanded detail. */
+@media (max-width: 640px) {
+  /* The title takes whatever is left; the badge, count and chevron keep their natural width. With
+     `flex: 1 1 auto` the title only gave up its proportional share, so the widest row still wrapped. */
+  .diag-issue-row > label {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .diag-issue-row > .diag-level,
+  .diag-issue-row > .diag-issue-count,
+  .diag-issue-row > .diag-expand {
+    flex: 0 0 auto;
+  }
+
+  /* The title is a flex item inside the checkbox label: it needs its own `flex` and `min-width: 0`
+     to ellipsis, otherwise it draws over the level badge next to it. */
+  .diag-issue-title {
+    display: block;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .diag-issue-row > label {
+    overflow: hidden;
+  }
+
+  /* `CheckboxField` wraps its children in a plain span, and that span is the flex item — styling
+     only `.diag-issue-title` left the wrapper at its content width, so the text painted over the
+     badge. Both levels need to be shrinkable. */
+  .diag-issue-row > label > span:last-child {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .diag-issue-row {
+    gap: 6px;
+  }
+
+  /* The row keeps title + level + count + chevron on one line; the exact timestamp (down to the
+     second) is in the expanded detail, so it does not need a line of its own here. */
+  .diag-issue-time {
+    display: none;
+  }
+}
+
+/* The three state actions, icon-only, on one row: three labelled buttons stacked to three lines at
+   phone width, and the labels are preserved as tooltips + accessible names. */
+.diag-issue-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.diag-state-btn {
+  width: 30px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.diag-state-btn:hover,
+.diag-state-btn:focus-visible {
+  opacity: 1;
+  background-color: rgba(128, 128, 128, 0.16);
+}
+
+/* Settled state as a solid circular glyph: the text badge cost ~46px of title width to say what a
+   check or a dash says instantly. Colour comes from the theme (`diag-state-*`). */
+.diag-state-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.95em;
+  opacity: 0.9;
+}
+
+.diag-issue-state-resolved .diag-issue-title,
+.diag-issue-state-ignored .diag-issue-title {
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+/* A tinted row needs its own inner padding so the colour does not touch the title text. */
+.diagnostics-issue {
+  border-radius: 3px;
+  padding: 0 6px;
+}
+
+/* The state filter's own options: the same glyphs the rows show, so the trigger and the list agree. */
+.diag-state-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.diag-state-open {
+  color: inherit;
+}
+
+.diag-select-state {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* Both dropdowns are the shared Select now, so they share this width rule instead of one being a
+   native `stdinput` and the other a `stdbtn`-styled button. */
+.diag-select-sort {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* The bundle tab's five checkboxes: a wrapping flex row on desktop, two columns on a phone. As a
+   plain `diag-inline` they tried to share one line and every label broke mid-word. */
+.diag-categories {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  align-items: center;
+  gap: 6px 12px;
+}
+
+@media (max-width: 640px) {
+  .diag-categories {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Batch actions sit at the right of the selection row: the header checkbox selects, these apply. */
+.diag-bulk {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.diag-bundle-picked {
+  margin: 10px 0 4px;
+}
+
+.diag-bulk-hint {
+  margin: 0 0 0 8px;
+  font-size: 0.8em;
+  opacity: 0.75;
+}
+
+/* Quick ranges above the level chips: with typed fields there is no calendar to click. */
+.diag-range-presets {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 12px 0 10px;
+}
+

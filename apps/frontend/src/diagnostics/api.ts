@@ -156,6 +156,33 @@ export function useSaveDiagnosticsSettings() {
   })
 }
 
+/** Applies one state to every ticked issue; the list endpoint has no bulk form, and a handful of
+ * requests is simpler than a second contract. */
+export function useBulkSetIssueState() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({
+      fingerprints,
+      state,
+    }: {
+      fingerprints: string[]
+      state: IssueRow["state"]
+    }) => {
+      await Promise.all(
+        fingerprints.map((fingerprint) =>
+          sendJson<{ issue: IssueRow }>(
+            "POST",
+            `/diagnostics/issues/${encodeURIComponent(fingerprint)}/state`,
+            { state },
+          ),
+        ),
+      )
+      return fingerprints.length
+    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["diagnostics"] }),
+  })
+}
+
 export function useIssues(params: URLSearchParams) {
   return useQuery({
     queryKey: ["diagnostics", "issues", params.toString()],

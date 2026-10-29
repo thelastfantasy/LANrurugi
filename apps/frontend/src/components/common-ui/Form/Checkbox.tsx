@@ -1,6 +1,6 @@
 import { Checkbox as BaseCheckbox } from "@base-ui/react/checkbox";
 import type { ComponentProps, ReactNode } from "react";
-import { FaCheck } from "react-icons/fa6";
+import { FaCheck, FaMinus } from "react-icons/fa6";
 
 /** Site-wide checkbox, built on Base UI's `Checkbox` — a small square box with a `FaCheck`
  * checkmark, unlike `Switch.tsx`'s icon-toggle. `common-form-control-bg` avoids a transparent box. */
@@ -57,6 +57,7 @@ export function CheckboxField({
   checked,
   onCheckedChange,
   disabled,
+  indeterminate = false,
   size = "inherit",
   fill = false,
   children,
@@ -65,6 +66,8 @@ export function CheckboxField({
   checked: boolean
   onCheckedChange: (checked: boolean) => void
   disabled?: boolean
+  /** "Some, not all": renders a dash instead of a tick, the standard partial-selection state. */
+  indeterminate?: boolean
   size?: FieldSize
   /** Take the parent's full width and let the label shrink, so a long label can truncate instead
    * of overflowing whatever sits beside the field. */
@@ -79,6 +82,7 @@ export function CheckboxField({
     >
       <BaseCheckbox.Root
         checked={checked}
+        indeterminate={indeterminate}
         onCheckedChange={onCheckedChange}
         disabled={disabled}
         className="common-form-control-bg inline-flex size-[13px] shrink-0 items-center justify-center border border-solid border-current p-0 outline-none data-checked:border-[#1a73e8] data-checked:bg-[#1a73e8] data-checked:text-white"
@@ -86,7 +90,7 @@ export function CheckboxField({
         {...rootProps}
       >
         <BaseCheckbox.Indicator className="flex items-center justify-center text-[11px] leading-none" keepMounted={false}>
-          <FaCheck aria-hidden="true" />
+          {indeterminate ? <FaMinus aria-hidden="true" /> : <FaCheck aria-hidden="true" />}
         </BaseCheckbox.Indicator>
       </BaseCheckbox.Root>
       {/* A bare text node participating directly in this `<label>`'s `inline-flex` doesn't get a

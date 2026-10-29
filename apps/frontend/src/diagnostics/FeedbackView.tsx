@@ -11,12 +11,17 @@ export function FeedbackView() {
   const [message, setMessage] = useState("")
   const [sending, setSending] = useState(false)
   const [note, setNote] = useState<string | null>(null)
+  // Attach the newest open issue's event, so the note points at something concrete instead of
+  // floating unattached (the tracker shows a broken "related error" link for a zero event id).
+
 
   /// The server owns the limits: per-account daily allowance, burst window and duplicate check.
   const send = async () => {
     setSending(true)
     setNote(null)
     try {
+      // The server attaches the newest event the tracker actually accepted, if any — a local id is
+      // only meaningful there once it was forwarded.
       const result = await submitFeedback({ message })
       setMessage("")
       setNote(t("diagnostics.feedback.sent", { remaining: result.remaining_today }))

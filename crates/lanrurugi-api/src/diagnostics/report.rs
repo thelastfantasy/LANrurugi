@@ -64,6 +64,27 @@ pub trait Reporter: Send + Sync {
     fn cron(&self, slug: &str) -> CronRun;
 }
 
+/// Decides whether a log event becomes a diagnostics event.
+///
+/// ERROR from anywhere except this module (a storage failure while handling an event must never
+/// produce another event — that is how a Redis hiccup becomes an infinite loop). WARNING only from
+/// this project's own crates, minus the ones that warn about things that are not defects: the
+/// update check answers 404 whenever no release exists yet, and iroh's network probes time out on
+/// perfectly healthy networks.
+pub fn capture_log_event(level: &str, target: &str) -> bool {
+    match level {
+        "ERROR" => !target.starts_with("lanrurugi_api::diagnostics"),
+        "WARN" => {
+            target.starts_with("lanrurugi_")
+                && !target.starts_with("lanrurugi_api::version")
+                && !target.starts_with("lanrurugi_api::diagnostics")
+                && !target.contains("net_report")
+                && !target.contains("iroh")
+        }
+        _ => false,
+    }
+}
+
 /// Reports through the in-process SDK transport.
 pub struct SentryReporter;
 
@@ -247,6 +268,22 @@ mod tests {
         // No panic, no global state: a settled run must not report on drop.
         Silent.cron("no-such-monitor").ok();
         Silent.capture(Level::Error, "ignored", Attrs::new());
+    }
+
+    #[test]
+    fn warnings_from_noisy_targets_are_ignored() {
+        assert!(capture_log_event("WARN", "lanrurugi_scanner::full_scan"));
+        assert!(capture_log_event("ERROR", "lanrurugi_api::plugins"));
+        // A storage failure while handling an event must never become another event.
+        assert!(!capture_log_event(
+            "ERROR",
+            "lanrurugi_api::diagnostics::mod"
+        ));
+        assert!(!capture_log_event("WARN", "lanrurugi_api::version"));
+        // Every startup with no release published answers 404; not a defect.
+        assert!(!capture_log_event("WARN", "iroh::socket::net_report"));
+        assert!(!capture_log_event("INFO", "lanrurugi_api::plugins"));
+        assert!(!capture_log_event("WARN", "hyper::proto"));
     }
 
     #[test]

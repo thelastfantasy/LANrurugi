@@ -1,0 +1,290 @@
+/** `DateTimeField`'s own styles: a field-shaped trigger plus the calendar popover it opens.
+ *
+ * Every colour derives from `currentColor`, so it fits all five themes without a per-theme rule —
+ * that is what lets this live in `common-ui` instead of one feature's stylesheet. */
+
+/* The date fields: a button that looks like a field (it opens the calendar below, it does not take
+   typing), and the calendar panel it toggles. */
+/* The wrapper carries its own label layout now that the control lives in `common-ui`: it used to
+   rely on the diagnostics panel's `.diag-field`. */
+.lrrg-datetime-field {
+  /* `min-width: 0` + no fixed height: the control aligns with sibling buttons by the row's own
+     `align-items`, not by a wrapper of its own. */
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: 0.9em;
+}
+
+.lrrg-datetime-field > span {
+  opacity: 0.8;
+}
+
+/* Placeholder styling: an untouched field still reads as a field, not as an empty box. */
+.lrrg-datetime-value {
+  flex: 1 1 auto;
+  /* The right-hand slot is the icon; the value keeps the left one and truncates rather than
+     pushing the icon off the end. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.lrrg-datetime-trigger:has(.lrrg-datetime-value:empty) .lrrg-datetime-value,
+.lrrg-datetime-trigger[data-empty="true"] .lrrg-datetime-value {
+  opacity: 0.6;
+}
+
+/* The trigger keeps `.stdinput` for the theme's own field background and border colour (every
+   theme defines those on that class), and this compound selector — one step more specific — takes
+   over the box model that made it collapse. */
+.lrrg-datetime-trigger.stdinput {
+  margin: 0;
+  max-width: none;
+  /* Font size stays `.stdinput`'s own (8pt), so this matches every other field on the page — the
+     wrapper's 0.9em is for its label, not for the control. */
+  border-radius: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  height: 21px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lrrg-datetime {
+  padding: 10px 12px;
+  /* Never wider than the viewport allows, or the seven day columns spill off a phone. */
+  width: min(304px, calc(100vw - 16px));
+  box-sizing: border-box;
+  /* legacy's `body { text-align: center }` bled in, which read as "the content sits right". */
+  text-align: left;
+  font-size: 0.9em;
+}
+
+/* `react-day-picker` is headless, so every colour here derives from `currentColor`: the selected
+   day is an outline rather than a filled pill, which is the one treatment that stays legible on a
+   dark theme (g), a light one (ex/modern) and the two coloured ones without a second palette. */
+.lrrg-datetime-body {
+  /* No width or padding of its own: the popover (`lrrg-datetime`) supplies both. */
+  width: 100%;
+  min-width: 0;
+}
+
+.lrrg-datetime .rdp-root {
+  padding: 0;
+  --rdp-accent-color: currentColor;
+  --rdp-accent-background-color: transparent;
+  --rdp-day-width: 1.9em;
+  --rdp-day-height: 1.9em;
+  --rdp-day_button-border-radius: 3px;
+  --rdp-nav_button-width: 1.8em;
+  --rdp-nav_button-height: 1.8em;
+  color: inherit;
+  margin: 0;
+  width: 100%;
+}
+
+.lrrg-datetime .rdp-months,
+.lrrg-datetime .rdp-month {
+  margin: 0;
+  width: 100%;
+}
+
+.lrrg-datetime .rdp-month_caption {
+  justify-content: flex-start;
+  font-weight: bold;
+  /* Room for the absolutely positioned nav, or it overlaps the month dropdown. */
+  padding: 0 44px 6px 0;
+  position: relative;
+}
+
+/* Keep v10's own absolute placement: as a static flex item the nav wrapped onto a row of its own,
+   which left the arrows stranded above the month/year dropdowns. */
+.lrrg-datetime-nav {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  gap: 4px;
+  /* The calendar itself is `position: relative` and comes later in the DOM, so without this it
+     paints — and hit-tests — above these buttons, which is why clicking them did nothing. */
+  z-index: 2;
+  display: flex;
+  gap: 2px;
+}
+
+.lrrg-datetime-nav button {
+  /* The glyph stays at its own size; only the touch target grows. `::after` extends the hit area
+     past the visual box, so the arrows look unchanged but are easy to hit on a phone. */
+  position: relative;
+  width: 30px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.lrrg-datetime-nav button::after {
+  content: "";
+  position: absolute;
+  /* 8px of extra target on every side: 46x42, above the 44px recommended minimum on one axis. */
+  inset: -8px;
+}
+
+.lrrg-datetime-nav button:hover {
+  background-color: rgba(128, 128, 128, 0.18);
+}
+
+/* A month change slides in from the side the gesture came from, which is what makes a swipe read as
+   a real page turn rather than a repaint. */
+.lrrg-datetime-month {
+  overflow: hidden;
+  /* A transform/animation here creates a stacking context; keeping the wrapper at `z-index: 0`
+     means the absolutely positioned nav (z-index 2, earlier sibling) still wins. */
+  position: relative;
+  z-index: 0;
+}
+
+.lrrg-slide-next {
+  animation: lrrg-slide-from-right 180ms ease-out;
+}
+
+.lrrg-slide-prev {
+  animation: lrrg-slide-from-left 180ms ease-out;
+}
+
+@keyframes lrrg-slide-from-right {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes lrrg-slide-from-left {
+  from {
+    opacity: 0;
+    transform: translateX(-18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.lrrg-datetime .rdp-month_grid {
+  /* Seven columns must fit the panel; `fixed` keeps a long day number from widening one. */
+  width: 100%;
+  max-width: 100%;
+  table-layout: fixed;
+}
+
+.lrrg-datetime .rdp-weekday {
+  opacity: 0.7;
+  font-weight: normal;
+}
+
+.lrrg-datetime .rdp-day_button:hover {
+  background-color: rgba(128, 128, 128, 0.2);
+}
+
+.lrrg-datetime .rdp-selected .rdp-day_button {
+  border: 2px solid currentColor;
+  font-weight: bold;
+}
+
+.lrrg-datetime .rdp-outside .rdp-day_button {
+  opacity: 0.45;
+}
+
+.lrrg-datetime .rdp-today .rdp-day_button {
+  text-decoration: underline;
+}
+
+.lrrg-datetime .rdp-chevron {
+  fill: currentColor;
+}
+
+/* The time row: one height for the inputs and the button, or they sit at three different baselines. */
+.lrrg-datetime-time {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.lrrg-datetime-time > input,
+.lrrg-datetime-time > .stdbtn {
+  height: 26px;
+  box-sizing: border-box;
+}
+
+/* The label was the smallest text in the popover; it should read as a field label. */
+.lrrg-datetime-time-label {
+  font-size: 1.2em;
+  opacity: 0.9;
+}
+
+/* "Now" as an icon: it is a shortcut, not a primary action, and the label cost more width than the
+   two time inputs had to spare. The text survives as the tooltip and accessible name. */
+.lrrg-datetime-now {
+  width: 30px;
+  min-width: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lrrg-datetime-part {
+  flex: 0 0 52px;
+  width: 52px;
+  text-align: center;
+  padding: 0 4px;
+}
+
+.lrrg-datetime-time > .stdbtn {
+  /* `.stdbtn` is `width: 100%` for form rows; here it should hug its label. */
+  flex: 0 0 auto;
+  width: auto;
+  /* `.stdbtn` also carries `min-width: 150px`, which is what kept it wide. */
+  min-width: 0;
+  padding: 0 10px;
+  margin-left: auto;
+}
+
+/* The calendar's own buttons (prev/next, days) must not paint the UA focus ring in the browser's
+   blue — that is the one colour on this control that would not follow the theme. */
+.lrrg-datetime button:focus {
+  outline: none;
+}
+
+.lrrg-datetime button:focus-visible {
+  outline: 1px solid currentColor;
+  outline-offset: 1px;
+}
+
+/* Invisible while open: it only exists to swallow the tap that would otherwise hit the page. */
+.lrrg-datetime-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9499;
+  background: transparent;
+}

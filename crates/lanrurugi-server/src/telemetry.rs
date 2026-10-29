@@ -45,8 +45,18 @@ pub fn init(log_dir: Option<&Path>) {
 
     // Error-level log events also become diagnostics events (specs/018): plugin failures and
     // background-job errors are logged, not raised, so this is the only way they reach the store.
-    let capture_layer =
-        sentry_tracing::layer().with_filter(tracing_subscriber::filter::LevelFilter::ERROR);
+    let capture_layer = sentry_tracing::layer()
+        .event_filter(|metadata| {
+            if lanrurugi_api::diagnostics::report::capture_log_event(
+                metadata.level().as_str(),
+                metadata.target(),
+            ) {
+                sentry_tracing::EventFilter::Event
+            } else {
+                sentry_tracing::EventFilter::Ignore
+            }
+        })
+        .with_filter(tracing_subscriber::filter::LevelFilter::WARN);
 
     let registry = tracing_subscriber::registry()
         .with(stderr_layer)
