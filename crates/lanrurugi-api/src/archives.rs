@@ -121,6 +121,38 @@ fn is_valid_archive_id(id: &str) -> bool {
     id.len() == ARCHIVE_ID_LEN && id.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// The same 40-hex id, rebuilt from its parsed bytes — `None` for anything that is not a real id.
+///
+/// Handlers that join an id into a filesystem path use this rather than validating the request
+/// string and then using it: the value that reaches `Path::join` is constructed here from the
+/// digits themselves, so it cannot carry a separator or `..` even if the validation above were
+/// ever weakened. (`rust/path-injection` cannot see through a custom guard function, so using the
+/// rebuilt value is also what makes that query see an untainted path instead of a false positive.)
+fn canonical_archive_id(id: &str) -> Option<String> {
+    if !is_valid_archive_id(id) {
+        return None;
+    }
+    fn nibble(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+    let raw = id.as_bytes();
+    let mut bytes = [0u8; ARCHIVE_ID_LEN / 2];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = (nibble(raw[index * 2])? << 4) | nibble(raw[index * 2 + 1])?;
+    }
+    let mut canonical = String::with_capacity(ARCHIVE_ID_LEN);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(canonical, "{byte:02x}");
+    }
+    Some(canonical)
+}
+
 #[derive(Debug, Serialize)]
 pub struct ArchiveMetadataJson {
     pub arcid: String,
@@ -3916,13 +3948,14 @@ async fn generate_page_thumbnails(
         }
     };
 
-    // `ArchiveId` validates nothing, and the id below is joined into `thumb_dir` — reject anything
-    // that is not a real 40-hex id before it reaches the filesystem.
-    if !is_valid_archive_id(id.as_str()) {
+    // `ArchiveId` validates nothing, and the id below is joined into `thumb_dir` — derive the
+    // path from the rebuilt 40-hex form (see `canonical_archive_id`), never from the request
+    // string, so nothing that could carry a separator reaches the filesystem.
+    let Some(canonical_id) = canonical_archive_id(id.as_str()) else {
         return not_found("generate_page_thumbnails", "Archive not found.");
-    }
+    };
 
-    let shard = &id[0..2];
+    let shard = &canonical_id[0..2];
     // Every missing page's thumbnail is generated in one batch, spread across the shared capped
     // rayon pool, instead of one page at a time each paying its own `spawn_blocking` round-trip
     // (constitution Principle III). The archive is read in a handful of forward passes rather than
@@ -3936,7 +3969,7 @@ async fn generate_page_thumbnails(
                 .library
                 .thumb_dir
                 .join(shard)
-                .join(id.as_str())
+                .join(canonical_id.as_str())
                 .join(format!("{}.{}", i + 1, thumb_settings.format.extension()));
             (!output.exists()).then(|| lanrurugi_scanner::thumbnail::PageThumbnailJob {
                 page: i + 1,
@@ -4147,6 +4180,27 @@ async fn get_page_thumbnails(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_archive_id_rebuilds_the_digits_and_rejects_anything_else() {
+        let id = "da39a3ee5e6b4b0d3255bfef95601890afd80709";
+        assert_eq!(canonical_archive_id(id).as_deref(), Some(id));
+
+        // Uppercase input is normalised: every stored id is produced by our own lowercase hex
+        // encoder, so the canonical form is also the one that already exists on disk.
+        assert_eq!(
+            canonical_archive_id("DA39A3EE5E6B4B0D3255BFEF95601890AFD80709").as_deref(),
+            Some(id)
+        );
+
+        // The value handed to a path join is built from parsed bytes, so nothing that could
+        // traverse (`/`, `..`, a NUL) can survive even as input.
+        assert_eq!(canonical_archive_id("../../../../etc/passwd"), None);
+        assert_eq!(
+            canonical_archive_id("da39a3ee5e6b4b0d3255bfef95601890afd8070"),
+            None
+        );
+    }
 
     #[test]
     fn is_valid_archive_id_accepts_a_real_sha1_hex_digest() {

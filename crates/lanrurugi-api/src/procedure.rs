@@ -55,6 +55,13 @@ pub async fn require_api_key(
     let Some(matched_path) = matched_path else {
         return next.run(request).await;
     };
+    // Any mutating request may change what the stats page aggregates (settings, categories,
+    // archives, bookmarks, reading progress, plugins, …). Bumping here — before authorization,
+    // because a request that later fails still cost nothing to be conservative about — is what
+    // makes the overview snapshot's invalidation exact instead of a 15-second guess.
+    if !request.method().is_safe() {
+        crate::stats::note_library_mutation();
+    }
     let cfg = match crate::auth::load(&state).await {
         Ok(cfg) => cfg,
         Err(e) => {

@@ -324,13 +324,30 @@ pub struct ArchiveCard {
 ///
 /// Guests never read or write it: their view is scope-filtered per request, and serving them a
 /// cached unfiltered snapshot would leak library-wide counts.
-const OVERVIEW_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(15);
+///
+/// Invalidation is exact for anything that goes through the API: every mutating request bumps
+/// [`note_library_mutation`], and a cached snapshot is only served while that counter still
+/// matches. The age cap below is the fallback for mutations that never pass through a request
+/// (the ingest watcher, a background job), where there is nothing to bump.
+const OVERVIEW_CACHE_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(60);
 
-type OverviewCache = std::sync::Mutex<Option<(std::time::Instant, axum::body::Bytes)>>;
+type OverviewCache = std::sync::Mutex<Option<(u64, std::time::Instant, axum::body::Bytes)>>;
 
 fn overview_cache() -> &'static OverviewCache {
     static CACHE: std::sync::OnceLock<OverviewCache> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Bumped by every mutating API request (see `procedure::require_api_key`).
+static LIBRARY_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Records that something may have changed the library, dropping the stats snapshot.
+pub(crate) fn note_library_mutation() {
+    LIBRARY_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn library_generation() -> u64 {
+    LIBRARY_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Serialized-JSON response, matching what `axum::Json` would produce for the same value.
@@ -348,12 +365,12 @@ async fn overview(State(state): State<AppState>, auth: Option<Extension<AuthCont
         Some(AuthMethod::GuestVisitor)
     );
     if !guest {
-        if let Some((at, body)) = overview_cache()
+        if let Some((generation, at, body)) = overview_cache()
             .lock()
             .expect("overview cache poisoned")
             .as_ref()
         {
-            if at.elapsed() < OVERVIEW_CACHE_TTL {
+            if *generation == library_generation() && at.elapsed() < OVERVIEW_CACHE_MAX_AGE {
                 return json_body(body.clone());
             }
         }
@@ -486,8 +503,11 @@ async fn overview(State(state): State<AppState>, auth: Option<Extension<AuthCont
         }
     };
     if !guest {
-        *overview_cache().lock().expect("overview cache poisoned") =
-            Some((std::time::Instant::now(), body.clone()));
+        *overview_cache().lock().expect("overview cache poisoned") = Some((
+            library_generation(),
+            std::time::Instant::now(),
+            body.clone(),
+        ));
     }
     json_body(body)
 }
