@@ -1244,20 +1244,31 @@ mod tests {
 
         // First attempt: cancel partway through. Rather than guessing a wall-clock delay long
         // enough to land after the first chunk but short enough to land before the whole 5000-byte
-        // body finishes (a real, confirmed-flaky failure mode under CI's own scheduling jitter —
-        // too short cancels before any bytes arrive at all, too long lets the transfer complete
-        // uninterrupted; `download_one`'s own `progress_tx` reporting is too coarse-grained to use
-        // instead — its 200ms throttle interval is longer than this whole transfer takes, so it
-        // never fires until the transfer's already done), this waits on `early_chunk_sent` — a
-        // real synchronization signal the route handler above fires the instant it hands its first
-        // chunk to the response stream — before cancelling, guaranteeing the cancellation always
-        // lands after real bytes have started arriving but (per the server's own 5ms-per-chunk
-        // pacing across 25 chunks) still well before the transfer completes.
+        // body finishes (a real, confirmed-flaky failure mode under CI's own scheduling jitter),
+        // this waits on `early_chunk_sent` — the route handler fires it once it has handed out a
+        // chunk — and then on the client's own progress: a non-empty `.part` file. The
+        // server-side signal alone is not enough; it says a chunk left the server, not that
+        // `download_one` has read and written it, and a real CI run cancelled with a 0-byte
+        // `.part` because of exactly that gap.
+        let resume_paths = ResumePaths::new(&staging_dir, &resume_key);
         let cancel = tokio_util::sync::CancellationToken::new();
         let cancel_after = cancel.clone();
         let early_chunk_sent_waiter = early_chunk_sent.clone();
+        let part_path = resume_paths.part_path.clone();
         tokio::spawn(async move {
             early_chunk_sent_waiter.notified().await;
+            // Bounded: a genuine regression (no incremental writes at all) must fail on the
+            // assertions below rather than hang the test forever.
+            for _ in 0..2_000 {
+                let written = tokio::fs::metadata(&part_path)
+                    .await
+                    .map(|meta| meta.len() > 0)
+                    .unwrap_or(false);
+                if written {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
             cancel_after.cancel();
         });
         let (progress_tx, _progress_rx) = tokio::sync::mpsc::unbounded_channel::<ProgressUpdate>();
@@ -1280,7 +1291,6 @@ mod tests {
 
         // The resumable `.part`/sidecar must have survived cancellation (this is the entire point
         // — a non-resumable call would have deleted it, but this one must not).
-        let resume_paths = ResumePaths::new(&staging_dir, &resume_key);
         let partial_len_after_cancel = tokio::fs::metadata(&resume_paths.part_path)
             .await
             .expect("the partial .part file must survive a cancelled resumable download")
