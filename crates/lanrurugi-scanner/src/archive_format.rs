@@ -634,6 +634,50 @@ pub fn read_entries(path: &Path, entry_names: &[String]) -> Result<Vec<Option<Ve
     Ok(entry_names.iter().map(|name| found.remove(name)).collect())
 }
 
+/// Like [`read_entries`], but hands the found entries to `on_batch` as it goes, so a caller that
+/// decodes each page can keep only one batch's bytes resident instead of the whole archive's.
+///
+/// Batches are only taken from a ZIP archive: that path is random-access (the central directory
+/// seeks straight to each name), so re-opening per batch costs one directory read. For any other
+/// format, chunking would re-walk the archive per batch — the O(n²) shape [`read_entries`] exists
+/// to avoid — so the whole set is read in one pass and delivered as a single batch.
+///
+/// `on_batch` receives `(index into entry_names, bytes)` pairs, in `entry_names` order within each
+/// batch; names that were not found are simply absent. Returning `Err` from it stops the walk.
+pub fn read_entries_batched<F>(
+    path: &Path,
+    entry_names: &[String],
+    batch_size: usize,
+    mut on_batch: F,
+) -> Result<()>
+where
+    F: FnMut(Vec<(usize, Vec<u8>)>) -> Result<()>,
+{
+    if entry_names.is_empty() {
+        return Ok(());
+    }
+    let step = if zip_random_access_eligible(path) {
+        batch_size.max(1)
+    } else {
+        entry_names.len()
+    };
+
+    let mut start = 0;
+    while start < entry_names.len() {
+        let end = (start + step).min(entry_names.len());
+        let chunk = &entry_names[start..end];
+        let found = read_entries(path, chunk)?;
+        let batch: Vec<(usize, Vec<u8>)> = found
+            .into_iter()
+            .enumerate()
+            .filter_map(|(offset, bytes)| bytes.map(|bytes| (start + offset, bytes)))
+            .collect();
+        on_batch(batch)?;
+        start = end;
+    }
+    Ok(())
+}
+
 /// Reads natural pixel dimensions for just the first `count` pages (natural-sort order, same as
 /// [`list_pages`] — so callers can zip this 1:1 against a prior `list_pages`/`/files` result by
 /// index), leaving every page beyond that entirely unread. Used only for infinite-scroll's resume-
@@ -1039,6 +1083,33 @@ mod tests {
     fn read_entries_returns_empty_for_an_empty_request() {
         let f = make_test_zip_with_ext("zip", &["page1.jpg"]);
         assert_eq!(read_entries(f.path(), &[]).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn read_entries_batched_delivers_every_page_across_batches_in_order() {
+        let names: Vec<String> = (1..=5).map(|index| format!("page{index}.jpg")).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let f = make_test_zip_with_ext("zip", &refs);
+
+        let mut seen: Vec<(usize, Vec<u8>)> = Vec::new();
+        read_entries_batched(f.path(), &names, 2, |batch| {
+            seen.extend(batch);
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(seen.len(), 5);
+        for (index, bytes) in &seen {
+            assert_eq!(
+                bytes,
+                format!("content of {}", names[*index]).as_bytes(),
+                "batch entry {index} carried the wrong page"
+            );
+        }
+        assert!(
+            seen.windows(2).all(|pair| pair[0].0 < pair[1].0),
+            "indexes must arrive in order across batches"
+        );
     }
 
     #[test]

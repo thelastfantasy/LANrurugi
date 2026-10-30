@@ -484,14 +484,10 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         discovery_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(8)),
         download_managers: Default::default(),
         thumbnail_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
-            std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4),
+            lanrurugi_core::concurrency::image_work_concurrency(),
         )),
         page_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
-            std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4),
+            lanrurugi_core::concurrency::image_work_concurrency(),
         )),
         plugin_options,
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),

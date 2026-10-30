@@ -39,6 +39,20 @@ fn worker_budget() -> usize {
         .max(1)
 }
 
+/// How many page/cover decodes may be in flight at once.
+///
+/// A memory bound, not a CPU one: each in-flight page holds its decoded image (3 bytes per pixel
+/// — 8–12 MB for a normal page, far more for a 3000×4000 scan) plus the encoder's own buffers, so
+/// "one per core" turns a 64-core host into 64 simultaneous page decodes. Eight is already more
+/// than the reader's own prefetch window needs, and the singleflight in front of this collapses
+/// duplicate keys anyway.
+pub fn image_work_concurrency() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(8)
+}
+
 /// The one capped pool every batch in this workspace runs on. Built once (spawning a thread pool
 /// per call, which is what this replaced, paid thread-create/teardown on every batch).
 fn pool() -> &'static rayon::ThreadPool {

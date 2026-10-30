@@ -727,58 +727,86 @@ struct PageFingerprint {
     grid: image::GrayImage,
 }
 
-/// Reads every entry in one forward pass (`archive_format::read_entries`, not one `read_entry`
-/// call per page) and reduces each page to a [`PageFingerprint`] in parallel via the shared capped
-/// pool. Also carries each page's compressed byte size (for
-/// `PageComparison::a_file_size`/`b_file_size`), free since `read_entries` already has the bytes.
-fn load_fingerprints(path: &Path, entries: &[String]) -> Result<Vec<PageFingerprint>> {
-    let t_read = std::time::Instant::now();
-    let raw = archive_format::read_entries(path, entries)?;
-    tracing::info!(
-        path = %path.display(),
-        entries = entries.len(),
-        elapsed_ms = t_read.elapsed().as_millis(),
-        "load_fingerprints: read_entries (single forward-pass I/O) done"
-    );
+/// Pages whose bytes are resident at once while fingerprinting. Each batch is decoded (in
+/// parallel) into fingerprints and then dropped, so a large archive's compressed page data never
+/// has to be held in full — the difference between "archive size" and "a few pages" at peak.
+const FINGERPRINT_BATCH: usize = 16;
 
+/// Reduces every page to a [`PageFingerprint`] in batches: read a batch (`read_entries_batched`,
+/// random-access for ZIP and one pass otherwise), decode it in parallel on the shared capped pool,
+/// drop the bytes, continue. Also carries each page's compressed byte size (for
+/// `PageComparison::a_file_size`/`b_file_size`), free since the bytes are in hand.
+fn load_fingerprints(path: &Path, entries: &[String]) -> Result<Vec<PageFingerprint>> {
     let t_decode = std::time::Instant::now();
-    let result: Result<Vec<PageFingerprint>> = with_thread_pool(|| {
-        use rayon::prelude::*;
-        raw.into_par_iter()
-            .zip(entries)
-            .map(|(bytes, entry)| {
-                let bytes = bytes.ok_or_else(|| ImgCompareError::Decode {
+    let mut slots: Vec<Option<PageFingerprint>> = entries.iter().map(|_| None).collect();
+    let mut failure: Option<ImgCompareError> = None;
+
+    archive_format::read_entries_batched(path, entries, FINGERPRINT_BATCH, |batch| {
+        let decoded: Vec<(usize, Result<PageFingerprint>)> = with_thread_pool(|| {
+            use rayon::prelude::*;
+            batch
+                .into_par_iter()
+                .map(|(index, bytes)| {
+                    let file_size = bytes.len() as u64;
+                    let decoded = match lanrurugi_scanner::image_decode::load_from_memory(&bytes) {
+                        Ok(image) => Ok(PageFingerprint {
+                            width: image.width(),
+                            height: image.height(),
+                            file_size,
+                            hash: alignment::hash_page(&image),
+                            sharpness: sharpness::laplacian_variance(&image),
+                            grid: crop_align::gray_grid(&image),
+                        }),
+                        Err(source) => Err(ImgCompareError::Decode {
+                            entry: entries[index].clone(),
+                            source,
+                        }),
+                    };
+                    (index, decoded)
+                })
+                .collect()
+        });
+        for (index, fingerprint) in decoded {
+            match fingerprint {
+                Ok(fingerprint) => slots[index] = Some(fingerprint),
+                Err(error) => {
+                    if failure.is_none() {
+                        failure = Some(error);
+                    }
+                }
+            }
+        }
+        Ok(())
+    })?;
+
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    let mut fingerprints = Vec::with_capacity(entries.len());
+    for (index, slot) in slots.into_iter().enumerate() {
+        match slot {
+            Some(fingerprint) => fingerprints.push(fingerprint),
+            // A page listed by `list_pages` but not returned by the read: same error the
+            // one-shot version reported, just detected at the end of the batch walk.
+            None => {
+                let entry = entries[index].clone();
+                return Err(ImgCompareError::Decode {
                     entry: entry.clone(),
                     source: image::ImageError::IoError(std::io::Error::new(
                         std::io::ErrorKind::NotFound,
                         format!("entry {entry:?} not found while re-reading archive"),
                     )),
-                })?;
-                let file_size = bytes.len() as u64;
-                let image = lanrurugi_scanner::image_decode::load_from_memory(&bytes).map_err(
-                    |source| ImgCompareError::Decode {
-                        entry: entry.clone(),
-                        source,
-                    },
-                )?;
-                Ok(PageFingerprint {
-                    width: image.width(),
-                    height: image.height(),
-                    file_size,
-                    hash: alignment::hash_page(&image),
-                    sharpness: sharpness::laplacian_variance(&image),
-                    grid: crop_align::gray_grid(&image),
-                })
-            })
-            .collect()
-    });
+                });
+            }
+        }
+    }
     tracing::info!(
         path = %path.display(),
         entries = entries.len(),
         elapsed_ms = t_decode.elapsed().as_millis(),
-        "load_fingerprints: parallel decode + hash/sharpness/grid (rayon) done"
+        "load_fingerprints: batched decode + hash/sharpness/grid (rayon) done"
     );
-    result
+    Ok(fingerprints)
 }
 
 /// Decodes only the pages the precise crop-alignment pass needs (at most two per sampled pair),

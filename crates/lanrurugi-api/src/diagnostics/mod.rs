@@ -647,25 +647,55 @@ async fn bundle_download(
 ) -> Response {
     match build(&state, &selection, false).await {
         Ok(Built {
-            bytes, bundle_name, ..
-        }) => (
-            StatusCode::OK,
-            [
-                (header::CONTENT_TYPE, "application/zip".to_string()),
-                (
-                    header::CONTENT_DISPOSITION,
-                    format!("attachment; filename=\"{bundle_name}\""),
-                ),
-            ],
-            bytes,
-        )
-            .into_response(),
+            download: Some(path),
+            bundle_name,
+            ..
+        }) => {
+            let length = std::fs::metadata(&path).map(|m| m.len()).ok();
+            match crate::common::stream_temp_file(path.clone()) {
+                Ok(body) => {
+                    let mut response = (
+                        StatusCode::OK,
+                        [
+                            (header::CONTENT_TYPE, "application/zip".to_string()),
+                            (
+                                header::CONTENT_DISPOSITION,
+                                format!("attachment; filename=\"{bundle_name}\""),
+                            ),
+                        ],
+                        body,
+                    )
+                        .into_response();
+                    if let Some(length) = length {
+                        response
+                            .headers_mut()
+                            .insert(header::CONTENT_LENGTH, length.into());
+                    }
+                    response
+                }
+                Err(e) => {
+                    let _ = std::fs::remove_file(&path);
+                    error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "diagnostics_bundle",
+                        e.to_string(),
+                    )
+                }
+            }
+        }
+        Ok(Built { download: None, .. }) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "diagnostics_bundle",
+            "bundle was not produced",
+        ),
         Err(message) => error(StatusCode::BAD_REQUEST, "diagnostics_bundle", message),
     }
 }
 
 struct Built {
-    bytes: Vec<u8>,
+    /// Temp file the archive was streamed into (`None` for the text-only preview). Deleted once
+    /// the download response's body is dropped.
+    download: Option<std::path::PathBuf>,
     rendered: text::Bilingual,
     bundle_name: String,
 }
@@ -689,7 +719,7 @@ async fn build(
     let rendered = bundle::feedback(&plan, top.as_ref(), &facts);
     if text_only {
         return Ok(Built {
-            bytes: Vec::new(),
+            download: None,
             rendered,
             bundle_name: facts.bundle_name,
         });
@@ -700,9 +730,26 @@ async fn build(
             plan.total_bytes
         ));
     }
-    let bytes = bundle::archive(&plan, selection, &facts, &rendered, &json!({}))?;
+    // Written straight to a temp file and streamed from there: a bundle no longer exists as one
+    // `Vec<u8>` in the process (it is capped at `CAP`, but the zip plus its entries were both held).
+    let path = std::env::temp_dir().join(format!(
+        "lrr-diagnostics-{}.zip",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
+    if let Err(e) = bundle::archive_to(
+        std::io::BufWriter::new(file),
+        &plan,
+        selection,
+        &facts,
+        &rendered,
+        &json!({}),
+    ) {
+        let _ = std::fs::remove_file(&path);
+        return Err(e);
+    }
     Ok(Built {
-        bytes,
+        download: Some(path),
         rendered,
         bundle_name: facts.bundle_name,
     })

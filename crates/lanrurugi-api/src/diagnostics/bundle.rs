@@ -341,11 +341,24 @@ pub fn archive(
     text: &Bilingual,
     manifest_extra: &serde_json::Value,
 ) -> Result<Vec<u8>, String> {
+    let buffer = std::io::Cursor::new(Vec::new());
+    Ok(archive_to(buffer, plan, selection, facts, text, manifest_extra)?.into_inner())
+}
+
+/// [`archive`] writing into any seekable sink — the download handler streams it through a temp
+/// file so a bundle never has to exist as one `Vec` in the process.
+pub fn archive_to<W: std::io::Write + std::io::Seek>(
+    out: W,
+    plan: &Plan,
+    selection: &Selection,
+    facts: &Facts,
+    text: &Bilingual,
+    manifest_extra: &serde_json::Value,
+) -> Result<W, String> {
     use std::io::Write;
     use zip::write::SimpleFileOptions;
 
-    let buffer = std::io::Cursor::new(Vec::new());
-    let mut zip = zip::ZipWriter::new(buffer);
+    let mut zip = zip::ZipWriter::new(out);
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     let readme = readme(plan, facts);
 
@@ -395,8 +408,7 @@ pub fn archive(
         zip.start_file(&path, options).map_err(|e| e.to_string())?;
         zip.write_all(&bytes).map_err(|e| e.to_string())?;
     }
-    let cursor = zip.finish().map_err(|e| e.to_string())?;
-    Ok(cursor.into_inner())
+    zip.finish().map_err(|e| e.to_string())
 }
 
 fn readme(plan: &Plan, facts: &Facts) -> String {
