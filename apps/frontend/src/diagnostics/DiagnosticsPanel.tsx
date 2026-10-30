@@ -2,7 +2,7 @@
 
 import "./diagnostics.css"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { CheckboxField, NumberInput, Select } from "@/components/common-ui/Form"
@@ -67,6 +67,23 @@ export function DiagnosticsPanel() {
   const usage = overview.data?.usage
   const drops = overview.data?.drops
   const window: ForwardWindow | undefined = overview.data?.window
+  // The overview refreshes every 30 s, which is far too coarse for a five-minute countdown. The
+  // clock below ticks once a second; before the first tick the server's own `remaining_secs` is
+  // shown, and the server stays the authority on when the window actually ends.
+  const [now, setNow] = useState(0)
+  useEffect(() => {
+    if (!window?.open) return
+    const tick = () => setNow(Date.now())
+    tick()
+    const timer = setInterval(tick, 1_000)
+    return () => clearInterval(timer)
+  }, [window?.open])
+  const remaining = window
+    ? now > 0
+      ? Math.max(0, Math.ceil((window.deadline - now) / 1000))
+      : window.remaining_secs
+    : 0
+  const windowOpen = window?.open === true && remaining > 0
 
   const onErrorToast = (error: unknown) =>
     toast({ icon: "error", text: error instanceof Error ? error.message : String(error) })
@@ -247,11 +264,11 @@ export function DiagnosticsPanel() {
           >
             {t("diagnostics.forward.start")}
           </button>
-          {window?.open && (
+          {windowOpen && (
             <>
               <span className="diag-window-open">
                 {t("diagnostics.forward.remaining", {
-                  remaining: formatRemaining(window.remaining_secs),
+                  remaining: formatRemaining(remaining),
                 })}
               </span>
               <button

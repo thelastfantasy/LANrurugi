@@ -7,6 +7,7 @@
 //! `/api/diagnostics/envelope`, and the only outbound destination is whatever tracker an
 //! administrator configured *and* a window they opened.
 
+pub mod attachment;
 pub mod bundle;
 pub mod forward;
 pub mod issue;
@@ -73,18 +74,11 @@ pub(crate) static REPORTER: OnceLock<&'static dyn report::Reporter> = OnceLock::
 /// middleware in [`capture_5xx`]) 5xx responses all become local events. The DSN is a dummy — the
 /// transport above is the only sink, so nothing is ever sent anywhere by the SDK itself.
 pub fn init_server_capture() {
-    let release = std::env::var("LANRURUGI_GIT_SHA")
-        .ok()
-        .or_else(|| option_env!("LANRURUGI_GIT_SHA").map(str::to_string));
-    let environment = std::env::var("LANRURUGI_ENVIRONMENT").unwrap_or_else(|_| {
-        if cfg!(debug_assertions) {
-            "development"
-        } else {
-            "production"
-        }
-        .to_string()
-    });
-    let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_string());
+    // One source of truth for deployment identity: the same values a forwarded feedback reports.
+    let deployment = crate::version::deployment();
+    let release = deployment.release.clone();
+    let environment = deployment.environment.clone();
+    let hostname = deployment.hostname.clone();
     // `ClientOptions` is `#[non_exhaustive]`: start from the defaults and set what matters.
     let mut options = sentry::ClientOptions::default();
     options.dsn = "http://lanrurugi@127.0.0.1/1".parse().ok();
@@ -252,6 +246,7 @@ use serde_json::{json, Value};
 use crate::common::error;
 
 use crate::AppState;
+use lanrurugi_storage::device_info::ClientReportedInfo;
 use lanrurugi_storage::diagnostics::{DiagnosticEvent, DiagnosticIssue, Fingerprint, IssueState};
 
 /// The whole diagnostics surface: the capture path here plus everything in [`routes`].
@@ -279,7 +274,13 @@ pub fn router() -> Router<AppState> {
         .route("/diagnostics/bundles/preview", post(bundle_preview))
         .route("/diagnostics/bundles/text", post(bundle_text))
         .route("/diagnostics/bundles", post(bundle_download))
-        .route("/diagnostics/feedback", post(feedback))
+        // Multipart with up to three images: the default 2 MB body limit would reject every one.
+        .route(
+            "/diagnostics/feedback",
+            post(feedback).layer(axum::extract::DefaultBodyLimit::max(
+                attachment::MAX_IMAGES * attachment::MAX_UPLOAD_BYTES + 1024 * 1024,
+            )),
+        )
         .route("/diagnostics/window", get(get_window).post(post_window))
         .route("/diagnostics/window", delete(delete_window))
         .route(
@@ -841,17 +842,150 @@ async fn daily_feedback_budget(state: &AppState, identity: &str) -> Option<u32> 
     (used <= DAILY_LIMIT).then(|| DAILY_LIMIT - used)
 }
 
+/// A feedback note's required contact fields, validated once so the handler's body stays flat.
+struct Contact {
+    name: String,
+    email: String,
+}
+
+/// Name and email are required: the tracker shows them as the reporter's identity, and the email
+/// is the only way back to the person who wrote the note.
+fn feedback_contact(name: &str, email: &str) -> Result<Contact, String> {
+    let clean =
+        |value: &str| -> String { value.trim().chars().filter(|c| !c.is_control()).collect() };
+    let name = clean(name);
+    if name.is_empty() {
+        return Err("a name is required.".to_string());
+    }
+    if name.chars().count() > 128 {
+        return Err("the name is longer than 128 characters.".to_string());
+    }
+    let email = clean(email);
+    if email.is_empty() {
+        return Err("an email address is required.".to_string());
+    }
+    if email.chars().count() > 254 {
+        return Err("the email address is longer than 254 characters.".to_string());
+    }
+    // Deliberately loose: one `@`, non-empty sides, no whitespace. Anything stricter rejects real
+    // addresses (plus-addressing, one-label internal domains) for no benefit here.
+    let valid = email.split_once('@').is_some_and(|(local, domain)| {
+        !local.is_empty() && !domain.is_empty() && !domain.contains('@')
+    }) && !email.contains(char::is_whitespace);
+    if !valid {
+        return Err("the email address is not valid.".to_string());
+    }
+    Ok(Contact { name, email })
+}
+
+/// The page the note was written on: a path on this instance, never an absolute URL or a query
+/// string (a share link lives there).
+fn feedback_url(raw: &str) -> Option<String> {
+    let clean: String = raw.trim().chars().filter(|c| !c.is_control()).collect();
+    (clean.starts_with('/') && clean.len() <= 500).then_some(clean)
+}
+
+/// One submitted note: the text fields plus up to [`attachment::MAX_IMAGES`] screenshots.
+struct FeedbackForm {
+    fields: std::collections::HashMap<String, String>,
+    images: Vec<(String, Vec<u8>)>,
+}
+
+/// Reads the multipart body. Screenshots are files; every other field is a short string (`client`
+/// is JSON encoded as one, see `FeedbackView.tsx`).
+async fn read_feedback_form(
+    multipart: &mut axum::extract::Multipart,
+) -> Result<FeedbackForm, (StatusCode, String)> {
+    let mut form = FeedbackForm {
+        fields: std::collections::HashMap::new(),
+        images: Vec::new(),
+    };
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(error) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("malformed form data: {error}"),
+                ))
+            }
+        };
+        let name = field.name().unwrap_or_default().to_string();
+        if name == "image" {
+            if form.images.len() >= attachment::MAX_IMAGES {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("at most {} images per note.", attachment::MAX_IMAGES),
+                ));
+            }
+            let filename = field.file_name().unwrap_or("feedback.png").to_string();
+            let bytes = match field.bytes().await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        format!("could not read the image: {error}"),
+                    ))
+                }
+            };
+            if bytes.len() > attachment::MAX_UPLOAD_BYTES {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "an image is larger than {} MB.",
+                        attachment::MAX_UPLOAD_BYTES / 1024 / 1024
+                    ),
+                ));
+            }
+            form.images.push((filename, bytes.to_vec()));
+        } else {
+            match field.text().await {
+                Ok(text) => {
+                    form.fields.insert(name, text);
+                }
+                Err(error) => {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        format!("could not read a form field: {error}"),
+                    ))
+                }
+            }
+        }
+    }
+    Ok(form)
+}
+
 async fn feedback(
     State(state): State<AppState>,
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
-    Json(body): Json<Value>,
+    headers: axum::http::HeaderMap,
+    mut multipart: axum::extract::Multipart,
 ) -> Response {
-    let Some(message) = body.get("message").and_then(|value| value.as_str()) else {
+    let form = match read_feedback_form(&mut multipart).await {
+        Ok(form) => form,
+        Err((status, reason)) => return error(status, "diagnostics_feedback", reason),
+    };
+    let Some(message) = form.fields.get("message") else {
         return error(
             StatusCode::BAD_REQUEST,
             "diagnostics_feedback",
             "expected a message.",
         );
+    };
+    let contact = match feedback_contact(
+        form.fields
+            .get("name")
+            .map(String::as_str)
+            .unwrap_or_default(),
+        form.fields
+            .get("email")
+            .map(String::as_str)
+            .unwrap_or_default(),
+    ) {
+        Ok(contact) => contact,
+        // Before the quota is touched: a form that was never sendable must not cost a send.
+        Err(reason) => return error(StatusCode::BAD_REQUEST, "diagnostics_feedback", reason),
     };
     if let Err(reason) = admit_feedback(message) {
         // 429 rather than 400: the content may be fine, the pace is the problem.
@@ -877,18 +1011,50 @@ async fn feedback(
             "the daily feedback limit for this account is used up.",
         );
     };
+    // Every upload is re-encoded to WebP here, before anything leaves the process.
+    let mut attachments = Vec::with_capacity(form.images.len());
+    for (filename, bytes) in form.images {
+        match attachment::convert(&filename, bytes).await {
+            Ok(converted) => attachments.push(converted),
+            Err(reason) => return error(StatusCode::BAD_REQUEST, "diagnostics_feedback", reason),
+        }
+    }
     let user_id = feedback_user_id(&identity);
-    let requested = body.get("event_id").and_then(|value| value.as_str());
+    let requested = form.fields.get("event_id").map(String::as_str);
     let event_id = match requested {
         Some(id) => Some(id.to_string()),
         None => forward::newest_forwarded(&state).await,
     };
-    match forward::submit_user_report(
+    // Only this request can say what the browser is: the User-Agent header carries OS/browser,
+    // `client` carries what no header does (screen, locale, client hints).
+    let user_agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let client = form
+        .fields
+        .get("client")
+        .and_then(|value| serde_json::from_str::<ClientReportedInfo>(value).ok())
+        .filter(|client| !client.is_empty());
+    let url = form
+        .fields
+        .get("url")
+        .map(String::as_str)
+        .and_then(feedback_url);
+    match forward::submit_feedback(
         &state,
-        &clean,
-        body.get("email").and_then(|value| value.as_str()),
-        event_id.as_deref(),
-        Some(&user_id),
+        &forward::Feedback {
+            message: &clean,
+            name: &contact.name,
+            email: &contact.email,
+            user_id: &user_id,
+            event_id: event_id.as_deref(),
+            url: url.as_deref(),
+            user_agent,
+            client,
+            attachments: &attachments,
+        },
     )
     .await
     {
@@ -1057,6 +1223,28 @@ mod feedback_tests {
         assert!(error.contains("too many notes"), "{error}");
         // A new window resets the allowance.
         assert!(admit(&mut budget, 1_000 + FEEDBACK_WINDOW_SECS, "next window").is_ok());
+    }
+
+    #[test]
+    fn a_note_needs_a_name_and_a_usable_email() {
+        assert!(feedback_contact("", "jade@example.com").is_err());
+        assert!(feedback_contact("Jade", "").is_err());
+        assert!(feedback_contact("Jade", "not-an-email").is_err());
+        assert!(feedback_contact("Jade", "two@at@example.com").is_err());
+        assert!(feedback_contact("Jade", "has space@example.com").is_err());
+        let contact = feedback_contact(" Jade ", " jade@example.com ").unwrap();
+        assert_eq!(contact.name, "Jade");
+        assert_eq!(contact.email, "jade@example.com");
+        // Control characters are stripped rather than rejected: a pasted newline is not an attack.
+        assert_eq!(feedback_contact("Ja\nde", "a@b.c").unwrap().name, "Jade");
+    }
+
+    #[test]
+    fn a_reported_url_must_be_a_local_path() {
+        assert_eq!(feedback_url("/config").as_deref(), Some("/config"));
+        assert_eq!(feedback_url(" https://elsewhere.test/x "), None);
+        assert_eq!(feedback_url("relative/path"), None);
+        assert_eq!(feedback_url(&format!("/{}", "x".repeat(600))), None);
     }
 }
 
@@ -1286,6 +1474,10 @@ pub async fn get_settings(State(state): State<AppState>) -> Response {
         "settings": settings.to_json(),
         "usage": usage,
         "drops": drops,
+        // The panel's own type has always expected this here; without it the open window, its
+        // countdown and its stop button never rendered (the `/diagnostics/window` route existed,
+        // but nothing on the settings path ever read it).
+        "window": forward::window(&state).await.to_json(),
     }))
     .into_response()
 }

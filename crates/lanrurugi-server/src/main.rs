@@ -214,6 +214,9 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn run(from_install_prefix: Vec<(&'static str, PathBuf)>) -> anyhow::Result<()> {
+    // The deployment's own start time, before any work: forwarded feedback and error events report
+    // it (and the resulting uptime) as part of this instance's identity.
+    lanrurugi_api::version::mark_started();
     // Register the JPEG XL decoder with `image` once at process start. Every production decode
     // path already goes through `lanrurugi_scanner::image_decode`, but this keeps any future direct
     // `image::open`/`ImageReader` use (or a dependency's own call) JXL-aware too.
@@ -618,30 +621,42 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // get repaired or dropped so hash-based dedup stops matching ghost bytes.
     repair_zombie_archives(&state).await;
 
-    // One-time reader-recommendation-cache backfill (issue #70) — a pre-existing library's
-    // archives never trigger `precompute_one` on their own (nothing about them changes after
-    // this feature ships), so without this they'd never get a cached recommendation entry at
-    // all. No more "wait for the model to finish loading" poll here — `lanrurugi-embed-worker`
-    // (see `lanrurugi_api::embed_worker_client`'s own doc comment) is spawned on demand by
-    // `spawn_full_precompute_job`'s own first `embed()` call below, not pre-loaded at startup, so
-    // there is no longer a background load task whose completion this needs to wait for. Guarded
-    // the same way a precision-tier change is (`settings::put_settings`): skip if a rebuild is
-    // already queued/active, so this startup check racing a user's own tier change doesn't
-    // double-queue a rebuild. Only advances `backfill_version` once the job actually finishes
-    // successfully — an interrupted rebuild (process restarted mid-backfill) is retried on the
-    // next startup rather than silently skipped, since `spawn_full_precompute_job`'s own
-    // generation-tagged resumability means a retry is cheap (already-current entries are skipped).
+    // One-time reader-recommendation-cache rebuilds, covering two independent reasons a cache can
+    // be stale against a pre-existing library: (a) the archive was never cached at all (issue
+    // #70 — its archives never trigger `precompute_one` on their own, since nothing about them
+    // changes after this feature ships), and (b) the title-normalization rules changed, so every
+    // persisted vector was computed from text this build would no longer produce. Both are folded
+    // into one task so they can't queue two full rebuilds against each other.
+    //
+    // No "wait for the model to finish loading" poll here — `lanrurugi-embed-worker` (see
+    // `lanrurugi_api::embed_worker_client`'s own doc comment) is spawned on demand by
+    // `spawn_full_precompute_job`'s first `embed()` call, not pre-loaded at startup. Guarded the
+    // same way a precision-tier change is (`settings::put_settings`): skip if a rebuild is already
+    // queued/active, so this startup check racing a user's own tier change doesn't double-queue
+    // one. Version markers are only advanced once the job actually finishes — an interrupted
+    // rebuild (process restarted mid-run) is retried on the next startup rather than silently
+    // skipped, since `spawn_full_precompute_job`'s own generation-tagged resumability means a
+    // retry is cheap (already-current entries are skipped).
     {
         let state = state.clone();
         tokio::spawn(async move {
-            let current_version = state
+            let rule_revision = lanrurugi_api::recommend_precompute::NORMALIZE_RULE_REVISION;
+            let stored_revision = state
+                .recommend_cache
+                .get_normalizer_version()
+                .await
+                .unwrap_or(0);
+            let stored_backfill = state
                 .recommend_cache
                 .get_backfill_version()
                 .await
                 .unwrap_or(0);
-            if current_version >= CURRENT_RECOMMEND_BACKFILL_VERSION {
+
+            let normalizer_stale = stored_revision < rule_revision;
+            if !normalizer_stale && stored_backfill >= CURRENT_RECOMMEND_BACKFILL_VERSION {
                 return;
             }
+
             let already_running =
                 state
                     .jobs
@@ -658,14 +673,42 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             if already_running {
                 return;
             }
-            let job_id = lanrurugi_api::recommend_precompute::spawn_full_precompute_job(
-                &state,
-                "first-time recommendation cache backfill",
-            )
-            .await;
+
+            if normalizer_stale {
+                // The vectors are derived data computed from the old normalization rules, and the
+                // rebuild's own reuse check compares raw titles — which a rule change never
+                // touches — so they have to go, or the change would be inert against an existing
+                // library. The Top-N lists stay; the generation bump re-ranks them from scratch.
+                match state.recommend_cache.purge_vectors().await {
+                    Ok(removed) => tracing::info!(
+                        removed,
+                        from = stored_revision,
+                        to = rule_revision,
+                        "recommend_precompute: title normalization changed, re-embedding every archive"
+                    ),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to purge recommend-cache vectors, leaving them in place");
+                        return;
+                    }
+                }
+                if let Err(e) = state.recommend_cache.bump_rebuild_generation().await {
+                    tracing::warn!(error = %e, "failed to bump recommend-cache rebuild generation");
+                    return;
+                }
+            }
+
+            let reason = if normalizer_stale {
+                "re-embed after title normalization change"
+            } else {
+                "first-time recommendation cache backfill"
+            };
+            let job_id =
+                lanrurugi_api::recommend_precompute::spawn_full_precompute_job(&state, reason)
+                    .await;
             // Poll the job's own status (no completion channel exists on `JobRegistry`) so the
-            // version marker is only written once the rebuild actually finished — see this
-            // block's own doc comment above for why a partial/interrupted run must not advance it.
+            // version markers are only written once the rebuild actually finished — see this
+            // block's own doc comment above for why a partial/interrupted run must not advance
+            // them.
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 let Some(job) = state.jobs.get(&job_id).await else {
@@ -673,6 +716,15 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 };
                 match job.state {
                     lanrurugi_core::jobs::JobState::Finished => {
+                        if normalizer_stale {
+                            if let Err(e) = state
+                                .recommend_cache
+                                .put_normalizer_version(rule_revision)
+                                .await
+                            {
+                                tracing::warn!(error = %e, "failed to persist recommend-cache normalizer version");
+                            }
+                        }
                         if let Err(e) = state
                             .recommend_cache
                             .put_backfill_version(CURRENT_RECOMMEND_BACKFILL_VERSION)

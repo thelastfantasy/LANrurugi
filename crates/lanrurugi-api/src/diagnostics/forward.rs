@@ -5,11 +5,13 @@
 //! moment it expires nothing more goes out.
 
 use deadpool_redis::redis::AsyncCommands;
+use lanrurugi_storage::device_info::{ClientReportedInfo, UserAgentInfo};
 use lanrurugi_storage::diagnostics::DiagnosticEvent;
 use lanrurugi_storage::keys::CONFIG_KEY;
 use serde_json::{json, Value};
 use url::Url;
 
+use crate::version::Deployment;
 use crate::AppState;
 
 const COUNTERS: &str = "LANRURUGI_DIAGNOSTICS_FORWARD";
@@ -124,6 +126,11 @@ pub async fn open_window(state: &AppState, duration_secs: u64) -> Result<Window,
     if TrackerDsn::parse(raw).is_none() {
         return Err("the configured tracker address is not a valid DSN.".to_string());
     }
+    // A window's counters describe that window. Without this they accumulate forever and the
+    // panel shows a fresh five-minute window above totals from months ago.
+    if let Ok(mut conn) = state.redis.config.get().await {
+        let _: Result<(), _> = conn.del(COUNTERS).await;
+    }
     write_deadline(state, now_ms() + (duration_secs as i64) * 1000).await?;
     Ok(window(state).await)
 }
@@ -223,15 +230,37 @@ pub async fn newest_forwarded(state: &AppState) -> Option<String> {
     ids.into_iter().next()
 }
 
-/// Submits a user report (Sentry's "feedback") to the tracker: a note the administrator wrote,
-/// optionally tied to one event. Sent with this instance's own DSN, never from a browser.
-pub async fn submit_user_report(
-    state: &AppState,
-    message: &str,
-    email: Option<&str>,
-    event_id: Option<&str>,
-    user_id: Option<&str>,
-) -> Result<(), String> {
+/// One screenshot sent with a note. Already WebP by the time it gets here — the conversion and
+/// its limits live in `diagnostics::attachment`.
+#[derive(Debug)]
+pub struct FeedbackAttachment {
+    pub filename: String,
+    pub bytes: Vec<u8>,
+}
+
+/// One feedback submission: what the administrator wrote, and everything the two sides of the
+/// connection know about themselves. The server fills this from the request (User-Agent) and this
+/// deployment's own identity; the browser fills `client`, `url` and the screenshots.
+pub struct Feedback<'a> {
+    pub message: &'a str,
+    pub name: &'a str,
+    pub email: &'a str,
+    /// Opaque hash of the reporter's identity — `user.id`, never the account itself.
+    pub user_id: &'a str,
+    /// The error event this note is about, when one was forwarded before it.
+    pub event_id: Option<&'a str>,
+    /// The page the note was written on (path only, no query string).
+    pub url: Option<&'a str>,
+    pub user_agent: Option<&'a str>,
+    /// Browser-side facts no header carries — see `clientReportedInfo.ts`.
+    pub client: Option<ClientReportedInfo>,
+    /// WebP screenshots, sent as `attachment` items in the same envelope.
+    pub attachments: &'a [FeedbackAttachment],
+}
+
+/// Submits a user report as a Sentry `feedback` item (the current spec; `user_report` is its
+/// deprecated predecessor). Sent with this instance's own DSN, never from a browser.
+pub async fn submit_feedback(state: &AppState, report: &Feedback<'_>) -> Result<(), String> {
     let settings = crate::diagnostics_settings::load(state).await;
     let Some(raw) = settings.tracker_dsn() else {
         return Err("configure a tracker first.".to_string());
@@ -239,24 +268,12 @@ pub async fn submit_user_report(
     let Some(dsn) = TrackerDsn::parse(raw) else {
         return Err("the configured tracker address is not a valid DSN.".to_string());
     };
-    let mut report = serde_json::json!({ "comments": message });
-    if let Some(user_id) = user_id {
-        // `user.id` is what the tracker counts distinct reporters by; it is an opaque hash, never
-        // the account's own identity.
-        report["user"] = serde_json::json!({ "id": user_id });
-    }
-    if let Some(email) = email.filter(|value| !value.trim().is_empty()) {
-        report["email"] = serde_json::json!(email.trim());
-    }
-    if let Some(event_id) = event_id.filter(|value| !value.trim().is_empty()) {
-        report["event_id"] = serde_json::json!(event_id.trim());
-    }
-    let envelope = format!(
-        "{{\"event_id\":\"{}\",\"sent_at\":\"{}\"}}\n{{\"type\":\"user_report\"}}\n{}\n",
-        event_id.unwrap_or("00000000000000000000000000000000"),
-        humantime_secs(now_ms()),
-        report
-    );
+    let at_ms = now_ms();
+    // The feedback's own id. The event it is *about* goes in `associated_event_id`; reusing that id
+    // here would make the tracker treat two different things as one.
+    let event_id = uuid::Uuid::new_v4().simple().to_string();
+    let event = feedback_event(report, &event_id, at_ms, &crate::version::deployment());
+    let envelope = feedback_envelope(&event_id, at_ms, &event, report.attachments);
     let auth = format!(
         "Sentry sentry_version=7, sentry_key={}, sentry_client=lanrurugi/{}",
         dsn.key,
@@ -278,11 +295,309 @@ pub async fn submit_user_report(
     }
 }
 
-/// RFC3339 in UTC, seconds precision — what an envelope header expects for `sent_at`.
+/// The `feedback` item's payload: a normal event with a `contexts.feedback` object. Device, OS,
+/// browser and app go in their own native contexts so the tracker renders them in its usual
+/// panels, not as an opaque blob.
+fn feedback_event(
+    report: &Feedback<'_>,
+    event_id: &str,
+    at_ms: i64,
+    deployment: &Deployment,
+) -> Value {
+    let ua = crate::device_info::parse_user_agent(report.user_agent);
+    let client = report.client.as_ref();
+
+    let mut contexts = serde_json::Map::new();
+    let mut feedback = json!({
+        "message": report.message,
+        "contact_email": report.email,
+        "name": report.name,
+        "source": "api",
+    });
+    if let Some(event_id) = report.event_id {
+        feedback["associated_event_id"] = json!(event_id);
+    }
+    if let Some(url) = report.url {
+        feedback["url"] = json!(url);
+    }
+    contexts.insert("feedback".into(), feedback);
+    if let Some(ua) = ua.as_ref() {
+        // Client Hints carry the full version where the frozen UA string stops at the major one.
+        let browser_version = client
+            .and_then(|client| client.uach_ua_full_version.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(ua.browser_version.as_str());
+        contexts.insert(
+            "browser".into(),
+            json!({ "name": ua.browser, "version": browser_version }),
+        );
+        contexts.insert("os".into(), os_context(ua, client));
+    } else if let Some(platform) = client.and_then(|client| client.uach_platform.as_deref()) {
+        // No UA to parse, but Client Hints still name the OS.
+        let mut os = json!({ "name": platform });
+        if let Some(version) = client
+            .and_then(|client| client.uach_platform_version.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            os["version"] = json!(version);
+        }
+        contexts.insert("os".into(), os);
+    }
+    if let Some(device) = device_context(ua.as_ref(), client) {
+        contexts.insert("device".into(), device);
+    }
+    contexts.insert("app".into(), app_context(deployment));
+    contexts.insert(
+        "lanrurugi".into(),
+        deployment_context(report, at_ms, deployment),
+    );
+
+    let release = deployment
+        .release
+        .clone()
+        .unwrap_or_else(|| deployment.version.to_string());
+    let mut event = json!({
+        "event_id": event_id,
+        // The event's own type, distinct from the envelope item's: trackers key "is this a
+        // feedback?" off this field (rustrak does), and a plain error event carrying a feedback
+        // context is not one.
+        "type": "feedback",
+        "timestamp": at_ms as f64 / 1000.0,
+        "platform": "javascript",
+        "level": "info",
+        "sdk": { "name": "lanrurugi", "version": deployment.version },
+        "release": release.clone(),
+        "environment": deployment.environment,
+        "server_name": deployment.hostname,
+        "tags": {
+            "source": "feedback",
+            "deployment": deployment.hostname,
+            "environment": deployment.environment,
+            "release": release,
+        },
+        "contexts": contexts,
+        "user": {
+            "id": report.user_id,
+            "email": report.email,
+            "username": report.name,
+        },
+    });
+    if let Some(user_agent) = report.user_agent {
+        let mut headers = json!({ "User-Agent": user_agent });
+        if let Some(languages) = client.and_then(|client| client.languages.as_deref()) {
+            headers["Accept-Language"] = json!(languages.replace(", ", ","));
+        }
+        event["request"] = json!({
+            "url": report.url.unwrap_or("/"),
+            "headers": headers,
+        });
+    }
+    event
+}
+
+/// `contexts.os`: the UA's own version, with Client Hints' (Chromium-only) real build when the
+/// two differ — the plain UA string freezes OS versions for privacy.
+fn os_context(ua: &UserAgentInfo, client: Option<&ClientReportedInfo>) -> Value {
+    let platform_version = client
+        .and_then(|client| client.uach_platform_version.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let ua_version = (!ua.os_version.trim().is_empty()).then_some(ua.os_version.as_str());
+    let version = ua_version.or(platform_version);
+    let mut os = json!({ "name": ua.os });
+    if let Some(version) = version {
+        os["version"] = json!(version);
+    }
+    if let Some(build) = platform_version.filter(|build| Some(*build) != version) {
+        os["build"] = json!(build);
+    }
+    os
+}
+
+/// `contexts.device`: only fields with a real value; an absent browser API stays absent rather than
+/// becoming a zero.
+fn device_context(
+    ua: Option<&UserAgentInfo>,
+    client: Option<&ClientReportedInfo>,
+) -> Option<Value> {
+    let mut device = serde_json::Map::new();
+    if let Some(ua) = ua {
+        if !ua.category.is_empty() {
+            device.insert("family".into(), json!(ua.category));
+        }
+        if !ua.vendor.is_empty() {
+            device.insert("brand".into(), json!(ua.vendor));
+        }
+    }
+    if let Some(client) = client {
+        if let Some(width) = client.screen_width {
+            device.insert("screen_width_pixels".into(), json!(width));
+        }
+        if let Some(height) = client.screen_height {
+            device.insert("screen_height_pixels".into(), json!(height));
+        }
+        if let Some(ratio) = client.device_pixel_ratio {
+            device.insert("screen_density".into(), json!(ratio));
+        }
+        if let Some(orientation) = client.screen_orientation.as_deref() {
+            // Sentry's field is the axis ("portrait"/"landscape"), not the screen API's full type.
+            device.insert(
+                "orientation".into(),
+                json!(orientation.split('-').next().unwrap_or(orientation)),
+            );
+        }
+        if let Some(count) = client.hardware_concurrency {
+            device.insert("processor_count".into(), json!(count));
+        }
+        if let Some(model) = client
+            .uach_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            device.insert("model".into(), json!(model));
+        }
+        if let Some(arch) = client
+            .uach_architecture
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            // Client Hints splits these; Sentry's `arch` wants the usual joined spelling.
+            let arch = match client.uach_bitness.as_deref() {
+                Some("64") if arch == "x86" => "x86_64".to_string(),
+                Some(bitness) => format!("{arch}{bitness}"),
+                None => arch.to_string(),
+            };
+            device.insert("arch".into(), json!(arch));
+        }
+        if let Some(gib) = client.device_memory_gib {
+            device.insert(
+                "memory_size".into(),
+                json!((f64::from(gib) * 1024.0 * 1024.0 * 1024.0) as u64),
+            );
+        }
+        if let Some(locale) = &client.language {
+            device.insert("locale".into(), json!(locale));
+        }
+        if let Some(timezone) = &client.timezone {
+            device.insert("timezone".into(), json!(timezone));
+        }
+        if let Some(online) = client.online {
+            device.insert("online".into(), json!(online));
+        }
+    }
+    (!device.is_empty()).then_some(Value::Object(device))
+}
+
+/// `contexts.app`: the instance's identity, in the fields the tracker already knows how to show.
+fn app_context(deployment: &Deployment) -> Value {
+    let mut app = json!({
+        "app_name": "lanrurugi",
+        "app_version": deployment.version,
+        "app_start_time": humantime_secs(deployment.started_at_ms),
+    });
+    if let Some(release) = &deployment.release {
+        app["app_build"] = json!(release);
+    }
+    if let Some(memory) = deployment.process_memory_bytes {
+        app["app_memory"] = json!(memory);
+    }
+    app
+}
+
+/// `contexts.lanrurugi`: everything that has no native Sentry field — this deployment's start
+/// time, uptime, build time, server OS, and the raw client-reported facts behind the mapped ones.
+fn deployment_context(report: &Feedback<'_>, at_ms: i64, deployment: &Deployment) -> Value {
+    let mut context = json!({
+        "deployment": deployment.hostname,
+        "environment": deployment.environment,
+        "version": deployment.version,
+        "server_os": deployment.os,
+        "server_arch": deployment.arch,
+        "containerized": deployment.containerized,
+        "started_at": humantime_secs(deployment.started_at_ms),
+        "uptime_secs": deployment.uptime_secs,
+        "server_time": humantime_secs(at_ms),
+    });
+    if let Some(release) = &deployment.release {
+        context["release"] = json!(release);
+    }
+    if let Some(built_at) = deployment.built_at_ms {
+        context["built_at"] = json!(humantime_secs(built_at));
+    }
+    if let Some(memory) = deployment.process_memory_bytes {
+        context["process_memory_bytes"] = json!(memory);
+    }
+    if let Some(user_agent) = report.user_agent {
+        context["user_agent"] = json!(user_agent);
+    }
+    if let Some(client) = report.client.as_ref() {
+        if let Ok(Value::Object(fields)) = serde_json::to_value(client) {
+            for (key, value) in fields {
+                if !value.is_null() {
+                    context[key] = value;
+                }
+            }
+        }
+    }
+    context
+}
+
+/// An envelope with one `feedback` item and, optionally, one `attachment` item per screenshot.
+/// Bytes, not a string: attachment payloads are binary (a `Vec<u8>` body also skips the UTF-8
+/// validation `reqwest` would do for text). `length` is what the SDKs send and what a strict
+/// envelope reader expects.
+fn feedback_envelope(
+    event_id: &str,
+    at_ms: i64,
+    event: &Value,
+    attachments: &[FeedbackAttachment],
+) -> Vec<u8> {
+    let body = event.to_string();
+    let mut out = Vec::with_capacity(body.len() + 256);
+    out.extend_from_slice(
+        format!(
+            "{{\"event_id\":\"{event_id}\",\"sent_at\":\"{}\"}}\n",
+            humantime_secs(at_ms)
+        )
+        .as_bytes(),
+    );
+    out.extend_from_slice(
+        format!(
+            "{{\"type\":\"feedback\",\"length\":{},\"content_type\":\"application/json\"}}\n",
+            body.len()
+        )
+        .as_bytes(),
+    );
+    out.extend_from_slice(body.as_bytes());
+    out.push(b'\n');
+    for attachment in attachments {
+        let filename = serde_json::to_string(&attachment.filename)
+            .unwrap_or_else(|_| "\"feedback.webp\"".to_string());
+        out.extend_from_slice(
+            format!(
+                "{{\"type\":\"attachment\",\"length\":{},\"filename\":{filename},\
+                 \"content_type\":\"image/webp\",\"attachment_type\":\"event.attachment\"}}\n",
+                attachment.bytes.len()
+            )
+            .as_bytes(),
+        );
+        out.extend_from_slice(&attachment.bytes);
+        out.push(b'\n');
+    }
+    out
+}
+
+/// RFC3339 in UTC, seconds precision — what an envelope header expects for `sent_at` and what
+/// Sentry contexts expect for a timestamp. `format_instant` stops at minutes (it is a human-facing
+/// label), so this one goes through chrono.
 fn humantime_secs(millis: i64) -> String {
-    crate::diagnostics::text::format_instant(millis)
-        .replace(" UTC", "Z")
-        .replace(' ', "T")
+    chrono::DateTime::from_timestamp_millis(millis)
+        .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
 }
 
 /// Sends one cron check-in to the tracker, if one is configured. Deliberately not gated on the
@@ -327,6 +642,38 @@ pub fn cron_error(slug: &str, reason: &str) {
     );
 }
 
+/// A rejected forward's reason, short enough for the panel. rustrak's error body is
+/// `{"error":{"message":…}}`; anything else falls back to the raw (clipped) text.
+fn rejection_reason(status: reqwest::StatusCode, body: &str) -> String {
+    let detail = serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")
+                .and_then(|error| error.get("message"))
+                .and_then(Value::as_str)
+                .or_else(|| value.get("message").and_then(Value::as_str))
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| body.trim().to_string());
+    let detail = clip(&detail, 200);
+    if detail.is_empty() {
+        format!("tracker answered {status}")
+    } else {
+        format!("tracker answered {status}: {detail}")
+    }
+}
+
+fn clip(text: &str, limit: usize) -> String {
+    let mut chars = text.chars();
+    let clipped: String = chars.by_ref().take(limit).collect();
+    if chars.next().is_some() {
+        format!("{clipped}…")
+    } else {
+        clipped
+    }
+}
+
 /// Forwards one stored event if a window is open. Called from the writer, never from a request.
 pub async fn maybe_forward(state: &AppState, event: &DiagnosticEvent) {
     let deadline = read_deadline(state).await;
@@ -367,7 +714,16 @@ pub async fn maybe_forward(state: &AppState, event: &DiagnosticEvent) {
         }
         Ok(response) => {
             let status = response.status();
-            bump(state, "failed", Some(&format!("tracker answered {status}"))).await
+            let body = response.text().await.unwrap_or_default();
+            let reason = rejection_reason(status, &body);
+            tracing::warn!(
+                event = %event.id,
+                source = event.source.as_str(),
+                message = %event.message,
+                reason = %reason,
+                "the tracker rejected a forwarded event"
+            );
+            bump(state, "failed", Some(&reason)).await
         }
         Err(error) => bump(state, "failed", Some(&error.to_string())).await,
     }
@@ -409,5 +765,209 @@ mod tests {
         assert!(ALLOWED.contains(&3_600));
         assert!(ALLOWED.contains(&86_400));
         assert!(!ALLOWED.contains(&60));
+    }
+
+    fn fixture_deployment() -> Deployment {
+        Deployment {
+            hostname: "lrr-test".to_string(),
+            environment: "test".to_string(),
+            release: Some("abc1234".to_string()),
+            version: "1.2.3",
+            started_at_ms: 1_700_000_000_000,
+            uptime_secs: 90,
+            built_at_ms: Some(1_699_900_000_000),
+            os: "linux",
+            arch: "x86_64",
+            containerized: true,
+            process_memory_bytes: Some(64 * 1024 * 1024),
+        }
+    }
+
+    fn fixture_client() -> ClientReportedInfo {
+        ClientReportedInfo {
+            screen_width: Some(1080),
+            screen_height: Some(2400),
+            device_pixel_ratio: Some(2.6),
+            screen_orientation: Some("portrait-primary".to_string()),
+            language: Some("ja-JP".to_string()),
+            languages: Some("ja-JP, en-US".to_string()),
+            timezone: Some("Asia/Tokyo".to_string()),
+            timezone_offset_minutes: Some(540),
+            platform: Some("Linux armv8l".to_string()),
+            hardware_concurrency: Some(8),
+            device_memory_gib: Some(4.0),
+            online: Some(true),
+            uach_architecture: Some("arm".to_string()),
+            uach_bitness: Some("64".to_string()),
+            uach_model: Some("Pixel 7".to_string()),
+            ..Default::default()
+        }
+    }
+
+    const FIREFOX_ANDROID: &str =
+        "Mozilla/5.0 (Android 14; Mobile; rv:141.0) Gecko/141.0 Firefox/141.0";
+
+    #[test]
+    fn a_feedback_event_carries_device_app_and_deployment_contexts() {
+        let report = Feedback {
+            message: "the thumbnail is missing",
+            name: "Jade",
+            email: "jade@example.com",
+            user_id: "lrrg-0123456789abcdef",
+            event_id: Some("deadbeef"),
+            url: Some("/config"),
+            user_agent: Some(FIREFOX_ANDROID),
+            client: Some(fixture_client()),
+            attachments: &[],
+        };
+        let event = feedback_event(
+            &report,
+            "0123456789abcdef",
+            1_700_000_100_000,
+            &fixture_deployment(),
+        );
+        let contexts = &event["contexts"];
+
+        // The feedback itself, in the modern spec's own context, linked to the error event.
+        assert_eq!(contexts["feedback"]["message"], "the thumbnail is missing");
+        assert_eq!(contexts["feedback"]["contact_email"], "jade@example.com");
+        assert_eq!(contexts["feedback"]["name"], "Jade");
+        assert_eq!(contexts["feedback"]["associated_event_id"], "deadbeef");
+        assert_eq!(contexts["feedback"]["url"], "/config");
+        // Native browser/OS/device fields, not a blob.
+        assert_eq!(contexts["browser"]["name"], "Firefox");
+        assert_eq!(contexts["os"]["name"], "Android");
+        assert_eq!(contexts["os"]["version"], "14");
+        assert_eq!(contexts["device"]["screen_width_pixels"], 1080);
+        assert_eq!(contexts["device"]["orientation"], "portrait");
+        assert_eq!(contexts["device"]["processor_count"], 8);
+        assert_eq!(contexts["device"]["memory_size"], 4 * 1024 * 1024 * 1024u64);
+        assert_eq!(contexts["device"]["locale"], "ja-JP");
+        assert_eq!(contexts["device"]["timezone"], "Asia/Tokyo");
+        assert_eq!(contexts["device"]["online"], true);
+        assert_eq!(contexts["device"]["model"], "Pixel 7");
+        assert_eq!(contexts["device"]["arch"], "arm64");
+        // The deployment's own identity and uptime.
+        assert_eq!(contexts["app"]["app_name"], "lanrurugi");
+        assert_eq!(contexts["app"]["app_version"], "1.2.3");
+        assert_eq!(contexts["app"]["app_start_time"], "2023-11-14T22:13:20Z");
+        assert_eq!(contexts["lanrurugi"]["deployment"], "lrr-test");
+        assert_eq!(contexts["lanrurugi"]["uptime_secs"], 90);
+        assert_eq!(contexts["lanrurugi"]["containerized"], true);
+        assert_eq!(contexts["lanrurugi"]["timezone"], "Asia/Tokyo");
+        // Top-level native fields the tracker groups and displays by.
+        assert_eq!(event["type"], "feedback");
+        assert_eq!(event["server_name"], "lrr-test");
+        assert_eq!(event["release"], "abc1234");
+        assert_eq!(event["environment"], "test");
+        assert_eq!(event["tags"]["source"], "feedback");
+        assert_eq!(event["user"]["username"], "Jade");
+        assert_eq!(event["user"]["email"], "jade@example.com");
+        assert_eq!(event["request"]["url"], "/config");
+        assert_eq!(event["request"]["headers"]["User-Agent"], FIREFOX_ANDROID);
+        assert_eq!(
+            event["request"]["headers"]["Accept-Language"],
+            "ja-JP,en-US"
+        );
+    }
+
+    #[test]
+    fn a_feedback_event_without_a_user_agent_stays_valid() {
+        let report = Feedback {
+            message: "note",
+            name: "Jade",
+            email: "jade@example.com",
+            user_id: "lrrg-x",
+            event_id: None,
+            url: None,
+            user_agent: None,
+            client: None,
+            attachments: &[],
+        };
+        let event = feedback_event(&report, "id", 0, &fixture_deployment());
+        assert!(event["contexts"]["feedback"]
+            .get("associated_event_id")
+            .is_none());
+        assert!(event["contexts"].get("browser").is_none());
+        assert!(event["contexts"]["lanrurugi"].get("user_agent").is_none());
+        assert!(event.get("request").is_none());
+        // A missing UA must not invent an OS or device block.
+        assert!(event["contexts"].get("os").is_none());
+        assert!(event["contexts"].get("device").is_none());
+    }
+
+    #[test]
+    fn a_rejection_reason_prefers_the_trackers_own_message() {
+        let status = reqwest::StatusCode::BAD_REQUEST;
+        // rustrak's shape: {"error":{"message":…}}.
+        let reason = rejection_reason(
+            status,
+            r#"{"error":{"error_type":"validation","message":"Invalid event JSON: missing value"}}"#,
+        );
+        assert_eq!(
+            reason,
+            "tracker answered 400 Bad Request: Invalid event JSON: missing value"
+        );
+        // A plain-text body from anything else is still better than no reason at all.
+        assert_eq!(
+            rejection_reason(status, "  nope\n"),
+            "tracker answered 400 Bad Request: nope"
+        );
+        // No body: the status alone.
+        assert_eq!(
+            rejection_reason(status, ""),
+            "tracker answered 400 Bad Request"
+        );
+    }
+
+    #[test]
+    fn a_long_rejection_body_is_clipped() {
+        let long = "x".repeat(500);
+        let reason = rejection_reason(reqwest::StatusCode::BAD_REQUEST, &long);
+        assert!(reason.ends_with('…'), "{reason}");
+        assert_eq!(
+            reason.chars().count(),
+            "tracker answered 400 Bad Request: ".chars().count() + 201
+        );
+        assert_eq!(clip("short", 10), "short");
+        assert_eq!(clip("abcdef", 3), "abc…");
+    }
+
+    #[test]
+    fn a_feedback_envelope_is_one_feedback_item() {
+        let event = json!({ "event_id": "abc", "platform": "javascript" });
+        let bytes = feedback_envelope("abc", 1_700_000_100_000, &event, &[]);
+        let text = String::from_utf8(bytes).unwrap();
+        let lines: Vec<&str> = text.trim_end().split('\n').collect();
+        assert_eq!(lines.len(), 3, "{text}");
+        assert!(lines[0].contains("\"event_id\":\"abc\""));
+        assert!(lines[0].contains("\"sent_at\":\"2023-11-14T22:15:00Z\""));
+        let header: Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(header["type"], "feedback");
+        assert_eq!(header["content_type"], "application/json");
+        // The declared length is the byte length of the payload line, as the protocol requires.
+        assert_eq!(header["length"], lines[2].len());
+        assert!(lines[2].contains("\"platform\":\"javascript\""));
+    }
+
+    #[test]
+    fn a_screenshot_rides_along_as_an_attachment_item() {
+        let event = json!({ "event_id": "abc" });
+        let attachment = FeedbackAttachment {
+            filename: "reader-bug.webp".to_string(),
+            bytes: b"RIFF....WEBP".to_vec(),
+        };
+        let bytes = feedback_envelope("abc", 1_700_000_100_000, &event, &[attachment]);
+        // Header, feedback header, event JSON, attachment header, then the raw WebP bytes.
+        let text = String::from_utf8_lossy(&bytes);
+        let lines: Vec<&str> = text.trim_end().split('\n').collect();
+        assert_eq!(lines.len(), 5, "{text}");
+        let header: Value = serde_json::from_str(lines[3]).unwrap();
+        assert_eq!(header["type"], "attachment");
+        assert_eq!(header["filename"], "reader-bug.webp");
+        assert_eq!(header["content_type"], "image/webp");
+        assert_eq!(header["attachment_type"], "event.attachment");
+        assert_eq!(header["length"], 12);
+        assert_eq!(lines[4].as_bytes(), b"RIFF....WEBP");
     }
 }

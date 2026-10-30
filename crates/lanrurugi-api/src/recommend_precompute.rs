@@ -8,7 +8,7 @@
 //! - [`precompute_one`]: incremental, fired (not awaited) from the archive-ingest and title-change
 //!   call sites. O(1) embed for the changed archive, O(n) cosine comparison against every already-
 //!   cached vector to build its own Top-N, and a **one-way** backfill — archives whose similarity
-//!   to the new/changed one clears the cache's own tail-score threshold get it spliced into their
+//!   to the new/changed one clears the cache's own tail-score threshold get it re-ranked into their
 //!   existing Top-N list. This is deliberately O(n), not O(n²): only the one changed archive's
 //!   vector is compared against the rest of the library, not every pair recomputed.
 //! - [`spawn_full_precompute_job`]: full O(n²) rebuild across every archive, run as a background
@@ -24,12 +24,21 @@
 //! just this job's own thread count) climbs, since the budget alone can't see load from other
 //! processes on the host.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use lanrurugi_recommend::embedding::cosine_similarity;
 
 use crate::AppState;
+
+/// The title-normalization rule revision the persisted vectors were embedded with — see
+/// [`lanrurugi_recommend::title::RULE_REVISION`]. `main.rs` compares this against the value stored
+/// in the cache's meta hash at startup and, on a mismatch, purges the vectors and forces a full
+/// rebuild: the per-vector reuse checks compare *raw* titles, which a normalization-rule change
+/// never alters, so without this a rule change would be silently inert against an existing
+/// library.
+pub const NORMALIZE_RULE_REVISION: u32 = lanrurugi_recommend::title::RULE_REVISION;
 
 /// User-selectable recommendation-cache precision (Settings page, `recommendprecision` field —
 /// see `settings.rs`). Higher tiers keep a longer Top-N per archive, which costs more Redis
@@ -63,11 +72,12 @@ impl RecommendPrecision {
     /// How many candidates to keep per archive's cached Top-N list. Scales with both CPU core
     /// count (more cores → a full rebuild of a wider list is still affordable) and library size
     /// (no point caching 2,000 candidates out of a 500-archive library) rather than a fixed
-    /// constant per tier. **Low is floored at 100** regardless of hardware/library size — the read
-    /// path (`recommend.rs`) always prefilters to at least
-    /// `limit.max(recommend_llm::PREFILTER_COUNT)` candidates before the Tankoubon
-    /// sibling-exclusion filter runs, and a cache shorter than that would starve the LLM rerank of
-    /// a shortlist to choose from on any archive with several already-owned sibling volumes.
+    /// constant per tier. **Every tier is floored at `recommend_llm::PREFILTER_COUNT`** — the
+    /// read path (`recommend.rs`) promises at least `limit.max(PREFILTER_COUNT)` candidates to the
+    /// LLM rerank, and a shorter cached list silently starves it: before this floor applied to all
+    /// tiers, a 200-archive library on `medium` cached 24 ids per archive, so the cache-hit path
+    /// handed the model a quarter of the documented shortlist and could not even see an archive's
+    /// own next volume.
     pub fn top_n(self, cores: usize, library_size: usize) -> usize {
         let cores = cores.max(1);
         let scale = match self {
@@ -77,11 +87,10 @@ impl RecommendPrecision {
         };
         let by_hardware = cores * scale;
         let by_library = library_size / 10;
-        let n = by_hardware.min(by_library).max(scale * 2);
-        match self {
-            Self::Low => n.max(100),
-            _ => n,
-        }
+        by_hardware
+            .min(by_library)
+            .max(scale * 2)
+            .max(crate::recommend_llm::PREFILTER_COUNT)
     }
 }
 
@@ -217,11 +226,14 @@ pub async fn precompute_one(state: &AppState, archive_id: &str, title: &str) {
     let all_vectors = Arc::new(all_vectors);
 
     let self_id_for_blocking = self_id.clone();
+    // Clones: the same `Arc`/vector are needed again by the backfill pass below.
+    let self_vector_for_own = self_vector.clone();
+    let all_vectors_for_own = all_vectors.clone();
     let (own_top_n, backfill_targets) = tokio::task::spawn_blocking(move || {
-        let mut scored: Vec<(String, f32)> = all_vectors
+        let mut scored: Vec<(String, f32)> = all_vectors_for_own
             .iter()
             .filter(|(id, _, _)| id != &self_id_for_blocking)
-            .map(|(id, _, v)| (id.clone(), cosine_similarity(&self_vector, v)))
+            .map(|(id, _, v)| (id.clone(), cosine_similarity(&self_vector_for_own, v)))
             .collect();
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -241,26 +253,89 @@ pub async fn precompute_one(state: &AppState, archive_id: &str, title: &str) {
         tracing::debug!(archive_id, error = %e, "precompute_one: failed to persist top-n");
     }
 
-    for target_id in backfill_targets {
-        let existing = match cache.get_topn(&target_id).await {
-            Ok(Some(list)) => list,
-            Ok(None) => continue, // Target was never precomputed — leave it for its own turn.
-            Err(e) => {
-                tracing::debug!(target_id, error = %e, "precompute_one: backfill read failed");
-                continue;
+    // One-way backfill, in two passes because the target's *current* list has to be read (async)
+    // before it can be re-ranked (CPU). Each target's list is rebuilt as "everything it already
+    // had, plus this archive, re-scored against the target's own vector and re-sorted" — the
+    // earlier append-and-truncate version was a no-op in practice: with the list already at
+    // `top_n`, it pushed the new id onto a full `Vec` and immediately truncated it away again, so
+    // a newly added volume never entered any existing archive's candidate pool (and a library that
+    // was only ever grown incrementally could never recommend a series' newest volume at all).
+    if !backfill_targets.is_empty() {
+        let mut pending: Vec<(String, Vec<String>)> = Vec::new();
+        for target_id in backfill_targets {
+            match cache.get_topn(&target_id).await {
+                // Target was never precomputed, or already knows about this archive.
+                Ok(Some(list)) if !list.contains(&self_id) => pending.push((target_id, list)),
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::debug!(target_id, error = %e, "precompute_one: backfill read failed");
+                }
             }
-        };
-        if existing.contains(&self_id) {
-            continue;
         }
-        let mut updated = existing;
-        updated.push(self_id.clone());
-        updated.truncate(top_n.max(updated.len().min(top_n + 1)));
-        updated.truncate(top_n);
-        if let Err(e) = cache.put_topn(&target_id, &updated).await {
-            tracing::debug!(target_id, error = %e, "precompute_one: backfill write failed");
+
+        if !pending.is_empty() {
+            let self_id_for_blocking = self_id.clone();
+            let self_vector_for_blocking = self_vector.clone();
+            let all_vectors = all_vectors.clone();
+            let updates: Vec<(String, Vec<String>)> = tokio::task::spawn_blocking(move || {
+                let by_id: HashMap<&str, &Vec<f32>> = all_vectors
+                    .iter()
+                    .map(|(id, _, vector)| (id.as_str(), vector))
+                    .collect();
+                let mut updates = Vec::with_capacity(pending.len());
+                for (target_id, existing) in pending {
+                    let Some(target_vec) = by_id.get(target_id.as_str()) else {
+                        continue;
+                    };
+                    let updated = merge_topn(&existing, top_n, &self_id_for_blocking, |id| {
+                        if id == self_id_for_blocking.as_str() {
+                            Some(cosine_similarity(target_vec, &self_vector_for_blocking))
+                        } else {
+                            by_id
+                                .get(id)
+                                .map(|vector| cosine_similarity(target_vec, vector))
+                        }
+                    });
+                    if updated != existing {
+                        updates.push((target_id, updated));
+                    }
+                }
+                updates
+            })
+            .await
+            .unwrap_or_default();
+
+            for (target_id, updated) in updates {
+                if let Err(e) = cache.put_topn(&target_id, &updated).await {
+                    tracing::debug!(target_id, error = %e, "precompute_one: backfill write failed");
+                }
+            }
         }
     }
+}
+
+/// Rebuilds one cached Top-N list with `new_id` spliced in at its true rank: re-scores every id it
+/// already holds (via `score`, which resolves an id to its cosine similarity *to this list's own
+/// anchor*), adds `new_id`, sorts and truncates. Ids that no longer resolve (a deleted archive's
+/// vector is gone) just drop out — same dangling-reference tolerance the read path has.
+fn merge_topn(
+    existing: &[String],
+    top_n: usize,
+    new_id: &str,
+    score: impl Fn(&str) -> Option<f32>,
+) -> Vec<String> {
+    let mut scored: Vec<(String, f32)> = existing
+        .iter()
+        .filter_map(|id| score(id).map(|s| (id.clone(), s)))
+        .collect();
+    if let Some(s) = score(new_id) {
+        scored.push((new_id.to_string(), s));
+    }
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let mut seen = std::collections::HashSet::new();
+    scored.retain(|(id, _)| seen.insert(id.clone()));
+    scored.truncate(top_n);
+    scored.into_iter().map(|(id, _)| id).collect()
 }
 
 /// Full O(n²) rebuild across the whole library — the first-time backfill for a pre-existing
@@ -484,10 +559,67 @@ mod tests {
     }
 
     #[test]
+    fn every_precision_tier_can_fill_the_llm_shortlist() {
+        // The read path promises `limit.max(PREFILTER_COUNT)` candidates; a 200-archive library on
+        // `medium` used to cache 24, which is what starved the rerank of the anchor's own series.
+        for precision in [
+            RecommendPrecision::Low,
+            RecommendPrecision::Medium,
+            RecommendPrecision::High,
+        ] {
+            assert!(
+                precision.top_n(2, 234) >= crate::recommend_llm::PREFILTER_COUNT,
+                "{precision:?} must be able to fill the prefilter shortlist"
+            );
+        }
+    }
+
+    #[test]
     fn precision_scales_up_with_more_cores_and_larger_library() {
         let small = RecommendPrecision::Medium.top_n(4, 1_000);
         let large = RecommendPrecision::Medium.top_n(32, 1_000_000);
         assert!(large > small);
+    }
+
+    #[test]
+    fn merge_topn_inserts_at_the_true_rank_not_the_tail() {
+        // A full list at `top_n` must make room for a score that beats its weakest member — the
+        // bug this replaces pushed and then truncated the newcomer straight back off.
+        let existing: Vec<String> = (0..4).map(|i| format!("old{i}")).collect();
+        let scores: HashMap<&str, f32> = [
+            ("old0", 0.9),
+            ("old1", 0.8),
+            ("old2", 0.7),
+            ("old3", 0.6),
+            ("new", 0.95),
+        ]
+        .into_iter()
+        .collect();
+        let merged = merge_topn(&existing, 4, "new", |id| scores.get(id).copied());
+        assert_eq!(merged, vec!["new", "old0", "old1", "old2"]);
+    }
+
+    #[test]
+    fn merge_topn_keeps_the_list_when_the_new_id_does_not_make_the_cut() {
+        let existing: Vec<String> = (0..3).map(|i| format!("old{i}")).collect();
+        let scores: HashMap<&str, f32> =
+            [("old0", 0.9), ("old1", 0.8), ("old2", 0.7), ("new", 0.1)]
+                .into_iter()
+                .collect();
+        assert_eq!(
+            merge_topn(&existing, 3, "new", |id| scores.get(id).copied()),
+            existing
+        );
+    }
+
+    #[test]
+    fn merge_topn_drops_ids_whose_vector_is_gone() {
+        let existing = vec!["a".to_string(), "deleted".to_string()];
+        let scores: HashMap<&str, f32> = [("a", 0.5), ("new", 0.9)].into_iter().collect();
+        assert_eq!(
+            merge_topn(&existing, 10, "new", |id| scores.get(id).copied()),
+            vec!["new", "a"]
+        );
     }
 
     #[test]

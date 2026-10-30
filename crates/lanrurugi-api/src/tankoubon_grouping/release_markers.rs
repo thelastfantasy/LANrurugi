@@ -1,82 +1,16 @@
-//! The one list of release markers (FR-002): title tokens that describe how a work was released —
-//! translation, edition, censorship, format, page count — rather than what it is. Unrelated works
-//! share them constantly, so they never count as shared title words. Extend the lists here when
-//! the evaluation finds another one.
+//! Release markers (FR-002): title tokens that describe how a work was released — translation,
+//! edition, censorship, format, page count — rather than what it is. Unrelated works share them
+//! constantly, so they never count as shared title words. The vocabulary is shared with the
+//! recommendation embedding's title normalizer; extend it in `lanrurugi_recommend::title`.
 
 use std::collections::HashSet;
 
-/// Whole tokens that are always release markers (compared case-insensitively).
-const MARKERS: &[&str] = &[
-    // Translation.
-    "中国翻訳",
-    "中国翻譯",
-    "中國翻譯",
-    "中国語",
-    "中文",
-    "中国翻译",
-    "英訳",
-    "英語",
-    "english",
-    "chinese",
-    "korean",
-    "韓国翻訳",
-    "translated",
-    "翻訳",
-    "機械翻訳",
-    "机翻",
-    "機翻",
-    // Edition / distribution.
-    "dl版",
-    "dl",
-    "digital",
-    "電子版",
-    "电子版",
-    "同人誌",
-    "同人志",
-    "成年コミック",
-    // Censorship.
-    "無修正",
-    "无修正",
-    "無修",
-    "无修",
-    "uncensored",
-    "decensored",
-    "修正",
-    // Colour / quality.
-    "カラー化",
-    "colorized",
-    "full color",
-    "フルカラー",
-    "高画質",
-    "hd",
-];
-
-/// Substrings that make a whole token a marker: a translation group's name ("某某汉化组") says who
-/// translated it, not what it is.
-const MARKER_SUBSTRINGS: &[&str] = &["汉化", "漢化", "翻訳", "翻譯", "翻译", "嵌字", "scanlat"];
-
-/// Whether one title token is a release marker.
+/// Whether one title token is a release marker. The vocabulary itself lives next to the title
+/// normalizer that also consumes it (`lanrurugi_recommend::title`) — one list, so a word added for
+/// the recommendation path (an edition note, a translation group) is immediately a non-signal for
+/// grouping too, instead of the two drifting apart.
 pub(crate) fn is_marker(token: &str) -> bool {
-    let lower = token.trim().to_lowercase();
-    if lower.is_empty() {
-        return false;
-    }
-    if MARKERS.contains(&lower.as_str()) {
-        return true;
-    }
-    if MARKER_SUBSTRINGS.iter().any(|m| lower.contains(m)) {
-        return true;
-    }
-    is_page_or_size_marker(&lower)
-}
-
-/// "24p", "32P", "120 pages", "1.2gb" and the like.
-fn is_page_or_size_marker(lower: &str) -> bool {
-    let digits = lower.trim_end_matches(|c: char| c.is_ascii_alphabetic());
-    let unit = &lower[digits.len()..];
-    !digits.is_empty()
-        && digits.chars().all(|c| c.is_ascii_digit() || c == '.')
-        && matches!(unit, "p" | "pages" | "page" | "mb" | "gb" | "kb")
+    lanrurugi_recommend::title::is_release_token(token)
 }
 
 /// The token set with every release marker removed.

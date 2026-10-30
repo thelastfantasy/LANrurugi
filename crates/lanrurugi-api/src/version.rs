@@ -618,9 +618,131 @@ async fn get_version(State(state): State<AppState>, Query(query): Query<VersionQ
     }
 }
 
+// ---------------------------------------------------------------- deployment identity
+
+/// When this process started: the closest a self-hosted deployment has to a "deployed at" time.
+/// Set once from `main` ([`mark_started`]) before any request is served; a missed call falls back
+/// to first use, which only makes the reported uptime shorter than the real one.
+static STARTED_AT: OnceLock<std::time::SystemTime> = OnceLock::new();
+
+pub fn mark_started() {
+    let _ = STARTED_AT.set(std::time::SystemTime::now());
+}
+
+fn unix_millis(at: std::time::SystemTime) -> i64 {
+    at.duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+pub fn started_at_millis() -> i64 {
+    unix_millis(*STARTED_AT.get_or_init(std::time::SystemTime::now))
+}
+
+/// How long this process has been running, seconds.
+pub fn uptime_secs() -> i64 {
+    ((unix_millis(std::time::SystemTime::now()) - started_at_millis()).max(0)) / 1000
+}
+
+/// The executable's own modification time — its build time, which for a container image is also
+/// the deploy time. `None` where the platform/filesystem does not report it.
+pub fn built_at_millis() -> Option<i64> {
+    let path = std::env::current_exe().ok()?;
+    Some(unix_millis(std::fs::metadata(path).ok()?.modified().ok()?))
+}
+
+/// Container hostname, so several installs forwarding to one tracker stay distinguishable.
+pub fn hostname() -> String {
+    if let Ok(value) = std::env::var("HOSTNAME") {
+        if !value.trim().is_empty() {
+            return value;
+        }
+    }
+    std::fs::read_to_string("/etc/hostname")
+        .ok()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+pub fn environment() -> String {
+    std::env::var("LANRURUGI_ENVIRONMENT").unwrap_or_else(|_| {
+        if cfg!(debug_assertions) {
+            "development"
+        } else {
+            "production"
+        }
+        .to_string()
+    })
+}
+
+/// Whether this process runs inside a container. Both marker files are container-runtime
+/// conventions; their absence is reported as "not containerized", never as "unknown".
+pub fn containerized() -> bool {
+    std::path::Path::new("/.dockerenv").exists()
+        || std::path::Path::new("/run/.containerenv").exists()
+}
+
+/// Resident set size in bytes, from `/proc/self/smaps_rollup`; `None` on platforms without procfs.
+/// (kB there, unlike `statm`'s page count, so a 64K-page kernel does not over-report by 16×.)
+pub fn process_memory_bytes() -> Option<u64> {
+    let rollup = std::fs::read_to_string("/proc/self/smaps_rollup").ok()?;
+    let line = rollup.lines().find(|line| line.starts_with("Rss:"))?;
+    let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kb * 1024)
+}
+
+/// Everything about *this deployment* a forwarded report carries. Assembled per send rather than
+/// cached: uptime and memory are live quantities.
+#[derive(Debug, Clone)]
+pub struct Deployment {
+    pub hostname: String,
+    /// `LANRURUGI_ENVIRONMENT`, or development/production from the build profile.
+    pub environment: String,
+    /// The git SHA when known — what the tracker groups releases by.
+    pub release: Option<String>,
+    pub version: &'static str,
+    pub started_at_ms: i64,
+    pub uptime_secs: i64,
+    /// Binary build time, when the filesystem reports it.
+    pub built_at_ms: Option<i64>,
+    pub os: &'static str,
+    pub arch: &'static str,
+    pub containerized: bool,
+    pub process_memory_bytes: Option<u64>,
+}
+
+pub fn deployment() -> Deployment {
+    Deployment {
+        hostname: hostname(),
+        environment: environment(),
+        release: current_sha(),
+        version: current_version(),
+        started_at_ms: started_at_millis(),
+        uptime_secs: uptime_secs(),
+        built_at_ms: built_at_millis(),
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        containerized: containerized(),
+        process_memory_bytes: process_memory_bytes(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_deployment_always_names_a_version_and_a_start_time() {
+        mark_started();
+        let deployment = deployment();
+        assert_eq!(deployment.version, env!("CARGO_PKG_VERSION"));
+        assert!(deployment.started_at_ms > 0);
+        assert!(deployment.uptime_secs >= 0);
+        assert!(!deployment.hostname.is_empty());
+        assert!(!deployment.environment.is_empty());
+        assert_eq!(deployment.containerized, containerized());
+    }
 
     #[test]
     fn a_remembered_failure_covers_only_its_own_key_and_only_while_fresh() {

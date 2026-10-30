@@ -8,6 +8,8 @@ import {
 } from "@tanstack/react-query"
 import { useEffect, useState, useSyncExternalStore } from "react"
 
+import { clearDiagnosticsDevice } from "@/diagnostics/device"
+import { startDiagnostics } from "@/diagnostics/sdk"
 import { buildChanged, type BuildIdentity,readSeenBuild, sinceIdentity, writeSeenBuild } from "@/lib/seenBuild"
 import { MSM_SELECTION_KEY } from "@/lib/storageKeys"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
@@ -1068,6 +1070,9 @@ export function useLogin() {
     // bounce straight back; with it, the provider observes the new cookies first.
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY })
+      // A browser that loaded the login page had no session, so the boot-time attempt found
+      // capture disabled. This is what actually starts diagnostics for a fresh login.
+      void startDiagnostics()
     },
   })
 }
@@ -1101,6 +1106,9 @@ export function useLogout() {
       clearSearchNavigationState()
       clearLastRefreshTimestamp()
       localStorage.removeItem(MSM_SELECTION_KEY)
+      // The diagnostics device id is per login session, not per browser forever: a shared machine
+      // must not hand the next admin the previous one's id.
+      clearDiagnosticsDevice()
     },
   })
 }

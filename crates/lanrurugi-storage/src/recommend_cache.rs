@@ -265,6 +265,54 @@ impl RecommendCacheRepository {
         let _: () = conn.hset(META_KEY, "backfill_version", version).await?;
         Ok(())
     }
+
+    /// Which title-normalization rule revision the persisted vectors were embedded under (see
+    /// `lanrurugi_recommend::title::RULE_REVISION`) — `0` for a cache written before the field
+    /// existed, which every current revision is above, so an existing library re-embeds once.
+    pub async fn get_normalizer_version(&self) -> Result<u32> {
+        let mut conn = self.pool.get().await?;
+        let raw: Option<String> = conn.hget(META_KEY, "normalizer_version").await?;
+        Ok(raw.and_then(|s| s.parse().ok()).unwrap_or(0))
+    }
+
+    pub async fn put_normalizer_version(&self, version: u32) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        let _: () = conn.hset(META_KEY, "normalizer_version", version).await?;
+        Ok(())
+    }
+
+    /// Drops every persisted embedding vector (not the Top-N lists — those are re-ranked under a
+    /// new `rebuild_generation`). Used when the title-normalization rules change: the vectors are
+    /// derived data, and the reuse checks compare *raw* titles, which a rule change never alters,
+    /// so leaving them in place would keep the old normalization in effect forever.
+    pub async fn purge_vectors(&self) -> Result<usize> {
+        let mut conn = self.pool.get().await?;
+        let prefix = "LANRURUGI_RECOMMEND_VECTOR_";
+        let mut cursor: u64 = 0;
+        let mut keys: Vec<String> = Vec::new();
+        loop {
+            let (next_cursor, batch): (u64, Vec<String>) = deadpool_redis::redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(format!("{prefix}*"))
+                .arg("COUNT")
+                .arg(1000)
+                .query_async(&mut conn)
+                .await?;
+            keys.extend(batch);
+            cursor = next_cursor;
+            if cursor == 0 {
+                break;
+            }
+        }
+
+        let mut deleted = 0usize;
+        for chunk in keys.chunks(500) {
+            let removed: u64 = conn.del(chunk).await?;
+            deleted += removed as usize;
+        }
+        Ok(deleted)
+    }
 }
 
 #[cfg(test)]

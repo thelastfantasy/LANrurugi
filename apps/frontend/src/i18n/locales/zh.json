@@ -2332,7 +2332,7 @@
   "diagnostics.forward.notConfigured": "本实例未配置追踪服务,不会外发任何数据。",
   "diagnostics.forward.start": "开启上报窗口",
   "diagnostics.forward.stop": "立即停止",
-  "diagnostics.forward.remaining": "剩余 {{remaining}}",
+  "diagnostics.forward.remaining": "正在监视中,剩余 {{remaining}}",
   "diagnostics.forward.counters": "已发送 {{sent}},失败 {{failed}}",
   "diagnostics.window.minutes5": "5 分钟",
   "diagnostics.window.hour1": "1 小时",
@@ -2363,6 +2363,12 @@
   "diagnostics.feedback.placeholder": "例如:点开第 3 卷的阅读页时缩略图不显示,刷新后依旧…",
   "diagnostics.feedback.hint": "写一条说明发到追踪服务,它会出现在那边的「用户反馈」里,带上哪台部署、什么环境;若之前有事件被上报过,还会关联到最近那一条。",
   "diagnostics.feedback.title": "直接反馈",
+  "diagnostics.feedback.name": "称呼(必填)",
+  "diagnostics.feedback.email": "邮箱(必填)",
+  "diagnostics.feedback.name_required": "请填写称呼。",
+  "diagnostics.feedback.email_required": "请填写邮箱,这条反馈才知道是谁写的。",
+  "diagnostics.feedback.email_invalid": "邮箱格式不完整。",
+  "diagnostics.feedback.attached": "发送时会自动附带:本浏览器的 UA、操作系统与浏览器版本、屏幕、语言与时区,以及本实例的版本、部署时间与运行时长。",
   "diagnostics.issues.inTrackerHint": "追踪服务里可以给问题写评论;本机没有读取它的凭据,所以回复只显示在那一边。",
   "diagnostics.issues.inTracker": "在追踪服务中查看",
   "diagnostics.tab.bundle": "反馈包",
@@ -2740,5 +2746,10 @@
   "share.import.columnSize": "大小",
   "share.import.sortByTitle": "按标题排序",
   "share.import.sortBySize": "按大小排序",
-  "share.import.inheritCategoriesHint": "把档案放进与分享方同名的分类；没有同名分类时自动新建。只处理新入库的档案。"
+  "share.import.inheritCategoriesHint": "把档案放进与分享方同名的分类；没有同名分类时自动新建。只处理新入库的档案。",
+  "diagnostics.feedback.images": "截图(可选,最多 {{count}} 张)",
+  "diagnostics.feedback.add_image": "添加截图",
+  "diagnostics.feedback.remove_image": "移除",
+  "diagnostics.feedback.image_limit": "每条反馈最多 {{count}} 张截图。",
+  "diagnostics.feedback.image_too_large": "「{{name}}」超过 {{size}} MB。"
 }

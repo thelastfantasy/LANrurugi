@@ -209,6 +209,20 @@ pub struct ClientReportedInfo {
     /// (parsed from the plain `User-Agent` string) is the only version signal at all.
     #[serde(default)]
     pub uach_full_version_list: Option<String>,
+    /// `navigator.userAgentData.getHighEntropyValues(["uaFullVersion"])` (Client Hints) — the
+    /// browser's own full version, where Chrome's plain UA string carries only the major one.
+    #[serde(default)]
+    pub uach_ua_full_version: Option<String>,
+    /// `navigator.userAgentData.getHighEntropyValues(["architecture"])` — "arm", "x86", ...
+    #[serde(default)]
+    pub uach_architecture: Option<String>,
+    /// `navigator.userAgentData.getHighEntropyValues(["bitness"])` — "64" or "32".
+    #[serde(default)]
+    pub uach_bitness: Option<String>,
+    /// `navigator.userAgentData.getHighEntropyValues(["model"])` — Android device model
+    /// ("Pixel 7"); empty on most desktops even in Chromium.
+    #[serde(default)]
+    pub uach_model: Option<String>,
     /// `navigator.userAgentData.mobile` (Client Hints) — `true`/`false` self-report, distinct from
     /// `woothee`'s own UA-string-based `category` guess.
     #[serde(default)]
@@ -250,6 +264,10 @@ pub struct ClientReportedInfo {
     #[serde(default)]
     #[serde(deserialize_with = "from_str_opt")]
     pub connection_save_data: Option<bool>,
+    /// `navigator.onLine` — whether the browser believes it has a network connection right now.
+    #[serde(default)]
+    #[serde(deserialize_with = "from_str_opt")]
+    pub online: Option<bool>,
     /// `navigator.cookieEnabled`.
     #[serde(default)]
     #[serde(deserialize_with = "from_str_opt")]
@@ -308,6 +326,10 @@ impl ClientReportedInfo {
             uach_platform_version,
             uach_brands,
             uach_full_version_list,
+            uach_ua_full_version,
+            uach_architecture,
+            uach_bitness,
+            uach_model,
             uach_mobile,
             hardware_concurrency,
             device_memory_gib,
@@ -317,6 +339,7 @@ impl ClientReportedInfo {
             connection_downlink_mbps,
             connection_rtt_ms,
             connection_save_data,
+            online,
             cookie_enabled,
             pdf_viewer_enabled,
             prefers_dark_color_scheme,
@@ -353,6 +376,11 @@ impl ClientReportedInfo {
             && connection_downlink_mbps.is_none()
             && connection_rtt_ms.is_none()
             && connection_save_data.is_none()
+            && online.is_none()
+            && uach_ua_full_version.is_none()
+            && uach_architecture.is_none()
+            && uach_bitness.is_none()
+            && uach_model.is_none()
             && cookie_enabled.is_none()
             && pdf_viewer_enabled.is_none()
             && prefers_dark_color_scheme.is_none()

@@ -258,15 +258,32 @@ export function useCloseWindow() {
   })
 }
 
-/** Submits the generated report as a user report (Sentry "feedback") to the configured tracker. */
+/** Submits a note to the configured tracker as a Sentry `feedback` item. Name and email are
+ * required; `client` is the browser-only environment report, `url` the page it was written on, and
+ * `images` are screenshots the server re-encodes to WebP before forwarding.
+ *
+ * Multipart, not JSON: the screenshots are files. `Content-Type` is deliberately left unset so the
+ * browser writes its own boundary. */
 export async function submitFeedback(input: {
   message: string
+  name: string
+  email: string
+  url?: string
+  client?: Record<string, string>
+  images?: File[]
   eventId?: string
 }): Promise<{ sent: boolean; remaining_today: number }> {
+  const form = new FormData()
+  form.append("message", input.message)
+  form.append("name", input.name)
+  form.append("email", input.email)
+  if (input.url) form.append("url", input.url)
+  if (input.client) form.append("client", JSON.stringify(input.client))
+  if (input.eventId) form.append("event_id", input.eventId)
+  for (const image of input.images ?? []) form.append("image", image, image.name)
   const response = await fetch("/api/diagnostics/feedback", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message: input.message, event_id: input.eventId }),
+    body: form,
   })
   const body = await response.json().catch(() => ({}))
   if (!response.ok) {

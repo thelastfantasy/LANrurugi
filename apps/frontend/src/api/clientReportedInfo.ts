@@ -58,6 +58,7 @@ export async function collectClientReportedInfo(): Promise<Record<string, string
   set("connection_rtt_ms", () => connection?.rtt)
   set("connection_save_data", () => connection?.saveData)
   set("cookie_enabled", () => navigator.cookieEnabled)
+  set("online", () => navigator.onLine)
   set("pdf_viewer_enabled", () => (navigator as unknown as { pdfViewerEnabled?: boolean }).pdfViewerEnabled)
   set("prefers_dark_color_scheme", () => window.matchMedia?.("(prefers-color-scheme: dark)").matches)
   set("prefers_reduced_motion", () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches)
@@ -68,7 +69,9 @@ export async function collectClientReportedInfo(): Promise<Record<string, string
   // real OS build number — Chrome's plain `User-Agent` string has frozen/generic OS version info
   // for privacy since ~2023) and each brand's *full* version (`brands`/`fullVersionList` only
   // carry major versions until high-entropy values are explicitly requested — a deliberate
-  // Client Hints privacy gate, not an oversight here).
+  // Client Hints privacy gate, not an oversight here). The same tier also carries the device
+  // model, the CPU architecture and the browser's own full version; a browser that denies a hint
+  // simply omits that field.
   try {
     const uaData = (
       navigator as unknown as {
@@ -81,6 +84,10 @@ export async function collectClientReportedInfo(): Promise<Record<string, string
           ) => Promise<{
             platformVersion?: string
             fullVersionList?: { brand: string; version: string }[]
+            uaFullVersion?: string
+            architecture?: string
+            bitness?: string
+            model?: string
           }>
         }
       }
@@ -90,8 +97,19 @@ export async function collectClientReportedInfo(): Promise<Record<string, string
       set("uach_mobile", () => uaData.mobile)
       set("uach_brands", () => uaData.brands?.map((b) => `${b.brand} ${b.version}`).join(", "))
       if (uaData.getHighEntropyValues) {
-        const highEntropy = await uaData.getHighEntropyValues(["platformVersion", "fullVersionList"])
+        const highEntropy = await uaData.getHighEntropyValues([
+          "platformVersion",
+          "fullVersionList",
+          "uaFullVersion",
+          "architecture",
+          "bitness",
+          "model",
+        ])
         set("uach_platform_version", () => highEntropy.platformVersion)
+        set("uach_ua_full_version", () => highEntropy.uaFullVersion)
+        set("uach_architecture", () => highEntropy.architecture)
+        set("uach_bitness", () => highEntropy.bitness)
+        set("uach_model", () => highEntropy.model)
         set(
           "uach_full_version_list",
           () => highEntropy.fullVersionList?.map((b) => `${b.brand} ${b.version}`).join(", "),

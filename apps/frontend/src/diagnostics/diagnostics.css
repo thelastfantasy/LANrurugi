@@ -413,6 +413,76 @@
   line-height: 1.45;
 }
 
+/* Screenshot picker: one real button (the theme's own `.stdbtn`) over a hidden file input, then
+   a row of thumbnails. The remove control stays a `.stdbtn` too, so it inherits the theme. */
+.diag-files {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.diag-file-input {
+  display: none;
+}
+
+.diag-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.diag-attachment {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 120px;
+}
+
+.diag-attachment img {
+  display: block;
+  width: 120px;
+  height: 80px;
+  /* Whole screenshot, not a centre crop: the useful pixel is often in a corner. */
+  object-fit: contain;
+  border: 1px solid rgba(128, 128, 128, 0.45);
+  border-radius: 3px;
+}
+
+.diag-attachment-foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.diag-attachment-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75em;
+  opacity: 0.75;
+}
+
+.diag-attachment-remove {
+  flex: 0 0 auto;
+  width: 26px;
+  padding: 0;
+}
+
+/* A required field's message. Weight rather than a new colour: the theme's own text colour is the
+   only one guaranteed to be legible on all five themes. */
+.diag-field-error {
+  margin: 4px 0 0;
+  font-size: 0.85em;
+  font-weight: bold;
+  line-height: 1.4;
+}
+
 /* The bundle builder stacks a row of controls; each group needs air above it, and on a phone the
    date fields go full width instead of shrinking to a smear. */
 .diag-bundle .diag-chips {

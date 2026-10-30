@@ -9,6 +9,7 @@
 import * as Sentry from "@sentry/react"
 
 import type { ForwardWindow } from "./api"
+import { diagnosticsDeviceId } from "./device"
 
 interface DiagnosticsConfig {
   enabled: boolean
@@ -19,7 +20,10 @@ interface DiagnosticsConfig {
   window: ForwardWindow
 }
 
+/** The SDK is initialised; later calls only refresh the scope. */
 let started = false
+/** An init is in flight, so concurrent callers share it. */
+let starting: Promise<void> | null = null
 
 /** An envelope as the protocol writes it: a header line, then one header + payload line per item. */
 /** What the SDK hands a transport; derived from the SDK's own option type so it stays in sync. */
@@ -145,10 +149,28 @@ function listenForRequests() {
   }
 }
 
-/** Initialises capture if the instance allows it. Safe to call once at startup. */
-export async function startDiagnostics(): Promise<void> {
-  if (started) return
-  started = true
+/**
+ * Initialises capture if the instance allows it. Callable more than once: the first successful call
+ * starts the SDK, and later calls only refresh the scope. That matters for the login page — a
+ * browser that loads it has no session yet, so the first call finds capture disabled; after the
+ * admin logs in, a second call is what actually starts capture (and assigns the device id) without
+ * requiring a full reload.
+ */
+export function startDiagnostics(): Promise<void> {
+  if (started) {
+    applyScope()
+    return Promise.resolve()
+  }
+  if (!starting) {
+    starting = init().finally(() => {
+      // A logged-out boot (or capture disabled) must stay retryable: the next login tries again.
+      if (!started) starting = null
+    })
+  }
+  return starting
+}
+
+async function init(): Promise<void> {
   let config: DiagnosticsConfig
   try {
     const response = await fetch("/api/diagnostics/config")
@@ -181,10 +203,32 @@ export async function startDiagnostics(): Promise<void> {
       return event
     },
   })
-  Sentry.getCurrentScope().setTag("app", "lanrurugi")
+  started = true
+  applyScope()
   listenForClicks()
   listenForNavigation()
   listenForRequests()
+}
+
+/**
+ * The scope data every captured event carries. Re-applied on each login so a session after a
+ * logout gets the new device id (the logout hook clears the stored one) instead of the previous
+ * session's tag.
+ */
+function applyScope() {
+  Sentry.getCurrentScope().setTag("app", "lanrurugi")
+  // Which browser this is. The forwarding window is instance-wide, so without an id every admin
+  // device's events look alike in the tracker; `display` covers the size differences an id can't
+  // show at a glance.
+  const device = diagnosticsDeviceId()
+  if (device) Sentry.getCurrentScope().setTag("device", device)
+  Sentry.getCurrentScope().setContext("display", {
+    width: window.screen.width,
+    height: window.screen.height,
+    viewport_width: window.innerWidth,
+    viewport_height: window.innerHeight,
+    dpr: window.devicePixelRatio,
+  })
 }
 
 /** Reports a render failure caught by the React error boundary. */

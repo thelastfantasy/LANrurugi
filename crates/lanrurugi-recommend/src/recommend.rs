@@ -39,19 +39,10 @@ pub struct ArchiveMeta {
     pub pagecount: u32,
 }
 
-use regex::Regex;
-use std::sync::LazyLock;
-
-/// Edition/translation markers anywhere in the title (`[中国翻訳]`, `[無字]`, `[DL版]` …).
-static MARKER_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[[^\]\[]+\]").unwrap());
-/// `【YYYYMMDD】` airing-date tag (jellyfin-frames source format).
-static DATE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"【\d{6}】").unwrap());
-/// `-f<start>-<end>_n<page>` frame-id suffix (jellyfin-frames source format).
-static FRAME_ID_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-f\d+-\d+_n\d+$").unwrap());
-/// Leading source tags (`[Patreon]`, `[Twitter]`, `[アンソロジー]` …).
-static LEADING_TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\[[^\]\[]+\]\s*").unwrap());
-/// `(@handle)` suffix.
-static HANDLE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s*\(@[^)]+\)$").unwrap());
+/// Raw titles are reduced to their *content* before embedding — release/edition blocks and the
+/// creator prefix are dropped, subtitles and everything else are kept. See [`crate::title`] for
+/// the rules themselves (and for why a `～…～` subtitle must survive them).
+pub use crate::title::normalize_title;
 
 /// A ranked recommendation.
 #[derive(Debug, Clone)]
@@ -60,33 +51,6 @@ pub struct Recommendation {
     pub title: String,
     /// Cosine similarity (0..1) of this title's embedding to the current archive's.
     pub score: f32,
-}
-
-/// Strips *source-format noise* from a title before embedding — the fixture acceptance test
-/// (60 real titles) showed the embedding model treats these as strong semantic signals, sending
-/// unrelated titles to the top of the ranking (a `jellyfin-frames-【260529】` prefix made two
-/// different anime's frame-export sets score 0.88; `[Patreon] Dal (@handle)` and
-/// `[Twitter] 原子ちゃん (@handle)` shared format, not content; `[アンソロジー]` / `[中国翻訳]` /
-/// `[無字]` / `[DL版]` are anthology/edition markers). These are all *finite, enumerable*
-/// source conventions — deliberately NOT a volume-notation table (that space is unbounded;
-/// series membership itself stays 100% embedding-driven, see the module docs).
-pub fn normalize_title(title: &str) -> String {
-    let mut t = title.trim().to_string();
-    // Edition/translation markers anywhere (`[中国翻訳]`, `[無字]`, `[DL版]`, `[中国翻译]` …).
-    // Edition/translation markers anywhere (`[中国翻訳]`, `[無字]`, `[DL版]` …).
-    t = MARKER_RE.replace_all(&t, "").into_owned();
-    // Source-prefix conventions: `jellyfin-frames-` + the `【YYYYMMDD】` airing-date tag and the
-    // `-f<start>-<end>_n<page>` frame-id suffix are one specific export tool's format.
-    if let Some(rest) = t.strip_prefix("jellyfin-frames-") {
-        t = rest.to_string();
-    }
-    t = DATE_RE.replace_all(&t, "").into_owned();
-    t = FRAME_ID_RE.replace_all(&t, "").into_owned();
-    // `[Patreon]`/`[Twitter]`/`[アンソロジー]` leading source tags and `(@handle)` suffixes.
-    t = LEADING_TAG_RE.replace_all(&t, "").into_owned();
-    t = HANDLE_RE.replace_all(&t, "").into_owned();
-    // Collapse runs of whitespace left behind by the removals.
-    t.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Ranks every candidate except `current_id` by embedding similarity to `current_title`,
