@@ -2,512 +2,76 @@
 
 # LANrurugi
 
-A from-scratch Rust + React rewrite of [LANraragi](https://github.com/Difegue/LANraragi), a
-self-hosted manga/doujinshi library manager. Aims for feature parity with, and full data/API
-compatibility with, existing LANraragi installations, while fixing a known duplicate-detection
-defect and adding genuine multi-core concurrency where the legacy Perl implementation had none.
+[![CI](https://github.com/thelastfantasy/LANrurugi/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/thelastfantasy/LANrurugi/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/thelastfantasy/LANrurugi/actions/workflows/codeql.yml/badge.svg?branch=dev)](https://github.com/thelastfantasy/LANrurugi/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-**Status**: Phase 1 (`specs/001-lanrurugi-full-rewrite/`) is implemented — all eight user stories
-(library continuity, non-merging ingestion, third-party API compatibility, plugin metadata
-enrichment, backup/export, duplicate repair, UI localization, and a concurrency benchmark against
-the legacy system) are done; see `specs/001-lanrurugi-full-rewrite/tasks.md` for the full
-breakdown. Four additive-to-Phase-1 addenda are also fully implemented: `specs/002-job-console/`
-(background job management UI), `specs/003-ui-test-automation/` (Vitest + Playwright frontend test
-coverage), `specs/005-download-plugin-progress/` (real byte-level download progress, per-domain
-concurrency/rate limiting), and `specs/007-guest-restricted-access/` (restricted guest access mode,
-replacing the legacy all-open/all-locked password toggle) — the latter's own
-`specs/007-guest-restricted-access/quickstart.md` full 11-scenario live-instance validation
-(`tasks.md` T053) still needs a run; the code itself is complete and passes all automated tests.
-Only Phase 2 (`specs/004-ocr-manga-translation/`, on-page manga translation) remains a plan with no
-implementation yet, deliberately kept independent per constitution Principle VI so it never blocks
-or is blocked by Phase 1.
+A self-hosted manga / doujinshi library manager. Rust backend, React frontend, a from-scratch rewrite of
+[LANraragi](https://github.com/Difegue/LANraragi).
 
-## Stack
+## Relationship to LANraragi
 
-- **Backend**: Rust (Tokio async runtime, Axum web framework, Rayon for CPU-bound parallelism),
-  one Cargo workspace under `crates/` producing a single binary, `lanrurugi-server`, with
-  `serve` / `rebuild-index` / `bench` subcommands.
-- **Datastore**: Redis with the legacy key layout (five logical DBs — see
-  `crates/lanrurugi-storage/src/redis.rs`). LANrurugi keeps its own database directory; LANraragi's
-  metadata is imported from its backup JSON.
-- **Frontend**: React 19 + TypeScript + Vite + Tailwind + Zustand + TanStack Query, under
-  `apps/frontend/`.
-- **Plugins**: sandboxed Deno subprocesses, one per plugin namespace (`crates/lanrurugi-plugin/`).
-- **Benchmark harness**: `crates/lanrurugi-bench/` — a synthetic-library generator, `criterion`
-  microbenchmarks, and a cross-system comparison harness that drives both this binary and an
-  actual legacy LANraragi instance side by side.
+LANrurugi keeps LANraragi's library layout, tag syntax and HTTP API, so existing third-party clients,
+readers and migration flows keep working — switching over is mounting the same manga directory and
+importing a backup JSON. The rewrite is about speed and reliability: the backend is Rust + Tokio, so
+CPU-bound paths (thumbnails, OCR, image comparison) actually use every core, and downloads moved out of
+the plugin sandbox into the host process, which is what makes real byte-level progress and per-domain
+rate limiting possible. Feature-wise it is parity-first: existing LANraragi behaviour is preserved where
+it exists, and subscriptions, sharing/import, in-page translation and native packages are added on top.
+For the item-by-item comparison — including the differences that are deliberate — see
+[docs/comparison-with-lanraragi.md](./docs/comparison-with-lanraragi.md) (Chinese).
 
-## Improvements over LANraragi
+## What it does
 
-This isn't just "the same features in a different language." Below is a concrete inventory of
-functional/architectural improvements — each one either fixes a real, named defect in legacy or
-adds a capability legacy never had, not a "used Rust so it's automatically better" claim. Sections
-marked **parity** are deliberate compatibility decisions, called out so this list doesn't overclaim.
+- **Library and reading**: categories, tags, reading progress, full-text and tag search; shelf / grid / list
+  views, 12 UI languages.
+- **Plugins**: metadata, download and login plugins run in Deno subprocesses with per-namespace permissions;
+  the AI wizard can generate new ones for a site.
+- **Downloads**: byte-level progress, per-domain concurrency and rate limits; subscriptions that discover new
+  releases, apply your rules, and queue them after a preview.
+- **Sharing**: send an archive or a tankoubon to someone who reads it in the browser, downloads it, or imports
+  it into their own instance — direct, hole-punched, or relayed, with no third-party service involved.
+- **In-page translation**: OCR → erase the original text → typeset the translation, on a cloud API or a local
+  model, with per-volume font caching.
+- **E-books**: PDF, EPUB, MOBI/AZW3, DjVu, FB2 and TXT are catalogued and read like any archive.
+- **Native packages**: Linux (x86_64 / aarch64), macOS (Apple Silicon) and FreeBSD — unpack and run, no container.
 
-### Data integrity & duplicate detection
-
-- **A real fix for legacy's false-duplicate-merge defect.** Legacy computes an archive's ID as
-  `SHA-1` of only the first 512,000 bytes of the file
-  (`~/LANraragi/lib/LANraragi/Utils/Database.pm::compute_id`) — two different files that happen to
-  share the same leading content (e.g. identical cover pages, different pages after that) hash
-  identically and get silently collapsed into one library entry, clobbering whichever one's
-  metadata got overwritten. LANrurugi's default ID algorithm
-  (`crates/lanrurugi-storage/src/id.rs::size_aware_id`) folds the real file size into the hash
-  input, so two archives sharing a prefix but differing in length no longer collide — while the
-  original legacy ID is still computed and kept forever for read-compatibility with existing
-  libraries (constitution Principle I). SHA-1 (not a newer hash) was deliberately kept rather than
-  switched to something like BLAKE3, specifically because legacy code elsewhere enumerates archive
-  IDs via a fixed-40-hex-character Redis key-glob pattern — changing the digest length would have
-  silently broken every one of those glob patterns.
-- **A one-time repair tool for libraries already damaged by that defect** (`lanrurugi
-  rebuild-index` / `POST /database/rebuild-index`, User Story 6) — recomputes every archive's ID
-  with the new algorithm, and any previously-hidden file that a historical false-merge had
-  swallowed reappears as its own, independently taggable archive, without disturbing the
-  already-correctly-tracked one's tags/reading progress. Legacy has no equivalent repair mechanism
-  at all — once two archives were merged, they stayed merged.
-- **Filename conflicts and content conflicts are no longer treated the same way.** A `QueueError`
-  carries a `DuplicateReasonKind` (`ContentHash` vs. `Filename`) so the two genuinely different
-  situations get genuinely different handling: a real content duplicate is unconditionally
-  rejected (no "overwrite" bypass — overwriting identical content was previously dead work that
-  also lost the original `date_added`), while a filename collision on *different* content stages
-  the downloaded bytes to a temp file and offers a real choice via two new endpoints —
-  `POST /download_queue/{id}/overwrite` and `POST /download_queue/{id}/rename` — letting the new
-  download either replace the existing archive or be catalogued under a new name as a fully
-  independent, coexisting archive. Legacy has no equivalent; this class of conflict was previously
-  either undetected or silently overwritten. An hourly background sweep reclaims any staged file
-  left unresolved for 24+ hours and downgrades the queue item to a distinct "expired, please
-  re-download" state instead of continuing to offer actions on bytes that no longer exist.
-
-### Concurrency & architecture
-
-- **One consolidated process instead of three.** Legacy runs the main Mojolicious app, `Shinobu`
-  as a separate file-watcher process, and Minion as a separate job-queue worker — three
-  independent OS processes. LANrurugi is one `clap`-based binary (`lanrurugi-server`) with
-  `serve`/`rebuild-index`/`bench` subcommands; `serve` runs the HTTP API, the `notify`-based file
-  watcher and background jobs as tasks inside one Tokio runtime, not separate processes. Work that
-  can crash or use a lot of memory — plugins (Deno), the embedding model, GPU inference and e-book
-  parsing — runs in isolated helper subprocesses started on demand, so a failure there never takes
-  the main process down. The file watcher recovers by itself from errors and from the content
-  directory being unmounted or remounted, then scans for files added meanwhile — no manual restart
-  like legacy Shinobu needed.
-- **A real fix for a concurrent-download race that could silently corrupt files.** Filename-
-  conflict detection used to be a one-time directory scan with no lock between "checked, no
-  conflict" and "wrote the file" — two downloads racing to the same resolved filename could both
-  pass the check and then one would silently clobber the other's bytes on disk while both left a
-  catalog record pointing at the same (now half-wrong) file. Fixed with a per-filename async lock
-  (`AppState::lock_filename`, `crates/lanrurugi-api/src/state.rs`) held across the whole
-  check-then-write window, with an RAII guard that releases correctly even across early-return
-  error paths.
-- **Cooperative download cancellation, not a forceful process-level abort.** A per-queue-item
-  `CancellationToken` lets the download loop notice a stop request at the same point it already
-  checks for network errors, reusing the identical partial-file cleanup path rather than leaving
-  an untraceable orphaned temp file behind the way an `AbortHandle`-style hard-kill would (dropping
-  mid-`write_all()` with no chance to clean up). Legacy has no per-download stop mechanism at all.
-- **Explicit, correct CPU/async bridging.** All CPU-bound work (hashing, image decode/resize) runs
-  via `rayon`, bridged into the async runtime through `tokio::task::spawn_blocking` — deliberately
-  never inline on an async worker thread, so a bulk scan/reindex can't stall requests the HTTP
-  server is concurrently serving. Legacy's single-threaded-per-request Perl model has no equivalent
-  concept of "don't block the reactor" to get right or wrong in the first place; this is new,
-  genuine multi-core parallelism for exactly the bulk operations (full library scan, duplicate-
-  repair reindex) the benchmark suite below measures.
-- **Request coalescing for expensive, frequently-repeated work.** Concurrent requests for the same
-  missing thumbnail, or the same archive page, collapse onto one regeneration/read instead of each
-  independently re-scanning the archive file from scratch — a class of duplicate-work legacy's
-  per-request model never had to (or could) avoid.
-
-### Download pipeline
-
-- **Real, byte-level download progress.** Previously, a download plugin's actual HTTP transfer
-  happened invisibly inside the Deno-sandboxed plugin process, with no way for the host to observe
-  progress at all. The real transfer moved into Rust (streaming `reqwest`), so `downloaded_bytes`/
-  `total_bytes` are real and stream into a genuine progress bar, instead of a queue item jumping
-  straight from 0% to 100%.
-- **Per-domain concurrency limits and rate limiting**, configurable per plugin (exact-hostname and
-  wildcard domain rules, token-bucket rate limiting) and user-overridable through a settings UI —
-  something legacy's download plugins never had any way to express or enforce at all.
-- **A real, verified bug fix for non-ASCII download filenames.** Some real download servers send a
-  legitimate UTF-8 filename directly in a plain `Content-Disposition: filename="..."` header
-  (technically not RFC 6266-compliant, but common in practice) — the original filename-parsing
-  code used `HeaderValue::to_str()`, which silently fails on any non-ASCII byte, so these downloads
-  fell back to a meaningless gallery-ID string as the saved filename. Fixed by reading the header's
-  raw bytes, decoding as UTF-8 first and falling back to a Latin-1 byte mapping (which can never
-  itself fail) only for genuinely non-UTF-8 servers.
-- **Download cancellation is a real, persisted state**, not just a frontend illusion — a
-  `Cancelled` state was added to the actual queue-item state machine (surviving a page refresh,
-  distinct from `Queued`/`Error`, with its own "已取消/Cancelled" UI treatment), after an earlier
-  frontend-only-optimistic-state attempt was found to vanish on refresh.
-- **Duplicate in-flight downloads of the same URL are now rejected** (`409`) instead of silently
-  allowed to run concurrently with no detection at all, and a running download's queue record can
-  no longer be deleted out from under it (previously silently orphaning the background task with
-  no way to observe or stop it afterward).
-
-### Error handling & internationalization
-
-- **Every download-queue error is now structured and translatable, never a raw string.**
-  `QueueError` (`crates/lanrurugi-core/src/queue_error.rs`) is a closed enum with zero free-text
-  fields — only structured, interpolatable data. Every variant gets a stable numeric code (real
-  HTTP-equivalent codes like 409/422 where applicable, ≥1000 for pure business errors with no HTTP
-  analog), and the frontend renders each `kind` as a real translated string — including turning a
-  duplicate-archive error's `existing_id` into an actual clickable link to the existing archive,
-  something legacy's plain error text never offered.
-- **The plugin SDK gained the same structured-error treatment.** Every plugin-side
-  `throw new Error("...")`/`{error: "a string"}` (roughly 40 call sites across the shipped plugin
-  set) was converted to a `{error_code, data}` shape, where `error_code` doubles as an i18n lookup
-  key rather than opaque English text a non-English-reading user would otherwise be stuck with.
-
-### Plugin sandboxing
-
-- **Per-plugin least-privilege permissions — legacy has no permission model for plugins at all.**
-  Each plugin namespace gets its own Deno subprocess, started only with the exact
-  network/read/write permissions that plugin itself declares (queried via a throwaway
-  zero-permission startup probe before the real worker is spawned) — never a shared process that
-  would otherwise grant every plugin the union of every other plugin's permissions.
-- **Real path-traversal hardening** on the plugin-namespace parameter, which arrives from an
-  unauthenticated HTTP query string (`POST /plugins/use?plugin=...`) — rejects `..`-traversal and
-  absolute paths, covered by dedicated tests.
-- **One plugin's failure can't take down another's.** A crashed or timed-out plugin call drops
-  just that plugin's own worker (respawned lazily on next use); every other plugin's pool is
-  unaffected.
-
-### AI / LLM features
-
-AI here is not a collection of bolt-on demos; it is used to turn several previously-manual workflows into complete, safe loops. The flagship is the **AI plugin creation wizard** — it takes "write a LANraragi plugin for this site" from reading SDK docs, hand-writing regexes, and debugging scrapers, to a single pipeline: natural-language description → generated plugin → sandboxed trial run → automatic repair → confirmed install → audit trail. That kind of full loop is extremely rare among self-hosted manga servers.
-
-#### AI plugin creation wizard (flagship)
-
-- **Generate working login/metadata/download plugins from natural language.** Enter a target domain and the system first reports which of the three plugin types are already covered; for each missing type (up to three per run) you describe the page, supply test links (metadata/download) or test credentials (login), and the AI (via a DeepSeek tool-calling loop) generates the corresponding `.ts` draft. All real network access — fetching pages, running trial calls — is performed by the system itself; the AI only makes semantic judgments.
-- **Drafts are not "probably working" — they are actually trial-run.** Generated code reuses the existing Deno sandbox's two-phase permission model and is executed for real against each supplied test link or the one login attempt. A trial run never installs anything; only an explicit confirm-save does. Manual code edits or an AI auto-fix (capped at 3 consecutive attempts, history never cleared) both re-trigger a fresh trial run, so broken plugins don't get installed.
-- **Trial failures automatically suggest login-related causes.** If a metadata/download trial run fails, the AI judges whether the failure looks login-related and, if so, offers to generate or associate a login plugin in place — once validated and saved, the originally-failing draft is automatically regenerated with the association, no restart of the wizard needed.
-- **Test credentials are never sent to the LLM.** The login call runs entirely locally; only a sanitized outcome is surfaced to the AI. This is what makes AI-generated plugins trustworthy enough for real sites, not just demos.
-- **A credential only ever goes to the site it belongs to.** Every address the AI asks to fetch, and every redirect hop, passes a local policy first: credentials go only to the target site, other sites are reachable only when the user supplied a link there and never with credentials, and loopback/private addresses are always refused. A generated plugin that declares hosts the user never supplied cannot be trial-run until the user approves those hosts for that run. Fetched pages reach the AI framed as untrusted data, with per-page and per-generation caps.
-- **AI-generated plugins are visibly marked, exportable, and auditable.** Installed-plugins list badges any wizard-generated plugin; every plugin can be exported as a `.zip` with one click; wizard saves — both successes and failures — are recorded in the activity log under their own action type, distinct from manual uploads.
-- **`domain_match` cleanly separates domain ownership from trigger matching.** Previously both shared `url_pattern`, so a narrowly-written trigger regex could make the wizard's own domain lookup or the Upload page's "fetch metadata" button miss a plugin that actually covers the domain. `domain_match` is a plain array of bare domains used only for ownership checks; `url_pattern` keeps its original job of gating real dispatch, with a fallback that preserves existing built-in plugin behavior.
-
-#### Other AI capabilities
-
-Everything below is optional and degrades gracefully without a configured DeepSeek key — either a local-embedding-only fallback or the feature simply staying unavailable, never a hard dependency:
-
-- **Unified LLM access.** Every DeepSeek-dependent feature uses the same `LlmClient` trait: API-key presence and the official DeepSeek `/user/balance` account balance are checked before each call (success is cached for 60 seconds; custom compatible endpoints that don't implement the balance route are allowed through). Prompts continue to live centrally in `crates/lanrurugi-api/src/llm_prompts.rs`.
-- **Smart recommendation engine.** At reading boundaries it shows recommendation cards (10 desktop / 6 tablet / 4 mobile), using a local ONNX embedding model for coarse filtering plus a DeepSeek LLM for fine ranking. Tankoubon reading boundaries use the last volume as the anchor and exclude the other volumes of the same Tankoubon.
-- **AI-assisted Tankoubon editing.** One-click analysis of member archive titles to suggest a Tankoubon name, chapter titles, and correct reading order; supports whole-series naming and per-volume chapter-name suggestions with multi-candidate preview and one-click apply.
-- **AI-assisted Tankoubon creation.** Analyzes archives not yet in any Tankoubon and suggests groups that likely belong to the same series, or additions to existing Tankoubons; local recall needs no LLM key, and it no longer groups works by different artists/circles (anthologies and shared cosplayers excepted), counts release markers such as 中国翻訳/DL版 as shared title words, or lets library-wide common tags dominate (tags are weighted by rarity). With an LLM key, the AI reviews the card in view (prefetching the next two) and can only remove members, never add; removed members start unticked with a reason, and the user decides. Each card can show why its members were grouped. Creating and dismissing suggestions are recorded as labels, and `lanrurugi-server eval-grouping` replays them to measure precision and recall before a change. With an LLM key you can also apply AI renaming and chapter ordering at creation time; unsatisfactory suggestions can be dismissed with "don't remind me again".
-- **LLM tag backfill.** Uses the LLM to identify and fill in missing author/coser tags from titles, improving grouping suggestions and related features.
-- **Archive split suggestions.** Automatically detects multi-volume/nested-directory archives and uses the LLM to propose a split plan. It supports a recursive directory-tree viewer (nested sub-archives are expanded), one-click suggestion generation for pre-existing archives, and batch splitting from a Tankoubon's overview; the reader page can review the plan and start a background split job with SSE progress, same-directory output, Tankoubon membership migration, and optional deletion of the original.
-- **Bulk-create Tankoubons from subfolders.** There is a settings-page switch for this feature (on by default), and the maintenance-script area now has “Subfolders to Tankoubons”: it scans only the first-level subdirectories of the library directory and creates one Tankoubon for every one that directly contains archives; archives in deeper nested directories are recursively included in that first-level Tankoubon, while nested directories themselves do not become separate Tankoubons. With a DeepSeek key configured it uses the LLM to infer a better series name and an author/circle tag; without one it falls back to the raw folder name and skips tagging.
-
-### Frontend
-
-- **Centralized route management** (`apps/frontend/src/routes.ts`) replacing previously scattered,
-  hand-written path strings — this closed real dead-link bugs, not just a refactor: several pages
-  used a `#/reader/{id}`-style hash fragment in an app that uses `BrowserRouter` (not
-  `HashRouter`), which only "worked" via a left-click `onClick` handler intercepting the browser's
-  default navigation — middle-click-to-open-in-new-tab, right-click-copy-link, and the app's own
-  "copy link" button were all genuinely broken until this was centralized and fixed.
-- **A rebuilt tag editor** with real removable chips (click-to-remove, Enter/comma-to-commit,
-  paste-splits-on-comma, duplicate rejection, autocomplete) replacing a degenerated plain
-  `<textarea>` — and, in the process, a real behavioral bug fix: running a metadata plugin now
-  correctly saves pending edits first (matching legacy's own real save-then-fetch sequencing),
-  which the prior implementation skipped entirely.
-- **Search filter state round-trips through the browser's real back/forward history** via React
-  Router's own `navigate()`, rather than a `replaceState`-only implementation that couldn't be
-  navigated with the back button at all.
-- **A full-page zoom preview (lightbox) on the reader overview.** Clicking a magnifying-glass icon
-  on any page-grid thumbnail opens a large preview + current-page info (page number, filename,
-  resolution, size, chapter) plus a fast-scrubbing, hover-to-preview horizontal filmstrip gallery
-  — none of it disturbing the underlying overview modal's own scroll position or actual reading
-  progress. Legacy's own thumbnail grid is too small to judge chapter start/end purely by content;
-  legacy has no equivalent feature at all.
-- **Google Reader-style `j`/`k` keyboard shortcuts in the reader** — `j` scrolls down and advances
-  to the next page once it hits the bottom, `k` jumps to the previous page's top; the scroll
-  distance is configurable on the settings panel as either a percentage of viewport height or a
-  fixed pixel amount. Several mobile-reader fixes shipped alongside: a discarded-and-reloaded tab
-  (e.g. after a phone's screen lock) no longer has its real reading progress overridden by a stale
-  `?p=` deep-link page number; the floating icon toolbar picked up a background so it no longer
-  visually collides with the content scrolled underneath it; and tapping the help icon on touch no
-  longer opens both the hover-preview bubble and the full shortcuts panel at once (a synthesized
-  `mouseenter` before `click` firing both).
-- **Several real chapter (ToC) management improvements**: delete/edit now lists every chapter in
-  the archive to pick from, instead of legacy's own real limitation of only ever operating on
-  "whichever chapter the reader is currently scrolled into" (`getCurrentChapter()`, not a porting
-  gap); one-click presets (cover/back cover/table of contents/color pages/omake/afterword/
-  illustration + a chapter-N dropdown) or number-key shortcuts (0 = table of contents, 1–9 = that
-  chapter) for common chapter types; preset-set chapter titles are now stored as reserved internal
-  identifiers (`toc`/`c1`–`c20`) and deduped by re-write (re-setting "Chapter 4" moves it instead
-  of leaving a stale duplicate behind), with the frontend mapping them back to real localized
-  display text — these preset entries can't be renamed through the manual-edit dialog (that would
-  break the dedup semantics) and must be deleted and re-applied via a preset instead.
-- **`date_added` now supports calendar-day search** (`date_added:2026-07-20`, resolved against a
-  server timezone configurable on the Settings page) as the timestamp range covering that day
-  00:00–24:00 in that timezone; legacy's own `date_added` is a bare Unix-seconds tag with no
-  concept of "by day" search at all. Tag display and its search link now consistently show/resolve
-  as `yyyy-mm-dd` in that same timezone.
-- **A `rating` comparison search syntax** (`rating>=1`, `rating<4`, `rating=5` — the last
-  equivalent to legacy's plain `rating:5`), supporting fractional values; legacy only ever
-  supported an exact-match `rating:N` tag.
-- **Quoted search values support `\"`/`\\` escaping.** A tag value that itself contains a literal
-  `"` (a real, if rare, possibility in a scraped artist/circle name) previously had no way to be
-  searched at all — the first unescaped `"` inside the value was read as the closing quote,
-  silently truncating it and leaving the remainder parsed as an unrelated bare token.
-- **A "Mark as Read"/"Mark as Unread" context-menu item on Library grid cards**, setting reading
-  progress directly to the last page or 0 — legacy has no way to manually toggle read status
-  outside of actually paging through the archive.
-- **A page-level bookmark system, replacing legacy's category-linked bookmark toggle.** Legacy's
-  "bookmark" was really a single global switch that added the whole archive to one designated
-  category; every page can now be bookmarked independently. A standalone `/bookmarks` page sorts by
-  recently-bookmarked/title/date-added with cursor pagination, and hovering (tapping, on touch) a
-  card opens a thumbnail grid of that archive's own bookmarked pages with per-page delete and
-  corner-aware positioning that flips toward whichever side of the viewport actually has more room.
-  The homepage carousel gained a matching "Bookmarked" mode reusing the same preview, with the
-  mouse wheel smartly handed off between the preview grid and the carousel's own horizontal scroll
-  (scrolls the grid's content first if it has any, briefly absorbs further scrolling once it hits
-  either end to avoid an accidental hand-off, then forwards to the carousel; a mouse with its own
-  horizontal wheel skips the grid entirely). Bookmark add/remove now also shows up in the activity
-  log.
-- **Stamps and bookmarks are linked.** Placing a stamp on a page that isn't bookmarked yet also
-  bookmarks it; removing a page's last remaining stamp also removes that bookmark — both
-  independently toggleable on the Settings page. The linked action is recorded as a single,
-  consolidated activity-log entry rather than being conflated with a manual stamp edit, and the
-  bookmark hover-preview grid overlays a per-page stamp-count badge.
-- **Bulk delete on the Batch Operations page**, backed by a dedicated `DELETE /api/archives`
-  endpoint restricted to real Session logins (API tokens are rejected outright). Requires typing
-  "delete"/`DELETE` to confirm; partial failures surface a toast listing each failed archive's own
-  error reason.
-
-### Authentication
-
-- **JWT short-lived access tokens + rotating refresh tokens, replacing a fixed 24-hour session.**
-  Login state is now backed by a real JWT (HS256) access token (short-lived) paired with a
-  revocable, single-use refresh token (OAuth 2.1-style rotation with reuse detection — replaying an
-  already-rotated refresh token burns the whole token family); the frontend transparently refreshes
-  an expired access token without forcing re-login. Both lifetimes are configurable on the Settings
-  page.
-- **A first-party API token management system, replacing legacy's single shared `apikey`.**
-  Legacy's "one fixed apikey string for the whole instance" is replaced by a real multi-token system
-  manageable from the Settings page — create, rename, and revoke named tokens, each with an Admin
-  (full access except token management, account security, and database deletion) or Guest
-  (read-only) role and an optional expiry, with the raw token shown exactly once at creation time.
-  This is a deliberate pre-release breaking change: third-party clients relying on legacy's
-  `Bearer base64(apikey)` / `?key=` mechanism are no longer guaranteed to work without modification
-  (see the API-contract-fidelity note below).
-- **Restricted guest access, replacing legacy's binary all-open/all-locked password toggle.**
-  Legacy's `enablepass`/`nofunmode` could only ever produce "fully open" or "fully locked", with no
-  middle ground; password protection is now unconditional (can no longer be disabled by anyone),
-  and in its place there's an optional site-wide guest-mode switch paired with a per-category
-  "visible to guests" flag — an administrator opts specific categories into guest visibility, and an
-  unauthenticated visitor is then routed into a scoped, read-only browsing experience (list, read,
-  search/tag-filter, confined to guest-visible categories) instead of being redirected to the login
-  page; bookmarking, progress-saving, raw-file download, and every admin function stay unavailable
-  to a guest. An out-of-scope archive returns 404, indistinguishable from a nonexistent one, rather
-  than a 403 that would leak "this ID exists, you just can't see it."
-
-### Testing infrastructure
-
-- **A two-layer automated test suite that Phase 1 shipped without.** Vitest + React Testing
-  Library for fast, no-backend unit coverage of hooks/logic, and Playwright (Chromium + Firefox)
-  for real end-to-end coverage against a live backend + Redis, with per-worker Redis isolation.
-  Several suites specifically encode real bugs this project's own manual QA already found and
-  fixed, plus systematic fixture coverage across every archive format the scanner supports.
-- **A dead test was found and fixed by actually wiring up the test infrastructure it depended on.**
-  A contract test kept silently passing (reported `ok`) while actually just skipping, because the
-  Redis connection string it needed had never been wired into the containerized test runner — true
-  of every Redis-dependent test in the suite until this was fixed. Fixing the wiring (not just the
-  one stale test) immediately surfaced that the specific test in question asserted against an
-  endpoint that no longer exists (the underlying feature had migrated to a different mechanism),
-  which was then replaced with a real equivalent test.
-
-### E-book formats
-
-- **PDF, EPUB (fixed-layout and reflowable), MOBI/AZW/AZW3 (comic and text), DjVu, FB2 and TXT are
-  catalogued like archives and read page by page in the same reader** (`specs/013-ebook-formats/`).
-  Pictures stored in a book (scanned PDF pages, fixed-layout EPUB pages, comic MOBI pages, FB2
-  illustrations) are served as their stored bytes, never re-encoded; text PDF pages and DjVu pages
-  are rendered to WebP; text books are typeset and paginated server-side with a Simplified
-  Chinese/Japanese/Korean CJK font chosen by the book's language, with colour emoji; hard-wrapped TXT
-  lines are rejoined grapheme by grapheme, so combined emoji are never split and no space is inserted
-  beside CJK punctuation. The book's own table of contents
-  (PDF bookmarks, EPUB nav/NCX resolved to the linked anchor, the MOBI guide ToC, DjVu bookmarks,
-  FB2 sections, detected TXT chapters) becomes the archive's chapter list on first import without
-  overwriting user edits, and a missing or token one is completed from the text's headings and
-  chapter lines. DRM-protected or encrypted files report why instead of becoming empty 0-page
-  archives. All parsing and rendering runs in a pool of `lanrurugi-book-worker` subprocesses (a
-  crash or hang never takes the server down; idle workers exit), rendered pages count against
-  `tempmaxsize`, and a PDF can still be opened as-is in the browser.
-
-### Native packages
-
-- **Native packages, no container needed** (`specs/015-native-platforms/`). Besides the Docker image,
-  every release ships packages for Linux (x86_64 / aarch64), macOS (Apple Silicon) and FreeBSD. The
-  program finds its frontend, plugins, docs, bundled PDFium/ONNX Runtime and models relative to its
-  own location, so nothing needs configuring beyond the library; a model download script and
-  systemd / launchd / rc.d service definitions are included. Redis, Deno and the other prerequisites
-  come from the system package manager; when an optional component is missing the server still
-  starts and its start-up log lists the unavailable features.
-
-### Sharing and cross-instance import
-
-- **Share archives and tankoubons, import them into another LANrurugi** (`specs/017-archive-sharing/`).
-  An administrator shares any mix of archives and tankoubons; the recipient reads or downloads them in
-  a browser, or imports them straight into their own instance with tags, summaries and tankoubon
-  volume order rebuilt. A share travels as a short code or QR code (decoded in the browser, never
-  uploaded), with a download limit, an IP allow-list or first-N-addresses rule, and an expiry, and
-  revoking it takes effect within half a minute. The code resolves to whatever route works now rather
-  than a fixed URL, so instances with no domain and no public IP import from each other too (direct,
-  hole punching, relay fallback, LAN discovery — or your own or a friend's LANrurugi node instead of
-  any third-party service). The code's text form also carries the sharer's current routes, sealed so
-  no address shows in it; whenever one of them works, an import involves no public service at all.
-  A relay offered to others can be rate-limited per connection or limited to listed instances.
-  Transfers are verified piece by piece and resume where they stopped; the result is byte-identical
-  to the original, and imported archives land as the newest in the library in the sharer's original
-  order. Importers can opt in to help deliver, spreading uploads
-  across instances while every piece is still checked against the sharer's fingerprint. Upload caps
-  with a BitTorrent-style alternative schedule, and embeddable share cards (iframe or Web Component),
-  come with it.
-- **Download a whole tankoubon as one zip.** Members are stored in volume order as their original
-  files (not re-compressed) and streamed as the zip is produced, with nothing prepared server-side first.
-
-### Job console
-
-- Surfaces the job registry already used internally for backup/restore, thumbnail regeneration,
-  duplicate scans, and index rebuilds as a real browsable admin page — live state/progress,
-  per-job result/error inspection, filtering — something legacy exposes only through Minion's own
-  admin UI, on a separate, additive `/api/jobs*` contract that leaves the legacy-mimicking
-  `/api/minion/*` API untouched (Principle II).
-
-### What's deliberately *not* claimed as an improvement (parity by design)
-
-- SHA-1 was kept, not upgraded to a newer hash — see the archive-ID section above; the improvement
-  is the size-aware *input*, not the hash primitive itself.
-- RAR/7z archives are still handled by shelling out to `unrar`/`7z`, matching legacy's own
-  pragmatic approach, not reimplemented from scratch.
-- The REST API contract is derived directly from legacy's own OpenAPI spec, additive-only —
-  endpoint shapes/paths themselves are unaffected, and the explicit goal is *not a redesigned API*.
-  **The one deliberate exception is authentication itself**: legacy's `Bearer base64(apikey)` /
-  `?key=` scheme was intentionally replaced pre-release by the JWT + API token system described
-  above — the one deliberate departure from the "preserve API contract compatibility" principle
-  (see the corresponding note at the end of that principle in
-  `.specify/memory/constitution.md`).
-- The search engine is a direct port of legacy's Redis-based model (sorted sets, tag filtering),
-  not a new search technology — parity was the actual goal here, evaluated and confirmed sufficient
-  at this project's target scale.
-
-## Building and running
-
-**To run it**: the Docker image is recommended (docs site, "Install"); without containers, every
-release also ships native packages for Linux (x86_64 / aarch64), macOS (Apple Silicon) and FreeBSD
-that run straight after unpacking (docs site, "Native install"). Build a Linux package locally with
-`mise run package-native` and check it with `scripts/smoke-native.sh`; the release packages for every
-platform are built by `.github/workflows/native-release.yml` on each tag (`specs/015-native-platforms/`).
-
-**From source**:
-Toolchain versions are pinned in `.mise.toml` (`mise install` reproduces them exactly: Rust,
-Node, Deno, pnpm, plus `sccache`/`mold` for build acceleration).
+## Quick start
 
 ```sh
-# Backend
-cargo build --release -p lanrurugi-server
-./target/release/lanrurugi-server serve --redis-url redis://127.0.0.1:6379 \
-  --library-path /path/to/existing/library
-
-# Frontend (dev server, proxies /api to the backend above)
-cd apps/frontend && pnpm install && pnpm run dev
-```
-
-Or via Docker (bundles the built frontend into the same image):
-
-```sh
-docker build -t lanrurugi .
 docker run -d --name lanrurugi -p 3000:3000 \
-  -v /path/to/library:/home/koyomi/lanrurugi/content \
+  -v /path/to/manga:/home/koyomi/lanrurugi/content \
   -v /path/to/thumb:/home/koyomi/lanrurugi/thumb \
   -v /path/to/database:/home/koyomi/lanrurugi/database \
-  lanrurugi
+  ghcr.io/thelastfantasy/lanrurugi:latest
 ```
 
-Prebuilt images are published as `ghcr.io/thelastfantasy/lanrurugi` and, on Docker Hub,
-`jade913/lanrurugi`. To move from LANraragi, mount the same manga directory as the library, give
-thumbnails and the database new directories, and import LANraragi's backup JSON in the first-run
-wizard (see the install guide in the docs).
+Open `http://<host>:3000`. The image bundles Redis, so no separate database container is needed; a fuller
+compose file (NAS panels, reverse proxy, migrating from LANraragi) is in the
+[docs](https://docs.lrrg.dev/en/guide/install/).
 
-A fresh instance (or one migrated from a legacy install that never changed its password) starts
-with legacy LANraragi's own default admin password still in place. **Change it immediately after
-first login** via the Settings page — don't leave a default-password instance reachable from
-outside your local network.
+Two image channels: `:latest` follows releases, `:edge` follows the head of the `dev` branch (it can break —
+don't point a real library at it).
 
-### CLI subcommands
-
-- `lanrurugi serve` — runs the HTTP API, static frontend, file watcher, and plugin pool in one
-  process.
-- `lanrurugi rebuild-index` — recomputes every archive's ID with the size-aware algorithm and
-  discovers any previously-invisible files a historical false-merge had hidden (User Story 6).
-- `lanrurugi bench` — generates a synthetic library and runs the concurrency/throughput
-  comparison against an already-running legacy instance (User Story 8;
-  see `specs/001-lanrurugi-full-rewrite/quickstart.md` §8).
-
-## Testing
-
-```sh
-cargo fmt --all
-cargo clippy --workspace --all-targets -- -D warnings
-LANRURUGI_TEST_REDIS_URL=redis://127.0.0.1:16379 cargo test --workspace
-```
-
-Redis-backed tests are skipped gracefully if `LANRURUGI_TEST_REDIS_URL` is unset; point it at a
-scratch Redis instance (e.g. `docker run -d --rm -p 16379:6379 redis:7-alpine`) to run them.
-
-### Frontend tests (`specs/003-ui-test-automation/`)
-
-```sh
-mise run test-frontend-unit   # Vitest + React Testing Library — fast, no backend required
-mise run test-frontend-e2e    # Playwright — real backend + Redis, Chromium + Firefox
-```
-
-`test-frontend-e2e` builds the backend, then starts its own isolated Redis instance, backend
-process, and frontend preview server per test worker (see `apps/frontend/tests/e2e/fixtures.ts`),
-always starting from a clean state. Set `KEEP=1 mise run test-frontend-e2e` to skip teardown for
-one run and inspect its environment afterward (Redis/library state) — this never persists past
-that single run. See `specs/003-ui-test-automation/quickstart.md` for the full validation guide.
+> **The default admin password is `kamimamita`** (same as LANraragi). Change it in Settings right after the
+> first login, and don't expose a default-password instance outside your LAN.
 
 ## Documentation
 
-**The HTTP API reference is not hand-written.** It is generated from the server's own route
-registrations by `crates/lanrurugi-api-docgen` (one OpenAPI 3.1 artefact) and rendered by the docs
-site under `docs/`: endpoints shared with LANraragi keep that project's own field-level
-documentation from its upstream `tools/openapi.yaml`, everything else is filled in by hand under
-`docs/api/sidecar/`, and an endpoint whose request/response shapes are not written down yet says so
-rather than being given an invented schema. A CI job (`docs-generate`) enforces "every route in the
-code must appear in the reference" on every run, so the reference cannot quietly fall behind the way
-a hand-maintained document does. The site is built inside this repository and shipped in the image
-at the instance's own `/docs` for offline reading (`mise run docs-api` / `docs-sdk` / `docs-build` /
-`docs-dev`).
+- User guide: <https://docs.lrrg.dev/en/>
+- API reference: <https://api.lrrg.dev/> — OpenAPI generated from the server's own routes, not hand-written
+- Plugin SDK: <https://sdk.lrrg.dev/>
+- For AI tools: <https://lrrg.dev/llms.txt>
 
-Online: [documentation](https://docs.lrrg.dev/en/), [Swagger UI](https://api.lrrg.dev/en/) and the
-[plugin SDK reference](https://sdk.lrrg.dev/). For AI tools, start from
-[`lrrg.dev/llms.txt`](https://lrrg.dev/llms.txt); the docs site also publishes its pages as Markdown,
-split by language and topic (see "llms.txt for AI tools" there).
+## Contributing
 
-- [`specs/011-api-docs-site/`](./specs/011-api-docs-site/) — Phase 1 addendum (additive,
-  implemented): the generator and docs site above, including testing the API against your own
-  instance from the browser and a `deno doc`-generated plugin SDK reference.
-- [`specs/001-lanrurugi-full-rewrite/`](./specs/001-lanrurugi-full-rewrite/) — Phase 1 spec, plan,
-  research decisions, data model, API contracts, and `quickstart.md` (end-to-end validation steps
-  for all eight user stories).
-- [`specs/002-job-console/`](./specs/002-job-console/) — Phase 1 addendum (additive, implemented):
-  background job management console surfacing the existing in-process job registry.
-- [`specs/003-ui-test-automation/`](./specs/003-ui-test-automation/) — Phase 1 addendum (additive,
-  implemented): Vitest + Playwright automated frontend test coverage — see `## Testing` above.
-- [`specs/005-download-plugin-progress/`](./specs/005-download-plugin-progress/) — Phase 1
-  addendum (additive, implemented): real byte-level download progress, per-domain concurrency
-  limits, and rate limiting for the download-plugin pipeline.
-- [`specs/007-guest-restricted-access/`](./specs/007-guest-restricted-access/) — Phase 1 addendum
-  (additive, code implemented, full live-instance validation of its own 11 quickstart scenarios
-  still pending): restricted guest access mode, replacing legacy's all-open/all-locked password
-  toggle.
-- [`specs/004-ocr-manga-translation/`](./specs/004-ocr-manga-translation/) — Phase 2 (depends on
-  Phase 1, does not block it, not yet implemented): optional on-page manga translation via OCR
-  detection/recognition, a user-selectable translation backend (cloud or locally-hosted), and
-  volume-level font matching.
-- [`.specify/memory/constitution.md`](./.specify/memory/constitution.md) — project governance,
-  architectural principles, and technology stack decisions.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) (Chinese) for the pinned toolchain, build/test commands and the checks
+a change must pass. Design documents live under `specs/`, one `spec.md` / `plan.md` / `tasks.md` per feature.
+
+## Changelog
+
+Every `v*` tag produces a bilingual release note generated from the commit history — see
+[Releases](https://github.com/thelastfantasy/LANrurugi/releases). The in-app upgrade notice reads the same text.
 
 ## License
 

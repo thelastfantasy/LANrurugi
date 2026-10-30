@@ -98,7 +98,11 @@ jobs:
       - name: publish multi-arch manifests
         run: |
           tags=""
-          for tag in "${{ steps.version.outputs.lanrurugi_version }}" latest; do
+          # The per-sha tag is pushed as `-amd64`/`-arm64` too, so it needs a manifest of its own —
+          # without this it stayed single-arch and `docker pull` failed on the other architecture.
+          for tag in "${{ steps.version.outputs.lanrurugi_version }}" \
+                     "${{ steps.version.outputs.lanrurugi_version }}-${{ steps.sha.outputs.short_sha }}" \
+                     latest; do
             tags="$tags -t ghcr.io/thelastfantasy/lanrurugi:$tag"
             if [ -n "$DOCKERHUB_IMAGE" ] && [ "$HAS_DOCKERHUB_TOKEN" = true ]; then
               tags="$tags -t docker.io/$DOCKERHUB_IMAGE:$tag"
