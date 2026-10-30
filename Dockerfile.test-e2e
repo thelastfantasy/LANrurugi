@@ -21,11 +21,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Node/pnpm via mise-managed versions would need mise itself inside the container; simpler to
 # install Node directly matching .mise.toml's pin (node = "24.18.0") via nodesource-less tarball.
-ARG NODE_VERSION=24.18.0
+ARG NODE_VERSION=26.13.0
 RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
     | tar -xJ -C /usr/local --strip-components=1
 
-ARG PNPM_VERSION=11.10.0
+ARG PNPM_VERSION=12.16.1
 RUN npm install -g "pnpm@${PNPM_VERSION}"
 
 WORKDIR /workspace

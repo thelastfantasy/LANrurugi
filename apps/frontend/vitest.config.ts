@@ -13,6 +13,12 @@ export default mergeConfig(
       globals: true,
       include: ['tests/unit/**/*.test.{ts,tsx}'],
       setupFiles: ['./tests/unit/setup.ts'],
+      // Node 26 ships its own experimental `localStorage` global (unavailable without
+      // `--localstorage-file`), and it shadows the one jsdom installs — every test touching
+      // localStorage failed with "Cannot read properties of undefined (reading 'clear')" until
+      // this flag removed it. Top-level `execArgv` is Vitest 4's replacement for
+      // `poolOptions.forks.execArgv`.
+      execArgv: ['--no-experimental-webstorage'],
     },
   }),
 )

@@ -17,11 +17,11 @@
 # rebuilt) — this doesn't attempt Rust hot-reload, only the frontend, matching what was actually
 # asked for.
 
-ARG RUST_VERSION=1.99.0
-ARG NODE_VERSION=24.18.0
-ARG PNPM_VERSION=11.10.0
-ARG REDIS_VERSION=7.4.9
-ARG DENO_VERSION=2.9.1
+ARG RUST_VERSION=1.99.1
+ARG NODE_VERSION=26.13.0
+ARG PNPM_VERSION=12.16.1
+ARG REDIS_VERSION=8.2.1
+ARG DENO_VERSION=2.9.8
 
 FROM rust:${RUST_VERSION}-slim-bookworm AS rust-builder
 ARG LANRURUGI_GIT_SHA=unknown

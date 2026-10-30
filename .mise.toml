@@ -1,7 +1,7 @@
 # Pinned toolchain versions (constitution Technology Stack Constraints: "Toolchain version
 # management"). Contributors and CI must not rely on whatever happens to be preinstalled — `mise
 # install` reproduces this exact set. Versions below were the latest stable release as of
-# 2026-07-06 (constitution's "verify at implementation time" rule); bump deliberately, not by
+# 2026-10-30 (constitution's "verify at implementation time" rule); bump deliberately, not by
 # copying an older pin from memory.
 [tools]
 # `components` pulls in `rustfmt`/`clippy` alongside the toolchain itself — mise's rust backend
@@ -10,21 +10,21 @@
 # installed for the toolchain ..., help: run `rustup component add ...`" — hit in CI first, since a
 # contributor machine that already had a system-wide Rust install with these components wouldn't
 # surface the gap).
-# Kept in lockstep with the `RUST_VERSION` ARG every Dockerfile pins (currently 1.99.0): CI installs
+# Kept in lockstep with the `RUST_VERSION` ARG every Dockerfile pins (currently 1.99.1): CI installs
 # its toolchain from *this* file while contributors build inside those images, so a drift between the
 # two means CI compiles with an older rustc than the code was written against. That is not
 # hypothetical — 1.97.1 here against 1.99.0 in the images let a dependency requiring rustc 1.98
 # (`avif-decode`) into the lockfile, and CI's `cargo check` failed outright on it.
-rust = { version = "1.99.0", components = "rustfmt,clippy" }
-node = "24.18.0"
-deno = "2.9.1"
-pnpm = "11.10.0"
+rust = { version = "1.99.1", components = "rustfmt,clippy" }
+node = "26.13.0"
+deno = "2.9.8"
+pnpm = "12.16.1"
 # Rust build acceleration (constitution Technology Stack Constraints: "Rust build acceleration").
-sccache = "0.16.0"
-mold = "2.41.0"
+sccache = "0.19.0"
+mold = "3.0.0"
 # Local pre-commit quality gate (constitution Engineering Workflow & Quality Gates); see
 # `lefthook.yml`. `mise install` + `lefthook install` wires the actual git hook.
-lefthook = "2.1.9"
+lefthook = "2.2.2"
 
 [env]
 # `cargo`/`rustc` pick these up automatically; see also `.cargo/config.toml` for the mold linker
