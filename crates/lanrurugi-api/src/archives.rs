@@ -1677,14 +1677,23 @@ pub(crate) async fn get_archive_thumbnail(
     )
 }
 
+/// The on-disk path of a thumbnail, or `None` when `id` cannot name a stored archive.
+///
+/// `ArchiveId` is a transparent `String` newtype that validates nothing, and callers pass ids
+/// straight from a URL path segment — so without the `is_valid_archive_id` check this would join
+/// `..`/absolute segments into `thumb_dir` and `&id[0..2]` would panic on a short or
+/// non-char-boundary string.
 fn thumbnail_disk_path(
     state: &AppState,
     id: &str,
     page: u32,
     format: lanrurugi_scanner::thumbnail::ThumbFormat,
-) -> std::path::PathBuf {
+) -> Option<std::path::PathBuf> {
+    if !is_valid_archive_id(id) {
+        return None;
+    }
     let shard = &id[0..2];
-    if page == 0 {
+    Some(if page == 0 {
         state
             .library
             .thumb_dir
@@ -1697,7 +1706,7 @@ fn thumbnail_disk_path(
             .join(shard)
             .join(id)
             .join(format!("{page}.{}", format.extension()))
-    }
+    })
 }
 
 async fn read_thumbnail_format(
@@ -1706,7 +1715,7 @@ async fn read_thumbnail_format(
     page: u32,
     format: lanrurugi_scanner::thumbnail::ThumbFormat,
 ) -> Option<(&'static str, bytes::Bytes)> {
-    let path = thumbnail_disk_path(state, id, page, format);
+    let path = thumbnail_disk_path(state, id, page, format)?;
     if let Ok(contents) = tokio::fs::read(&path).await {
         return Some((format.content_type(), bytes::Bytes::from(contents)));
     }
@@ -1738,7 +1747,9 @@ async fn read_thumbnail_from_disk(
     support: ClientImageSupport,
 ) -> Option<(&'static str, bytes::Bytes)> {
     for format in thumbnail_formats_for(support) {
-        let path = thumbnail_disk_path(state, id, page, format);
+        let Some(path) = thumbnail_disk_path(state, id, page, format) else {
+            continue;
+        };
         if let Ok(contents) = tokio::fs::read(&path).await {
             return Some((format.content_type(), bytes::Bytes::from(contents)));
         }
@@ -1792,7 +1803,7 @@ async fn regenerate_thumbnail_on_demand(
                 let state = state.clone();
                 let id = id.to_string();
                 move || async move {
-                    let output = thumbnail_disk_path(&state, &id, page, format);
+                    let output = thumbnail_disk_path(&state, &id, page, format)?;
                     let source_page = if page == 0 { 1 } else { page as usize };
                     let result = lanrurugi_scanner::thumbnail::generate(
                         std::path::PathBuf::from(&archive.file),
@@ -3788,7 +3799,13 @@ async fn generate_page_thumbnails(
         }
     };
 
-    let shard = &id[0..2.min(id.len())];
+    // `ArchiveId` validates nothing, and the id below is joined into `thumb_dir` — reject anything
+    // that is not a real 40-hex id before it reaches the filesystem.
+    if !is_valid_archive_id(id.as_str()) {
+        return not_found("generate_page_thumbnails", "Archive not found.");
+    }
+
+    let shard = &id[0..2];
     // Every missing page's thumbnail is generated in one batch, spread across rayon's whole
     // thread pool, instead of one page at a time each paying its own `spawn_blocking` round-trip
     // — a real difference for large-page-count volumes (constitution Principle III: CPU-bound
