@@ -471,13 +471,19 @@ hooks is acceptable.
 ## Before pushing — check whether README.md needs updating
 
 Before any `git push`, review what the commit(s) being pushed actually changed and ask: does this
-add/fix/remove something `README.md`'s own "## Improvements over LANraragi" section (or the Status/
-Stack/Documentation sections) already makes a claim about, or should now make a claim about? A
-shipped feature, a real bug fix with user-facing impact, or a spec moving from
+add/fix/remove something one of these already makes a claim about, or should now make a claim about?
+
+- `README.md`'s "能做什么" bullets (the only feature list it still carries — the long
+  comparison moved out; see next bullet) and its 快速开始 / 文档 sections,
+- `docs/comparison-with-lanraragi.md` (the long-form item-by-item comparison, including the
+  deliberately-not-an-improvement entries),
+- `CONTRIBUTING.md` (toolchain, build/test commands, pre-push gates) when a command or gate changes.
+
+A shipped feature, a real bug fix with user-facing impact, or a spec moving from
 planned-but-unimplemented to fully implemented (verify via that spec's own `tasks.md` checkbox
-completion, not assumption) are all candidates. Not every push needs a README change — routine
-internal refactors, test-only changes, or mid-flight work-in-progress commits usually don't — but
-skipping this check silently lets the README drift out of date the same way the "002/003/005 are
+completion, not assumption) are all candidates. Not every push needs a change to any of them —
+routine internal refactors, test-only changes, or mid-flight work-in-progress commits usually don't
+— but skipping this check silently lets them drift out of date the same way the "002/003/005 are
 planned but not yet implemented" line above did until it was caught and corrected during a real
 README-writing pass.
 
