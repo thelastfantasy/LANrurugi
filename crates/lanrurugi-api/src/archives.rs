@@ -621,9 +621,10 @@ async fn batch_delete_archives(
     axum::Json(body): axum::Json<BatchDeleteRequest>,
 ) -> Response {
     let auth = auth.as_ref().map(|e| &e.0);
-    // Capped: `body.ids` arrives as one JSON array, so its length is already bounded by the body
-    // limit, and an unbounded `with_capacity` on it is an easy way to pre-reserve a large blank.
-    let mut results = Vec::with_capacity(body.ids.len().min(1024));
+    // No `with_capacity` from `body.ids` — its length is request-controlled, and CodeQL's
+    // `rust/uncontrolled-allocation-size` is right that reserving it up front is a needless
+    // allocation the request gets to size. The Vec grows to what it actually pushes.
+    let mut results = Vec::new();
     let mut deleted_count = 0u32;
     for id in &body.ids {
         let outcome = delete_one_archive(&state, id, auth).await;
@@ -3930,10 +3931,9 @@ async fn get_page_thumbnails(
             }
         }
 
-        // `count` is a query parameter and `total` is what actually exists, so reserve against the
-        // smaller of the two rather than the requested size.
-        let mut pages: Vec<serde_json::Value> =
-            Vec::with_capacity((count as usize).min(total as usize));
+        // `count` is a query parameter, so no `with_capacity` from it — same reasoning as
+        // `batch_delete_archives`.
+        let mut pages: Vec<serde_json::Value> = Vec::new();
         let end = (from + count - 1).min(total);
         let mut global = 1u32;
         for (arc_id, pc) in &member_page_counts {

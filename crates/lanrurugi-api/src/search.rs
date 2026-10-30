@@ -779,9 +779,8 @@ async fn search_random(
             let mut ids = result.ids;
             ids.shuffle(&mut rand::rng());
             let count = q.count.unwrap_or(5).min(ids.len());
-            // `count` is also request-controlled; `ids.len()` bounds it, but cap the reservation
-            // explicitly so a large `count` cannot pre-reserve megabytes before any lookup.
-            let mut data = Vec::with_capacity(count.min(200));
+            // `count` is request-controlled; no `with_capacity` from it.
+            let mut data = Vec::new();
             // Walks the whole shuffled list, not just the first `count` ids — a search-index
             // entry that outlived its archive (a "ghost" id left behind by an incomplete delete;
             // `remove_archive_index` now prevents new ones, but stale data from before that fix

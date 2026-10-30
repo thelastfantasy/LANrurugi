@@ -1125,9 +1125,8 @@ async fn export_plugins_batch(
         );
     }
 
-    // Capped for the same reason as `batch_delete_archives`: the request array is already bounded
-    // by the body limit, and reserving its full length up front is needless.
-    let mut entries: Vec<(String, Vec<u8>)> = Vec::with_capacity(req.namespaces.len().min(256));
+    // No `with_capacity` from the request's array length — see `batch_delete_archives`.
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
     for namespace in &req.namespaces {
         let source_path = state.plugins_dir.join(format!("{namespace}.ts"));
         match tokio::fs::read(&source_path).await {
