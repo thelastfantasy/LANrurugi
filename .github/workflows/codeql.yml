@@ -63,6 +63,9 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
+          # Empty for `actions`, which has no path filtering to apply — the config file only
+          # carries `paths-ignore`.
+          config-file: ${{ matrix.language == 'actions' && '' || './.github/codeql/codeql-config.yml' }}
 
       - uses: github/codeql-action/analyze@v3
         with:

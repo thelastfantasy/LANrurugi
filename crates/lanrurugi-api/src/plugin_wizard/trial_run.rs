@@ -461,7 +461,9 @@ async fn run_link_trial(
     // caused).
     let plugin_customargs = customargs_for(&req.plugin_parameter_values, info);
 
-    let mut per_link = Vec::with_capacity(req.test_links.len());
+    // Capped: `test_links` is request-controlled, and the array is already bounded by the body
+    // limit — no reason to reserve its full length before the first link is even tried.
+    let mut per_link = Vec::with_capacity(req.test_links.len().min(64));
     for link in &req.test_links {
         let mut args = if method == "exec_metadata" {
             json!({

@@ -259,8 +259,11 @@ function convertDeployment(text, template) {
     if (!host) continue;
     const line = new RegExp(`^(\\s*- )[^\\n]*?(:\\/home\\/koyomi\\/lanrurugi\\/${dir})$`, "m");
     const quote = /[\s#"]|^[^\w./~$]/.test(host) || /^[A-Za-z]:/.test(host);
+    // Backslashes first: escaping only `"` leaves a trailing `\` in the host free to escape the
+    // closing quote and break out of the YAML scalar (CodeQL `js/incomplete-sanitization`).
+    const escaped = host.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
     out = out.replace(line, (_, lead, tail) =>
-      quote ? `${lead}"${host.replace(/"/g, '\\"')}${tail}"` : `${lead}${host}${tail}`,
+      quote ? `${lead}"${escaped}${tail}"` : `${lead}${host}${tail}`,
     );
   }
   // The next port up, so LANrurugi can run next to LANraragi while the move is checked.

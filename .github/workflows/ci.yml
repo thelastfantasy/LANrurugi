@@ -8,6 +8,14 @@ on:
 env:
   RUSTC_WRAPPER: sccache
 
+# Least privilege, stated explicitly: without a `permissions` block the job token inherits the
+# repository default, which is read-write on contents for older repos (CodeQL's
+# `actions/missing-workflow-permissions` flags exactly that). Nothing here writes through
+# GITHUB_TOKEN — the docs job publishes with a Cloudflare API token from secrets, and uploading or
+# downloading an artifact needs no write scope.
+permissions:
+  contents: read
+
 jobs:
   rust:
     name: Rust (check, fmt, clippy, test)

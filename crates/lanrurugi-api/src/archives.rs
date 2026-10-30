@@ -621,7 +621,9 @@ async fn batch_delete_archives(
     axum::Json(body): axum::Json<BatchDeleteRequest>,
 ) -> Response {
     let auth = auth.as_ref().map(|e| &e.0);
-    let mut results = Vec::with_capacity(body.ids.len());
+    // Capped: `body.ids` arrives as one JSON array, so its length is already bounded by the body
+    // limit, and an unbounded `with_capacity` on it is an easy way to pre-reserve a large blank.
+    let mut results = Vec::with_capacity(body.ids.len().min(1024));
     let mut deleted_count = 0u32;
     for id in &body.ids {
         let outcome = delete_one_archive(&state, id, auth).await;
@@ -3911,7 +3913,10 @@ async fn get_page_thumbnails(
             }
         }
 
-        let mut pages: Vec<serde_json::Value> = Vec::with_capacity(count as usize);
+        // `count` is a query parameter and `total` is what actually exists, so reserve against the
+        // smaller of the two rather than the requested size.
+        let mut pages: Vec<serde_json::Value> =
+            Vec::with_capacity((count as usize).min(total as usize));
         let end = (from + count - 1).min(total);
         let mut global = 1u32;
         for (arc_id, pc) in &member_page_counts {

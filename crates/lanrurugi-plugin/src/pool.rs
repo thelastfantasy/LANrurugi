@@ -126,6 +126,13 @@ impl Worker {
         declared_read: bool,
         relay: RelayAccess,
     ) -> Result<Self> {
+        // Defence in depth: every current caller validates the namespace before getting here, but
+        // `spawn` is where the joins below actually happen, so the guard belongs here too rather
+        // than only at the entry points. `..`/absolute namespaces would otherwise escape
+        // `plugins_dir` through `Path::join`.
+        if !is_safe_namespace(namespace) {
+            return Err(PoolError::NotFound(namespace.to_string()));
+        }
         let plugin_module = plugins_dir.join(format!("{namespace}.ts"));
         // Read before spawning: worst case is one extra harmless respawn later, never a missed edit.
         let mtime = plugin_mtime(&plugin_module)?;
