@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `dev` is the repository's default branch, so a merge into it has to run CI too — without it
+    # the default branch was the one place nothing was ever checked (only PRs and `main` were).
+    branches: [main, dev]
   pull_request:
 
 env:

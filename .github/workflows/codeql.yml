@@ -14,9 +14,11 @@ name: CodeQL
 
 on:
   push:
-    branches: [001-lanrurugi-full-rewrite, dev, main]
+    # Same branch set as `ci.yml`, plus the feature branch that currently holds the whole tree —
+    # that entry can go once #76 lands and `delete-branch-on-merge.yml` removes the branch.
+    branches: [main, dev, 001-lanrurugi-full-rewrite]
   pull_request:
-    branches: [001-lanrurugi-full-rewrite, dev, main]
+    branches: [main, dev, 001-lanrurugi-full-rewrite]
   schedule:
     # Weekly, Monday 03:17 UTC — off the hour so it isn't queued behind every other repo's cron.
     - cron: "17 3 * * 1"
