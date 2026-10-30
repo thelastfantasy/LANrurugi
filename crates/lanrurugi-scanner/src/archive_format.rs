@@ -469,14 +469,73 @@ pub fn list_all_entries(path: &Path) -> Result<Vec<ArchiveEntryInfo>> {
     Ok(entries)
 }
 
-/// Reads the raw bytes of a single named entry (used for thumbnail extraction). Iterates the
-/// archive until the entry is found, then reads its data into memory.
+/// Extensions this module can read through `zip`'s central directory instead of libarchive's
+/// forward stream. Only the ZIP family: RAR/7z have no comparable random access, and a book's
+/// "entries" are synthesised rather than stored.
+fn zip_random_access_eligible(path: &Path) -> bool {
+    matches!(extension_of(path).as_str(), "zip" | "cbz")
+}
+
+/// Caps an up-front capacity hint from the zip header, same reasoning as
+/// [`RawArchiveReader::read_data_to_vec`]'s own cap: a lying header must not become a huge
+/// allocation.
+const MAX_ZIP_ENTRY_PREALLOC: u64 = 256 * 1024 * 1024;
+
+/// One entry, by name, through the zip central directory: a seek plus that entry's own
+/// decompression, instead of walking every entry before it.
+///
+/// `None` whenever this file/name can't be served that way — not actually a zip, a name whose
+/// encoding `zip` decoded differently from [`decode_archive_name`] (non-UTF-8 entry names are
+/// exactly the case this module's own decoder exists for), an encrypted or unsupported method, a
+/// header this crate rejects. The caller then falls back to the forward scan, so the bytes and the
+/// errors are unchanged wherever the fast path can't prove it agrees.
+fn read_entry_via_zip(path: &Path, entry_name: &str) -> Option<Vec<u8>> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+    let mut entry = archive.by_name(entry_name).ok()?;
+    let mut bytes = Vec::with_capacity(entry.size().min(MAX_ZIP_ENTRY_PREALLOC) as usize);
+    std::io::Read::read_to_end(&mut entry, &mut bytes).ok()?;
+    Some(bytes)
+}
+
+/// [`read_entries`] via the central directory, in the caller's order. Same fallback contract as
+/// [`read_entry_via_zip`]: `None` means "use the forward scan instead".
+fn read_entries_via_zip(path: &Path, entry_names: &[String]) -> Option<Vec<Option<Vec<u8>>>> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+    let mut out = Vec::with_capacity(entry_names.len());
+    for name in entry_names {
+        match archive.by_name(name) {
+            Ok(mut entry) => {
+                let mut bytes =
+                    Vec::with_capacity(entry.size().min(MAX_ZIP_ENTRY_PREALLOC) as usize);
+                std::io::Read::read_to_end(&mut entry, &mut bytes).ok()?;
+                out.push(Some(bytes));
+            }
+            Err(zip::result::ZipError::FileNotFound) => out.push(None),
+            // Encrypted/unsupported/structurally odd: let the libarchive path decide, exactly as
+            // before, rather than inventing a new failure mode here.
+            Err(_) => return None,
+        }
+    }
+    Some(out)
+}
+
+/// Reads the raw bytes of a single named entry (used for thumbnail extraction and every reader
+/// page). ZIP archives — the overwhelming majority of a manga library — are read through the
+/// central directory (O(1) seek + that entry's own decompression); everything else falls back to
+/// the forward scan that this function used to do unconditionally.
 pub fn read_entry(path: &Path, entry_name: &str) -> Result<Vec<u8>> {
     if is_book(path) {
         return book_read_page(path, entry_name);
     }
     if !is_supported_archive(path) {
         return Err(ArchiveFormatError::UnsupportedExtension(extension_of(path)));
+    }
+    if zip_random_access_eligible(path) {
+        if let Some(bytes) = read_entry_via_zip(path, entry_name) {
+            return Ok(bytes);
+        }
     }
     let mut archive = RawArchiveReader::open(path)?;
     while let Some(entry) = archive.next_entry()? {
@@ -515,6 +574,19 @@ pub fn read_entries(path: &Path, entry_names: &[String]) -> Result<Vec<Option<Ve
     }
     if entry_names.is_empty() {
         return Ok(Vec::new());
+    }
+
+    // Random access first: for a zip this is one seek per entry instead of a walk from the first
+    // byte, and the fallback below still handles every name/format it can't serve.
+    if zip_random_access_eligible(path) {
+        if let Some(entries) = read_entries_via_zip(path, entry_names) {
+            tracing::info!(
+                path = %path.display(),
+                wanted = entry_names.len(),
+                "read_entries: served through the zip central directory (no forward scan)"
+            );
+            return Ok(entries);
+        }
     }
 
     let wanted: std::collections::HashSet<&str> = entry_names.iter().map(String::as_str).collect();
@@ -880,6 +952,30 @@ mod tests {
     #[test]
     fn read_entry_returns_file_bytes() {
         let f = make_test_zip_with_ext("zip", &["page1.jpg", "page2.jpg"]);
+        assert_eq!(
+            read_entry(f.path(), "page2.jpg").unwrap(),
+            b"content of page2.jpg"
+        );
+    }
+
+    #[test]
+    fn read_entry_reads_a_late_page_of_a_zip() {
+        // The forward scan used to walk every earlier entry to reach this one; the
+        // central-directory path seeks straight to it. Either way the bytes must be identical.
+        let names: Vec<String> = (1..=40)
+            .map(|index| format!("page{index:03}.jpg"))
+            .collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let f = make_test_zip_with_ext("zip", &refs);
+        assert_eq!(
+            read_entry(f.path(), "page040.jpg").unwrap(),
+            b"content of page040.jpg"
+        );
+    }
+
+    #[test]
+    fn read_entry_uses_the_same_path_for_cbz() {
+        let f = make_test_zip_with_ext("cbz", &["page1.jpg", "page2.jpg"]);
         assert_eq!(
             read_entry(f.path(), "page2.jpg").unwrap(),
             b"content of page2.jpg"

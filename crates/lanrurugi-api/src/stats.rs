@@ -315,7 +315,50 @@ pub struct ArchiveCard {
 
 // ─────────────────────────── handler ───────────────────────────
 
+/// A short-lived snapshot of the whole-library overview.
+///
+/// Building it lists every archive, every category and every grouping, then derives several
+/// aggregate maps from them. The page is opened occasionally and a chart up to 15 seconds old is
+/// not misleading, so repeated opens (and the frontend's own refresh) no longer each pay for a
+/// full library pass.
+///
+/// Guests never read or write it: their view is scope-filtered per request, and serving them a
+/// cached unfiltered snapshot would leak library-wide counts.
+const OVERVIEW_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(15);
+
+type OverviewCache = std::sync::Mutex<Option<(std::time::Instant, axum::body::Bytes)>>;
+
+fn overview_cache() -> &'static OverviewCache {
+    static CACHE: std::sync::OnceLock<OverviewCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Serialized-JSON response, matching what `axum::Json` would produce for the same value.
+fn json_body(body: axum::body::Bytes) -> Response {
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        body,
+    )
+        .into_response()
+}
+
 async fn overview(State(state): State<AppState>, auth: Option<Extension<AuthContext>>) -> Response {
+    let guest = matches!(
+        auth.as_deref().map(|a| &a.method),
+        Some(AuthMethod::GuestVisitor)
+    );
+    if !guest {
+        if let Some((at, body)) = overview_cache()
+            .lock()
+            .expect("overview cache poisoned")
+            .as_ref()
+        {
+            if at.elapsed() < OVERVIEW_CACHE_TTL {
+                return json_body(body.clone());
+            }
+        }
+    }
+
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -336,10 +379,7 @@ async fn overview(State(state): State<AppState>, auth: Option<Extension<AuthCont
     // from them) over archives its own searches correctly exclude. `guest_visitor` is not in
     // `route_policy.csv`'s whitelist today, so this is defense in depth against a frontend route
     // guard being bypassed, exactly like that endpoint's own reasoning.
-    if matches!(
-        auth.as_deref().map(|a| &a.method),
-        Some(AuthMethod::GuestVisitor)
-    ) {
+    if guest {
         match crate::search::guest_visible_archive_ids(&state).await {
             Ok(allowed) => archives.retain(|a| allowed.contains(&a.id)),
             Err(e) => {
@@ -433,7 +473,23 @@ async fn overview(State(state): State<AppState>, auth: Option<Extension<AuthCont
         note,
     };
 
-    axum::Json(overview).into_response()
+    // Serialized once and shared: `Json` would serialize a second time, and the cached copy is
+    // exactly the bytes a caller gets.
+    let body = match serde_json::to_vec(&overview) {
+        Ok(body) => axum::body::Bytes::from(body),
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "stats_overview",
+                e.to_string(),
+            )
+        }
+    };
+    if !guest {
+        *overview_cache().lock().expect("overview cache poisoned") =
+            Some((std::time::Instant::now(), body.clone()));
+    }
+    json_body(body)
 }
 
 // ─────────────────────────── timeline endpoint ───────────────────────────

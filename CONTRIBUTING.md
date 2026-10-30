@@ -20,6 +20,7 @@ LANrurugi 的后端是 Rust（`crates/` 下的 Cargo workspace），前端是 Re
 | `mise run clippy` / `mise run fmt` | 单独跑 lint / 格式化 |
 | `mise run test-frontend-unit` | Vitest + React Testing Library，不需要后端 |
 | `mise run test-frontend-e2e` | Playwright，真实后端 + Redis，Chromium + Firefox |
+| `mise run measure-compare [-- <页数>]` | 合成档案跑一次图片对比，打印峰值内存（`VmHWM`）与各阶段耗时；改对比/解码路径后用它对比前后 |
 | `mise run dev-rebuild` / `dev-up` / `dev-down` | 开发容器（`compose.dev.yaml`，前端走 Vite 热重载） |
 
 ## 技术栈

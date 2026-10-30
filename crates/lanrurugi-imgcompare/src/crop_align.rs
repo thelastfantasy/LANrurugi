@@ -948,4 +948,47 @@ mod tests {
              leaked into `estimate_crop_alignment_with_confidence` again"
         );
     }
+
+    /// The grid entry point must be a pure refactor of the decoded-image one: `compare_archives`
+    /// now feeds it a precomputed 48px grid per page (so the rescue path never re-downsamples two
+    /// full images), and any difference here would silently change every rescue/coarse decision.
+    #[test]
+    fn the_grid_entry_point_matches_the_decoded_image_entry_point() {
+        let a = smooth_page_pattern(1000, 1400);
+        let b = page_with_border(&a, 110, 50, 30, 60);
+
+        let from_images = estimate_crop_alignment_with_confidence(&a, &b);
+        let from_grids = estimate_crop_alignment_from_grid(
+            &gray_grid(&a),
+            a.height(),
+            &gray_grid(&b),
+            b.width(),
+            b.height(),
+        );
+
+        assert_eq!(from_images.0, from_grids.0, "alignment must be identical");
+        assert_eq!(
+            from_images.1.to_bits(),
+            from_grids.1.to_bits(),
+            "confidence must be identical"
+        );
+    }
+
+    /// The phase-2 gate: `compare_archives` only runs the precise (pixel-level) pass for samples
+    /// whose *coarse* alignment came back non-identity. If a genuinely bordered page stopped
+    /// producing one, the magnifier's synthetic pad would silently go back to the coarse estimate
+    /// — the behavior phase 2 exists to improve on.
+    #[test]
+    fn a_bordered_page_produces_a_non_identity_coarse_alignment() {
+        let a = smooth_page_pattern(1000, 1400);
+        let b = page_with_border(&a, 110, 50, 30, 60);
+
+        let (alignment, confidence) = estimate_crop_alignment_with_confidence(&a, &b);
+        assert!(confidence > MIN_CONFIDENCE, "got {confidence}");
+        assert_ne!(
+            alignment,
+            CropAlignment::IDENTITY,
+            "a bordered page must not align as identity, or phase 2 never runs for it"
+        );
+    }
 }
