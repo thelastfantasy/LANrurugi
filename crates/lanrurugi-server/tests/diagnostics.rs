@@ -63,12 +63,28 @@ fn event_from(id: &str, message: &str) -> DiagnosticEvent {
     event
 }
 
+/// Serialises the tests in this file: they all share one Redis (`common::test_state` hands every
+/// test the same set of logical DBs, not one database per test).
+///
+/// `capture_groups_repeats_and_survives_eviction` runs `evict(max_events: 1)`, which trims the
+/// *global* events zset — run concurrently, that deleted
+/// `a_bundle_carries_events_and_no_secrets`'s event before the bundle was built, so the bundle
+/// legitimately contained no path and the assertion failed. Intermittent on CI (first seen
+/// 2026-10-30, run 41028870121, on a docs-only commit), with nothing wrong in the code under test.
+/// The two forwarding-window tests write the same `config` keys for the same reason.
+static DIAGNOSTICS_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn serialised() -> tokio::sync::MutexGuard<'static, ()> {
+    DIAGNOSTICS_TEST_LOCK.lock().await
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn capture_groups_repeats_and_survives_eviction() {
     let Some((state, _redis)) = common::test_state().await else {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
+    let _serialised = serialised().await;
     let tag = nonce();
     let first = event_from("e1", &format!("cannot decode archive: bad header {tag}"));
     let second = event_from("e2", &format!("cannot decode archive: bad header {tag}"));
@@ -139,6 +155,7 @@ async fn a_bundle_carries_events_and_no_secrets() {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
+    let _serialised = serialised().await;
     // A message containing a share code and an absolute path: the code must always be gone, the
     // path is kept by the default profile (see `diagnostics_include_private_data`).
     let event = event_from(
@@ -213,6 +230,7 @@ async fn forwarding_happens_only_while_the_window_is_open() {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
+    let _serialised = serialised().await;
     let (dsn, received, tracker) = fake_tracker().await;
     // A previous run may have left a window open in this shared test Redis.
     forward::close_window(&state).await.expect("a clean window");
@@ -267,6 +285,7 @@ async fn an_expired_window_reads_as_closed_and_does_not_renew() {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
+    let _serialised = serialised().await;
     let mut body = serde_json::Map::new();
     body.insert(
         "tracker_dsn".into(),
@@ -304,6 +323,7 @@ async fn a_bundle_can_be_replayed_into_a_tracker() {
         eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
         return;
     };
+    let _serialised = serialised().await;
     let (dsn, received, tracker) = fake_tracker().await;
     forward::close_window(&state).await.expect("a clean window");
     let mut body = serde_json::Map::new();
