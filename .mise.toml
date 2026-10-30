@@ -232,6 +232,13 @@ rm -f "$tmp"
 echo "wrote docs/api/legacy-openapi.yaml — review the diff before committing."
 """
 
+[tasks.changelog]
+description = "Preview the release notes for the next tag (bilingual when DEEPSEEK_API_KEY is set), written to release-notes.md — the GitHub release body is what the app's upgrade overlay renders"
+# Same generator `native-release.yml` runs on a tag, so a local preview is exactly what will ship.
+# `--from <ref>` is worth passing while no tag exists yet; without it the whole history is listed
+# once as the "first release".
+run = "python3 scripts/release-changelog.py"
+
 [tasks.docs-sdk]
 description = "Build deliverable 3 of 3: the plugin-authoring SDK reference into docs/dist-sdk/ — the browsable HTML tree plus a path-normalised machine-readable JSON, both from the same TypeScript the plugin runtime loads. Deployed as its own Cloudflare Pages project; the server image copies it under /docs/sdk/."
 # Same three sources as `plugin-sdk-docs`, and for the same reason: `plugins/legacy-globals.d.ts`

@@ -187,6 +187,23 @@ jobs:
     needs: [linux, macos, freebsd]
     runs-on: ubuntu-24.04
     steps:
+      # The release body *is* the changelog: the app's own upgrade overlay renders it
+      # (`GET /api/version?since=`), so it is generated here from the commits this tag contains.
+      # `fetch-depth: 0` is what the range arithmetic needs — the previous tag and the full log
+      # between it and this one are not in a shallow clone.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Generate bilingual release notes
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        # The release must still publish when translation fails (no key, GitHub/DeepSeek outage):
+        # the script degrades to Chinese-only on its own, this guards only a crash.
+        run: |
+          python3 scripts/release-changelog.py --output release-notes.md \
+            || printf '# %s\n' "${GITHUB_REF_NAME}" > release-notes.md
+          head -20 release-notes.md
       - uses: actions/download-artifact@v4
         with:
           pattern: package-*
@@ -196,6 +213,7 @@ jobs:
         run: cd dist && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
+          body_path: release-notes.md
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS
