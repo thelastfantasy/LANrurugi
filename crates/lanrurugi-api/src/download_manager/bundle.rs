@@ -47,8 +47,16 @@ pub async fn bundle_into_one_archive(
 
     tokio::task::spawn_blocking(move || -> Result<(), BundleError> {
         let file = std::fs::File::create(&bundle_path_for_blocking)?;
-        let mut writer = zip::ZipWriter::new(file);
-        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        // Buffered: `ZipWriter` hands the writer small fragments (per entry header and per
+        // `io::copy` chunk), which would otherwise each be their own `write(2)`.
+        let mut writer = zip::ZipWriter::new(std::io::BufWriter::with_capacity(1 << 20, file));
+        // Stored, not deflated: every bundled resource is already a compressed image (JPEG/PNG/
+        // WebP), where deflate costs real CPU per page and saves essentially nothing. The
+        // tankoubon zip (`tankoubon_zip.rs`) already stores for the same reason. `large_file`
+        // lifts the 4 GiB per-entry limit a long multi-page bundle can otherwise hit.
+        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .large_file(true);
 
         let mut used_names: std::collections::HashSet<String> = std::collections::HashSet::new();
         for resource in &resources {
@@ -57,7 +65,10 @@ pub async fn bundle_into_one_archive(
             let mut source = std::fs::File::open(&resource.path)?;
             std::io::copy(&mut source, &mut writer)?;
         }
-        writer.finish()?;
+        // `finish` returns the `BufWriter`; flush it explicitly so a write error on the buffered
+        // tail surfaces instead of being dropped with the handle.
+        let mut buffered = writer.finish()?;
+        std::io::Write::flush(&mut buffered)?;
 
         for resource in &resources {
             let _ = std::fs::remove_file(&resource.path);

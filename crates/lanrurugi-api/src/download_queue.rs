@@ -2352,7 +2352,7 @@ async fn convert_unless_decodable(
         return None;
     };
     let converted = lanrurugi_scanner::resize::convert_to_format(
-        bytes.to_vec(),
+        bytes::Bytes::copy_from_slice(bytes),
         COMPARISON_ENCODE_QUALITY,
         u32::MAX,
         None,

@@ -17,8 +17,6 @@
 //! secret's lifecycle for simplicity — see `lanrurugi_core::session`) keep verifying across
 //! restarts.
 
-use std::collections::HashMap;
-
 use deadpool_redis::redis::AsyncCommands;
 use rand::RngExt;
 
@@ -85,40 +83,62 @@ pub struct LiveAuthConfig {
 /// needs to be generated and persisted once since there's no legacy value to fall back to.
 pub async fn load(state: &AppState) -> Result<LiveAuthConfig, AuthConfigError> {
     let mut conn = state.redis.config.get().await?;
-    let fields: HashMap<String, String> = conn.hgetall(CONFIG_KEY).await?;
+    // `HMGET` over exactly the fields this function reads rather than `HGETALL`: `LRR_CONFIG`
+    // holds every setting in the app, and this runs on *every* API request (the middleware calls
+    // it to authorize before dispatching), so expanding the whole hash meant allocating a
+    // `String` pair for every unrelated setting each time.
+    let values: Vec<Option<String>> = conn
+        .hmget(
+            CONFIG_KEY,
+            &[
+                "guestmode",
+                "password",
+                "access_token_lifetime_secs",
+                "refresh_token_lifetime_secs",
+                "refresh_token_idle_lifetime_secs",
+                "max_login_devices",
+                "cookie_domain",
+                SESSION_SECRET_FIELD,
+            ],
+        )
+        .await?;
+    // Same field order as the list above.
+    let mut values = values.into_iter();
+    let mut next = || values.next().flatten();
+    let guest_mode = next();
+    let password = next();
+    let access_token_lifetime_secs = next();
+    let refresh_token_lifetime_secs = next();
+    let refresh_token_idle_lifetime_secs = next();
+    let max_login_devices = next();
+    let cookie_domain = next();
+    let session_secret_field = next();
 
-    let guest_mode_enabled = fields
-        .get("guestmode")
+    // Still re-read per request on purpose (FR-015: a settings change must take effect
+    // immediately, not after a cache window) — only the redundant allocation is gone.
+    let guest_mode_enabled = guest_mode
+        .as_deref()
         .map(|v| v != "0")
         .ok_or(AuthConfigError::MissingField("guestmode"))?;
-    let password_hash = fields
-        .get("password")
-        .cloned()
-        .unwrap_or_else(|| DEFAULT_PASSWORD_HASH.to_string());
-    let access_token_lifetime_secs = fields
-        .get("access_token_lifetime_secs")
+    let password_hash = password.unwrap_or_else(|| DEFAULT_PASSWORD_HASH.to_string());
+    let access_token_lifetime_secs = access_token_lifetime_secs
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(lanrurugi_core::session::DEFAULT_ACCESS_TOKEN_LIFETIME_SECS);
-    let refresh_token_lifetime_secs = fields
-        .get("refresh_token_lifetime_secs")
+    let refresh_token_lifetime_secs = refresh_token_lifetime_secs
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(lanrurugi_core::session::DEFAULT_REFRESH_TOKEN_LIFETIME_SECS);
-    let refresh_token_idle_lifetime_secs = fields
-        .get("refresh_token_idle_lifetime_secs")
+    let refresh_token_idle_lifetime_secs = refresh_token_idle_lifetime_secs
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(lanrurugi_core::session::DEFAULT_REFRESH_TOKEN_IDLE_LIFETIME_SECS);
-    let max_login_devices = fields
-        .get("max_login_devices")
+    let max_login_devices = max_login_devices
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(lanrurugi_core::session::DEFAULT_MAX_LOGIN_DEVICES);
-    let retired_cookie_domain = fields
-        .get("cookie_domain")
-        .map(|v| v.trim())
-        .filter(|v| !v.is_empty())
-        .map(str::to_string);
+    let retired_cookie_domain = cookie_domain
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
 
-    let session_secret = match fields.get(SESSION_SECRET_FIELD) {
-        Some(hex) if !hex.is_empty() => hex_decode(hex),
+    let session_secret = match session_secret_field {
+        Some(hex) if !hex.is_empty() => hex_decode(&hex),
         _ => {
             let generated: Vec<u8> = (0..32).map(|_| rand::rng().random()).collect();
             let _: () = conn

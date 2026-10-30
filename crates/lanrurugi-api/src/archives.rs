@@ -8,7 +8,6 @@
 //! content itself is already exposed via `/archives/{id}/metadata`'s `toc` field. This module
 //! implements what the verified contract actually has rather than inventing new GET methods.
 
-use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -917,21 +916,34 @@ pub(crate) async fn serve_archive_download(archive: &Archive) -> Response {
         )
             .into_response();
     }
-    match tokio::fs::read(&archive.file).await {
-        Ok(bytes) => (
-            [
-                (header::CONTENT_TYPE, "application/octet-stream".to_string()),
-                (header::CONTENT_DISPOSITION, disposition),
-            ],
-            bytes,
-        )
-            .into_response(),
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "download_archive",
-            e.to_string(),
-        ),
+    // Streamed rather than `tokio::fs::read`: a multi-gigabyte archive was previously loaded
+    // whole into the process before the first byte went out (the same reason `inline_pdf` below
+    // streams).
+    let file = match tokio::fs::File::open(&archive.file).await {
+        Ok(file) => file,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "download_archive",
+                e.to_string(),
+            )
+        }
+    };
+    let length = file.metadata().await.map(|m| m.len()).ok();
+    let mut response = (
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (header::CONTENT_DISPOSITION, disposition),
+        ],
+        axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file)),
+    )
+        .into_response();
+    if let Some(length) = length {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_LENGTH, length.into());
     }
+    response
 }
 
 /// Streams the PDF rather than reading it into memory: a PDF can be hundreds of megabytes.
@@ -3115,19 +3127,26 @@ async fn fetch_page(
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())?;
+    // Refcounted from here on: the resize call needs to hand the bytes to a blocking task while
+    // this function may still have to serve them (the unchanged and the failed-conversion paths),
+    // and cloning a `Vec` for that would copy the whole page.
+    let raw = bytes::Bytes::from(raw);
 
     let mut conn = state.redis.config.get().await.map_err(|e| e.to_string())?;
-    let fields: HashMap<String, String> = conn.hgetall(CONFIG_KEY).await.unwrap_or_default();
-    let enable_resize = fields
-        .get("enableresize")
-        .map(|v| v != "0")
-        .unwrap_or(false);
-    let threshold: i64 = fields
-        .get("sizethreshold")
+    // Only the three fields this path reads: the config hash carries every setting in the app, and
+    // `HGETALL` would allocate a `String` pair for each of them on every single page request.
+    let (enable_resize, threshold, quality): (Option<String>, Option<String>, Option<String>) =
+        conn.hmget(
+            CONFIG_KEY,
+            &["enableresize", "sizethreshold", "readerquality"],
+        )
+        .await
+        .unwrap_or((None, None, None));
+    let enable_resize = enable_resize.map(|v| v != "0").unwrap_or(false);
+    let threshold: i64 = threshold
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_SIZE_THRESHOLD);
-    let quality: i64 = fields
-        .get("readerquality")
+    let quality: i64 = quality
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_READER_QUALITY);
     // Mobile pages use a much lower threshold, and a smaller pixel dimension cap. Quality is
@@ -3301,13 +3320,12 @@ async fn fetch_page(
         .await;
         return match converted {
             Ok(Some(animated)) => {
-                if let Some(parent) = cache_path.parent() {
-                    let _ = tokio::fs::create_dir_all(parent).await;
-                }
-                let _ = tokio::fs::write(&cache_path, &animated.bytes).await;
-                let _ = tokio::fs::write(
-                    cache_path.with_extension("webp.dims"),
-                    format!("{}x{}", animated.orig_width, animated.orig_height),
+                write_page_cache(
+                    &cache_path,
+                    EncodeFormat::Webp,
+                    &animated.bytes,
+                    animated.orig_width,
+                    animated.orig_height,
                 )
                 .await;
                 let etag = page_file_etag(&cache_path.to_string_lossy(), "webp-anim").await;
@@ -3435,11 +3453,9 @@ async fn fetch_page(
     }
 
     // `raw` is still needed after this call regardless of which branch runs below (`Ok(Some(_))`
-    // reads its length; `Ok(None)` serves it back as-is), while the conversion functions both take
-    // their input by value (they `move` it into `run_blocking`) — so the source bytes have to be
-    // cloned into the conversion call either way. `orig_size` is captured up front so the
-    // `Ok(None)` branch can move the original `raw` out directly instead of cloning it a second
-    // time.
+    // reads its length; `Ok(None)` and the error path serve it back as-is). The conversions take
+    // their input by value (they `move` it into `run_blocking`), but `Bytes` clones are refcount
+    // bumps, not page-sized copies.
     let orig_size = raw.len() as u64;
     let max_long_edge = if preview {
         Some(lanrurugi_scanner::resize::MAX_LONG_EDGE_PREVIEW)
@@ -3479,13 +3495,12 @@ async fn fetch_page(
     };
     match converted {
         Ok(Some((resized, orig_width, orig_height))) => {
-            if let Some(parent) = cache_path.parent() {
-                let _ = tokio::fs::create_dir_all(parent).await;
-            }
-            let _ = tokio::fs::write(&cache_path, &resized).await;
-            let _ = tokio::fs::write(
-                cache_path.with_extension(format!("{}.dims", output_format.extension())),
-                format!("{orig_width}x{orig_height}"),
+            write_page_cache(
+                &cache_path,
+                output_format,
+                &resized,
+                orig_width,
+                orig_height,
             )
             .await;
             let etag =
@@ -3538,7 +3553,7 @@ fn metadata_only(
 async fn serve_original_page(
     archive_file: &str,
     path: &str,
-    raw: Vec<u8>,
+    raw: bytes::Bytes,
     content_type: &'static str,
 ) -> FetchedPage {
     let orig_size = raw.len() as u64;
@@ -3549,7 +3564,7 @@ async fn serve_original_page(
     let etag = page_file_etag(archive_file, path).await;
     FetchedPage {
         content_type,
-        bytes: bytes::Bytes::from(raw),
+        bytes: raw,
         resized: false,
         orig_size,
         orig_width: dims.map(|d| d.0).unwrap_or(0),
@@ -3566,6 +3581,44 @@ async fn read_cache_dims(cache_path: &std::path::Path, format: EncodeFormat) -> 
             let (w, h) = s.trim().split_once('x')?;
             Some((w.parse().ok()?, h.parse().ok()?))
         })
+}
+
+/// Writes a rendered page and its `.dims` sidecar into the resize cache.
+///
+/// Both files go to a sibling temp path and are renamed into place: a process killed mid-write
+/// (this deployment's own OOM restarts are not hypothetical) would otherwise leave a truncated
+/// image at a cache key whose read path only checks that the file exists, so the broken bytes
+/// would be served for as long as that key lives.
+async fn write_page_cache(
+    cache_path: &std::path::Path,
+    format: EncodeFormat,
+    bytes: &[u8],
+    orig_width: u32,
+    orig_height: u32,
+) {
+    if let Some(parent) = cache_path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    // Sidecar first: the read path treats a missing sidecar as "zero dims", so it is the safe
+    // half to have in place before the image itself appears.
+    let dims_path = cache_path.with_extension(format!("{}.dims", format.extension()));
+    let _ = write_atomically(&dims_path, format!("{orig_width}x{orig_height}").as_bytes()).await;
+    let _ = write_atomically(cache_path, bytes).await;
+}
+
+/// Writes `contents` to a sibling temp file, then renames it over `target` — atomic on every
+/// filesystem this runs on, since both paths are in the same directory.
+async fn write_atomically(target: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    let tmp = target.with_extension(format!(
+        "{}.{}.tmp",
+        target
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default(),
+        uuid::Uuid::new_v4().simple()
+    ));
+    tokio::fs::write(&tmp, contents).await?;
+    tokio::fs::rename(&tmp, target).await
 }
 
 /// Detects an image's MIME type from its magic bytes so the browser displays it inline rather
@@ -3807,12 +3860,12 @@ async fn generate_page_thumbnails(
     }
 
     let shard = &id[0..2];
-    // Every missing page's thumbnail is generated in one batch, spread across rayon's whole
-    // thread pool, instead of one page at a time each paying its own `spawn_blocking` round-trip
-    // — a real difference for large-page-count volumes (constitution Principle III: CPU-bound
-    // decode/resize/encode work belongs off the async reactor, and batched here for genuine
-    // parallelism rather than just serialized off-reactor dispatch).
-    let jobs: Vec<(std::path::PathBuf, usize, std::path::PathBuf)> = pages
+    // Every missing page's thumbnail is generated in one batch, spread across the shared capped
+    // rayon pool, instead of one page at a time each paying its own `spawn_blocking` round-trip
+    // (constitution Principle III). The archive is read in a handful of forward passes rather than
+    // once per page — `generate_sync` re-lists and rescans from the first entry every time, which
+    // made this O(pages²) archive IO on the overview grid.
+    let jobs: Vec<lanrurugi_scanner::thumbnail::PageThumbnailJob> = pages
         .iter()
         .enumerate()
         .filter_map(|(i, _)| {
@@ -3822,12 +3875,17 @@ async fn generate_page_thumbnails(
                 .join(shard)
                 .join(id.as_str())
                 .join(format!("{}.{}", i + 1, thumb_settings.format.extension()));
-            (!output.exists()).then(|| (std::path::PathBuf::from(&archive.file), i + 1, output))
+            (!output.exists()).then(|| lanrurugi_scanner::thumbnail::PageThumbnailJob {
+                page: i + 1,
+                output,
+            })
         })
         .collect();
-    let page_indices: Vec<usize> = jobs.iter().map(|(_, page, _)| *page).collect();
+    let page_indices: Vec<usize> = jobs.iter().map(|job| job.page).collect();
 
-    let results = match lanrurugi_scanner::thumbnail::generate_batch(
+    let results = match lanrurugi_scanner::thumbnail::generate_batch_in_one_pass(
+        std::path::PathBuf::from(&archive.file),
+        pages.clone(),
         jobs,
         thumb_settings.format,
         thumb_settings.quality,

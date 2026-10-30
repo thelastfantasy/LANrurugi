@@ -105,10 +105,36 @@ impl ArchiveRepository {
     }
 
     pub async fn list_all(&self) -> Result<Vec<Archive>> {
-        list_all_by_glob(&self.pool, ARCHIVE_KEY_GLOB, |id| async move {
-            self.get(&ArchiveId(id)).await
-        })
-        .await
+        // One `KEYS` + one pipelined `HGETALL` per id, in a single round trip.
+        //
+        // The generic `list_all_by_glob` below fetches each record with `get()`, which is *two*
+        // round trips per archive (`EXISTS` then `HGETALL`) issued one after another — for a
+        // 10k-archive library that is 20k sequential round trips on every call (`/archives`, the
+        // stats page, backup export, the search index rebuild, …). A pipeline sends all of them
+        // at once; an absent key simply answers with an empty hash, which is also why the
+        // `EXISTS` check can be dropped rather than pipelined.
+        let mut conn = self.pool.get().await?;
+        let ids: Vec<String> = conn.keys(ARCHIVE_KEY_GLOB).await?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut pipe = deadpool_redis::redis::pipe();
+        for id in &ids {
+            pipe.cmd("HGETALL").arg(id);
+        }
+        let hashes: Vec<std::collections::HashMap<String, String>> =
+            pipe.query_async(&mut conn).await?;
+
+        let mut archives = Vec::with_capacity(ids.len());
+        for (id, fields) in ids.into_iter().zip(hashes) {
+            // A key that disappeared between `KEYS` and the pipeline answers empty — the same
+            // "skip it" behavior the per-id `get()` loop had.
+            if fields.is_empty() {
+                continue;
+            }
+            archives.push(archive_from_fields(&ArchiveId(id), fields)?);
+        }
+        Ok(archives)
     }
 
     /// Finds the archive whose stored `file` path has `filename` as its basename, if any —

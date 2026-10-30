@@ -73,8 +73,12 @@ pub enum ResizeError {
 /// should serve `content` itself unmodified in that case. On success, the tuple also carries the
 /// *original* pixel dimensions (from the decode that just ran) so the caller can surface them —
 /// e.g. in a response header — without decoding a second time.
+///
+/// Takes `Bytes` rather than `Vec<u8>`: the caller usually still needs the original page bytes
+/// after this returns (`Ok(None)` and the error path both serve them), and a refcounted clone
+/// costs nothing where a `Vec` clone would copy the whole page.
 pub async fn resize_if_over_threshold(
-    content: Vec<u8>,
+    content: bytes::Bytes,
     quality: u8,
     threshold_kb: i64,
     max_short_edge: u32,
@@ -109,7 +113,7 @@ pub async fn resize_if_over_threshold(
 /// (BMP/TIFF/unknown), where "serve the original" isn't an option. Returns the converted bytes
 /// plus the original dimensions, same shape as `resize_if_over_threshold`'s success case.
 pub async fn convert_to_format(
-    content: Vec<u8>,
+    content: bytes::Bytes,
     quality: u8,
     max_short_edge: u32,
     max_long_edge: Option<u32>,
@@ -142,56 +146,61 @@ fn resize_sync(
 ) -> Result<Vec<u8>, ResizeError> {
     let short_edge = img.width().min(img.height());
     let long_edge = img.width().max(img.height());
-    let resized = if let Some(max_long) = max_long_edge {
-        let ratio = (max_long as f64 / long_edge as f64).min(1.0);
-        let target_width = (img.width() as f64 * ratio).round() as u32;
-        let target_height = (img.height() as f64 * ratio).round() as u32;
-        img.resize(
-            target_width,
-            target_height,
-            image::imageops::FilterType::Lanczos3,
-        )
+    let target = if let Some(max_long) = max_long_edge {
+        scaled_dims(img, (max_long as f64 / long_edge as f64).min(1.0))
     } else if short_edge > max_short_edge {
-        let ratio = max_short_edge as f64 / short_edge as f64;
-        let target_width = (img.width() as f64 * ratio).round() as u32;
-        let target_height = (img.height() as f64 * ratio).round() as u32;
-        img.resize(
-            target_width,
-            target_height,
-            image::imageops::FilterType::Lanczos3,
-        )
+        scaled_dims(img, max_short_edge as f64 / short_edge as f64)
     } else {
         // Still over the byte-size threshold but the short edge isn't over-sized: legacy still
         // re-encodes through ImageMagick at `quality` here (a recompression pass, e.g. for an
-        // oversized lossless PNG), it just doesn't also downscale.
-        img.clone()
+        // oversized lossless PNG), it just doesn't also downscale. No bitmap is copied for that —
+        // the encoder reads the decoded image directly.
+        None
     };
+    let resized = target.map(|(w, h)| img.resize(w, h, image::imageops::FilterType::Lanczos3));
+    let base = resized.as_ref().unwrap_or(img);
 
     // Preview: after reducing content to ~600px long edge, force the output canvas to the same
     // pixel dimensions as the full WebP version. The content is not improved—this is a cheap
     // upscale—but both variants now share the exact same dimensions, so the seamless swap needs
     // no frontend layout adaptation.
-    let final_image = if let Some(full_short) = preview_full_short_edge {
+    let preview = preview_full_short_edge.and_then(|full_short| {
         let short_edge = img.width().min(img.height());
         let ratio = (full_short as f64 / short_edge as f64).min(1.0);
-        let target_width = (img.width() as f64 * ratio).round() as u32;
-        let target_height = (img.height() as f64 * ratio).round() as u32;
-        resized.resize(
-            target_width,
-            target_height,
-            image::imageops::FilterType::Triangle,
-        )
-    } else {
-        resized
-    };
+        scaled_dims(img, ratio)
+            .map(|(w, h)| base.resize(w, h, image::imageops::FilterType::Triangle))
+    });
+    let final_image = preview.as_ref().unwrap_or(base);
 
-    let rgb = final_image.to_rgb8();
+    // Encode straight from the decoded buffer when the decoder already produced RGB — the common
+    // case (every JPEG page). `to_rgb8()` would clone that whole buffer first, and for
+    // `ImageRgb8` it is literally `x.clone()`, so the copy is pure waste.
+    match final_image.as_rgb8() {
+        Some(rgb) => encode_rgb(rgb, quality, format),
+        None => encode_rgb(&final_image.to_rgb8(), quality, format),
+    }
+}
+
+/// The rounded target dimensions for `img` scaled by `ratio`, or `None` when that is exactly the
+/// current size — `DynamicImage::resize` clones the entire bitmap when the target equals the
+/// current dimensions, which is never what a caller wants here.
+fn scaled_dims(img: &image::DynamicImage, ratio: f64) -> Option<(u32, u32)> {
+    let width = ((img.width() as f64) * ratio).round().max(1.0) as u32;
+    let height = ((img.height() as f64) * ratio).round().max(1.0) as u32;
+    ((width, height) != (img.width(), img.height())).then_some((width, height))
+}
+
+fn encode_rgb(
+    rgb: &image::RgbImage,
+    quality: u8,
+    format: EncodeFormat,
+) -> Result<Vec<u8>, ResizeError> {
     match format {
         EncodeFormat::Webp => webpx::Encoder::new_rgb(rgb.as_raw(), rgb.width(), rgb.height())
             .quality(quality as f32)
             .encode(webpx::Unstoppable)
             .map_err(|error| ResizeError::Webp(error.to_string())),
-        EncodeFormat::Jxl => crate::jxl::encode_rgb(&rgb, quality).map_err(ResizeError::from),
+        EncodeFormat::Jxl => crate::jxl::encode_rgb(rgb, quality).map_err(ResizeError::from),
     }
 }
 
@@ -199,7 +208,7 @@ fn resize_sync(
 mod tests {
     use super::*;
 
-    fn make_test_jpeg(width: u32, height: u32) -> Vec<u8> {
+    fn make_test_jpeg(width: u32, height: u32) -> bytes::Bytes {
         let img = image::RgbImage::from_pixel(width, height, image::Rgb([200, 50, 50]));
         let mut bytes = Vec::new();
         img.write_to(
@@ -207,7 +216,7 @@ mod tests {
             image::ImageFormat::Jpeg,
         )
         .unwrap();
-        bytes
+        bytes.into()
     }
 
     #[tokio::test]

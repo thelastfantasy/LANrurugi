@@ -4255,6 +4255,7 @@ name = "lanrurugi-scanner"
 version = "0.1.0"
 dependencies = [
  "avif-decode",
+ "bytes",
  "chardetng",
  "crc32fast",
  "deadpool-redis",

@@ -173,6 +173,11 @@ fn decode_archive_name(raw: &[u8]) -> String {
 /// `find_entry_by_suffix` actually need, directly against `libarchive2_sys`.
 struct RawArchiveReader {
     handle: *mut libarchive2_sys::archive,
+    /// Uncompressed size the archive's own header reports for the entry [`Self::next_entry`] last
+    /// returned, or `0` when the format doesn't say. Only used to pre-size
+    /// [`Self::read_data_to_vec`]'s buffer — without a hint a multi-megabyte page grows through
+    /// every doubling step, copying the whole thing at each one.
+    entry_size: u64,
 }
 
 struct RawEntry {
@@ -199,7 +204,10 @@ impl RawArchiveReader {
                 libarchive2_sys::archive_read_free(handle);
                 return Err(ArchiveFormatError::Libarchive(msg));
             }
-            Ok(Self { handle })
+            Ok(Self {
+                handle,
+                entry_size: 0,
+            })
         }
     }
 
@@ -234,6 +242,11 @@ impl RawArchiveReader {
             const S_IFREG: u32 = 0o100000;
             let is_regular_file = (mode as u32 & S_IFMT) == S_IFREG;
 
+            // `archive_entry_size` is -1 when the format can't report one; treat every
+            // non-positive or implausible value as "no hint" rather than trusting it.
+            let reported = libarchive2_sys::archive_entry_size(entry);
+            self.entry_size = if reported > 0 { reported as u64 } else { 0 };
+
             let name_ptr: *const c_char = libarchive2_sys::archive_entry_pathname(entry);
             let name_bytes = if name_ptr.is_null() {
                 Vec::new()
@@ -248,7 +261,15 @@ impl RawArchiveReader {
     }
 
     fn read_data_to_vec(&mut self) -> Result<Vec<u8>> {
-        let mut data = Vec::new();
+        // The header's own size is a hint, not a promise (a lying/malicious header must not turn
+        // into a huge up-front allocation), so it is only trusted up to a sane ceiling.
+        const MAX_PREALLOC: u64 = 256 * 1024 * 1024;
+        let hint = if self.entry_size <= MAX_PREALLOC {
+            self.entry_size as usize
+        } else {
+            0
+        };
+        let mut data = Vec::with_capacity(hint);
         let mut buf = [0u8; 8192];
         unsafe {
             loop {

@@ -127,7 +127,7 @@ pub fn is_convertible(content_type: &str) -> bool {
 /// converted safely, serve the original bytes"; callers should treat that exactly like a static
 /// `Ok(None)` and pass the source through untouched.
 pub async fn convert_to_animated_webp(
-    content: Vec<u8>,
+    content: bytes::Bytes,
     content_type: &str,
     quality: u8,
     max_short_edge: u32,

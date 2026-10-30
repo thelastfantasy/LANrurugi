@@ -39,9 +39,28 @@ fn worker_budget() -> usize {
         .max(1)
 }
 
-/// Runs a rayon parallel operation over `items`, off the async reactor, on a dedicated pool capped
-/// to `worker_budget()` threads (not rayon's uncapped global pool — see that function's doc
-/// comment for why).  `work` executes once per item; results are collected in input order.
+/// The one capped pool every batch in this workspace runs on. Built once (spawning a thread pool
+/// per call, which is what this replaced, paid thread-create/teardown on every batch).
+fn pool() -> &'static rayon::ThreadPool {
+    static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(worker_budget())
+            .build()
+            .expect("rayon pool build")
+    })
+}
+
+/// Runs `work` inside that shared capped pool — for a caller that needs `rayon` over a slice it
+/// already owns instead of [`parallel_map`]'s owned-`Vec` shape. Anything CPU-bound and parallel
+/// must go through here (or `parallel_map`), never rayon's uncapped global pool.
+pub fn with_thread_pool<T: Send>(work: impl FnOnce() -> T + Send) -> T {
+    pool().install(work)
+}
+
+/// Runs a rayon parallel operation over `items`, off the async reactor, on a pool capped to
+/// `worker_budget()` threads (not rayon's uncapped global pool — see that function's doc comment
+/// for why).  `work` executes once per item; results are collected in input order.
 pub async fn parallel_map<T, R, F>(items: Vec<T>, work: F) -> Result<Vec<R>, BlockingTaskError>
 where
     T: Send + 'static,
@@ -50,11 +69,7 @@ where
 {
     run_blocking(move || {
         use rayon::prelude::*;
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(worker_budget())
-            .build()
-            .expect("rayon pool build");
-        pool.install(|| items.into_par_iter().map(work).collect())
+        with_thread_pool(|| items.into_par_iter().map(work).collect())
     })
     .await
 }

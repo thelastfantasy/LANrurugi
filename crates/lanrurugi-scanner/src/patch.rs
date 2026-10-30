@@ -260,7 +260,12 @@ pub fn write_merged_zip<W: std::io::Write + std::io::Seek>(
     }
 
     let mut writer = zip::ZipWriter::new(out);
-    let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+    // Stored, not deflated: the pages being copied in are already-compressed images, so deflate
+    // would spend CPU recompressing data with no entropy left to remove. The merged archive is
+    // served/downloaded as-is, so the smaller output also isn't worth the CPU here.
+    let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored)
+        .large_file(true);
     for (i, page) in effective.iter().enumerate() {
         let bytes = read_page(archive_path, page)?;
         let ext = Path::new(page.entry_name())

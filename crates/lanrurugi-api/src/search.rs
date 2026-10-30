@@ -23,6 +23,18 @@ use crate::AppState;
 /// straight to `state.repos.archives.get`, which always returns `None` for a non-archive key —
 /// silently dropping every grouped Tankoubon out of search results entirely.
 pub(crate) async fn resolve_search_entry(state: &AppState, id: &str) -> Option<serde_json::Value> {
+    let mode = crate::settings::read_new_badge_mode(state).await;
+    resolve_search_entry_with_mode(state, id, &mode).await
+}
+
+/// [`resolve_search_entry`] for a caller that resolves a whole page of ids in one request and has
+/// already read the current `newbadgemode`: reading it per card was one Redis round trip (and one
+/// whole-hash lookup) per result for a value that cannot change mid-request.
+pub(crate) async fn resolve_search_entry_with_mode(
+    state: &AppState,
+    id: &str,
+    mode: &str,
+) -> Option<serde_json::Value> {
     if let Some(tankid) = id.strip_prefix("TANK_").map(|_| id) {
         let grouping = state
             .repos
@@ -43,7 +55,6 @@ pub(crate) async fn resolve_search_entry(state: &AppState, id: &str) -> Option<s
         )
         .await;
 
-        let mode = crate::settings::read_new_badge_mode(state).await;
         let mut aggregate_names = Vec::new();
         let mut aggregate_isnew = false;
         let mut aggregate_pagecount: u64 = 0;
@@ -55,7 +66,7 @@ pub(crate) async fn resolve_search_entry(state: &AppState, id: &str) -> Option<s
             // Per-member `effective_isnew` (not the raw flag) so a time-windowed or
             // until-finished mode also governs a Tankoubon's aggregate badge — a tank whose every
             // member's badge has lapsed no longer advertises itself as "new".
-            aggregate_isnew = aggregate_isnew || crate::archives::effective_isnew(&a, &mode);
+            aggregate_isnew = aggregate_isnew || crate::archives::effective_isnew(&a, mode);
             aggregate_pagecount += u64::from(a.pagecount);
             aggregate_size += a.arcsize;
             latest_readtime = latest_readtime.max(a.lastreadtime);
@@ -85,7 +96,19 @@ pub(crate) async fn resolve_search_entry(state: &AppState, id: &str) -> Option<s
         .get(&lanrurugi_core::ids::ArchiveId(id.to_string()))
         .await
         .ok()??;
-    let mode = crate::settings::read_new_badge_mode(state).await;
+    search_entry_json(state, a, id, mode).await
+}
+
+/// The body of [`resolve_search_entry`] once the caller already has the archive and the current
+/// `newbadgemode` — the search handlers resolve one page of up to 100 results in a row, and reading
+/// the same settings field again for every one of them is a Redis round trip and a `HashMap` lookup
+/// per card for a value that cannot change mid-request.
+async fn search_entry_json(
+    state: &AppState,
+    a: lanrurugi_core::entities::Archive,
+    id: &str,
+    mode: &str,
+) -> Option<serde_json::Value> {
     let mut json = serde_json::to_value(ArchiveMetadataJson::from(&a)).ok()?;
     let obj = json.as_object_mut()?;
     obj.insert("archive_count".into(), json!(null));
@@ -93,7 +116,7 @@ pub(crate) async fn resolve_search_entry(state: &AppState, id: &str) -> Option<s
     // badge rendering sees the *effective* value (see `archives::effective_isnew`'s docs).
     obj.insert(
         "isnew".into(),
-        json!(crate::archives::effective_isnew(&a, &mode)),
+        json!(crate::archives::effective_isnew(&a, mode)),
     );
     // Additive, not part of `ArchiveMetadataJson` itself — that struct's own shape is pinned to
     // the legacy-recorded contract (constitution Principle II), so a new field (issue #77's own
@@ -124,8 +147,12 @@ pub(crate) async fn resolve_search_entry(state: &AppState, id: &str) -> Option<s
 /// scan. An archive can technically belong to more than one Tankoubon; this picks the
 /// lexicographically smallest id so the result is deterministic across requests rather than
 /// dependent on Redis set iteration order, and reports the index within that chosen Tankoubon.
-async fn resolve_raw_search_entry(state: &AppState, id: &str) -> Option<serde_json::Value> {
-    let mut entry = resolve_search_entry(state, id).await?;
+async fn resolve_raw_search_entry(
+    state: &AppState,
+    id: &str,
+    mode: &str,
+) -> Option<serde_json::Value> {
+    let mut entry = resolve_search_entry_with_mode(state, id, mode).await?;
 
     let mut tankid: Option<String> = None;
     let mut archive_index: Option<usize> = None;
@@ -491,17 +518,19 @@ async fn search_archives_with_mode(
     {
         Ok(result) => {
             let page = paginate(&result.ids, q.start);
-            let mut data = Vec::with_capacity(page.len());
-            for id in &page {
-                let entry = if force_ungrouped {
-                    resolve_raw_search_entry(state, id).await
+            // One settings read for the whole page (see `resolve_search_entry_with_mode`), and the
+            // per-card lookups run concurrently: each one is 2-3 Redis commands, so a 100-card
+            // page used to serialize several hundred round trips behind each other.
+            let mode = crate::settings::read_new_badge_mode(state).await;
+            let entries = join_all(page.iter().map(|id| async {
+                if force_ungrouped {
+                    resolve_raw_search_entry(state, id, &mode).await
                 } else {
-                    resolve_search_entry(state, id).await
-                };
-                if let Some(entry) = entry {
-                    data.push(entry);
+                    resolve_search_entry_with_mode(state, id, &mode).await
                 }
-            }
+            }))
+            .await;
+            let data: Vec<serde_json::Value> = entries.into_iter().flatten().collect();
             axum::Json(json!({
                 "data": data,
                 "recordsFiltered": result.filtered_count,

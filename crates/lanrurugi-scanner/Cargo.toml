@@ -21,6 +21,7 @@ chardetng.workspace = true
 encoding_rs.workspace = true
 libc.workspace = true
 image.workspace = true
+bytes.workspace = true
 webpx.workspace = true
 jxl-image-rs-integration = "0.7.4"
 jxl.workspace = true

@@ -63,46 +63,54 @@ fn decode_avif(bytes: &[u8]) -> image::ImageResult<DynamicImage> {
             ))
         })?;
     // `ImgVec`'s accessors live on `ImgRef`: `width()`/`height()`/`pixels()`. `rgb`'s `Gray` keeps
-    // its component behind `value()`.
+    // its component behind `value()`. Each branch pre-sizes its output: a `flat_map(...).collect()`
+    // from a decoder's own row-padded buffer has no exact size hint, so it would grow through every
+    // doubling step and copy the whole (tens-of-MB) image at each one.
     Ok(match decoded {
         AvifImage::Rgb8(image) => {
             let (width, height) = (image.width() as u32, image.height() as u32);
-            let data = image.pixels().flat_map(|p| [p.r, p.g, p.b]).collect();
+            let mut data = Vec::with_capacity(width as usize * height as usize * 3);
+            data.extend(image.pixels().flat_map(|p| [p.r, p.g, p.b]));
             DynamicImage::ImageRgb8(decoded_buffer::<image::Rgb<u8>>(
                 "avif", width, height, data,
             )?)
         }
         AvifImage::Rgba8(image) => {
             let (width, height) = (image.width() as u32, image.height() as u32);
-            let data = image.pixels().flat_map(|p| [p.r, p.g, p.b, p.a]).collect();
+            let mut data = Vec::with_capacity(width as usize * height as usize * 4);
+            data.extend(image.pixels().flat_map(|p| [p.r, p.g, p.b, p.a]));
             DynamicImage::ImageRgba8(decoded_buffer::<image::Rgba<u8>>(
                 "avif", width, height, data,
             )?)
         }
         AvifImage::Rgb16(image) => {
             let (width, height) = (image.width() as u32, image.height() as u32);
-            let data = image.pixels().flat_map(|p| [p.r, p.g, p.b]).collect();
+            let mut data = Vec::with_capacity(width as usize * height as usize * 3);
+            data.extend(image.pixels().flat_map(|p| [p.r, p.g, p.b]));
             DynamicImage::ImageRgb16(decoded_buffer::<image::Rgb<u16>>(
                 "avif", width, height, data,
             )?)
         }
         AvifImage::Rgba16(image) => {
             let (width, height) = (image.width() as u32, image.height() as u32);
-            let data = image.pixels().flat_map(|p| [p.r, p.g, p.b, p.a]).collect();
+            let mut data = Vec::with_capacity(width as usize * height as usize * 4);
+            data.extend(image.pixels().flat_map(|p| [p.r, p.g, p.b, p.a]));
             DynamicImage::ImageRgba16(decoded_buffer::<image::Rgba<u16>>(
                 "avif", width, height, data,
             )?)
         }
         AvifImage::Gray8(image) => {
             let (width, height) = (image.width() as u32, image.height() as u32);
-            let data = image.pixels().map(|p| p.value()).collect();
+            let mut data = Vec::with_capacity(width as usize * height as usize);
+            data.extend(image.pixels().map(|p| p.value()));
             DynamicImage::ImageLuma8(decoded_buffer::<image::Luma<u8>>(
                 "avif", width, height, data,
             )?)
         }
         AvifImage::Gray16(image) => {
             let (width, height) = (image.width() as u32, image.height() as u32);
-            let data = image.pixels().map(|p| p.value()).collect();
+            let mut data = Vec::with_capacity(width as usize * height as usize);
+            data.extend(image.pixels().map(|p| p.value()));
             DynamicImage::ImageLuma16(decoded_buffer::<image::Luma<u16>>(
                 "avif", width, height, data,
             )?)

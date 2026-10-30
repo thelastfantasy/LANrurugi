@@ -48,6 +48,8 @@ pub async fn convert_any_to_webp(content: Vec<u8>, quality: u8) -> Result<Vec<u8
     if kind == Kind::Webp {
         return Ok(content);
     }
+    // Refcounted from here so the animated attempt and the still fallback below share one buffer.
+    let content = bytes::Bytes::from(content);
     if kind == Kind::Png && is_apng(&content) {
         // A frame cap or a frame the decoder rejects falls through to the still path, same as the
         // other animated formats below: the note is worth sending even if its motion is not.

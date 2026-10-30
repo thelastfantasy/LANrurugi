@@ -205,14 +205,172 @@ fn generate_sync(
         .get(page.saturating_sub(1))
         .ok_or(ThumbnailError::NoPages)?;
     let bytes = crate::patch::read_page(archive_path, entry)?;
+    thumbnail_from_bytes(&bytes, page, output_path, format, quality)
+}
 
+/// One page of [`generate_batch_in_one_pass`] — the 1-based page index and where its thumbnail
+/// goes. Jobs are processed in the order given, and results come back in that same order.
+#[derive(Debug, Clone)]
+pub struct PageThumbnailJob {
+    pub page: usize,
+    pub output: PathBuf,
+}
+
+/// Pages read per forward pass in [`generate_batch_in_one_pass`] — bounded so neither the page
+/// bytes nor the decoded images of a whole volume are ever resident at once.
+const BATCH_CHUNK: usize = 16;
+
+/// Generates many page thumbnails of **one** archive, reading the archive a handful of times
+/// instead of once per page.
+///
+/// [`generate_batch`] takes one job per page and each job re-lists and rescans the archive from
+/// its first entry (`generate_sync` → `list_pages` + `read_entry`), so a 200-page overview costs
+/// 200 full scans plus 200 partial ones — O(pages²) archive IO. This walks each chunk of jobs in
+/// a single pass (`archive_format::read_entries`) and decodes/encodes that chunk in parallel.
+///
+/// `pages` is the archive's own page list, already known by the caller (`list_pages`'s output,
+/// natural-sorted), so even the listing scan isn't repeated. Results match `jobs`' order.
+pub async fn generate_batch_in_one_pass(
+    archive_path: PathBuf,
+    pages: Vec<String>,
+    jobs: Vec<PageThumbnailJob>,
+    format: ThumbFormat,
+    quality: u8,
+) -> Result<Vec<Result<Option<String>, ThumbnailError>>, BlockingTaskError> {
+    run_blocking(move || generate_batch_sync(&archive_path, &pages, jobs, format, quality)).await
+}
+
+fn generate_batch_sync(
+    archive_path: &Path,
+    pages: &[String],
+    jobs: Vec<PageThumbnailJob>,
+    format: ThumbFormat,
+    quality: u8,
+) -> Vec<Result<Option<String>, ThumbnailError>> {
+    use rayon::prelude::*;
+
+    if jobs.is_empty() {
+        return Vec::new();
+    }
+    // Books render pages on demand through their own cache and aren't forward-scannable by
+    // libarchive; the per-page path is exactly what `generate_sync` does for them anyway.
+    if archive_format::is_book(archive_path) {
+        return jobs
+            .iter()
+            .map(|job| generate_sync(archive_path, job.page, &job.output, format, quality))
+            .collect();
+    }
+
+    let effective = crate::patch::effective_pages(archive_path, pages);
+    let mut results: Vec<Option<Result<Option<String>, ThumbnailError>>> =
+        jobs.iter().map(|_| None).collect();
+
+    for chunk_start in (0..jobs.len()).step_by(BATCH_CHUNK) {
+        let chunk_end = (chunk_start + BATCH_CHUNK).min(jobs.len());
+        let chunk = &jobs[chunk_start..chunk_end];
+
+        // Patched pages live in the sidecar zip, not this archive — they are rare, so they keep
+        // the per-page read instead of complicating the forward pass.
+        let mut wanted: Vec<(usize, String)> = Vec::new();
+        for (offset, job) in chunk.iter().enumerate() {
+            let index = chunk_start + offset;
+            match effective.get(job.page.saturating_sub(1)) {
+                Some(crate::patch::EffectivePage::Original(name)) => {
+                    wanted.push((index, name.clone()));
+                }
+                Some(crate::patch::EffectivePage::Patched(_)) => {
+                    results[index] = Some(generate_sync(
+                        archive_path,
+                        job.page,
+                        &job.output,
+                        format,
+                        quality,
+                    ));
+                }
+                None => results[index] = Some(Err(ThumbnailError::NoPages)),
+            }
+        }
+        if wanted.is_empty() {
+            continue;
+        }
+
+        let names: Vec<String> = wanted.iter().map(|(_, name)| name.clone()).collect();
+        let bytes = match archive_format::read_entries(archive_path, &names) {
+            Ok(bytes) => bytes,
+            // A whole-archive read failure is reported exactly as the per-page path would: let
+            // each page produce its own error rather than inventing one for the whole chunk.
+            Err(_) => {
+                for (offset, job) in chunk.iter().enumerate() {
+                    let index = chunk_start + offset;
+                    if results[index].is_none() {
+                        results[index] = Some(generate_sync(
+                            archive_path,
+                            job.page,
+                            &job.output,
+                            format,
+                            quality,
+                        ));
+                    }
+                }
+                continue;
+            }
+        };
+
+        let mut decodable: Vec<(usize, Vec<u8>)> = Vec::with_capacity(wanted.len());
+        for ((index, _), found) in wanted.iter().zip(bytes) {
+            match found {
+                Some(page_bytes) => decodable.push((*index, page_bytes)),
+                None => results[*index] = Some(Err(ThumbnailError::NoPages)),
+            }
+        }
+
+        let processed: Vec<(usize, Result<Option<String>, ThumbnailError>)> =
+            lanrurugi_core::concurrency::with_thread_pool(|| {
+                decodable
+                    .into_par_iter()
+                    .map(|(index, page_bytes)| {
+                        let job = &jobs[index];
+                        (
+                            index,
+                            thumbnail_from_bytes(
+                                &page_bytes,
+                                job.page,
+                                &job.output,
+                                format,
+                                quality,
+                            ),
+                        )
+                    })
+                    .collect()
+            });
+        for (index, outcome) in processed {
+            results[index] = Some(outcome);
+        }
+    }
+
+    results
+        .into_iter()
+        .map(|r| r.unwrap_or(Err(ThumbnailError::NoPages)))
+        .collect()
+}
+
+/// Decodes `bytes` (one page's raw image bytes), resizes and encodes it to `output_path`, returning
+/// the cover hash for page 1 exactly as [`generate`] does. Split out of [`generate_sync`] so the
+/// batch path can hand it pages it read in a single archive pass.
+fn thumbnail_from_bytes(
+    bytes: &[u8],
+    page: usize,
+    output_path: &Path,
+    format: ThumbFormat,
+    quality: u8,
+) -> Result<Option<String>, ThumbnailError> {
     let cover_hash = (page == 1).then(|| {
         let mut hasher = Sha1::new();
-        hasher.update(&bytes);
+        hasher.update(bytes);
         hex_encode(&hasher.finalize())
     });
 
-    let img = crate::image_decode::load_from_memory(&bytes)?;
+    let img = crate::image_decode::load_from_memory(bytes)?;
     // A thumbnail exists to be *smaller* than the page it stands in for — in pixels and in bytes.
     // Both halves of that are enforced here, because neither is guaranteed by the encoder:
     //
@@ -230,17 +388,23 @@ fn generate_sync(
     loop {
         let ratio = target_height as f64 / img.height() as f64;
         let target_width = ((img.width() as f64) * ratio).round().max(1.0) as u32;
-        let rgb = if target_width == img.width() && target_height == img.height() {
+        let resized = if target_width == img.width() && target_height == img.height() {
             // Already at or under the target edge: re-encoding it at a different size would only
             // throw detail away, so this attempt uses the decoded pixels as-is.
-            img.to_rgb8()
+            None
         } else {
-            img.resize(
+            Some(img.resize(
                 target_width,
                 target_height,
                 image::imageops::FilterType::Lanczos3,
-            )
-            .to_rgb8()
+            ))
+        };
+        let base = resized.as_ref().unwrap_or(&img);
+        // Borrow the decoded buffer when it is already RGB (the usual JPEG page): `to_rgb8()`
+        // clones it, and for `ImageRgb8` that clone is the whole image for nothing.
+        let rgb = match base.as_rgb8() {
+            Some(rgb) => std::borrow::Cow::Borrowed(rgb),
+            None => std::borrow::Cow::Owned(base.to_rgb8()),
         };
 
         for attempt_quality in std::iter::once(quality).chain(QUALITY_FALLBACKS.iter().copied()) {
@@ -443,6 +607,69 @@ mod tests {
                 "stale hqthumbpages={stale} must be ignored"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn one_pass_batch_generates_every_requested_page() {
+        let archive = make_large_test_zip_with_image();
+        let pages = archive_format::list_pages(archive.path()).unwrap();
+        assert_eq!(pages.len(), 2);
+        let out_dir = tempfile::tempdir().unwrap();
+        let jobs: Vec<PageThumbnailJob> = (1..=2)
+            .map(|page| PageThumbnailJob {
+                page,
+                output: out_dir.path().join(format!("{page}.webp")),
+            })
+            .collect();
+
+        let results = generate_batch_in_one_pass(
+            archive.path().to_path_buf(),
+            pages,
+            jobs,
+            ThumbFormat::Webp,
+            DEFAULT_WEBP_QUALITY,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(results.len(), 2);
+        for (index, result) in results.into_iter().enumerate() {
+            assert!(result.is_ok(), "page {} failed: {result:?}", index + 1);
+            let path = out_dir.path().join(format!("{}.webp", index + 1));
+            assert!(path.exists(), "page {} thumbnail missing", index + 1);
+            assert_eq!(image::open(&path).unwrap().height(), THUMBNAIL_HEIGHT);
+        }
+    }
+
+    #[tokio::test]
+    async fn one_pass_batch_reports_a_page_out_of_range_without_failing_the_others() {
+        let archive = make_large_test_zip_with_image();
+        let pages = archive_format::list_pages(archive.path()).unwrap();
+        let out_dir = tempfile::tempdir().unwrap();
+        let jobs = vec![
+            PageThumbnailJob {
+                page: 1,
+                output: out_dir.path().join("1.webp"),
+            },
+            PageThumbnailJob {
+                page: 9,
+                output: out_dir.path().join("9.webp"),
+            },
+        ];
+
+        let results = generate_batch_in_one_pass(
+            archive.path().to_path_buf(),
+            pages,
+            jobs,
+            ThumbFormat::Webp,
+            DEFAULT_WEBP_QUALITY,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_ok());
+        assert!(matches!(results[1], Err(ThumbnailError::NoPages)));
     }
 
     #[tokio::test]
