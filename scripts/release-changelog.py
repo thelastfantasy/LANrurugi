@@ -138,11 +138,20 @@ def collect(from_ref: str | None, to_ref: str, max_commits: int) -> list[Entry]:
     return entries
 
 
+def group_key(type_: str) -> str:
+    """Bucket name for a commit type — the group's *first* type, so the two types sharing one
+    heading (`ci` and `build`) land in a single bucket instead of emitting that heading twice."""
+    for types, _, _ in GROUPS:
+        if type_ in types:
+            return types[0]
+    return "other"
+
+
 def grouped(entries: list[Entry]) -> dict[str, list[Entry]]:
-    order = {t: i for i, (types, _, _) in enumerate(GROUPS) for t in types}
+    order = {types[0]: i for i, (types, _, _) in enumerate(GROUPS)}
     buckets: dict[str, list[Entry]] = {}
     for entry in entries:
-        buckets.setdefault(entry.type if entry.type in order else "other", []).append(entry)
+        buckets.setdefault(group_key(entry.type), []).append(entry)
     return dict(sorted(buckets.items(), key=lambda kv: order.get(kv[0], len(GROUPS))))
 
 
