@@ -287,7 +287,7 @@ async fn queue_restore(
     auth: Option<axum::extract::Extension<AuthContext>>,
     mut multipart: Multipart,
 ) -> Response {
-    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut file_bytes: Option<bytes::Bytes> = None;
     loop {
         let field = match multipart.next_field().await {
             Ok(Some(f)) => f,
@@ -295,7 +295,7 @@ async fn queue_restore(
             Err(e) => return error(StatusCode::BAD_REQUEST, "queue_restore", e.to_string()),
         };
         if field.name() == Some("file") {
-            file_bytes = field.bytes().await.ok().map(|b| b.to_vec());
+            file_bytes = field.bytes().await.ok();
         }
     }
     let Some(bytes) = file_bytes else {
@@ -828,7 +828,7 @@ async fn queue_import_legacy(
     Query(query): Query<ImportLegacyQuery>,
     mut multipart: Multipart,
 ) -> Response {
-    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut file_bytes: Option<bytes::Bytes> = None;
     loop {
         let field = match multipart.next_field().await {
             Ok(Some(f)) => f,
@@ -842,7 +842,7 @@ async fn queue_import_legacy(
             }
         };
         if field.name() == Some("file") {
-            file_bytes = field.bytes().await.ok().map(|b| b.to_vec());
+            file_bytes = field.bytes().await.ok();
         }
     }
     let Some(bytes) = file_bytes else {

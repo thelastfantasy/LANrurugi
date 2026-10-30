@@ -4143,11 +4143,15 @@ version = "0.1.0"
 dependencies = [
  "image",
  "image_hasher",
+ "lanrurugi-core",
  "lanrurugi-scanner",
  "rayon",
  "serde",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
+ "tracing-subscriber",
+ "zip",
 ]
 
 [[package]]

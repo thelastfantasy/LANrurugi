@@ -42,6 +42,41 @@ pub fn llm_error_status(class: lanrurugi_llm::LlmErrorClass) -> StatusCode {
     }
 }
 
+/// A body streaming an existing file, without owning its lifetime — a finished page variant in
+/// the resize cache, so serving a cache hit never has to hold the whole page in memory.
+pub(crate) fn stream_file(path: &std::path::Path) -> std::io::Result<axum::body::Body> {
+    let file = std::fs::File::open(path)?;
+    Ok(axum::body::Body::from_stream(
+        tokio_util::io::ReaderStream::new(tokio::fs::File::from_std(file)),
+    ))
+}
+
+/// A body streaming `path`, deleting the file once the body is dropped.
+///
+/// For artifacts too large to buffer but cheap to rebuild (a patched archive's merged zip): the
+/// request never learns when the last byte went out, so the file's lifetime is tied to the body
+/// itself rather than to the handler.
+pub(crate) fn stream_temp_file(path: std::path::PathBuf) -> std::io::Result<axum::body::Body> {
+    use futures_util::StreamExt as _;
+
+    struct RemoveOnDrop(std::path::PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    let file = std::fs::File::open(&path)?;
+    let guard = RemoveOnDrop(path);
+    let stream =
+        tokio_util::io::ReaderStream::new(tokio::fs::File::from_std(file)).map(move |chunk| {
+            // Keeps the guard alive for exactly as long as the stream exists.
+            let _ = &guard;
+            chunk
+        });
+    Ok(axum::body::Body::from_stream(stream))
+}
+
 /// The `OperationResponse` error shape for a failed model call, plus its machine-readable
 /// `class` so a client can tell a timeout from a provider error from a validator rejection.
 pub fn llm_error(operation: &str, err: &lanrurugi_llm::LlmError) -> Response {

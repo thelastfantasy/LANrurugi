@@ -102,6 +102,10 @@ description = "Run lanrurugi-bench's criterion microbenchmarks (the only task th
 # target).
 run = "scripts/cargo-container-run.sh cargo bench -p lanrurugi-bench --features bench --"
 
+[tasks.measure-compare]
+description = "Measure one imgcompare synthetic comparison: peak RSS (VmHWM) plus the library's own per-stage timings. PAGES=<n> overrides the default 188 pages. Dev profile (memory figures are profile-independent; wall times are not, so treat them as relative)"
+run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-imgcompare --example measure_compare"
+
 [tasks.clippy]
 description = "cargo clippy --workspace inside the dev container (see scripts/cargo-container-run.sh for the resource guardrails)"
 run = "scripts/cargo-container-run.sh cargo clippy --workspace --all-targets -- -D warnings"

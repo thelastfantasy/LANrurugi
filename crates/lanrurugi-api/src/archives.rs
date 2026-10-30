@@ -897,24 +897,49 @@ async fn download_archive(
 pub(crate) async fn serve_archive_download(archive: &Archive) -> Response {
     // A sidecar `.patch.zip` (issue #77's own follow-on design) means the reader is showing pages
     // that don't exist in the archive file itself — downloading the raw file as-is would silently
-    // drop them. `build_merged_zip` returns `None` (repackage cost skipped entirely) whenever
-    // there's no patch, or a patch exists but failed to load/apply, in which case this falls
-    // through to the same plain-file-read behavior as before patches existed.
+    // drop them. The repackaged archive is streamed through a temp file: it used to be built as
+    // one `Vec<u8>` holding the whole member, which for a large patched archive is the entire
+    // file in memory before the first byte goes out. `Ok(false)` (nothing to merge) falls through
+    // to plain file streaming below, exactly as before.
     let archive_file = archive.file.clone();
     let disposition = content_disposition_for(archive);
     let merged = lanrurugi_core::concurrency::run_blocking(move || {
-        lanrurugi_scanner::patch::build_merged_zip(std::path::Path::new(&archive_file))
+        let path = std::path::Path::new(&archive_file);
+        let tmp =
+            std::env::temp_dir().join(format!("lrr-merged-{}.zip", uuid::Uuid::new_v4().simple()));
+        let file = std::fs::File::create(&tmp).ok()?;
+        match lanrurugi_scanner::patch::write_merged_zip(path, std::io::BufWriter::new(file)) {
+            Ok(true) => Some(tmp),
+            _ => {
+                let _ = std::fs::remove_file(&tmp);
+                None
+            }
+        }
     })
     .await;
-    if let Ok(Ok(Some(bytes))) = merged {
-        return (
-            [
-                (header::CONTENT_TYPE, "application/octet-stream".to_string()),
-                (header::CONTENT_DISPOSITION, disposition),
-            ],
-            bytes,
-        )
-            .into_response();
+    if let Ok(Some(tmp)) = merged {
+        match crate::common::stream_temp_file(tmp.clone()) {
+            Ok(body) => {
+                let mut response = (
+                    [
+                        (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+                        (header::CONTENT_DISPOSITION, disposition),
+                    ],
+                    body,
+                )
+                    .into_response();
+                if let Ok(meta) = std::fs::metadata(&tmp) {
+                    response
+                        .headers_mut()
+                        .insert(header::CONTENT_LENGTH, meta.len().into());
+                }
+                return response;
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                tracing::warn!(error = %e, "could not stream the merged archive; falling back");
+            }
+        }
     }
     // Streamed rather than `tokio::fs::read`: a multi-gigabyte archive was previously loaded
     // whole into the process before the first byte went out (the same reason `inline_pdf` below
@@ -1972,22 +1997,33 @@ async fn update_progress(
             // neither "pages per day" nor "which works get re-read" can be derived from it after
             // the fact. Best-effort, like legacy's own increment — a stats write must never fail a
             // progress save.
+            //
+            // One pipelined round trip for all of it: this runs once per page turn, and the
+            // commands were five sequential round trips.
             if let Ok(mut conn) = state.redis.config.get().await {
-                let _: Result<i64, _> = conn.incr(TOTAL_PAGES_STAT_KEY, 1).await;
                 let day = chrono::DateTime::from_timestamp(now as i64, 0)
                     .map(|t| t.format("%Y-%m-%d").to_string())
                     .unwrap_or_default();
+                let mut pipe = deadpool_redis::redis::pipe();
+                pipe.cmd("INCR").arg(TOTAL_PAGES_STAT_KEY);
                 if !day.is_empty() {
                     let key = lanrurugi_storage::keys::read_daily_key(&day);
-                    let _: Result<i64, _> = conn.incr(&key, 1).await;
+                    pipe.cmd("INCR").arg(&key);
                     // Only the first write ever lands (`SETNX`), so this stays the counter's own
                     // start date however long the library is read for.
-                    let _: Result<bool, _> = conn.set_nx(READ_DAILY_SINCE_KEY, day.as_str()).await;
-                    let _: Result<bool, _> = conn
-                        .expire(&key, lanrurugi_storage::keys::READ_DAILY_TTL_SECS)
-                        .await;
+                    pipe.cmd("SETNX")
+                        .arg(READ_DAILY_SINCE_KEY)
+                        .arg(day.as_str());
+                    pipe.cmd("EXPIRE")
+                        .arg(&key)
+                        .arg(lanrurugi_storage::keys::READ_DAILY_TTL_SECS);
                 }
-                let _: Result<i64, _> = conn.hincr(READ_FREQ_STAT_KEY, id.as_str(), 1).await;
+                pipe.cmd("HINCRBY")
+                    .arg(READ_FREQ_STAT_KEY)
+                    .arg(id.as_str())
+                    .arg(1);
+                let _: Result<Vec<deadpool_redis::redis::Value>, _> =
+                    pipe.query_async(&mut conn).await;
             }
             axum::Json(json!({
                 "operation": "update_progress",
@@ -3028,7 +3064,30 @@ pub(crate) async fn serve_page(
                         .unwrap_or(header::HeaderValue::from_static("0")),
                 );
             }
-            (header_map, page.bytes).into_response()
+            match page.body {
+                crate::state::PageBody::Bytes(bytes) => (header_map, bytes).into_response(),
+                // A finished cache file: stream it, with a real `Content-Length` so the reader's
+                // progress/range behaviour is unchanged.
+                crate::state::PageBody::File(path) => {
+                    let length = tokio::fs::metadata(&path).await.map(|m| m.len()).ok();
+                    match crate::common::stream_file(&path) {
+                        Ok(body) => {
+                            let mut response = (header_map, body).into_response();
+                            if let Some(length) = length {
+                                response
+                                    .headers_mut()
+                                    .insert(header::CONTENT_LENGTH, length.into());
+                            }
+                            response
+                        }
+                        Err(e) => error(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "serve_page",
+                            e.to_string(),
+                        ),
+                    }
+                }
+            }
         }
         Err(msg) => error(StatusCode::INTERNAL_SERVER_ERROR, "serve_page", msg),
     }
@@ -3087,7 +3146,7 @@ async fn fetch_page(
         let orig_size = raw.len() as u64;
         return Ok(FetchedPage {
             content_type,
-            bytes: bytes::Bytes::from(raw),
+            body: crate::state::PageBody::Bytes(bytes::Bytes::from(raw)),
             resized: false,
             orig_size,
             orig_width: 0,
@@ -3104,7 +3163,9 @@ async fn fetch_page(
     if corrupted_pages.iter().any(|p| p == path) {
         return Ok(FetchedPage {
             content_type: "image/svg+xml",
-            bytes: bytes::Bytes::from_static(CORRUPTED_PAGE_PLACEHOLDER),
+            body: crate::state::PageBody::Bytes(bytes::Bytes::from_static(
+                CORRUPTED_PAGE_PLACEHOLDER,
+            )),
             resized: false,
             orig_size: 0,
             orig_width: 0,
@@ -3284,12 +3345,13 @@ async fn fetch_page(
             EncodeFormat::Webp,
             true,
         );
-        if let Ok(cached) = tokio::fs::read(&cache_path).await {
+        // Cache hit: stream the finished file rather than reading it into memory first.
+        if tokio::fs::metadata(&cache_path).await.is_ok() {
             let dims = read_cache_dims(&cache_path, EncodeFormat::Webp).await;
             let etag = page_file_etag(&cache_path.to_string_lossy(), "webp-anim").await;
             return Ok(FetchedPage {
                 content_type: EncodeFormat::Webp.content_type(),
-                bytes: bytes::Bytes::from(cached),
+                body: crate::state::PageBody::File(cache_path.clone()),
                 resized: true,
                 orig_size: raw.len() as u64,
                 orig_width: dims.map(|d| d.0).unwrap_or(0),
@@ -3331,7 +3393,7 @@ async fn fetch_page(
                 let etag = page_file_etag(&cache_path.to_string_lossy(), "webp-anim").await;
                 Ok(FetchedPage {
                     content_type: EncodeFormat::Webp.content_type(),
-                    bytes: bytes::Bytes::from(animated.bytes),
+                    body: crate::state::PageBody::Bytes(bytes::Bytes::from(animated.bytes)),
                     resized: true,
                     orig_size: raw.len() as u64,
                     orig_width: animated.orig_width,
@@ -3436,14 +3498,15 @@ async fn fetch_page(
     );
     // Cache hit: the encoded bytes plus the `.dims` sidecar (original "WxH") written at encode
     // time — no re-decode of the original needed. A missing sidecar (older cache entry) just
-    // degrades to zero dims in the headers.
-    if let Ok(cached) = tokio::fs::read(&cache_path).await {
+    // degrades to zero dims in the headers. The file is streamed rather than read: one page-sized
+    // buffer per concurrent reader used to live here.
+    if tokio::fs::metadata(&cache_path).await.is_ok() {
         let dims = read_cache_dims(&cache_path, output_format).await;
         let etag =
             page_file_etag(&cache_path.to_string_lossy(), output_format.content_type()).await;
         return Ok(FetchedPage {
             content_type: output_format.content_type(),
-            bytes: bytes::Bytes::from(cached),
+            body: crate::state::PageBody::File(cache_path.clone()),
             resized: true,
             orig_size: raw.len() as u64,
             orig_width: dims.map(|d| d.0).unwrap_or(0),
@@ -3507,7 +3570,7 @@ async fn fetch_page(
                 page_file_etag(&cache_path.to_string_lossy(), output_format.content_type()).await;
             Ok(FetchedPage {
                 content_type: output_format.content_type(),
-                bytes: bytes::Bytes::from(resized),
+                body: crate::state::PageBody::Bytes(bytes::Bytes::from(resized)),
                 resized: true,
                 orig_size,
                 orig_width,
@@ -3541,7 +3604,7 @@ fn metadata_only(
 ) -> FetchedPage {
     FetchedPage {
         content_type,
-        bytes: bytes::Bytes::new(),
+        body: crate::state::PageBody::Bytes(bytes::Bytes::new()),
         resized,
         orig_size,
         orig_width: dims.map(|d| d.0).unwrap_or(0),
@@ -3564,7 +3627,7 @@ async fn serve_original_page(
     let etag = page_file_etag(archive_file, path).await;
     FetchedPage {
         content_type,
-        bytes: raw,
+        body: crate::state::PageBody::Bytes(raw),
         resized: false,
         orig_size,
         orig_width: dims.map(|d| d.0).unwrap_or(0),

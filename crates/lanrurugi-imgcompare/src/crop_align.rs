@@ -511,14 +511,38 @@ pub fn estimate_crop_alignment_with_confidence(
     a: &DynamicImage,
     b: &DynamicImage,
 ) -> (CropAlignment, f64) {
-    let a_height = a.height().max(1);
-    let (b_width, b_height) = (b.width().max(1), b.height().max(1));
+    estimate_crop_alignment_from_grid(
+        &gray_grid(a),
+        a.height().max(1),
+        &gray_grid(b),
+        b.width().max(1),
+        b.height().max(1),
+    )
+}
 
-    let a_coarse = downsample_gray(a, CORRELATION_HEIGHT);
-    let b_coarse = downsample_gray(b, CORRELATION_HEIGHT);
+/// The 48px-tall grayscale grid [`estimate_crop_alignment_from_grid`] correlates over, for one
+/// already-decoded page.
+///
+/// Exposed so a caller that runs the coarse algorithm repeatedly over the same pages — the rescue
+/// path does, once per orphaned page — can compute each page's grid once and reuse it, instead of
+/// re-downsampling two full-resolution images per call.
+pub fn gray_grid(image: &DynamicImage) -> GrayImage {
+    downsample_gray(image, CORRELATION_HEIGHT)
+}
+
+/// [`estimate_crop_alignment_with_confidence`] over precomputed grids: identical result, but the
+/// caller supplies each page's grid (and its real dimensions) instead of two decoded images.
+pub fn estimate_crop_alignment_from_grid(
+    a_grid: &GrayImage,
+    a_height: u32,
+    b_grid: &GrayImage,
+    b_width: u32,
+    b_height: u32,
+) -> (CropAlignment, f64) {
+    let (a_height, b_width, b_height) = (a_height.max(1), b_width.max(1), b_height.max(1));
     let coarse = SearchPass {
-        a_grid: &a_coarse,
-        b_grid: &b_coarse,
+        a_grid,
+        b_grid,
         scale_candidates: &COARSE_SCALE_CANDIDATES,
         shift_center: (0, 0),
         shift_radius: MAX_SHIFT_PX,
@@ -531,7 +555,7 @@ pub fn estimate_crop_alignment_with_confidence(
 
     // Convert from the grid-internal correspondence (A-grid px -> B-grid px via `grid_scale` +
     // integer `shift`) to the public, real-dimension-normalized contract `CropAlignment` promises.
-    // `a_coarse`/`b_coarse` preserve their OWN image's real aspect ratio at `CORRELATION_HEIGHT`,
+    // `a_grid`/`b_grid` preserve their OWN image's real aspect ratio at `CORRELATION_HEIGHT`,
     // so 1 grid px = `a_height/CORRELATION_HEIGHT` real A px (both axes, uniformly) and likewise
     // `b_height/CORRELATION_HEIGHT` real B px — converting through real pixels and then
     // normalizing by each side's own real width/height (per this type's own UV convention) yields

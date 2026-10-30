@@ -5,7 +5,7 @@
 //! correctness doesn't depend on the cache (it's purely a latency optimization); SC-008's
 //! benchmark (US8) is where a cache would earn its complexity back if warranted.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use std::sync::Arc;
 
@@ -334,6 +334,42 @@ async fn eval_expr(
     }
 }
 
+/// One `HMGET` per id, all in a single round trip, in `ids`' order — one row per id, one entry per
+/// field, `None` for a missing field.
+///
+/// The filters and sorts below ask the same question about every candidate ("progress/pagecount",
+/// "tags", "title/tags"); issuing those as one round trip each rather than one per archive is the
+/// difference between a handful of Redis commands and N of them for a page of results.
+///
+/// Callers must exclude Tankoubon ids (`TANK_…`): those are zsets, and `HMGET` on one is a
+/// `WRONGTYPE` error that fails the whole pipeline.
+async fn hmget_many(
+    conn: &mut deadpool_redis::Connection,
+    ids: &[&str],
+    fields: &[&str],
+) -> Result<Vec<Vec<Option<String>>>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut pipe = deadpool_redis::redis::pipe();
+    for id in ids {
+        let mut cmd = deadpool_redis::redis::cmd("HMGET");
+        cmd.arg(*id);
+        for field in fields {
+            cmd.arg(*field);
+        }
+        pipe.add_command(cmd);
+    }
+    Ok(pipe.query_async(conn).await?)
+}
+
+fn parse_u32(value: &Option<String>) -> u32 {
+    value
+        .as_deref()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0)
+}
+
 pub async fn search(
     archive_pool: &Pool,
     search_pool: &Pool,
@@ -417,19 +453,47 @@ pub async fn search(
         // Applies `new_badge_mode` on top of the raw `LRR_NEW` membership, mirroring
         // `lanrurugi_api::archives::effective_isnew` — under a time window or until-finished
         // mode, an archive whose badge has lapsed must not keep surfacing through the "New
-        // Archives" filter. `retain`'s closure can't `await`, hence the explicit loop.
+        // Archives" filter.
+        //
+        // Progress/pagecount/tags for every candidate come from one round trip (`hmget_many`)
+        // instead of two or three `HGET`s per archive. Tankoubon ids are zsets, so they stay out
+        // of that fetch and read as `(0, 0, None)` — which is exactly what the old per-id `HGET`
+        // produced for them (the command errored, and the error was swallowed).
+        let window_days = params
+            .new_badge_mode
+            .strip_suffix('d')
+            .and_then(|d| d.parse::<u64>().ok());
         let mut keep = HashSet::new();
+        let ids: Vec<&str> = filtered
+            .iter()
+            .filter(|id| !id.starts_with("TANK"))
+            .map(String::as_str)
+            .collect();
+        let fields: &[&str] = if window_days.is_some() {
+            &["progress", "pagecount", "tags"]
+        } else {
+            &["progress", "pagecount"]
+        };
+        let rows = hmget_many(&mut archive_conn, &ids, fields).await?;
+        let mut stats: HashMap<&str, (u32, u32, Option<String>)> =
+            HashMap::with_capacity(ids.len());
+        for (id, row) in ids.iter().zip(rows) {
+            let mut row = row.into_iter();
+            let progress = parse_u32(&row.next().flatten());
+            let pagecount = parse_u32(&row.next().flatten());
+            stats.insert(id, (progress, pagecount, row.next().flatten()));
+        }
         for id in &filtered {
             if !new_set.contains(id) {
                 continue;
             }
+            let (progress, pagecount, tags) = stats
+                .get(id.as_str())
+                .map(|(p, c, t)| (*p, *c, t.clone()))
+                .unwrap_or((0, 0, None));
             let lapsed = match params.new_badge_mode.as_str() {
                 "until_opened" => false,
-                "until_finished" => {
-                    let progress: u32 = archive_conn.hget(id, "progress").await.unwrap_or(0);
-                    let pagecount: u32 = archive_conn.hget(id, "pagecount").await.unwrap_or(0);
-                    pagecount > 0 && progress >= pagecount
-                }
+                "until_finished" => pagecount > 0 && progress >= pagecount,
                 mode => {
                     // A time-window mode also lapses once the archive is finished (same
                     // threshold `until_finished` uses above), mirroring
@@ -438,8 +502,6 @@ pub async fn search(
                     // of a `3d` window used to keep matching `newonly` for the rest of the
                     // window while also having already dropped out of the "On Deck" carousel's
                     // own unrelated `hidecompleted` filter).
-                    let progress: u32 = archive_conn.hget(id, "progress").await.unwrap_or(0);
-                    let pagecount: u32 = archive_conn.hget(id, "pagecount").await.unwrap_or(0);
                     if pagecount > 0 && progress >= pagecount {
                         true
                     } else {
@@ -449,11 +511,12 @@ pub async fn search(
                         else {
                             continue;
                         };
-                        let tags: String = archive_conn.hget(id, "tags").await.unwrap_or_default();
-                        let Some(added) = tags.split(',').find_map(|t| {
-                            t.trim()
-                                .strip_prefix("date_added:")
-                                .and_then(|v| v.parse::<u64>().ok())
+                        let Some(added) = tags.as_deref().and_then(|tags| {
+                            tags.split(',').find_map(|t| {
+                                t.trim()
+                                    .strip_prefix("date_added:")
+                                    .and_then(|v| v.parse::<u64>().ok())
+                            })
                         }) else {
                             continue;
                         };
@@ -473,14 +536,28 @@ pub async fn search(
     }
 
     if params.hidecompleted {
+        // Same one-round-trip fetch as `newonly` above; Tankoubons are always kept (they are
+        // zsets, and a Tankoubon has no completion of its own to judge).
+        let ids: Vec<&str> = filtered
+            .iter()
+            .filter(|id| !id.starts_with("TANK"))
+            .map(String::as_str)
+            .collect();
+        let rows = hmget_many(&mut archive_conn, &ids, &["progress", "pagecount"]).await?;
+        let mut completion: HashMap<&str, (u32, u32)> = HashMap::with_capacity(ids.len());
+        for (id, row) in ids.iter().zip(rows) {
+            let mut row = row.into_iter();
+            let progress = parse_u32(&row.next().flatten());
+            let pagecount = parse_u32(&row.next().flatten());
+            completion.insert(id, (progress, pagecount));
+        }
         let mut keep = HashSet::new();
         for id in &filtered {
             if id.starts_with("TANK") {
                 keep.insert(id.clone());
                 continue;
             }
-            let progress: u32 = archive_conn.hget(id, "progress").await.unwrap_or(0);
-            let pagecount: u32 = archive_conn.hget(id, "pagecount").await.unwrap_or(0);
+            let (progress, pagecount) = completion.get(id.as_str()).copied().unwrap_or((0, 0));
             let completed =
                 pagecount > 0 && (progress as f64 / pagecount as f64) > HIDE_COMPLETED_THRESHOLD;
             if !completed {
@@ -1481,10 +1558,25 @@ async fn sort_ids(
             .iter()
             .map(|(text, field)| (eq.fold(&text.to_lowercase()).into_owned(), *field))
             .collect();
+        // One round trip for every candidate's title+tags. Tankoubons are zsets — `HGET` on one
+        // errors, which the old per-id code turned into empty strings and therefore a score of 0;
+        // they still score 0 here, just without the round trips.
+        let ids: Vec<&str> = filtered
+            .iter()
+            .filter(|id| !id.starts_with("TANK"))
+            .map(String::as_str)
+            .collect();
+        let rows = hmget_many(archive_conn, &ids, &["title", "tags"]).await?;
+        let mut documents: HashMap<&str, (String, String)> = HashMap::with_capacity(ids.len());
+        for (id, row) in ids.iter().zip(rows) {
+            let mut row = row.into_iter();
+            let title = row.next().flatten().unwrap_or_default();
+            let tags = row.next().flatten().unwrap_or_default();
+            documents.insert(id, (title, tags));
+        }
         let mut scored: Vec<(i64, String)> = Vec::with_capacity(filtered.len());
         for id in filtered {
-            let title: String = archive_conn.hget(id, "title").await.unwrap_or_default();
-            let tags: String = archive_conn.hget(id, "tags").await.unwrap_or_default();
+            let (title, tags) = documents.get(id.as_str()).cloned().unwrap_or_default();
             let folded_title = eq.fold(&title.to_lowercase()).into_owned();
             let folded_tags = eq.fold(&tags.to_lowercase()).into_owned();
             let mut score = 0i64;
@@ -1541,6 +1633,24 @@ async fn sort_ids(
     }
 
     if sortkey == "lastread" {
+        // One round trip for every plain archive's `lastreadtime`; Tankoubons have no such field
+        // and are imputed from their members below (each tank's own members come back in one
+        // further round trip rather than one per member).
+        let ids: Vec<&str> = filtered
+            .iter()
+            .filter(|id| !id.starts_with("TANK"))
+            .map(String::as_str)
+            .collect();
+        let rows = hmget_many(archive_conn, &ids, &["lastreadtime"]).await?;
+        let mut lastread: HashMap<&str, u64> = HashMap::with_capacity(ids.len());
+        for (id, row) in ids.iter().zip(rows) {
+            let t = row
+                .first()
+                .and_then(|v| v.as_deref())
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0);
+            lastread.insert(id, t);
+        }
         let mut pairs: Vec<(String, u64)> = Vec::new();
         for id in filtered {
             let t: u64 = if id.starts_with("TANK") {
@@ -1554,14 +1664,20 @@ async fn sort_ids(
                     .zrangebyscore(id, 1, "+inf")
                     .await
                     .unwrap_or_default();
-                let mut max_time = 0u64;
-                for member in &members {
-                    let t: u64 = archive_conn.hget(member, "lastreadtime").await.unwrap_or(0);
-                    max_time = max_time.max(t);
-                }
-                max_time
+                let member_ids: Vec<&str> = members.iter().map(String::as_str).collect();
+                hmget_many(archive_conn, &member_ids, &["lastreadtime"])
+                    .await
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|row| {
+                        row.first()
+                            .and_then(|v| v.as_deref())
+                            .and_then(|v| v.trim().parse::<u64>().ok())
+                    })
+                    .max()
+                    .unwrap_or(0)
             } else {
-                archive_conn.hget(id, "lastreadtime").await.unwrap_or(0)
+                lastread.get(id.as_str()).copied().unwrap_or(0)
             };
             if t > 0 {
                 pairs.push((id.clone(), t));
@@ -1589,6 +1705,18 @@ async fn sort_ids(
     // members' tags of the same namespace (`get_tank_unified_tags`'s coalescing).
     let sortkey_prefix = format!("{sortkey}:");
     let is_date_sort = sortkey == "date_added" || sortkey == "timestamp";
+    // One round trip for every plain archive's tags; Tankoubons are zsets and are imputed from
+    // their members below, exactly as before.
+    let ids: Vec<&str> = filtered
+        .iter()
+        .filter(|id| !id.starts_with("TANK"))
+        .map(String::as_str)
+        .collect();
+    let rows = hmget_many(archive_conn, &ids, &["tags"]).await?;
+    let mut tags_by_id: HashMap<&str, String> = HashMap::with_capacity(ids.len());
+    for (id, row) in ids.iter().zip(rows) {
+        tags_by_id.insert(*id, row.into_iter().next().flatten().unwrap_or_default());
+    }
     let mut unkeyed: Vec<String> = Vec::new();
     if is_date_sort {
         let mut keyed: Vec<(String, u64)> = Vec::new();
@@ -1596,7 +1724,10 @@ async fn sort_ids(
             let value = if id.starts_with("TANK") {
                 tank_date_sort_value(archive_conn, id, &sortkey_prefix).await
             } else {
-                let tags: String = archive_conn.hget(id, "tags").await.unwrap_or_default();
+                let tags = tags_by_id
+                    .get(id.as_str())
+                    .map(String::as_str)
+                    .unwrap_or_default();
                 tags.split(',').find_map(|t| {
                     t.trim()
                         .strip_prefix(&sortkey_prefix)
@@ -1619,7 +1750,10 @@ async fn sort_ids(
 
     let mut keyed: Vec<(String, String)> = Vec::new();
     for id in filtered {
-        let tags: String = archive_conn.hget(id, "tags").await.unwrap_or_default();
+        let tags = tags_by_id
+            .get(id.as_str())
+            .map(String::as_str)
+            .unwrap_or_default();
         let value = tags.split(',').find_map(|t| {
             let t = t.trim();
             t.strip_prefix(&sortkey_prefix)

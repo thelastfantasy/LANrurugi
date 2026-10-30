@@ -67,25 +67,55 @@ pub fn write_tankoubon_zip<W: Write>(out: W, members: &[MemberSource]) -> io::Re
             missing.push(missing_line(position, width, member.title()));
             continue;
         };
-        let merged = lanrurugi_scanner::patch::build_merged_zip(path)
-            .ok()
-            .flatten();
-        let extension = if merged.is_some() {
-            "zip".to_string()
-        } else {
-            path.extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("zip")
-                .to_string()
-        };
+        // A patched member has to be repackaged into a fresh zip. That repackaged archive is
+        // streamed through a temp file rather than built as one `Vec<u8>`: `build_merged_zip`
+        // held the whole (possibly hundreds-of-MB) member in memory, on top of the copy this
+        // loop was about to write into the outer zip.
+        let mut merged_tmp = None;
+        let mut extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("zip")
+            .to_string();
+        let tmp =
+            std::env::temp_dir().join(format!("lrr-merged-{}.zip", uuid::Uuid::new_v4().simple()));
+        match std::fs::File::create(&tmp) {
+            Ok(file) => {
+                match lanrurugi_scanner::patch::write_merged_zip(
+                    path,
+                    std::io::BufWriter::new(file),
+                ) {
+                    Ok(true) => {
+                        extension = "zip".to_string();
+                        merged_tmp = Some(tmp);
+                    }
+                    // Nothing to merge (the common case) — no repackaging needed.
+                    _ => {
+                        let _ = std::fs::remove_file(&tmp);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::debug!(path = %tmp.display(), error = %e, "could not stage a merged member");
+            }
+        }
         let name = unique_name(
             &mut used_names,
             member_entry_name(position, width, member.title(), &extension),
         );
-        match merged {
-            Some(bytes) => {
+        match merged_tmp {
+            Some(tmp) => {
+                let mut file = match std::fs::File::open(&tmp) {
+                    Ok(f) => f,
+                    Err(_) => {
+                        let _ = std::fs::remove_file(&tmp);
+                        missing.push(missing_line(position, width, member.title()));
+                        continue;
+                    }
+                };
                 zip.start_file(name, options).map_err(io::Error::other)?;
-                zip.write_all(&bytes)?;
+                io::copy(&mut file, &mut zip)?;
+                let _ = std::fs::remove_file(&tmp);
             }
             None => {
                 let mut file = match std::fs::File::open(path) {

@@ -299,6 +299,19 @@ impl AppState {
 pub type ThumbnailSingleflight =
     lanrurugi_core::singleflight::Singleflight<String, Option<(&'static str, bytes::Bytes)>>;
 
+/// Where a fetched page's bytes come from.
+///
+/// The resize cache already holds finished variants on disk, so a cache hit can be streamed
+/// straight from the file instead of being read into memory first — the difference between one
+/// page-sized buffer per concurrent reader and a bounded pipe. Everything generated on the fly
+/// (a conversion, a passthrough of the archive entry) is already in memory and stays a `Bytes`.
+#[derive(Clone)]
+pub enum PageBody {
+    Bytes(bytes::Bytes),
+    /// A finished file on disk (the resize cache). Each reader opens it independently.
+    File(std::path::PathBuf),
+}
+
 /// `fetch_page`'s result — `resized` marks a WebP- or JXL-converted variant, and `orig_*` carry
 /// the original entry's own size/dimensions (surfaced as response headers so the reader's
 /// file-info bar can show "current WebP/JXL vs original" without a second request or decode). A
@@ -307,7 +320,7 @@ pub type ThumbnailSingleflight =
 #[derive(Clone)]
 pub struct FetchedPage {
     pub content_type: &'static str,
-    pub bytes: bytes::Bytes,
+    pub body: PageBody,
     pub resized: bool,
     pub orig_size: u64,
     pub orig_width: u32,

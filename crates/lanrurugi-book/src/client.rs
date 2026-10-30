@@ -84,8 +84,19 @@ impl Default for BookConfig {
     }
 }
 
-/// ~30% of cores, at least one (the project-wide cap for CPU-bound background work).
+/// ~30% of cores, at least one (the project-wide cap for CPU-bound background work), unless
+/// `LANRURUGI_BOOK_MAX_WORKERS` says otherwise.
+///
+/// Each worker is a whole subprocess holding PDFium/DjVu state, so the CPU-based default is the
+/// wrong knob on a memory-constrained host (fewer workers) or a big one (more); this is the
+/// deployment-level override, resolved once at pool construction.
 fn default_max_workers() -> usize {
+    if let Some(configured) = std::env::var("LANRURUGI_BOOK_MAX_WORKERS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+    {
+        return configured.max(1);
+    }
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
     ((cores as f64 * 0.3).floor() as usize).max(1)
 }

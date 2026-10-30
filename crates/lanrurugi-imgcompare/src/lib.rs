@@ -22,30 +22,10 @@ pub mod sharpness;
 use std::path::Path;
 
 use image::DynamicImage;
+use lanrurugi_core::concurrency::with_thread_pool;
 use lanrurugi_scanner::archive_format;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-
-/// Caps CPU-bound rayon work at ~30% of cores instead of the uncapped global pool — same figure
-/// as `lanrurugi-api::recommend_precompute::precompute_worker_budget` (duplicated, not shared:
-/// this crate can't depend on `lanrurugi-api`). No `LoadThrottle`-style live backoff here — that's
-/// for multi-minute background jobs, not a single interactive comparison.
-fn worker_budget() -> usize {
-    (std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-        * 3
-        / 10)
-        .max(1)
-}
-
-fn with_capped_parallelism<T: Send>(f: impl FnOnce() -> T + Send) -> T {
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(worker_budget())
-        .build()
-        .expect("rayon pool build")
-        .install(f)
-}
 
 #[derive(Debug, Error)]
 pub enum ImgCompareError {
@@ -442,48 +422,33 @@ pub fn compare_archives_streaming(
     );
 
     let t_load = std::time::Instant::now();
-    let a_images = load_pages(a_path, &a_pages)?;
-    let b_images = load_pages(b_path, &b_pages)?;
+    let a_fingerprints = load_fingerprints(a_path, &a_pages)?;
+    let b_fingerprints = load_fingerprints(b_path, &b_pages)?;
     tracing::info!(
         a_pages = a_pages.len(),
         b_pages = b_pages.len(),
         elapsed_ms = t_load.elapsed().as_millis(),
-        "compare_archives: load_pages (decode, both sides) done"
+        "compare_archives: decode + fingerprints (both sides) done"
     );
 
-    // Was the largest stage in the pipeline (3059ms of ~4000ms for 188+185 pages) running serial;
-    // parallelized via the same capped pool `load_pages` uses.
-    let t_hash = std::time::Instant::now();
-    let (a_hashes, b_hashes) = with_capped_parallelism(|| {
-        use rayon::prelude::*;
-        rayon::join(
-            || {
-                a_images
-                    .par_iter()
-                    .map(|(image, _)| alignment::hash_page(image))
-                    .collect::<Vec<_>>()
-            },
-            || {
-                b_images
-                    .par_iter()
-                    .map(|(image, _)| alignment::hash_page(image))
-                    .collect::<Vec<_>>()
-            },
-        )
-    });
-    tracing::info!(
-        elapsed_ms = t_hash.elapsed().as_millis(),
-        "compare_archives: perceptual hashing (both sides) done"
-    );
+    let a_hashes: Vec<image_hasher::ImageHash> =
+        a_fingerprints.iter().map(|f| f.hash.clone()).collect();
+    let b_hashes: Vec<image_hasher::ImageHash> =
+        b_fingerprints.iter().map(|f| f.hash.clone()).collect();
 
     let t_align = std::time::Instant::now();
     let mut rescue_attempts = 0u32;
     let mut rescue_hits = 0u32;
+    // Rescue correlates the two pages' precomputed 48px grids rather than two freshly decoded
+    // full-resolution images: the grids are what the coarse algorithm works on anyway, so this
+    // is the same answer for a fraction of the cost.
     let pairs = alignment::align_sequences_with_rescue(&a_hashes, &b_hashes, |a_index, b_index| {
         rescue_attempts += 1;
-        let (a_image, _) = &a_images[a_index];
-        let (b_image, _) = &b_images[b_index];
-        let (_, confidence) = crop_align::estimate_crop_alignment_with_confidence(a_image, b_image);
+        let a = &a_fingerprints[a_index];
+        let b = &b_fingerprints[b_index];
+        let (_, confidence) = crop_align::estimate_crop_alignment_from_grid(
+            &a.grid, a.height, &b.grid, b.width, b.height,
+        );
         if confidence >= alignment::RESCUE_CONFIDENCE_THRESHOLD {
             rescue_hits += 1;
             Some(alignment::rescued_match_distance())
@@ -502,21 +467,21 @@ pub fn compare_archives_streaming(
     let comparisons: Vec<PageComparison> = pairs
         .iter()
         .map(|pair| {
-            let (a_image, a_file_size) = &a_images[pair.a_index];
-            let (b_image, b_file_size) = &b_images[pair.b_index];
+            let a = &a_fingerprints[pair.a_index];
+            let b = &b_fingerprints[pair.b_index];
             PageComparison {
                 a_page_index: pair.a_index,
                 b_page_index: pair.b_index,
                 a_filename: a_pages[pair.a_index].clone(),
                 b_filename: b_pages[pair.b_index].clone(),
-                a_file_size: *a_file_size,
-                b_file_size: *b_file_size,
-                a_sharpness: sharpness::laplacian_variance(a_image),
-                b_sharpness: sharpness::laplacian_variance(b_image),
-                a_width: a_image.width(),
-                a_height: a_image.height(),
-                b_width: b_image.width(),
-                b_height: b_image.height(),
+                a_file_size: a.file_size,
+                b_file_size: b.file_size,
+                a_sharpness: a.sharpness,
+                b_sharpness: b.sharpness,
+                a_width: a.width,
+                a_height: a.height,
+                b_width: b.width,
+                b_height: b.height,
                 // Computed below, only for the subset `sample_evenly` actually picks — see that
                 // call site's own docs for why running this for every aligned pair (which can be
                 // hundreds) isn't worth the cost.
@@ -553,26 +518,28 @@ pub fn compare_archives_streaming(
     let t_crop_align = std::time::Instant::now();
     let (coarse_tx, coarse_rx) = std::sync::mpsc::channel::<(usize, crop_align::CropAlignment)>();
     // `thread::scope` (not a bare `thread::spawn`, which requires `'static`) — the worker borrows
-    // `a_images`/`b_images`/`samples`, all owned by this function's own stack frame, and the scope
-    // guarantees the worker is joined (or the whole thing panics) before it returns, so those
-    // borrows never outlive their owner even if `on_event` below returns early on cancellation.
-    // Results land in `coarse_results` (not written back into `samples` directly) since the worker
-    // already holds an immutable borrow of `samples` for the whole scope; applied to `samples`
-    // itself only after the scope closes, below.
+    // `a_fingerprints`/`b_fingerprints`/`samples`, all owned by this function's own stack frame,
+    // and the scope guarantees the worker is joined (or the whole thing panics) before it returns,
+    // so those borrows never outlive their owner even if `on_event` below returns early on
+    // cancellation. Results land in `coarse_results` (not written back into `samples` directly)
+    // since the worker already holds an immutable borrow of `samples` for the whole scope; applied
+    // to `samples` itself only after the scope closes, below.
     let mut coarse_results: Vec<Option<crop_align::CropAlignment>> = vec![None; samples.len()];
     let mut cancelled = false;
     std::thread::scope(|scope| {
         scope.spawn(|| {
-            with_capped_parallelism(|| {
+            with_thread_pool(|| {
                 use rayon::prelude::*;
                 samples
                     .par_iter()
                     .enumerate()
                     .for_each(|(sample_index, sample)| {
-                        let (a_image, _) = &a_images[sample.a_page_index];
-                        let (b_image, _) = &b_images[sample.b_page_index];
+                        let a = &a_fingerprints[sample.a_page_index];
+                        let b = &b_fingerprints[sample.b_page_index];
                         let (alignment, _confidence) =
-                            crop_align::estimate_crop_alignment_with_confidence(a_image, b_image);
+                            crop_align::estimate_crop_alignment_from_grid(
+                                &a.grid, a.height, &b.grid, b.width, b.height,
+                            );
                         let _ = coarse_tx.send((sample_index, alignment));
                     });
             });
@@ -618,29 +585,50 @@ pub fn compare_archives_streaming(
     // actively open on an already-precise sample while a later one is still computing).
     let t_precise_crop_align = std::time::Instant::now();
     let (precise_tx, precise_rx) = std::sync::mpsc::channel::<(usize, crop_align::CropAlignment)>();
-    let padded_count = samples
+    // The precise pass inspects real borders, so it needs real pixels — but only for the handful
+    // of padded samples (at most `SAMPLE_SIZE` pairs), fetched with one extra forward pass per
+    // side. Everything else stayed as fingerprints.
+    let padded_samples: Vec<(usize, &PageComparison)> = samples
         .iter()
-        .filter(|s| s.crop_alignment != crop_align::CropAlignment::IDENTITY)
-        .count();
+        .enumerate()
+        .filter(|(_, sample)| sample.crop_alignment != crop_align::CropAlignment::IDENTITY)
+        .collect();
+    let (a_sample_images, b_sample_images) = if padded_samples.is_empty() {
+        Default::default()
+    } else {
+        load_sample_images(
+            a_path,
+            &a_pages,
+            b_path,
+            &b_pages,
+            padded_samples.iter().map(|(_, sample)| *sample),
+        )?
+    };
+    // Exactly one phase-2 message per participating sample, so the receive loop below cannot wait
+    // for a message that will never come: a sample whose pages could not be re-read simply does
+    // not participate (it keeps the coarse alignment already displayed).
+    let padded: Vec<(usize, &DynamicImage, &DynamicImage)> = padded_samples
+        .iter()
+        .filter_map(|(index, sample)| {
+            let a_image = a_sample_images.get(&sample.a_page_index)?;
+            let b_image = b_sample_images.get(&sample.b_page_index)?;
+            Some((*index, a_image, b_image))
+        })
+        .collect();
+    let padded_count = padded.len();
     let mut cancelled = false;
     std::thread::scope(|scope| {
         scope.spawn(|| {
-            with_capped_parallelism(|| {
+            with_thread_pool(|| {
                 use rayon::prelude::*;
-                samples
+                padded
                     .par_iter()
-                    .enumerate()
-                    .for_each(|(sample_index, sample)| {
-                        if sample.crop_alignment == crop_align::CropAlignment::IDENTITY {
-                            return;
-                        }
-                        let (a_image, _) = &a_images[sample.a_page_index];
-                        let (b_image, _) = &b_images[sample.b_page_index];
+                    .for_each(|(sample_index, a_image, b_image)| {
                         let (alignment, _confidence) =
                             crop_align::estimate_precise_crop_alignment_with_confidence(
                                 a_image, b_image,
                             );
-                        let _ = precise_tx.send((sample_index, alignment));
+                        let _ = precise_tx.send((*sample_index, alignment));
                     });
             });
         });
@@ -721,22 +709,40 @@ fn is_likely_different_language(aligned_pairs: usize, a_total: usize, b_total: u
     (aligned_pairs as f64 / a_total as f64) >= LANGUAGE_EDITION_ALIGNMENT_RATIO
 }
 
+/// Everything the comparison pipeline needs from one page that is derived from its pixels,
+/// computed once while the decoded image is transiently in hand.
+///
+/// The decoded image itself is deliberately *not* kept: holding every page of both sides was
+/// ~3 GB for a 188+185-page pair (8.4 MB per 1400x2000 RGB page), which is what this replaced.
+/// The only pages decoded twice are the handful of `crop_align`-sampled pairs, and only for the
+/// precise pass (see [`load_sample_images`]).
+struct PageFingerprint {
+    width: u32,
+    height: u32,
+    file_size: u64,
+    hash: image_hasher::ImageHash,
+    sharpness: f64,
+    /// The 48px grid [`crop_align::estimate_crop_alignment_from_grid`] correlates over — a couple
+    /// of KB per page, so the rescue path never has to decode a full image again.
+    grid: image::GrayImage,
+}
+
 /// Reads every entry in one forward pass (`archive_format::read_entries`, not one `read_entry`
-/// call per page) and decodes it in parallel via [`with_capped_parallelism`]. Also returns each
-/// page's compressed byte size (for `PageComparison::a_file_size`/`b_file_size`), free since
-/// `read_entries` already has the bytes in hand.
-fn load_pages(path: &Path, entries: &[String]) -> Result<Vec<(DynamicImage, u64)>> {
+/// call per page) and reduces each page to a [`PageFingerprint`] in parallel via the shared capped
+/// pool. Also carries each page's compressed byte size (for
+/// `PageComparison::a_file_size`/`b_file_size`), free since `read_entries` already has the bytes.
+fn load_fingerprints(path: &Path, entries: &[String]) -> Result<Vec<PageFingerprint>> {
     let t_read = std::time::Instant::now();
     let raw = archive_format::read_entries(path, entries)?;
     tracing::info!(
         path = %path.display(),
         entries = entries.len(),
         elapsed_ms = t_read.elapsed().as_millis(),
-        "load_pages: read_entries (single forward-pass I/O) done"
+        "load_fingerprints: read_entries (single forward-pass I/O) done"
     );
 
     let t_decode = std::time::Instant::now();
-    let result: Result<Vec<(DynamicImage, u64)>> = with_capped_parallelism(|| {
+    let result: Result<Vec<PageFingerprint>> = with_thread_pool(|| {
         use rayon::prelude::*;
         raw.into_par_iter()
             .zip(entries)
@@ -755,7 +761,14 @@ fn load_pages(path: &Path, entries: &[String]) -> Result<Vec<(DynamicImage, u64)
                         source,
                     },
                 )?;
-                Ok((image, file_size))
+                Ok(PageFingerprint {
+                    width: image.width(),
+                    height: image.height(),
+                    file_size,
+                    hash: alignment::hash_page(&image),
+                    sharpness: sharpness::laplacian_variance(&image),
+                    grid: crop_align::gray_grid(&image),
+                })
             })
             .collect()
     });
@@ -763,9 +776,65 @@ fn load_pages(path: &Path, entries: &[String]) -> Result<Vec<(DynamicImage, u64)
         path = %path.display(),
         entries = entries.len(),
         elapsed_ms = t_decode.elapsed().as_millis(),
-        "load_pages: parallel decode (rayon) done"
+        "load_fingerprints: parallel decode + hash/sharpness/grid (rayon) done"
     );
     result
+}
+
+/// Decodes only the pages the precise crop-alignment pass needs (at most two per sampled pair),
+/// with one forward pass per side — the pages every other stage needs were reduced to
+/// [`PageFingerprint`]s already.
+fn load_sample_images<'a>(
+    a_path: &Path,
+    a_pages: &[String],
+    b_path: &Path,
+    b_pages: &[String],
+    padded: impl Iterator<Item = &'a PageComparison>,
+) -> Result<(
+    std::collections::HashMap<usize, DynamicImage>,
+    std::collections::HashMap<usize, DynamicImage>,
+)> {
+    let mut a_wanted: Vec<usize> = Vec::new();
+    let mut b_wanted: Vec<usize> = Vec::new();
+    for sample in padded {
+        if !a_wanted.contains(&sample.a_page_index) {
+            a_wanted.push(sample.a_page_index);
+        }
+        if !b_wanted.contains(&sample.b_page_index) {
+            b_wanted.push(sample.b_page_index);
+        }
+    }
+
+    fn decode_wanted(
+        path: &Path,
+        pages: &[String],
+        wanted: &[usize],
+    ) -> Result<std::collections::HashMap<usize, DynamicImage>> {
+        let mut decoded = std::collections::HashMap::new();
+        if wanted.is_empty() {
+            return Ok(decoded);
+        }
+        let names: Vec<String> = wanted
+            .iter()
+            .filter_map(|index| pages.get(*index).cloned())
+            .collect();
+        let bytes = archive_format::read_entries(path, &names)?;
+        for (index, page_bytes) in wanted.iter().zip(bytes) {
+            let Some(page_bytes) = page_bytes else {
+                continue;
+            };
+            let entry = pages.get(*index).cloned().unwrap_or_default();
+            let image = lanrurugi_scanner::image_decode::load_from_memory(&page_bytes)
+                .map_err(|source| ImgCompareError::Decode { entry, source })?;
+            decoded.insert(*index, image);
+        }
+        Ok(decoded)
+    }
+
+    Ok((
+        decode_wanted(a_path, a_pages, &a_wanted)?,
+        decode_wanted(b_path, b_pages, &b_wanted)?,
+    ))
 }
 
 /// Rolls per-pair sharpness comparisons into an overall pick, or `None` if confidence is too low

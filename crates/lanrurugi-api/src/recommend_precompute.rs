@@ -479,11 +479,9 @@ pub async fn spawn_full_precompute_job(state: &AppState, reason: &str) -> String
             if !to_rank.is_empty() {
                 let vectors_arc = vectors_arc.clone();
                 let results: Vec<(String, Vec<String>)> = tokio::task::spawn_blocking(move || {
-                    let pool = rayon::ThreadPoolBuilder::new()
-                        .num_threads(cores)
-                        .build()
-                        .expect("rayon pool build");
-                    pool.install(|| {
+                    // The workspace's shared capped pool, not a fresh one per batch: this used to
+                    // build a thread pool for every `BATCH_SIZE` chunk.
+                    lanrurugi_core::concurrency::with_thread_pool(|| {
                         use rayon::prelude::*;
                         to_rank
                             .into_par_iter()
