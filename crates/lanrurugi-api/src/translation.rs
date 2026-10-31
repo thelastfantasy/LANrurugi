@@ -169,6 +169,12 @@ async fn update_translation_scope(
 /// "Translation is unavailable for this page" — never a blank image or a broken response
 /// (FR-019). The reader shows the original page alongside this.
 fn translation_unavailable(kind: &str, message: impl Into<String>) -> Response {
+    // The reader only ever renders one generic sentence ("this page's translation is
+    // unavailable"), so without this line the *reason* exists only in the response body — which
+    // makes a failed page indistinguishable from a disabled one in the logs (2026-10-31: a page
+    // failed after a full OCR pass and there was nothing in the log saying why).
+    let message = message.into();
+    tracing::warn!(kind, message = %message, "page translation unavailable");
     (
         StatusCode::SERVICE_UNAVAILABLE,
         Json(json!({
@@ -176,7 +182,7 @@ fn translation_unavailable(kind: &str, message: impl Into<String>) -> Response {
             "success": 0,
             "translationAvailable": false,
             "kind": kind,
-            "error": message.into(),
+            "error": message,
         })),
     )
         .into_response()

@@ -101,8 +101,21 @@ pub fn fit_to_pixel_budget(page: &RgbImage, max_pixels: u64) -> (Option<RgbImage
         return (None, 1.0);
     }
     let factor = (max_pixels as f64 / pixels as f64).sqrt();
-    let scaled_w = ((f64::from(width) * factor).round() as u32).clamp(1, width);
-    let scaled_h = ((f64::from(height) * factor).round() as u32).clamp(1, height);
+    let mut scaled_w = ((f64::from(width) * factor).floor() as u32).clamp(1, width);
+    let mut scaled_h = ((f64::from(height) * factor).floor() as u32).clamp(1, height);
+    // Floor-ing each dimension independently can still leave the product above the budget (both
+    // floors interact), and a result that misses by a few pixels is useless to the caller: its own
+    // frame check then rejects the page and the whole reduction was wasted. Shrink until the
+    // contract "the returned page is within max_pixels" actually holds.
+    while u64::from(scaled_w) * u64::from(scaled_h) > max_pixels {
+        if scaled_w >= scaled_h && scaled_w > 1 {
+            scaled_w -= 1;
+        } else if scaled_h > 1 {
+            scaled_h -= 1;
+        } else {
+            break;
+        }
+    }
     let scaled = image::imageops::resize(page, scaled_w, scaled_h, FilterType::Triangle);
     (Some(scaled), scaled_w as f32 / width as f32)
 }
@@ -686,6 +699,20 @@ mod tests {
             reduced.height()
         );
         assert!(factor < 1.0);
+    }
+
+    /// Rounding each axis independently used to land a few thousand pixels over the budget, which
+    /// the caller's own frame check then rejected — so a page that *was* reduced was still treated
+    /// as "cannot fit even reduced" and lost its bubble masks (seen live 2026-10-31).
+    #[test]
+    fn fit_to_pixel_budget_never_lands_over_the_budget() {
+        // The exact budget the frame limit converts to, and the exact page that exposed it.
+        let budget = 22_369_274u64;
+        let page = RgbImage::from_pixel(4535, 6307, image::Rgb([7, 8, 9]));
+        let (reduced, _) = fit_to_pixel_budget(&page, budget);
+        let reduced = reduced.expect("must be reduced");
+        let pixels = u64::from(reduced.width()) * u64::from(reduced.height());
+        assert!(pixels <= budget, "got {pixels} pixels, budget {budget}");
     }
 
     #[test]
