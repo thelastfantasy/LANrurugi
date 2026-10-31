@@ -215,7 +215,7 @@ export function usePageTranslation({
       pollRef.current = null
       releaseObjectUrl()
     }
-  }, [archiveId, page, settings, enabled, loadPageImage, refreshToken])
+  }, [effectKey, archiveId, page, settings, enabled, loadPageImage])
 
   if (!enabled || !settings) return { status: "idle" }
   if (backend.category === "none") {
