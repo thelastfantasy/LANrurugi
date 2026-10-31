@@ -288,17 +288,29 @@ fn estimate_boldness(
 
 /// Crops `page` to `bbox`, clamped to the page bounds. Returns `None` if the box lies outside the
 /// image or has zero area after clamping.
+/// Extra margin taken around a detected box before it is cropped, as a fraction of its own size.
+///
+/// The detector's box is tight enough to clip the first/last glyph's own strokes on some pages —
+/// measured live 2026-10-31: a four-character sign came back as three ("里事長" for 理事長室), which
+/// no amount of post-processing can recover once the pixels are gone. A small expansion costs a
+/// little surrounding artwork and buys those strokes back.
+const CROP_EXPAND_FRACTION: f32 = 0.04;
+
 pub fn crop_region(page: &RgbImage, bbox: &crate::entities::BoundingBox) -> Option<RgbImage> {
     let (pw, ph) = page.dimensions();
-    if bbox.x >= pw || bbox.y >= ph {
+    let pad_x = (bbox.w as f32 * CROP_EXPAND_FRACTION).round() as u32;
+    let pad_y = (bbox.h as f32 * CROP_EXPAND_FRACTION).round() as u32;
+    let x = bbox.x.saturating_sub(pad_x).min(pw);
+    let y = bbox.y.saturating_sub(pad_y).min(ph);
+    if x >= pw || y >= ph {
         return None;
     }
-    let w = bbox.w.min(pw - bbox.x);
-    let h = bbox.h.min(ph - bbox.y);
+    let w = (bbox.w + pad_x * 2).min(pw - x);
+    let h = (bbox.h + pad_y * 2).min(ph - y);
     if w == 0 || h == 0 {
         return None;
     }
-    Some(page.view(bbox.x, bbox.y, w, h).to_image())
+    Some(page.view(x, y, w, h).to_image())
 }
 
 #[cfg(test)]
@@ -401,6 +413,19 @@ mod tests {
         let page = RgbImage::from_pixel(50, 50, ImageRgb([255, 255, 255]));
         let bbox = crate::entities::BoundingBox::new(40, 40, 100, 100);
         let crop = crop_region(&page, &bbox).expect("overlapping crop should succeed");
-        assert_eq!(crop.dimensions(), (10, 10));
+        // `CROP_EXPAND_FRACTION` moves the left/top edge outward (40 - 4 = 36) and the box is then
+        // clamped to the page, so the crop covers the last 14 pixels rather than the bbox's 10 —
+        // still never past the page's own bounds, which is the property this test exists for.
+        assert_eq!(crop.dimensions(), (14, 14));
+        assert!(crop.dimensions().0 <= 50 && crop.dimensions().1 <= 50);
+    }
+
+    #[test]
+    fn crop_expands_beyond_the_detected_box() {
+        let page = RgbImage::from_pixel(200, 200, ImageRgb([255, 255, 255]));
+        let bbox = crate::entities::BoundingBox::new(100, 100, 50, 50);
+        let crop = crop_region(&page, &bbox).expect("crop should succeed");
+        // 4% of 50 rounds to 2 px per side.
+        assert_eq!(crop.dimensions(), (54, 54));
     }
 }
