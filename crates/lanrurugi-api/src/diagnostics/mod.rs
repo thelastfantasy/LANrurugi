@@ -30,6 +30,28 @@ pub fn attach_capture_state(state: AppState) {
 
 /// The server's own SDK transport: it never leaves the process. It serialises the envelope and
 /// feeds it through the same decode → scrub → store path the browser's events take.
+/// The runtime captured when capture is initialised, so the transport can spawn from a thread
+/// that has no runtime of its own — an OCR/rayon worker, or a panic hook.
+///
+/// `tokio::spawn` panics there, and a panic raised *inside* a panic hook aborts the process
+/// outright ("thread panicked while processing panic"). That is not hypothetical: it killed this
+/// server 21 times on 2026-10-31, each time taking the reader's page down with it. A future that
+/// cannot be spawned is dropped instead — capture is diagnostics, never worth the process.
+static CAPTURE_RUNTIME: OnceLock<tokio::runtime::Handle> = OnceLock::new();
+
+fn spawn_capture(work: impl std::future::Future<Output = ()> + Send + 'static) -> bool {
+    let handle = tokio::runtime::Handle::try_current()
+        .ok()
+        .or_else(|| CAPTURE_RUNTIME.get().cloned());
+    match handle {
+        Some(handle) => {
+            handle.spawn(work);
+            true
+        }
+        None => false,
+    }
+}
+
 struct LocalTransport;
 
 /// The SDK wants a factory, not a transport instance; this one hands back the stateless
@@ -52,7 +74,7 @@ impl sentry::Transport for LocalTransport {
         let Some(state) = CAPTURE_STATE.get().cloned() else {
             return;
         };
-        tokio::spawn(async move {
+        spawn_capture(async move {
             let profile = crate::diagnostics_settings::load(&state)
                 .await
                 .scrub_profile();
@@ -94,6 +116,7 @@ pub fn init_server_capture() {
         .map(|rate| rate.clamp(0.0, 1.0))
         .unwrap_or(0.01);
     options = options.traces_sample_rate(trace_rate);
+    let _ = CAPTURE_RUNTIME.set(tokio::runtime::Handle::current());
     let _ = CAPTURE_GUARD.set(sentry::init(options));
     report::install(&report::SentryReporter);
     // Deployment identity, so several installs forwarding to one project stay distinguishable.
@@ -1223,6 +1246,24 @@ pub fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod capture_spawn_tests {
+    use super::*;
+
+    /// The regression this guards: on a thread with no runtime, `tokio::spawn` panics, and a panic
+    /// raised while a panic hook is running aborts the whole server (measured 2026-10-31, 21
+    /// restarts). Capture must drop the future instead.
+    #[test]
+    fn spawning_capture_from_a_plain_thread_never_panics() {
+        let outcome = std::thread::spawn(|| spawn_capture(async {}))
+            .join()
+            .expect("spawn_capture must not panic off-runtime");
+        // Either it found the runtime captured at init (another test initialised capture) or it
+        // declined to spawn; both are acceptable, panicking is not.
+        let _ = outcome;
+    }
 }
 
 #[cfg(test)]
