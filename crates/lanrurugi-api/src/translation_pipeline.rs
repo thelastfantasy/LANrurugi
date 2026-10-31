@@ -1141,6 +1141,12 @@ pub async fn translate_page(
 ) -> Result<(), PipelineError> {
     let volume_id = resolve_volume_id(state, archive_id).await;
 
+    // Stage timings for this page, logged once at the end. Purely diagnostic: knowing which stage
+    // actually dominates (the LLM call, the whole-page erase, or encoding the composite) is what
+    // makes "split the work so the reader sees progress" a measured decision rather than a guess
+    // (2026-10-31).
+    let stage_started = std::time::Instant::now();
+
     // --- 0. Bubble segmentation, once, up front --------------------------------------------------
     // A real 2026-09-14 incident: this used to run once inside `ensure_detected` (for bubble-aware
     // region merging) and again inside `composite_and_cache` (for shape-accurate page erasure) —
@@ -1200,8 +1206,10 @@ pub async fn translate_page(
     };
 
     // --- 1. Detection (persisted) --------------------------------------------------------------
+    let after_bubbles = std::time::Instant::now();
     let (detected, degraded) =
         detect_with_degradation(state, ctx, archive_id, page, bubbles.as_deref()).await?;
+    let after_detection = std::time::Instant::now();
 
     if detected.is_empty() {
         if degraded {
@@ -1297,7 +1305,8 @@ pub async fn translate_page(
     }
 
     // --- 5. Composite and cache ----------------------------------------------------------------
-    composite_and_cache(
+    let after_translation = std::time::Instant::now();
+    let outcome = composite_and_cache(
         state,
         ctx,
         archive_id,
@@ -1306,7 +1315,19 @@ pub async fn translate_page(
         bubbles.as_deref(),
         degraded,
     )
-    .await
+    .await;
+    tracing::info!(
+        %archive_id,
+        %page,
+        regions = regions.len(),
+        bubble_ms = (after_bubbles - stage_started).as_millis() as u64,
+        detect_ms = (after_detection - after_bubbles).as_millis() as u64,
+        translate_ms = (after_translation - after_detection).as_millis() as u64,
+        composite_ms = (std::time::Instant::now() - after_translation).as_millis() as u64,
+        total_ms = stage_started.elapsed().as_millis() as u64,
+        "translation stage timings"
+    );
+    outcome
 }
 
 /// The billed half: context-assembled batched translation, then persistence of both the glossary
