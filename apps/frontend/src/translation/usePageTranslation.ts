@@ -66,6 +66,13 @@ export function usePageTranslation({
   const backend = enabled && settings ? resolveActiveBackend(settings) : { category: "none" as const }
   const active = enabled && backend.category !== "none"
 
+  // `refreshToken` is part of the key so bumping it (the reader's "重新翻译") invalidates the
+  // stored outcome immediately: the derived `pending` branch at the end of this hook takes over,
+  // which is what puts the loading chip back while the fresh attempt runs. Deriving it this way,
+  // rather than resetting state inside the effect, keeps React's "no cascading renders from an
+  // effect body" rule intact.
+  const effectKey = pageKey(archiveId, page, refreshToken)
+
   useEffect(() => {
     // Revoke the previous page's blob URL before replacing it — a reader session turning through
     // hundreds of pages would otherwise leak one per page.
@@ -88,7 +95,7 @@ export function usePageTranslation({
     const targetLanguage = resolveTargetLanguage(settings.targetLanguage)
     let cancelled = false
 
-    const key = pageKey(archiveId, page)
+    const key = effectKey
 
     const setState = (next: TranslationPageState) => {
       if (!cancelled) setResolved({ key, state: next })
@@ -220,12 +227,12 @@ export function usePageTranslation({
   // A resolved outcome is tagged with the page it was produced for, so a page turn falls straight
   // back to `pending` on the very first render rather than briefly showing the previous page's
   // translated image over the new page.
-  return resolved !== null && resolved.key === pageKey(archiveId, page)
+  return resolved !== null && resolved.key === effectKey
     ? resolved.state
     : { status: "pending" }
 }
 
 /** Identifies which page a resolved outcome belongs to. */
-function pageKey(archiveId: string, page: number): string {
-  return `${archiveId}:${page}`
+function pageKey(archiveId: string, page: number, refreshToken = 0): string {
+  return `${archiveId}:${page}:${refreshToken}`
 }
