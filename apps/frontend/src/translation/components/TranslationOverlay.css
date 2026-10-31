@@ -9,11 +9,13 @@
 
 .translation-overlay__image {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  /* `contain`, matching how the reader sizes the page underneath, so the overlay can't stretch to a
-   * different aspect ratio than the page it's covering. */
+  /* The reader's own `<img>` sits 1px inside this same wrapper (measured live 2026-10-31:
+   * 607.48x844.98 inside a 609.48x846.98 span), so covering the wrapper made every translated page
+   * render a hair larger than the original it replaces — a visible "适应高度" mismatch. Reproduce
+   * that inset and the boxes match exactly. */
+  inset: 1px;
+  width: calc(100% - 2px);
+  height: calc(100% - 2px);
   object-fit: contain;
   /* Clicks fall through to the reader's own page-turn handler underneath. */
   pointer-events: none;

@@ -1516,6 +1516,14 @@ async fn composite_and_cache(
         finish_composite_page(&mut image, plan, &font_set, erased)
             .map_err(|e| PipelineError::Composite(e.to_string()))?;
         let changed = image != before;
+        // Recorded so "the translated page looks slightly differently sized" is answerable from
+        // logs: the composite must be the original page's own dimensions.
+        tracing::info!(
+            width = image.width(),
+            height = image.height(),
+            format = ?output_format,
+            "composite page encoded"
+        );
         let bytes = encode_composite(&image, output_format)?;
         Ok::<(Vec<u8>, bool), PipelineError>((bytes, changed))
     })

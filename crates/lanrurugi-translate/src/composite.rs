@@ -2610,6 +2610,10 @@ fn outline_stroke_offsets(radius: i32) -> Vec<(i32, i32)> {
     offsets
 }
 
+/// Text at or below this length is laid out on a single line whenever one fits, rather than being
+/// wrapped — a short phrase broken across two rows looks like a rendering fault.
+const SINGLE_LINE_PREFERENCE_CHARS: usize = 6;
+
 /// Smallest mean-luma difference accepted between the drawn text and the backdrop under it.
 const MIN_TEXT_CONTRAST: f32 = 0.3;
 
@@ -2834,6 +2838,30 @@ fn fit_text(
     // translated text looking "shifted" within its own box, though the text itself was correctly
     // centred at whatever (too-small) size `fit_text` had settled on; the actual bug was the
     // size search never climbing back up.
+    // Short strings get one line if any acceptable size allows it. Wrapping a three- or
+    // four-character phrase into two rows reads as a layout bug rather than a translation
+    // (reported live 2026-10-31: "董事長" split across two rows inside its sign). The multi-line
+    // search below is still what long text gets, and it is the fallback here too.
+    if text.chars().count() <= SINGLE_LINE_PREFERENCE_CHARS {
+        let mut candidate = (box_h as f32 * 0.9).clamp(MIN_FONT_PX, MAX_FONT_PX);
+        while candidate >= MIN_FONT_PX {
+            let advance = shape_line(
+                font,
+                text,
+                harfrust::Direction::LeftToRight,
+                candidate,
+                upem,
+            )
+            .advance;
+            let line_height =
+                font.raster.as_scaled(PxScale::from(candidate)).height() * LINE_SPACING_FACTOR;
+            if advance <= usable_w && line_height <= box_h as f32 {
+                return Some((candidate, vec![text.to_string()]));
+            }
+            candidate -= 1.0;
+        }
+    }
+
     let mut size = (box_h as f32 * 0.9).clamp(MIN_FONT_PX, MAX_FONT_PX);
 
     while size >= MIN_FONT_PX {
