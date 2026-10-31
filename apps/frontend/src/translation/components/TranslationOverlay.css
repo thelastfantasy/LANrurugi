@@ -9,11 +9,14 @@
 
 .translation-overlay__image {
   position: absolute;
-  /* Geometry (left/top/width/height) is copied from the page's own `<img>` at runtime — see
-   * `useOriginalPageBox`'s own docs. CSS cannot express it: the reader image's box differs from its
-   * wrapper by a couple of pixels, and by a different amount per display mode and viewport.
-   * `contain` is only a safety net for the frame between mount and the first measurement. */
   inset: 0;
+  width: 100%;
+  height: 100%;
+  /* `contain`, matching how the reader sizes the page underneath, so the overlay can't stretch to a
+   * different aspect ratio than the page it's covering. Sized from the wrapper rather than measured
+   * from the page's own <img>: a runtime measurement once locked the overlay to the page's *natural*
+   * pixel size on a phone, which rendered as a hugely oversized, mostly-black crop (2026-10-31). A
+   * couple of pixels of difference is the acceptable side of that trade. */
   object-fit: contain;
   /* Clicks fall through to the reader's own page-turn handler underneath. */
   pointer-events: none;

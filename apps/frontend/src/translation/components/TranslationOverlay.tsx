@@ -1,6 +1,5 @@
 import "./TranslationOverlay.css"
 
-import { useEffect, useRef } from "react"
 import { useTranslation } from "react-i18next"
 
 import { resolveActiveBackend } from "../settings"
@@ -39,7 +38,6 @@ export function TranslationOverlay({
   refreshToken?: number
 }) {
   const { t } = useTranslation()
-  const overlayRef = useOriginalPageBox(page)
   const state = usePageTranslation({
     archiveId,
     page,
@@ -79,65 +77,12 @@ export function TranslationOverlay({
 
   return (
     <img
-      ref={overlayRef}
       className="translation-overlay__image"
       src={state.imageUrl}
       alt={`${t("reader.page")} ${page}`}
       draggable={false}
     />
   )
-}
-
-/**
- * Keeps the overlay exactly over the page it covers.
- *
- * CSS alone could not promise this: the reader's own `.reader-image` is `width:auto;height:auto`
- * with both max constraints, so its box inside the wrapper differs from the wrapper's own box by a
- * couple of pixels — and by a different amount in each display mode (fit-width, fit-height, original
- * size) and at each viewport size. Copying the original's measured box is the only rule that holds
- * in all of them; measured live 2026-10-31 on the same page in three modes.
- */
-function useOriginalPageBox(page: number): React.RefObject<HTMLImageElement | null> {
-  const overlayRef = useRef<HTMLImageElement | null>(null)
-
-  useEffect(() => {
-    const apply = () => {
-      const img = overlayRef.current
-      // The overlay is not necessarily a sibling of the page it covers (in manga mode it lives in
-      // a different span), so look the page up by its own `data-page` — the attribute the reader
-      // itself uses — rather than by DOM neighbourhood.
-      const original =
-        document.querySelector(`img.reader-image[data-page="${page}"]`) ??
-        document.querySelector("img.reader-image")
-      if (!img || !(original instanceof HTMLImageElement)) return
-      const target = original.getBoundingClientRect()
-      img.style.width = `${target.width}px`
-      img.style.height = `${target.height}px`
-      // Translate by the delta between where the overlay rendered and where the page actually is,
-      // measured after clearing the previous transform. Doing it this way avoids reasoning about
-      // which ancestor happens to be this element's containing block — the previous attempt got
-      // that wrong and left a 1px offset at every size.
-      img.style.transform = "none"
-      const current = img.getBoundingClientRect()
-      img.style.transform = `translate(${target.left - current.left}px, ${target.top - current.top}px)`
-    }
-
-    apply()
-    const observer = new ResizeObserver(apply)
-    const original =
-      document.querySelector(`img.reader-image[data-page="${page}"]`) ??
-      document.querySelector("img.reader-image")
-    if (original) observer.observe(original)
-    const parent = overlayRef.current?.parentElement
-    if (parent) observer.observe(parent)
-    window.addEventListener("resize", apply)
-    return () => {
-      observer.disconnect()
-      window.removeEventListener("resize", apply)
-    }
-  }, [page])
-
-  return overlayRef
 }
 
 export default TranslationOverlay
