@@ -41,6 +41,29 @@ pub const DEFAULT_SOCKET_PATH: &str = "/tmp/lanrurugi-gpu-worker.sock";
 /// not a measured tight bound.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
 
+/// Fixed per-request bytes a bubble-segmentation request adds: one wire struct (dimensions plus a
+/// `Vec` length prefix).
+const BUBBLE_REQUEST_OVERHEAD_BYTES: u64 = 16;
+
+/// Bytes a bubble-segmentation request occupies on the wire: the page at 3 bytes/pixel plus the
+/// same envelope slack [`erase_request_bytes`] allows.
+///
+/// This matters because the model itself only ever sees a 1600x1600 letterbox, yet the request
+/// sends the page at full resolution. A page over [`MAX_FRAME_BYTES`] therefore cannot be
+/// transferred at all — and sending it anyway costs far more than the failed call: the client
+/// discards the worker session, so the next page pays a full CUDA model reload for all three
+/// models (measured on a 4535x6307 scan, 2026-10-31).
+pub fn bubble_request_bytes(width: u32, height: u32) -> u64 {
+    BUBBLE_REQUEST_OVERHEAD_BYTES
+        + u64::from(width) * u64::from(height) * 3
+        + ERASE_REQUEST_FRAMING_SLACK
+}
+
+/// Whether a bubble-segmentation request for a `width` x `height` page can be sent at all.
+pub fn bubble_request_fits(width: u32, height: u32) -> bool {
+    bubble_request_bytes(width, height) <= MAX_FRAME_BYTES as u64
+}
+
 /// Fixed per-request bytes an `erase_page` request adds on top of its arguments' own payloads: three
 /// wire structs (page, model mask, paste mask), each `4 + 4` bytes of dimensions plus an 8-byte
 /// `Vec` length prefix — `3 * 16 = 48`. The RPC envelope is accounted for separately, by
@@ -182,6 +205,17 @@ pub trait GpuWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The real page that exposed this (2026-10-31): a 4535x6307 scan is 81.8 MiB of RGB, so a
+    /// bubble-segmentation request for it can never encode — the client must skip it rather than
+    /// send it and lose the worker session.
+    #[test]
+    fn a_very_large_page_does_not_fit_a_bubble_request() {
+        assert!(!bubble_request_fits(4535, 6307));
+        assert!(!bubble_request_fits(4000, 6000));
+        // A normal digital page still goes through untouched.
+        assert!(bubble_request_fits(1600, 2300));
+    }
 
     /// The exact byte length of the three values an `erase_page` request carries as arguments,
     /// serialized with `bincode`'s default (fixed-width) configuration — the same library and

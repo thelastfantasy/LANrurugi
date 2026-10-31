@@ -1114,18 +1114,33 @@ pub async fn translate_page(
     // within one request instead of two long-lived processes. Running it here, exactly once, and
     // threading the same result into both `ensure_detected` (merging) and `composite_and_cache`
     // (erasure) removes the second call entirely rather than just moving where the race happens.
-    let image_worker_for_bubbles = Arc::clone(&ctx.image_worker);
     let bubble_page_image = load_page_image(state, archive_id, page).await?.0;
-    let bubbles = lanrurugi_core::concurrency::run_blocking(move || {
-        use lanrurugi_ocr::bubble_segment::BubbleSegmenterHandle;
-        BubbleSegmenterHandle::detect(&*image_worker_for_bubbles, &bubble_page_image)
-            .inspect_err(|e| {
-                tracing::warn!(error = %e, "bubble segmentation failed for this page; regions stay unmerged and erasure falls back to rectangular boxes")
-            })
-            .ok()
-    })
-    .await
-    .map_err(|e| PipelineError::Ocr(e.to_string()))?;
+    let (bubble_w, bubble_h) = bubble_page_image.dimensions();
+    // A page above the worker's frame limit cannot be sent at all, and attempting it is worse than
+    // skipping: the client discards the worker session on the transport failure, so the next page
+    // pays a full CUDA model reload (three models) instead of one skipped fallback. The model only
+    // ever sees a 1600x1600 letterbox anyway, so this costs the page nothing beyond the rectangular
+    // erasure it already falls back to on any bubble-segmentation failure.
+    let bubbles = if !lanrurugi_gpu_ipc::bubble_request_fits(bubble_w, bubble_h) {
+        tracing::info!(
+            width = bubble_w,
+            height = bubble_h,
+            "page exceeds the gpu-worker frame limit; skipping bubble segmentation (rectangular              erasure fallback) rather than sending a request that would restart the worker"
+        );
+        None
+    } else {
+        let image_worker_for_bubbles = Arc::clone(&ctx.image_worker);
+        lanrurugi_core::concurrency::run_blocking(move || {
+            use lanrurugi_ocr::bubble_segment::BubbleSegmenterHandle;
+            BubbleSegmenterHandle::detect(&*image_worker_for_bubbles, &bubble_page_image)
+                .inspect_err(|e| {
+                    tracing::warn!(error = %e, "bubble segmentation failed for this page; regions stay unmerged and erasure falls back to rectangular boxes")
+                })
+                .ok()
+        })
+        .await
+        .map_err(|e| PipelineError::Ocr(e.to_string()))?
+    };
 
     // --- 1. Detection (persisted) --------------------------------------------------------------
     let (detected, degraded) =
