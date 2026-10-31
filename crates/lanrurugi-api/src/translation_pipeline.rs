@@ -1115,31 +1115,49 @@ pub async fn translate_page(
     // threading the same result into both `ensure_detected` (merging) and `composite_and_cache`
     // (erasure) removes the second call entirely rather than just moving where the race happens.
     let bubble_page_image = load_page_image(state, archive_id, page).await?.0;
-    let (bubble_w, bubble_h) = bubble_page_image.dimensions();
-    // A page above the worker's frame limit cannot be sent at all, and attempting it is worse than
-    // skipping: the client discards the worker session on the transport failure, so the next page
-    // pays a full CUDA model reload (three models) instead of one skipped fallback. The model only
-    // ever sees a 1600x1600 letterbox anyway, so this costs the page nothing beyond the rectangular
-    // erasure it already falls back to on any bubble-segmentation failure.
+    let (page_w, page_h) = bubble_page_image.dimensions();
+    // A page above the worker's frame limit cannot be sent at full resolution: the encode fails,
+    // the client discards the worker session, and the next page pays a full CUDA model reload for
+    // all three models (measured 2026-10-31: a 4535x6307 scan is 81.8MB against a 64MiB frame).
+    // The detector letterboxes to 1600x1600 regardless, so shrinking first loses nothing the model
+    // would have used — boxes and masks are mapped back to page space afterwards.
+    let (reduced_page, bubble_scale) = lanrurugi_ocr::bubble_segment::fit_to_pixel_budget(
+        &bubble_page_image,
+        lanrurugi_gpu_ipc::bubble_request_max_pixels(),
+    );
+    let bubble_detection_image = reduced_page.unwrap_or(bubble_page_image);
+    let (bubble_w, bubble_h) = bubble_detection_image.dimensions();
     let bubbles = if !lanrurugi_gpu_ipc::bubble_request_fits(bubble_w, bubble_h) {
-        tracing::info!(
-            width = bubble_w,
-            height = bubble_h,
-            "page exceeds the gpu-worker frame limit; skipping bubble segmentation (rectangular              erasure fallback) rather than sending a request that would restart the worker"
+        tracing::warn!(
+            width = page_w,
+            height = page_h,
+            "page cannot fit the gpu-worker frame limit even reduced; skipping bubble segmentation (rectangular erasure fallback)"
         );
         None
     } else {
+        if bubble_scale < 1.0 {
+            tracing::info!(
+                width = page_w,
+                height = page_h,
+                reduced_width = bubble_w,
+                reduced_height = bubble_h,
+                "page reduced for bubble segmentation to fit the gpu-worker frame limit"
+            );
+        }
         let image_worker_for_bubbles = Arc::clone(&ctx.image_worker);
-        lanrurugi_core::concurrency::run_blocking(move || {
+        let detected = lanrurugi_core::concurrency::run_blocking(move || {
             use lanrurugi_ocr::bubble_segment::BubbleSegmenterHandle;
-            BubbleSegmenterHandle::detect(&*image_worker_for_bubbles, &bubble_page_image)
+            BubbleSegmenterHandle::detect(&*image_worker_for_bubbles, &bubble_detection_image)
                 .inspect_err(|e| {
                     tracing::warn!(error = %e, "bubble segmentation failed for this page; regions stay unmerged and erasure falls back to rectangular boxes")
                 })
                 .ok()
         })
         .await
-        .map_err(|e| PipelineError::Ocr(e.to_string()))?
+        .map_err(|e| PipelineError::Ocr(e.to_string()))?;
+        detected.map(|bubbles| {
+            lanrurugi_ocr::bubble_segment::rescale_bubbles(bubbles, bubble_scale, page_w, page_h)
+        })
     };
 
     // --- 1. Detection (persisted) --------------------------------------------------------------

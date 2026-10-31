@@ -87,6 +87,70 @@ pub struct DetectedBubble {
 /// callers above this crate can no longer hold a concrete `BubbleSegmenter` directly without also
 /// depending on `lanrurugi-api`. Synchronous for the same reason as that trait too — called from
 /// inside a `spawn_blocking` closure, never a true async-reactor thread.
+/// Shrinks `page` until its pixel count fits `max_pixels`. Returns the reduced page (`None` when
+/// the original already fits — so a caller can move the original instead of copying it) and the
+/// scale factor applied.
+///
+/// The detector letterboxes whatever it is given down to [`INPUT_SIZE`] anyway, so at full
+/// resolution a very large scan gains the model nothing while making the request too big to
+/// encode — which the client sees as a transport failure and answers by killing the worker.
+pub fn fit_to_pixel_budget(page: &RgbImage, max_pixels: u64) -> (Option<RgbImage>, f32) {
+    let (width, height) = page.dimensions();
+    let pixels = u64::from(width) * u64::from(height);
+    if max_pixels == 0 || pixels <= max_pixels {
+        return (None, 1.0);
+    }
+    let factor = (max_pixels as f64 / pixels as f64).sqrt();
+    let scaled_w = ((f64::from(width) * factor).round() as u32).clamp(1, width);
+    let scaled_h = ((f64::from(height) * factor).round() as u32).clamp(1, height);
+    let scaled = image::imageops::resize(page, scaled_w, scaled_h, FilterType::Triangle);
+    (Some(scaled), scaled_w as f32 / width as f32)
+}
+
+/// Maps bubbles detected on a page reduced by [`fit_to_pixel_budget`] back into `page_w` x
+/// `page_h` pixel space: boxes scale by `1 / factor`, each mask is nearest-neighbour resampled to
+/// its new box. A bubble whose mask is inconsistent with its own box is dropped rather than
+/// silently producing a wrongly-sized mask.
+pub fn rescale_bubbles(
+    bubbles: Vec<DetectedBubble>,
+    factor: f32,
+    page_w: u32,
+    page_h: u32,
+) -> Vec<DetectedBubble> {
+    if factor >= 1.0 {
+        return bubbles;
+    }
+    let inverse = 1.0 / factor;
+    bubbles
+        .into_iter()
+        .filter_map(|bubble| {
+            let (old_w, old_h) = (bubble.bbox.w, bubble.bbox.h);
+            if old_w == 0 || old_h == 0 || bubble.mask.len() < (old_w * old_h) as usize {
+                return None;
+            }
+            let x = ((bubble.bbox.x as f32 * inverse).round() as u32).min(page_w.saturating_sub(1));
+            let y = ((bubble.bbox.y as f32 * inverse).round() as u32).min(page_h.saturating_sub(1));
+            let w = ((old_w as f32 * inverse).round() as u32).clamp(1, page_w - x);
+            let h = ((old_h as f32 * inverse).round() as u32).clamp(1, page_h - y);
+            let mut mask = vec![false; (w * h) as usize];
+            for row in 0..h as usize {
+                let source_row = (row * old_h as usize / h as usize).min(old_h as usize - 1);
+                for column in 0..w as usize {
+                    let source_column =
+                        (column * old_w as usize / w as usize).min(old_w as usize - 1);
+                    mask[row * w as usize + column] =
+                        bubble.mask[source_row * old_w as usize + source_column];
+                }
+            }
+            Some(DetectedBubble {
+                bbox: BoundingBox::new(x, y, w, h),
+                confidence: bubble.confidence,
+                mask,
+            })
+        })
+        .collect()
+}
+
 pub trait BubbleSegmenterHandle: Send + Sync {
     fn detect(&self, page: &RgbImage) -> Result<Vec<DetectedBubble>, String>;
 }
@@ -606,6 +670,48 @@ fn greedy_nms(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The page that motivated this (2026-10-31): 4535x6307 is 81.8MB of RGB, past the worker's
+    /// frame limit, and the detector would letterbox it to 1600x1600 anyway.
+    #[test]
+    fn fit_to_pixel_budget_shrinks_a_huge_page_into_the_budget() {
+        let page = RgbImage::from_pixel(4535, 6307, image::Rgb([10, 20, 30]));
+        let budget = 4096 * 4096;
+        let (reduced, factor) = fit_to_pixel_budget(&page, budget);
+        let reduced = reduced.expect("this page must be reduced");
+        assert!(
+            u64::from(reduced.width()) * u64::from(reduced.height()) <= budget,
+            "got {}x{}",
+            reduced.width(),
+            reduced.height()
+        );
+        assert!(factor < 1.0);
+    }
+
+    #[test]
+    fn fit_to_pixel_budget_leaves_a_page_that_fits_alone() {
+        let page = RgbImage::from_pixel(1600, 2300, image::Rgb([1, 2, 3]));
+        let (reduced, factor) = fit_to_pixel_budget(&page, 4096 * 4096);
+        assert!(reduced.is_none(), "no copy should be made when it fits");
+        assert_eq!(factor, 1.0);
+    }
+
+    #[test]
+    fn rescale_bubbles_maps_boxes_and_upsamples_masks_back_to_the_page() {
+        // A 100x100 box at (10,10) on a half-size detection page becomes (20,20,200,200).
+        let bubbles = vec![DetectedBubble {
+            bbox: BoundingBox::new(10, 10, 100, 100),
+            confidence: 0.9,
+            mask: vec![true; 100 * 100],
+        }];
+
+        let scaled = rescale_bubbles(bubbles, 0.5, 1000, 1000);
+        assert_eq!(scaled.len(), 1);
+        assert_eq!(scaled[0].bbox, BoundingBox::new(20, 20, 200, 200));
+        assert_eq!(scaled[0].mask.len(), 200 * 200);
+        assert!(scaled[0].mask.iter().all(|&covered| covered));
+        assert_eq!(scaled[0].confidence, 0.9);
+    }
 
     #[test]
     fn letterbox_centers_padding_for_a_taller_than_wide_page() {

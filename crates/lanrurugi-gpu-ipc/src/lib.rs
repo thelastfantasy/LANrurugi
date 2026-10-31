@@ -64,6 +64,14 @@ pub fn bubble_request_fits(width: u32, height: u32) -> bool {
     bubble_request_bytes(width, height) <= MAX_FRAME_BYTES as u64
 }
 
+/// Largest pixel count whose bubble-segmentation request still fits a frame — what
+/// `lanrurugi_ocr::bubble_segment::fit_to_pixel_budget` reduces an oversized page to.
+pub fn bubble_request_max_pixels() -> u64 {
+    let budget =
+        MAX_FRAME_BYTES as u64 - BUBBLE_REQUEST_OVERHEAD_BYTES - ERASE_REQUEST_FRAMING_SLACK;
+    budget / 3
+}
+
 /// Fixed per-request bytes an `erase_page` request adds on top of its arguments' own payloads: three
 /// wire structs (page, model mask, paste mask), each `4 + 4` bytes of dimensions plus an 8-byte
 /// `Vec` length prefix — `3 * 16 = 48`. The RPC envelope is accounted for separately, by
