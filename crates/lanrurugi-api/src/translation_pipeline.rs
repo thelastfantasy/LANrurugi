@@ -2093,6 +2093,23 @@ fn should_schedule_current_page(state: Option<&PageState>) -> bool {
 mod tests {
     use super::*;
 
+    /// The filter that stopped a blank highlight from being OCRed into "然後" (2026-10-31): a
+    /// white blob with no ink is artwork, one with a few strokes of ink is a candidate.
+    #[test]
+    fn dark_ink_fraction_distinguishes_a_blank_crop_from_inked_text() {
+        let blank = image::RgbImage::from_pixel(40, 20, image::Rgb([255, 255, 255]));
+        let bbox = lanrurugi_ocr::entities::BoundingBox::new(0, 0, 40, 20);
+        assert_eq!(dark_ink_fraction(&blank, &bbox), 0.0);
+
+        let mut inked = blank.clone();
+        for x in 0..10 {
+            inked.put_pixel(x, 10, image::Rgb([0, 0, 0]));
+        }
+        let fraction = dark_ink_fraction(&inked, &bbox);
+        assert!(fraction > 0.0, "got {fraction}");
+        assert!(fraction < 0.05, "ten pixels of eight hundred: {fraction}");
+    }
+
     fn a_region() -> DetectedTextRegion {
         DetectedTextRegion::new(
             ArchiveId("0".repeat(40)),

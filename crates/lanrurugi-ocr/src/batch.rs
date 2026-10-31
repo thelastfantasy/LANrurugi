@@ -952,8 +952,16 @@ pub async fn run_batch(
         recognized.iter().map(|r| (r.page_index, r.infra_failure)),
     );
 
+    // Counters for the per-page summary below: "this page lost N boxes" is the first question
+    // asked about a page whose translation came out visibly incomplete, and previously the only
+    // trace was a scatter of warnings that had to be tallied by hand (2026-10-31, page 53).
+    let mut dropped_empty: Vec<usize> = vec![0; pages.len()];
+    let mut dropped_not_japanese: Vec<usize> = vec![0; pages.len()];
+    let mut kept_per_page: Vec<usize> = vec![0; pages.len()];
+
     for rec in recognized {
         if rec.text.trim().is_empty() {
+            dropped_empty[rec.page_index] += 1;
             // Real reported incident (2026-09-18): a detected candidate box for a legitimate
             // second line of text ("トウカ", the second line of a two-line "皇族ガーディアン /
             // トウカ" label) silently vanished with no trace in any log — this branch was
@@ -973,9 +981,15 @@ pub async fn run_batch(
         // artwork untouched than translate garbage and composite a garbled block over legible
         // lettering.
         if !crate::recognize::looks_like_japanese(&rec.text) {
-            tracing::warn!(%rec.text, "OCR result doesn't look like Japanese text; dropping region");
+            dropped_not_japanese[rec.page_index] += 1;
+            tracing::warn!(
+                ?rec.bbox,
+                %rec.text,
+                "OCR result doesn't look like Japanese text; dropping region"
+            );
             continue;
         }
+        kept_per_page[rec.page_index] += 1;
         lines_per_page[rec.page_index].push(DetectedLine::with_ocr_metadata(
             rec.bbox,
             rec.text,
@@ -983,6 +997,23 @@ pub async fn run_batch(
             rec.writing_direction,
         ));
         styles[rec.page_index].push((rec.bbox, rec.style));
+    }
+
+    for (index, ((kept, empty), not_japanese)) in kept_per_page
+        .iter()
+        .zip(&dropped_empty)
+        .zip(&dropped_not_japanese)
+        .enumerate()
+    {
+        if *empty > 0 || *not_japanese > 0 {
+            tracing::info!(
+                page_index = index,
+                kept = *kept,
+                dropped_empty = *empty,
+                dropped_not_japanese = *not_japanese,
+                "page OCR lost detected boxes before translation"
+            );
+        }
     }
 
     let mut raw_masks_per_page: Vec<Option<crate::detect::PageTextProbabilityMap>> =
