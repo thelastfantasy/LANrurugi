@@ -773,6 +773,13 @@ fn white_blob_candidates(page: &RgbImage, regions: &[DetectedTextRegion]) -> Vec
                 continue;
             }
             let bbox = BoundingBox::new(min_x, min_y, bw, bh);
+            // A near-white blob with (almost) no dark pixels in it cannot hold text: it is artwork,
+            // a highlight, or page margin. OCR on such a crop still returns *something* now and
+            // then — measured 2026-10-31, a character's white chest highlight came back as "然後",
+            // which then got translated and drawn over the artwork.
+            if dark_ink_fraction(page, &bbox) < MIN_BLOB_INK_FRACTION {
+                continue;
+            }
             if !blob_covered(page, &bbox, regions) {
                 out.push(bbox);
             }
@@ -781,6 +788,33 @@ fn white_blob_candidates(page: &RgbImage, regions: &[DetectedTextRegion]) -> Vec
     out.sort_by_key(|b| std::cmp::Reverse(u64::from(b.w) * u64::from(b.h)));
     out.truncate(8);
     out
+}
+
+/// Smallest share of a white-blob candidate's own area that must be dark ink for it to be worth
+/// OCRing at all. Real text in a bubble covers several percent of its interior; a highlight or a
+/// blank margin covers essentially none.
+const MIN_BLOB_INK_FRACTION: f32 = 0.004;
+
+/// Share of `bbox`'s pixels dark enough to be text ink, clamped to the page.
+fn dark_ink_fraction(page: &RgbImage, bbox: &BoundingBox) -> f32 {
+    let (pw, ph) = page.dimensions();
+    let mut ink = 0u64;
+    let mut total = 0u64;
+    for y in bbox.y..(bbox.y + bbox.h).min(ph) {
+        for x in bbox.x..(bbox.x + bbox.w).min(pw) {
+            let p = page.get_pixel(x, y).0;
+            let luma = 0.299 * f32::from(p[0]) + 0.587 * f32::from(p[1]) + 0.114 * f32::from(p[2]);
+            if luma <= UNCOVERED_INK_MAX_LUMA {
+                ink += 1;
+            }
+            total += 1;
+        }
+    }
+    if total == 0 {
+        0.0
+    } else {
+        ink as f32 / total as f32
+    }
 }
 
 /// Minimum uncovered dark-ink pixels before a bubble/white-blob candidate is re-OCRed even

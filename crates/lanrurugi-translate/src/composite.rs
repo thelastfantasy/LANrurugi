@@ -79,7 +79,13 @@ const DEFAULT_FG: Rgb = Rgb {
 /// bubble-interior preference plus [`LAYOUT_OVERFLOW_FRACTION`] reduce how often the shrink search
 /// even needs to go that low in the first place.
 const MIN_FONT_PX: f32 = 12.0;
-const MAX_FONT_PX: f32 = 72.0;
+/// Upper bound for the shrink-to-fit search. It is a *start* point, not a target: every search
+/// below only ever shrinks from here, so a cap that is too low silently renders every translation
+/// smaller than the artwork it replaces. 72 was too low for a real 4535x6307 scan, whose original
+/// glyphs are ~120px tall — reported live 2026-10-31 ("翻译字号比原始字号偏小"). 400 clears that
+/// page's own text height while still bounding the first iteration; the searches stop as soon as
+/// the text fits, so a large bubble is never over-filled by this alone.
+const MAX_FONT_PX: f32 = 400.0;
 
 /// How far a region's own text layout box may extend past its OCR-detected bounding box on each
 /// side, as a fraction of that box's own width/height — see [`layout_box`]'s own doc comment for
@@ -1955,7 +1961,7 @@ fn fit_horizontal_in_shape(
     let shape_h = (y_last - y_first + 1) as f32;
     let centre_y = (y_first as f32 + y_last as f32 + 1.0) / 2.0;
 
-    let mut size = MAX_FONT_PX;
+    let mut size = (shape_h * 0.9).clamp(MIN_FONT_PX, MAX_FONT_PX);
     while size >= MIN_FONT_PX {
         let line_pitch = font.raster.as_scaled(PxScale::from(size)).height() * LINE_SPACING_FACTOR;
         if line_pitch > 0.0 {
@@ -2341,7 +2347,7 @@ fn fit_vertical_in_shape(
     let mut single_column: Option<(f32, Vec<PlacedColumn>)> = None;
     let mut multi_column: Option<(f32, Vec<PlacedColumn>)> = None;
 
-    let mut size = MAX_FONT_PX;
+    let mut size = (shape_w * 0.9).clamp(MIN_FONT_PX, MAX_FONT_PX);
     while size >= MIN_FONT_PX {
         let pitch = vertical_pitch(font, size);
         if pitch > 0.0 {
@@ -2779,7 +2785,7 @@ fn fit_text(
     // translated text looking "shifted" within its own box, though the text itself was correctly
     // centred at whatever (too-small) size `fit_text` had settled on; the actual bug was the
     // size search never climbing back up.
-    let mut size = MAX_FONT_PX;
+    let mut size = (box_h as f32 * 0.9).clamp(MIN_FONT_PX, MAX_FONT_PX);
 
     while size >= MIN_FONT_PX {
         let lines = wrap_text(text, font, size, upem, usable_w);
@@ -2818,7 +2824,7 @@ fn fit_text_vertical(
     // Same fix and same reasoning as `fit_text`'s own doc comment on this exact line — always
     // search downward from `MAX_FONT_PX`, never from a box-derived guess that the loop below can
     // never climb back up past.
-    let mut size = MAX_FONT_PX;
+    let mut size = (box_h as f32 * 0.9).clamp(MIN_FONT_PX, MAX_FONT_PX);
 
     // Only a short translation gets the single-column preference below; a genuinely long one has
     // to wrap no matter what, and forcing it into one column would shrink it drastically.

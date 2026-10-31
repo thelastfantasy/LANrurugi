@@ -33,6 +33,17 @@ if [ -d /dev/dri ]; then
   device_flags+=(--device /dev/dri)
 fi
 
+# `.env.dev-container` (gitignored) holds values that must reach *only* this container — the
+# diagnostics tracker DSN and its always-forward switch. They deliberately do not live in
+# `.env.local`: mise loads that file into every task, including `mise run test`, where a
+# developer's own tracker DSN would silently change what the "no tracker configured" tests see.
+if [ -f .env.dev-container ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env.dev-container
+  set +a
+fi
+
 # `LANRURUGI_TRACKER_DSN` is passed through from the shell: exporting it before `dev-up` points
 # this instance's diagnostics forwarding at a tracker without touching the settings page
 # (specs/018).
