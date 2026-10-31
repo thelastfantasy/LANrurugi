@@ -1,0 +1,33 @@
+target/
+.cargo-target/
+.cargo-registry/
+.pnpm-store/
+node_modules/
+apps/frontend/dist/
+apps/frontend/node_modules/
+# 011-api-docs-site: the docs stage builds everything it needs from source inside the image, so a
+# developer's local build output and generated inputs must not ride along in the build context —
+# these are gitignored for the same reason. `docs/api/` (the vendored upstream OpenAPI document and
+# the hand-written sidecar) IS an input and is copied explicitly by the Dockerfile.
+docs/dist/
+docs/.astro/
+docs/node_modules/
+docs/public/openapi.json
+docs/dist-swagger/
+docs/dist-sdk/
+docs/public/favicon.svg
+.git/
+.github/
+specs/
+*.log
+.env*
+# Runtime data (compose.yaml's own bind-mount source) — never part of the build context. Besides
+# being pointlessly huge (the manga library itself), a rootless-podman uid-mapped subdirectory
+# under here (data/database/appendonlydir, owned by Redis's in-container uid) isn't even readable
+# by the host user building the image, which fails the build outright without this exclusion.
+data/
+
+# Locally fetched PDFium (mise run fetch-pdfium); images fetch their own in the `pdfium` stage.
+.pdfium/
+dist/native
+.native-assets

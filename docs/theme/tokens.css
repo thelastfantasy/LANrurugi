@@ -1,0 +1,54 @@
+/*
+ * LANrurugi palette shared by the docs site, the Swagger UI page and the SDK reference — the same
+ * one the homepage uses. Light is E-Hentai's (apps/frontend/public/legacy/themes/g.css), dark is
+ * ExHentai's (ex.css).
+ *
+ * Each site toggles dark mode its own way (Starlight: `data-theme`, Swagger UI: `html.dark-mode`,
+ * deno doc: `html.dark`); the dark block lists all three, and each site only ever sets its own.
+ */
+
+:root {
+  --lr-paper: #e3e0d1;
+  --lr-card: #edebdf;
+  --lr-sand: #d9d5c3;
+  --lr-rule: #c9c2ac;
+  --lr-ink: #5c0d11;
+  --lr-text: #5c0d11;
+  --lr-text-strong: #3d070a;
+  --lr-text-muted: #8b5a3c;
+  --lr-hi: #f0a500;
+  --lr-hi-text: #3d070a;
+  --lr-link: #8a1a24;
+  --lr-link-hover: #5c0d11;
+  --lr-btn-bg: #5c0d11;
+  --lr-btn-text: #f2efdf;
+  --lr-bar: #5c0d11;
+  --lr-bar-text: #f2efdf;
+  --lr-code-bg: #f2efdf;
+  --lr-shadow: 4px 4px 0 var(--lr-ink);
+  --lr-shadow-sm: 3px 3px 0 var(--lr-ink);
+  --lr-border: 3px solid var(--lr-ink);
+  --lr-border-thin: 2px solid var(--lr-ink);
+  --lr-radius: 14px;
+}
+
+:root[data-theme='dark'],
+html.dark-mode,
+html.dark {
+  --lr-paper: #34353b;
+  --lr-card: #43464e;
+  --lr-sand: #4f535b;
+  --lr-rule: #5c6069;
+  --lr-ink: #101114;
+  --lr-text: #dddddd;
+  --lr-text-strong: #f1f1f1;
+  --lr-text-muted: #a9abb0;
+  --lr-hi-text: #1d1e22;
+  --lr-link: #f0a500;
+  --lr-link-hover: #ffc94d;
+  --lr-btn-bg: #f1f1f1;
+  --lr-btn-text: #34353b;
+  --lr-bar: #23242a;
+  --lr-bar-text: #f1f1f1;
+  --lr-code-bg: #2b2c31;
+}

@@ -1,0 +1,20 @@
+[package]
+name = "lanrurugi-imgcompare"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lanrurugi-core.workspace = true
+lanrurugi-scanner.workspace = true
+image.workspace = true
+image_hasher = "3.0"
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+rayon.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+zip.workspace = true
+tempfile = "3"

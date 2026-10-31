@@ -1,0 +1,87 @@
+---
+/*
+ * Starlight's own search, plus an empty state for the dialog: example queries and the most-used
+ * pages, shown until the reader types. Pagefind renders nothing for an empty query, which left a
+ * blank box. The search itself is untouched — this wraps the default component.
+ */
+import Default from '@astrojs/starlight/components/Search.astro'
+
+const en = Astro.locals.starlightRoute.locale === 'en'
+const base = import.meta.env.BASE_URL.replace(/\/$/, '')
+const href = (slug: string) => `${base}/${en ? 'en/' : ''}${slug}/`
+
+const copy = en
+  ? {
+      try: 'Try searching',
+      queries: ['compose', 'reverse proxy', 'tankoubon', 'API token'],
+      pages: 'Popular pages',
+    }
+  : {
+      try: '试试搜索',
+      queries: ['compose', '反向代理', 'tankoubon', 'API 令牌'],
+      pages: '常用页面',
+    }
+
+const pages = [
+  { slug: 'guide/install', zh: '安装（Docker / NAS）', en: 'Install (Docker / NAS)' },
+  { slug: 'guide/reverse-proxy', zh: '反向代理', en: 'Reverse proxy' },
+  { slug: 'guide/quickstart', zh: '快速开始', en: 'Quickstart' },
+  { slug: 'plugin/getting-started', zh: '插件开发入门', en: 'Writing plugins' },
+  { slug: 'api', zh: 'API 文档', en: 'API documentation' },
+  { slug: 'plugin/sdk', zh: 'SDK 参考', en: 'SDK reference' },
+]
+---
+
+<Default {...Astro.props} />
+
+<template id="lr-search-empty">
+  <div class="lr-search-empty">
+    <p class="lr-search-empty__title">{copy.try}</p>
+    <div class="lr-search-empty__queries">
+      {copy.queries.map((q) => <button type="button" data-query={q}>{q}</button>)}
+    </div>
+    <p class="lr-search-empty__title">{copy.pages}</p>
+    <ul class="lr-search-empty__pages">
+      {
+        pages.map((page) => (
+          <li>
+            <a href={href(page.slug)}>{en ? page.en : page.zh}</a>
+          </li>
+        ))
+      }
+    </ul>
+  </div>
+</template>
+
+<script>
+  const INPUT = '.pagefind-ui__search-input'
+
+  function install() {
+    const container = document.querySelector('site-search .search-container')
+    const template = document.getElementById('lr-search-empty') as HTMLTemplateElement | null
+    if (!container || !template || container.querySelector('.lr-search-empty')) return
+    container.append(template.content.cloneNode(true))
+    const panel = container.querySelector('.lr-search-empty') as HTMLElement
+
+    // Hidden as soon as there is a query; back when the box is cleared.
+    const sync = () => {
+      const input = container.querySelector(INPUT) as HTMLInputElement | null
+      panel.hidden = Boolean(input?.value.trim())
+    }
+    container.addEventListener('input', sync)
+    // Pagefind's clear button empties the box without an input event.
+    container.addEventListener('click', () => setTimeout(sync))
+
+    panel.querySelectorAll<HTMLButtonElement>('button[data-query]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const input = container.querySelector(INPUT) as HTMLInputElement | null
+        if (!input) return
+        input.value = button.dataset.query ?? ''
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        input.focus()
+      })
+    })
+  }
+
+  install()
+</script>

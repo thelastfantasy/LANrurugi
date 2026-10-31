@@ -1,0 +1,218 @@
+[
+  {
+    "key": "search",
+    "zh": "搜索 API",
+    "en": "Search API",
+    "description_zh": "对档案索引执行搜索。",
+    "description_en": "Perform searches against the archive index."
+  },
+  {
+    "key": "archives",
+    "zh": "档案 API",
+    "en": "Archive API"
+  },
+  {
+    "key": "database",
+    "zh": "数据库 API",
+    "en": "Database API"
+  },
+  {
+    "key": "categories",
+    "zh": "分类 API",
+    "en": "Category API"
+  },
+  {
+    "key": "tankoubons",
+    "zh": "Tankoubon API",
+    "en": "Tankoubon API"
+  },
+  {
+    "key": "stamps",
+    "zh": "图章 API",
+    "en": "Stamps API"
+  },
+  {
+    "key": "plugins",
+    "zh": "插件 API",
+    "en": "Plugin API"
+  },
+  {
+    "key": "shinobu",
+    "zh": "Shinobu API",
+    "en": "Shinobu API"
+  },
+  {
+    "key": "minion",
+    "zh": "Minion API",
+    "en": "Minion API"
+  },
+  {
+    "key": "opds",
+    "zh": "OPDS 目录",
+    "en": "OPDS Catalog"
+  },
+  {
+    "key": "misc",
+    "zh": "其他 API",
+    "en": "Miscellaneous other API"
+  },
+  {
+    "key": "activity",
+    "zh": "活动日志",
+    "en": "Activity Log"
+  },
+  {
+    "key": "api_tokens",
+    "zh": "API 令牌",
+    "en": "API Tokens"
+  },
+  {
+    "key": "archive_split",
+    "zh": "档案拆分",
+    "en": "Archive Splitting"
+  },
+  {
+    "key": "auth_bridge",
+    "zh": "跨域登录",
+    "en": "Cross-origin Login"
+  },
+  {
+    "key": "bench",
+    "zh": "性能基准",
+    "en": "Benchmark"
+  },
+  {
+    "key": "bookmarks",
+    "zh": "书签",
+    "en": "Bookmarks"
+  },
+  {
+    "key": "download_queue",
+    "zh": "下载队列",
+    "en": "Download Queue"
+  },
+  {
+    "key": "duplicates",
+    "zh": "重复检测",
+    "en": "Duplicate Detection"
+  },
+  {
+    "key": "font_pattern",
+    "zh": "字体模式",
+    "en": "Font Patterns"
+  },
+  {
+    "key": "health",
+    "zh": "健康检查",
+    "en": "Health"
+  },
+  {
+    "key": "jobs",
+    "zh": "后台任务",
+    "en": "Background Jobs"
+  },
+  {
+    "key": "login",
+    "zh": "登录",
+    "en": "Login"
+  },
+  {
+    "key": "logs",
+    "zh": "日志",
+    "en": "Logs"
+  },
+  {
+    "key": "opensearch",
+    "zh": "OpenSearch",
+    "en": "OpenSearch"
+  },
+  {
+    "key": "plugin_wizard",
+    "zh": "插件向导",
+    "en": "Plugin Wizard"
+  },
+  {
+    "key": "preferences",
+    "zh": "偏好设置",
+    "en": "Preferences"
+  },
+  {
+    "key": "recommend",
+    "zh": "推荐",
+    "en": "Recommendations"
+  },
+  {
+    "key": "scripts",
+    "zh": "维护脚本",
+    "en": "Maintenance Scripts"
+  },
+  {
+    "key": "sessions",
+    "zh": "登录设备",
+    "en": "Signed-in Devices"
+  },
+  {
+    "key": "settings",
+    "zh": "设置",
+    "en": "Settings"
+  },
+  {
+    "key": "stats",
+    "zh": "库统计",
+    "en": "Library Statistics"
+  },
+  {
+    "key": "subscriptions",
+    "zh": "订阅",
+    "en": "Subscriptions"
+  },
+  {
+    "key": "tankoubon_grouping",
+    "zh": "Tankoubon 分组",
+    "en": "Tankoubon Grouping"
+  },
+  {
+    "key": "terminology_glossary",
+    "zh": "术语表",
+    "en": "Terminology Glossary"
+  },
+  {
+    "key": "translation",
+    "zh": "页面翻译",
+    "en": "Page Translation"
+  },
+  {
+    "key": "translation_settings",
+    "zh": "翻译设置",
+    "en": "Translation Settings"
+  },
+  {
+    "key": "version",
+    "zh": "版本",
+    "en": "Version"
+  },
+  {
+    "key": "llm_usage",
+    "zh": "AI 用量",
+    "en": "AI Usage",
+    "description_zh": "各项 AI 功能的请求次数、token 用量、耗时与失败统计。",
+    "description_en": "Per-feature AI request counts, token usage, time and failures."
+  },
+  {
+    "key": "shares",
+    "zh": "分享",
+    "en": "Sharing"
+  },
+  {
+    "key": "share_recipient",
+    "zh": "分享接收方",
+    "en": "Share Recipients"
+  },
+  {
+    "key": "diagnostics",
+    "zh": "诊断与反馈 API",
+    "en": "Diagnostics API",
+    "description_zh": "本机错误事件、问题分组、反馈包与临时上报窗口。",
+    "description_en": "Local error events, issue grouping, feedback bundles and the temporary forwarding window."
+  }
+]

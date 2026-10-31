@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1
+#
+# Patches `catthehacker/ubuntu:act-latest` (the community-maintained runner image `act` defaults
+# to for `ubuntu-latest`) with the two packages it's missing relative to GitHub's own real
+# `ubuntu-latest` runner: `cmake` and `libclang-dev`, both needed by `libarchive2-sys`'s build
+# script (bindgen + CMake) when building this workspace inside `act`. Confirmed directly: a bare
+# `act -j <job>` run against the unpatched image fails at `cargo build`'s
+# `libarchive2-sys` step with "is `cmake` not installed?", then (once cmake is added) with
+# "Unable to find libclang" — real ubuntu-latest ships both (GitHub's own runner-images repo lists
+# CMake 3.31.6; libclang-dev is a normal apt package there too), it's specifically `act`'s own
+# lighter-weight image that lacks them.
+#
+# Not used by real CI (.github/workflows/ci.yml runs on GitHub's actual `ubuntu-latest`, which
+# already has both tools) — this is purely a local `act`-debugging aid. See `mise run
+# test-ci-local`.
+FROM docker.io/catthehacker/ubuntu:act-latest
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        cmake \
+        libclang-dev \
+    && rm -rf /var/lib/apt/lists/*

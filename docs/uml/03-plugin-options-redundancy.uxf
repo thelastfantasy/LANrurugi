@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<diagram program="umlet" version="15.1">
+  <zoom_level>10</zoom_level>
+
+  <!-- 标题 / 发现说明 -->
+  <element>
+    <id>UMLNote</id>
+    <coordinates>
+      <x>60</x>
+      <y>40</y>
+      <w>980</w>
+      <h>100</h>
+    </coordinates>
+    <panel_attributes>图 3/3 —— 冗余发现：DomainRule 被独立定义了三次
+同样的四个字段（pattern / max_concurrent / max_bytes_per_sec / [description]）在三个 crate 里
+各自手写了一份，没有共享 trait 或 newtype——只靠约定和一个往返测试（round-trip test，
+该模块自己的文档注释里写明）保持同步，不是靠类型系统。给其中一份加字段而漏掉另外
+两份，会在运行时悄悄破坏 download_manager::settings::merge 的合并逻辑。
+bg=#fff2cc</panel_attributes>
+    <additional_attributes/>
+  </element>
+
+  <!-- 第 1 份：lanrurugi_plugin::protocol::DomainRule -->
+  <element>
+    <id>UMLClass</id>
+    <coordinates>
+      <x>60</x>
+      <y>200</y>
+      <w>280</w>
+      <h>170</h>
+    </coordinates>
+    <panel_attributes>&lt;&lt;第 1/3 份&gt;&gt;
+lanrurugi_plugin::protocol::
+DomainRule
+--
+pattern: Option&lt;String&gt;
+max_concurrent: Option&lt;u32&gt;
+max_bytes_per_sec: Option&lt;u64&gt;
+description: Option&lt;String&gt;
+--
+插件自己声明的默认规则，
+从 Deno 插件的 pluginOptions()
+导出读取。
+bg=#ffe6cc</panel_attributes>
+    <additional_attributes/>
+  </element>
+
+  <!-- 第 2 份：download_manager::domain_rules::DomainRule -->
+  <element>
+    <id>UMLClass</id>
+    <coordinates>
+      <x>400</x>
+      <y>200</y>
+      <w>280</w>
+      <h>170</h>
+    </coordinates>
+    <panel_attributes>&lt;&lt;第 2/3 份&gt;&gt;
+lanrurugi_api::download_manager::
+domain_rules::DomainRule
+--
+pattern: Option&lt;String&gt;
+max_concurrent: Option&lt;u32&gt;
+max_bytes_per_sec: Option&lt;u64&gt;
+description: Option&lt;String&gt;
+--
+用于运行时实际的并发/限速
+匹配逻辑（resolved_key 等）。
+bg=#ffe6cc</panel_attributes>
+    <additional_attributes/>
+  </element>
+
+  <!-- 第 3 份：storage::plugin_options::DomainRuleOverride -->
+  <element>
+    <id>UMLClass</id>
+    <coordinates>
+      <x>740</x>
+      <y>200</y>
+      <w>280</w>
+      <h>170</h>
+    </coordinates>
+    <panel_attributes>&lt;&lt;第 3/3 份，缺 description 字段&gt;&gt;
+lanrurugi_storage::plugin_options::
+DomainRuleOverride
+--
+pattern: Option&lt;String&gt;
+max_concurrent: Option&lt;u32&gt;
+max_bytes_per_sec: Option&lt;u64&gt;
+--
+持久化的用户覆盖项，Redis key
+LANRURUGI_DOWNLOAD_PLUGIN_
+OPTIONS_&lt;namespace&gt;。
+bg=#ffe6cc</panel_attributes>
+    <additional_attributes/>
+  </element>
+
+  <!-- "靠约定保持同步" 的虚线关系 -->
+  <element>
+    <id>Relation</id>
+    <coordinates>
+      <x>330</x>
+      <y>270</y>
+      <w>90</w>
+      <h>40</h>
+    </coordinates>
+    <panel_attributes>lt=..
+形状相同
+（手工维护）</panel_attributes>
+    <additional_attributes>10;10;70;10</additional_attributes>
+  </element>
+
+  <element>
+    <id>Relation</id>
+    <coordinates>
+      <x>670</x>
+      <y>270</y>
+      <w>90</w>
+      <h>40</h>
+    </coordinates>
+    <panel_attributes>lt=..
+形状相同
+（手工维护）</panel_attributes>
+    <additional_attributes>10;10;70;10</additional_attributes>
+  </element>
+
+  <!-- 合并为 EffectiveDomainRule -->
+  <element>
+    <id>UMLClass</id>
+    <coordinates>
+      <x>400</x>
+      <y>460</y>
+      <w>280</w>
+      <h>150</h>
+    </coordinates>
+    <panel_attributes>EffectiveDomainRule
+（download_manager::settings）
+--
+pattern: Option&lt;String&gt;
+max_concurrent: Option&lt;u32&gt;
+max_bytes_per_sec: Option&lt;u64&gt;
+description: Option&lt;String&gt;
+source: Source
+--
+把上面第 1、3 份合并成的响应
+形状——前端调用方实际能看到
+的唯一一处。两侧完整类型化，
+跟前端 EffectiveDomainRule
+完全一致。</panel_attributes>
+    <additional_attributes/>
+  </element>
+
+  <element>
+    <id>Relation</id>
+    <coordinates>
+      <x>200</x>
+      <y>360</y>
+      <w>340</w>
+      <h>120</h>
+    </coordinates>
+    <panel_attributes>lt=-&gt;
+merge()</panel_attributes>
+    <additional_attributes>10;100;10;10;320;10;320;100</additional_attributes>
+  </element>
+
+  <element>
+    <id>Relation</id>
+    <coordinates>
+      <x>540</x>
+      <y>360</y>
+      <w>340</w>
+      <h>120</h>
+    </coordinates>
+    <panel_attributes>lt=-&gt;
+merge()</panel_attributes>
+    <additional_attributes>320;100;320;10;10;10;10;100</additional_attributes>
+  </element>
+
+  <!-- 建议修法 -->
+  <element>
+    <id>UMLNote</id>
+    <coordinates>
+      <x>740</x>
+      <y>460</y>
+      <w>280</w>
+      <h>150</h>
+    </coordinates>
+    <panel_attributes>建议修法（尚未实施）
+--
+把唯一权威的 DomainRule 挪进
+lanrurugi-core（三个 crate 目前
+都没有理由避免依赖它），让
+protocol::/domain_rules::/
+plugin_options:: 各自重新导出
+或用一个薄 newtype 包一层，
+而不是各自重新声明四个字段。</panel_attributes>
+    <additional_attributes/>
+  </element>
+
+</diagram>

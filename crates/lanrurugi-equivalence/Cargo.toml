@@ -1,0 +1,27 @@
+[package]
+name = "lanrurugi-equivalence"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+unicode-normalization.workspace = true
+serde.workspace = true
+tracing.workspace = true
+wana_kana = { workspace = true, optional = true }
+ferrous-opencc = { workspace = true, optional = true }
+
+[features]
+default = ["jp"]
+# 日文互通：半角、浊点/半浊点分离、片假名<->平假名
+jp = ["dep:wana_kana"]
+# OpenCC：中文繁简 + 日文汉字新旧字体。单独开这个 feature 可以让 `jp` 在不开 `zh` 时也能
+# 处理 `発/發`、`竜/龍` 这类日文新旧字体。
+opencc = ["dep:ferrous-opencc"]
+# 中文繁简互通（归一到简体）
+zh = ["opencc"]
+# 主程序用的完整语言集
+full = ["jp", "zh"]
+
+[dev-dependencies]
+serde_json.workspace = true

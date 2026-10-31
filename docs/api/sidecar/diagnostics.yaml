@@ -1,0 +1,270 @@
+# Diagnostics and feedback bundles (`specs/018-error-telemetry-feedback/`). Every path here needs
+# a real session: an API token and a guest visitor are both refused by `route_policy.csv`, because
+# these responses carry captured errors, breadcrumbs, server logs and the tracker credential.
+"/api/diagnostics/config":
+  get:
+    summary: Client capture configuration
+    description: What the browser needs to decide whether to initialise its error SDK, and the current forwarding window. Never contains the tracker DSN.
+    tags: [diagnostics]
+    responses:
+      "200":
+        description: The capture switches, release identity, and window state.
+
+"/api/diagnostics/settings":
+  get:
+    summary: Read diagnostics settings and usage
+    description: The settings (with the tracker address reduced to `tracker_configured`), the store's usage counters, the drop counters, and the forwarding window.
+    tags: [diagnostics]
+    responses:
+      "200": { description: Settings, usage, drops and window. }
+  put:
+    summary: Update diagnostics settings
+    description: |
+      Writes any of the capture switches, the retention limits (days, events, bytes) or the tracker
+      DSN (`tracker_dsn`, empty to clear). An unknown key or an invalid value rejects the whole
+      update, so a half-applied configuration never exists. The forwarding window is set through
+      `/api/diagnostics/window` instead.
+    tags: [diagnostics]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: true
+    responses:
+      "200": { description: The resulting settings. }
+      "400": { description: An unknown key or an invalid value. }
+
+"/api/diagnostics/envelope":
+  post:
+    summary: Ingest one error envelope
+    description: |
+      The browser SDK's own transport target: a standard Sentry envelope, posted same-origin with
+      the session cookie (the `X-Sentry-Auth` header is accepted and ignored). `204` means the event
+      was not stored — capture disabled, that source switched off, the rate limit reached, or the
+      body was not an envelope — which is deliberate, so the SDK does not retry. An `@sentry` DSN
+      pointing at this instance resolves to this path.
+    tags: [diagnostics]
+    requestBody:
+      required: true
+      content:
+        application/x-sentry-envelope:
+          schema: { type: string, format: binary }
+    responses:
+      "200": { description: Stored; the body is the event id. }
+      "204": { description: Accepted but not stored (see description). }
+      "400": { description: The body was not a parseable envelope. }
+
+# The SDK appends a trailing slash (`<dsn>/api/<project>/envelope/`); both spellings reach the
+# same handler, so both are documented.
+"/api/diagnostics/envelope/":
+  post:
+    summary: Ingest one error envelope (SDK spelling)
+    description: Identical to `/api/diagnostics/envelope`; present because the Sentry SDK derives its ingest URL with a trailing slash.
+    tags: [diagnostics]
+    responses:
+      "200": { description: Stored; the body is the event id. }
+      "204": { description: Accepted but not stored. }
+      "400": { description: The body was not a parseable envelope. }
+
+"/api/diagnostics/issues":
+  get:
+    summary: List issues
+    description: Grouped errors, newest or most frequent first, filtered by level, source, release, state, time range and free text.
+    tags: [diagnostics]
+    parameters:
+      - { name: level, in: query, schema: { type: array, items: { type: string } }, style: form, explode: true }
+      - { name: source, in: query, schema: { type: array, items: { type: string } }, style: form, explode: true }
+      - { name: release, in: query, schema: { type: string } }
+      - { name: state, in: query, schema: { type: string, enum: [open, resolved, ignored, all] } }
+      - { name: from, in: query, schema: { type: integer, format: int64 } }
+      - { name: to, in: query, schema: { type: integer, format: int64 } }
+      - { name: q, in: query, schema: { type: string } }
+      - { name: sort, in: query, schema: { type: string, enum: [recent, frequent] } }
+      - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+    responses:
+      "200": { description: The issues and the total before `limit`. }
+
+"/api/diagnostics/issues/{fingerprint}":
+  get:
+    summary: One issue with its events
+    description: The issue, its most recent 20 events (stacks resolved against the release's maps when available), and the server log excerpts around its request id.
+    tags: [diagnostics]
+    parameters:
+      - { name: fingerprint, in: path, required: true, schema: { type: string } }
+    responses:
+      "200": { description: The issue, events and log excerpt. }
+      "404": { description: No such issue. }
+
+"/api/diagnostics/issues/{fingerprint}/state":
+  post:
+    summary: Resolve, ignore or reopen an issue
+    description: Idempotent. A new event under a resolved or ignored fingerprint reopens it.
+    tags: [diagnostics]
+    parameters:
+      - { name: fingerprint, in: path, required: true, schema: { type: string } }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [state]
+            properties:
+              state: { type: string, enum: [open, resolved, ignored] }
+    responses:
+      "200": { description: The updated issue. }
+      "404": { description: No such issue. }
+
+"/api/diagnostics/events":
+  get:
+    summary: The merged event and log timeline
+    description: Captured events plus the server log entries in the same window, which is what the bundle builder selects from.
+    tags: [diagnostics]
+    parameters:
+      - { name: level, in: query, schema: { type: array, items: { type: string } }, style: form, explode: true }
+      - { name: source, in: query, schema: { type: array, items: { type: string } }, style: form, explode: true }
+      - { name: fingerprint, in: query, schema: { type: string } }
+      - { name: from, in: query, schema: { type: integer, format: int64 } }
+      - { name: to, in: query, schema: { type: integer, format: int64 } }
+      - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000 } }
+    responses:
+      "200": { description: "`entries` (events) and `log` (server log lines)." }
+
+"/api/diagnostics/bundles/preview":
+  post:
+    summary: Preview a bundle
+    description: Resolves the selection and reports the files it would contain, their sizes, whether it exceeds the cap, and the truncations a fitting bundle would need. Nothing is generated.
+    tags: [diagnostics]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/DiagnosticsSelection" }
+    responses:
+      "200": { description: The planned files and totals. }
+      "400": { description: An empty or over-retention range. }
+
+"/api/diagnostics/bundles":
+  post:
+    summary: Download a bundle
+    description: |
+      Streams the zip: `manifest.json`, `README.txt`, both languages' feedback text, the selected
+      server logs, the frontend events, the environment file, the redacted config when asked for, and
+      `envelopes.ndjson.gz` (the captured events as standard envelopes, so the same archive can be
+      replayed to a tracker later). Source maps are never included.
+    tags: [diagnostics]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/DiagnosticsSelection" }
+    responses:
+      "200":
+        description: The archive.
+        content:
+          application/zip:
+            schema: { type: string, format: binary }
+      "400": { description: The selection is invalid, or exceeds the cap without `truncate`. }
+
+"/api/diagnostics/bundles/text":
+  post:
+    summary: The feedback text for a bundle
+    description: The issue title and body in both Chinese and English, naming the version, release, engine, range, counts, top fingerprint and request id.
+    tags: [diagnostics]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/DiagnosticsSelection" }
+    responses:
+      "200": { description: "`zh` and `en` title/body, plus the bundle name." }
+
+"/api/diagnostics/window":
+  get:
+    summary: The forwarding window
+    description: Whether it is open, its deadline, what remains, and how many events have been sent or failed.
+    tags: [diagnostics]
+    responses:
+      "200": { description: The window state. }
+  post:
+    summary: Open a forwarding window
+    description: Only when a valid tracker DSN is configured. Duration must be 300, 3600 or 86400 seconds.
+    tags: [diagnostics]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [duration_secs]
+            properties:
+              duration_secs: { type: integer, enum: [300, 3600, 86400] }
+    responses:
+      "200": { description: The new window. }
+      "409": { description: No tracker configured, or an unsupported duration. }
+  delete:
+    summary: Close the window now
+    description: Closes at once; no further event is forwarded.
+    tags: [diagnostics]
+    responses:
+      "200": { description: The closed window. }
+
+"/api/diagnostics/replay":
+  post:
+    summary: Replay a bundle's events to the tracker
+    description: |
+      For an instance that collected a bundle offline: posts each stored envelope in the archive to
+      the configured tracker, keeping the original event ids so the tracker dedupes. This is an
+      explicit administrator action and needs no open window.
+    tags: [diagnostics]
+    requestBody:
+      required: true
+      content:
+        application/zip:
+          schema: { type: string, format: binary }
+    responses:
+      "200": { description: "`sent`, `failed` and the per-envelope errors." }
+      "409": { description: No tracker configured. }
+
+components:
+  schemas:
+    DiagnosticsSelection:
+      type: object
+      required: [from, to]
+      description: What to include in a bundle. Frozen into the archive's `manifest.json`.
+      properties:
+        from: { type: integer, format: int64, description: "Start of the range, unix milliseconds." }
+        to: { type: integer, format: int64, description: "End of the range, unix milliseconds." }
+        levels:
+          type: array
+          items: { type: string, enum: [error, warning, info] }
+          description: Empty means every level.
+        sources:
+          type: array
+          items: { type: string, enum: [web, server, plugin] }
+        issues:
+          type: array
+          items: { type: string }
+        include_ids:
+          type: array
+          items: { type: string }
+        exclude_ids:
+          type: array
+          items: { type: string }
+        categories:
+          type: object
+          properties:
+            server_logs: { type: boolean, default: true }
+            frontend_events: { type: boolean, default: true }
+            environment: { type: boolean, default: true }
+            config: { type: boolean, default: false, description: "Redacted configuration." }
+        truncate:
+          type: boolean
+          default: false
+          description: "Fit the bundle to the cap instead of refusing it."
+        resolve_stacks:
+          type: boolean
+          default: true
+          description: "Resolve browser frames against the release's maps when available."

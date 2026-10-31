@@ -1,0 +1,66 @@
+/* Usage breakdown readout (FR-014). Layout lives here rather than inline because the mobile
+ * stacking below is a media query, which inline `style` cannot express (constitution
+ * Principle VII). The one inline value that remains — each bar's width — is genuinely computed
+ * from live data at render time, which that same rule explicitly allows. */
+
+.translation-usage__rows {
+  margin: 0.5rem 0;
+}
+
+.translation-usage__row {
+  display: grid;
+  grid-template-columns: 10rem 1fr;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.translation-usage__row dt {
+  font-weight: 600;
+}
+
+.translation-usage__row dd {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  min-width: 0;
+}
+
+.translation-usage__value {
+  min-width: 8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.translation-usage__bar {
+  height: 0.5rem;
+  min-width: 2px;
+  border-radius: 999px;
+  /* `currentColor` keeps the bar tied to whatever the active theme sets for surrounding text,
+   * rather than hardcoding a colour that would only look right on one of the five themes. */
+  background: currentColor;
+  opacity: 0.45;
+}
+
+.translation-usage__exhausted {
+  font-weight: 600;
+}
+
+.translation-usage__limit {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* Narrow screens: the two-column grid stops fitting a label plus a bar, so stack instead. */
+@media (max-width: 640px) {
+  .translation-usage__row {
+    grid-template-columns: 1fr;
+    gap: 0.15rem;
+  }
+
+  .translation-usage__value {
+    min-width: 0;
+  }
+}

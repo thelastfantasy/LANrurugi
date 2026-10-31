@@ -1,0 +1,9 @@
+# Optional: a Redis instance dedicated to LANrurugi, configured like the one inside the container
+# image. Point `dir` at a container deployment's `database` directory to keep using its data.
+# Start it with `redis-server redis.conf` and set LANRURUGI_REDIS_URL=redis://127.0.0.1:16379.
+port 16379
+bind 127.0.0.1
+dbfilename database.rdb
+dir @DATA@/database
+appendonly yes
+appendfilename "appendonly.aof"
