@@ -58,6 +58,7 @@ podman run -d --replace \
   -e LANRURUGI_BUBBLE_SEG_MODEL_DIR=/home/koyomi/lanrurugi/models/bubble-seg \
   -e LANRURUGI_GEOIP_ACCOUNT_ID="${LANRURUGI_GEOIP_ACCOUNT_ID:-}" \
   -e LANRURUGI_TRACKER_DSN="${LANRURUGI_TRACKER_DSN:-}" \
+  -e LANRURUGI_TRACKER_ALWAYS_FORWARD="${LANRURUGI_TRACKER_ALWAYS_FORWARD:-}" \
   -e LANRURUGI_GEOIP_LICENSE_KEY="${LANRURUGI_GEOIP_LICENSE_KEY:-}" \
   --health-cmd "curl -fsS http://127.0.0.1:3001/health" \
   --health-interval 15s \

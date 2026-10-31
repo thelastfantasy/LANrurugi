@@ -93,6 +93,9 @@ services:
       # `-e` flag: set it here (or in `.env.local`, which mise loads for every task) and this
       # instance's diagnostics page can forward to a tracker; unset = nothing is ever forwarded.
       - LANRURUGI_TRACKER_DSN=${LANRURUGI_TRACKER_DSN:-}
+      # Dev boxes want an error waiting for them without re-opening a window every time; leave it
+      # unset in production so forwarding still requires the deliberate window.
+      - LANRURUGI_TRACKER_ALWAYS_FORWARD=${LANRURUGI_TRACKER_ALWAYS_FORWARD:-}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3001/health"]
       interval: 15s

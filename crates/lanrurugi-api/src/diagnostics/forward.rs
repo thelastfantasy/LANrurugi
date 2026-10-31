@@ -106,7 +106,7 @@ pub async fn window(state: &AppState) -> Window {
     let (sent, failed, last_error) = counters(state).await;
     let now = now_ms();
     Window {
-        open: deadline > now,
+        open: window_is_open(deadline, now, always_forward()),
         deadline,
         remaining_secs: ((deadline - now).max(0)) / 1000,
         sent,
@@ -138,6 +138,34 @@ pub async fn open_window(state: &AppState, duration_secs: u64) -> Result<Window,
 pub async fn close_window(state: &AppState) -> Result<Window, String> {
     write_deadline(state, 0).await?;
     Ok(window(state).await)
+}
+
+/// Whether a forwarding window counts as open.
+///
+/// Split out from the env read so the decision is testable without touching process state.
+fn window_is_open(deadline: i64, now: i64, always: bool) -> bool {
+    always || deadline > now
+}
+
+/// `true` when `LANRURUGI_TRACKER_ALWAYS_FORWARD` asks for forwarding without a window.
+///
+/// The window is the right default: a self-hosted instance must never stream diagnostics anywhere
+/// unless someone deliberately asked for it. A development box is the opposite case — the point of
+/// pointing it at a tracker is that an error is waiting when you go looking, rather than requiring
+/// a window to be re-opened before every attempt. Unset/false leaves production behaviour exactly
+/// as it was.
+fn always_forward() -> bool {
+    static ALWAYS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ALWAYS.get_or_init(|| {
+        std::env::var("LANRURUGI_TRACKER_ALWAYS_FORWARD")
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(false)
+    })
 }
 
 async fn read_deadline(state: &AppState) -> i64 {
@@ -187,7 +215,7 @@ async fn bump(state: &AppState, field: &str, error: Option<&str>) {
 /// window is open, and only to a configured tracker.
 pub async fn forward_envelope(state: &AppState, body: &[u8]) {
     let deadline = read_deadline(state).await;
-    if deadline <= now_ms() {
+    if !window_is_open(deadline, now_ms(), always_forward()) {
         return;
     }
     let settings = crate::diagnostics_settings::load(state).await;
@@ -677,7 +705,7 @@ fn clip(text: &str, limit: usize) -> String {
 /// Forwards one stored event if a window is open. Called from the writer, never from a request.
 pub async fn maybe_forward(state: &AppState, event: &DiagnosticEvent) {
     let deadline = read_deadline(state).await;
-    if deadline <= now_ms() {
+    if !window_is_open(deadline, now_ms(), always_forward()) {
         return;
     }
     let settings = crate::diagnostics_settings::load(state).await;
@@ -732,6 +760,19 @@ pub async fn maybe_forward(state: &AppState, event: &DiagnosticEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_window_is_open_only_before_its_deadline_unless_always_forward_is_set() {
+        assert!(!window_is_open(0, 1_000, false), "no window opened yet");
+        assert!(
+            !window_is_open(500, 1_000, false),
+            "deadline already passed"
+        );
+        assert!(window_is_open(2_000, 1_000, false), "inside the window");
+        // The dev switch ignores the deadline entirely — that is its whole point.
+        assert!(window_is_open(0, 1_000, true));
+        assert!(window_is_open(500, 1_000, true));
+    }
 
     #[test]
     fn a_sentry_dsn_becomes_an_envelope_url() {
