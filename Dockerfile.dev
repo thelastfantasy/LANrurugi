@@ -76,7 +76,14 @@ RUN --mount=type=cache,id=lrr-cargo-registry,target=/usr/local/cargo/registry \
 FROM node:${NODE_VERSION}-slim AS frontend-deps
 ARG PNPM_VERSION
 WORKDIR /build
-RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+# `node:*-slim` no longer ships everything node itself needs on this host: the `corepack` shim is
+# gone upstream, and node's dynamic deps (libatomic) are not in the slim base — both verified by a
+# real rebuild failing with "corepack: not found" and then "libatomic.so.1: cannot open shared
+# object file". Install what's missing rather than assuming the tag carries it.
+RUN apt-get update && apt-get install -y --no-install-recommends libatomic1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && if ! command -v corepack >/dev/null 2>&1; then npm install -g corepack@latest; fi \
+    && corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 COPY pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/frontend/package.json apps/frontend/package.json
 RUN pnpm install --frozen-lockfile --filter lanrurugi-frontend
@@ -264,7 +271,14 @@ RUN ln -sf ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack
     && ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 ARG PNPM_VERSION
-RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+# `node:*-slim` no longer ships everything node itself needs on this host: the `corepack` shim is
+# gone upstream, and node's dynamic deps (libatomic) are not in the slim base — both verified by a
+# real rebuild failing with "corepack: not found" and then "libatomic.so.1: cannot open shared
+# object file". Install what's missing rather than assuming the tag carries it.
+RUN apt-get update && apt-get install -y --no-install-recommends libatomic1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && if ! command -v corepack >/dev/null 2>&1; then npm install -g corepack@latest; fi \
+    && corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 
 # Baked-in node_modules for fast, deterministic startup (see this file's own doc comment on why
 # this isn't reinstalled at container-run time). `pnpm-workspace.yaml` itself must ship alongside
