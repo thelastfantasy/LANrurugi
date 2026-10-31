@@ -26,6 +26,7 @@ export function TranslationOverlay({
   settings,
   enabled,
   loadPageImage,
+  refreshToken,
 }: {
   archiveId: string
   page: number
@@ -33,9 +34,18 @@ export function TranslationOverlay({
   /** Whether translation is on for this archive (per-archive/per-Tankoubon scope). */
   enabled: boolean
   loadPageImage?: () => Promise<ImageBitmap | HTMLImageElement>
+  /** See `usePageTranslation`'s own docs: bumped to re-run this page without a reload. */
+  refreshToken?: number
 }) {
   const { t } = useTranslation()
-  const state = usePageTranslation({ archiveId, page, settings, enabled, loadPageImage })
+  const state = usePageTranslation({
+    archiveId,
+    page,
+    settings,
+    enabled,
+    loadPageImage,
+    refreshToken,
+  })
   const backend = settings ? resolveActiveBackend(settings) : { category: "none" as const }
 
   if (state.status === "idle") return null

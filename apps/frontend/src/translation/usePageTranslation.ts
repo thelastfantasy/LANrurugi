@@ -31,6 +31,12 @@ export interface UsePageTranslationArgs {
   enabled: boolean
   /** Loads the original page image, used only on the client-compositing path. */
   loadPageImage?: () => Promise<ImageBitmap | HTMLImageElement>
+  /**
+   * Bumped by the reader's "重新翻译" action. The effect below depends on it, so bumping it tears
+   * down the current blob/poll and starts a fresh attempt — which is what makes re-translating a
+   * hot swap instead of a full page reload.
+   */
+  refreshToken?: number
 }
 
 /**
@@ -46,6 +52,7 @@ export function usePageTranslation({
   settings,
   enabled,
   loadPageImage,
+  refreshToken = 0,
 }: UsePageTranslationArgs): TranslationPageState {
   // Only *asynchronously produced* outcomes live in state. The idle/unconfigured/pending states
   // are pure functions of the props, so they're derived during render instead — setting them from
@@ -201,7 +208,7 @@ export function usePageTranslation({
       pollRef.current = null
       releaseObjectUrl()
     }
-  }, [archiveId, page, settings, enabled, loadPageImage])
+  }, [archiveId, page, settings, enabled, loadPageImage, refreshToken])
 
   if (!enabled || !settings) return { status: "idle" }
   if (backend.category === "none") {

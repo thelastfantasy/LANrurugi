@@ -69,9 +69,10 @@ import { useSession } from "@/session/SessionProvider";
 import { FONT_SIZE_XS, useApplyTheme } from "@/theme";
 import { toast } from "@/toast";
 import { TranslationOverlay } from "@/translation/components/TranslationOverlay";
-import { TRANSLATION_TARGET_LANGUAGES } from "@/translation/settings";
 // Phase 2 on-page translation (`specs/004-ocr-manga-translation`). Rendered as an overlay layer so
 // the reader's own image pipeline below is untouched — with translation off, this renders nothing.
+import { invalidateCachedPage } from "@/translation/localCache";
+import { TRANSLATION_TARGET_LANGUAGES } from "@/translation/settings";
 import { useTranslationSettings } from "@/translation/useTranslationSettings";
 
 import { ArchiveOverviewOverlay } from "./ArchiveOverviewOverlay";
@@ -243,6 +244,10 @@ export function Reader() {
   // renders nothing in all three cases (`specs/004-ocr-manga-translation` FR-007).
   const [translationSettings, translationScope, toggleTranslationEnabled, setTranslationTargetLanguage] =
     useTranslationSettings(translationArchiveId);
+
+  // Bumped by `retranslatePage`: the overlay's own effect depends on it, so this re-runs that one
+  // page in place instead of reloading the whole reader.
+  const [translationRefreshToken, setTranslationRefreshToken] = useState(0);
   // These two `useCallback`s MUST live before any of this component's early `return`s below
   // (Rules of Hooks — every hook must run unconditionally on every render). The URLs they need
   // are only computable once `pages.data` exists, which is exactly what the early-return guards
@@ -1131,12 +1136,16 @@ export function Reader() {
 
   function retranslatePage() {
     if (!translationArchiveId) return;
-    // Drop this page's detection/text/render caches server-side, then reload so the reader
-    // re-requests the page and the pipeline re-runs OCR -> translate -> composite.
+    // Drop this page's detection/text/render caches server-side and the locally composited copy,
+    // then let the overlay re-run in place. A full `window.location.reload()` here threw away the
+    // scroll position, prefetched images and reader settings for a single-page action.
     void fetch(
       `/api/archives/${encodeURIComponent(translationArchiveId)}/page/${currentPage}/translation`,
       { method: "DELETE" },
-    ).finally(() => window.location.reload());
+    )
+      .then(() => invalidateCachedPage(translationArchiveId, currentPage))
+      .catch(() => {})
+      .finally(() => setTranslationRefreshToken((token) => token + 1));
   }
 
   async function acquireWakeLock() {
@@ -2345,6 +2354,7 @@ export function Reader() {
                       settings={translationSettings}
                       enabled={translationScope?.enabled ?? false}
                       loadPageImage={loadLeftPageImage}
+                      refreshToken={translationRefreshToken}
                     />
                   )}
                 </span>
@@ -2401,6 +2411,7 @@ export function Reader() {
                         settings={translationSettings}
                         enabled={translationScope?.enabled ?? false}
                         loadPageImage={loadRightPageImage}
+                        refreshToken={translationRefreshToken}
                       />
                     )}
                   </span>
