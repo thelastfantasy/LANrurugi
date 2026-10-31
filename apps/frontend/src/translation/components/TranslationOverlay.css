@@ -9,20 +9,12 @@
 
 .translation-overlay__image {
   position: absolute;
-  /* The reader's own `<img>` sits 1px inside this same wrapper (measured live 2026-10-31:
-   * 607.48x844.98 inside a 609.48x846.98 span), so covering the wrapper made every translated page
-   * render a hair larger than the original it replaces — a visible "适应高度" mismatch. Reproduce
-   * that inset and the boxes match exactly. */
-  inset: 1px;
-  width: calc(100% - 2px);
-  height: calc(100% - 2px);
+  /* Geometry (left/top/width/height) is copied from the page's own `<img>` at runtime — see
+   * `useOriginalPageBox`'s own docs. CSS cannot express it: the reader image's box differs from its
+   * wrapper by a couple of pixels, and by a different amount per display mode and viewport.
+   * `contain` is only a safety net for the frame between mount and the first measurement. */
+  inset: 0;
   object-fit: contain;
-  /* Clicks fall through to the reader's own page-turn handler underneath. */
-  pointer-events: none;
-  /* Must clear legacy `.reader-image`'s `z-index: 19` (lrr.css) — this overlay sits in the same
-   * stacking context as the page it covers, so anything lower gets hidden behind the original. */
-  z-index: 20;
-}
 
 .translation-failed {
   position: absolute;
