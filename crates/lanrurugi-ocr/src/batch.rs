@@ -173,6 +173,70 @@ fn projection_runs(projection: &[u32], min_run_len: usize) -> Vec<(usize, usize)
         .collect()
 }
 
+/// Angles (degrees) tried when asking whether a tall box is really horizontal lettering drawn at a
+/// slight angle. Manga lettering rarely exceeds ~20° off horizontal, and a real vertical column
+/// never collapses into one row at any of these.
+const SKEW_TRIAL_DEGREES: [f32; 8] = [-20.0, -15.0, -10.0, -5.0, 5.0, 10.0, 15.0, 20.0];
+
+/// Whether a box that is taller than wide is one horizontal line drawn at an angle.
+///
+/// Rotates the crop by each of [`SKEW_TRIAL_DEGREES`] and accepts the first angle whose ink
+/// collapses into a single y-run (the definition of "one line" the projection rules already use).
+/// Sampled at a stride, because this only ever has to answer a yes/no question.
+fn is_skewed_horizontal(crop: &RgbImage, prior: &[bool]) -> bool {
+    let (w, h) = crop.dimensions();
+    if w < 8 || h < 8 {
+        return false;
+    }
+    let use_prior = prior.len() == (w * h) as usize && prior.iter().any(|&p| p);
+    let stride = (w.max(h) / 256).max(1);
+    let centre_x = w as f32 / 2.0;
+    let centre_y = h as f32 / 2.0;
+
+    for degrees in SKEW_TRIAL_DEGREES {
+        let radians = degrees.to_radians();
+        let (sin, cos) = (radians.sin(), radians.cos());
+        let mut y_projection = vec![0u32; h as usize];
+
+        let mut y = 0;
+        while y < h {
+            let mut x = 0;
+            while x < w {
+                // Rotate the sample point back into the source to test "is this row straight?".
+                let dx = x as f32 - centre_x;
+                let dy = y as f32 - centre_y;
+                let sx = (centre_x + dx * cos + dy * sin).round();
+                let sy = (centre_y - dx * sin + dy * cos).round();
+                if sx >= 0.0 && sy >= 0.0 && sx < w as f32 && sy < h as f32 {
+                    let (sx, sy) = (sx as u32, sy as u32);
+                    let inside_prior = !use_prior || prior[(sy * w + sx) as usize];
+                    let pixel = crop.get_pixel(sx, sy);
+                    let luma =
+                        (u32::from(pixel[0]) + u32::from(pixel[1]) + u32::from(pixel[2])) / 3;
+                    if inside_prior && luma < 180 {
+                        y_projection[y as usize] += 1;
+                    }
+                }
+                x += stride;
+            }
+            y += stride;
+        }
+
+        let min_run = (y_projection.len() / 64).max(2);
+        let runs = crate::batch::projection_runs(&y_projection, min_run);
+        // Exactly one row band, and it must be a *band* rather than everything: a two-column block
+        // of stacked glyphs still spans nearly the full height at any small rotation, while one
+        // angled line covers only part of it.
+        if let [only] = runs.as_slice() {
+            let thickness = only.1.saturating_sub(only.0) + 1;
+            if (thickness as f32) <= (h as f32) * 0.5 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Coarse reading-axis inference from the crop's own ink projections.
 ///
 /// A single vertical column is one x-run with several y-runs (characters stacked top-to-bottom);
@@ -215,6 +279,13 @@ fn reading_axis(crop: &RgbImage, prior: &[bool]) -> Axis {
     // than tall and must NOT be forced horizontal by aspect alone.
     let (width_f, height_f) = (w as f32, h as f32);
     if height_f >= width_f * 1.25 {
+        // A line drawn at a few degrees gets an axis-aligned box that is taller than it is wide, so
+        // the shape rule below would call it a vertical column (reported live 2026-10-31: page 54's
+        // "理事長室" sign). Rotating the ink back collapses it into a single row when it really is
+        // one angled line.
+        if is_skewed_horizontal(crop, if use_prior { prior } else { &[] }) {
+            return Axis::Horizontal;
+        }
         return Axis::Vertical;
     }
     if width_f >= height_f * 1.25 {

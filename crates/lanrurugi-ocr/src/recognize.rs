@@ -779,9 +779,20 @@ fn load_vocab(path: &Path) -> Result<(Vec<String>, SpecialTokens), RecognitionEr
     Ok((vocab, special))
 }
 
+/// White margin added around a crop before it is resized to the model's geometry, as a fraction of
+/// the crop's longer edge.
+///
+/// `manga-ocr` is trained on crops that carry a little background around the glyphs; a detector box
+/// that hugs the strokes clips their edges, and the recogniser then answers with an empty or
+/// garbled string — which `run_batch` drops, so a perfectly visible bubble silently loses its
+/// translation (measured 2026-10-31: page 53 kept only 2 of 7 detected boxes). Padding restores
+/// the margin the model expects without moving any region.
+const CROP_PADDING_FRACTION: f32 = 0.08;
+
 /// Resizes to the model's fixed geometry and normalises into CHW float input.
 fn preprocess(crop: &RgbImage) -> Vec<f32> {
-    let resized = image::imageops::resize(crop, IMAGE_SIZE, IMAGE_SIZE, FilterType::CatmullRom);
+    let padded = padded_crop(crop);
+    let resized = image::imageops::resize(&padded, IMAGE_SIZE, IMAGE_SIZE, FilterType::CatmullRom);
 
     let pixel_count = (IMAGE_SIZE * IMAGE_SIZE) as usize;
     let mut chw = vec![0f32; pixel_count * 3];
@@ -793,6 +804,16 @@ fn preprocess(crop: &RgbImage) -> Vec<f32> {
         }
     }
     chw
+}
+
+/// [`CROP_PADDING_FRACTION`] worth of near-white margin on all four sides, so the recogniser sees
+/// the space around the glyphs its training distribution had.
+fn padded_crop(crop: &RgbImage) -> RgbImage {
+    let (w, h) = crop.dimensions();
+    let pad = ((w.max(h) as f32 * CROP_PADDING_FRACTION).round() as u32).max(2);
+    let mut out = RgbImage::from_pixel(w + pad * 2, h + pad * 2, image::Rgb([255, 255, 255]));
+    image::imageops::replace(&mut out, crop, i64::from(pad), i64::from(pad));
+    out
 }
 
 #[cfg(test)]
@@ -848,9 +869,15 @@ mod tests {
 
     #[test]
     fn preprocess_maps_black_to_negative_one() {
-        let img = RgbImage::from_pixel(8, 8, ImageRgb([0, 0, 0]));
+        // The crop is padded with white before resizing (`CROP_PADDING_FRACTION`), so only the
+        // interior stays black; the border is the margin the recogniser expects.
+        let img = RgbImage::from_pixel(64, 64, ImageRgb([0, 0, 0]));
         let out = preprocess(&img);
-        assert!(out.iter().all(|v| (v + 1.0).abs() < 1e-5));
+        let size = IMAGE_SIZE as usize;
+        let centre = (size / 2) * size + (size / 2);
+        assert!((out[centre] + 1.0).abs() < 1e-5, "centre = {}", out[centre]);
+        // And the padded border is white, i.e. the +1 end of the normalisation.
+        assert!((out[0] - 1.0).abs() < 1e-5, "corner = {}", out[0]);
     }
 
     #[test]

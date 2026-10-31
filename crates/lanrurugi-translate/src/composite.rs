@@ -87,12 +87,10 @@ const MIN_FONT_PX: f32 = 12.0;
 /// the text fits, so a large bubble is never over-filled by this alone.
 const MAX_FONT_PX: f32 = 400.0;
 
-/// How far a region's own text layout box may extend past its OCR-detected bounding box on each
-/// side, as a fraction of that box's own width/height — see [`layout_box`]'s own doc comment for
-/// why this exists (a tight OCR crop under-covers a bubble's own real usable interior even more
-/// than [`MIN_FONT_PX`]'s own floor alone can compensate for, especially when no matched bubble is
-/// available to lay out against instead). Deliberately modest: a few points of the region's own
-/// size, not free rein to spill into surrounding artwork or a neighbouring bubble.
+/// Growth `layout_box` (test-only) applies to a region with no matched bubble. Kept in step with
+/// `effective_draw_bbox`, which grows along the text's own axis only — see its own comment on why
+/// the cross axis gets no extra room.
+#[cfg(test)]
 const LAYOUT_OVERFLOW_FRACTION: f32 = 0.15;
 
 /// Extra layout room (per side, as a fraction of the region's own size) granted along the axis
@@ -1903,8 +1901,11 @@ fn effective_draw_bbox(
     // neighbour-overlap incident this guards against). Conservative on purpose: if the grown box so
     // much as touches a neighbour, fall back to the region's own box exactly as before, rather than
     // trying to trim one edge and risking a new off-by-one overlap.
-    let cross_pad = ((if vertical { region.w } else { region.h }) as f32 * LAYOUT_OVERFLOW_FRACTION)
-        .round() as u32;
+    // Growth is deliberately *along* the text's own axis only, never across it: the cross axis is
+    // where a bubble's walls are, and padding there lets a wide translation spill past them
+    // (reported live 2026-10-31: "左边的几个字稍微溢出了气泡"). The OCR box is already the widest
+    // thing the detector was willing to claim, so the cross axis gets no extra room at all.
+    let cross_pad = 0u32;
     let grow_pad = ((if vertical { region.h } else { region.w }) as f32
         * NO_BUBBLE_LAYOUT_GROWTH_FRACTION)
         .round() as u32;
