@@ -15,6 +15,12 @@
    * `contain` is only a safety net for the frame between mount and the first measurement. */
   inset: 0;
   object-fit: contain;
+  /* Clicks fall through to the reader's own page-turn handler underneath. */
+  pointer-events: none;
+  /* Must clear legacy `.reader-image`'s `z-index: 19` (lrr.css) — this overlay sits in the same
+   * stacking context as the page it covers, so anything lower gets hidden behind the original. */
+  z-index: 20;
+}
 
 .translation-failed {
   position: absolute;
