@@ -835,6 +835,7 @@ pub async fn run_batch(
     // `選んでもらいます`, two columns whose glyphs touch vertically so the y-projection merges into
     // one run and the box was called Horizontal) previously produced no second candidate at all,
     // so the LLM never got to choose. The rotated crops go through one batched encoder pass below.
+    let axes: Vec<Axis> = work.iter().map(|item| item.axis).collect();
     let rotate_work: Vec<(usize, RgbImage)> = work
         .iter()
         .enumerate()
@@ -929,9 +930,23 @@ pub async fn run_batch(
                                 bbox = ?existing.bbox,
                                 original = %existing.text,
                                 rotated = %text,
+                                vertical_primary = axes[index] == Axis::Vertical,
                                 "rotated 90° reading candidate differs"
                             );
-                            existing.alternate_source_text = Some(text.to_string());
+                            if axes[index] == Axis::Vertical {
+                                // A column the projection pass called vertical is lettering stacked
+                                // top-to-bottom, but the recogniser is trained on horizontal lines:
+                                // feeding it the upright crop asks it to read glyphs rotated 90°,
+                                // which is what produced truncated readings ("彼、いい仕事を....")
+                                // and empty ones (2026-10-31). The rotated reading becomes the
+                                // primary text for exactly those boxes; the upright reading is kept
+                                // as the alternate so the translator still sees both.
+                                let upright =
+                                    std::mem::replace(&mut existing.text, text.to_string());
+                                existing.alternate_source_text = Some(upright);
+                            } else {
+                                existing.alternate_source_text = Some(text.to_string());
+                            }
                         }
                     }
                 }
