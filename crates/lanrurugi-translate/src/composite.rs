@@ -690,7 +690,11 @@ pub fn finish_composite_page(
         // comment) beats `style_estimate`'s statistical cluster split when both are available —
         // falls back to that estimate, then to a near-black default, exactly as before when no
         // stroke mask could be built at all (no confident fg/bg split, or an empty stroke result).
-        let fg = sampled_fg.or(region.fg_color).unwrap_or(DEFAULT_FG);
+        let fg = ensure_legible(
+            page,
+            &region.bounding_box,
+            sampled_fg.or(region.fg_color).unwrap_or(DEFAULT_FG),
+        );
         let bold = region.is_bold.unwrap_or(false);
         let Some(font) = ResolvedFont::load(fonts.resolve(region.font.as_deref())) else {
             continue;
@@ -2603,6 +2607,50 @@ fn outline_stroke_offsets(radius: i32) -> Vec<(i32, i32)> {
         }
     }
     offsets
+}
+
+/// Smallest mean-luma difference accepted between the drawn text and the backdrop under it.
+const MIN_TEXT_CONTRAST: f32 = 0.3;
+
+/// Returns `fg`, or plain black/white when `fg` would barely separate from the pixels actually
+/// under the region now (measured after the erase/flat-fill pass, so it is what a reader sees).
+///
+/// The colour otherwise comes from a style estimate or an ink sample, either of which can land on
+/// a light tone — and when the backdrop's own uniformity check also fails, `draw_glyph` adds a
+/// black outline, producing light-grey lettering with a black ring on a white bubble (reported
+/// live 2026-10-31, page 54). Contrast is the property that actually matters, so it is checked
+/// against the real backdrop rather than trusted to the estimate.
+fn ensure_legible(page: &RgbImage, bbox: &BoundingBox, fg: Rgb) -> Rgb {
+    let (page_w, page_h) = page.dimensions();
+    let mut total = 0u64;
+    let mut sum = 0u64;
+    for y in bbox.y..(bbox.y + bbox.h).min(page_h) {
+        for x in bbox.x..(bbox.x + bbox.w).min(page_w) {
+            let pixel = page.get_pixel(x, y).0;
+            sum +=
+                u64::from(pixel[0]) * 299 + u64::from(pixel[1]) * 587 + u64::from(pixel[2]) * 114;
+            total += 1;
+        }
+    }
+    if total == 0 {
+        return fg;
+    }
+    let backdrop = (sum as f32 / total as f32) / 1000.0 / 255.0;
+    let ink = (f32::from(fg.r) * 299.0 + f32::from(fg.g) * 587.0 + f32::from(fg.b) * 114.0)
+        / 1000.0
+        / 255.0;
+    if (backdrop - ink).abs() >= MIN_TEXT_CONTRAST {
+        return fg;
+    }
+    if backdrop > 0.5 {
+        DEFAULT_FG
+    } else {
+        Rgb {
+            r: 245,
+            g: 245,
+            b: 245,
+        }
+    }
 }
 
 /// Rasterizes and alpha-blends one glyph at `(pen_x, pen_y)` — the shared last step for both the
