@@ -444,6 +444,11 @@ async fn detect_with_degradation(
             if partly_covered && !bubble_has_uncovered_ink(&image, bubble, &regions) {
                 continue;
             }
+            // Same ink gate as the white-blob path below: an "empty" bubble with no dark pixels in
+            // it holds no text, and OCR on a blank crop still returns *something* now and then.
+            if dark_ink_fraction(&image, &bubble.bbox) < MIN_BLOB_INK_FRACTION {
+                continue;
+            }
             candidates.push(bubble.bbox);
         }
     }

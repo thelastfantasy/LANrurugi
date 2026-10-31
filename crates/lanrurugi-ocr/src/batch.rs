@@ -1013,6 +1013,17 @@ pub async fn run_batch(
                 dropped_not_japanese = *not_japanese,
                 "page OCR lost detected boxes before translation"
             );
+            // On a page that lost boxes, name the ones that survived: "this bubble came out
+            // garbled" and "this artwork got a translation drawn on it" are only distinguishable
+            // by knowing exactly which boxes were kept (2026-10-31, page 53).
+            for line in &lines_per_page[index] {
+                tracing::info!(
+                    page_index = index,
+                    bbox = ?line.bounding_box,
+                    text = %line.text,
+                    "region kept for translation"
+                );
+            }
         }
     }
 
