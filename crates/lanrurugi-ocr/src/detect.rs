@@ -277,43 +277,22 @@ impl TextDetector {
         // probability map can resolve — the real page-54 bubble came back as three fragments
         // instead of one text block (2026-10-31). Tiling keeps every glyph at the size the model
         // was trained on; a normal ~1600px page is still one single inference.
-        let mut tile_images: Vec<RgbImage> = Vec::new();
-        let mut plans: Vec<Vec<(usize, u32, u32)>> = Vec::with_capacity(pages.len());
-        for page in &pages {
-            let (width, height) = page.dimensions();
-            if width.max(height) <= TILING_THRESHOLD {
-                tile_images.push(page.clone());
-                plans.push(vec![(tile_images.len() - 1, 0, 0)]);
-                continue;
-            }
-            let mut plan = Vec::new();
-            for (origin_x, origin_y) in tile_origins(width, height) {
-                tile_images.push(crop_tile(page, origin_x, origin_y));
-                plan.push((tile_images.len() - 1, origin_x, origin_y));
-            }
-            plans.push(plan);
-        }
-
-        let tile_sizes: Vec<(u32, u32)> = tile_images.iter().map(|t| t.dimensions()).collect();
-        let (batch_tensor, img_shapes) = self
-            .model
-            .preprocess(tile_images)
-            .map_err(|e| DetectionError::Inference(e.to_string()))?;
-        let predictions = self
-            .model
-            .infer(&batch_tensor)
-            .map_err(|e| DetectionError::Inference(e.to_string()))?;
-        let output = self.model.postprocess(
-            &predictions,
-            img_shapes.clone(),
-            text_detection_postprocess_config().score_threshold,
-            self.box_threshold,
-            text_detection_postprocess_config().unclip_ratio,
-        );
-
         let mut result = Vec::with_capacity(pages.len());
-        for (page_index, plan) in plans.iter().enumerate() {
-            let (page_w, page_h) = pages[page_index].dimensions();
+
+        // One tile at a time, deliberately: batching a page's whole tile grid made the detector's
+        // own f32 input alone ~370MB for this 4535x6307 scan (12 tiles), which took the server from
+        // ~3.7GB to 6.3GB RSS and turned every translation request into a 500 under memory
+        // pressure (2026-10-31). Sequential tiles keep the peak at one tile — a few tens of MB —
+        // and cost only per-call launch overhead, which is noise next to recognition.
+        for page in &pages {
+            let (page_w, page_h) = page.dimensions();
+            let single_pass = page_w.max(page_h) <= TILING_THRESHOLD;
+            let origins: Vec<(u32, u32)> = if single_pass {
+                vec![(0, 0)]
+            } else {
+                tile_origins(page_w, page_h)
+            };
+
             let mut boxes: Vec<BoundingBox> = Vec::new();
             let mut mask = PageTextProbabilityMap {
                 width: page_w,
@@ -321,27 +300,45 @@ impl TextDetector {
                 values: vec![0.0; (page_w * page_h) as usize],
             };
 
-            for &(tile_index, origin_x, origin_y) in plan {
-                let tile_boxes: Vec<BoundingBox> = output
-                    .boxes
-                    .get(tile_index)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(to_axis_aligned)
-                    .filter(|bbox| is_plausible_text_box(bbox, page_w, page_h))
-                    .map(|bbox| shift_box(bbox, origin_x, origin_y))
-                    .filter(|bbox| bbox.x < page_w && bbox.y < page_h && bbox.w > 0 && bbox.h > 0)
-                    .collect();
-                boxes.extend(tile_boxes);
-
-                let (tile_w, tile_h) = tile_sizes[tile_index];
-                let tile_mask = page_text_probability_map(
+            for (origin_x, origin_y) in origins {
+                let tile = if single_pass {
+                    page.clone()
+                } else {
+                    crop_tile(page, origin_x, origin_y)
+                };
+                let (tile_w, tile_h) = tile.dimensions();
+                let (batch_tensor, img_shapes) = self
+                    .model
+                    .preprocess(vec![tile])
+                    .map_err(|e| DetectionError::Inference(e.to_string()))?;
+                let predictions = self
+                    .model
+                    .infer(&batch_tensor)
+                    .map_err(|e| DetectionError::Inference(e.to_string()))?;
+                let output = self.model.postprocess(
                     &predictions,
-                    tile_index,
-                    &img_shapes[tile_index],
-                    tile_w,
-                    tile_h,
+                    img_shapes.clone(),
+                    text_detection_postprocess_config().score_threshold,
+                    self.box_threshold,
+                    text_detection_postprocess_config().unclip_ratio,
                 );
+
+                boxes.extend(
+                    output
+                        .boxes
+                        .first()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(to_axis_aligned)
+                        .filter(|bbox| is_plausible_text_box(bbox, page_w, page_h))
+                        .map(|bbox| shift_box(bbox, origin_x, origin_y))
+                        .filter(|bbox| {
+                            bbox.x < page_w && bbox.y < page_h && bbox.w > 0 && bbox.h > 0
+                        }),
+                );
+
+                let tile_mask =
+                    page_text_probability_map(&predictions, 0, &img_shapes[0], tile_w, tile_h);
                 blit_mask(&mut mask, &tile_mask, origin_x, origin_y);
             }
 
