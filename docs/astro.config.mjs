@@ -109,7 +109,7 @@ export default defineConfig({
             { label: '支持的格式', translations: { en: 'Supported formats' }, slug: 'guide/formats' },
             { label: '分享与导入', translations: { en: 'Sharing and importing' }, slug: 'guide/sharing' },
             { label: '用文档站测试 API', translations: { en: 'Testing the API from these docs' }, slug: 'guide/api-testing' },
-            { label: '给 AI 工具用的 llms.txt', translations: { en: 'llms.txt for AI tools' }, slug: 'guide/llms-txt' },
+            { label: 'llms.txt', slug: 'guide/llms-txt' },
           ],
         },
         {

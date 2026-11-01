@@ -1,5 +1,5 @@
 ---
-title: llms.txt for AI tools
+title: llms.txt
 description: What each llms.txt file on the homepage and the documentation site contains, and which one to give an AI assistant.
 ---
 

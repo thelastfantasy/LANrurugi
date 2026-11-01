@@ -1,5 +1,5 @@
 ---
-title: 给 AI 工具用的 llms.txt
+title: llms.txt
 description: 项目主页和文档站提供的 llms.txt 系列文件各自包含什么，以及让 AI 助手了解 LANrurugi 时该给它哪一份。
 ---
 
