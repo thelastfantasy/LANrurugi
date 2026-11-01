@@ -124,6 +124,13 @@ fn is_plausible_text_box(bbox: &BoundingBox, page_w: u32, page_h: u32) -> bool {
 /// value actually kept.
 fn text_detection_preprocess_config() -> DBPreprocessConfig {
     DBPreprocessConfig {
+        // Raised from `1600` — a 4535x6307 scan was being shrunk 3.9x before inference, which
+        // pushed small lettering (a 60px column becomes 15px) below what the probability map can
+        // resolve. Tiling the page at native scale fixed detection but split text columns that
+        // straddled a tile seam, so a bubble came back as two half-sentences and its erasure left
+        // the other half on the page (2026-11-01). One inference at 2400 instead halves the
+        // downscale without introducing seams.
+        //
         // Raised from `960` — see this function's own doc comment above for the real detection
         // miss this fixed and why `box_threshold` alone couldn't. `zyddnys/manga-image-translator`
         // (`DetectorConfig.detection_size`, confirmed by reading `manga_translator/config.py`
@@ -132,7 +139,7 @@ fn text_detection_preprocess_config() -> DBPreprocessConfig {
         // page heights are typically ~1600px, so this value already means "don't downscale a
         // normal page at all" without matching that reference project's full number, which would
         // roughly double this call's own inference cost for pages that don't need it).
-        limit_side_len: Some(1600),
+        limit_side_len: Some(2400),
         limit_type: Some(LimitType::Max),
         max_side_limit: Some(4000),
         resize_long: None,
@@ -271,235 +278,48 @@ impl TextDetector {
             return Ok(Vec::new());
         }
 
-        // A page taller/wider than `TILING_THRESHOLD` is cut into native-scale tiles first. The
-        // model's own `limit_side_len` is 1600, so a 4535x6307 scan was being shrunk 3.9x before
-        // inference, which pushed small lettering (a 60px column becomes 15px) below what the
-        // probability map can resolve — the real page-54 bubble came back as three fragments
-        // instead of one text block (2026-10-31). Tiling keeps every glyph at the size the model
-        // was trained on; a normal ~1600px page is still one single inference.
-        let mut result = Vec::with_capacity(pages.len());
+        let page_sizes: Vec<(u32, u32)> = pages.iter().map(|p| p.dimensions()).collect();
+        let (batch_tensor, img_shapes) = self
+            .model
+            .preprocess(pages)
+            .map_err(|e| DetectionError::Inference(e.to_string()))?;
+        let predictions = self
+            .model
+            .infer(&batch_tensor)
+            .map_err(|e| DetectionError::Inference(e.to_string()))?;
+        let output = self.model.postprocess(
+            &predictions,
+            img_shapes.clone(),
+            text_detection_postprocess_config().score_threshold,
+            self.box_threshold,
+            text_detection_postprocess_config().unclip_ratio,
+        );
 
-        // One tile at a time, deliberately: batching a page's whole tile grid made the detector's
-        // own f32 input alone ~370MB for this 4535x6307 scan (12 tiles), which took the server from
-        // ~3.7GB to 6.3GB RSS and turned every translation request into a 500 under memory
-        // pressure (2026-10-31). Sequential tiles keep the peak at one tile — a few tens of MB —
-        // and cost only per-call launch overhead, which is noise next to recognition.
-        for page in &pages {
-            let (page_w, page_h) = page.dimensions();
-            let single_pass = page_w.max(page_h) <= TILING_THRESHOLD;
-            let origins: Vec<(u32, u32)> = if single_pass {
-                vec![(0, 0)]
-            } else {
-                tile_origins(page_w, page_h)
-            };
-            // Tiles are pushed through the model a few at a time. One-at-a-time was the safe
-            // memory choice after batching the whole grid at once cost the server 2.6GB extra RSS
-            // (2026-10-31), but it also made a page's detection take 14-16s — by far the largest
-            // stage (measured 2026-11-01). A small batch keeps the peak at 2-3 tiles' worth of
-            // input (60-90MB) while removing most of the per-call overhead.
-            let tile_batch = tile_batch_size();
-
-            let mut boxes: Vec<BoundingBox> = Vec::new();
-            let mut mask = PageTextProbabilityMap {
-                width: page_w,
-                height: page_h,
-                values: vec![0.0; (page_w * page_h) as usize],
-            };
-
-            for chunk in origins.chunks(tile_batch) {
-                let mut chunk_images: Vec<RgbImage> = Vec::with_capacity(chunk.len());
-                for &(origin_x, origin_y) in chunk {
-                    chunk_images.push(if single_pass {
-                        page.clone()
-                    } else {
-                        crop_tile(page, origin_x, origin_y)
-                    });
-                }
-                let chunk_sizes: Vec<(u32, u32)> =
-                    chunk_images.iter().map(|t| t.dimensions()).collect();
-                let (batch_tensor, img_shapes) = self
-                    .model
-                    .preprocess(chunk_images)
-                    .map_err(|e| DetectionError::Inference(e.to_string()))?;
-                let predictions = self
-                    .model
-                    .infer(&batch_tensor)
-                    .map_err(|e| DetectionError::Inference(e.to_string()))?;
-                let output = self.model.postprocess(
-                    &predictions,
-                    img_shapes.clone(),
-                    text_detection_postprocess_config().score_threshold,
-                    self.box_threshold,
-                    text_detection_postprocess_config().unclip_ratio,
-                );
-
-                for (index, &(origin_x, origin_y)) in chunk.iter().enumerate() {
-                    boxes.extend(
-                        output
-                            .boxes
-                            .get(index)
-                            .into_iter()
-                            .flatten()
-                            .filter_map(to_axis_aligned)
-                            .filter(|bbox| is_plausible_text_box(bbox, page_w, page_h))
-                            .map(|bbox| shift_box(bbox, origin_x, origin_y))
-                            .filter(|bbox| {
-                                bbox.x < page_w && bbox.y < page_h && bbox.w > 0 && bbox.h > 0
-                            }),
-                    );
-                    let (tile_w, tile_h) = chunk_sizes[index];
-                    let tile_mask = page_text_probability_map(
-                        &predictions,
-                        index,
-                        &img_shapes[index],
-                        tile_w,
-                        tile_h,
-                    );
-                    blit_mask(&mut mask, &tile_mask, origin_x, origin_y);
-                }
-            }
-
-            dedupe_overlapping_boxes(&mut boxes);
-            boxes.sort_by_key(|bbox| (bbox.y, bbox.x));
+        let mut result = Vec::with_capacity(page_sizes.len());
+        for (i, &(page_w, page_h)) in page_sizes.iter().enumerate() {
+            let boxes: Vec<BoundingBox> = output
+                .boxes
+                .get(i)
+                .into_iter()
+                .flatten()
+                .filter_map(to_axis_aligned)
+                .filter(|bbox| {
+                    let ok = is_plausible_text_box(bbox, page_w, page_h);
+                    if !ok {
+                        tracing::warn!(
+                            ?bbox,
+                            page_w,
+                            page_h,
+                            "discarding an anomalously large/thin detected text box — see MAX_BOX_AREA_FRACTION's own doc comment"
+                        );
+                    }
+                    ok
+                })
+                .collect();
+            let mask = page_text_probability_map(&predictions, i, &img_shapes[i], page_w, page_h);
             result.push((boxes, mask));
         }
         Ok(result)
-    }
-}
-
-/// Pages whose longer edge exceeds this are cut into native-scale tiles before detection, so the
-/// model sees glyphs at the size its own training distribution had. Normal manga pages (~1600px)
-/// are far below it and keep the single-inference path.
-const TILING_THRESHOLD: u32 = 2000;
-
-/// How many tiles go through the model in one call. Small enough that peak memory stays at a few
-/// tiles' worth of input, large enough to remove most of the per-call overhead that made a tiled
-/// page take 14-16s in the strictly-one-at-a-time version. `LANRURUGI_OCR_TILE_BATCH` overrides it
-/// (clamped to 1..=4) for a host that wants to trade latency against memory.
-fn tile_batch_size() -> usize {
-    static BATCH: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *BATCH.get_or_init(|| {
-        std::env::var("LANRURUGI_OCR_TILE_BATCH")
-            .ok()
-            .and_then(|value| value.trim().parse::<usize>().ok())
-            .map(|value| value.clamp(1, 4))
-            .unwrap_or(2)
-    })
-}
-
-/// Side length of one detection tile, in page pixels. Matches the model's own `limit_side_len`, so
-/// a tile crosses it *undownscaled*.
-const TILE_SIDE: u32 = 1600;
-
-/// Overlap between neighbouring tiles, as a fraction of `TILE_SIDE`. Text lines that straddle a
-/// seam are then seen by at least one tile whole.
-const TILE_OVERLAP_FRACTION: f32 = 0.15;
-
-/// Top-left corners of every tile covering a `width` x `height` page.
-///
-/// The last row/column is shifted back so it ends exactly on the page edge rather than padding the
-/// page with invented pixels — every tile stays `TILE_SIDE` square (which the batched preprocess
-/// needs) while still covering the whole page.
-fn tile_origins(width: u32, height: u32) -> Vec<(u32, u32)> {
-    let step = (TILE_SIDE as f32 * (1.0 - TILE_OVERLAP_FRACTION)).round() as u32;
-    let step = step.max(1);
-    let axis = |extent: u32| -> Vec<u32> {
-        if extent <= TILE_SIDE {
-            return vec![0];
-        }
-        let mut origins: Vec<u32> = (0..extent.saturating_sub(TILE_SIDE) + step)
-            .step_by(step as usize)
-            .collect();
-        if origins.last().copied() != Some(extent - TILE_SIDE) {
-            origins.push(extent - TILE_SIDE);
-        }
-        origins.retain(|&origin| origin + TILE_SIDE <= extent);
-        origins.sort_unstable();
-        origins.dedup();
-        origins
-    };
-    let xs = axis(width);
-    let ys = axis(height);
-    let mut origins = Vec::with_capacity(xs.len() * ys.len());
-    for &y in &ys {
-        for &x in &xs {
-            origins.push((x, y));
-        }
-    }
-    origins
-}
-
-/// The `TILE_SIDE` square at `(origin_x, origin_y)`, clamped into the page.
-fn crop_tile(page: &RgbImage, origin_x: u32, origin_y: u32) -> RgbImage {
-    let (width, height) = page.dimensions();
-    let x = origin_x.min(width.saturating_sub(1));
-    let y = origin_y.min(height.saturating_sub(1));
-    let w = TILE_SIDE.min(width - x);
-    let h = TILE_SIDE.min(height - y);
-    use image::GenericImageView as _;
-    page.view(x, y, w, h).to_image()
-}
-
-/// Moves a tile-space box into page space.
-fn shift_box(bbox: BoundingBox, origin_x: u32, origin_y: u32) -> BoundingBox {
-    BoundingBox::new(bbox.x + origin_x, bbox.y + origin_y, bbox.w, bbox.h)
-}
-
-/// Writes `tile`'s probabilities into `page` at `(origin_x, origin_y)`, keeping the larger of the two
-/// values where tiles overlap.
-fn blit_mask(
-    page: &mut PageTextProbabilityMap,
-    tile: &PageTextProbabilityMap,
-    origin_x: u32,
-    origin_y: u32,
-) {
-    for y in 0..tile.height {
-        let page_y = origin_y + y;
-        if page_y >= page.height {
-            break;
-        }
-        for x in 0..tile.width {
-            let page_x = origin_x + x;
-            if page_x >= page.width {
-                break;
-            }
-            let source = tile.values[(y * tile.width + x) as usize];
-            let target = &mut page.values[(page_y * page.width + page_x) as usize];
-            if source > *target {
-                *target = source;
-            }
-        }
-    }
-}
-
-/// Drops boxes one tile duplicated from another (same text seen through the overlap), keeping the
-/// larger of the pair.
-fn dedupe_overlapping_boxes(boxes: &mut Vec<BoundingBox>) {
-    boxes.sort_by_key(|bbox| std::cmp::Reverse(u64::from(bbox.w) * u64::from(bbox.h)));
-    let mut kept: Vec<BoundingBox> = Vec::with_capacity(boxes.len());
-    for candidate in boxes.drain(..) {
-        let duplicate = kept.iter().any(|other| {
-            let overlap = intersection_area(other, &candidate);
-            let smaller = (u64::from(other.w) * u64::from(other.h))
-                .min(u64::from(candidate.w) * u64::from(candidate.h));
-            smaller > 0 && overlap * 100 >= smaller * 60
-        });
-        if !duplicate {
-            kept.push(candidate);
-        }
-    }
-    *boxes = kept;
-}
-
-fn intersection_area(a: &BoundingBox, b: &BoundingBox) -> u64 {
-    let x0 = a.x.max(b.x);
-    let y0 = a.y.max(b.y);
-    let x1 = (a.x + a.w).min(b.x + b.w);
-    let y1 = (a.y + a.h).min(b.y + b.h);
-    if x1 <= x0 || y1 <= y0 {
-        0
-    } else {
-        u64::from(x1 - x0) * u64::from(y1 - y0)
     }
 }
 
@@ -635,53 +455,6 @@ fn to_axis_aligned(bbox: &OarBoundingBox) -> Option<BoundingBox> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn tiles_cover_the_whole_page_without_leaving_it() {
-        // The page that motivated tiling: 4535x6307, ~2.8x the model's own 1600px working size.
-        let (width, height) = (4535u32, 6307u32);
-        let origins = tile_origins(width, height);
-        assert!(origins.len() >= 9, "expected a grid, got {}", origins.len());
-        assert!(
-            origins
-                .iter()
-                .all(|&(x, y)| x + TILE_SIDE <= width && y + TILE_SIDE <= height),
-            "every tile must stay inside the page"
-        );
-        // Every page edge is covered by at least one tile.
-        assert!(origins.iter().any(|&(x, _)| x == 0));
-        assert!(origins.iter().any(|&(x, _)| x + TILE_SIDE == width));
-        assert!(origins.iter().any(|&(_, y)| y == 0));
-        assert!(origins.iter().any(|&(_, y)| y + TILE_SIDE == height));
-    }
-
-    #[test]
-    fn a_page_that_already_fits_is_one_tile() {
-        assert_eq!(tile_origins(1200, 1600), vec![(0, 0)]);
-    }
-
-    #[test]
-    fn dedupe_keeps_one_of_two_near_identical_boxes() {
-        let mut boxes = vec![
-            BoundingBox::new(100, 100, 200, 60),
-            BoundingBox::new(104, 102, 198, 58),
-            BoundingBox::new(600, 900, 120, 50),
-        ];
-        dedupe_overlapping_boxes(&mut boxes);
-        assert_eq!(boxes.len(), 2, "got {boxes:?}");
-        assert!(boxes.iter().any(|b| b.x == 600));
-    }
-
-    #[test]
-    fn dedupe_keeps_boxes_that_merely_touch() {
-        let mut boxes = vec![
-            BoundingBox::new(100, 100, 100, 60),
-            BoundingBox::new(210, 100, 100, 60),
-        ];
-        dedupe_overlapping_boxes(&mut boxes);
-        assert_eq!(boxes.len(), 2);
-    }
-
     use oar_ocr::processors::Point;
 
     fn poly(points: &[(f32, f32)]) -> OarBoundingBox {

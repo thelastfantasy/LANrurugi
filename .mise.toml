@@ -181,6 +181,10 @@ run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-inpaint --example d
 description = "Run the real OCR pipeline (detection + recognition, same code the server uses) on one page image and print every region that survived, so an OCR-quality question can be answered without a 20-minute image rebuild — usage: mise run debug-ocr-page -- <page.jpg> [expected text]. Needs LANRURUGI_MANGA_OCR_MODEL_DIR and the GPU worker models."
 run = "scripts/cargo-container-run.sh sh scripts/debug-ocr-page.sh \"$@\""
 
+[tasks.debug-encode]
+description = "Time and size one real page through WebP and JPEG XL at several encoder settings, to decide the composited-page format from measurements — usage: mise run debug-encode -- <page.webp>"
+run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-scanner --example bench_encode -- \"$@\""
+
 [tasks.debug-stroke-mask]
 description = "Visualise local_background_stroke_mask's real pixel classification against a real crop (stroke pixels painted red) — usage: mise run debug-stroke-mask -- <crop.png> <out.png>"
 run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-inpaint --example debug_stroke_mask -- \"$@\""
