@@ -1139,6 +1139,43 @@ pub async fn translate_page(
     archive_id: &ArchiveId,
     page: PageNumber,
 ) -> Result<(), PipelineError> {
+    // One Sentry transaction per page, so the tracker's Performance view has a per-page duration
+    // series (and p95) instead of nothing. The stage split stays in the `translation stage timings`
+    // log line — a span tree would be nicer, but this is the piece that makes the cost visible at
+    // all, and it is deliberately sampled by `LANRURUGI_TRACES_SAMPLE_RATE` (1.0 in dev).
+    let transaction = sentry::start_transaction(sentry::TransactionContext::new(
+        &format!("translate page {page}"),
+        "translation.page",
+    ));
+    transaction.set_tag("archive_id", archive_id.as_str());
+    transaction.set_tag("provider", ctx.provider.as_str());
+    let started = std::time::Instant::now();
+
+    let outcome = translate_page_inner(state, ctx, archive_id, page).await;
+
+    transaction.set_data(
+        "duration_ms",
+        u64::try_from(started.elapsed().as_millis())
+            .unwrap_or(u64::MAX)
+            .into(),
+    );
+    transaction.set_tag(
+        "outcome",
+        match &outcome {
+            Ok(()) => "ok",
+            Err(_) => "error",
+        },
+    );
+    transaction.finish();
+    outcome
+}
+
+async fn translate_page_inner(
+    state: &AppState,
+    ctx: &TranslationContextHandles,
+    archive_id: &ArchiveId,
+    page: PageNumber,
+) -> Result<(), PipelineError> {
     let volume_id = resolve_volume_id(state, archive_id).await;
 
     // Stage timings for this page, logged once at the end. Purely diagnostic: knowing which stage

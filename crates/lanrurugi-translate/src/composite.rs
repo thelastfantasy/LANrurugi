@@ -2118,6 +2118,17 @@ fn draw_region_horizontal(
     let Some((font_px, lines)) = fit_text(text, font, w, h) else {
         return;
     };
+    // Answers "why is the translated text smaller than the original?" from data instead of
+    // geometry guesswork: the size the shrink-to-fit search settled on, the box it had to fit, and
+    // the text it was fitting.
+    tracing::info!(
+        text = %text,
+        font_px,
+        box_w = w,
+        box_h = h,
+        lines = lines.len(),
+        "drew horizontal text"
+    );
 
     let px_scale = PxScale::from(font_px);
     let scaled = font.raster.as_scaled(px_scale);
@@ -2313,6 +2324,14 @@ fn draw_region_vertical(
     let Some((font_px, columns)) = fit_text_vertical(text, font, w, h) else {
         return;
     };
+    tracing::info!(
+        text = %text,
+        font_px,
+        box_w = w,
+        box_h = h,
+        columns = columns.len(),
+        "drew vertical text"
+    );
     let px_scale = PxScale::from(font_px);
     let pitch = vertical_pitch(font, font_px);
     let total_width = pitch * columns.len() as f32;

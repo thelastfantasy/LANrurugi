@@ -292,6 +292,12 @@ impl TextDetector {
             } else {
                 tile_origins(page_w, page_h)
             };
+            // Tiles are pushed through the model a few at a time. One-at-a-time was the safe
+            // memory choice after batching the whole grid at once cost the server 2.6GB extra RSS
+            // (2026-10-31), but it also made a page's detection take 14-16s — by far the largest
+            // stage (measured 2026-11-01). A small batch keeps the peak at 2-3 tiles' worth of
+            // input (60-90MB) while removing most of the per-call overhead.
+            let tile_batch = tile_batch_size();
 
             let mut boxes: Vec<BoundingBox> = Vec::new();
             let mut mask = PageTextProbabilityMap {
@@ -300,16 +306,20 @@ impl TextDetector {
                 values: vec![0.0; (page_w * page_h) as usize],
             };
 
-            for (origin_x, origin_y) in origins {
-                let tile = if single_pass {
-                    page.clone()
-                } else {
-                    crop_tile(page, origin_x, origin_y)
-                };
-                let (tile_w, tile_h) = tile.dimensions();
+            for chunk in origins.chunks(tile_batch) {
+                let mut chunk_images: Vec<RgbImage> = Vec::with_capacity(chunk.len());
+                for &(origin_x, origin_y) in chunk {
+                    chunk_images.push(if single_pass {
+                        page.clone()
+                    } else {
+                        crop_tile(page, origin_x, origin_y)
+                    });
+                }
+                let chunk_sizes: Vec<(u32, u32)> =
+                    chunk_images.iter().map(|t| t.dimensions()).collect();
                 let (batch_tensor, img_shapes) = self
                     .model
-                    .preprocess(vec![tile])
+                    .preprocess(chunk_images)
                     .map_err(|e| DetectionError::Inference(e.to_string()))?;
                 let predictions = self
                     .model
@@ -323,23 +333,30 @@ impl TextDetector {
                     text_detection_postprocess_config().unclip_ratio,
                 );
 
-                boxes.extend(
-                    output
-                        .boxes
-                        .first()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(to_axis_aligned)
-                        .filter(|bbox| is_plausible_text_box(bbox, page_w, page_h))
-                        .map(|bbox| shift_box(bbox, origin_x, origin_y))
-                        .filter(|bbox| {
-                            bbox.x < page_w && bbox.y < page_h && bbox.w > 0 && bbox.h > 0
-                        }),
-                );
-
-                let tile_mask =
-                    page_text_probability_map(&predictions, 0, &img_shapes[0], tile_w, tile_h);
-                blit_mask(&mut mask, &tile_mask, origin_x, origin_y);
+                for (index, &(origin_x, origin_y)) in chunk.iter().enumerate() {
+                    boxes.extend(
+                        output
+                            .boxes
+                            .get(index)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(to_axis_aligned)
+                            .filter(|bbox| is_plausible_text_box(bbox, page_w, page_h))
+                            .map(|bbox| shift_box(bbox, origin_x, origin_y))
+                            .filter(|bbox| {
+                                bbox.x < page_w && bbox.y < page_h && bbox.w > 0 && bbox.h > 0
+                            }),
+                    );
+                    let (tile_w, tile_h) = chunk_sizes[index];
+                    let tile_mask = page_text_probability_map(
+                        &predictions,
+                        index,
+                        &img_shapes[index],
+                        tile_w,
+                        tile_h,
+                    );
+                    blit_mask(&mut mask, &tile_mask, origin_x, origin_y);
+                }
             }
 
             dedupe_overlapping_boxes(&mut boxes);
@@ -354,6 +371,21 @@ impl TextDetector {
 /// model sees glyphs at the size its own training distribution had. Normal manga pages (~1600px)
 /// are far below it and keep the single-inference path.
 const TILING_THRESHOLD: u32 = 2000;
+
+/// How many tiles go through the model in one call. Small enough that peak memory stays at a few
+/// tiles' worth of input, large enough to remove most of the per-call overhead that made a tiled
+/// page take 14-16s in the strictly-one-at-a-time version. `LANRURUGI_OCR_TILE_BATCH` overrides it
+/// (clamped to 1..=4) for a host that wants to trade latency against memory.
+fn tile_batch_size() -> usize {
+    static BATCH: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *BATCH.get_or_init(|| {
+        std::env::var("LANRURUGI_OCR_TILE_BATCH")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .map(|value| value.clamp(1, 4))
+            .unwrap_or(2)
+    })
+}
 
 /// Side length of one detection tile, in page pixels. Matches the model's own `limit_side_len`, so
 /// a tile crosses it *undownscaled*.

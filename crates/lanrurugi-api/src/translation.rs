@@ -235,11 +235,13 @@ async fn clear_page_translation(
 /// The composited page's output codec for a given client — `jxl > webp`, with WebP as the fallback
 /// exactly as it was before the codec became negotiable.
 fn translation_image_format(support: ClientImageSupport) -> TranslationImageFormat {
-    if support.jxl {
-        TranslationImageFormat::Jxl
-    } else {
-        TranslationImageFormat::Webp
-    }
+    // WebP for every composited page, even when the browser advertises JXL. A translated page is a
+    // 28-megapixel re-encode (4535x6307 on a real scan) and JXL's own encoder took 5-15s of the
+    // page's total time — measured with the stage timings on 2026-11-01, where it was the second
+    // largest cost after detection. WebP encodes the same page in about a second; the size
+    // difference does not matter for a cached, server-rendered page.
+    let _ = support;
+    TranslationImageFormat::Webp
 }
 
 /// `Content-Disposition` for a composited page: `<archive title>_<page>_translated.<ext>`. Without
