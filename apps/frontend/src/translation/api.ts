@@ -13,6 +13,8 @@ export async function fetchTranslationSettings(): Promise<TranslationSettings> {
 
 /** Fields omitted are left unchanged. `apiKey` is write-only and never returned. */
 export interface UpdateTranslationSettings {
+  /** Account-wide master switch (beta, default off). */
+  enabled?: boolean
   provider?: string | null
   endpoint?: string | null
   model?: string | null

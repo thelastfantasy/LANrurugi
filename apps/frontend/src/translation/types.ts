@@ -79,10 +79,11 @@ export interface LocalBackendConfig {
 }
 
 /** Server-stored settings (the cloud half only — a local selection never leaves the device).
- * Deliberately no `enabled` field — whether translation is on is scoped per-archive/per-Tankoubon
- * (see {@link TranslationScope}), not a single account-wide switch (turning it on for one book
- * must never turn it on for every unrelated archive in the library). */
+ * `enabled` is the account-wide master switch and ships **off**: on-page translation is a beta, and
+ * per-archive scoping (see {@link TranslationScope}) only decides *where* it runs once this is on. */
 export interface TranslationSettings {
+  /** Account-wide master switch for the whole feature. Beta, and off unless the user turns it on. */
+  enabled: boolean
   provider: CloudProvider | null
   endpoint: string | null
   model: string | null

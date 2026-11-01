@@ -19,6 +19,8 @@ use thiserror::Error;
 use crate::credentials::CredentialRef;
 
 /// Redis `LRR_CONFIG` field names. Additive — no Phase 1 field is touched.
+/// Master on/off for on-page translation. Absent (any pre-existing install) reads as off.
+const FIELD_ENABLED: &str = "translation_enabled";
 const FIELD_PROVIDER: &str = "translation_provider";
 const FIELD_ENDPOINT: &str = "translation_endpoint";
 const FIELD_MODEL: &str = "translation_model";
@@ -85,12 +87,15 @@ impl CloudProvider {
 /// The server-stored settings. Note there is no credential field — only a reference, resolved
 /// server-side at call time (FR-006).
 ///
-/// Deliberately carries no `enabled` field — whether translation is on is scoped per-archive/
-/// per-Tankoubon (`TranslationScopeRepository` below), not a single account-wide switch. This
-/// struct is everything *else* that genuinely is account-wide: which backend, which language,
-/// how far to look ahead.
+/// `enabled` is the account-wide master switch for on-page AI translation, and it defaults to
+/// **off**: the feature is shipped as a beta, so a fresh install (and an existing one whose stored
+/// settings predate this field) does not translate anything until the user turns it on. Per-archive
+/// / per-Tankoubon scoping still lives in `TranslationScopeRepository` below and only matters while
+/// this is on.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TranslationSettings {
+    /// Master switch for the whole feature (beta, default off).
+    pub enabled: bool,
     pub provider: Option<CloudProvider>,
     /// Non-secret connection detail (base URL).
     pub endpoint: Option<String>,
@@ -105,6 +110,7 @@ pub struct TranslationSettings {
 impl Default for TranslationSettings {
     fn default() -> Self {
         Self {
+            enabled: false,
             provider: None,
             endpoint: None,
             model: None,
@@ -152,6 +158,9 @@ impl TranslationSettingsRepository {
         };
 
         Ok(TranslationSettings {
+            enabled: get(FIELD_ENABLED)
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false),
             provider: get(FIELD_PROVIDER)
                 .as_deref()
                 .and_then(CloudProvider::parse),
@@ -170,6 +179,10 @@ impl TranslationSettingsRepository {
     pub async fn save(&self, settings: &TranslationSettings) -> Result<(), SettingsError> {
         let mut conn = self.pool.get().await?;
         let pairs: Vec<(&str, String)> = vec![
+            (
+                FIELD_ENABLED,
+                if settings.enabled { "1" } else { "0" }.to_string(),
+            ),
             (
                 FIELD_PROVIDER,
                 settings

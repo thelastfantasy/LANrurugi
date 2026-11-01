@@ -68,6 +68,11 @@ export function useTranslationSettings(
     }
   }, [archiveId])
 
+  // The account-wide master switch owns the feature: while it is off, no per-archive scope is ever
+  // exposed, so the reader shows no translation UI at all (beta, default off — enabling a book
+  // before turning the feature on must not start translating it).
+  const effectiveScope = settings && !settings.enabled ? null : scope
+
   const toggleEnabled = useCallback(() => {
     if (!archiveId) return
     setScope((current) => {
@@ -89,5 +94,5 @@ export function useTranslationSettings(
     })
   }, [])
 
-  return [settings, scope, toggleEnabled, setTargetLanguage]
+  return [settings, effectiveScope, toggleEnabled, setTargetLanguage]
 }

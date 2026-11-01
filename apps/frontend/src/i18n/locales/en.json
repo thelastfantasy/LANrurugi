@@ -2751,5 +2751,8 @@
   "diagnostics.feedback.add_image": "Add screenshot",
   "diagnostics.feedback.remove_image": "Remove",
   "diagnostics.feedback.image_limit": "At most {{count}} screenshots per note.",
-  "diagnostics.feedback.image_too_large": "\"{{name}}\" is larger than {{size}} MB."
+  "diagnostics.feedback.image_too_large": "\"{{name}}\" is larger than {{size}} MB.",
+  "translation.masterSwitch": "Enable AI translation",
+  "translation.betaBadge": "Beta",
+  "translation.masterSwitchHint": "Off by default. The reader only shows its translation controls once this is on; the feature is experimental and recognition/layout quality is still improving."
 }

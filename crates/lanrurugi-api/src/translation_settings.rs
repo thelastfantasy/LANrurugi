@@ -93,6 +93,8 @@ fn settings_json(
     global_deepseek_key_set: bool,
 ) -> serde_json::Value {
     json!({
+        // The account-wide master switch. Beta, default off — the settings UI marks it as such.
+        "enabled": settings.enabled,
         "provider": settings.provider.map(|p| p.as_str()),
         "endpoint": settings.endpoint,
         "model": settings.model,
@@ -155,6 +157,8 @@ where
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateSettingsBody {
+    /// The master switch; omitted leaves it unchanged.
+    pub enabled: Option<bool>,
     #[serde(default, deserialize_with = "double_option")]
     pub provider: Option<Option<String>>,
     #[serde(default, deserialize_with = "double_option")]
@@ -186,6 +190,9 @@ async fn update_translation_settings(
         }
     };
 
+    if let Some(enabled) = body.enabled {
+        settings.enabled = enabled;
+    }
     if let Some(provider) = body.provider {
         match provider {
             Some(name) => match CloudProvider::parse(&name) {

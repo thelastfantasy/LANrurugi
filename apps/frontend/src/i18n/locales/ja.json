@@ -2622,5 +2622,8 @@
   "share.import.columnSize": "サイズ",
   "share.import.sortByTitle": "タイトルで並べ替え",
   "share.import.sortBySize": "サイズで並べ替え",
-  "share.import.inheritCategoriesHint": "共有元と同じ名前のカテゴリに入れます。同名のカテゴリがなければ作成します。新しく取り込んだアーカイブのみ対象です。"
+  "share.import.inheritCategoriesHint": "共有元と同じ名前のカテゴリに入れます。同名のカテゴリがなければ作成します。新しく取り込んだアーカイブのみ対象です。",
+  "translation.masterSwitch": "AI 翻訳を有効にする",
+  "translation.betaBadge": "ベータ版",
+  "translation.masterSwitchHint": "既定ではオフです。オンにするとリーダーに翻訳ボタンが表示されます。実験的な機能で、認識と組版の品質は改善中です。"
 }

@@ -289,6 +289,23 @@ async fn get_page_translation(
     let archive_id = ArchiveId::from(id);
     let member_of = tankoubon_memberships(&state, &archive_id).await;
 
+    // The account-wide master switch comes first: on-page translation is a beta and ships off, so
+    // even a book whose per-archive scope is enabled must not translate until the user turns the
+    // feature on (they can't have enabled it deliberately while the feature itself is off).
+    let settings_enabled = match lanrurugi_translate::settings::TranslationSettingsRepository::new(
+        state.redis.config.clone(),
+    )
+    .get()
+    .await
+    {
+        Ok(settings) => settings.enabled,
+        // A settings read failure is not a reason to translate: stay off, same as default.
+        Err(_) => false,
+    };
+    if !settings_enabled {
+        return translation_unavailable("disabled", "on-page translation is turned off");
+    }
+
     // FR-007: with translation off this is the entire cost of the request. Scoped per-archive/
     // per-Tankoubon, not account-wide — turning translation on for one book must never turn it on
     // for every unrelated archive in the library.

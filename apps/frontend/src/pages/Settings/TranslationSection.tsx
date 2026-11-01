@@ -1,7 +1,7 @@
 import type { Dispatch } from "react"
 import { useTranslation } from "react-i18next"
 
-import { NumberInput } from "@/components/common-ui/Form"
+import { NumberInput, Switch } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
 import { FONT_SIZE_SM } from "@/theme"
 import { UsagePanel } from "@/translation/components/UsagePanel"
@@ -46,12 +46,46 @@ export function TranslationSection({
   // so it wouldn't update the moment a user picks "DeepSeek" in the dropdown, only after a round
   // trip through Save. The project-wide key isn't overridable from here, so both the input and the
   // save payload drop out whenever it applies.
+  // The master switch comes first and gates everything below it: on-page translation ships as a
+  // beta, so an install that has never opted in must not show its backend/model controls at all
+  // (they would look like configuration for a feature that is off).
+  const masterSwitch = (
+    <Row label={t("translation.masterSwitch")} noHelp>
+      <span className="flex items-center gap-2">
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            padding: "1px 6px",
+            borderRadius: 3,
+            border: "1px solid currentColor",
+            opacity: 0.8,
+          }}
+        >
+          {t("translation.betaBadge")}
+        </span>
+        <Switch
+          checked={settings.enabled}
+          onCheckedChange={(next) => update({ enabled: next })}
+        />
+      </span>
+    </Row>
+  )
+
   const usesGlobalKey =
     category === "cloud" && settings.provider === "deepseek" && settings.globalDeepseekKeySet
 
   return (
     <CollapsibleSection id="translation" icon="fa-language" title={t("translation.title")}>
       <div className="settings-table" style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
+        {masterSwitch}
+        {!settings.enabled && (
+          <Row label="" noHelp>
+            <span style={{ opacity: 0.75 }}>{t("translation.masterSwitchHint")}</span>
+          </Row>
+        )}
+        {settings.enabled && (
+        <>
         <Row label={t("translation.backend")} noHelp>
           <select
             className="stdinput"
@@ -153,6 +187,8 @@ export function TranslationSection({
         </Row>
 
         {category === "cloud" && settings.provider && <UsagePanel />}
+        </>
+        )}
       </div>
     </CollapsibleSection>
   )

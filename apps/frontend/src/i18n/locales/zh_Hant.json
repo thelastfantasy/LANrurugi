@@ -953,5 +953,8 @@
   "subscriptions.headers": "請求標頭",
   "subscriptions.credentialsHint": "隨該訂閱的檢查一同傳送。與登入外掛不同，這些不會自動更新 —— 一旦失效，檢查會悄悄地看到更少內容。",
   "subscriptions.settling": "等待中 —— 儲存後稍候片刻才開始首次檢查",
-  "subscriptions.enableLabel": "啟用"
+  "subscriptions.enableLabel": "啟用",
+  "translation.masterSwitch": "啟用 AI 翻譯",
+  "translation.betaBadge": "測試版",
+  "translation.masterSwitchHint": "預設關閉。開啟後閱讀器才會顯示翻譯按鈕；這是實驗功能，辨識與排版品質仍在改進。"
 }

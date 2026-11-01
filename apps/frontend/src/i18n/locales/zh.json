@@ -2751,5 +2751,8 @@
   "diagnostics.feedback.add_image": "添加截图",
   "diagnostics.feedback.remove_image": "移除",
   "diagnostics.feedback.image_limit": "每条反馈最多 {{count}} 张截图。",
-  "diagnostics.feedback.image_too_large": "「{{name}}」超过 {{size}} MB。"
+  "diagnostics.feedback.image_too_large": "「{{name}}」超过 {{size}} MB。",
+  "translation.masterSwitch": "启用 AI 翻译",
+  "translation.betaBadge": "测试版",
+  "translation.masterSwitchHint": "默认关闭。开启后阅读器才会显示翻译按钮；这是实验功能，识别与排版质量仍在改进。"
 }
