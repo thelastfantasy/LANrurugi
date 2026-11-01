@@ -2738,10 +2738,11 @@ pub(crate) async fn start_download(
                         for superseded in superseded_ids {
                             // Full user-delete path (file, search index, thumbnails, ...), not a
                             // bare record removal.
-                            match crate::archives::delete_one_archive(
+                            match crate::archives::purge_one_archive(
                                 &state_for_task,
                                 &lanrurugi_core::ids::ArchiveId(superseded.clone()),
                                 None,
+                                crate::archives::PurgeOptions::PERMANENT,
                             )
                             .await
                             {

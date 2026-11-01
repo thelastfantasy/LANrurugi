@@ -51,6 +51,7 @@ import type {
   DownloadQueueItem,
   DownloadQueueListResponse,
   DuplicateGroup,
+  EmptyBinResult,
   ExportPatchInsertion,
   HistoryEntry,
   HoverPageOrderResponse,
@@ -70,7 +71,10 @@ import type {
   PluginSettingsUpdate,
   PublicThemeSettings,
   RandomArchivesResponse,
+  RecycleBinView,
   ReservationEntry,
+  RestoreResult,
+  SafetyPasswordStatus,
   SearchResponse,
   ServerInfo,
   Settings,
@@ -718,11 +722,22 @@ export function useUpdateTankoubon(id: string) {
   })
 }
 
+/** `mode: "recycle"` moves the whole Tankoubon (every member archive plus the grouping) into the
+ *  recycle bin; the default `"dissolve"` only drops the grouping and keeps the archives. */
 export function useDeleteTankoubon() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => sendJson("DELETE", `/tankoubons/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tankoubons"] }),
+    mutationFn: (vars: string | { id: string; mode?: "dissolve" | "recycle" }) => {
+      const id = typeof vars === "string" ? vars : vars.id
+      const mode = typeof vars === "string" ? undefined : vars.mode
+      const query = mode === "recycle" ? "?mode=recycle" : ""
+      return sendJson("DELETE", `/tankoubons/${encodeURIComponent(id)}${query}`)
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["tankoubons"] })
+      void queryClient.invalidateQueries({ queryKey: ["recycle-bin"] })
+      void queryClient.invalidateQueries({ queryKey: ["archives"] })
+    },
   })
 }
 
@@ -2278,5 +2293,90 @@ export function useAuthConfig() {
     queryKey: ["auth-config"],
     queryFn: () => fetchJson<AuthBridgeConfig>("/auth/config"),
     staleTime: 60_000,
+  })
+}
+
+// --- specs/019 recycle bin & safety password ---------------------------------------------
+
+export function useRecycleBin() {
+  return useQuery({
+    queryKey: ["recycle-bin"],
+    queryFn: () => fetchJson<RecycleBinView>("/recycle-bin"),
+  })
+}
+
+function invalidateAfterBinChange(queryClient: ReturnType<typeof useQueryClient>) {
+  void queryClient.invalidateQueries({ queryKey: ["recycle-bin"] })
+  void queryClient.invalidateQueries({ queryKey: ["archives"] })
+  void queryClient.invalidateQueries({ queryKey: ["bookmarks"] })
+  void queryClient.invalidateQueries({ queryKey: ["tankoubon"] })
+  void queryClient.invalidateQueries({ queryKey: ["stats"] })
+}
+
+/** Restore one entry. The response reports where the file actually landed (the original path may
+ *  have been taken or gone). */
+export function useRestoreFromBin() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<RestoreResult>("POST", `/recycle-bin/${encodeURIComponent(id)}/restore`),
+    onSuccess: () => invalidateAfterBinChange(queryClient),
+  })
+}
+
+/** Permanently delete one entry — requires the four-digit safety password. */
+export function usePurgeEntry() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, safetyPassword }: { id: string; safetyPassword: string }) =>
+      sendJson<{ operation: string; success: number }>(
+        "DELETE",
+        `/recycle-bin/${encodeURIComponent(id)}`,
+        { safety_password: safetyPassword },
+      ),
+    onSuccess: () => invalidateAfterBinChange(queryClient),
+  })
+}
+
+/** Empty the whole bin — one safety-password verification covers every entry. */
+export function useEmptyBin() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (safetyPassword: string) =>
+      sendJson<EmptyBinResult>("DELETE", "/recycle-bin", { safety_password: safetyPassword }),
+    onSuccess: () => invalidateAfterBinChange(queryClient),
+  })
+}
+
+export function useSafetyPasswordStatus() {
+  return useQuery({
+    queryKey: ["safety-password"],
+    queryFn: () => fetchJson<SafetyPasswordStatus>("/safety-password"),
+  })
+}
+
+export function useSetSafetyPassword() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { current_password?: string; new_password: string }) =>
+      sendJson<SafetyPasswordStatus>("POST", "/safety-password", body),
+    onSuccess: (status) => {
+      queryClient.setQueryData(["safety-password"], status)
+      void queryClient.invalidateQueries({ queryKey: ["recycle-bin"] })
+    },
+  })
+}
+
+export function useResetSafetyPassword() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (loginPassword: string) =>
+      sendJson<SafetyPasswordStatus>("POST", "/safety-password/reset", {
+        login_password: loginPassword,
+      }),
+    onSuccess: (status) => {
+      queryClient.setQueryData(["safety-password"], status)
+      void queryClient.invalidateQueries({ queryKey: ["recycle-bin"] })
+    },
   })
 }

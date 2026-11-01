@@ -122,9 +122,9 @@ Expected: the entry and its payload are gone from disk and from `/api/recycle-bi
 
 ```sh
 curl -sb "$COOKIE" -X PUT "$BASE/api/settings" -H 'content-type: application/json' \
-  -d '{"recycle_max_size_mb":1}'     # bin now over cap
+  -d '{"recycle_max_size_gb":1}'     # bin now over cap
 # The settings write triggers an immediate sweep: oldest entries go, the newest one survives
-# even when it alone exceeds 1 MiB.
+# even when it alone exceeds 1 GiB.
 curl -sb "$COOKIE" "$BASE/api/recycle-bin" | jq '.usage'
 ```
 

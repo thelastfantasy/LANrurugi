@@ -24,7 +24,7 @@ precedent.
 | `GET /api/recycle-bin` | `?q=<text>` (optional filter over title/name/path) | `RecycleBinView` |
 | `GET /api/recycle-bin/{id}/thumbnail` | | image bytes (`image/webp`, `image/jpeg` or `image/png`); `404` if none |
 | `POST /api/recycle-bin/{id}/restore` | — | `RestoreResult` |
-| `DELETE /api/recycle-bin/{id}` | `{ "safety_password": "1234" }` | `PurgeResult` |
+| `DELETE /api/recycle-bin/{id}` | `{ "safety_password": "1234" }` | `PurgeResult` (for a `TANK_…` id: `PurgeTankResult`) |
 | `DELETE /api/recycle-bin` | `{ "safety_password": "1234" }` (empty the bin) | `EmptyResult` |
 
 `DELETE` with a JSON body is already this codebase's established shape (`DELETE /api/archives`,
@@ -90,6 +90,9 @@ A caller without the safety password therefore cannot use the response to learn 
 
 ### Existing delete endpoints (additive only)
 
+- `DELETE /api/tankoubons/{id}` → `?mode=dissolve` (default) keeps today's "drop the grouping only";
+  `?mode=recycle` moves every member archive and the grouping into the bin and answers
+  `{"operation":"delete_tankoubon","success":1,"recycled":true}`.
 - `DELETE /api/archives/{id}` → unchanged fields plus `"recycled": true`. No filesystem path is added: the
   response is reachable by API tokens, and the bin's internal path is not something a client needs.
 - `DELETE /api/archives` (batch) → unchanged fields plus `"recycled": true` per successful result and

@@ -34,6 +34,7 @@ export function Layout() {
         { to: "/stats", label: t("app.statistics") },
         { to: "/activity", label: t("app.activity") },
         { to: "/bookmarks", label: t("app.bookmarks") },
+        { to: "/recycle-bin", label: t("app.recycleBin") },
       ]
     : [{ to: "/login", label: t("app.adminLogin") }]
 

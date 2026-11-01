@@ -66,22 +66,50 @@ export function DeleteConfirmDialog({
   isTank: boolean
   /** The archive's `source:` URL, when it has one. Absent for a hand-uploaded file. */
   source?: string
-  /** `blockResubscribe` is only meaningful when a subscription is actually tracking this work. */
-  onConfirm: (blockResubscribe: boolean) => void
+  /** `blockResubscribe` is only meaningful when a subscription is actually tracking this work;
+   * `tankMode` only when deleting a Tankoubon. */
+  onConfirm: (blockResubscribe: boolean, tankMode: "dissolve" | "recycle") => void
   onCancel: () => void
 }) {
   const { t } = useTranslation()
   const tracking = useTrackingSubscriptions(isTank ? undefined : source)
   const [block, setBlock] = useState(rememberedChoice)
+  const [tankMode, setTankMode] = useState<"dissolve" | "recycle">("dissolve")
 
   return (
     <Confirm
       danger
       message={
         <>
-          {isTank
-            ? t("library.thisWillDeleteThisTankoubon")
-            : t("common.thisWillDeleteBothMetadata")}
+          {isTank ? (
+            <span style={{ display: "block", marginBottom: 8 }}>
+              {t("library.thisWillDeleteThisTankoubon")}
+            </span>
+          ) : (
+            t("common.thisWillDeleteBothMetadata")
+          )}
+          {isTank && (
+            <span style={{ display: "block", textAlign: "left", fontWeight: "normal", fontSize: "0.95em" }}>
+              <label style={{ display: "flex", gap: 6, alignItems: "flex-start", marginBottom: 6 }}>
+                <input
+                  type="radio"
+                  name="tank-delete-mode"
+                  checked={tankMode === "recycle"}
+                  onChange={() => setTankMode("recycle")}
+                />
+                <span>{t("library.recycleWholeTankoubon")}</span>
+              </label>
+              <label style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+                <input
+                  type="radio"
+                  name="tank-delete-mode"
+                  checked={tankMode === "dissolve"}
+                  onChange={() => setTankMode("dissolve")}
+                />
+                <span>{t("library.dissolveTankoubonOnly")}</span>
+              </label>
+            </span>
+          )}
           {/* Offered only for an archive a subscription actually brought in. For a hand-uploaded
               file the option would have no effect, which is worse than not offering it. */}
           {tracking.length > 0 && (
@@ -105,7 +133,7 @@ export function DeleteConfirmDialog({
         </>
       }
       confirmLabel={t("library.yesDeleteIt") ?? undefined}
-      onConfirm={() => onConfirm(tracking.length > 0 ? block : false)}
+      onConfirm={() => onConfirm(tracking.length > 0 ? block : false, tankMode)}
       onCancel={onCancel}
     />
   )

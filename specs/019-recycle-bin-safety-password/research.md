@@ -95,7 +95,8 @@ Destination resolution, checked in order:
 2. original absolute path is free → use it exactly.
 3. original path occupied by a different file → append ` (restored)`, then ` (restored 2)`, … before the
    extension until free (FR-007).
-4. original directory missing or outside the current library → library root + original filename (FR-009).
+4. recorded path outside the current library → library root + original filename (FR-009); a path inside the
+   library whose parent chain was pruned is recreated instead.
 
 The response returns the final path so the UI can tell the user where the archive actually landed.
 
@@ -202,8 +203,8 @@ trust boundary for an escape hatch.
 ## 9. Retention and capacity policy
 
 **Decision**: two numeric settings, stored with the existing `NUMBER_FIELDS` machinery:
-`recycle_retention_days` default 30 (0 = forever, otherwise 1–36500) and `recycle_max_size_mb` default 10240
-(0 = unlimited). Enforcement:
+`recycle_retention_days` default 30 (0 = forever, otherwise 1–36500) and `recycle_max_size_gb` default 0
+(unlimited; an operator opts into a cap). Enforcement:
 
 - delete an entry when `now - deleted_at >= retention_days` (retention 0 disables this check);
 - then, while `sum(size) > cap`, evict the oldest entry, **stopping before the newest entry** — the most recent

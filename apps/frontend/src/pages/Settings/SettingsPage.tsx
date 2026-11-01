@@ -22,6 +22,7 @@ import { ApiTokensSection } from "./ApiTokensSection"
 import { ArchiveFilesSection } from "./ArchiveFilesSection"
 import { GlobalSection } from "./GlobalSection"
 import { LlmUsageSection } from "./LlmUsageSection"
+import { RecycleBinSection } from "./RecycleBinSection"
 import { SecuritySection } from "./SecuritySection"
 import { SharingSection } from "./SharingSection"
 import { SubscriptionsSection } from "./SubscriptionsSection"
@@ -111,6 +112,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [ssoAutoRedirect, setSsoAutoRedirect] = useState(settings.sso_auto_redirect)
   const [enablecors, setEnablecors] = useState(settings.enablecors)
 
+  const [recycleRetentionDays, setRecycleRetentionDays] = useState(settings.recycle_retention_days)
+  const [recycleMaxSizeGb, setRecycleMaxSizeGb] = useState(settings.recycle_max_size_gb)
   const [tempmaxsize, setTempmaxsize] = useState(settings.tempmaxsize)
   const [replacedupe, setReplacedupe] = useState(settings.replacedupe)
 
@@ -187,6 +190,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       ssoAutoRedirect !== settings.sso_auto_redirect ||
       enablecors !== settings.enablecors ||
       tempmaxsize !== settings.tempmaxsize ||
+      recycleRetentionDays !== settings.recycle_retention_days ||
+      recycleMaxSizeGb !== settings.recycle_max_size_gb ||
       replacedupe !== settings.replacedupe ||
       thumbnailFormat !== savedThumbnailFormat ||
       webpquality !== settings.webpquality ||
@@ -206,6 +211,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       guestmode, accessTokenLifetimeSecs,
       refreshTokenLifetimeSecs, refreshTokenIdleLifetimeSecs, maxLoginDevices,
       trustedOrigins, ssoAutoRedirect, enablecors, tempmaxsize,
+      recycleRetentionDays, recycleMaxSizeGb,
       replacedupe, savedThumbnailFormat, thumbnailFormat, webpquality, excludednamespaces, tagruleson,
       tagrules, usedateadded, usedatemodified, timezone, newbadgemode, recommendprecision,
       settings, translationIsDirty,
@@ -246,6 +252,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       sso_auto_redirect: ssoAutoRedirect,
       enablecors,
       tempmaxsize,
+      recycle_retention_days: recycleRetentionDays,
+      recycle_max_size_gb: recycleMaxSizeGb,
       replacedupe,
       thumbnail_format: thumbnailFormat,
       webpquality,
@@ -519,6 +527,13 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           <ApiTokensSection />
           <SharingSection />
           <SubscriptionsSection />
+
+          <RecycleBinSection
+            retentionDays={recycleRetentionDays}
+            setRetentionDays={setRecycleRetentionDays}
+            maxSizeGb={recycleMaxSizeGb}
+            setMaxSizeGb={setRecycleMaxSizeGb}
+          />
 
           <ArchiveFilesSection
             tempmaxsize={tempmaxsize}

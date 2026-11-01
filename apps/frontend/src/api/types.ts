@@ -102,6 +102,10 @@ export interface Settings {
   /** Days a finished download-queue entry is kept; `0` keeps them all. Swept hourly by the
    *  subscription scheduler. */
   download_queue_retention_days: number
+  /** How long a recycled archive stays recoverable; `0` keeps it forever. */
+  recycle_retention_days: number
+  /** Recycle-bin size cap in GiB; `0` means unlimited. */
+  recycle_max_size_gb: number
   /** Absolute refresh-token lifetime in seconds — the hard cap anchored to the original login.
    *  Silent refreshes never extend this. */
   refresh_token_lifetime_secs: number
@@ -1511,4 +1515,78 @@ export type LlmUsageFeatureRow =
 export interface LlmUsageResponse {
   window: LlmUsageWindow
   features: LlmUsageFeatureRow[]
+}
+
+
+// --- specs/019 recycle bin & safety password ---------------------------------------------
+
+export type RecycleConflict =
+  | "identical_archive_exists"
+  | "payload_missing"
+  | "payload_size_mismatch"
+  | "unsupported_schema"
+
+export type RecycleKind = "archive" | "tankoubon"
+
+export interface RecycleMember {
+  id: string
+  title: string
+  size: number
+  page_count: number
+  restorable: boolean
+  conflict: RecycleConflict | null
+}
+
+export interface RecycleEntry {
+  kind: RecycleKind
+  member_count: number
+  members: RecycleMember[]
+  id: string
+  title: string
+  name: string
+  original_path: string
+  file_name: string
+  size: number
+  page_count: number
+  deleted_at: number
+  deleted_by: { kind: string; label: string }
+  expires_at: number | null
+  remaining_seconds: number | null
+  restorable: boolean
+  conflict: RecycleConflict | null
+  has_thumbnail: boolean
+}
+
+export interface RecycleBinView {
+  entries: RecycleEntry[]
+  usage: { count: number; bytes: number }
+  limits: { retention_days: number; max_bytes: number }
+  leftovers: { count: number }
+  safety_password: { configured: boolean }
+}
+
+export interface RestoreResult {
+  operation: string
+  success: number
+  id: string
+  /** Archive restores carry `path`/`renamed`; a Tankoubon restore reports its member count. */
+  kind?: RecycleKind
+  path?: string
+  renamed?: boolean
+  name?: string
+  members?: number
+}
+
+export interface EmptyBinResult {
+  operation: string
+  success: number
+  deleted: number
+  failed: { id: string; error: string }[]
+}
+
+export interface SafetyPasswordStatus {
+  configured: boolean
+  locked: boolean
+  locked_until: number | null
+  attempts_remaining: number | null
 }

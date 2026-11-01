@@ -12,6 +12,8 @@ export * from "./Select";
 
 export * from "./NumberInput";
 
+export * from "./OTPField";
+
 export * from "./StarRating";
 
 export * from "./Switch";

@@ -633,15 +633,43 @@ export function useLibrary() {
     archiveId: string,
     isTank: boolean,
     blockResubscribe = true,
+    tankMode: "dissolve" | "recycle" = "dissolve",
   ) {
     // Read before the delete, since the archive's own tags are what name the source.
     const source = !isTank && !blockResubscribe ? sourceTagOf(archiveId) : undefined;
 
     if (isTank) {
-      await fetch(`/api/tankoubons/${archiveId}`, { method: "DELETE" });
+      const query = tankMode === "recycle" ? "?mode=recycle" : "";
+      await fetch(`/api/tankoubons/${archiveId}${query}`, { method: "DELETE" });
       await tankoubons.refetch();
+      await queryClient.invalidateQueries({ queryKey: ["recycle-bin"] });
+      await queryClient.invalidateQueries({ queryKey: ["archives"] });
+      if (tankMode === "recycle") {
+        toast({ heading: t("recycleBin.movedToBin"), icon: "success" });
+      }
     } else {
       await fetch(`/api/archives/${archiveId}`, { method: "DELETE" });
+      // Recoverable for the retention window: offer the undo right where the mistake happened
+      // (spec 019 FR-034) instead of making the user open the bin page.
+      toast({
+        heading: t("recycleBin.movedToBin"),
+        icon: "success",
+        action: {
+          label: t("recycleBin.undo"),
+          onClick: () => {
+            void (async () => {
+              try {
+                await sendJson("POST", `/recycle-bin/${encodeURIComponent(archiveId)}/restore`);
+                await queryClient.invalidateQueries({ queryKey: ["archives"] });
+                await queryClient.invalidateQueries({ queryKey: ["recycle-bin"] });
+                toast({ heading: t("recycleBin.restored"), icon: "success" });
+              } catch {
+                toast({ heading: t("recycleBin.restoreFailed"), icon: "error" });
+              }
+            })();
+          },
+        },
+      });
     }
 
     if (source) {

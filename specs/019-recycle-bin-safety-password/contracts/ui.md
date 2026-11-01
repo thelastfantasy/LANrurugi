@@ -14,7 +14,7 @@ confirmation word and an undo action, which is the only behavioural change to an
 
 ## Recycle bin page
 
-- Header: title, usage summary (`N entries · X GiB of 10 GiB`), retention text ("kept 30 days" / "kept
+- Header: title, usage summary (`N entries · X of <cap>`, or "unlimited"), retention text ("kept 30 days" / "kept
   forever"), empty-bin button (disabled when empty).
 - Filter: one text input filtering title / filename / original path, client-side over the fetched list (the bin is
   bounded; no server pagination).
@@ -46,14 +46,15 @@ confirmation word and an undo action, which is the only behavioural change to an
 
 ## Shared component: `common-ui/Form/OTPField`
 
-A single reusable segmented code field for the whole app, built on Base UI's `OTPField` rather than four styled
-`<input>`s. It lives in `apps/frontend/src/components/common-ui/Form/OTPField.tsx` and is exported from
+A single reusable segmented code field for the whole app: one real `<input>` behind four presentational slots
+(the shape shadcn's input-otp uses), rather than one `<input>` per digit — per-slot inputs move focus on every
+character, which dismisses the Android soft keyboard and makes the four-digit entry unusable on a phone. It lives in `apps/frontend/src/components/common-ui/Form/OTPField.tsx` and is exported from
 `Form/index.ts`; the safety-password dialog and the Settings section both use this one component.
 
 | Aspect | Contract |
 |---|---|
-| Anatomy | `OTPField.Root` + one `OTPField.Input` per digit (+ optional `OTPField.Separator` for grouped codes); one native `<label>` binds the root's `id` |
-| Props | `length` (default 4), controlled `value` / `onValueChange`, `onComplete`, `mask` (default off — the digits stay readable while typing), `disabled`, `invalid`, `autoFocus`, `label`, `slotLabel(index, total)`, `describedById` |
+| Anatomy | One `<input class="otp-field-input">` covering a row of `.otp-field-slot` divs; one native `<label>` binds the input's `id`; slots are `aria-hidden` |
+| Props | `length` (default 4), controlled `value` / `onValueChange`, `onComplete`, `mask` (default on — every slot renders as a dot), `disabled`, `invalid`, `autoFocus`, `label`, `slotLabel(index, total)`, `describedById` |
 | Behaviour | `validationType="numeric"`; paste of the whole code fills all slots; Backspace/arrow navigation follows Base UI's own handling; completion fires `onComplete` once and moves focus to the caller's confirm button; no auto-submit |
 | Accessibility | first slot carries the label, every later slot an `aria-label` from `slotLabel` (e.g. "数字 2/4"); `data-invalid` on the root plus an `aria-describedby` error text; full keyboard operability |
 | Theming | every colour, size and the mobile step live in five real CSS classes appended to all five theme files (`g`, `ex`, `modern`, `modern_red`, `modern_clear`) — `.otp-field`, `.otp-field-slot`, `[data-filled]`, `:focus-visible`, `[data-invalid] .otp-field-slot`, `.otp-field-separator` — each using that theme's own accent/input/error colours. No inline `style`, no `--theme-*` transitional variables |
@@ -88,7 +89,7 @@ identical-archive conflict).
 `icon="fa-recycle"`) on the Settings page, containing:
 
 - `Retention` — number input in days, `0 = keep forever`, saved through the existing `PUT /settings`.
-- `Capacity` — number input in MiB, `0 = unlimited`, saved the same way.
+- `Capacity` — number input in GiB, `0 = unlimited`, saved the same way.
 - Usage line: current entries/bytes and the computed effective limit.
 - Safety password block: `Set` / `Change` (current + new + confirm) and `Reset with login password`
   (login password + confirm). Both use `SafetyPasswordDialog`'s input component, not a second implementation.

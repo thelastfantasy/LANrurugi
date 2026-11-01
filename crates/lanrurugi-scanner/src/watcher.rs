@@ -22,6 +22,15 @@ pub fn is_watched_archive_path(path: &Path) -> bool {
     if path.components().any(|c| c.as_os_str() == "thumb") {
         return false;
     }
+    // The recycle bin's payload lives inside the library (specs/019) and must be invisible to the
+    // watcher, `full_scan::walk` and both subfolder scripts, which all share this filter — without
+    // this, moving a file into the bin would immediately re-catalogue it.
+    if path
+        .components()
+        .any(|c| c.as_os_str() == lanrurugi_storage::recycle::RECYCLE_DIR_NAME)
+    {
+        return false;
+    }
     // A page patch (`crates/lanrurugi-scanner/src/patch.rs`) is itself a `.zip` file, sharing its
     // "real" archive's extension — without this check it would get catalogued as its own,
     // separate (and un-openable-as-manga) archive. Checked here rather than only in `full_scan`'s
@@ -213,5 +222,18 @@ mod tests {
         let novel = dir.path().join("novel.txt");
         std::fs::write(&novel, "第一章 春天\n".repeat(1000)).unwrap();
         assert!(is_watched_archive_path(&novel));
+    }
+}
+
+#[cfg(test)]
+mod recycle_exclusion_tests {
+    use super::*;
+
+    #[test]
+    fn recycle_payload_is_never_a_watched_archive() {
+        let bin = Path::new("/library/.lanrurugi-recycle/abc/payload/book.zip");
+        assert!(!is_watched_archive_path(bin));
+        let normal = Path::new("/library/books/book.zip");
+        assert!(is_watched_archive_path(normal));
     }
 }

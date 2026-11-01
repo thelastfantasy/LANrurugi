@@ -24,6 +24,7 @@ import { AiSkeleton, FormatBadge } from "@/components/Display"
 import { TagInput } from "@/components/Form"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
+import { TankDeleteChoiceDialog } from "@/pages/Library/TankDeleteChoiceDialog"
 import { toast } from "@/toast"
 
 type Suggestion = TankoubonAiRenameResponse["suggestions"][number]
@@ -270,6 +271,7 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
   useDocumentTitle(t("tankoubonEdit.editing1Tankoubon").replace("%1", tankoubon.name))
   const updateTankoubon = useUpdateTankoubon(tankId)
   const deleteTankoubon = useDeleteTankoubon()
+  const [deleteOpen, setDeleteOpen] = useState(false)
   const stats = useStats(2)
   const tagSuggestions = (stats.data ?? []).map((s) => (s.namespace ? `${s.namespace}:${s.text}` : s.text))
 
@@ -318,8 +320,13 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
     setArchives((prev) => prev.filter((a) => a !== id))
   }
 
-  async function handleDelete() {
-    await deleteTankoubon.mutateAsync(tankId)
+  function handleDelete() {
+    setDeleteOpen(true)
+  }
+
+  async function deleteWithMode(mode: "dissolve" | "recycle") {
+    setDeleteOpen(false)
+    await deleteTankoubon.mutateAsync({ id: tankId, mode })
     navigate(routes.library())
   }
 
@@ -692,6 +699,13 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
           </div>
         </div>
       </form>
+      {deleteOpen && (
+        <TankDeleteChoiceDialog
+          title={tankoubon.name}
+          onConfirm={(mode: "dissolve" | "recycle") => void deleteWithMode(mode)}
+          onCancel={() => setDeleteOpen(false)}
+        />
+      )}
     </div>
   )
 }

@@ -57,6 +57,10 @@ export function actionTypeLabel(t: (key: string, opts?: Record<string, unknown>)
  * of a link, since the linked resource is gone by definition. An explicit set, not a suffix guess. */
 const DELETION_ACTION_TYPES = new Set([
   "archive.delete",
+  "archive.recycle",
+  "archive.purge",
+  "tankoubon.recycle",
+  "tankoubon.purge",
   "archive.patch_delete",
   "category.delete",
   "tankoubon.delete",
@@ -78,6 +82,10 @@ export function outcomeLabel(t: (key: string) => string | null, status: string):
 /** `action_type` values with no single resource to name at all (whole-database operations) — use
  * a fixed no-placeholder description instead of the `{{title}}`-templated one every other type uses. */
 const NO_TARGET_ACTION_TYPES = new Set([
+  "recycle.empty",
+  "recycle.sweep",
+  "safety_password.set",
+  "safety_password.reset",
   "database.clean",
   "database.clear_new_flags",
   "database.drop",

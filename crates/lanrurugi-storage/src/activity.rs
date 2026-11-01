@@ -59,6 +59,25 @@ pub mod action_types {
     pub const ARCHIVE_PATCH_DELETE: &str = "archive.patch_delete";
     pub const ARCHIVE_THUMB_REGEN: &str = "archive.thumb_regen";
     pub const ARCHIVE_UPLOAD: &str = "archive.upload";
+    /// 019 recycle bin: an archive was moved into the bin (the user-visible delete).
+    pub const ARCHIVE_RECYCLE: &str = "archive.recycle";
+    /// 019: an entry was restored from the bin back to the library.
+    pub const ARCHIVE_RESTORE: &str = "archive.restore";
+    /// 019: one entry was permanently deleted (individually or by the sweep's per-entry path).
+    pub const ARCHIVE_PURGE: &str = "archive.purge";
+    /// 019: the whole bin was emptied by the operator.
+    pub const RECYCLE_EMPTY: &str = "recycle.empty";
+    /// 019: the automatic retention/capacity sweep removed entries (System actor).
+    pub const RECYCLE_SWEEP: &str = "recycle.sweep";
+    /// 019: a whole Tankoubon (grouping + every member archive) was moved into the bin.
+    pub const TANKOUBON_RECYCLE: &str = "tankoubon.recycle";
+    /// 019: a recycled Tankoubon was restored with all its member archives.
+    pub const TANKOUBON_RESTORE: &str = "tankoubon.restore";
+    /// 019: a recycled Tankoubon was permanently deleted.
+    pub const TANKOUBON_PURGE: &str = "tankoubon.purge";
+    /// 019: the safety password was set/changed/reset. Never records the password itself.
+    pub const SAFETY_PASSWORD_SET: &str = "safety_password.set";
+    pub const SAFETY_PASSWORD_RESET: &str = "safety_password.reset";
     pub const SETTINGS_UPDATE: &str = "settings.update";
     pub const SETTINGS_PASSWORD_CHANGE: &str = "settings.password_change";
     pub const CATEGORY_CREATE: &str = "category.create";

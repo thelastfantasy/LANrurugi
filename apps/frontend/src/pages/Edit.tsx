@@ -2,7 +2,7 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate, useParams } from "react-router-dom"
 
-import { ApiError } from "@/api/client"
+import { ApiError, sendJson } from "@/api/client"
 import {
   useArchiveMetadata,
   useDeleteArchive,
@@ -83,6 +83,26 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
     if (!(await confirmDialog(t("edit.areYouSureYouWant") ?? "", true))) return
     await deleteArchive.mutateAsync(archiveId)
     navigate("/")
+    // Recoverable: the archive is in the recycle bin for the configured window, so offer the undo
+    // right here instead of making the user find the bin page.
+    toast({
+      heading: t("recycleBin.movedToBin"),
+      icon: "success",
+      action: {
+        label: t("recycleBin.undo"),
+        onClick: () => {
+          void (async () => {
+            try {
+              await sendJson("POST", `/recycle-bin/${encodeURIComponent(archiveId)}/restore`)
+              toast({ heading: t("recycleBin.restored"), icon: "success" })
+              navigate(`/edit/${archiveId}`)
+            } catch {
+              toast({ heading: t("recycleBin.restoreFailed"), icon: "error" })
+            }
+          })()
+        },
+      },
+    })
   }
 
   /** Renames the on-disk file — distinct from `title`, a display label. Only the stem round-trips;

@@ -266,3 +266,25 @@ pub fn share_rdv_key(lookup_pubkey_hex: &str) -> String {
 }
 
 pub const SHARE_RDV_TTL_SECS: i64 = 2 * 60 * 60;
+
+/// Additive, LANrurugi-only (`specs/019-recycle-bin-safety-password`). Hash on the **archive**
+/// logical DB: archive id -> JSON `RecycleEntry`. The payload bytes live on disk under
+/// `lanrurugi_storage::recycle::RECYCLE_DIR_NAME`.
+pub const RECYCLE_BIN_KEY: &str = "LANRURUGI_RECYCLE_BIN";
+
+/// Additive, LANrurugi-only. Hash on the **archive** logical DB: tank id -> JSON `RecycleTank`.
+/// A recycled Tankoubon keeps its member archives as ordinary [`RECYCLE_BIN_KEY`] entries and this
+/// record is what makes them show up as one unit in the bin until the whole tank is restored or
+/// purged.
+pub const RECYCLE_TANKS_KEY: &str = "LANRURUGI_RECYCLE_TANKS";
+
+/// `LRR_CONFIG` field holding the safety password's bcrypt hash (absent = not configured). Excluded
+/// from the generic settings GET/PUT like legacy's own `password` field.
+pub const SAFETY_PASSWORD_HASH_FIELD: &str = "safety_password_hash";
+/// `LRR_CONFIG` field recording when the safety password was last set (display only).
+pub const SAFETY_PASSWORD_SET_AT_FIELD: &str = "safety_password_set_at";
+
+/// Prefix for the per-login-family failed-verification counter (string, TTL 300 s).
+pub const SAFETY_FAIL_KEY_PREFIX: &str = "LANRURUGI_SAFETY_FAIL:";
+/// Prefix for the per-login-family lock marker (string, TTL 300 s, value = unlock unix seconds).
+pub const SAFETY_LOCK_KEY_PREFIX: &str = "LANRURUGI_SAFETY_LOCK:";

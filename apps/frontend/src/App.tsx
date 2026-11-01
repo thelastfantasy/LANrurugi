@@ -9,6 +9,7 @@ import { FirstRunWizardGate } from "./FirstRunWizardGate"
 import { Layout } from "./Layout"
 import { Library } from "./pages/Library"
 import { Login } from "./pages/Login"
+import { RecycleBinPage } from "./pages/RecycleBin"
 import { RouteFallback } from "./RouteFallback"
 import { AllowGuest, RequireAuth, RequireGuest } from "./RouteGuards"
 
@@ -94,6 +95,7 @@ export function App() {
           <Route element={<RequireAuth />}>
             <Route path="/activity" element={<ActivityPage />} />
             <Route path="/bookmarks" element={<BookmarksPage />} />
+            <Route path="/recycle-bin" element={<RecycleBinPage />} />
             <Route path="/edit/:archiveId" element={<Edit />} />
             <Route path="/tankoubon/:tankId/edit" element={<TankoubonEdit />} />
             <Route path="/config/categories" element={<Categories />} />

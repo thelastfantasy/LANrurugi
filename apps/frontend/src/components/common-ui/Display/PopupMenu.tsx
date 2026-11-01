@@ -99,10 +99,10 @@ export function PopupMenuItem({
 
 /** A horizontal divider between groups of {@link PopupMenuItem}s — matches legacy's own
  * `.context-menu-separator`. Renders as `<li>` (via `render`) since it sits inside `PopupMenu`'s
- * own `<ul>`, not Base UI's default `<div>`. Negative horizontal margin cancels out the `<ul>`'s
- * own `m-[.3em]` so the line reaches the Popup's real outer border instead of stopping at the
- * `<ul>`'s own inset edge, which the menu rows' `px-4` (padding, not margin) doesn't share. */
+ * own `<ul>`, not Base UI's default `<div>`. A plain block `<li>` already spans the menu's full
+ * inner width; the negative horizontal margin this used to carry made it wider than the `<ul>`'s
+ * content box, which turned the menu's `overflow-y: auto` into a horizontal scrollbar. */
 export function PopupMenuSeparator() {
   const palette = useMenuPalette()
-  return <Separator render={<li />} className="my-[.35em] -mx-[.3em] border-b" style={{ borderColor: palette.separator }} />
+  return <Separator render={<li />} className="my-[.35rem] border-b" style={{ borderColor: palette.separator }} />
 }

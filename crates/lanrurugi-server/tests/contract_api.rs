@@ -12,8 +12,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use deadpool_redis::redis::AsyncCommands;
 use lanrurugi_api::{AppState, AuthConfig, LibraryPaths, Repositories};
-use lanrurugi_core::entities::Archive;
+use lanrurugi_core::entities::{Archive, Grouping};
+use lanrurugi_core::ids::{ArchiveId, TankId};
 use lanrurugi_core::jobs::JobRegistry;
 use lanrurugi_plugin::pool::PluginPool;
 use lanrurugi_scanner::handle::ScannerHandle;
@@ -2167,4 +2169,391 @@ async fn subfolders_to_tankoubons_creates_tankoubons_visible_in_list_all() {
             .await
             .unwrap();
     }
+}
+
+// --- specs/019 recycle bin & safety password ------------------------------------------------
+
+/// Sends one JSON request with the session cookie and returns `(status, body)`.
+async fn json_call(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    cookie: &str,
+    body: Option<Value>,
+) -> (axum::http::StatusCode, Value) {
+    let request = axum::http::Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("cookie", cookie)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            body.map(|b| b.to_string()).unwrap_or_default(),
+        ))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// Seeds one real on-disk archive so the recycle path has bytes to move.
+async fn seed_real_archive(redis: &RedisDbs, dir: &std::path::Path, id: &str) -> Archive {
+    let path = dir.join(format!("{id}.cbz"));
+    std::fs::write(&path, b"recycle-test-bytes").unwrap();
+    let archive = Archive {
+        id: lanrurugi_core::ids::ArchiveId(id.to_string()),
+        name: id.to_string(),
+        title: "Recycle fixture".to_string(),
+        file: path.to_string_lossy().into_owned(),
+        tags: "artist:fixture,recycle:test".to_string(),
+        summary: "summary".to_string(),
+        arcsize: 18,
+        pagecount: 4,
+        isnew: true,
+        lastreadpage: 2,
+        lastreadtime: 1234,
+        thumbhash: None,
+        toc: vec![],
+        stamp_ids: vec![],
+        heal_failed_at: None,
+        corrupted_pages: vec![],
+        has_patch: false,
+    };
+    lanrurugi_storage::repository::ArchiveRepository::new(redis.archive.clone())
+        .save(&archive)
+        .await
+        .unwrap();
+    archive
+}
+
+#[tokio::test]
+async fn delete_moves_an_archive_to_the_bin_and_restore_brings_it_back() {
+    let Some((app, redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    let cookie = login_cookie_fresh(&app).await;
+    let dir = tempfile::tempdir().unwrap();
+    let id = "9a".repeat(20);
+    let archive = seed_real_archive(&redis, dir.path(), &id).await;
+
+    let (status, body) = json_call(
+        &app,
+        "DELETE",
+        &format!("/api/archives/{id}"),
+        &cookie,
+        None,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    assert_eq!(body["recycled"], true);
+    assert!(!archive.file.is_empty());
+    assert!(
+        !std::path::Path::new(&archive.file).exists(),
+        "the file must have moved into the bin"
+    );
+
+    let (status, bin) = json_call(&app, "GET", "/api/recycle-bin", &cookie, None).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let entry = bin["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == id)
+        .expect("deleted archive must be listed in the bin");
+    assert_eq!(entry["restorable"], true);
+    assert_eq!(entry["title"], "Recycle fixture");
+
+    // FR-004: gone from every ordinary read path while recycled.
+    let (status, _) = json_call(
+        &app,
+        "GET",
+        &format!("/api/archives/{id}/metadata"),
+        &cookie,
+        None,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+
+    let (status, restored) = json_call(
+        &app,
+        "POST",
+        &format!("/api/recycle-bin/{id}/restore"),
+        &cookie,
+        None,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{restored}");
+    assert_eq!(restored["path"], archive.file);
+    assert!(std::path::Path::new(&archive.file).exists());
+
+    let (status, metadata) = json_call(
+        &app,
+        "GET",
+        &format!("/api/archives/{id}/metadata"),
+        &cookie,
+        None,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(metadata["title"], "Recycle fixture");
+    assert_eq!(metadata["tags"], "artist:fixture,recycle:test");
+    assert_eq!(metadata["progress"], 2);
+}
+
+#[tokio::test]
+async fn safety_password_gates_purging_and_locks_after_five_failures() {
+    let Some((app, redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    let cookie = login_cookie_fresh(&app).await;
+    let dir = tempfile::tempdir().unwrap();
+    let id = "9b".repeat(20);
+    let archive = seed_real_archive(&redis, dir.path(), &id).await;
+    let (status, _) = json_call(
+        &app,
+        "DELETE",
+        &format!("/api/archives/{id}"),
+        &cookie,
+        None,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    let (status, body) = json_call(
+        &app,
+        "DELETE",
+        &format!("/api/recycle-bin/{id}"),
+        &cookie,
+        Some(serde_json::json!({ "safety_password": "0000" })),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "safety_password_not_set");
+
+    let (status, body) = json_call(
+        &app,
+        "POST",
+        "/api/safety-password",
+        &cookie,
+        Some(serde_json::json!({ "new_password": "1234" })),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    assert_eq!(body["configured"], true);
+
+    let mut last_status = axum::http::StatusCode::OK;
+    for _ in 0..5 {
+        let (status, _) = json_call(
+            &app,
+            "DELETE",
+            &format!("/api/recycle-bin/{id}"),
+            &cookie,
+            Some(serde_json::json!({ "safety_password": "0000" })),
+        )
+        .await;
+        last_status = status;
+    }
+    assert_eq!(last_status, axum::http::StatusCode::TOO_MANY_REQUESTS);
+
+    // Locked means even the correct digits are refused.
+    let (status, body) = json_call(
+        &app,
+        "DELETE",
+        &format!("/api/recycle-bin/{id}"),
+        &cookie,
+        Some(serde_json::json!({ "safety_password": "1234" })),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::TOO_MANY_REQUESTS, "{body}");
+
+    // Simulate the lock expiring without waiting five minutes (test-only key surgery).
+    {
+        let mut conn = redis.config.get().await.unwrap();
+        let keys: Vec<String> = deadpool_redis::redis::cmd("KEYS")
+            .arg("LANRURUGI_SAFETY_*")
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        if !keys.is_empty() {
+            let _: () = conn.del(keys.as_slice()).await.unwrap();
+        }
+    }
+
+    let (status, body) = json_call(
+        &app,
+        "DELETE",
+        &format!("/api/recycle-bin/{id}"),
+        &cookie,
+        Some(serde_json::json!({ "safety_password": "1234" })),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    assert!(!std::path::Path::new(&archive.file).exists());
+
+    // Reset with the login password clears the credential.
+    let (status, body) = json_call(
+        &app,
+        "POST",
+        "/api/safety-password/reset",
+        &cookie,
+        Some(serde_json::json!({ "login_password": "kamimamita" })),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    assert_eq!(body["configured"], false);
+}
+
+#[tokio::test]
+async fn recycle_prunes_emptied_subdirectories_and_restore_recreates_them() {
+    let Some((app, redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    let cookie = login_cookie_fresh(&app).await;
+    let root = tempfile::tempdir().unwrap();
+    let nested = root.path().join("series").join("volume 01");
+    std::fs::create_dir_all(&nested).unwrap();
+    let id = "9c".repeat(20);
+    let archive = seed_real_archive(&redis, &nested, &id).await;
+
+    let (status, body) = json_call(
+        &app,
+        "DELETE",
+        &format!("/api/archives/{id}"),
+        &cookie,
+        None,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    // The delete moved the only file out, so the emptied chain up to the library root is gone.
+    assert!(
+        !nested.exists(),
+        "the emptied subdirectory should be pruned"
+    );
+    assert!(!root.path().join("series").exists());
+
+    let (status, restored) = json_call(
+        &app,
+        "POST",
+        &format!("/api/recycle-bin/{id}/restore"),
+        &cookie,
+        None,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{restored}");
+    assert_eq!(restored["path"], archive.file);
+    assert_eq!(restored["renamed"], false);
+    assert!(
+        std::path::Path::new(&archive.file).exists(),
+        "restore must recreate the original nested path"
+    );
+}
+
+#[tokio::test]
+async fn recycling_a_tankoubon_keeps_it_as_one_restorable_entry() {
+    let Some((app, redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    let cookie = login_cookie_fresh(&app).await;
+    let root = tempfile::tempdir().unwrap();
+    let volume_one = root.path().join("tank").join("vol 1");
+    let volume_two = root.path().join("tank").join("vol 2");
+    std::fs::create_dir_all(&volume_one).unwrap();
+    std::fs::create_dir_all(&volume_two).unwrap();
+    let id_one = "9d".repeat(20);
+    let id_two = "9e".repeat(20);
+    let archive_one = seed_real_archive(&redis, &volume_one, &id_one).await;
+    let archive_two = seed_real_archive(&redis, &volume_two, &id_two).await;
+
+    let tank_id = "TANK_1700000000".to_string();
+    let groupings = lanrurugi_storage::repository::GroupingRepository::new(redis.archive.clone());
+    groupings
+        .save(&Grouping {
+            tankid: TankId(tank_id.clone()),
+            name: "Tank Fixture".to_string(),
+            summary: "summary".to_string(),
+            tags: "artist:tank".to_string(),
+            progress: 3,
+            archives: vec![ArchiveId(id_one.clone()), ArchiveId(id_two.clone())],
+            thumbnail_manual: false,
+            thumbnail_source_archive: None,
+            thumbnail_source_page: None,
+            chapter_names: vec![],
+            created_at: None,
+            updated_at: None,
+        })
+        .await
+        .unwrap();
+
+    let (status, body) = json_call(
+        &app,
+        "DELETE",
+        &format!("/api/tankoubons/{tank_id}?mode=recycle"),
+        &cookie,
+        None,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    assert_eq!(body["recycled"], true);
+    assert!(!std::path::Path::new(&archive_one.file).exists());
+    assert!(!std::path::Path::new(&archive_two.file).exists());
+    assert!(groupings
+        .get(&TankId(tank_id.clone()))
+        .await
+        .unwrap()
+        .is_none());
+
+    // The bin shows one Tankoubon row, not two orphaned archives.
+    let (status, bin) = json_call(&app, "GET", "/api/recycle-bin", &cookie, None).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let entry = bin["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == tank_id)
+        .expect("the tankoubon must be one bin row");
+    assert_eq!(entry["kind"], "tankoubon");
+    assert_eq!(entry["member_count"], 2);
+    assert_eq!(entry["members"].as_array().unwrap().len(), 2);
+    assert!(
+        bin["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["kind"] != "archive" || (e["id"] != id_one && e["id"] != id_two)),
+        "member archives must not be listed separately"
+    );
+
+    let (status, restored) = json_call(
+        &app,
+        "POST",
+        &format!("/api/recycle-bin/{tank_id}/restore"),
+        &cookie,
+        None,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{restored}");
+    assert_eq!(restored["kind"], "tankoubon");
+    assert_eq!(restored["members"], 2);
+    assert!(std::path::Path::new(&archive_one.file).exists());
+    assert!(std::path::Path::new(&archive_two.file).exists());
+    let grouping = groupings
+        .get(&TankId(tank_id))
+        .await
+        .unwrap()
+        .expect("the tankoubon record must be back");
+    assert_eq!(grouping.name, "Tank Fixture");
+    assert_eq!(grouping.progress, 3);
+    assert_eq!(
+        grouping.archives,
+        vec![ArchiveId(id_one), ArchiveId(id_two)]
+    );
 }

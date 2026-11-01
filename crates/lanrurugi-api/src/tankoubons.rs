@@ -1406,18 +1406,78 @@ pub struct UpdateTankoubonMetadata {
     chapter_names: Option<Vec<lanrurugi_core::entities::ChapterNameEntry>>,
 }
 
+#[derive(serde::Deserialize, Default)]
+pub struct DeleteTankParams {
+    /// `dissolve` (default): delete the grouping only, members stay in the library.
+    /// `recycle`: move every member archive into the recycle bin, then delete the grouping, keeping
+    /// the whole Tankoubon restorable as one unit.
+    #[serde(default)]
+    mode: Option<String>,
+}
+
 async fn delete_tankoubon(
     State(state): State<AppState>,
     auth: Option<axum::extract::Extension<AuthContext>>,
     Path(id): Path<TankId>,
+    Query(params): Query<DeleteTankParams>,
 ) -> Response {
+    let auth_ref = auth.as_ref().map(|e| &e.0);
+    if params.mode.as_deref() == Some("recycle") {
+        if let Err(e) = crate::recycle::recycle_tankoubon(&state, &id, auth_ref).await {
+            return error(StatusCode::INTERNAL_SERVER_ERROR, "delete_tankoubon", e);
+        }
+        match dissolve_tankoubon(&state, &id, auth_ref, false).await {
+            Ok(()) => {
+                record_manual(
+                    &state,
+                    auth_ref,
+                    action_types::TANKOUBON_RECYCLE,
+                    ActivityTarget {
+                        id: Some(id.0.clone()),
+                        label: None,
+                        kind: Some("tankoubon".to_string()),
+                    },
+                    Outcome::Success,
+                    None,
+                    None,
+                )
+                .await;
+                return axum::Json(json!({
+                    "operation": "delete_tankoubon",
+                    "success": 1,
+                    "recycled": true,
+                }))
+                .into_response();
+            }
+            Err(e) => {
+                // Members are already in the bin; put them back if the grouping could not be
+                // dropped, so the tankoubon is not left half deleted.
+                let _ = crate::recycle::restore_tankoubon(&state, id.as_str(), None).await;
+                return error(StatusCode::INTERNAL_SERVER_ERROR, "delete_tankoubon", e);
+            }
+        }
+    }
+    match dissolve_tankoubon(&state, &id, auth_ref, true).await {
+        Ok(()) => {
+            axum::Json(json!({ "operation": "delete_tankoubon", "success": 1 })).into_response()
+        }
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, "delete_tankoubon", e),
+    }
+}
+
+async fn dissolve_tankoubon(
+    state: &AppState,
+    id: &TankId,
+    auth: Option<&AuthContext>,
+    record_activity: bool,
+) -> Result<(), String> {
     // Fetched before delete purely to know which member archives (if any) need restoring to
     // `TANKGROUPED_KEY`, and the tank's own current name for the title-index cleanup — a missing/
     // already-gone grouping just means nothing to restore/clean up.
-    let old = state.repos.groupings.get(&id).await.ok().flatten();
+    let old = state.repos.groupings.get(id).await.ok().flatten();
     let old_archives = old.as_ref().map(|g| g.archives.clone()).unwrap_or_default();
     let old_name = old.as_ref().map(|g| g.name.clone()).unwrap_or_default();
-    match state.repos.groupings.delete(&id).await {
+    match state.repos.groupings.delete(id).await {
         Ok(()) => {
             // Push this Tankoubon's translation switch down onto each former member's own key
             // before it's gone — otherwise every member would silently revert to "off" the instant
@@ -1425,11 +1485,11 @@ async fn delete_tankoubon(
             let scope_repo = lanrurugi_translate::settings::TranslationScopeRepository::new(
                 state.redis.config.clone(),
             );
-            if let Err(e) = scope_repo.inherit_from_tankoubon(&id, &old_archives).await {
+            if let Err(e) = scope_repo.inherit_from_tankoubon(id, &old_archives).await {
                 tracing::warn!(%id, error = %e, "failed to push translation scope down to former tankoubon members");
             }
 
-            let others = other_groupings(&state, &id).await;
+            let others = other_groupings(state, id).await;
             let (_, left) = tank_membership_delta(&old_archives, &[], &others);
             if let Err(e) =
                 lanrurugi_search::indexer::sync_tank_membership(&state.redis.search, &[], &left)
@@ -1440,7 +1500,7 @@ async fn delete_tankoubon(
             // Outright deletion is the only thing that removes the tank's own id from the search
             // index — see `sync_tank_membership`'s own docs for why emptying it out must not.
             if let Err(e) =
-                lanrurugi_search::indexer::remove_tank_from_index(&state.redis.search, &id).await
+                lanrurugi_search::indexer::remove_tank_from_index(&state.redis.search, id).await
             {
                 tracing::warn!(%id, error = %e, "failed to remove tank from search index");
             }
@@ -1448,7 +1508,7 @@ async fn delete_tankoubon(
                 if let Err(e) = lanrurugi_search::indexer::remove_title_index(
                     &state.redis.search,
                     &state.equivalence,
-                    &id,
+                    id,
                     &old_name,
                 )
                 .await
@@ -1456,46 +1516,46 @@ async fn delete_tankoubon(
                     tracing::warn!(%id, error = %e, "failed to remove tank title search index");
                 }
             }
-            record_manual(
-                &state,
-                auth.as_ref().map(|e| &e.0),
-                action_types::TANKOUBON_DELETE,
-                ActivityTarget {
-                    id: Some(id.0.clone()),
-                    label: Some(old_name).filter(|n| !n.is_empty()),
-                    kind: Some("tankoubon".to_string()),
-                },
-                Outcome::Success,
-                None,
-                None,
-            )
-            .await;
-            axum::Json(json!({ "operation": "delete_tankoubon", "success": 1 })).into_response()
+            if record_activity {
+                record_manual(
+                    state,
+                    auth,
+                    action_types::TANKOUBON_DELETE,
+                    ActivityTarget {
+                        id: Some(id.0.clone()),
+                        label: Some(old_name).filter(|n| !n.is_empty()),
+                        kind: Some("tankoubon".to_string()),
+                    },
+                    Outcome::Success,
+                    None,
+                    None,
+                )
+                .await;
+            }
+            Ok(())
         }
         Err(e) => {
             // A real Redis delete failure on the actual delete attempt (not the earlier best-
             // effort lookup) — the user's delete genuinely didn't take effect.
-            record_manual(
-                &state,
-                auth.as_ref().map(|e| &e.0),
-                action_types::TANKOUBON_DELETE,
-                ActivityTarget {
-                    id: Some(id.0.clone()),
-                    label: Some(old_name).filter(|n| !n.is_empty()),
-                    kind: Some("tankoubon".to_string()),
-                },
-                Outcome::Failure {
-                    reason: e.to_string(),
-                },
-                None,
-                None,
-            )
-            .await;
-            error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "delete_tankoubon",
-                e.to_string(),
-            )
+            if record_activity {
+                record_manual(
+                    state,
+                    auth,
+                    action_types::TANKOUBON_DELETE,
+                    ActivityTarget {
+                        id: Some(id.0.clone()),
+                        label: Some(old_name).filter(|n| !n.is_empty()),
+                        kind: Some("tankoubon".to_string()),
+                    },
+                    Outcome::Failure {
+                        reason: e.to_string(),
+                    },
+                    None,
+                    None,
+                )
+                .await;
+            }
+            Err(e.to_string())
         }
     }
 }

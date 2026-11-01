@@ -48,6 +48,22 @@ entry's directory for crash recovery and on-disk self-description.
 
 `meta.json` is exactly `RecycleEntry` serialized (same `schema`), inside `<id>/meta.json`.
 
+### RecycleTank
+
+One recycled Tankoubon. Stored in `LANRURUGI_RECYCLE_TANKS` keyed by tank id; its member archives are
+ordinary `RecycleEntry` rows in `LANRURUGI_RECYCLE_BIN`, hidden from the top level while this record
+exists.
+
+| Field | Notes |
+|---|---|
+| `schema` | Entry format version. |
+| `tank_id` | `TANK_…` id; also the list row's `id`. |
+| `grouping` | The whole `Grouping` record (name, summary, tags, volume order, progress, cover choice), so restore is exact. |
+| `size`, `page_count` | Sums over members, for the row and for capacity accounting. |
+| `deleted_at`, `deleted_by` | Same semantics as an archive entry. |
+
+Restore/purge always act on the whole tank; a member is never restored or evicted on its own.
+
 ### RecycleEntryView (API DTO)
 
 Computed per request, never stored:
@@ -68,7 +84,7 @@ Stored in `LRR_CONFIG` through the existing `NUMBER_FIELDS` mechanism:
 | Setting | Default | Range | Meaning |
 |---|---|---|---|
 | `recycle_retention_days` | `30` | `0..=36500` | Days an entry is kept; `0` = forever. |
-| `recycle_max_size_mb` | `10240` (10 GiB) | `0..=1_048_576` | Maximum total bytes in the bin; `0` = unlimited. |
+| `recycle_max_size_gb` | `0` (unlimited) | `0..=1_048_576` | Maximum total size in GiB; `0` = unlimited (the default). The MiB field this shipped with for one release is read once, rounded up, then ignored. |
 
 Changing either value triggers an immediate sweep after the settings write succeeds.
 
@@ -89,6 +105,7 @@ Changing either value triggers an immediate sweep after the settings write succe
 | Key | DB | Type | Content |
 |---|---|---|---|
 | `LANRURUGI_RECYCLE_BIN` | archive | Hash | field = archive id, value = JSON `RecycleEntry` |
+| `LANRURUGI_RECYCLE_TANKS` | archive | Hash | field = tank id, value = JSON `RecycleTank` (grouping + its member ids live in the bin hash above) |
 | `LRR_CONFIG` | config | Hash | two new settings fields + two safety-password fields (new field names only) |
 | `LANRURUGI_SAFETY_FAIL:<family>` | config | String | failure counter |
 | `LANRURUGI_SAFETY_LOCK:<family>` | config | String | lock marker |

@@ -41,7 +41,9 @@ pub mod procedure;
 pub mod recommend;
 pub mod recommend_llm;
 pub mod recommend_precompute;
+pub mod recycle;
 pub mod repair;
+pub mod safety_password;
 pub mod scripts;
 pub mod search;
 pub mod search_history;
@@ -86,6 +88,8 @@ use axum::Router;
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(activity::router())
+        .merge(recycle::router())
+        .merge(safety_password::router())
         .merge(api_tokens::router())
         .merge(archive_split::router())
         .merge(archives::router())

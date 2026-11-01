@@ -364,6 +364,7 @@ async fn add_to_category(
     }
 }
 
+#[derive(Debug)]
 pub enum AddToCategoryError {
     CategoryNotFound,
     Dynamic,

@@ -369,11 +369,21 @@ pub async fn heal_pagecounts(archives: &ArchiveRepository) -> HealSummary {
                     Err(e) => e.to_string(),
                     Ok(_) => "archive contains no recognized image entries".to_string(),
                 };
+                // Books skip the "known failed" shortcut above (a book that failed last month may
+                // open after a worker upgrade), so a permanently broken book retries on *every*
+                // pass. Log only the first failure at WARN and the repeats at debug: three test
+                // fixtures left in a library turned into 173 identical warning events in a few
+                // hours, which drowns the issues list (2026-11-01).
+                let already_failing = archive.heal_failed_at.is_some();
                 archive.heal_failed_at = Some(now_unix_secs());
                 if let Err(e) = archives.save(&archive).await {
                     tracing::warn!(archive_id = %archive.id, error = %e, "heal_pagecounts: failed to persist heal_failed_at marker");
                 }
-                tracing::warn!(archive_id = %archive.id, %filename, %reason, "heal_pagecounts: failed, will not retry");
+                if already_failing {
+                    tracing::debug!(archive_id = %archive.id, %filename, %reason, "heal_pagecounts: still failing");
+                } else {
+                    tracing::warn!(archive_id = %archive.id, %filename, %reason, "heal_pagecounts: failed, will not retry");
+                }
                 summary.failed += 1;
                 summary.details.push(HealDetail {
                     archive_id: archive.id.to_string(),
@@ -808,5 +818,30 @@ mod tests {
         ));
 
         archives.delete(&id).await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod recycle_scan_tests {
+    use super::*;
+
+    /// A full walk must not see recycled payloads: `walk` feeds `full_scan`, and the same filter
+    /// backs the live watcher (specs/019 FR-005 / SC-003).
+    #[test]
+    fn walk_skips_the_recycle_bin_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let normal = root.path().join("book.zip");
+        std::fs::write(&normal, b"normal").unwrap();
+        let bin = root
+            .path()
+            .join(lanrurugi_storage::recycle::RECYCLE_DIR_NAME)
+            .join("a".repeat(40))
+            .join("payload");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("book.zip"), b"recycled").unwrap();
+
+        let mut found = Vec::new();
+        walk(root.path(), &mut found);
+        assert_eq!(found, vec![normal]);
     }
 }

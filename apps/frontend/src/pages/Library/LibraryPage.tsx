@@ -350,11 +350,12 @@ export function Library() {
           isTank={deleteTarget.isTank}
           source={sourceOf(lib.shown, deleteTarget.id)}
           onCancel={() => lib.setDeleteTarget(null)}
-          onConfirm={(blockResubscribe) => {
+          onConfirm={(blockResubscribe, tankMode) => {
             void lib.deleteArchive(
               deleteTarget.id,
               deleteTarget.isTank,
               blockResubscribe,
+              tankMode,
             );
             lib.setDeleteTarget(null);
           }}

@@ -15,6 +15,7 @@ pub mod keys;
 pub mod plugin_options;
 pub mod rebuild;
 pub mod recommend_cache;
+pub mod recycle;
 pub mod redis;
 pub mod refresh_tokens;
 pub mod repository;

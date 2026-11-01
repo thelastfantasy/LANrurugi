@@ -1407,3 +1407,164 @@ textarea {
 .diag-field-error {
     color: #C0392B;
 }
+
+/* 019 recycle bin: four-digit safety-password input (common-ui/Form/OTPField). One joined group
+   with a single outer border and only the first/last slot rounded, like shadcn's input-otp. The
+   real <input> covers the group invisibly so the phone keyboard stays open across all digits. */
+.otp-field-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.otp-field-wrap.is-start {
+  align-items: flex-start;
+}
+
+.otp-field-label {
+  font-size: 9pt;
+  color: #34353B;
+}
+
+.otp-field {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  box-sizing: border-box;
+  border: 1px solid #C7CDD1;
+  border-radius: 4px;
+  background: #ECF0F1;
+  overflow: hidden;
+}
+
+.otp-field:focus-within {
+  outline: 2px solid #3B97EA;
+  outline-offset: 1px;
+}
+
+.otp-field-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 46px;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #34353B;
+  font-family: inherit;
+  font-size: 17pt;
+  line-height: 1;
+  user-select: none;
+}
+
+.otp-field-slot + .otp-field-slot {
+  border-left: 1px solid #C7CDD1;
+}
+
+.otp-field-slot:first-child {
+  border-top-left-radius: 3px;
+  border-bottom-left-radius: 3px;
+}
+
+.otp-field-slot:last-child {
+  border-top-right-radius: 3px;
+  border-bottom-right-radius: 3px;
+}
+
+.otp-field-slot.is-active {
+  box-shadow: inset 0 -2px 0 #3B97EA;
+}
+
+/* Invisible but real: it owns focus, the caret position and paste for the whole group. 16px keeps
+   iOS from zooming the viewport when it focuses. */
+.otp-field-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  font-size: 16px;
+  opacity: 0;
+}
+
+.otp-field[data-invalid] {
+  border-color: #C0392B;
+}
+
+.otp-field[data-invalid]:focus-within {
+  outline-color: #C0392B;
+}
+
+.otp-field[data-invalid] .otp-field-slot.is-active {
+  box-shadow: inset 0 -2px 0 #C0392B;
+}
+
+@media (max-width: 560px) {
+  .otp-field-slot {
+    width: 38px;
+    height: 42px;
+    font-size: 15pt;
+  }
+}
+
+/* 019 recycle bin. Layout follows the Activity page (`div.ido` + `h1.ih` + grid rows); only the
+   danger colour needs a theme value, everything else inherits. */
+.recycle-conflict {
+  color: #C0392B;
+  font-size: 8.5pt;
+}
+
+.recycle-path {
+  font-size: 8pt;
+  opacity: 0.65;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recycle-thumb {
+  width: 44px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  opacity: 0.9;
+}
+
+.recycle-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.recycle-thumb i {
+  font-size: 14pt;
+  opacity: 0.4;
+}
+
+.otp-field-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  align-items: center;
+}
+
+.otp-field-error {
+  color: #C0392B;
+  font-size: 9pt;
+  text-align: center;
+  margin: 10px 0 0;
+}

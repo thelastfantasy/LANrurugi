@@ -46,6 +46,12 @@ pub(crate) const DEFAULT_READER_QUALITY: i64 = 85;
 /// See `NUMBER_FIELDS`' own entry for what this bounds.
 pub(crate) const DEFAULT_QUEUE_RETENTION_DAYS: i64 = 30;
 pub(crate) const DEFAULT_WEBP_QUALITY: i64 = 85;
+/// specs/019: how long a recycled archive stays recoverable. `0` means "keep forever".
+pub(crate) const DEFAULT_RECYCLE_RETENTION_DAYS: i64 = 30;
+/// specs/019: the recycle bin's total size cap in GiB. `0` means "unlimited", which is the
+/// default — the retention window is the bound until an operator opts into a cap. GiB rather than
+/// MiB so the smallest meaningful cap is 1 GiB instead of a one-megabyte foot-gun.
+pub(crate) const DEFAULT_RECYCLE_MAX_SIZE_GB: i64 = 0;
 
 pub fn router() -> Router<AppState> {
     // `/settings/password` ("账号安全类" danger) — no API token, admin-role or not, may change the
@@ -413,6 +419,9 @@ const NUMBER_FIELDS: &[(&str, i64)] = &[
         "download_queue_retention_days",
         DEFAULT_QUEUE_RETENTION_DAYS,
     ),
+    // specs/019 — the recycle bin's two bounds, enforced by `recycle::sweep`.
+    ("recycle_retention_days", DEFAULT_RECYCLE_RETENTION_DAYS),
+    ("recycle_max_size_gb", DEFAULT_RECYCLE_MAX_SIZE_GB),
 ];
 
 const BOOL_FIELDS: &[(&str, bool)] = &[
@@ -540,6 +549,19 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
             return Err(format!(
                 "Field \"{key}\" must be a number of seconds >= 60."
             ));
+        }
+    }
+    if key == "recycle_retention_days" || key == "recycle_max_size_gb" {
+        let Some(value) = value.as_i64() else {
+            return Err(format!("Field \"{key}\" must be a number."));
+        };
+        let max = if key == "recycle_retention_days" {
+            36_500
+        } else {
+            1_048_576
+        };
+        if value < 0 || value > max {
+            return Err(format!("Field \"{key}\" must be between 0 and {max}."));
         }
     }
     if key == "max_login_devices" {
@@ -793,6 +815,9 @@ async fn put_settings(
     // `jxlthumbpages`), which needs a full regen so the library stays in one uniform format rather
     // than a mixed bag. A quality-only change (`webpquality`) intentionally does *not* trigger
     // this — it only affects thumbnails generated from here on.
+    // specs/019 — tightening either bin bound must take effect now, not on the next hourly sweep.
+    let recycle_bounds_changed =
+        fields.contains_key("recycle_retention_days") || fields.contains_key("recycle_max_size_gb");
     let new_enablewebp = fields.get("enablewebp").and_then(Value::as_bool);
     let previous_enablewebp = conn
         .hget::<_, _, Option<String>>(CONFIG_KEY, "enablewebp")
@@ -990,6 +1015,13 @@ async fn put_settings(
                 tracing::warn!(error = %e, "failed to enforce max_login_devices after settings change")
             }
         }
+    }
+
+    if recycle_bounds_changed {
+        let state = state.clone();
+        tokio::spawn(async move {
+            crate::recycle::sweep(&state).await;
+        });
     }
 
     axum::Json(json!({ "operation": "put_settings", "success": 1 })).into_response()

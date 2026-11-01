@@ -552,10 +552,11 @@ async fn clean_database(
             // an empty `file` does nothing to make them go away. Routing both deletion paths
             // through one function is also what stops them drifting apart again the next time a
             // cleanup step is added.
-            match crate::archives::delete_one_archive(
+            match crate::archives::purge_one_archive(
                 &state,
                 &archive.id,
                 auth.as_ref().map(|e| &e.0),
+                crate::archives::PurgeOptions::PERMANENT,
             )
             .await
             {

@@ -118,6 +118,15 @@ p, token_admin, /api/settings/password, POST, deny
 p, token_admin, /api/sessions, GET, deny
 p, token_admin, /api/sessions/:family_id, PATCH, deny
 p, token_admin, /api/sessions/:family_id, DELETE, deny
+# 019 recycle bin: destructive/credential surface, session-cookie only (same boundary as sessions).
+p, token_admin, /api/recycle-bin, GET, deny
+p, token_admin, /api/recycle-bin/:id/thumbnail, GET, deny
+p, token_admin, /api/recycle-bin/:id/restore, POST, deny
+p, token_admin, /api/recycle-bin/:id, DELETE, deny
+p, token_admin, /api/recycle-bin, DELETE, deny
+p, token_admin, /api/safety-password, GET, deny
+p, token_admin, /api/safety-password, POST, deny
+p, token_admin, /api/safety-password/reset, POST, deny
 p, token_admin, /api/tokens, GET, deny
 p, token_admin, /api/tokens, POST, deny
 p, token_admin, /api/tokens/:id, PATCH, deny
@@ -144,6 +153,14 @@ p, token_guest, /api/settings/password, POST, deny
 p, token_guest, /api/sessions, GET, deny
 p, token_guest, /api/sessions/:family_id, PATCH, deny
 p, token_guest, /api/sessions/:family_id, DELETE, deny
+p, token_guest, /api/recycle-bin, GET, deny
+p, token_guest, /api/recycle-bin/:id/thumbnail, GET, deny
+p, token_guest, /api/recycle-bin/:id/restore, POST, deny
+p, token_guest, /api/recycle-bin/:id, DELETE, deny
+p, token_guest, /api/recycle-bin, DELETE, deny
+p, token_guest, /api/safety-password, GET, deny
+p, token_guest, /api/safety-password, POST, deny
+p, token_guest, /api/safety-password/reset, POST, deny
 p, token_guest, /api/tokens, GET, deny
 p, token_guest, /api/tokens, POST, deny
 p, token_guest, /api/tokens/:id, PATCH, deny

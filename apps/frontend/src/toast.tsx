@@ -7,6 +7,10 @@ export interface ToastConfig {
   /** Rendered as plain text (React's default escaping) unless `html: true` is also set — see that
    * field's own docs. */
   text?: string
+  /** One inline action (e.g. "Undo" after moving an archive to the recycle bin). Rendered as a
+   * `.stdbtn` button inside the toast; clicking it does not dismiss the toast — the handler owns
+   * that, so a failed undo can leave its own error visible. */
+  action?: { label: string; onClick: () => void }
   /** Opt-in to rendering `text` as raw HTML — only for developer-authored strings with no user-
    * or plugin-controlled content; never interpolate untrusted input with `html: true`. */
   html?: boolean
@@ -49,6 +53,16 @@ export function toast(c: ToastConfig) {
       {c.heading && <h2>{c.heading}</h2>}
       {c.text && c.html && <div dangerouslySetInnerHTML={{ __html: c.text }} />}
       {c.text && !c.html && <div>{c.text}</div>}
+      {c.action && (
+        <button
+          type="button"
+          className="stdbtn"
+          style={{ marginTop: 8 }}
+          onClick={c.action.onClick}
+        >
+          {c.action.label}
+        </button>
+      )}
     </div>,
     options,
   )

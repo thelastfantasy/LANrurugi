@@ -51,6 +51,9 @@ enum Command {
     EvalGrouping(lanrurugi_server::cli::eval_grouping::EvalGroupingArgs),
     /// Run a sharing rendezvous/relay node for other instances, with no library and no Redis.
     ShareNode(lanrurugi_server::cli::share_node::ShareNodeArgs),
+    /// Clear the safety password (`specs/019`) and any verification lockout. For an operator who
+    /// cannot log in; never accepts a password argument.
+    ResetSafetyPassword(ResetSafetyPasswordArgs),
     /// Run the anonymous-heartbeat sink (the other end of `--telemetry-url`), against its own
     /// Redis and behind a Cloudflare Tunnel. One instance serves every deployment of the project;
     /// it is not part of a normal installation.
@@ -186,6 +189,16 @@ struct RebuildIndexArgs {
 }
 
 #[derive(clap::Args)]
+struct ResetSafetyPasswordArgs {
+    #[arg(
+        long,
+        env = "LANRURUGI_REDIS_URL",
+        default_value = DEFAULT_REDIS_URL
+    )]
+    redis_url: String,
+}
+
+#[derive(clap::Args)]
 struct BenchArgs {
     /// Base URL of an already-running legacy LANraragi instance to compare against (see
     /// `quickstart.md` §8 — standing up the legacy system itself is out of scope for this CLI).
@@ -261,6 +274,7 @@ async fn run(from_install_prefix: Vec<(&'static str, PathBuf)>) -> anyhow::Resul
             serve(args).await
         }
         Command::RebuildIndex(args) => rebuild_index(args).await,
+        Command::ResetSafetyPassword(args) => reset_safety_password(args).await,
         Command::EvalGrouping(args) => lanrurugi_server::cli::eval_grouping::run(args).await,
         Command::ShareNode(args) => lanrurugi_server::cli::share_node::run(args).await,
         Command::TelemetryIngest(args) => lanrurugi_server::cli::telemetry_ingest::run(args).await,
@@ -545,6 +559,34 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         activity_dedup,
         import_snapshots,
     };
+
+    // specs/019: finish any delete interrupted by a crash, then enforce the bin's bounds once before
+    // serving; failures are logged, never fatal.
+    {
+        let repaired = lanrurugi_api::recycle::reconcile(&state).await;
+        if repaired > 0 {
+            tracing::info!(repaired, "finished interrupted recycle-bin operations");
+        }
+        let report = lanrurugi_api::recycle::sweep(&state).await;
+        if report.expired + report.over_capacity > 0 {
+            tracing::info!(
+                expired = report.expired,
+                over_capacity = report.over_capacity,
+                "recycle bin swept at startup"
+            );
+        }
+    }
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
+            interval.tick().await; // consume the immediate first tick; startup already swept
+            loop {
+                interval.tick().await;
+                lanrurugi_api::recycle::sweep(&state).await;
+            }
+        });
+    }
 
     // Error telemetry: one background writer, so an envelope never costs a request a Redis round
     // trip (specs/018, research.md §1/§5).
@@ -1364,6 +1406,49 @@ async fn repair_zombie_archives(state: &AppState) {
 /// `POST /database/rebuild-index`, synchronously to completion rather than as a background job —
 /// appropriate for a one-shot CLI invocation (e.g. run once after upgrading from legacy, or from
 /// a maintenance cron, without needing an HTTP client to poll a job ID).
+/// `reset-safety-password`: clears the safety password and every lockout key without needing a
+/// login. Never prints or accepts the secret itself.
+async fn reset_safety_password(args: ResetSafetyPasswordArgs) -> anyhow::Result<()> {
+    let redis = lanrurugi_storage::redis::RedisDbs::connect(&args.redis_url)?;
+    let mut conn = redis.config.get().await?;
+    let _: () = conn
+        .hdel(
+            lanrurugi_storage::keys::CONFIG_KEY,
+            &[
+                lanrurugi_storage::keys::SAFETY_PASSWORD_HASH_FIELD,
+                lanrurugi_storage::keys::SAFETY_PASSWORD_SET_AT_FIELD,
+            ][..],
+        )
+        .await?;
+
+    // `SCAN`, never `KEYS`: a production config DB can hold far more than this app's own keys.
+    let mut cursor = 0u64;
+    let mut removed = 0usize;
+    loop {
+        let (next, keys): (u64, Vec<String>) = deadpool_redis::redis::cmd("SCAN")
+            .arg(cursor)
+            .arg("MATCH")
+            .arg("LANRURUGI_SAFETY_*")
+            .arg("COUNT")
+            .arg(200u64)
+            .query_async(&mut conn)
+            .await?;
+        if !keys.is_empty() {
+            let _: () = conn.del(keys.as_slice()).await?;
+            removed += keys.len();
+        }
+        cursor = next;
+        if cursor == 0 {
+            break;
+        }
+    }
+
+    println!(
+        "safety password cleared ({removed} lockout key(s) removed); set a new one in Settings"
+    );
+    Ok(())
+}
+
 async fn rebuild_index(args: RebuildIndexArgs) -> anyhow::Result<()> {
     let redis = RedisDbs::connect(&args.redis_url)?;
     let repos = Repositories::new(&redis);

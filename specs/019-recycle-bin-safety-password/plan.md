@@ -20,7 +20,7 @@ per-session-family lockout after five failures. It can be set or changed from Se
 password, or cleared from a new `lanrurugi reset-safety-password` CLI subcommand.
 
 The bin is bounded by two new numeric settings (`recycle_retention_days`, default 30, 0 = forever;
-`recycle_max_size_mb`, default 10 GiB, 0 = unlimited) enforced by an hourly in-process sweep plus immediate
+`recycle_max_size_gb`, default 0 = unlimited) enforced by an hourly in-process sweep plus immediate
 enforcement when a setting is tightened. The web UI gains a `/recycle-bin` page, a nav entry, an
 "undo" action on the delete toast, and a Settings section showing usage and the two limits.
 
@@ -53,7 +53,7 @@ watcher, the full scan and both subfolder scripts; a recycled id must behave exa
 everywhere except the bin endpoints.
 
 **Scale/Scope**: One library, one administrator, up to a few thousand recycled entries in pathological use;
-defaults bound the bin to 30 days / 10 GiB.
+defaults bound the bin to a 30-day window with no size cap.
 
 ## Constitution Check
 
@@ -101,7 +101,7 @@ crates/lanrurugi-api/src/
 ├── safety_password.rs       # NEW — set/change/reset, per-request verification, lockout
 ├── archives.rs              # delete_one_archive split: recycle vs purge, response field, thumbnail keep
 ├── state.rs                 # RecycleRepository + bin-mutation lock in AppState/Repositories
-├── settings.rs              # recycle_retention_days / recycle_max_size_mb fields + enforcement hook
+├── settings.rs              # recycle_retention_days / recycle_max_size_gb fields + enforcement hook
 ├── policy/route_policy.csv  # explicit denies for both token roles on the new routes
 └── lib.rs                   # router registration
 
@@ -109,7 +109,7 @@ crates/lanrurugi-scanner/src/watcher.rs   # is_watched_archive_path excludes the
 crates/lanrurugi-server/src/main.rs       # hourly sweep task; reset-safety-password subcommand
 
 apps/frontend/src/
-├── components/common-ui/Form/OTPField.tsx   # shared segmented code field on Base UI's OTPField
+├── components/common-ui/Form/OTPField.tsx   # shared single-input segmented code field
 ├── pages/RecycleBin/        # index.tsx, RecycleRow.tsx, SafetyPasswordDialog.tsx, RecycleBinToolbar.tsx
 ├── pages/Settings/RecycleBinSection.tsx
 ├── api/hooks.ts             # recycle-bin + safety-password queries/mutations

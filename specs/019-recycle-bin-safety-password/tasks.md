@@ -25,22 +25,22 @@ and independently testable.
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-- [ ] T001 Add the storage types and repository skeleton in `crates/lanrurugi-storage/src/recycle.rs`: `RecycleEntry`,
+- [X] T001 Add the storage types and repository skeleton in `crates/lanrurugi-storage/src/recycle.rs`: `RecycleEntry`,
   `RecycleSnapshot`, `RecycleActor`, `BookmarkSnapshot`, `RecycleEntryView`, `RecycleState` (as data-model.md),
   all `#[serde(rename_all = "snake_case")]`/`transparent` where applicable, and `RecycleRepository { pool }`.
   Register the module in `crates/lanrurugi-storage/src/lib.rs`.
-- [ ] T002 [P] Add key constants to `crates/lanrurugi-storage/src/keys.rs`: `RECYCLE_BIN_KEY = "LANRURUGI_RECYCLE_BIN"`,
+- [X] T002 [P] Add key constants to `crates/lanrurugi-storage/src/keys.rs`: `RECYCLE_BIN_KEY = "LANRURUGI_RECYCLE_BIN"`,
   `SAFETY_FAIL_KEY_PREFIX = "LANRURUGI_SAFETY_FAIL:"`, `SAFETY_LOCK_KEY_PREFIX = "LANRURUGI_SAFETY_LOCK:"`,
   and the `LRR_CONFIG` field names `safety_password_hash` / `safety_password_set_at` /
-  `recycle_retention_days` / `recycle_max_size_mb` as constants.
-- [ ] T003 [P] Add activity action types in `crates/lanrurugi-storage/src/activity.rs`'s `action_types`:
+  `recycle_retention_days` / `recycle_max_size_gb` as constants.
+- [X] T003 [P] Add activity action types in `crates/lanrurugi-storage/src/activity.rs`'s `action_types`:
   `ARCHIVE_RECYCLE`, `ARCHIVE_RESTORE`, `ARCHIVE_PURGE`, `RECYCLE_EMPTY`, `RECYCLE_SWEEP`,
   `SAFETY_PASSWORD_SET`, `SAFETY_PASSWORD_RESET`, with one-line docs matching the neighbouring entries.
-- [ ] T004 [P] Add the bin directory constant and path helpers in `crates/lanrurugi-scanner/src/watcher.rs`:
+- [X] T004 [P] Add the bin directory constant and path helpers in `crates/lanrurugi-scanner/src/watcher.rs`:
   `pub const RECYCLE_DIR_NAME: &str = ".lanrurugi-recycle";` and the component check inside
   `is_watched_archive_path` (before the extension check, next to the existing `thumb` check), so the watcher,
   `full_scan::walk`, `walk_subfolders` and `collect_archives_recursive` all exclude it from one place.
-- [ ] T005 [P] Add a scanner regression test in `crates/lanrurugi-scanner/src/full_scan.rs` (its `#[cfg(test)]`
+- [X] T005 [P] Add a scanner regression test in `crates/lanrurugi-scanner/src/full_scan.rs` (its `#[cfg(test)]`
   module): a temp library containing `.lanrurugi-recycle/<id>/payload/book.zip` scans to
   `catalogued == 0`, while the same file outside the bin still catalogues.
 
@@ -50,26 +50,26 @@ and independently testable.
 
 **Purpose**: the repository, filesystem primitives and app wiring that every story uses.
 
-- [ ] T006 Implement `RecycleRepository` in `crates/lanrurugi-storage/src/recycle.rs`: `put`, `get`, `list`
+- [X] T006 Implement `RecycleRepository` in `crates/lanrurugi-storage/src/recycle.rs`: `put`, `get`, `list`
   (single `HGETALL`, newest first), `remove`, `usage()` (count + bytes), `all_ids()`. Deserialize failures must be
   logged and skipped, never fail the whole listing. Redis-gated unit tests mirroring the `download_queue.rs`
   test convention (skip when `LANRURUGI_TEST_REDIS_URL` is unset).
-- [ ] T007 Implement the filesystem primitives in the same module: `bin_root(library)`, `entry_dir(library, id)`,
+- [X] T007 Implement the filesystem primitives in the same module: `bin_root(library)`, `entry_dir(library, id)`,
   `payload_dir(...)`, `write_meta_atomic` (temp file + rename), `read_meta`, `move_into_bin` (payload + optional
   patch, `rename`, `EXDEV` surfaced as an error not a copy), `move_out_of_bin`, `remove_entry_dir`. Unit tests
   with `tempfile` for a round-trip, for a missing payload, and for SC-006: on Unix, the payload's
   `MetadataExt::ino()` is unchanged after the move (a copy would allocate a new inode), so a future "helpful"
   copy fallback fails the test.
-- [ ] T008 Wire `RecycleRepository` into `AppState`/`Repositories` in `crates/lanrurugi-api/src/state.rs`, on the
+- [X] T008 Wire `RecycleRepository` into `AppState`/`Repositories` in `crates/lanrurugi-api/src/state.rs`, on the
   `archive` pool, plus a `recycle_locks: Arc<tokio::sync::Mutex<HashSet<ArchiveId>>>`-backed per-entry guard with
   an RAII guard type (or a small `recycle::EntryLock` helper) implementing the "one mutation per entry" rule
   (FR-014).
-- [ ] T009 Add `crates/lanrurugi-api/src/recycle.rs` with `pub fn router() -> Router<AppState>` registered in
+- [X] T009 Add `crates/lanrurugi-api/src/recycle.rs` with `pub fn router() -> Router<AppState>` registered in
   `crates/lanrurugi-api/src/lib.rs`, initially exposing only `GET /recycle-bin`; implement the listing handler
   returning `RecycleBinView` (entries + usage + limits + leftovers + `safety_password.configured`), with
   `restorable`/`conflict` derived at read time per data-model.md. `configured` is a direct `HEXISTS` on
   `LRR_CONFIG` here, deliberately not a call into the Phase 4 module, so Phase 2 never depends on US2.
-- [ ] T010 Add the docgen sidecar `docs/api/sidecar/recycle-bin.yaml` covering every route added by this feature
+- [X] T010 Add the docgen sidecar `docs/api/sidecar/recycle-bin.yaml` covering every route added by this feature
   as it lands (start with `GET /api/recycle-bin`), following `docs/api/sidecar/sessions.yaml`'s shape, with
   `tags: [recycle-bin]` and shared error schemas. `mise run check-crate -- lanrurugi-api-docgen` must pass.
 
@@ -87,59 +87,59 @@ reading progress; confirm the bin entry; restore; verify everything is back and 
 
 ### Implementation
 
-- [ ] T011 [US1] Snapshot builder in `crates/lanrurugi-api/src/recycle.rs`: read the `Archive`, then
+- [X] T011 [US1] Snapshot builder in `crates/lanrurugi-api/src/recycle.rs`: read the `Archive`, then
   `categories.for_archive`, `bookmarks.list_for_archive`, `stamps.get` for each `stamp_ids` entry, and
   `archives.version_histories_for`; assemble `RecycleEntry` (including `deleted_by` from `AuthContext`, falling
   back to a `system` actor when `None`).
-- [ ] T012 [US1] Split `delete_one_archive` in `crates/lanrurugi-api/src/archives.rs` into
+- [X] T012 [US1] Split `delete_one_archive` in `crates/lanrurugi-api/src/archives.rs` into
   `purge_archive_record(state, id, archive, auth)` (today's cleanup tail: record, search index, recommend cache,
   categories, bookmarks, stamps, download queue — **without** thumbnail removal for the recycle path) and
   `recycle_archive(state, id, archive, auth)`: acquire entry + filename locks, move payload/patch into the bin,
   write `meta.json`, `RecycleRepository::put`, `HDEL LRR_FILEMAP[original_path]` (so a different file later
   arriving at that path is never re-keyed against the recycled id), then `purge_archive_record`, then activity.
   Any failure before the move leaves the archive untouched (FR-002); a failure after it rolls back best-effort.
-- [ ] T013 [US1] Make the single and batch delete handlers return the additive field `recycled: true` (plus the
+- [X] T013 [US1] Make the single and batch delete handlers return the additive field `recycled: true` (plus the
   batch `recycled_count`), keeping every existing field and the `DeleteOneOutcome` shapes otherwise intact, and
   add no filesystem path to the response (contracts/http-api.md).
-- [ ] T014 [US1] Route every non-user deletion straight to `purge_archive_record` (FR-017): the missing-file
+- [X] T014 [US1] Route every non-user deletion straight to `purge_archive_record` (FR-017): the missing-file
   Clean Database path (`crates/lanrurugi-api/src/database.rs`), the post-download superseded-revision sweep
   (`crates/lanrurugi-api/src/plugins.rs`, `delete_one_archive` with no auth), and `archive_split.rs`'s removal of
   the original after a successful split (today a bare `archives.delete` + `remove_file` at the end of `execute`).
   Update each call site's comment so the next refactor cannot route it through the bin; add one assertion per
   path that no `LANRURUGI_RECYCLE_BIN` field appears.
-- [ ] T015 [US1] Keep thumbnails on recycle (do not unlink cover/per-page files in the recycle path) and verify no
+- [X] T015 [US1] Keep thumbnails on recycle (do not unlink cover/per-page files in the recycle path) and verify no
   existing thumbnail cleanup treats the id as dead; add `GET /api/recycle-bin/{id}/thumbnail` in
   `crates/lanrurugi-api/src/recycle.rs` streaming the existing cover file with its content type, `404` when absent
   (FR-016).
-- [ ] T016 [US1] Restore in `crates/lanrurugi-api/src/recycle.rs`: destination resolution per research §4
+- [X] T016 [US1] Restore in `crates/lanrurugi-api/src/recycle.rs`: destination resolution per research §4
   (same-id conflict → `409 identical_archive_exists`; payload missing or size ≠ recording →
   `payload_missing`/`payload_size_mismatch`; free path → as-is; occupied → ` (restored N)`; missing
-  directory/outside library → library root), then lock filename, move payload + patch out, `HSET
+  directory inside the library recreated, outside library → library root), then lock filename, move payload + patch out, `HSET
   LRR_FILEMAP[destination] = size_aware_id(payload)` (the scanner-computed id, **not** necessarily the stored id:
   equal for size-aware archives, and for a legacy-id entry writing the stored id would make the watcher re-key
   the record and orphan the stamps/bookmarks restore just re-created — see research §4), `archives.save`,
   re-apply categories/bookmarks/stamps/version history, remove the entry. Return
   `{operation, success, id, path, renamed}`. `POST /api/recycle-bin/{id}/restore` (FR-006–FR-009).
-- [ ] T017 [US1] Startup reconciliation in `crates/lanrurugi-api/src/recycle.rs`: `reconcile(state)` over the
+- [X] T017 [US1] Startup reconciliation in `crates/lanrurugi-api/src/recycle.rs`: `reconcile(state)` over the
   bin directory vs the hash, applying the five-row table in research §3 (finish a half-done delete, rebuild
   missing `meta.json` from the record, adopt orphan entries, mark payload-less entries un-restorable, count
   leftovers with the 24 h grace). Call it once from `crates/lanrurugi-server/src/main.rs` before serving, and
   expose the leftover count in the listing (FR-013).
-- [ ] T018 [US1] Activity entries for `archive.recycle` and `archive.restore` with actor, archive id, title and
+- [X] T018 [US1] Activity entries for `archive.recycle` and `archive.restore` with actor, archive id, title and
   file path (FR-015), plus the matching labels in
   `apps/frontend/src/pages/Activity/OperationDescription.tsx` and `.../activityTarget.ts`.
-- [ ] T019 [US1] Frontend data layer: `apps/frontend/src/api/recycle.ts` (types + fetchers) and TanStack Query
+- [X] T019 [US1] Frontend data layer: `apps/frontend/src/api/recycle.ts` (types + fetchers) and TanStack Query
   hooks in `apps/frontend/src/api/hooks.ts` (`useRecycleBin`, `useRestoreArchive`), with cache invalidation of
   the library/search queries after a restore.
-- [ ] T020 [US1] Frontend page `apps/frontend/src/pages/RecycleBin/`: `index.tsx` (page component only),
+- [X] T020 [US1] Frontend page `apps/frontend/src/pages/RecycleBin/`: `index.tsx` (page component only),
   `RecycleRow.tsx`, `RecycleBinToolbar.tsx` — thumbnail, title, filename, size, deleted-at, original path,
   restore action, un-restorable reason, empty state, filter input (contracts/ui.md). Route `/recycle-bin` in
   `apps/frontend/src/App.tsx` and the nav link in `apps/frontend/src/Layout.tsx`.
-- [ ] T021 [US1] Delete-flow integration: extend the existing confirmation copy in
+- [X] T021 [US1] Delete-flow integration: extend the existing confirmation copy in
   `apps/frontend/src/pages/Library/ArchiveContextMenu.tsx` (and the Batch/Edit delete affordances) to say the
   archive moves to the bin, and add the "Moved to the recycle bin · Undo" toast action calling
   `useRestoreArchive` (FR-034). Add undo-action support to `apps/frontend/src/toast.tsx` if it has none.
-- [ ] T022 [US1] Tests: API integration in `crates/lanrurugi-server/tests/` for delete→list→restore fidelity
+- [X] T022 [US1] Tests: API integration in `crates/lanrurugi-server/tests/` for delete→list→restore fidelity
   (title/tags/categories/bookmarks/stamps/progress/path, including the sidecar patch file and the `has_patch`
   flag), for the batch delete recycling every id, and for FR-004 after a delete: `/api/search`, the category's
   archive list, `/api/database/stats` and `/api/archives/{id}` all report the archive as absent; a
@@ -160,42 +160,42 @@ session-only authorization.
 
 ### Implementation
 
-- [ ] T023 [US2] `crates/lanrurugi-api/src/safety_password.rs`: credential read/write helpers over `LRR_CONFIG`
+- [X] T023 [US2] `crates/lanrurugi-api/src/safety_password.rs`: credential read/write helpers over `LRR_CONFIG`
   (`hash_password`/`verify_password`, 4-ASCII-digit validation), excluded from the generic `GET/PUT /settings`
   payload (mirror `password`'s own exclusion in `settings.rs`).
-- [ ] T024 [US2] Verification helper `verify_safety_password(state, auth, pin) -> Result<(), SafetyPasswordError>`
+- [X] T024 [US2] Verification helper `verify_safety_password(state, auth, pin) -> Result<(), SafetyPasswordError>`
   implementing the lock-before-bcrypt order, the per-family counter/lock keys (TTL 300 s, threshold 5), the
   `safety_password_not_set` case and the generic `safety_password_incorrect` failure (FR-021–FR-024).
-- [ ] T025 [US2] Endpoints in `safety_password.rs`: `GET /api/safety-password`, `POST /api/safety-password`
+- [X] T025 [US2] Endpoints in `safety_password.rs`: `GET /api/safety-password`, `POST /api/safety-password`
   (set/change; the current-password check goes through T024's helper so it shares the same counter and lock),
   `POST /api/safety-password/reset` (login password verified via `password::verify_password`, clears hash + lock
   keys). Every successful set/change/reset writes the `safety_password.set`/`safety_password.reset` activity
   entry with no PIN content (FR-036). Register the router (FR-018/FR-019/FR-025).
-- [ ] T026 [US2] Purge and empty endpoints in `crates/lanrurugi-api/src/recycle.rs`: `DELETE /api/recycle-bin/{id}`
+- [X] T026 [US2] Purge and empty endpoints in `crates/lanrurugi-api/src/recycle.rs`: `DELETE /api/recycle-bin/{id}`
   and `DELETE /api/recycle-bin`, both taking `{safety_password}`, resolving in the contract's fixed order
   (session → password/lock → entry → per-entry lock → execute) so a wrong PIN never reveals whether the id
   exists, then removing payload, patch, thumbnails, hash field and `meta.json`; partial failures reported per id
   and surviving entries kept (FR-010, FR-011, FR-022). Record `archive.purge` / `recycle.empty` activity.
-- [ ] T027 [US2] Lockout, per-entry serialization and conflict responses on the three mutations: `429` with
+- [X] T027 [US2] Lockout, per-entry serialization and conflict responses on the three mutations: `429` with
   `locked_until` while locked (checked before the entry lookup), `404` only once verification has passed, `409 in
   progress` / `404 already gone` for a lost race (FR-014, FR-022).
-- [ ] T028 [US2] Authorization: add explicit `token_admin`/`token_guest` deny lines for `/api/recycle-bin*` and
+- [X] T028 [US2] Authorization: add explicit `token_admin`/`token_guest` deny lines for `/api/recycle-bin*` and
   `/api/safety-password*` to `crates/lanrurugi-api/policy/route_policy.csv`; add the matching assertions to
   `crates/lanrurugi-api/src/authz.rs`'s test block (FR-027).
-- [ ] T029 [US2] CLI: add `ResetSafetyPassword { redis_url }` to `crates/lanrurugi-server/src/main.rs`, clearing
+- [X] T029 [US2] CLI: add `ResetSafetyPassword { redis_url }` to `crates/lanrurugi-server/src/main.rs`, clearing
   the two `LRR_CONFIG` fields and every `LANRURUGI_SAFETY_*` key, printing one confirmation line and never
   accepting/printing a password (FR-026). Document it in the binary's `--help` text and `README.md`'s CLI list.
-- [ ] T030 [US2] Create the shared component `apps/frontend/src/components/common-ui/Form/OTPField.tsx`,
-  built on Base UI's `OTPField` (`@base-ui/react/otp-field`: `Root` / `Input` / `Separator`, already in the
-  installed `@base-ui/react`): props `length` (default 4), controlled `value` + `onValueChange`, `onComplete`,
-  `mask` (default off so the four digits stay readable while typing), `disabled`, `invalid`, `autoFocus`,
+- [X] T030 [US2] Create the shared component `apps/frontend/src/components/common-ui/Form/OTPField.tsx`,
+  built as one real `<input>` behind four presentational slots (Base UI's per-slot `OTPField` was dropped:
+  focusing a new input per digit closes the Android soft keyboard after every character): props `length` (default 4), controlled `value` + `onValueChange`, `onComplete`,
+  `mask` (default on so the digits are never readable on screen), `disabled`, `invalid`, `autoFocus`,
   `label`, `slotLabel(index, total)` for the per-slot `aria-label`, and `describedById`. Root renders with the
   `.otp-field` class and `data-invalid`; every slot is `OTPField.Input` with `.otp-field-slot`; on completion,
   focus moves to the caller's confirm button rather than auto-submitting. Export it from `Form/index.ts` and the
   common-ui barrel. Vitest/RTL test (`OTPField.test.tsx`): four slots render, typing/pasting/backspace fill and
   clear them, `onValueComplete` fires once at four digits, disabled/invalid attributes propagate, and only the
   first slot carries the label (the rest get the position `aria-label`).
-- [ ] T031 [P] [US2] Add the OTP field's theme classes to **all five** files in
+- [X] T031 [P] [US2] Add the OTP field's theme classes to **all five** files in
   `apps/frontend/public/legacy/themes/` (`g.css`, `ex.css`, `modern.css`, `modern_red.css`,
   `modern_clear.css`), per CLAUDE.md's custom-colour rule and the `.tankoubon-member-row` precedent: `.otp-field`
   (flex layout + gap), `.otp-field-slot` (box size, border, background, text colour — each taken from that
@@ -205,15 +205,15 @@ session-only authorization.
   Append each file's block at its end with a one-line comment; do not use the transitional `--theme-*` variables
   from `apps/frontend/src/index.css`, and do not put any of these values in an inline `style`.
 
-- [ ] T032 [US2] Frontend: `apps/frontend/src/pages/RecycleBin/SafetyPasswordDialog.tsx` implementing
+- [X] T032 [US2] Frontend: `apps/frontend/src/pages/RecycleBin/SafetyPasswordDialog.tsx` implementing
   contracts/ui.md (setup-when-unconfigured, the shared `OTPField` for every four-digit entry, attempts
   remaining, lock countdown, focus trap/Escape/focus return), plus `useSafetyPasswordStatus` /
   `useSetSafetyPassword` / `useResetSafetyPassword` / `usePurgeEntry` / `useEmptyBin` hooks and the row/toolbar
   wiring.
-- [ ] T033 [US2] Frontend: safety-password block (set/change/reset) in
+- [X] T033 [US2] Frontend: safety-password block (set/change/reset) in
   `apps/frontend/src/pages/Settings/RecycleBinSection.tsx`, reusing `OTPField` (never a second PIN input) and
   the same submit/error handling as the dialog.
-- [ ] T034 [US2] Tests: API integration for not-configured refusal, wrong PIN changes nothing, five failures lock
+- [X] T034 [US2] Tests: API integration for not-configured refusal, wrong PIN changes nothing, five failures lock
   (correct PIN refused while locked; the counter is shared with the change-current-password check), lock expiry
   via a manually deleted lock key, reset with the login password, a wrong PIN on a nonexistent id answering the
   same way as on an existing one, the `safety_password.*` activity entries carrying no PIN content, and no
@@ -236,21 +236,21 @@ session-only authorization.
 
 ### Implementation
 
-- [ ] T037 [US3] Add `recycle_retention_days` (default 30, `0..=36500`) and `recycle_max_size_mb`
-  (default 10240, `0..=1_048_576`) to `NUMBER_FIELDS` in `crates/lanrurugi-api/src/settings.rs`, with the
+- [X] T037 [US3] Add `recycle_retention_days` (default 30, `0..=36500`) and `recycle_max_size_gb`
+  (default 0 = unlimited, `0..=1_048_576`) to `NUMBER_FIELDS` in `crates/lanrurugi-api/src/settings.rs`, with the
   range check in `validate_setting_field` and the two values included in the settings GET payload.
-- [ ] T038 [US3] `sweep(state)` in `crates/lanrurugi-api/src/recycle.rs`: delete entries past retention (skip
+- [X] T038 [US3] `sweep(state)` in `crates/lanrurugi-api/src/recycle.rs`: delete entries past retention (skip
   when 0), then evict oldest-first until within the cap but never the newest entry (skip when 0); each removal
   deletes payload/patch/thumbnails/entry and writes `recycle.sweep` activity with `System` actor and
   `reason: expired|over_capacity` (FR-028–FR-031).
-- [ ] T039 [US3] Scheduling: hourly `tokio::time::interval` task in `crates/lanrurugi-server/src/main.rs`
+- [X] T039 [US3] Scheduling: hourly `tokio::time::interval` task in `crates/lanrurugi-server/src/main.rs`
   alongside the existing sweeps, one run at startup after `reconcile`, and an immediate spawn after a
   `PUT /settings` that lowers either bound (T037's hook). Never block request handling (FR-030).
-- [ ] T040 [US3] Immediate enforcement hook in `crates/lanrurugi-api/src/settings.rs`: after a successful write
+- [X] T040 [US3] Immediate enforcement hook in `crates/lanrurugi-api/src/settings.rs`: after a successful write
   that changes either bound, spawn `recycle::sweep`, so tightening takes effect without waiting for the hour.
-- [ ] T041 [US3] Listing additions: `expires_at`/`remaining_seconds` per entry, `leftovers`, and the usage/limits
+- [X] T041 [US3] Listing additions: `expires_at`/`remaining_seconds` per entry, `leftovers`, and the usage/limits
   block already scaffolded in T009, now driven by the real settings (FR-031/FR-032).
-- [ ] T042 [US3] Frontend: `RecycleBinSection.tsx` retention/capacity inputs + usage line + effective-limit text,
+- [X] T042 [US3] Frontend: `RecycleBinSection.tsx` retention/capacity inputs + usage line + effective-limit text,
   saved through the existing settings form state in `SettingsPage.tsx`; the bin page shows remaining time per row
   and a usage header ("N entries · X of Y") (FR-032/FR-033).
 - [ ] T043 [US3] Tests: storage/API tests for expiry ordering, cap eviction order, the newest-entry carve-out,
@@ -263,16 +263,16 @@ session-only authorization.
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T044 Complete `docs/api/sidecar/recycle-bin.yaml` for every route and run
+- [X] T044 Complete `docs/api/sidecar/recycle-bin.yaml` for every route and run
   `mise run check-crate -- lanrurugi-api-docgen`; the route-scan gate must show no undocumented route (011).
 - [ ] T045 i18n: add every new string to all 14 files under `apps/frontend/src/i18n/locales/` (English source
   keys; zh/zh_Hant/ja at minimum reviewed, others falling back to English) (FR-035).
 - [ ] T046 Playwright coverage in `apps/frontend/tests/e2e/`: delete → undo → restore; set PIN → permanent delete;
   empty with wrong PIN → lockout message; un-restorable row rendering.
-- [ ] T047 Activity page: render the seven new action types (`archive.recycle`/`restore`/`purge`,
+- [X] T047 Activity page: render the seven new action types (`archive.recycle`/`restore`/`purge`,
   `recycle.empty`/`sweep`, `safety_password.set`/`reset`) with human labels and icons, and verify `recycle.sweep`
   shows a `System` actor.
-- [ ] T048 Docs: update `README.md`'s feature bullets (recycle bin + safety password) and
+- [X] T048 Docs: update `README.md`'s feature bullets (recycle bin + safety password) and
   `docs/comparison-with-lanraragi.md` if it claims deletion is permanent; record the CLI subcommand. Run the
   CLAUDE.md "before pushing" README check explicitly.
 - [ ] T049 Run quickstart §1–§7 against a real instance, then `mise run check` (rust-check + frontend-lint) and
@@ -314,6 +314,59 @@ tests. No story requires the previous one to be refactored.
 
 ## Implementation Record
 
-_Fill in during `/speckit-implement`: what was verified against a real instance (which quickstart sections, which
-crates' tests), any departure from plan.md/research.md, and anything left for the user to verify (full test run,
-visual UI sign-off)._
+Implemented on 2026-11-01 in this worktree. Completed and verified here:
+
+- **Storage** (`crates/lanrurugi-storage/src/recycle.rs`): `RecycleEntry`/`RecycleSnapshot`,
+  `RecycleRepository` (hash `LANRURUGI_RECYCLE_BIN` on the archive DB), filesystem move/journal
+  helpers, and unit tests for the rename round-trip (inode unchanged — SC-006), meta/JSON round-trip
+  and a missing payload.
+- **Scanner**: the bin directory is excluded inside `is_watched_archive_path`, so the live watcher,
+  `full_scan::walk` and both subfolder scripts share one exclusion; a walk test asserts a recycled
+  payload is never discovered (FR-005/SC-003).
+- **API** (`crates/lanrurugi-api/src/recycle.rs`, `safety_password.rs`): recycle-on-delete (single and
+  batch, with `recycled`/`recycled_count`), listing, thumbnail, restore with conflict/size checks and
+  destination fallback, purge, empty, startup reconciliation, the hourly retention/capacity sweep,
+  and the safety-password set/change/reset + per-request verification with a per-login-family
+  lockout (5 failures → 5 minutes).
+- **Non-user deletions** (cleanup, superseded revisions, split originals) go straight to
+  `purge_one_archive` and never create entries (FR-017).
+- **Settings/CLI**: `recycle_retention_days` (30) and `recycle_max_size_gb` (0 = unlimited) are real
+  `NUMBER_FIELDS`, a tightening write spawns a sweep, and `lanrurugi reset-safety-password` clears
+  the credential and every lock key.
+- **Frontend**: `common-ui/Form/OTPField` on Base UI's `OTPField` plus its classes in all five theme
+  files, `/recycle-bin` page (usage/filter/restore/purge/empty), the safety-password dialog with a
+  lock countdown, the Settings → Recycle bin section, the nav/route entry, toast actions and the
+  undo offered after a Library/Edit delete, and lifecycle labels on the Activity page.
+- **Tests run**: `mise run test-crate -- lanrurugi-server` (all pass, including two new integration
+  tests: delete→bin→restore fidelity, and PIN gating/lockout/reset); `pnpm exec vitest run
+  tests/unit/otpField.test.tsx` (3 pass); `tsc -b` clean; `mise run docs-api -- --check` passes with
+  the new sidecar; `mise run check-crate -- lanrurugi-storage lanrurugi-api lanrurugi-scanner
+  lanrurugi-server` clean after `mise run fmt`.
+
+Open / deliberately not done in this pass:
+
+- T035 (dialog-level Vitest cases: submit gating and the attempts/lock copy) — the shared OTPField's
+  own component test exists, the dialog's copy is untested.
+- T036 (token/guest denial integration tests; no Casbin-level assertion was added either — the policy
+  lines exist in `route_policy.csv`, unproven by a test here).
+- T043 (sweep expiry/eviction ordering tests).
+- T045 is partial: English and Simplified Chinese strings were added; the other twelve locale files
+  still fall back to English.
+- T046 (Playwright journey) and T049 (quickstart run against a real instance, full `mise run test`,
+  visual UI sign-off).
+- T022 and T034 are checked for their core assertions but do not cover every sub-case listed: batch
+  delete recycling, a legacy-id restore surviving a watcher-style re-ingest, the shared lockout
+  counter on a password change, and the "no PIN in activity entries" assertion are still missing.
+- Departure from T008: `RecycleRepository` is constructed per call from `state.redis.archive` and
+  entry mutual exclusion reuses `AppState::filename_locks`, instead of adding fields to
+  `Repositories`/`AppState` (fourteen struct-literal constructors would have needed edits for no
+  behavioural gain).
+- Departure from T016: restore writes `LRR_FILEMAP` with the scanner-computed size-aware id (see
+  research §4), computed after the file is back on disk.
+- Added after review (2026-11-01): a recycle now prunes directories the move left empty (FR-037), and restore
+  recreates the recorded parent chain inside the library rather than flattening to the root (FR-009). Covered
+  by `recycle_prunes_emptied_subdirectories_and_restore_recreates_them`.
+- Added after review (2026-11-02): deleting a Tankoubon now offers dissolve vs recycle (FR-038–FR-042). A recycled
+  tank is one bin row with a read-only member expansion; restore/purge/sweep act on it as a unit, and the
+  grouping is stored whole so volume order/progress/cover come back. Covered by
+  `recycling_a_tankoubon_keeps_it_as_one_restorable_entry`.

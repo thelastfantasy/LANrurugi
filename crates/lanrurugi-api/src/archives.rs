@@ -117,7 +117,7 @@ pub(crate) fn effective_isnew(a: &lanrurugi_core::entities::Archive, mode: &str)
 /// (`lanrurugi_storage::id::{legacy_id, size_aware_id}`) — anything else (in particular anything
 /// containing `/`, `\`, or `.`) cannot be a real ID and must never be used to build a filesystem
 /// path.
-fn is_valid_archive_id(id: &str) -> bool {
+pub(crate) fn is_valid_archive_id(id: &str) -> bool {
     id.len() == ARCHIVE_ID_LEN && id.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
@@ -420,19 +420,47 @@ async fn get_archive_metadata(
 }
 
 /// Outcome of deleting one archive's DB record + best-effort on-disk/index/cache cleanup — shared
-/// by the single-archive [`delete_archive`] handler and [`batch_delete_archives`]'s per-id loop so
-/// the two never drift on what "delete an archive" actually does (file removal, search-index
-/// cleanup, recommend-cache eviction, stale download-queue entries, thumbnails, sidecar patch).
+/// by the recycle path, the permanent purge used by non-user deletions, and the batch handler, so
+/// none of them drift on what "delete an archive" actually does.
 pub(crate) enum DeleteOneOutcome {
     NotFound,
     Deleted { filename: String },
     Error(String),
 }
 
-pub(crate) async fn delete_one_archive(
+/// What the purge tail does to the bytes. Recycling keeps the payload (moved into the bin) and the
+/// thumbnails (the bin page needs them); every other caller removes both.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PurgeOptions {
+    pub remove_archive_file: bool,
+    pub keep_thumbnails: bool,
+    /// The recycle path writes its own `archive.recycle` entry, so the purge tail must not also
+    /// log "deleted".
+    pub record_activity: bool,
+}
+
+impl PurgeOptions {
+    /// A permanent delete of a live archive (superseded revision, clean-database cleanup).
+    pub(crate) const PERMANENT: Self = Self {
+        remove_archive_file: true,
+        keep_thumbnails: false,
+        record_activity: true,
+    };
+    /// Specs/019: the payload already moved into the bin, and its cover must survive there.
+    pub(crate) const AFTER_RECYCLE: Self = Self {
+        remove_archive_file: false,
+        keep_thumbnails: true,
+        record_activity: false,
+    };
+}
+
+/// Drops the archive record and every id-keyed thing around it. The caller decides whether the
+/// bytes go (see [`PurgeOptions`]); this never creates a bin entry.
+pub(crate) async fn purge_one_archive(
     state: &AppState,
     id: &lanrurugi_core::ids::ArchiveId,
     auth: Option<&crate::auth_context::AuthContext>,
+    options: PurgeOptions,
 ) -> DeleteOneOutcome {
     let archive = match state.repos.archives.get(id).await {
         Ok(Some(a)) => a,
@@ -448,24 +476,26 @@ pub(crate) async fn delete_one_archive(
             // user-triggered destructive action (unlinks the archive's file from disk, not just a
             // DB record).
             tracing::info!(%id, filename = %archive.name, "deleted archive");
-            crate::activity::record_manual(
-                state,
-                auth,
-                lanrurugi_storage::activity::action_types::ARCHIVE_DELETE,
-                lanrurugi_storage::activity::ActivityTarget {
-                    id: Some(id.to_string()),
-                    label: Some(archive.name.clone()),
-                    kind: Some("archive".to_string()),
-                },
-                lanrurugi_storage::activity::Outcome::Success,
-                None,
-                // `label` above is just the archive's display title — the on-disk path is the
-                // one piece of information a "was this really deleted, and from where" audit
-                // actually needs, and it's gone from `state.repos.archives` the moment this
-                // delete commits, so this is its only surviving record.
-                Some(json!({ "file": archive.file })),
-            )
-            .await;
+            if options.record_activity {
+                crate::activity::record_manual(
+                    state,
+                    auth,
+                    lanrurugi_storage::activity::action_types::ARCHIVE_DELETE,
+                    lanrurugi_storage::activity::ActivityTarget {
+                        id: Some(id.to_string()),
+                        label: Some(archive.name.clone()),
+                        kind: Some("archive".to_string()),
+                    },
+                    lanrurugi_storage::activity::Outcome::Success,
+                    None,
+                    // `label` above is just the archive's display title — the on-disk path is the
+                    // one piece of information a "was this really deleted, and from where" audit
+                    // actually needs, and it's gone from `state.repos.archives` the moment this
+                    // delete commits, so this is its only surviving record.
+                    Some(json!({ "file": archive.file })),
+                )
+                .await;
+            }
             // Best-effort, matching every other indexer call site in this file (`update_title_index`/
             // `update_tag_indexes` above) — a search-index cleanup failure shouldn't undo an already
             // committed archive deletion, just leave a ghost id behind (logged) for a future rescan
@@ -555,9 +585,11 @@ pub(crate) async fn delete_one_archive(
             // still left the file sitting on disk indefinitely), silently accumulating orphaned
             // files on every delete. Best-effort (logged, not propagated) for the same reason as
             // the search-index cleanup above — the DB record is already gone either way.
-            if let Err(e) = tokio::fs::remove_file(&archive.file).await {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    tracing::warn!(%id, file = %archive.file, error = %e, "failed to remove deleted archive's file from disk");
+            if options.remove_archive_file {
+                if let Err(e) = tokio::fs::remove_file(&archive.file).await {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!(%id, file = %archive.file, error = %e, "failed to remove deleted archive's file from disk");
+                    }
                 }
             }
             // A sidecar `.patch.zip` (issue #77's own follow-on design) is associated purely by
@@ -566,24 +598,28 @@ pub(crate) async fn delete_one_archive(
             // get silently picked up by some future, differently-content archive that happens to
             // land on the same filename, splicing in pages that were never meant to apply to it.
             // Best-effort, same reasoning as every other cleanup here.
-            let patch_path =
-                lanrurugi_scanner::patch::patch_path_for(std::path::Path::new(&archive.file));
-            if let Err(e) = tokio::fs::remove_file(&patch_path).await {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    tracing::warn!(%id, patch_path = %patch_path.display(), error = %e, "failed to remove deleted archive's patch file from disk");
+            if options.remove_archive_file {
+                let patch_path =
+                    lanrurugi_scanner::patch::patch_path_for(std::path::Path::new(&archive.file));
+                if let Err(e) = tokio::fs::remove_file(&patch_path).await {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!(%id, patch_path = %patch_path.display(), error = %e, "failed to remove deleted archive's patch file from disk");
+                    }
                 }
             }
-            let shard = &id[0..2.min(id.len())];
-            for format in lanrurugi_scanner::thumbnail::ThumbFormat::ALL {
-                let thumb_path = state
-                    .library
-                    .thumb_dir
-                    .join(shard)
-                    .join(format!("{id}.{}", format.extension()));
-                let _ = tokio::fs::remove_file(&thumb_path).await;
+            if !options.keep_thumbnails {
+                let shard = &id[0..2.min(id.len())];
+                for format in lanrurugi_scanner::thumbnail::ThumbFormat::ALL {
+                    let thumb_path = state
+                        .library
+                        .thumb_dir
+                        .join(shard)
+                        .join(format!("{id}.{}", format.extension()));
+                    let _ = tokio::fs::remove_file(&thumb_path).await;
+                }
+                let pages_dir = state.library.thumb_dir.join(shard).join(id.as_str());
+                let _ = tokio::fs::remove_dir_all(&pages_dir).await;
             }
-            let pages_dir = state.library.thumb_dir.join(shard).join(id.as_str());
-            let _ = tokio::fs::remove_dir_all(&pages_dir).await;
             DeleteOneOutcome::Deleted {
                 filename: archive.name,
             }
@@ -591,22 +627,24 @@ pub(crate) async fn delete_one_archive(
         Err(e) => {
             // The archive was found (a real target existed) but the actual DB delete failed —
             // a genuine attempted-and-failed deletion, not a pre-execution lookup miss.
-            crate::activity::record_manual(
-                state,
-                auth,
-                lanrurugi_storage::activity::action_types::ARCHIVE_DELETE,
-                lanrurugi_storage::activity::ActivityTarget {
-                    id: Some(id.to_string()),
-                    label: Some(archive.name.clone()),
-                    kind: Some("archive".to_string()),
-                },
-                lanrurugi_storage::activity::Outcome::Failure {
-                    reason: e.to_string(),
-                },
-                None,
-                Some(json!({ "file": archive.file })),
-            )
-            .await;
+            if options.record_activity {
+                crate::activity::record_manual(
+                    state,
+                    auth,
+                    lanrurugi_storage::activity::action_types::ARCHIVE_DELETE,
+                    lanrurugi_storage::activity::ActivityTarget {
+                        id: Some(id.to_string()),
+                        label: Some(archive.name.clone()),
+                        kind: Some("archive".to_string()),
+                    },
+                    lanrurugi_storage::activity::Outcome::Failure {
+                        reason: e.to_string(),
+                    },
+                    None,
+                    Some(json!({ "file": archive.file })),
+                )
+                .await;
+            }
             DeleteOneOutcome::Error(e.to_string())
         }
     }
@@ -617,13 +655,14 @@ async fn delete_archive(
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
 ) -> Response {
-    match delete_one_archive(&state, &id, auth.as_ref().map(|e| &e.0)).await {
+    match crate::recycle::recycle_archive(&state, &id, auth.as_ref().map(|e| &e.0)).await {
         DeleteOneOutcome::NotFound => not_found("delete_archive", format!("{id} does not exist.")),
         DeleteOneOutcome::Deleted { filename } => axum::Json(json!({
             "operation": "delete_archive",
             "id": id,
             "filename": filename,
             "success": 1,
+            "recycled": true,
         }))
         .into_response(),
         DeleteOneOutcome::Error(e) => error(StatusCode::INTERNAL_SERVER_ERROR, "delete_archive", e),
@@ -662,11 +701,12 @@ async fn batch_delete_archives(
     let mut results = Vec::new();
     let mut deleted_count = 0u32;
     for id in &body.ids {
-        let outcome = delete_one_archive(&state, id, auth).await;
+        let outcome = crate::recycle::recycle_archive(&state, id, auth).await;
         results.push(match outcome {
             DeleteOneOutcome::NotFound => BatchDeleteResult {
                 id: id.to_string(),
                 success: false,
+                recycled: false,
                 filename: None,
                 error: Some(format!("{id} does not exist.")),
             },
@@ -675,6 +715,7 @@ async fn batch_delete_archives(
                 BatchDeleteResult {
                     id: id.to_string(),
                     success: true,
+                    recycled: true,
                     filename: Some(filename),
                     error: None,
                 }
@@ -682,6 +723,7 @@ async fn batch_delete_archives(
             DeleteOneOutcome::Error(e) => BatchDeleteResult {
                 id: id.to_string(),
                 success: false,
+                recycled: false,
                 filename: None,
                 error: Some(e),
             },
@@ -691,6 +733,7 @@ async fn batch_delete_archives(
         "operation": "batch_delete_archives",
         "success": 1,
         "deleted": deleted_count,
+        "recycled_count": deleted_count,
         "total": body.ids.len(),
         "results": results,
     }))
@@ -706,6 +749,9 @@ struct BatchDeleteRequest {
 struct BatchDeleteResult {
     id: String,
     success: bool,
+    /// Always true for a success as of specs/019 — the archive moved into the recycle bin rather
+    /// than being destroyed.
+    recycled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     filename: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

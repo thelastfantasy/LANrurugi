@@ -230,9 +230,10 @@
   min-width: 96px;
 }
 
+/* One scroll container, not two: the tab body already scrolls (`.diag-tab-body`, 62vh), so giving
+   the list its own 48vh viewport produced a second, nested scrollbar as soon as an issue was
+   expanded (2026-11-01). The list just grows; the tab body scrolls it. */
 .diag-issue-list {
-  max-height: 48vh;
-  overflow: auto;
   border-top: 1px solid rgba(128, 128, 128, 0.3);
 }
 
@@ -288,6 +289,21 @@
   opacity: 1;
   background-color: rgba(128, 128, 128, 0.16);
   outline: none;
+}
+
+/* The time is the row's last column before the chevron, and every row's must line up: `×173` and
+   `×7` are different widths, so without a fixed-width, right-aligned time the whole column
+   staggered (2026-11-01). Scoped to the issue row because `.diag-expand`'s own `margin-left: auto`
+   is what pushes the chevron right everywhere else. */
+.diag-issue-row > .diag-issue-time {
+  margin-left: auto;
+  min-width: 11ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.diag-issue-row > .diag-expand {
+  margin-left: 0;
 }
 
 .diag-issue-count,
@@ -622,9 +638,10 @@
   outline-offset: -3px;
 }
 
+/* No scroll container of its own: the dialog's overlay layer already scrolls the whole modal
+   (`Modal`'s own `overflowY: auto`), and a second viewport here produced two nested scrollbars —
+   one on the modal edge and one inside the tab (2026-11-01). */
 .diag-tab-body {
-  max-height: 62vh;
-  overflow-y: auto;
   padding-right: 2px;
 }
 

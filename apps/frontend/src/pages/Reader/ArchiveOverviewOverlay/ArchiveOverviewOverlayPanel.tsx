@@ -42,6 +42,7 @@ import { isBookExtension } from "@/lib/utils/bookFormats"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 import { sortCategories } from "@/lib/utils/sortCategories"
 import { displayTocName, isReservedTocIdentifier } from "@/lib/utils/tocValidation"
+import { TankDeleteChoiceDialog } from "@/pages/Library/TankDeleteChoiceDialog"
 import { EntryTreePopover } from "@/pages/Upload/EntryTreePopover"
 import { toast } from "@/toast"
 
@@ -258,6 +259,7 @@ export function ArchiveOverviewOverlay({
   const addTocEntryForId = useAddTocEntryForId()
   const removeTocEntryForId = useRemoveTocEntryForId()
   const deleteTankoubon = useDeleteTankoubon()
+  const [tankDeleteOpen, setTankDeleteOpen] = useState(false)
   const splitSuggestion = useArchiveSplitSuggestion(!isTank ? archive.arcid : null)
   const analyzeSplit = useAnalyzeArchiveSplit()
   const executeSplit = useExecuteArchiveSplit()
@@ -390,17 +392,7 @@ export function ArchiveOverviewOverlay({
    * milder operation than deleting a real archive, so it gets its own confirmation copy. */
   async function deleteArchive() {
     if (isTank) {
-      if (
-        !(await confirmDialog(
-          t(
-            "reader.confirmDeleteTankoubon",
-          ) ?? "",
-        ))
-      ) {
-        return
-      }
-      await deleteTankoubon.mutateAsync(archive.arcid)
-      navigate(routes.library())
+      setTankDeleteOpen(true)
       return
     }
     if (
@@ -1037,6 +1029,20 @@ export function ArchiveOverviewOverlay({
         </div>
         <ScrollToTopFab onJump={() => setScrollAnchor(1)} />
       </div>
+
+      {tankDeleteOpen && (
+        <TankDeleteChoiceDialog
+          title={archive.title}
+          onConfirm={(mode) => {
+            setTankDeleteOpen(false);
+            void (async () => {
+              await deleteTankoubon.mutateAsync({ id: archive.arcid, mode });
+              navigate(routes.library());
+            })();
+          }}
+          onCancel={() => setTankDeleteOpen(false)}
+        />
+      )}
 
       {lightboxPage !== null && (
         <PageLightbox
