@@ -735,6 +735,34 @@ fn plan_failure_groups(
 /// per-region recognition and style estimation — the expensive, embarrassingly parallel part — are
 /// then dispatched as one `parallel_map` over every region in the batch, so rayon sees the entire
 /// unit of work at once rather than one page (or one region) at a time.
+/// Shortest side a merged region must have to be treated as dialogue. A single kana in a normal
+/// manga page is ~40px tall even at this scan's resolution; specks below it are punctuation noise
+/// the detector picked up at higher input resolutions.
+/// True when `inner`'s centre lies inside `outer` — used to decide whether a dropped text box
+/// belongs to an existing region rather than standing on its own.
+fn contains(outer: &crate::entities::BoundingBox, inner: &crate::entities::BoundingBox) -> bool {
+    let cx = inner.x + inner.w / 2;
+    let cy = inner.y + inner.h / 2;
+    cx >= outer.x && cx <= outer.x + outer.w && cy >= outer.y && cy <= outer.y + outer.h
+}
+
+fn union(
+    a: &crate::entities::BoundingBox,
+    b: &crate::entities::BoundingBox,
+) -> crate::entities::BoundingBox {
+    let x0 = a.x.min(b.x);
+    let y0 = a.y.min(b.y);
+    let x1 = (a.x + a.w).max(b.x + b.w);
+    let y1 = (a.y + a.h).max(b.y + b.h);
+    crate::entities::BoundingBox::new(x0, y0, x1 - x0, y1 - y0)
+}
+
+const MIN_REGION_SIDE: u32 = 30;
+
+/// Area floor that goes with [`MIN_REGION_SIDE`] — a long thin sliver (a 30x40 speck is 1200px²)
+/// is still not a text block.
+const MIN_REGION_AREA: u64 = 2500;
+
 pub async fn run_batch(
     engine: Arc<OcrEngine>,
     pages: Vec<PageInput>,
@@ -1042,12 +1070,17 @@ pub async fn run_batch(
     // asked about a page whose translation came out visibly incomplete, and previously the only
     // trace was a scatter of warnings that had to be tallied by hand (2026-10-31, page 53).
     let mut dropped_empty: Vec<usize> = vec![0; pages.len()];
+    // Boxes whose recognition failed. They are not translated, but they are still *detected text*
+    // sitting inside a bubble: leaving their pixels untouched while the bubble's other lines are
+    // replaced draws the translation on top of the original lettering (2026-11-01, page 53).
+    let mut dropped_boxes: Vec<Vec<crate::entities::BoundingBox>> = vec![Vec::new(); pages.len()];
     let mut dropped_not_japanese: Vec<usize> = vec![0; pages.len()];
     let mut kept_per_page: Vec<usize> = vec![0; pages.len()];
 
     for rec in recognized {
         if rec.text.trim().is_empty() {
             dropped_empty[rec.page_index] += 1;
+            dropped_boxes[rec.page_index].push(rec.bbox);
             // Real reported incident (2026-09-18): a detected candidate box for a legitimate
             // second line of text ("トウカ", the second line of a two-line "皇族ガーディアン /
             // トウカ" label) silently vanished with no trace in any log — this branch was
@@ -1068,6 +1101,7 @@ pub async fn run_batch(
         // lettering.
         if !crate::recognize::looks_like_japanese(&rec.text) {
             dropped_not_japanese[rec.page_index] += 1;
+            dropped_boxes[rec.page_index].push(rec.bbox);
             tracing::warn!(
                 ?rec.bbox,
                 %rec.text,
@@ -1138,6 +1172,55 @@ pub async fn run_batch(
                 &engine.merge_config,
                 bubbles,
             );
+
+            // Specks that survived detection and recognition are not dialogue: on a real page the
+            // 2400px detection pass kept 12x11 and 21x33 boxes for single punctuation marks, and
+            // each one was drawn as its own one-character translation (2026-11-01). Everything a
+            // reader would actually call text is far larger than this floor.
+            let before = regions.len();
+            regions.retain(|region| {
+                let bbox = region.bounding_box;
+                let area = u64::from(bbox.w) * u64::from(bbox.h);
+                let keep = bbox.w.min(bbox.h) >= MIN_REGION_SIDE && area >= MIN_REGION_AREA;
+                if !keep {
+                    tracing::info!(
+                        page_index = i,
+                        bbox = ?bbox,
+                        text = %region.source_text,
+                        "dropping a speck too small to be dialogue"
+                    );
+                }
+                keep
+            });
+            if regions.len() != before {
+                tracing::info!(
+                    page_index = i,
+                    dropped = before - regions.len(),
+                    remaining = regions.len(),
+                    "filtered speck regions out of this page"
+                );
+            }
+
+            // A dropped box is still part of whatever bubble it sits in. Growing the region that
+            // covers that bubble makes the composite erase the whole bubble instead of only its
+            // recognised lines — the user's own rule for this: a bubble is the unit, and a plain
+            // text box inside it is absorbed by it (2026-11-01).
+            for dropped in std::mem::take(&mut dropped_boxes[i]) {
+                let target = regions.iter_mut().find(|region| {
+                    region.bounding_box.iou(&dropped) > 0.0
+                        || contains(&region.bounding_box, &dropped)
+                        || contains(&dropped, &region.bounding_box)
+                });
+                if let Some(region) = target {
+                    region.bounding_box = union(&region.bounding_box, &dropped);
+                    tracing::info!(
+                        page_index = i,
+                        dropped = ?dropped,
+                        region = ?region.bounding_box,
+                        "absorbed an unrecognised box into its region so the whole bubble is erased"
+                    );
+                }
+            }
 
             // A merged region inherits the style of the line boxes it absorbed. Each attribute is
             // carried independently so one unknown never suppresses the others (FR-008a).
