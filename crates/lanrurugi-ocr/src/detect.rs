@@ -278,10 +278,88 @@ impl TextDetector {
             return Ok(Vec::new());
         }
 
-        let page_sizes: Vec<(u32, u32)> = pages.iter().map(|p| p.dimensions()).collect();
+        let mut result = Vec::with_capacity(pages.len());
+        for page in &pages {
+            let (page_w, page_h) = page.dimensions();
+
+            // Stage A — one cheap inference over the whole page (the model downscales it to
+            // `limit_side_len` itself). On a 4535x6307 scan that is a 1.9x shrink, which is fine
+            // for *finding* candidate areas and too coarse for reading small lettering.
+            let (coarse, mut mask) = self.detect_one(page)?;
+
+            // Stage B — re-detect each candidate at native resolution. This is what makes small
+            // text legible without the seam problem a fixed tile grid had: the crop boundary is a
+            // *text region's* boundary, not an arbitrary coordinate, so a column can never be cut
+            // in half (2026-11-01). Background areas are never processed at all.
+            let mut boxes: Vec<BoundingBox> = Vec::new();
+            let mut refined: Vec<BoundingBox> = Vec::new();
+            let needs_refinement = page_w.max(page_h) > DETECTION_REFINEMENT_THRESHOLD;
+            let mut crops = 0usize;
+            if needs_refinement {
+                for coarse_box in &coarse {
+                    if crops >= MAX_REFINEMENT_CROPS {
+                        break;
+                    }
+                    let Some(crop_box) = expand_candidate(coarse_box, page_w, page_h) else {
+                        continue;
+                    };
+                    // A candidate larger than the detector's own working size would just be
+                    // downscaled again — no gain, and it would reintroduce the seam risk.
+                    if crop_box.w.max(crop_box.h) > DETECTION_REFINEMENT_THRESHOLD {
+                        continue;
+                    }
+                    let crop = {
+                        use image::GenericImageView as _;
+                        page.view(crop_box.x, crop_box.y, crop_box.w, crop_box.h)
+                            .to_image()
+                    };
+                    let (local_boxes, local_mask) = self.detect_one(&crop)?;
+                    crops += 1;
+                    if local_boxes.is_empty() {
+                        // Stage A saw something here; keep its box rather than losing the region.
+                        continue;
+                    }
+                    for local in local_boxes {
+                        let shifted = BoundingBox::new(
+                            local.x + crop_box.x,
+                            local.y + crop_box.y,
+                            local.w,
+                            local.h,
+                        );
+                        if is_plausible_text_box(&shifted, page_w, page_h)
+                            && shifted.x + shifted.w <= page_w
+                            && shifted.y + shifted.h <= page_h
+                        {
+                            refined.push(shifted);
+                        }
+                    }
+                    blit_mask(&mut mask, &local_mask, crop_box.x, crop_box.y);
+                }
+            }
+
+            boxes.extend(coarse);
+            if !refined.is_empty() {
+                // A refined box replaces the coarse one it came from — keeping both would detect
+                // the same text twice.
+                boxes.retain(|b| !refined.iter().any(|r| overlaps(b, r)));
+                boxes.extend(refined);
+            }
+            boxes.sort_by_key(|bbox| (bbox.y, bbox.x));
+            result.push((boxes, mask));
+        }
+        Ok(result)
+    }
+
+    /// One inference over one image at its own size, returning boxes in that image's coordinates
+    /// and a probability map of exactly that size.
+    fn detect_one(
+        &self,
+        image: &RgbImage,
+    ) -> Result<(Vec<BoundingBox>, PageTextProbabilityMap), DetectionError> {
+        let (width, height) = image.dimensions();
         let (batch_tensor, img_shapes) = self
             .model
-            .preprocess(pages)
+            .preprocess(vec![image.clone()])
             .map_err(|e| DetectionError::Inference(e.to_string()))?;
         let predictions = self
             .model
@@ -294,32 +372,76 @@ impl TextDetector {
             self.box_threshold,
             text_detection_postprocess_config().unclip_ratio,
         );
+        let boxes = output
+            .boxes
+            .first()
+            .into_iter()
+            .flatten()
+            .filter_map(to_axis_aligned)
+            .filter(|bbox| is_plausible_text_box(bbox, width, height))
+            .collect();
+        let mask = page_text_probability_map(&predictions, 0, &img_shapes[0], width, height);
+        Ok((boxes, mask))
+    }
+}
 
-        let mut result = Vec::with_capacity(page_sizes.len());
-        for (i, &(page_w, page_h)) in page_sizes.iter().enumerate() {
-            let boxes: Vec<BoundingBox> = output
-                .boxes
-                .get(i)
-                .into_iter()
-                .flatten()
-                .filter_map(to_axis_aligned)
-                .filter(|bbox| {
-                    let ok = is_plausible_text_box(bbox, page_w, page_h);
-                    if !ok {
-                        tracing::warn!(
-                            ?bbox,
-                            page_w,
-                            page_h,
-                            "discarding an anomalously large/thin detected text box — see MAX_BOX_AREA_FRACTION's own doc comment"
-                        );
-                    }
-                    ok
-                })
-                .collect();
-            let mask = page_text_probability_map(&predictions, i, &img_shapes[i], page_w, page_h);
-            result.push((boxes, mask));
+/// Pages longer than this get a second, per-region detection pass at native resolution. Set at the
+/// detector's own `limit_side_len`, since below it stage A already sees every glyph unscaled.
+const DETECTION_REFINEMENT_THRESHOLD: u32 = 2400;
+
+/// Upper bound on refinement crops per page, so a page full of detected noise can't turn into
+/// hundreds of inferences.
+const MAX_REFINEMENT_CROPS: usize = 24;
+
+/// Margin kept around a candidate region before re-detecting it, so a line that touches the coarse
+/// box's edge is not clipped. Clamped into the page.
+const CANDIDATE_MARGIN_FRACTION: f32 = 0.12;
+
+fn expand_candidate(candidate: &BoundingBox, page_w: u32, page_h: u32) -> Option<BoundingBox> {
+    let margin_x = (candidate.w as f32 * CANDIDATE_MARGIN_FRACTION).round() as u32;
+    let margin_y = (candidate.h as f32 * CANDIDATE_MARGIN_FRACTION).round() as u32;
+    let x = candidate.x.saturating_sub(margin_x);
+    let y = candidate.y.saturating_sub(margin_y);
+    let right = (candidate.x + candidate.w + margin_x).min(page_w);
+    let bottom = (candidate.y + candidate.h + margin_y).min(page_h);
+    if right <= x || bottom <= y {
+        return None;
+    }
+    Some(BoundingBox::new(x, y, right - x, bottom - y))
+}
+
+fn overlaps(a: &BoundingBox, b: &BoundingBox) -> bool {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = (a.x + a.w).min(b.x + b.w);
+    let y1 = (a.y + a.h).min(b.y + b.h);
+    x1 > x0 && y1 > y0
+}
+
+/// Writes `tile`'s probabilities into `page` at `(origin_x, origin_y)`, keeping the larger value
+/// where they overlap.
+fn blit_mask(
+    page: &mut PageTextProbabilityMap,
+    tile: &PageTextProbabilityMap,
+    origin_x: u32,
+    origin_y: u32,
+) {
+    for y in 0..tile.height {
+        let page_y = origin_y + y;
+        if page_y >= page.height {
+            break;
         }
-        Ok(result)
+        for x in 0..tile.width {
+            let page_x = origin_x + x;
+            if page_x >= page.width {
+                break;
+            }
+            let source = tile.values[(y * tile.width + x) as usize];
+            let target = &mut page.values[(page_y * page.width + page_x) as usize];
+            if source > *target {
+                *target = source;
+            }
+        }
     }
 }
 
@@ -455,6 +577,28 @@ fn to_axis_aligned(bbox: &OarBoundingBox) -> Option<BoundingBox> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_candidate_is_expanded_but_stays_inside_the_page() {
+        // A column at the page edge must not ask for pixels outside it.
+        let expanded = expand_candidate(&BoundingBox::new(0, 0, 100, 400), 1000, 1000).unwrap();
+        assert_eq!((expanded.x, expanded.y), (0, 0));
+        assert!(expanded.w >= 100 && expanded.h >= 400);
+
+        let expanded = expand_candidate(&BoundingBox::new(900, 900, 100, 100), 1000, 1000).unwrap();
+        assert_eq!(expanded.x + expanded.w, 1000);
+        assert_eq!(expanded.y + expanded.h, 1000);
+    }
+
+    #[test]
+    fn refinement_only_runs_on_pages_bigger_than_the_detector_window() {
+        // The real page that motivated stage B, and a normal one that must stay single-pass.
+        let real_scan = (4535u32, 6307u32);
+        assert!(real_scan.0.max(real_scan.1) > DETECTION_REFINEMENT_THRESHOLD);
+        let normal_page = (1200u32, 1600u32);
+        assert!(normal_page.0.max(normal_page.1) <= DETECTION_REFINEMENT_THRESHOLD);
+    }
+
     use oar_ocr::processors::Point;
 
     fn poly(points: &[(f32, f32)]) -> OarBoundingBox {
