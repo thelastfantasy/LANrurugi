@@ -521,10 +521,20 @@ pub fn merge_lines(
         .filter_map(|(_, mut members)| {
             reading_order(&mut members, |m| m.bounding_box);
 
-            let bounding_box = members
+            let mut bounding_box = members
                 .iter()
                 .map(|m| m.bounding_box)
                 .reduce(|acc, b| acc.union_with(&b))?;
+
+            // The bubble is the unit, not the text box: a detected box routinely covers only the
+            // columns the recogniser found, and the ones it missed then stay unerased while the
+            // translation is drawn over them (2026-11-01, page 53 — the region was 236x616 inside
+            // a 139k-pixel bubble, so the leftmost column survived). Growing the region to the
+            // bubble it belongs to makes the erase cover the whole bubble's lettering and gives
+            // the layout the bubble's real area to size text into.
+            if let Some(index) = bubble_membership(&bounding_box, bubbles) {
+                bounding_box = bounding_box.union_with(&bubbles[index].bbox);
+            }
 
             // Japanese text is not space-delimited, so joining columns with a space would insert
             // separators that were never in the original; lines are concatenated directly.
