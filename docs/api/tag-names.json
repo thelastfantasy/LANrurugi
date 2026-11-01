@@ -12,6 +12,13 @@
     "en": "Archive API"
   },
   {
+    "key": "recycle-bin",
+    "zh": "回收站 API",
+    "en": "Recycle Bin API",
+    "description_zh": "回收站条目、恢复与永久删除，以及安全密码的设置与校验。",
+    "description_en": "Recycle-bin entries and restore/purge, plus safety-password status and verification."
+  },
+  {
     "key": "database",
     "zh": "数据库 API",
     "en": "Database API"
