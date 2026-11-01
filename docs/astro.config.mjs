@@ -104,6 +104,7 @@ export default defineConfig({
             { label: '安装（Docker / NAS）', translations: { en: 'Install (Docker / NAS)' }, slug: 'guide/install' },
             { label: '原生安装（Linux / macOS / FreeBSD）', translations: { en: 'Native install (Linux / macOS / FreeBSD)' }, slug: 'guide/install-native' },
             { label: '反向代理', translations: { en: 'Reverse proxy' }, slug: 'guide/reverse-proxy' },
+            { label: '配置项（环境变量）', translations: { en: 'Configuration' }, slug: 'guide/configuration' },
             { label: '快速开始', translations: { en: 'Quickstart' }, slug: 'guide/quickstart' },
             { label: '支持的格式', translations: { en: 'Supported formats' }, slug: 'guide/formats' },
             { label: '分享与导入', translations: { en: 'Sharing and importing' }, slug: 'guide/sharing' },

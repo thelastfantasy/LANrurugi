@@ -64,6 +64,11 @@ The web interface, plugins, documentation, bundled libraries and models are foun
 program itself, so the package works wherever you unpack it. It connects to
 `redis://127.0.0.1:6379` by default; change that with `--redis-url` or `LANRURUGI_REDIS_URL`.
 
+It listens on `[::]:3000` by default — one dual-stack socket, IPv4 and IPv6 alike (falling back to
+`0.0.0.0` on a host without IPv6). Change that with `--bind` or `LANRURUGI_BIND`; the value is a whole
+`address:port`: `0.0.0.0:8080` for all IPv4 interfaces, `127.0.0.1:3000` for loopback alone behind a
+reverse proxy. A bare port is not accepted.
+
 ## 3. Translation models (optional)
 
 ```sh
@@ -82,8 +87,9 @@ sudo ./install-service.sh /var/lib/lanrurugi   # Linux (systemd), FreeBSD (rc.d)
 ```
 
 The script creates the data directories and `lanrurugi.env` (library location, Redis URL, port),
-installs the service definition for your system and prints the command that starts it. Add `--print`
-to see the generated definition without installing it.
+installs the service definition for your system and prints the command that starts it. To change the
+listen address, edit `LANRURUGI_BIND` in that file and restart the service. Add `--print` to see the
+generated definition without installing it.
 
 ## Moving from a Docker deployment
 

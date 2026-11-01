@@ -54,6 +54,10 @@ redis-server --daemonize yes      # 或启用系统自带的 Redis 服务
 前端、插件、文档、自带的原生库和模型都按程序自己的位置查找，解压到哪里都可以，不需要再设置其它路径。
 默认连接 `redis://127.0.0.1:6379`，用 `--redis-url` 或环境变量 `LANRURUGI_REDIS_URL` 修改。
 
+默认监听 `[::]:3000`——一个双栈套接字，IPv4 和 IPv6 都在听（主机没有 IPv6 时自动退回 `0.0.0.0`）。
+用 `--bind` 或环境变量 `LANRURUGI_BIND` 改，值是一整个 `地址:端口`：`0.0.0.0:8080` 监听所有 IPv4 网卡，
+`127.0.0.1:3000` 只给本机或前面的反向代理；只写 `:8080` 不行。
+
 ## 3. 下载翻译模型（可选）
 
 ```sh
@@ -71,6 +75,7 @@ sudo ./install-service.sh /var/lib/lanrurugi   # Linux（systemd）、FreeBSD（
 ```
 
 脚本会创建数据目录和 `lanrurugi.env`（书库位置、Redis 地址、监听端口），并为当前系统安装服务定义，最后提示启动命令。
+要换监听地址，改这个文件里的 `LANRURUGI_BIND`，重启服务生效。
 只想看生成的服务文件而不安装，加 `--print`。
 
 ## 从 Docker 部署迁移

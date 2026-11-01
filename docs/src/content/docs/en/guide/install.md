@@ -79,6 +79,36 @@ docker run -d --name lanrurugi -p 3000:3000 \
   ghcr.io/thelastfantasy/lanrurugi:latest
 ```
 
+## Using a different port
+
+The image always listens on 3000 inside the container. Changing only the **host** side is enough:
+edit the left half of `ports` (or of `docker run -p`).
+
+```yaml
+    ports:
+      - "8080:3000"
+```
+
+To change the port inside the container too (`network_mode: host`, or something else already holds
+3000), override the image's command. The image's `CMD` already carries `--bind [::]:3000`, and a
+command-line flag beats an environment variable, so `-e LANRURUGI_BIND=0.0.0.0:8080` **does not work**:
+
+```sh
+docker run -d -p 8080:8080 ... ghcr.io/thelastfantasy/lanrurugi:latest \
+  serve --bind 0.0.0.0:8080
+```
+
+In Compose that is the `command` key:
+
+```yaml
+    command: ["serve", "--bind", "0.0.0.0:8080"]
+    ports:
+      - "8080:8080"
+```
+
+`--bind` takes one whole `address:port`: `[::]` (the default) listens on IPv4 and IPv6, `0.0.0.0` on
+all IPv4 interfaces only, `127.0.0.1` on loopback for a reverse proxy. A bare port is not accepted.
+
 ## Where the image is published
 
 The same image, for amd64 and arm64, is published to two registries:

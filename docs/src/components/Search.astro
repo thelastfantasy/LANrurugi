@@ -63,6 +63,20 @@ const pages = [
     container.append(template.content.cloneNode(true))
     const panel = container.querySelector('.lr-search-empty') as HTMLElement
 
+    // Pagefind splits a query on `_` but ORs the pieces, so searching an environment variable by its
+    // full name matched every page mentioning "LANrurugi" instead of the one documenting it —
+    // `LANRURUGI_BIND` behaved like `lanrurugi OR bind`. A space makes it an AND. Capture phase, so
+    // this runs before Pagefind's own listener reads the value.
+    container.addEventListener(
+      'input',
+      (event) => {
+        const input = event.target
+        if (!(input instanceof HTMLInputElement) || !input.value.includes('_')) return
+        input.value = input.value.replace(/_/g, ' ')
+      },
+      true,
+    )
+
     // Hidden as soon as there is a query; back when the box is cleared.
     const sync = () => {
       const input = container.querySelector(INPUT) as HTMLInputElement | null

@@ -71,6 +71,35 @@ docker run -d --name lanrurugi -p 3000:3000 \
   ghcr.io/thelastfantasy/lanrurugi:latest
 ```
 
+## 换一个端口
+
+镜像内部固定监听 3000。只换**宿主机**这一侧就够了：改 `ports` 或 `docker run -p` 的左边。
+
+```yaml
+    ports:
+      - "8080:3000"
+```
+
+如果容器内部也要换（`network_mode: host`，或者 3000 已被别的服务占用），要覆盖镜像的启动命令。
+镜像的 `CMD` 里已经写死 `--bind [::]:3000`，而命令行参数优先于环境变量，所以
+`-e LANRURUGI_BIND=0.0.0.0:8080` **不会生效**。
+
+```sh
+docker run -d -p 8080:8080 ... ghcr.io/thelastfantasy/lanrurugi:latest \
+  serve --bind 0.0.0.0:8080
+```
+
+compose 里对应写 `command`：
+
+```yaml
+    command: ["serve", "--bind", "0.0.0.0:8080"]
+    ports:
+      - "8080:8080"
+```
+
+`--bind` 的值是一整个 `地址:端口`：`[::]`（默认）同时监听 IPv4 和 IPv6，`0.0.0.0` 监听所有 IPv4 网卡，
+`127.0.0.1` 只给本机（配合反向代理）；只写端口不行。
+
 ## 镜像来源
 
 同一个镜像同时发布在两个仓库，内容完全相同，都包含 amd64 和 arm64 两种架构：

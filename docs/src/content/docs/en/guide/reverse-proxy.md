@@ -7,6 +7,10 @@ LANrurugi itself only speaks HTTP (by default on port 3000, IPv4 and IPv6). To s
 HTTPS, put a reverse proxy in front of it. Whichever proxy you use, it has to meet the conditions
 below.
 
+The examples below all assume the default 3000. If you changed the listen address (`--bind` /
+`LANRURUGI_BIND`, see [Install](../install/) and [Native install](../install-native/)), every
+`127.0.0.1:3000` has to change with it.
+
 ## What the proxy has to do
 
 - **Serve it at the root of a host.** The frontend requests the API at absolute `/api/...` paths, so

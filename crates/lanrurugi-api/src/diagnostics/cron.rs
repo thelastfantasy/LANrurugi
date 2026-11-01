@@ -38,7 +38,7 @@ pub fn check_in(slug: &str, status: &str, elapsed: Duration, interval_minutes: u
         },
     });
     let header = serde_json::json!({
-        "event_id": uuid_like_id(),
+        "event_id": event_id(),
         "sent_at": chrono::Utc::now().to_rfc3339(),
     });
     let item = serde_json::json!({ "type": "check_in" });
@@ -56,13 +56,19 @@ fn forward(body: &str) {
     });
 }
 
-/// A random hex id of Sentry's own 32-character shape, without taking a uuid dependency for it.
+/// A real UUID (v4), used both for the envelope header's `event_id` and for `check_in_id`.
+///
+/// It has to be a *conforming* UUID, not merely 32 hex characters: a check-in whose id is not a
+/// UUID makes the tracker synthesise one of its own for the stored row (measured 2026-11-01: our
+/// dashless id came back as `00000000-0000-0000-18e3-…`, whose version nibble is `0`), and the
+/// dashboard validates that column as a UUID — so the Crons page failed with "the API returned data
+/// this dashboard cannot parse" for every monitor that had a check-in. Sending a proper v4 id keeps
+/// the stored row's id valid.
 fn uuid_like_id() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
-    let mixed = nanos ^ (nanos >> 64) ^ (u128::from(std::process::id()) << 32);
-    format!("{mixed:032x}")
+    uuid::Uuid::new_v4().to_string()
+}
+
+/// The same id without dashes, which is what an envelope header's `event_id` expects.
+fn event_id() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
 }

@@ -6,6 +6,9 @@ description: 用 Nginx、Caddy、Traefik、Apache 或 Nginx Proxy Manager 为 LA
 LANrurugi 本身只提供 HTTP（默认端口 3000，同时监听 IPv4 和 IPv6）。要通过域名和 HTTPS 访问，在它前面放一个反向代理。
 无论用哪一种代理，都要满足下面几条。
 
+下面的例子都按默认的 3000 写。如果你改了监听地址（`--bind` / `LANRURUGI_BIND`，见[安装](../install/)与
+[原生安装](../install-native/)），所有 `127.0.0.1:3000` 要跟着改。
+
 ## 代理需要满足的条件
 
 - **挂在域名根路径下。** 前端以绝对路径 `/api/...` 请求接口，不支持挂在子路径（如
