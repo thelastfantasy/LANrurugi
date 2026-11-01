@@ -94,7 +94,7 @@ function EntryTreeRow({
       )}
       <i
         className={
-          child.isDirectory ? "fa fa-folder" : child.isPage ? "fa fa-image" : "fa fa-file-o"
+          child.isDirectory ? "fa fa-folder" : child.isPage ? "fa fa-image" : "far fa-file"
         }
         aria-hidden="true"
         style={{ opacity: 0.7, width: 14, textAlign: "center" }}

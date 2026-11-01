@@ -24,7 +24,7 @@ export function FormatDistribution({ formats }: { formats: StatsOverview["format
   const paletteFor = (index: number) => seriesColor(palette, index)
 
   return (
-    <StatsSection title={t("stats.formatDistribution")} icon="fa-file-archive-o" hint={t("stats.formatDistributionHint")}>
+    <StatsSection title={t("stats.formatDistribution")} icon="far fa-file-archive" hint={t("stats.formatDistributionHint")}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center" }}>
         <div style={{ flex: "1 1 260px", minWidth: 240 }}>
           <ChartFrame height={240}>

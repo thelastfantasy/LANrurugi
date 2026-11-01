@@ -102,19 +102,19 @@ export function Stats() {
         <div id="statsOverview" style={{ margin: "16px 0" }}>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 10, textAlign: "left" }}>
             <StatsCard
-              icon="fa-file-text-o"
+              icon="far fa-file-lines"
               label={t("stats.totalPages")}
               value={totals?.pages.toLocaleString() ?? "-"}
               hint={t("stats.averagePagesValue", { count: totals?.average_pages ?? 0 })}
             />
             <StatsCard
-              icon="fa-hdd-o"
+              icon="far fa-hard-drive"
               label={t("stats.averageArchiveSize")}
               value={formatBytes(totals?.average_bytes ?? 0)}
               hint={t("stats.largestArchiveValue", { size: formatBytes(totals?.largest_bytes ?? 0) })}
             />
             <StatsCard
-              icon="fa-bookmark-o"
+              icon="far fa-circle-check"
               label={t("stats.readingStatus")}
               value={`${(totals?.unread ?? 0).toLocaleString()} / ${(totals?.finished ?? 0).toLocaleString()}`}
               hint={t("stats.unreadFinishedHint")}
@@ -126,7 +126,7 @@ export function Stats() {
               hint={t("stats.newBadgesValue", { count: totals?.new ?? 0 })}
             />
             <StatsCard
-              icon="fa-star-half-o"
+              icon="far fa-star-half-stroke"
               label={t("stats.ratedArchives")}
               value={(totals?.rated ?? 0).toLocaleString()}
             />
