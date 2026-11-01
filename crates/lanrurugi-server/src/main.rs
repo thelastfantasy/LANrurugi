@@ -845,7 +845,15 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(10 * 60));
             loop {
                 interval.tick().await;
+                let started = std::time::Instant::now();
                 sweep_stale_queue_items(&state).await;
+                // One check-in per run: the tracker's Monitors page plots these, and a monitor that
+                // stops checking in is the only way an in-process timer can report its own death.
+                lanrurugi_api::diagnostics::cron::check_in(
+                    "lanrurugi-queue-sweep",
+                    "ok",
+                    started.elapsed(),
+                );
             }
         });
     }
@@ -887,7 +895,13 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
             loop {
                 interval.tick().await;
+                let started = std::time::Instant::now();
                 lanrurugi_api::download_manager::ingest::sweep_stale_pending_renames(&state).await;
+                lanrurugi_api::diagnostics::cron::check_in(
+                    "lanrurugi-pending-rename-sweep",
+                    "ok",
+                    started.elapsed(),
+                );
             }
         });
     }
@@ -903,7 +917,13 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(15 * 60));
             loop {
                 interval.tick().await;
+                let started = std::time::Instant::now();
                 lanrurugi_api::download_manager::ingest::sweep_resize_cache_size(&state).await;
+                lanrurugi_api::diagnostics::cron::check_in(
+                    "lanrurugi-resize-cache-sweep",
+                    "ok",
+                    started.elapsed(),
+                );
             }
         });
     }
@@ -922,8 +942,14 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(5 * 60));
             loop {
                 interval.tick().await;
+                let started = std::time::Instant::now();
                 lanrurugi_api::translation_pipeline::sweep_finished_translation_sessions(&state)
                     .await;
+                lanrurugi_api::diagnostics::cron::check_in(
+                    "lanrurugi-translation-session-sweep",
+                    "ok",
+                    started.elapsed(),
+                );
             }
         });
     }

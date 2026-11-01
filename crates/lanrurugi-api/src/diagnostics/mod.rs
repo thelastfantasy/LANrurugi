@@ -9,6 +9,7 @@
 
 pub mod attachment;
 pub mod bundle;
+pub mod cron;
 pub mod forward;
 pub mod issue;
 pub mod logs;
@@ -75,6 +76,13 @@ impl sentry::Transport for LocalTransport {
             return;
         };
         spawn_capture(async move {
+            // Forward the envelope as-is first: whatever item it carries — an event, a transaction
+            // from a span, a structured log record, a session — reaches the tracker unchanged. The
+            // local ingest below only understands error events, which is why transactions and logs
+            // previously stopped here and the tracker's Performance/Logs pages stayed empty
+            // (2026-11-01).
+            crate::diagnostics::forward::forward_envelope(&state, &body).await;
+
             let profile = crate::diagnostics_settings::load(&state)
                 .await
                 .scrub_profile();
@@ -118,6 +126,10 @@ pub fn init_server_capture() {
     options = options.traces_sample_rate(trace_rate);
     let _ = CAPTURE_RUNTIME.set(tokio::runtime::Handle::current());
     let _ = CAPTURE_GUARD.set(sentry::init(options));
+    // Release health: one session per process lifetime is what puts this deployment's release on
+    // the tracker's Releases page with a crash-free rate — without it that page stays empty
+    // however many events arrive (2026-11-01).
+    sentry::start_session();
     report::install(&report::SentryReporter);
     // Deployment identity, so several installs forwarding to one project stay distinguishable.
     sentry::configure_scope(|scope| {

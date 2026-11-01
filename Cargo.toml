@@ -137,9 +137,9 @@ governor = "0.10"
 # Error telemetry (specs/018). The SDK is used for capture only: the browser's DSN points back at
 # this instance and the server's transport writes into the local store, so nothing leaves the
 # machine unless an administrator configures a tracker and opens a window.
-sentry = { version = "0.49.3", default-features = false, features = ["backtrace", "contexts", "panic", "transport", "reqwest", "rustls", "tracing"] }
+sentry = { version = "0.49.3", default-features = false, features = ["backtrace", "contexts", "logs", "panic", "release-health", "transport", "reqwest", "rustls", "tracing"] }
 sentry-tower = { version = "0.49.3", features = ["http"] }
-sentry-tracing = "0.49.3"
+sentry-tracing = { version = "0.49.3", features = ["logs"] }
 sentry-panic = "0.49.3"
 # Resolves a minified browser stack against a release's source maps, server-side.
 sourcemap = "9.3.2"

@@ -59,9 +59,34 @@ pub fn init(log_dir: Option<&Path>) {
         }))
         .with_filter(tracing_subscriber::filter::LevelFilter::WARN);
 
+    // Structured logs for the tracker's Logs page. Volume is controlled by one env var:
+    // `LANRURUGI_TRACKER_LOG_LEVEL=info` sends `lanrurugi_*` INFO and everything WARN+; unset sends
+    // WARN+ only. The level filter alone is not enough — `ort` logs every BFCArena reservation at
+    // INFO, which is why the target filter below also excludes it unless explicitly asked for.
+    let log_level = std::env::var("LANRURUGI_TRACKER_LOG_LEVEL")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    let info_targets = log_level == "info" || log_level == "debug";
+    let log_layer = sentry_tracing::LogLayer::new().with_filter(
+        tracing_subscriber::filter::filter_fn(move |metadata| {
+            let level = metadata.level();
+            let target = metadata.target();
+            if !target.starts_with("lanrurugi") {
+                return *level == tracing::Level::WARN || *level == tracing::Level::ERROR;
+            }
+            if info_targets {
+                *level <= tracing::Level::INFO
+            } else {
+                *level == tracing::Level::WARN || *level == tracing::Level::ERROR
+            }
+        }),
+    );
+
     let registry = tracing_subscriber::registry()
         .with(stderr_layer)
-        .with(capture_layer);
+        .with(capture_layer)
+        .with(log_layer);
 
     match log_dir {
         Some(dir) => {

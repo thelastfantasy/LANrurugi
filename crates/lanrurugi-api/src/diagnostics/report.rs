@@ -198,11 +198,22 @@ static LLM_TRACER: LlmTracer = LlmTracer;
 impl lanrurugi_llm::telemetry::Tracer for LlmTracer {
     fn begin(
         &self,
-        _call: &lanrurugi_llm::telemetry::CallStarted,
+        call: &lanrurugi_llm::telemetry::CallStarted,
     ) -> Option<Box<dyn std::any::Any + Send>> {
-        // Only the start instant crosses the await; the transaction itself is built in `end`, so a
-        // caller's future stays `Send`.
-        Some(Box::new(std::time::SystemTime::now()))
+        // A real span, not a timestamp: the previous version stored `SystemTime` here and then
+        // downcast it to `sentry::Transaction` in `end`, which can never succeed — so every LLM
+        // call silently produced nothing and the tracker's AI Agent Monitoring page stayed empty
+        // (2026-11-01). `gen_ai.operation.type` is the attribute that page groups by.
+        let context = sentry::TransactionContext::new(
+            &format!("{} {}", call.feature, call.model),
+            "gen_ai.chat",
+        );
+        let transaction = sentry::start_transaction(context);
+        transaction.set_data("gen_ai.operation.type", "ai_client".into());
+        transaction.set_data("gen_ai.request.model", call.model.to_string().into());
+        transaction.set_data("gen_ai.feature", call.feature.to_string().into());
+        transaction.set_tag("gen_ai.feature", call.feature);
+        Some(Box::new(transaction))
     }
 
     fn end(
@@ -215,9 +226,16 @@ impl lanrurugi_llm::telemetry::Tracer for LlmTracer {
         else {
             return;
         };
+        transaction.set_data("gen_ai.response.model", call.model.to_string().into());
         transaction.set_data("gen_ai.usage.input_tokens", call.input_tokens.into());
         transaction.set_data("gen_ai.usage.output_tokens", call.output_tokens.into());
         transaction.set_data("gen_ai.response.attempts", call.attempts.into());
+        transaction.set_data(
+            "gen_ai.response.latency_ms",
+            u64::try_from(call.elapsed.as_millis())
+                .unwrap_or(u64::MAX)
+                .into(),
+        );
         if let Some(error) = &call.error {
             transaction.set_data("error.class", error.clone().into());
             transaction.set_status(sentry::protocol::SpanStatus::InternalError);

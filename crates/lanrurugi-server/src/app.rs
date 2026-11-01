@@ -190,7 +190,14 @@ pub fn build_app(
         }));
     }
 
-    router.layer(TraceLayer::new_for_http())
+    // One Sentry transaction per HTTP request, with the request url/method as its own fields —
+    // this is what makes the tracker's Performance view cover *every* endpoint rather than only the
+    // hand-instrumented ones (`translation.page`). It sits outside `TraceLayer` so the transaction
+    // spans the whole request including the tracing span, and outside the auth layer so a refused
+    // request still shows up as a 401/403 rather than as a hole in the data.
+    router
+        .layer(sentry_tower::SentryHttpLayer::new().enable_transaction())
+        .layer(TraceLayer::new_for_http())
 }
 
 /// Serves `{dir}/index.html` with its inline anti-flash-of-default-theme `<script id="theme-init"

@@ -191,8 +191,14 @@ async function init(): Promise<void> {
     release: config.release,
     environment: "production",
     maxBreadcrumbs: 50,
-    // Navigation + request spans, at the same 1% the server uses: enough for a p95, not a firehose.
-    tracesSampleRate: 0.01,
+    // Browser transactions (pageload + navigation). Matches the server's own rate, read from the
+    // same build-time config so a dev instance that forwards everything also *samples* everything
+    // — at the old hardcoded 1% a Performance page looks empty even when the plumbing works.
+    // 100% while the forwarding window is open (a dev instance, or a user who just pressed
+    // "start forwarding" and expects to see the data), 1% otherwise — the same posture the server
+    // takes, and the reason a Performance page looked empty at a hardcoded 1% even when the
+    // plumbing worked.
+    tracesSampleRate: config.window.open ? 1.0 : 0.01,
     integrations: (defaults) => [
       ...defaults,
       Sentry.browserTracingIntegration({ instrumentNavigation: true }),
