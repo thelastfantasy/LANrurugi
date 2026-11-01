@@ -60,7 +60,11 @@ ARG LANRURUGI_GIT_SHA=unknown
 # image built without it never forwards anything, and an instance that configures its own DSN in
 # the settings always wins over this. CI passes it from a repository secret.
 ARG LANRURUGI_TRACKER_DSN=
+# The `release` a tracker groups by; a release build passes `lanrurugi@1.2.0`, a local build leaves
+# it empty and the binary falls back to its git SHA.
+ARG LANRURUGI_RELEASE=
 ENV LANRURUGI_GIT_SHA=${LANRURUGI_GIT_SHA}
+ENV LANRURUGI_RELEASE=${LANRURUGI_RELEASE}
 ENV LANRURUGI_TRACKER_DSN=${LANRURUGI_TRACKER_DSN}
 RUN cargo build --release -p lanrurugi-server -p lanrurugi-book-worker
 # The API reference document, generated from the crate source already copied above. Built here

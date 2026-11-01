@@ -49,6 +49,9 @@ jobs:
           provenance: false
           build-args: |
             LANRURUGI_GIT_SHA=${{ steps.sha.outputs.short_sha }}
+            # The tracker groups events/sessions by `release`, which wants a version rather than a
+            # commit: `lanrurugi@0.2.0`. Local builds pass no value and fall back to the SHA.
+            LANRURUGI_RELEASE=lanrurugi@${{ steps.version.outputs.lanrurugi_version }}
             # Diagnostics forwarding target, baked into the image (specs/018). Empty for
             # fork PRs, so nothing is sent from a build that never sees the secret.
             LANRURUGI_TRACKER_DSN=${{ secrets.LANRURUGI_TRACKER_DSN }}

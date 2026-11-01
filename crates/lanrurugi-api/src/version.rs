@@ -170,6 +170,35 @@ pub fn current_version() -> &'static str {
 /// spawning `git rev-parse HEAD` per request would be needless overhead.
 static SHA_CACHE: OnceLock<Option<String>> = OnceLock::new();
 
+/// The value reported to the tracker as an event's `release`.
+///
+/// A tracker groups events, sessions and transactions by this string, so it wants a *release*, not
+/// a commit: a published build reports `lanrurugi@1.2.0` while a local build keeps falling back to
+/// its git SHA. Resolution order mirrors [`current_sha`]'s own:
+/// 1. runtime `LANRURUGI_RELEASE` (a container can retag itself without a rebuild);
+/// 2. compile-time `LANRURUGI_RELEASE` (what a release build bakes in);
+/// 3. the git SHA.
+static RELEASE_CACHE: OnceLock<Option<String>> = OnceLock::new();
+
+pub fn current_release() -> Option<String> {
+    RELEASE_CACHE
+        .get_or_init(|| {
+            let usable = |value: &str| !value.is_empty() && value != "unknown";
+            if let Ok(value) = std::env::var("LANRURUGI_RELEASE") {
+                if usable(&value) {
+                    return Some(value);
+                }
+            }
+            if let Some(value) = option_env!("LANRURUGI_RELEASE") {
+                if usable(value) {
+                    return Some(value.to_string());
+                }
+            }
+            current_sha()
+        })
+        .clone()
+}
+
 pub(crate) fn current_sha() -> Option<String> {
     SHA_CACHE
         .get_or_init(|| {
@@ -716,7 +745,7 @@ pub fn deployment() -> Deployment {
     Deployment {
         hostname: hostname(),
         environment: environment(),
-        release: current_sha(),
+        release: current_release(),
         version: current_version(),
         started_at_ms: started_at_millis(),
         uptime_secs: uptime_secs(),
@@ -788,6 +817,17 @@ mod tests {
         assert!(sha_match("0123456789abcdef", "0123456789abcdef"));
         assert!(!sha_match("0123456a", "0123456b"));
         assert!(!sha_match("abc", "abcdefg"));
+    }
+
+    #[test]
+    fn the_reported_release_falls_back_to_the_commit_when_no_version_is_set() {
+        // Process-wide env is not touched here: `LANRURUGI_RELEASE` is read through a `OnceLock`, so a
+        // test that set it would decide the value for every other test in this binary. What this
+        // asserts is the contract a build without the variable has — the release is the SHA.
+        if std::env::var("LANRURUGI_RELEASE").is_ok() {
+            return;
+        }
+        assert_eq!(current_release(), current_sha());
     }
 
     #[test]
