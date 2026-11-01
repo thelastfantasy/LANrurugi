@@ -853,6 +853,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     "lanrurugi-queue-sweep",
                     "ok",
                     started.elapsed(),
+                    10,
                 );
             }
         });
@@ -901,6 +902,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     "lanrurugi-pending-rename-sweep",
                     "ok",
                     started.elapsed(),
+                    60,
                 );
             }
         });
@@ -923,6 +925,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     "lanrurugi-resize-cache-sweep",
                     "ok",
                     started.elapsed(),
+                    15,
                 );
             }
         });
@@ -949,6 +952,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     "lanrurugi-translation-session-sweep",
                     "ok",
                     started.elapsed(),
+                    5,
                 );
             }
         });

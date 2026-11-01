@@ -12,10 +12,12 @@ use std::time::Duration;
 
 /// Reports one run of a scheduled job.
 ///
-/// `slug` is the monitor's identity on the tracker (`lanrurugi-queue-sweep`, …); a monitor is
-/// created from the first check-in that mentions an unknown slug, so no dashboard setup is needed.
-/// `status` is `"ok"` or `"error"`; `elapsed` is that run's own duration.
-pub fn check_in(slug: &str, status: &str, elapsed: Duration) {
+/// `slug` is the monitor's identity on the tracker (`lanrurugi-queue-sweep`, …), `status` is `"ok"`
+/// or `"error"`, `elapsed` is that run's own duration, and `interval_minutes` is the job's own
+/// period — it travels with **every** check-in as `monitor_config`, because the tracker only
+/// creates a monitor from a check-in that carries a schedule (verified live 2026-11-01: a
+/// check-in without one is accepted with a 200 and creates nothing).
+pub fn check_in(slug: &str, status: &str, elapsed: Duration, interval_minutes: u64) {
     // Built by hand rather than through the SDK: `sentry` 0.49 has no `capture_check_in`, and the
     // envelope format is three JSON lines (header, item header, payload).
     let check_in_id = uuid_like_id();
@@ -26,6 +28,14 @@ pub fn check_in(slug: &str, status: &str, elapsed: Duration) {
         "duration": elapsed.as_secs_f64(),
         "environment": crate::version::deployment().environment,
         "release": crate::version::deployment().release,
+        "monitor_config": {
+            "schedule": { "type": "interval", "value": interval_minutes, "unit": "minute" },
+            // One missed run is worth knowing about, and one good run is enough to clear it.
+            "checkin_margin": interval_minutes.min(15),
+            "max_runtime": (interval_minutes * 2).max(5),
+            "failure_issue_threshold": 1,
+            "recovery_threshold": 1,
+        },
     });
     let header = serde_json::json!({
         "event_id": uuid_like_id(),
