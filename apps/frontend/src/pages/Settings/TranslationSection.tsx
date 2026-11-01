@@ -57,8 +57,10 @@ export function TranslationSection({
 
   // The beta marker belongs on the accordion's own title bar: it labels the whole section, and
   // putting it there keeps the collapsed state self-explanatory without opening anything.
+  // Inline, not a flex container: `.collapsible-title` renders `<i class="fa …" /> {title}` inside a
+  // block element, so a block-level span pushed the icon onto its own line (2026-11-01).
   const sectionTitle = (
-    <span className="flex items-center gap-2">
+    <>
       {t("translation.title")}
       <span
         style={{
@@ -68,11 +70,13 @@ export function TranslationSection({
           borderRadius: 3,
           border: "1px solid currentColor",
           opacity: 0.8,
+          marginLeft: 6,
+          whiteSpace: "nowrap",
         }}
       >
         {t("translation.betaBadge")}
       </span>
-    </span>
+    </>
   )
 
   const usesGlobalKey =

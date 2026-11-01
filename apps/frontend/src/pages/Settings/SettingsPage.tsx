@@ -153,7 +153,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const translationIsDirty =
     !!translation.settings &&
     !!translation.serverSettings &&
-    (translation.settings.provider !== translation.serverSettings.provider ||
+    (translation.settings.enabled !== translation.serverSettings.enabled ||
+      translation.settings.provider !== translation.serverSettings.provider ||
       translation.settings.endpoint !== translation.serverSettings.endpoint ||
       translation.settings.model !== translation.serverSettings.model ||
       translation.settings.lookaheadPages !== translation.serverSettings.lookaheadPages ||
@@ -269,6 +270,9 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         translation.category === "local" && translation.local.endpoint.trim() ? { ...translation.local } : null,
       )
       const saved = await updateTranslationSettings({
+        // The master switch is saved first-class: without it here the switch only ever changed
+        // local state and the next reload silently reverted it (2026-11-01).
+        enabled: translation.settings.enabled,
         provider: translation.category === "cloud" ? translation.settings.provider : null,
         endpoint: translation.settings.endpoint,
         model: translation.settings.model,
