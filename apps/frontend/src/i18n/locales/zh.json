@@ -798,6 +798,7 @@
   "app.rectangleDisplay": "选框显示方式",
   "logs.redisLogsWonTBe": "如果您从源代码运行，Redis日志将无法从这里获取！",
   "library.refresh": "刷新",
+  "library.relevance": "相关度",
   "Refresh Selection": "刷新选择",
   "settings.regenerateAllThumbnails": "重新生成所有缩略图",
   "Regenerate all thumbnails": "重新生成所有缩略图",
@@ -2363,7 +2364,7 @@
   "diagnostics.feedback.placeholder": "例如:点开第 3 卷的阅读页时缩略图不显示,刷新后依旧…",
   "diagnostics.feedback.hint": "写一条说明发到追踪服务,它会出现在那边的「用户反馈」里,带上哪台部署、什么环境;若之前有事件被上报过,还会关联到最近那一条。",
   "diagnostics.feedback.title": "直接反馈",
-  "diagnostics.feedback.name": "称呼(必填)",
+  "diagnostics.feedback.name": "称呼",
   "diagnostics.feedback.email": "邮箱(必填)",
   "diagnostics.feedback.name_required": "请填写称呼。",
   "diagnostics.feedback.email_required": "请填写邮箱,这条反馈才知道是谁写的。",
@@ -2754,5 +2755,6 @@
   "diagnostics.feedback.image_too_large": "「{{name}}」超过 {{size}} MB。",
   "translation.masterSwitch": "启用 AI 翻译",
   "translation.betaBadge": "测试版",
-  "translation.masterSwitchHint": "默认关闭。开启后阅读器才会显示翻译按钮；这是实验功能，识别与排版质量仍在改进。"
+  "translation.masterSwitchHint": "默认关闭。开启后阅读器才会显示翻译按钮；这是实验功能，识别与排版质量仍在改进。",
+  "diagnostics.feedback.failed": "发送失败,请稍后再试。"
 }

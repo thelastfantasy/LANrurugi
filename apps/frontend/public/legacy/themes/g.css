@@ -1403,3 +1403,9 @@ textarea {
 .diag-issue-info {
   background-color: rgba(74, 93, 138, 0.10);
 }
+
+/* 诊断/反馈表单里字段级校验消息。用本主题 .confirm-danger-icon 的同一支红色，让它看起来是
+   这个主题自己的"错误"色，而不是硬塞进来的红。 */
+.diag-field-error {
+    color: #C0392B;
+}

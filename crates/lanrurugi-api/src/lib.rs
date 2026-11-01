@@ -24,6 +24,7 @@ pub mod font_pattern;
 pub mod geoip;
 pub mod gpu_worker_client;
 pub mod health;
+pub mod heartbeat;
 pub mod jobs;
 pub mod llm_prompts;
 pub mod llm_usage;

@@ -51,6 +51,10 @@ enum Command {
     EvalGrouping(lanrurugi_server::cli::eval_grouping::EvalGroupingArgs),
     /// Run a sharing rendezvous/relay node for other instances, with no library and no Redis.
     ShareNode(lanrurugi_server::cli::share_node::ShareNodeArgs),
+    /// Run the anonymous-heartbeat sink (the other end of `--telemetry-url`), against its own
+    /// Redis and behind a Cloudflare Tunnel. One instance serves every deployment of the project;
+    /// it is not part of a normal installation.
+    TelemetryIngest(lanrurugi_server::cli::telemetry_ingest::TelemetryIngestArgs),
 }
 
 #[derive(clap::Args)]
@@ -97,6 +101,23 @@ struct ServeArgs {
     /// setting should expose to whoever can reach the Settings page.
     #[arg(long, env = "LANRURUGI_DISABLE_UPDATE_CHECK", default_value_t = false)]
     disable_update_check: bool,
+
+    /// Anonymous startup heartbeat: one request per installation per day, carrying a random
+    /// install id, the version and the architecture — never a library path, a file name, a user or
+    /// an address (the sink derives the country from the connection itself). Off unless
+    /// `--telemetry-url` names a sink, so a build from source never phones home.
+    #[arg(long, env = "LANRURUGI_TELEMETRY_URL")]
+    telemetry_url: Option<String>,
+
+    /// Refuses the heartbeat above even when `--telemetry-url` is set. Same deploy-time-flag
+    /// reasoning as `--disable-update-check`, and the same `Boolish` parser so `=1` works.
+    #[arg(
+        long,
+        env = "LANRURUGI_NO_TELEMETRY",
+        default_value_t = false,
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    no_telemetry: bool,
 
     /// Disables the first-run wizard entirely: it never auto-opens, and the Settings page stops
     /// offering to run it. Same deploy-time-flag reasoning as `--disable-update-check` above.
@@ -242,6 +263,7 @@ async fn run(from_install_prefix: Vec<(&'static str, PathBuf)>) -> anyhow::Resul
         Command::RebuildIndex(args) => rebuild_index(args).await,
         Command::EvalGrouping(args) => lanrurugi_server::cli::eval_grouping::run(args).await,
         Command::ShareNode(args) => lanrurugi_server::cli::share_node::run(args).await,
+        Command::TelemetryIngest(args) => lanrurugi_server::cli::telemetry_ingest::run(args).await,
         Command::Formats(args) => {
             tokio::task::spawn_blocking(move || lanrurugi_server::cli::formats::run(args)).await?
         }
@@ -299,6 +321,14 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
 
     let redis = RedisDbs::connect(&args.redis_url)?;
     bootstrap(&redis, &args.library_path).await?;
+    // Detached and best-effort: an unreachable sink must never delay or fail a startup.
+    lanrurugi_api::heartbeat::spawn(
+        redis.clone(),
+        lanrurugi_api::heartbeat::Options {
+            url: args.telemetry_url.clone(),
+            disabled: args.no_telemetry,
+        },
+    );
     if lanrurugi_server::mounts::in_container() {
         let redis_dir = bundled_redis_dir(&redis, &args.redis_url).await;
         let mut kept = vec![

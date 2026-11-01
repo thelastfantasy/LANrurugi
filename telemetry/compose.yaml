@@ -1,0 +1,50 @@
+# The anonymous heartbeat sink for every deployment of this project: Redis + the sink + a
+# Cloudflare Tunnel. Deployed once, by the project maintainer — this is not part of a normal
+# LANrurugi installation, and a normal installation never needs this file.
+#
+# `redis` has no `ports:` on purpose. Nothing but `ingest` may reach it, and `ingest` is only
+# reachable by `cloudflared` over this compose network.
+name: lanrurugi-telemetry
+
+services:
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?put REDIS_PASSWORD in .env}
+    volumes:
+      # A dataset, not a container-local path: snapshots on the parent dataset then cover it.
+      - ${REDIS_DATA:-./data}:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 6379 -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+  ingest:
+    # The published image already contains the binary; its own entrypoint would start a bundled
+    # Redis and `serve`, neither of which this service wants, so call the binary directly.
+    image: ${LANRURUGI_IMAGE:-ghcr.io/thelastfantasy/lanrurugi:latest}
+    entrypoint: ["lanrurugi-server"]
+    command: ["telemetry-ingest", "--bind", "0.0.0.0:8099"]
+    environment:
+      # Keep the password alphanumeric: it sits inside a URL.
+      LANRURUGI_TELEMETRY_REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/0
+      LANRURUGI_TELEMETRY_RETENTION_DAYS: ${RETENTION_DAYS:-400}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: ["tunnel", "--no-autoupdate", "run", "--token", "${TUNNEL_TOKEN:?put TUNNEL_TOKEN in .env}"]
+    depends_on:
+      - ingest
+    restart: unless-stopped

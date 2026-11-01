@@ -422,6 +422,7 @@
   "Reading Progression has been fully migrated": "閱讀進度已成功完成遷移",
   "logs.redisLogsWonTBe": "若您是從原始碼執行，將無法從此處讀取 Redis 日誌！",
   "library.refresh": "重新整理",
+  "library.relevance": "相關度",
   "Refresh Selection": "重新整理選取項目",
   "settings.regenerateAllThumbnails": "重新產生所有縮圖",
   "Regenerate all thumbnails": "重新產生所有縮圖",
@@ -956,5 +957,8 @@
   "subscriptions.enableLabel": "啟用",
   "translation.masterSwitch": "啟用 AI 翻譯",
   "translation.betaBadge": "測試版",
-  "translation.masterSwitchHint": "預設關閉。開啟後閱讀器才會顯示翻譯按鈕；這是實驗功能，辨識與排版品質仍在改進。"
+  "translation.masterSwitchHint": "預設關閉。開啟後閱讀器才會顯示翻譯按鈕；這是實驗功能，辨識與排版品質仍在改進。",
+  "diagnostics.feedback.name": "稱呼",
+  "diagnostics.feedback.email": "電子郵件(必填)",
+  "diagnostics.feedback.failed": "傳送失敗,請稍後再試。"
 }

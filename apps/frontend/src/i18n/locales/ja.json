@@ -390,6 +390,7 @@
   "Reading Progression has been fully migrated": "読書進捗の移行が完了しました",
   "logs.redisLogsWonTBe": "ソースから実行している場合、Redis のログはここでは表示できません！",
   "library.refresh": "更新",
+  "library.relevance": "関連度",
   "Refresh Selection": "選択を更新",
   "settings.regenerateAllThumbnails": "すべてのサムネイルを再生成",
   "settings.regenerateAllThumbnailsThisMight": "すべてのサムネイルを再生成します。完了まで時間がかかる場合があります！",
@@ -2625,5 +2626,8 @@
   "share.import.inheritCategoriesHint": "共有元と同じ名前のカテゴリに入れます。同名のカテゴリがなければ作成します。新しく取り込んだアーカイブのみ対象です。",
   "translation.masterSwitch": "AI 翻訳を有効にする",
   "translation.betaBadge": "ベータ版",
-  "translation.masterSwitchHint": "既定ではオフです。オンにするとリーダーに翻訳ボタンが表示されます。実験的な機能で、認識と組版の品質は改善中です。"
+  "translation.masterSwitchHint": "既定ではオフです。オンにするとリーダーに翻訳ボタンが表示されます。実験的な機能で、認識と組版の品質は改善中です。",
+  "diagnostics.feedback.name": "お名前",
+  "diagnostics.feedback.email": "メールアドレス(必須)",
+  "diagnostics.feedback.failed": "送信に失敗しました。しばらくしてから再度お試しください。"
 }

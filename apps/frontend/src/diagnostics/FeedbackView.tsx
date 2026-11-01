@@ -1,7 +1,7 @@
 /** Sending a note to the configured tracker (specs/018) — its own tab, since it is the one action
  * here a user takes without reading anything else first. */
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { collectClientReportedInfo } from "@/api/clientReportedInfo"
@@ -23,14 +23,43 @@ interface PickedImage {
   url: string
 }
 
+/** A note's contact details, remembered after the first successful send: nobody wants to retype
+ * their own email on every report. Per browser, not per account — this is the person's own contact
+ * information on their own device, so it stays put across logins. */
+const CONTACT_KEY = "lanrurugi_feedback_contact"
+
+function readSavedContact(): { name: string; email: string } {
+  try {
+    const raw = localStorage.getItem(CONTACT_KEY)
+    if (!raw) return { name: "", email: "" }
+    const parsed = JSON.parse(raw) as { name?: unknown; email?: unknown }
+    return {
+      name: typeof parsed.name === "string" ? parsed.name : "",
+      email: typeof parsed.email === "string" ? parsed.email : "",
+    }
+  } catch {
+    // Blocked storage or corrupt value: an empty form is a better fallback than a crash.
+    return { name: "", email: "" }
+  }
+}
+
+function saveContact(name: string, email: string): void {
+  try {
+    localStorage.setItem(CONTACT_KEY, JSON.stringify({ name, email }))
+  } catch {
+    // Nothing to do: the note still went out, only the prefill is lost.
+  }
+}
+
 export function FeedbackView() {
   const { t } = useTranslation()
-  const [name, setName] = useState("")
-  const [email, setEmail] = useState("")
+  // Read once: two `useState` initializers would each hit storage separately.
+  const savedContact = useMemo(() => readSavedContact(), [])
+  const [name, setName] = useState(savedContact.name)
+  const [email, setEmail] = useState(savedContact.email)
   const [message, setMessage] = useState("")
   const [sending, setSending] = useState(false)
   const [note, setNote] = useState<string | null>(null)
-  const [nameTouched, setNameTouched] = useState(false)
   const [emailTouched, setEmailTouched] = useState(false)
   const [images, setImages] = useState<PickedImage[]>([])
   const [imageError, setImageError] = useState<string | null>(null)
@@ -91,10 +120,9 @@ export function FeedbackView() {
   const trimmedName = name.trim()
   const trimmedEmail = email.trim()
   const emailValid = EMAIL.test(trimmedEmail)
-  const ready = trimmedName.length > 0 && emailValid && message.trim().length > 0
-
-  const nameError =
-    nameTouched && trimmedName.length === 0 ? t("diagnostics.feedback.name_required") : null
+  // The name is optional (a maintainer reading the tracker only needs a way to reply), so it never
+  // blocks submission and carries no error state; the email is the one field that must be filled.
+  const ready = emailValid && message.trim().length > 0
   const emailError =
     !emailTouched || emailValid
       ? null
@@ -104,7 +132,6 @@ export function FeedbackView() {
 
   /// The server owns the limits: per-account daily allowance, burst window and duplicate check.
   const send = async () => {
-    setNameTouched(true)
     setEmailTouched(true)
     if (!ready) return
     setSending(true)
@@ -124,10 +151,14 @@ export function FeedbackView() {
         images: images.map((image) => image.file),
       })
       setMessage("")
+      saveContact(trimmedName, trimmedEmail)
       clearImages()
       setNote(t("diagnostics.feedback.sent", { remaining: result.remaining_today }))
     } catch (error) {
-      setNote(String(error))
+      // A localized sentence, not the server's own English: the raw text stays in the console for
+      // whoever is debugging, and the user only needs to know the note did not go out.
+      console.error("feedback submit failed", error)
+      setNote(t("diagnostics.feedback.failed"))
     } finally {
       setSending(false)
     }
@@ -144,10 +175,7 @@ export function FeedbackView() {
             value={name}
             maxLength={128}
             autoComplete="name"
-            aria-invalid={nameError !== null}
-            aria-describedby={nameError ? "feedback-name-error" : undefined}
             onChange={(event) => setName(event.target.value)}
-            onBlur={() => setNameTouched(true)}
           />
         </label>
         <label className="diag-field">
@@ -163,18 +191,13 @@ export function FeedbackView() {
             onChange={(event) => setEmail(event.target.value)}
             onBlur={() => setEmailTouched(true)}
           />
+          {emailError && (
+            <p className="diag-field-error" id="feedback-email-error" role="alert">
+              {emailError}
+            </p>
+          )}
         </label>
       </div>
-      {nameError && (
-        <p className="diag-field-error" id="feedback-name-error" role="alert">
-          {nameError}
-        </p>
-      )}
-      {emailError && (
-        <p className="diag-field-error" id="feedback-email-error" role="alert">
-          {emailError}
-        </p>
-      )}
       <p className="diag-usage">{t("diagnostics.feedback.attached")}</p>
       <textarea
         className="stdinput diag-message"
@@ -241,7 +264,10 @@ export function FeedbackView() {
         </button>
         <span className="diag-usage">{t("diagnostics.feedback.limit")}</span>
       </div>
-      {note && <p className="diag-note">{note}</p>}
+      {/* Same treatment as the two hints above it (`.diag-usage`): this is a status line, not a
+          field-level validation error, so it carries their colour, size and indent rather than the
+          red used for a field the user must fix. */}
+      {note && <p className="diag-usage">{note}</p>}
     </div>
   )
 }

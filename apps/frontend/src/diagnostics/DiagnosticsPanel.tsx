@@ -18,7 +18,7 @@ import {
 } from "./api"
 
 /** The project's own tracker (see `OFFICIAL_TRACKER_HOST` server-side). */
-const OFFICIAL_TRACKER_HOST = "https://sentry.taosaka.com"
+const OFFICIAL_TRACKER_HOST = "https://sentry.lrrg.dev"
 
 const WINDOW_CHOICES = [
   { value: "300", labelKey: "diagnostics.window.minutes5" },

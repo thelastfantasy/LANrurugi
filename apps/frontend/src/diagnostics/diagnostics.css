@@ -69,7 +69,10 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 10px 16px;
-  align-items: end;
+  /* `start`, not `end`: a field-level validation message makes one column taller, and bottom
+     alignment then pushes the other column's label and input down with it — the two fields have to
+     share a top edge so their labels and inputs stay on the same line. */
+  align-items: start;
 }
 
 .diag-field {
@@ -471,6 +474,10 @@
 .diag-attachment-remove {
   flex: 0 0 auto;
   width: 26px;
+  /* The theme's own `.stdbtn` carries `min-width: 150px` (legacy dialogs always showed a wide
+     action button), which is wider than a 120px thumbnail — without clearing it the × stretched
+     past the picture it belongs to. */
+  min-width: 0;
   padding: 0;
 }
 

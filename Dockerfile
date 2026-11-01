@@ -27,11 +27,6 @@ ARG REDIS_VERSION=8.2.1
 ARG LANRURUGI_RUNTIME_BASE=runtime-base-cpu
 
 FROM rust:${RUST_VERSION}-slim-bookworm AS rust-builder
-ARG LANRURUGI_GIT_SHA=unknown
-# The maintainer's own tracker DSN for diagnostics forwarding (specs/018). Empty by default: an
-# image built without it never forwards anything, and an instance that configures its own DSN in
-# the settings always wins over this. CI passes it from a repository secret.
-ARG LANRURUGI_TRACKER_DSN=
 WORKDIR /build
 # cmake + libclang-dev build `libarchive2-sys` (bundles libarchive's C source, built via CMake,
 # bindgen needs libclang — see `crates/lanrurugi-scanner/src/archive_format.rs`); the zlib1g-dev/
@@ -57,6 +52,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+# Both build-time values are declared here rather than at the top of the stage: the git sha changes
+# every commit, and an `ARG` invalidates every layer after it — placed above the `apt-get` they
+# forced a full toolchain-dependency reinstall on every cached rebuild (2026-11-01).
+ARG LANRURUGI_GIT_SHA=unknown
+# The maintainer's own tracker DSN for diagnostics forwarding (specs/018). Empty by default: an
+# image built without it never forwards anything, and an instance that configures its own DSN in
+# the settings always wins over this. CI passes it from a repository secret.
+ARG LANRURUGI_TRACKER_DSN=
 ENV LANRURUGI_GIT_SHA=${LANRURUGI_GIT_SHA}
 ENV LANRURUGI_TRACKER_DSN=${LANRURUGI_TRACKER_DSN}
 RUN cargo build --release -p lanrurugi-server -p lanrurugi-book-worker

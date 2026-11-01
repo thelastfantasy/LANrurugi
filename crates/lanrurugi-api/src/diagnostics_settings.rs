@@ -53,7 +53,7 @@ const FIELDS: &[(&str, Kind, &str)] = &[
 
 /// The project's own tracker. When an instance is pointed here (built in, or pasted from the
 /// documentation) the panel says so explicitly: it is the maintainer's service, not a third party.
-pub const OFFICIAL_TRACKER_HOST: &str = "https://sentry.taosaka.com";
+pub const OFFICIAL_TRACKER_HOST: &str = "https://sentry.lrrg.dev";
 
 /// Diagnostics settings, defaults filled in.
 #[derive(Debug, Clone)]

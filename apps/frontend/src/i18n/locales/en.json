@@ -761,6 +761,7 @@
   "app.rectangleDisplay": "Rectangle Display",
   "logs.redisLogsWonTBe": "Redis logs won't be available from here if you're running from source!",
   "library.refresh": "Refresh",
+  "library.relevance": "Relevance",
   "Refresh Selection": "Refresh Selection",
   "settings.regenerateAllThumbnails": "Regenerate all Thumbnails",
   "settings.regenerateAllThumbnailsThisMight": "Regenerate all thumbnails. This might take a while!",
@@ -2363,7 +2364,7 @@
   "diagnostics.feedback.placeholder": "e.g. the thumbnails on volume 3's reader page never load, and reloading doesn't help…",
   "diagnostics.feedback.hint": "Send a note to the tracker. It shows up on its User Feedback page with the deployment and environment, and links to the most recent event that was forwarded, if there was one.",
   "diagnostics.feedback.title": "Send feedback",
-  "diagnostics.feedback.name": "Name (required)",
+  "diagnostics.feedback.name": "Name",
   "diagnostics.feedback.email": "Email (required)",
   "diagnostics.feedback.name_required": "Enter a name.",
   "diagnostics.feedback.email_required": "Enter an email address so the note can be attributed.",
@@ -2754,5 +2755,6 @@
   "diagnostics.feedback.image_too_large": "\"{{name}}\" is larger than {{size}} MB.",
   "translation.masterSwitch": "Enable AI translation",
   "translation.betaBadge": "Beta",
-  "translation.masterSwitchHint": "Off by default. The reader only shows its translation controls once this is on; the feature is experimental and recognition/layout quality is still improving."
+  "translation.masterSwitchHint": "Off by default. The reader only shows its translation controls once this is on; the feature is experimental and recognition/layout quality is still improving.",
+  "diagnostics.feedback.failed": "Sending failed. Please try again."
 }

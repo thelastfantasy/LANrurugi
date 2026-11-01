@@ -36,6 +36,9 @@ serde.workspace = true
 serde_json.workspace = true
 base64 = "0.22"
 deadpool-redis.workspace = true
+# `telemetry-ingest`: the payload's id is a UUID and its keys are dated.
+uuid.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 reqwest.workspace = true

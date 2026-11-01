@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom"
 import { useDiscardReservation, useReservations } from "@/api/hooks"
 import type { ReservationEntry } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
+import { CollapsibleSection } from "@/components/Display"
 import { routes } from "@/lib/routes"
 import { FONT_SIZE_SM, FONT_SIZE_XS } from "@/theme"
 
@@ -44,18 +45,20 @@ export function ReservationGroup() {
 
   return (
     <div style={{ marginTop: 8 }}>
-      <div
-        className={`collapsible-title caret-right${open ? " active" : ""}`}
-        style={{ padding: "5px 0 0 5px", cursor: "pointer" }}
-        onClick={() => setOpen((o) => !o)}
+      <CollapsibleSection
+        as="div"
+        icon="fa-bookmark"
+        iconClassName="fas fa-bookmark fa-2x"
+        open={open}
+        onOpenChange={setOpen}
+        titleStyle={{ padding: "5px 0 0 5px", display: "block" }}
+        bodyStyle={{ padding: "5px 0 0 0" }}
+        title={
+          <b style={{ verticalAlign: "super" }}>
+            {t("reservations.title")} ({entries.length})
+          </b>
+        }
       >
-        <i className="fas fa-bookmark fa-2x" style={{ marginRight: 4 }} aria-hidden="true"></i>
-        <b style={{ verticalAlign: "super" }}>
-          {t("reservations.title")} ({entries.length})
-        </b>
-      </div>
-      {open && (
-        <div className="collapsible-body" style={{ padding: "5px 0 0 0" }}>
           {entries.map((entry) => (
             <div
               key={entry.id}
@@ -104,8 +107,7 @@ export function ReservationGroup() {
           <p style={{ fontSize: FONT_SIZE_XS, opacity: 0.8, marginTop: 6 }}>
             {t("reservations.discardIsRemembered")}
           </p>
-        </div>
-      )}
+      </CollapsibleSection>
     </div>
   )
 }

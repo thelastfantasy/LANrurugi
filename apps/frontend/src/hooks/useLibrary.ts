@@ -39,6 +39,7 @@ import {
   tagSuggestions,
   toggleQuickFilter,
 } from "@/lib/searchSuggestions";
+import { defaultSortDir, effectiveSortDir } from "@/lib/sortOrder";
 import {
   COLUMN_COUNT_KEY,
   CROP_THUMBS_KEY,
@@ -110,7 +111,7 @@ export function useLibrary() {
   }): string {
     const nextPage = overrides.page ?? page;
     const nextSortby = overrides.sortby ?? sortby;
-    const nextOrder = overrides.order ?? order;
+    const nextOrder = effectiveSortDir(nextSortby, overrides.order ?? order);
     const nextFilter = overrides.appliedFilter ?? appliedFilter;
     const nextCategory = overrides.selectedCategory ?? selectedCategory;
     const params = new URLSearchParams();
@@ -194,12 +195,16 @@ export function useLibrary() {
     selectedCategory?: string;
   }) {
     const nextSortby = overrides.sortby ?? sortby;
-    const nextOrder = overrides.order ?? order;
+    // Switching fields resets to that field's own natural direction: relevance has no reverse,
+    // dates are newest-first, title/tag namespaces are A→Z.
+    const nextOrder =
+      overrides.order ??
+      (overrides.sortby !== undefined ? defaultSortDir(overrides.sortby) : order);
     if (overrides.sortby !== undefined) {
       localStorage.setItem(INDEX_SORT_KEY, overrides.sortby);
     }
-    if (overrides.order !== undefined) {
-      localStorage.setItem(INDEX_ORDER_KEY, overrides.order);
+    if (overrides.order !== undefined || overrides.sortby !== undefined) {
+      localStorage.setItem(INDEX_ORDER_KEY, nextOrder);
     }
     if (
       loggedIn &&
@@ -348,7 +353,7 @@ export function useLibrary() {
   const search = useSearch({
     filter: appliedFilter,
     sortby,
-    order,
+    order: effectiveSortDir(sortby, order),
     start: page * PAGE_SIZE,
     ...searchContext,
   });

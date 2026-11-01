@@ -2055,3 +2055,12 @@ body div.ido {
   border-color: #1a73e8;
   color: #ffffff;
 }
+
+/* An accordion header is a control, not text: without this a fast double click (open/close) starts
+ * a text selection on the header, and the next drag extends it over the whole section body. Sits
+ * here rather than on the shared `CollapsibleSection` because the carousel's own header is
+ * hand-rolled and shares only this class. */
+.collapsible-title {
+  user-select: none;
+  -webkit-user-select: none;
+}

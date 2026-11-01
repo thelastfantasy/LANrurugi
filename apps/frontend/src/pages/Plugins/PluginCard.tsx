@@ -5,6 +5,7 @@ import { useSearchParams } from "react-router-dom"
 import { usePluginOptions, usePluginSettings, useUpdatePluginSettings } from "@/api/hooks"
 import type { PluginInfo } from "@/api/types"
 import type { DragHandleProps } from "@/components/common-ui/Display"
+import { CollapsibleSection } from "@/components/Display"
 import { PluginOptionsForm } from "@/pages/PluginOptionsForm"
 import { PluginParametersForm } from "@/pages/PluginParametersForm"
 
@@ -200,16 +201,16 @@ export function PluginCard({
             only the parameters were collapsible. */}
         {(hasDownloadOptions || hasParameters) && (
           <>
-            <div
-              className={`collapsible-title caret-right${settingsOpen ? " active" : ""}`}
-              style={{ padding: "5px 0 0 5px", cursor: "pointer" }}
-              onClick={() => setSettingsOpen((o) => !o)}
+            <CollapsibleSection
+              as="div"
+              icon="fa-sliders"
+              iconClassName="fas fa-sliders-h fa-2x"
+              open={settingsOpen}
+              onOpenChange={setSettingsOpen}
+              titleStyle={{ padding: "5px 0 0 5px", display: "block" }}
+              bodyStyle={{ padding: "5px 0 0 0" }}
+              title={<b style={{ verticalAlign: "super" }}>{t("pluginParameters.pluginSettings")}</b>}
             >
-              <i className="fas fa-sliders-h fa-2x" style={{ marginRight: 4 }} aria-hidden="true"></i>
-              <b style={{ verticalAlign: "super" }}>{t("pluginParameters.pluginSettings")}</b>
-            </div>
-            {settingsOpen && (
-              <div className="collapsible-body" style={{ padding: "5px 0 0 0" }}>
                 {hasDownloadOptions && <PluginOptionsForm namespace={plugin.namespace} />}
                 {/* Deliberately its own box, outside the options form: everything in that form
                     persists through one `/plugins/options` record that Save/Reset act on as a
@@ -220,8 +221,7 @@ export function PluginCard({
                     <PluginParametersForm namespace={plugin.namespace} parameters={plugin.parameters} />
                   </div>
                 )}
-              </div>
-            )}
+            </CollapsibleSection>
           </>
         )}
 

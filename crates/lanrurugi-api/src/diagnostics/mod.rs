@@ -930,18 +930,22 @@ struct Contact {
     email: String,
 }
 
-/// Name and email are required: the tracker shows them as the reporter's identity, and the email
-/// is the only way back to the person who wrote the note.
+/// The email is the only field that has to be there — it is the one way back to the person who
+/// wrote the note, and the tracker shows it as the reporter's identity. The name is optional: a
+/// submitted note without one is attributed to "anonymous" rather than rejected, because insisting
+/// on a name only makes people type a fake one.
 fn feedback_contact(name: &str, email: &str) -> Result<Contact, String> {
     let clean =
         |value: &str| -> String { value.trim().chars().filter(|c| !c.is_control()).collect() };
     let name = clean(name);
-    if name.is_empty() {
-        return Err("a name is required.".to_string());
-    }
     if name.chars().count() > 128 {
         return Err("the name is longer than 128 characters.".to_string());
     }
+    let name = if name.is_empty() {
+        "anonymous".to_string()
+    } else {
+        name
+    };
     let email = clean(email);
     if email.is_empty() {
         return Err("an email address is required.".to_string());
@@ -1326,8 +1330,12 @@ mod feedback_tests {
     }
 
     #[test]
-    fn a_note_needs_a_name_and_a_usable_email() {
-        assert!(feedback_contact("", "jade@example.com").is_err());
+    fn a_note_needs_a_usable_email_and_only_may_have_a_name() {
+        // The name is optional: an empty one is attributed, not rejected.
+        assert_eq!(
+            feedback_contact("", "jade@example.com").unwrap().name,
+            "anonymous"
+        );
         assert!(feedback_contact("Jade", "").is_err());
         assert!(feedback_contact("Jade", "not-an-email").is_err());
         assert!(feedback_contact("Jade", "two@at@example.com").is_err());

@@ -524,3 +524,9 @@ changeset is large enough to make per-feature attribution valuable, that's a sig
 often *during* the work (right after each feature lands, before the next one starts touching the
 same files) — not a reason to reverse-engineer feature boundaries out of an already-tangled
 worktree after the fact.
+
+## 本机 / NAS 运维信息在哪里
+
+跨会话的部署与运维细节（NAS 的 SSH 连接方式、TrueNAS 版本、rustrak/nginx 的路径与踩坑记录、
+追踪服务的域名迁移历史）记在 `~/.dsh/notes/lanrurugi-ops.md`。需要操作 NAS 或第三方服务前先读它，
+不要凭记忆重建连接信息。

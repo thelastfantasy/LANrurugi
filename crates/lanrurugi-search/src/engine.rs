@@ -1303,11 +1303,7 @@ async fn token_matches(
             } else {
                 format!("INDEX_*{folded}*")
             };
-            let keys: Vec<String> = search_conn.keys(pattern).await?;
-            for key in keys {
-                let members: Vec<String> = search_conn.smembers(&key).await?;
-                ids.extend(members);
-            }
+            collect_index_keys(search_conn, &pattern, &mut ids).await?;
         }
     }
 
@@ -1343,11 +1339,7 @@ async fn token_matches(
                 } else {
                     format!("INDEX_*{}*", token.tag)
                 };
-                let keys: Vec<String> = search_conn.keys(raw_pattern).await?;
-                for key in keys {
-                    let members: Vec<String> = search_conn.smembers(&key).await?;
-                    ids.extend(members);
-                }
+                collect_index_keys(search_conn, &raw_pattern, &mut ids).await?;
             }
         }
 
@@ -1367,6 +1359,58 @@ async fn token_matches(
     ids.retain(|id| scope.contains(id));
 
     Ok(ids)
+}
+
+/// Unions every archive id indexed under the `INDEX_*` keys matching `pattern` into `ids`.
+///
+/// `SCAN` rather than `KEYS`: a mid-word pattern (`INDEX_*k*`) walks the whole keyspace, and
+/// `KEYS` blocks Redis for that entire walk while every other client waits. Keys are collected
+/// and deduplicated first (one `SCAN` iteration can return the same key twice) so each
+/// `SMEMBERS` is issued once, and they are read back in pipelined batches rather than one round
+/// trip per key.
+async fn collect_index_keys(
+    conn: &mut deadpool_redis::Connection,
+    pattern: &str,
+    ids: &mut HashSet<String>,
+) -> Result<()> {
+    let mut cursor = String::from("0");
+    let mut keys: HashSet<String> = HashSet::new();
+    loop {
+        let (next, batch): (String, Vec<String>) = deadpool_redis::redis::cmd("SCAN")
+            .arg(&cursor)
+            .arg("MATCH")
+            .arg(pattern)
+            .arg("COUNT")
+            .arg(500)
+            .query_async(&mut *conn)
+            .await?;
+        keys.extend(batch);
+        if next == "0" {
+            break;
+        }
+        cursor = next;
+    }
+    if keys.is_empty() {
+        return Ok(());
+    }
+    // Batched, not one pipeline for every key: a single-letter query can match thousands of
+    // `INDEX_*` keys, and one pipeline that large would make Redis build (and this side hold)
+    // every member list at once. Each batch is still one round trip.
+    const KEY_BATCH: usize = 256;
+    let keys: Vec<String> = keys.into_iter().collect();
+    for chunk in keys.chunks(KEY_BATCH) {
+        let mut pipe = deadpool_redis::redis::pipe();
+        for key in chunk {
+            let mut cmd = deadpool_redis::redis::cmd("SMEMBERS");
+            cmd.arg(key);
+            pipe.add_command(cmd);
+        }
+        let members: Vec<Vec<String>> = pipe.query_async(&mut *conn).await?;
+        for batch in members {
+            ids.extend(batch);
+        }
+    }
+    Ok(())
 }
 
 /// Unions every archive whose title contains `needle` into `ids`, reading them out of the
@@ -1540,11 +1584,18 @@ async fn sort_ids(
     archive_conn: &mut deadpool_redis::Connection,
     search_conn: &mut deadpool_redis::Connection,
     eq: &Equivalence,
-    sortkey: &str,
-    order_desc: bool,
+    mut sortkey: &str,
+    mut order_desc: bool,
     filtered: &HashSet<String>,
     terms: &[(String, Field)],
 ) -> Result<Vec<String>> {
+    // Nothing to rank without a scoring term: every candidate would tie at 0 and the id tie-break
+    // would present archive-hash order as if it were relevance. Newest-first is the useful default
+    // when there is no query text at all.
+    if sortkey == "relevance" && terms.is_empty() {
+        sortkey = "date_added";
+        order_desc = true;
+    }
     // Deliberately opt-in and never the default: every other sort here is a total order a caller
     // can predict from stored fields, while this one changes meaning as the query changes. It also
     // cannot reuse the tag-namespace fallback below (which would happily treat the literal string
@@ -1593,18 +1644,25 @@ async fn sort_ids(
             }
             scored.push((score, id.clone()));
         }
-        // Highest score first by default (`order_desc == false`, i.e. the API's own default) — an
-        // ascending relevance sort is never what a caller means by asking for relevance, so
-        // `order=asc` is what flips this to lowest-first.
-        scored.sort_by(|a, b| {
-            if order_desc {
-                a.0.cmp(&b.0)
-            } else {
-                b.0.cmp(&a.0)
-            }
-            .then_with(|| a.1.cmp(&b.1))
-        });
-        return Ok(scored.into_iter().map(|(_, id)| id).collect());
+        // An attribute-only query (`is:new`, `pages:>100`, …) has no text that can appear in a
+        // title or a tag, so every candidate ties at 0 again — same fallback, not fake relevance.
+        if scored.iter().all(|(score, _)| *score == 0) {
+            sortkey = "date_added";
+            order_desc = true;
+        } else {
+            // Highest score first by default (`order_desc == false`, i.e. the API's own default) —
+            // an ascending relevance sort is never what a caller means by asking for relevance, so
+            // `order=asc` is what flips this to lowest-first.
+            scored.sort_by(|a, b| {
+                if order_desc {
+                    a.0.cmp(&b.0)
+                } else {
+                    b.0.cmp(&a.0)
+                }
+                .then_with(|| a.1.cmp(&b.1))
+            });
+            return Ok(scored.into_iter().map(|(_, id)| id).collect());
+        }
     }
     if sortkey == "title" {
         let ordered: Vec<String> = search_conn
@@ -1936,6 +1994,73 @@ mod tests {
         assert_ne!(ids[2], ids[3]);
 
         for id in [&id_old, &id_new, &id_no_date, &tank.to_string()] {
+            let _: () = aconn.del(id).await.unwrap();
+        }
+    }
+
+    /// `sortby=relevance` with nothing to score (an empty filter, or an attribute-only query whose
+    /// terms can never appear in a title/tag) ties every candidate at 0. The id tie-break would
+    /// then hand back random archive-hash order, so the sort must fall back to newest-first.
+    #[tokio::test]
+    async fn relevance_without_scoring_terms_falls_back_to_newest_first() {
+        let Some((archive_pool, search_pool, _bookmarks)) = test_pools().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let mut aconn = archive_pool.get().await.unwrap();
+        // `d0…` sorts before `d1…`, so a test that silently kept the id tie-break would return
+        // them in the opposite order and fail.
+        let id_old = "d0".repeat(20);
+        let id_new = "d1".repeat(20);
+        for (id, tags) in [
+            (id_old.as_str(), "date_added:1000"),
+            (id_new.as_str(), "date_added:2000"),
+        ] {
+            let _: () = aconn.hset(id, "tags", tags).await.unwrap();
+        }
+        let filtered: HashSet<String> = [&id_old, &id_new]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        // Empty query: no scoring terms at all.
+        let ids = sort_ids(
+            &mut aconn,
+            &mut search_pool.get().await.unwrap(),
+            &test_eq(),
+            "relevance",
+            false,
+            &filtered,
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            ids,
+            vec![id_new.clone(), id_old.clone()],
+            "an empty query must fall back to newest-first, not archive-id order"
+        );
+
+        // Attribute-only query: the term exists but cannot appear in any title/tag, so every
+        // candidate still scores 0.
+        let ids = sort_ids(
+            &mut aconn,
+            &mut search_pool.get().await.unwrap(),
+            &test_eq(),
+            "relevance",
+            false,
+            &filtered,
+            &[("is:new".to_string(), Field::Any)],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            ids,
+            vec![id_new.clone(), id_old.clone()],
+            "an attribute-only query must fall back to newest-first too"
+        );
+
+        for id in [&id_old, &id_new] {
             let _: () = aconn.del(id).await.unwrap();
         }
     }
