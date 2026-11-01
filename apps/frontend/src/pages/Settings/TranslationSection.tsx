@@ -51,32 +51,35 @@ export function TranslationSection({
   // (they would look like configuration for a feature that is off).
   const masterSwitch = (
     <Row label={t("translation.masterSwitch")} noHelp>
-      <span className="flex items-center gap-2">
-        <span
-          style={{
-            fontSize: 11,
-            fontWeight: 700,
-            padding: "1px 6px",
-            borderRadius: 3,
-            border: "1px solid currentColor",
-            opacity: 0.8,
-          }}
-        >
-          {t("translation.betaBadge")}
-        </span>
-        <Switch
-          checked={settings.enabled}
-          onCheckedChange={(next) => update({ enabled: next })}
-        />
-      </span>
+      <Switch checked={settings.enabled} onCheckedChange={(next) => update({ enabled: next })} />
     </Row>
+  )
+
+  // The beta marker belongs on the accordion's own title bar: it labels the whole section, and
+  // putting it there keeps the collapsed state self-explanatory without opening anything.
+  const sectionTitle = (
+    <span className="flex items-center gap-2">
+      {t("translation.title")}
+      <span
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          padding: "1px 6px",
+          borderRadius: 3,
+          border: "1px solid currentColor",
+          opacity: 0.8,
+        }}
+      >
+        {t("translation.betaBadge")}
+      </span>
+    </span>
   )
 
   const usesGlobalKey =
     category === "cloud" && settings.provider === "deepseek" && settings.globalDeepseekKeySet
 
   return (
-    <CollapsibleSection id="translation" icon="fa-language" title={t("translation.title")}>
+    <CollapsibleSection id="translation" icon="fa-language" title={sectionTitle}>
       <div className="settings-table" style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
         {masterSwitch}
         {!settings.enabled && (
