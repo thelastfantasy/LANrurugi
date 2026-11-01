@@ -56,6 +56,10 @@ pub(crate) fn tankoubon_chapter_rename_system() -> String {
         + library_data_rule()
 }
 
+/// Bump whenever the reranking instructions change: the ordering is cached per
+/// `(archive, limit, version)`, so a stale entry would otherwise outlive the prompt it came from.
+pub(crate) const RECOMMEND_RERANK_PROMPT_VERSION: &str = "v1";
+
 /// Recommendation LLM rerank prompt.
 pub(crate) fn recommend_llm_system() -> String {
     "你是一个漫画/同人志推荐引擎。你会收到当前漫画的标题和标签、以及候选漫画清单（id: 标题 | 标签 | 页数 | 版本）。\n\

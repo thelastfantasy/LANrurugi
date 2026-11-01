@@ -21,3 +21,4 @@ pub mod repository;
 pub mod shares;
 pub mod subscriptions;
 pub mod test_support;
+pub mod thumbnail_failures;

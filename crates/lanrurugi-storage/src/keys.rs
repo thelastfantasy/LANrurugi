@@ -116,6 +116,42 @@ pub const GROUPING_LABELS_KEY: &str = "LANRURUGI_GROUPING_LABELS";
 /// `<suggestion_id>|<archive_id>`). No TTL, like the labels.
 pub const GROUPING_DISAGREEMENTS_KEY: &str = "LANRURUGI_GROUPING_REVIEWER_DISAGREEMENTS";
 
+/// Additive, LANrurugi-only. Why an archive's thumbnail can never be generated (a hash, field
+/// `"{archive_id}:{page}"` → `reason|size|mtime` of the file at the time it failed).
+///
+/// Consulted before any on-demand generation, so a structurally broken file (corrupt/truncated/
+/// encrypted container, undecodable page) is opened once instead of on every page load. The stored
+/// file fingerprint is what keeps "never" from becoming "even after the file is fixed": a file
+/// whose size/mtime changed no longer matches its entry and is retried (see
+/// `lanrurugi_api::thumbnail_failures`). No TTL — the fingerprint is the invalidation.
+pub const THUMBNAIL_BLACKLIST_KEY: &str = "LANRURUGI_THUMBNAIL_BLACKLIST";
+
+/// Additive, LANrurugi-only. Short-lived "this generation just failed, don't immediately retry"
+/// memory for *transient* thumbnail failures (worker restart, I/O, encoder OOM) — one key per
+/// `(archive, page)`, value the error text, expiring on its own.
+pub fn thumbnail_retry_key(archive_id: &str, page: u32) -> String {
+    format!("LANRURUGI_THUMBNAIL_RETRY:{archive_id}:{page}")
+}
+
+/// 10 minutes: long enough that a page load's worth of thumbnails does not retry a file that is
+/// currently unreadable, short enough that a worker that came back is picked up on the next visit.
+pub const THUMBNAIL_RETRY_TTL_SECS: i64 = 10 * 60;
+
+/// Additive, LANrurugi-only. One reader-recommendation LLM rerank, keyed by anchor, limit and
+/// prompt version: the ordered archive ids the model picked.
+///
+/// The rerank is a synchronous DeepSeek call (observed 6–64 s); the candidate shortlist itself is
+/// already cached by `lanrurugi_storage::recommend_cache`, so without this every panel open paid
+/// the model call again for the same answer. A hit is re-validated against the live candidate list,
+/// so an id that has since been deleted simply falls through to a fresh call.
+pub fn recommend_rerank_key(archive_id: &str, limit: usize, prompt_version: &str) -> String {
+    format!("LANRURUGI_RECOMMEND_RERANK:{archive_id}:{limit}:{prompt_version}")
+}
+
+/// 6 hours: a library that does not change reuses one answer all day, while any new archive makes
+/// the re-validation drop it (the model's answer is only as fresh as the shortlist it saw).
+pub const RECOMMEND_RERANK_TTL_SECS: i64 = 6 * 60 * 60;
+
 /// How long one [`read_daily_key`] survives — long enough for a "past year" reading-history chart,
 /// short enough that the key family never grows without bound.
 pub const READ_DAILY_TTL_SECS: i64 = 400 * 24 * 60 * 60;

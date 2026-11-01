@@ -54,6 +54,30 @@ pub enum BookError {
     Io(#[from] io::Error),
 }
 
+impl BookError {
+    /// Whether re-reading the same book later could plausibly succeed.
+    ///
+    /// The book half of `lanrurugi_scanner::ArchiveFormatError::is_permanent`'s policy: a
+    /// truncated/corrupt/DRM-protected file is a property of the bytes on disk, while a worker
+    /// that is missing, restarting or crashed says nothing about the book itself.
+    pub fn is_permanent(&self) -> bool {
+        match self {
+            BookError::NotABook(_) => true,
+            BookError::Encrypted => true,
+            // Truncated, corrupt, or a variant this worker does not understand — e.g. an EPUB zip
+            // with no EOCD record. Retrying the same bytes cannot fix it.
+            BookError::Unreadable(_) => true,
+            BookError::PageOutOfRange(_) => true,
+            // No worker process to talk to (binary missing, pool exhausted, not started yet).
+            BookError::WorkerUnavailable(_) => false,
+            // A worker-level failure: a crash, a timeout, or a caught panic. A fresh worker may
+            // well succeed, so this must never be treated as a property of the file.
+            BookError::Worker(_) => false,
+            BookError::Io(_) => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BookConfig {
     pub worker_bin: Option<PathBuf>,

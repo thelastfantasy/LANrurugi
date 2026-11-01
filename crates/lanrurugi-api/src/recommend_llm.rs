@@ -62,8 +62,17 @@ impl ShortlistEntry<'_> {
 
 /// Reranks `candidates` via DeepSeek's chat API with an explicit "next volume first"
 /// instruction. Returns `None` on any failure — the caller falls back to the embedding order.
+///
+/// The answer is cached (`lanrurugi_storage::keys::recommend_rerank_key`) because this call sits
+/// on the request path of `GET /api/reader/recommendations/{id}`: it was observed taking 6–64 s,
+/// and the panel is re-opened (or prefetched) far more often than the library changes. The cache
+/// entry records the *candidate set* it was produced from, so a library edit — including the one
+/// case the whole rerank exists for, a new volume of the same series appearing — invalidates it
+/// rather than serving a stale ordering. The deadline bounds the pathological case instead of the
+/// seam's three-minute default; timing out is just another fallback to the embedding order.
 pub async fn llm_rerank(
     state: &AppState,
+    archive_id: &str,
     current_title: &str,
     current_tags: &str,
     current_pagecount: u32,
@@ -82,6 +91,18 @@ pub async fn llm_rerank(
     // plain top-N by similarity.
     let shortlist = dedupe_by_work(candidates);
     let shortlist = &shortlist[..shortlist.len().min(MAX_PROMPT_CANDIDATES)];
+
+    let by_id: std::collections::HashMap<&str, &ShortlistEntry> =
+        shortlist.iter().map(|e| (e.meta.id.as_str(), e)).collect();
+    let candidate_fingerprint = candidate_fingerprint(shortlist.iter().map(|e| e.meta.id.as_str()));
+
+    if let Some(picks) = cached_picks(state, archive_id, limit, &candidate_fingerprint).await {
+        let ranked = rank_picks(&picks, &by_id, shortlist, limit);
+        if !ranked.is_empty() {
+            return Some(ranked);
+        }
+        // Every remembered pick has since been deleted: fall through and ask again.
+    }
 
     let candidate_list: Vec<String> = shortlist
         .iter()
@@ -121,9 +142,11 @@ pub async fn llm_rerank(
 
     let known: std::collections::HashSet<&str> =
         shortlist.iter().map(|e| e.meta.id.as_str()).collect();
+    let spec = lanrurugi_llm::CallSpec::new(lanrurugi_llm::FeatureId::RECOMMEND_RERANK)
+        .with_deadline(RERANK_DEADLINE);
     let picks: Vec<LlmPick> = crate::repair::json_chat_checked(
         &state.redis.config,
-        &lanrurugi_llm::CallSpec::new(lanrurugi_llm::FeatureId::RECOMMEND_RERANK),
+        &spec,
         &system,
         &user,
         0.2,
@@ -135,26 +158,65 @@ pub async fn llm_rerank(
     .ok()?
     .value;
 
-    let by_id: std::collections::HashMap<&str, &ShortlistEntry> =
-        shortlist.iter().map(|e| (e.meta.id.as_str(), e)).collect();
-    let mut ranked: Vec<Recommendation> = Vec::with_capacity(picks.len());
+    let ranked = rank_picks(
+        &picks.iter().map(|p| p.id.clone()).collect::<Vec<_>>(),
+        &by_id,
+        shortlist,
+        limit,
+    );
+    if ranked.is_empty() {
+        return None;
+    }
+    remember_picks(
+        state,
+        archive_id,
+        limit,
+        &candidate_fingerprint,
+        &ranked.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
+    )
+    .await;
+    Some(ranked)
+}
+
+/// Ceiling for one rerank. The observed distribution is 6–64 s; 30 s keeps the answers that actually
+/// arrive while cutting the tail that made a panel open cost a minute. Timing out falls back to the
+/// embedding order, which is the same degradation as any other model failure.
+const RERANK_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A stable digest of the exact candidate set an answer was produced from (order included — the
+/// prompt numbers the lines, so order is part of the question). Changes whenever the shortlist
+/// does, which is precisely when a remembered ordering stops being trustworthy.
+fn candidate_fingerprint<'a>(ids: impl Iterator<Item = &'a str>) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for id in ids {
+        hasher.update(id.as_bytes());
+        hasher.update(b"\n");
+    }
+    hasher.finalize().to_hex()[..16].to_string()
+}
+
+/// Turns an ordered id list into [`Recommendation`]s, keeping only ids that are still in the
+/// shortlist and de-duplicating. Shared by the fresh-answer and cache-hit paths so both produce
+/// exactly the same ranking and scores.
+fn rank_picks(
+    ids: &[String],
+    by_id: &std::collections::HashMap<&str, &ShortlistEntry>,
+    shortlist: &[ShortlistEntry<'_>],
+    limit: usize,
+) -> Vec<Recommendation> {
+    let mut ranked: Vec<Recommendation> = Vec::with_capacity(ids.len());
     let mut picked = std::collections::HashSet::new();
-    for pick in picks {
-        if !picked.insert(pick.id.clone()) {
+    for id in ids {
+        if !picked.insert(id.as_str()) {
             continue;
         }
-        if let Some(entry) = by_id.get(pick.id.as_str()) {
+        if let Some(entry) = by_id.get(id.as_str()) {
             ranked.push(Recommendation {
                 id: entry.meta.id.clone(),
                 title: entry.meta.title.clone(),
                 score: 1.0 - (ranked.len() as f32 * 0.05).min(0.95),
             });
-        } else {
-            warn!(id = %pick.id, "LLM returned a candidate id not in the prefiltered shortlist — skipped");
         }
-    }
-    if ranked.is_empty() {
-        return None;
     }
     ranked.truncate(limit);
     if ranked.len() < limit {
@@ -162,7 +224,7 @@ pub async fn llm_rerank(
             if ranked.len() >= limit {
                 break;
             }
-            if !picked.contains(&entry.meta.id) {
+            if !picked.contains(entry.meta.id.as_str()) {
                 ranked.push(Recommendation {
                     id: entry.meta.id.clone(),
                     title: entry.meta.title.clone(),
@@ -171,7 +233,67 @@ pub async fn llm_rerank(
             }
         }
     }
-    Some(ranked)
+    ranked
+}
+
+/// The remembered ordering for `(archive, limit)`, if it was produced from this exact candidate
+/// set. Any Redis problem is a miss — a cache must never be able to fail the request.
+async fn cached_picks(
+    state: &AppState,
+    archive_id: &str,
+    limit: usize,
+    candidate_fingerprint: &str,
+) -> Option<Vec<String>> {
+    use deadpool_redis::redis::AsyncCommands;
+    let mut conn = state.redis.config.get().await.ok()?;
+    let key = lanrurugi_storage::keys::recommend_rerank_key(
+        archive_id,
+        limit,
+        crate::llm_prompts::RECOMMEND_RERANK_PROMPT_VERSION,
+    );
+    let raw: String = conn.get(&key).await.ok().flatten()?;
+    let cached: RerankCacheEntry = serde_json::from_str(&raw).ok()?;
+    (cached.candidates == candidate_fingerprint).then_some(cached.picks)
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct RerankCacheEntry {
+    /// The shortlist digest this ordering was produced from.
+    candidates: String,
+    /// Ordered archive ids, exactly as the model returned them (then filtered).
+    picks: Vec<String>,
+}
+
+async fn remember_picks(
+    state: &AppState,
+    archive_id: &str,
+    limit: usize,
+    candidate_fingerprint: &str,
+    picks: &[String],
+) {
+    use deadpool_redis::redis::AsyncCommands;
+    let Ok(mut conn) = state.redis.config.get().await else {
+        return;
+    };
+    let key = lanrurugi_storage::keys::recommend_rerank_key(
+        archive_id,
+        limit,
+        crate::llm_prompts::RECOMMEND_RERANK_PROMPT_VERSION,
+    );
+    let entry = RerankCacheEntry {
+        candidates: candidate_fingerprint.to_string(),
+        picks: picks.to_vec(),
+    };
+    let Ok(raw) = serde_json::to_string(&entry) else {
+        return;
+    };
+    let _: Result<(), _> = conn
+        .set_ex(
+            key,
+            raw,
+            lanrurugi_storage::keys::RECOMMEND_RERANK_TTL_SECS as u64,
+        )
+        .await;
 }
 
 /// One entry per *work*: collapses `[中国翻訳]`/`[DL版]` re-releases of something already in the
@@ -280,5 +402,53 @@ mod tests {
             dedupe_by_work(&candidates[1..2])[0].parts.release,
             vec!["中国翻訳".to_string()]
         );
+    }
+
+    /// The cache stores ids only, so the ranking has to be reproducible from ids alone — otherwise
+    /// a cache hit would reorder (or rescore) the same answer differently from the call that
+    /// produced it.
+    #[test]
+    fn a_remembered_ordering_ranks_the_same_way_as_the_fresh_answer() {
+        let candidates = vec![meta("a", "A巻"), meta("b", "B巻"), meta("c", "C巻")];
+        let shortlist = dedupe_by_work(&candidates);
+        let by_id: std::collections::HashMap<&str, &ShortlistEntry> =
+            shortlist.iter().map(|e| (e.meta.id.as_str(), e)).collect();
+
+        let ranked = rank_picks(&["c".to_string(), "a".to_string()], &by_id, &shortlist, 2);
+        let ids: Vec<&str> = ranked.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["c", "a"]);
+        assert_eq!(ranked[0].score, 1.0);
+        assert_eq!(ranked[1].score, 0.95);
+    }
+
+    /// A cached id that has since been deleted, or one repeated, must not shrink the answer below
+    /// the requested limit — the shortlist's remaining order fills the gap, exactly as on the
+    /// fresh-answer path.
+    #[test]
+    fn a_remembered_ordering_is_repaired_against_the_live_shortlist() {
+        let candidates = vec![meta("a", "A巻"), meta("b", "B巻"), meta("c", "C巻")];
+        let shortlist = dedupe_by_work(&candidates);
+        let by_id: std::collections::HashMap<&str, &ShortlistEntry> =
+            shortlist.iter().map(|e| (e.meta.id.as_str(), e)).collect();
+
+        let ranked = rank_picks(
+            &["b".to_string(), "gone".to_string(), "b".to_string()],
+            &by_id,
+            &shortlist,
+            3,
+        );
+        let ids: Vec<&str> = ranked.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["b", "a", "c"]);
+    }
+
+    /// The fingerprint is what makes a cached ordering trustworthy: it must change with the
+    /// candidate set (including its order, which the prompt numbers) and stay stable otherwise.
+    #[test]
+    fn the_candidate_fingerprint_follows_the_shortlist() {
+        let base = candidate_fingerprint(["a", "b", "c"].into_iter());
+        assert_eq!(base, candidate_fingerprint(["a", "b", "c"].into_iter()));
+        assert_ne!(base, candidate_fingerprint(["b", "a", "c"].into_iter()));
+        assert_ne!(base, candidate_fingerprint(["a", "b"].into_iter()));
+        assert_ne!(base, candidate_fingerprint(["a", "b", "d"].into_iter()));
     }
 }

@@ -195,7 +195,17 @@ pub fn build_app(
     // hand-instrumented ones (`translation.page`). It sits outside `TraceLayer` so the transaction
     // spans the whole request including the tracing span, and outside the auth layer so a refused
     // request still shows up as a 401/403 rather than as a hole in the data.
+    //
+    // `capture_request_trace` sits *inside* it on purpose: the transaction is installed in the
+    // hub's thread-local scope during the Sentry layer's own first poll, so this middleware (first
+    // polled immediately afterwards, on the same thread) is the earliest place that can reliably
+    // read it and hand it to the rest of the request's task — which is what lets a model call
+    // report itself inside this trace instead of as an unrelated transaction. See that module's
+    // own docs.
     router
+        .layer(axum::middleware::from_fn(
+            lanrurugi_api::trace_context::capture_request_trace,
+        ))
         .layer(sentry_tower::SentryHttpLayer::new().enable_transaction())
         .layer(TraceLayer::new_for_http())
 }

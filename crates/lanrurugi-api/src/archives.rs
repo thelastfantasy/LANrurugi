@@ -484,6 +484,10 @@ pub(crate) async fn delete_one_archive(
             if let Err(e) = state.recommend_cache.delete_for(id.as_str()).await {
                 tracing::warn!(%id, error = %e, "failed to remove deleted archive from recommendation cache");
             }
+            // The thumbnail failure memory is keyed by archive id, which is only the SHA-1 of the
+            // file's first 512 KB — an id can come back attached to different bytes, so a leftover
+            // entry would blacklist a re-imported archive that has nothing wrong with it.
+            crate::thumbnail_failures::clear_archive(state, id.as_str()).await;
             // Issue #102 — three kinds of data that live OUTSIDE the archive record and so survive
             // its deletion. Each is best-effort for the same reason as the index cleanup above: the
             // record is already gone, and failing here must not turn a completed delete into an
@@ -1850,6 +1854,10 @@ pub(crate) fn thumbnail_formats_for(
 /// [`get_archive_thumbnail`]'s doc comment for the singleflight/concurrency-cap rationale — keyed
 /// by `"{id}:{page}"` so a cover regen and a per-page regen for the same archive don't collide on
 /// the same singleflight slot.
+///
+/// A failure is recorded in [`crate::thumbnail_failures`] *before* the next page load can ask
+/// again, and a previously recorded one short-circuits the whole attempt: a file whose bytes can
+/// never produce a thumbnail used to be re-parsed on every request that listed it.
 async fn regenerate_thumbnail_on_demand(
     state: &AppState,
     id: &str,
@@ -1864,6 +1872,11 @@ async fn regenerate_thumbnail_on_demand(
         .await
         .ok()
         .flatten()?;
+    let file = std::path::PathBuf::from(&archive.file);
+    if let Some(reason) = crate::thumbnail_failures::blocked(state, id, page, &file).await {
+        tracing::debug!(id = %id, page, reason = %reason, "skipping thumbnail generation");
+        return None;
+    }
 
     state
         .thumbnail_singleflight
@@ -1876,7 +1889,7 @@ async fn regenerate_thumbnail_on_demand(
                     let output = thumbnail_disk_path(&state, &id, page, format)?;
                     let source_page = if page == 0 { 1 } else { page as usize };
                     let result = lanrurugi_scanner::thumbnail::generate(
-                        std::path::PathBuf::from(&archive.file),
+                        file.clone(),
                         source_page,
                         output,
                         format,
@@ -1887,6 +1900,8 @@ async fn regenerate_thumbnail_on_demand(
                         Ok(_) => read_thumbnail_format(&state, &id, page, format).await,
                         Err(e) => {
                             tracing::warn!(id = %id, page, error = %e, "on-demand thumbnail generation failed");
+                            crate::thumbnail_failures::note_failure(&state, &id, page, &file, &e)
+                                .await;
                             None
                         }
                     }
@@ -1948,6 +1963,14 @@ async fn update_thumbnail(
         .thumb_dir
         .join(shard)
         .join(format!("{id}.{}", thumb_settings.format.extension()));
+    // "Set as cover" is the user saying this page *can* produce a thumbnail, so a remembered
+    // failure for it (including a permanent one, which retrying alone would never clear) must not
+    // keep short-circuiting the next read. The written file is the *cover* whatever source page was
+    // chosen, so the cover's own slot (`page 0`, what `get_archive_thumbnail` asks for) goes too.
+    crate::thumbnail_failures::clear_page(&state, id.as_str(), page).await;
+    if page != 0 {
+        crate::thumbnail_failures::clear_page(&state, id.as_str(), 0).await;
+    }
     match lanrurugi_scanner::thumbnail::generate(
         std::path::PathBuf::from(&archive.file),
         page as usize,
@@ -2155,10 +2178,16 @@ pub async fn spawn_regen_thumbnails_job(
     let job_id = jobs.create("regen_thumbnails").await;
     let job_id_for_task = job_id.clone();
     let archive_repo = state.repos.archives.clone();
+    let state_for_failures = state.clone();
 
     tokio::spawn(async move {
         jobs.mark_active(&job_id_for_task).await;
         let total = archives.len().max(1);
+
+        // This job *is* the admin's "try everything again": an archive blacklisted for a file
+        // that has since been fixed would otherwise stay invisible forever, since the blacklist's
+        // own invalidation (a changed size/mtime) only triggers on the next read attempt.
+        crate::thumbnail_failures::clear_all(&state_for_failures).await;
 
         // Which archives actually need a freshly generated cover (force, or the file for the
         // *current* format doesn't exist yet) — only these pay the CPU-heavy decode/resize/encode
@@ -2231,7 +2260,17 @@ pub async fn spawn_regen_thumbnails_job(
                         }
                     }
                     Err(e) => {
-                        tracing::warn!(id = %archive.id, error = %e, "regen_thumbs failed for archive")
+                        tracing::warn!(id = %archive.id, error = %e, "regen_thumbs failed for archive");
+                        // Same two-layer memory the on-demand path writes: a file that is broken
+                        // should not send every subsequent page load back through this parse.
+                        crate::thumbnail_failures::note_failure(
+                            &state_for_failures,
+                            &archive.id,
+                            0,
+                            std::path::Path::new(&archive.file),
+                            &e,
+                        )
+                        .await;
                     }
                 }
             }

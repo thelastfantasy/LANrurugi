@@ -67,6 +67,33 @@ pub enum ArchiveFormatError {
     Book(#[from] lanrurugi_book::BookError),
 }
 
+impl ArchiveFormatError {
+    /// Whether re-reading the same file later could plausibly succeed.
+    ///
+    /// This is the container half of [`crate::thumbnail::ThumbnailError::is_permanent`]'s policy
+    /// (see that method's own doc comment for what the caller does with it): a corrupt, truncated,
+    /// encrypted or unsupported container is a property of the bytes on disk and stays broken no
+    /// matter how often it is retried, whereas a momentary I/O failure says nothing about the file.
+    /// Deliberately per *error kind*, never per format — a broken CBZ and a broken EPUB take the
+    /// same path.
+    pub fn is_permanent(&self) -> bool {
+        match self {
+            // The file was momentarily unreadable (permissions, an unmounted share, EIO): retrying
+            // later is exactly what fixes this.
+            ArchiveFormatError::Io(_) => false,
+            // libarchive could not parse the container at all — truncated, corrupt, or carrying a
+            // passphrase. Re-opening the same bytes cannot change that.
+            ArchiveFormatError::Libarchive(_) => true,
+            // Catalogued but not readable as an archive (a `.txt` alongside images, an extension
+            // this build's libarchive has no codec for).
+            ArchiveFormatError::UnsupportedExtension(_) => true,
+            // The requested entry does not exist: a page index past the end of a fixed page list.
+            ArchiveFormatError::EntryNotFound(_) => true,
+            ArchiveFormatError::Book(e) => e.is_permanent(),
+        }
+    }
+}
+
 type Result<T> = std::result::Result<T, ArchiveFormatError>;
 
 const IMAGE_EXTENSIONS: &[&str] = &[

@@ -448,6 +448,13 @@ async fn delete_existing_archive(
     // for the single-delete API path — best-effort, matching that path's reasoning.
     let _ = tokio::fs::remove_file(crate::patch::patch_path_for(Path::new(&existing.file))).await;
     archives.delete(&existing.id).await?;
+    // This archive id stops naming anything the moment the record above is gone, so its thumbnail
+    // failure memory goes too — an id is only `SHA-1(first 512 KB)`, and the file landing at this
+    // same path next is a *different* one that must not inherit a blacklist written about its
+    // predecessor.
+    let _ =
+        lanrurugi_storage::thumbnail_failures::forget_archive(config_pool, existing.id.as_str())
+            .await;
     let mut config_conn = config_pool.get().await?;
     let _: () = config_conn.hdel(FILEMAP_KEY, &existing.file).await?;
     // Confirmed missing live (issue found during unrelated manual QA): without this, the deleted

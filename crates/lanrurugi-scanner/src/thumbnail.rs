@@ -155,6 +155,39 @@ pub enum ThumbnailError {
     Jxl(#[from] crate::jxl::JxlEncodeError),
 }
 
+impl ThumbnailError {
+    /// Whether this failure is a property of the archive on disk, rather than of the moment it was
+    /// read — i.e. whether asking again (until the file itself changes) is pure waste.
+    ///
+    /// The caller uses this to decide between two different kinds of "don't retry yet" memory
+    /// (`lanrurugi_api::thumbnail_failures`): a permanent failure is remembered until the file's
+    /// size/mtime changes, a transient one only for a few minutes. The split is per *error kind*
+    /// and covers every format — a truncated CBZ, a corrupt EPUB and a password-protected PDF all
+    /// land in the same bucket as long as the cause is the bytes.
+    pub fn is_permanent(&self) -> bool {
+        match self {
+            // Corrupt/truncated/encrypted/unsupported container, or a book the worker reports as
+            // unreadable — see `archive_format::ArchiveFormatError::is_permanent`.
+            ThumbnailError::Archive(e) => e.is_permanent(),
+            // The page's own bytes are not a decodable image. Every retry decodes the same bytes.
+            ThumbnailError::Decode(_) => true,
+            // Nothing to thumbnail: the archive has no pages at all.
+            ThumbnailError::NoPages => true,
+            // A broken sidecar patch is *not* permanent: deleting or replacing `.patch.zip` fixes
+            // it, and that changes a file this classification does not fingerprint (the archive
+            // itself is untouched). Short retry memory instead.
+            ThumbnailError::Patch(_) => false,
+            // Momentary I/O (permissions, an unmounted share, a full disk while writing the
+            // output), a panicked/enqueued-out blocking task, or an encoder that ran out of
+            // resources. All have a real chance of succeeding later.
+            ThumbnailError::Io(_) => false,
+            ThumbnailError::Join(_) => false,
+            ThumbnailError::Webp(_) => false,
+            ThumbnailError::Jxl(_) => false,
+        }
+    }
+}
+
 /// Generates a thumbnail from `page` (1-indexed) of `archive_path` and writes it to
 /// `output_path`, resizing to `THUMBNAIL_HEIGHT` px tall, preserving aspect ratio. When `page`
 /// is the cover (`1`), also returns the SHA-1 hex digest of the *raw, pre-resize* source image
@@ -907,6 +940,78 @@ mod tests {
         assert!(
             matches!(result, Err(ThumbnailError::Decode(_))),
             "expected a Decode error for genuinely undecodable image bytes, got {result:?}"
+        );
+    }
+
+    /// The policy the on-demand path's failure memory runs on: a broken *file* is remembered until
+    /// the file changes, a broken *moment* only for a few minutes. Getting this backwards either
+    /// blacklists a library over a transient worker crash or re-parses a corrupt archive forever.
+    #[test]
+    fn failures_are_classified_by_the_file_not_by_the_moment() {
+        use crate::archive_format::ArchiveFormatError;
+        use lanrurugi_book::BookError;
+
+        // Every container format reports its own corruption through the same two kinds.
+        let permanent = [
+            ThumbnailError::Archive(ArchiveFormatError::Libarchive(
+                "Unrecognized archive format".into(),
+            )),
+            ThumbnailError::Archive(ArchiveFormatError::Libarchive(
+                "Passphrase required for this entry".into(),
+            )),
+            ThumbnailError::Archive(ArchiveFormatError::Book(BookError::Unreadable(
+                "EPUB: invalid Zip archive: Could not find EOCD".into(),
+            ))),
+            ThumbnailError::Archive(ArchiveFormatError::Book(BookError::Unreadable(
+                "PDF trailer not found".into(),
+            ))),
+            ThumbnailError::Archive(ArchiveFormatError::Book(BookError::Encrypted)),
+            ThumbnailError::Archive(ArchiveFormatError::UnsupportedExtension("cbz.txt".into())),
+            ThumbnailError::Archive(ArchiveFormatError::EntryNotFound("0012.jpg".into())),
+        ];
+        for error in permanent {
+            assert!(
+                error.is_permanent(),
+                "{error:?} describes the file and must not be retried forever"
+            );
+        }
+
+        let transient = [
+            // A worker that is missing, restarting or crashed says nothing about the book.
+            ThumbnailError::Archive(ArchiveFormatError::Book(BookError::WorkerUnavailable(
+                "no worker binary".into(),
+            ))),
+            ThumbnailError::Archive(ArchiveFormatError::Book(BookError::Worker(
+                "worker panicked".into(),
+            ))),
+            ThumbnailError::Archive(ArchiveFormatError::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "denied",
+            ))),
+        ];
+        for error in transient {
+            assert!(
+                !error.is_permanent(),
+                "{error:?} can plausibly succeed on the next attempt"
+            );
+        }
+
+        assert!(
+            ThumbnailError::NoPages.is_permanent(),
+            "an archive with no pages will never have one"
+        );
+        assert!(
+            !ThumbnailError::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "denied"
+            ))
+            .is_permanent(),
+            "a momentary I/O failure must not blacklist an archive permanently"
+        );
+        assert!(
+            !ThumbnailError::Patch(crate::patch::PatchError::MissingMetadata).is_permanent(),
+            "a broken sidecar patch is fixed by removing the patch, which does not touch the \
+             archive's own fingerprint — so it must expire rather than stick"
         );
     }
 }

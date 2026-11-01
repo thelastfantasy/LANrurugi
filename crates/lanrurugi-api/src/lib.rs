@@ -64,6 +64,8 @@ pub mod tankoubon_grouping;
 pub mod tankoubon_zip;
 pub mod tankoubons;
 pub mod terminology_glossary;
+pub mod thumbnail_failures;
+pub mod trace_context;
 pub mod translation;
 pub mod translation_pipeline;
 pub mod translation_settings;

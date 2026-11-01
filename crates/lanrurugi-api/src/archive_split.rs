@@ -1364,6 +1364,10 @@ async fn run_split_job(
             }
         }
         let _ = state.repos.archives.delete(archive_id).await;
+        // The archive id no longer names anything, so its thumbnail failure memory has to go with
+        // it — an id is only `SHA-1(first 512 KB)`, and a later import can land on the same id with
+        // different bytes that this entry would wrongly blacklist.
+        crate::thumbnail_failures::clear_archive(state, archive_id.as_str()).await;
         // The original archive is gone; drop its id from every category it belonged to. New split
         // archives were already added above by `inherit_metadata_to_split_archives`.
         if let Ok(categories) = state.repos.categories.list_all().await {

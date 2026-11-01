@@ -264,6 +264,7 @@ impl RecommendService {
             .collect();
         let result: Vec<Recommendation> = match crate::recommend_llm::llm_rerank(
             state,
+            archive_id,
             &current_title,
             &current_tags,
             current_pagecount,
@@ -374,6 +375,7 @@ impl RecommendService {
 
         match crate::recommend_llm::llm_rerank(
             state,
+            archive_id,
             &current.title,
             &current.tags,
             current.pagecount,

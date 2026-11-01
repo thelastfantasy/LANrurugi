@@ -204,10 +204,23 @@ impl lanrurugi_llm::telemetry::Tracer for LlmTracer {
         // downcast it to `sentry::Transaction` in `end`, which can never succeed — so every LLM
         // call silently produced nothing and the tracker's AI Agent Monitoring page stayed empty
         // (2026-11-01). `gen_ai.operation.type` is the attribute that page groups by.
-        let context = sentry::TransactionContext::new(
-            &format!("{} {}", call.feature, call.model),
-            "gen_ai.chat",
-        );
+        //
+        // When the call was made from inside an HTTP request, this transaction joins that
+        // request's trace as a child of its span instead of starting an unrelated trace:
+        // otherwise the time a request spent waiting on the model (observed at 6–64 s) could only
+        // be seen as a slow request with no children plus a separate transaction elsewhere. A
+        // background call has no request context and keeps its own top-level trace.
+        let name = format!("{} {}", call.feature, call.model);
+        let context = match crate::trace_context::current() {
+            Some(parent) => sentry::TransactionContext::new_with_details(
+                &name,
+                "gen_ai.chat",
+                parent.trace_id,
+                None,
+                Some(parent.span_id),
+            ),
+            None => sentry::TransactionContext::new(&name, "gen_ai.chat"),
+        };
         let transaction = sentry::start_transaction(context);
         transaction.set_data("gen_ai.operation.type", "ai_client".into());
         transaction.set_data("gen_ai.request.model", call.model.to_string().into());

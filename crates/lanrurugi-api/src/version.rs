@@ -27,6 +27,7 @@ use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
+use lanrurugi_core::singleflight::Singleflight;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -73,6 +74,25 @@ static CHANGELOG_FAILED: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 /// Built once so the TLS connection to GitHub is reused across requests: `Client::new()` per call
 /// made even a *failed* lookup pay a fresh handshake (measured at ~380 ms cold vs ~57 ms warm).
 static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
+
+/// Collapses concurrent cold-cache lookups onto one GitHub round trip.
+///
+/// The two caches above only help *after* a lookup finishes, and a page load fires this endpoint
+/// from more than one component (`Footer`, `UpdateBanner`) at once. Three concurrent requests were
+/// observed finishing within the same millisecond after 1.0–1.8 s — three independent lookups
+/// whose answers the first one would have supplied for free. One permit: a rare cold lookup is
+/// cheap to serialize, and there is never a reason to run two of them.
+static VERSION_INFLIGHT: OnceLock<Singleflight<String, Result<Value, String>>> = OnceLock::new();
+static CHANGELOG_INFLIGHT: OnceLock<Singleflight<String, Result<Vec<Value>, String>>> =
+    OnceLock::new();
+
+fn version_inflight() -> &'static Singleflight<String, Result<Value, String>> {
+    VERSION_INFLIGHT.get_or_init(|| Singleflight::new(1))
+}
+
+fn changelog_inflight() -> &'static Singleflight<String, Result<Vec<Value>, String>> {
+    CHANGELOG_INFLIGHT.get_or_init(|| Singleflight::new(1))
+}
 
 fn http_client() -> &'static reqwest::Client {
     HTTP.get_or_init(|| {
@@ -536,7 +556,10 @@ async fn changelog_for(since: Option<&str>, version: &str, sha: Option<&str>) ->
     if recently_failed(&CHANGELOG_FAILED, &key) {
         return None;
     }
-    match changelog_since(since, version, sha).await {
+    match changelog_inflight()
+        .run(key.clone(), || changelog_since(since, version, sha))
+        .await
+    {
         Ok(entries) => {
             let value = Value::Array(entries);
             *CHANGELOG_CACHE.lock().unwrap() = Some(Cached {
@@ -619,7 +642,12 @@ async fn get_version(State(state): State<AppState>, Query(query): Query<VersionQ
         return fail_open_body(version, sha.as_deref());
     }
 
-    match fetch_version_info(version, sha.as_deref()).await {
+    match version_inflight()
+        .run(cache_key.clone(), || {
+            fetch_version_info(version, sha.as_deref())
+        })
+        .await
+    {
         Ok(data) => {
             *CACHE.lock().unwrap() = Some(Cached {
                 key: cache_key,

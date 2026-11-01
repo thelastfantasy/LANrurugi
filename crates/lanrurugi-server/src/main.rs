@@ -1339,6 +1339,9 @@ async fn repair_zombie_archives(state: &AppState) {
         if let Err(e) = state.repos.archives.delete(&archive.id).await {
             tracing::warn!(id = %archive.id, error = %e, "failed to delete zombie archive record");
         }
+        // The record is gone, so nothing can ever ask for its thumbnail again; keeping the entry
+        // would just leave the id blacklisted for a future import that reuses it.
+        lanrurugi_api::thumbnail_failures::clear_archive(state, archive.id.as_str()).await;
         if !archive.file.is_empty() {
             if let Ok(mut conn) = state.redis.config.get().await {
                 use deadpool_redis::redis::AsyncCommands;
