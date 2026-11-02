@@ -262,7 +262,7 @@ jobs:
       # `public/openapi.json` and `dist-sdk/…` (confirmed by listing a real run's artifact).
       # Extracting into `docs/` puts both back exactly where the build looks for them; `.` drops them
       # at the repository root, and `docs/public` nests them one level too deep.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: docs-generated
           path: docs
