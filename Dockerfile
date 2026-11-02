@@ -151,7 +151,15 @@ RUN chmod +x fetch-inpaint-model.sh && ./fetch-inpaint-model.sh /models/inpaint
 # Missing this stage's output is not fatal at runtime, same as `inpaint-model` — `inpainter` (when
 # itself available) just falls back to plain rectangular erasure instead of a bubble's real outline.
 FROM debian:bookworm-slim AS bubble-seg-model
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+# `ultralytics` imports `cv2`, and the `opencv-python` wheel it pulls links libGL/libxcb even though
+# the export never opens a window: without these the script died at import with
+# "libxcb.so.1: cannot open shared object file" (2026-11-02).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        libgl1 \
+        libglib2.0-0 \
+        libxcb1 \
     && rm -rf /var/lib/apt/lists/*
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:${PATH}"

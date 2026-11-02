@@ -38,6 +38,8 @@ ULTRALYTICS_VERSION="8.4.142"
 ONNX_VERSION="1.22.0"
 ONNXRUNTIME_VERSION="1.29.0"
 ONNXSLIM_VERSION="0.1.96"
+# Not a package version, but part of the reproducible inputs: see the `uv venv` call below.
+CONVERSION_PYTHON="3.13"
 
 # Fixed at the upstream model card's own training resolution (README: "Image Size 1600x1600") —
 # exporting at a different size than training risks accuracy loss from an unfamiliar receptive
@@ -71,7 +73,11 @@ if ! echo "${PT_SHA256}  ${WORKDIR}/best.pt" | sha256_check; then
 fi
 
 echo "Building a throwaway conversion venv (uv, isolated — nothing touches system Python)..."
-uv venv "${WORKDIR}/venv" >/dev/null
+# The interpreter is pinned, not left to `uv`'s own "newest CPython" default: on 2026-11-02 that
+# default became 3.15, and `onnxruntime==1.29.0` publishes no `cp315` wheel — the conversion step
+# failed on every architecture with "no solution found when resolving dependencies". 3.13 is
+# within every pinned package's published ABI range.
+uv venv --python "${CONVERSION_PYTHON}" "${WORKDIR}/venv" >/dev/null
 uv pip install --python "${WORKDIR}/venv/bin/python" \
   "ultralytics==${ULTRALYTICS_VERSION}" \
   "onnx==${ONNX_VERSION}" \
