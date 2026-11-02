@@ -164,7 +164,7 @@ regex = "1.13"
 quick-xml = "0.38"
 base64 = "0.22"
 memmap2 = "0.9"
-cosmic-text = "0.14"
+cosmic-text = "0.19"
 # Already in the dependency tree transitively (a `criterion`/`clap` dependency of a dependency) —
 # promoted to a direct workspace dependency for `bookmarks.rs`'s own grapheme-cluster-accurate
 # name-length check (`MAX_BOOKMARK_NAME_LEN`), which `str::chars().count()` alone gets wrong for a
