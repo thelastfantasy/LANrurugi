@@ -507,6 +507,9 @@ async fn stats_json(State(app): State<Arc<Ingest>>, headers: HeaderMap) -> Respo
     }
 }
 
+/// Hard ceiling on `/api/series`, so one request cannot ask for an unbounded window.
+const MAX_SERIES_DAYS: i64 = 90;
+
 #[derive(Debug, Deserialize)]
 struct SeriesQuery {
     days: Option<i64>,
@@ -522,7 +525,7 @@ async fn series(
     if !read_authorized(&app, &headers) {
         return unauthorized();
     }
-    let days = q.days.unwrap_or(30).clamp(1, 90);
+    let days = q.days.unwrap_or(30).clamp(1, MAX_SERIES_DAYS);
     let mut conn = match app.pool.get().await {
         Ok(conn) => conn,
         Err(error) => {
@@ -530,7 +533,9 @@ async fn series(
             return (StatusCode::SERVICE_UNAVAILABLE, "stats unavailable").into_response();
         }
     };
-    let mut points = Vec::with_capacity(days as usize);
+    // Sized from the constant, not from `days`: a capacity derived from the query value reads as
+    // unbounded allocation even after the clamp (CodeQL flagged exactly that).
+    let mut points = Vec::with_capacity(MAX_SERIES_DAYS as usize);
     for offset in (0..days).rev() {
         let date = day(offset);
         let key = format!("LANRURUGI_TELEMETRY:DAY:{date}");
