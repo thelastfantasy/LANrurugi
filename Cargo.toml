@@ -131,7 +131,7 @@ harfrust = "0.13"
 # Unicode UAX#14 line-breaking (`icu_segmenter`) — CJK text wraps without whitespace, which the
 # prior hand-written `wrap_text`'s `split_whitespace` couldn't do at all.
 icu_segmenter = "2.3"
-tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 flate2 = "1.1"
 governor = "0.10"
 # Error telemetry (specs/018). The SDK is used for capture only: the browser's DSN points back at
