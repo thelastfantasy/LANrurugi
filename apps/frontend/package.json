@@ -68,7 +68,7 @@
     "@typescript-eslint/eslint-plugin": "^8.72.1",
     "@typescript-eslint/parser": "^8.72.1",
     "@vitejs/plugin-react": "^6.1.2",
-    "cldr-annotations-derived-full": "48.2.0",
+    "cldr-annotations-derived-full": "49.0.0",
     "cldr-annotations-full": "48.2.0",
     "eslint": "^10.13.0",
     "eslint-plugin-react-hooks": "^7.1.1",
