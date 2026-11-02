@@ -118,7 +118,7 @@ FROM docker.io/denoland/deno:bin-${DENO_VERSION} AS deno-bin
 # against Docker Hub's real tag listing), so this same distro swap is what production's own GPU
 # Dockerfile needs too, not a dev-only shortcut. `cudnn-runtime` (not plain `cuda-runtime`) because
 # ORT's CUDA EP needs cuDNN for convolution ops — see `cuda.rs`'s own `CUDNN_DYLIBS` list.
-FROM docker.io/nvidia/cuda:13.3.1-cudnn-runtime-ubuntu24.04 AS runtime
+FROM docker.io/nvidia/cuda:13.4.3-cudnn-runtime-ubuntu24.04 AS runtime
 # Ubuntu 24.04 (noble) renamed several t64-transition packages — verified against a real
 # `ubuntu:24.04` container's own `apt-cache`/`apt list`, not assumed: only `libssl3` actually
 # changed (-> `libssl3t64`) of everything in this list; `libstdc++6` and the rest are unchanged
