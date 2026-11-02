@@ -3945,31 +3945,15 @@ dependencies = [
 
 [[package]]
 name = "jxl"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43b041e4bd5bb931cf73b271bc3304eb135bb473914877d64bf77fdf5b4d4687"
-dependencies = [
- "array-init",
- "byteorder",
- "jxl_macros 0.7.4",
- "jxl_simd 0.7.4",
- "jxl_transforms 0.7.4",
- "num-derive",
- "num-traits",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "jxl"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8379fc83d79477900c9aed78cb8370a556d834081bebcb771c6010381c4e230"
 dependencies = [
  "array-init",
  "byteorder",
- "jxl_macros 0.8.0",
- "jxl_simd 0.8.0",
- "jxl_transforms 0.8.0",
+ "jxl_macros",
+ "jxl_simd",
+ "jxl_transforms",
  "num-derive",
  "num-traits",
  "thiserror 2.0.21",
@@ -3983,18 +3967,7 @@ checksum = "040122e58dac2a6ac1ef70ba8630f35461870c5e7f94d62d7db27f09f96bbe97"
 dependencies = [
  "bytemuck",
  "image",
- "jxl 0.8.0",
-]
-
-[[package]]
-name = "jxl_macros"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7401c9c53e44e2efa17d7562c613f0972b93cf134aa91f08c14e00c8278ce663"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
+ "jxl",
 ]
 
 [[package]]
@@ -4010,24 +3983,9 @@ dependencies = [
 
 [[package]]
 name = "jxl_simd"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba1f65c01a3f807385be7a1200f78b9d958bff1321b753b859ecfcba63a0642d"
-
-[[package]]
-name = "jxl_simd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a645451b4d34b4017caf24110a14eb737e275b5d3d121bc754e67727ee65af0e"
-
-[[package]]
-name = "jxl_transforms"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f72e196c6c1e938a4c7e2175d7c83464fa9e7f587224d310cac15d83fc80a37"
-dependencies = [
- "jxl_simd 0.7.4",
-]
 
 [[package]]
 name = "jxl_transforms"
@@ -4035,7 +3993,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "21c4b7f8957f5ba578b2e28cd5ebbc97dad58a3ad5ff26765da61e8dab8f1cad"
 dependencies = [
- "jxl_simd 0.8.0",
+ "jxl_simd",
 ]
 
 [[package]]
@@ -4471,7 +4429,7 @@ dependencies = [
  "image",
  "jixel-image-bindings",
  "jpeg2k",
- "jxl 0.7.4",
+ "jxl",
  "jxl-image-rs-integration",
  "lanrurugi-book",
  "lanrurugi-core",
