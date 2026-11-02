@@ -38,7 +38,7 @@ jobs:
         run: cargo run -p lanrurugi-api-docgen
       - name: Build frontend, docs and plugin bundle
         run: scripts/build-native-assets.sh native-assets
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: native-assets
           path: native-assets
@@ -99,7 +99,7 @@ jobs:
         run: |
           scripts/smoke-sample-library.sh smoke-library
           scripts/smoke-native.sh dist/*.tar.gz
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: package-linux-${{ matrix.arch }}
           path: dist/*.tar.gz
@@ -144,7 +144,7 @@ jobs:
         run: |
           scripts/smoke-sample-library.sh smoke-library
           scripts/smoke-native.sh dist/*.tar.gz
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: package-macos-arm64
           path: dist/*.tar.gz
@@ -180,7 +180,7 @@ jobs:
             scripts/smoke-sample-library.sh smoke-library
             SMOKE_EXPECT="pdfium onnxruntime djvulibre deno" SMOKE_LIBRARY=smoke-library SMOKE_STRICT=1 \
               scripts/smoke-native.sh dist/*.tar.gz
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: package-freebsd-x86_64
           path: dist/*.tar.gz
