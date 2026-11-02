@@ -48,6 +48,18 @@ added under `/api/` alongside the existing paths — they do not alter any path 
 - `POST /database/rebuild-index` — triggers the US6 duplicate-repair/reindex operation
   (data-model.md's "Rebuild/Reindex operation"). Returns a job identifier pollable the same way
   existing Minion-style jobs are (`/minion/{jobid}`-shaped), for UI/tooling consistency.
+- `GET/POST /archives/{id}/split-suggestion` — get or generate an Archive split suggestion.
+- `POST /archives/{id}/split/execute` — start a background split job.
+- `GET /archives/{id}/split/stream` — SSE progress stream for an active split job.
+- `GET /archives/{id}/split-tree` — viewer-only recursive archive directory tree; nested archives
+  are expanded into synthetic directories so the frontend can show sub-archive contents.
+- `POST /database/scripts/subfolders-to-tankoubons` — native maintenance script that scans the
+  library directory and creates one Tankoubon per **first-level subfolder** containing archives.
+  Archives beneath nested subdirectories are recursively included in the first-level subfolder's
+  Tankoubon; nested directories themselves do not become separate Tankoubons. Controlled by the
+  `subfolders_to_tankoubons` setting (default `true`). Best-effort LLM naming/author-tag
+  enrichment when a DeepSeek key is configured; always falls back to the folder name when no key is
+  available. Non-destructive: never deletes existing Tankoubons.
 - `POST /bench/run` — triggers the US8 benchmark suite (`bench/compare`) against a synthetic
   library; returns a report identifier. `GET /bench/{reportid}` — retrieves the comparison report
   (see `contracts/benchmark-report.md`).

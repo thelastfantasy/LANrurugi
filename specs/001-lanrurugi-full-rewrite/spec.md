@@ -509,3 +509,44 @@ confirm that with a metered backend selected, look-ahead activity respects a con
 - Interface localization (User Story 7) covers UI chrome only (menus, labels, messages), not the
   content of user-supplied archive metadata or extension-fetched tags/summaries, which remain in
   whatever language the source data/extension provides.
+- **Deliberate search-semantics deviation (recorded 2026-10-10, per the constitution's
+  compatibility-affecting-change sign-off rule).** The *title* half of a quoted (or `$`-suffixed)
+  token no longer reproduces legacy's whole-title equality — legacy's `"$tag\x00*"` pattern against
+  a `"<title>\x00id"` member could only ever match a title identical to the quoted string, so
+  quoting was useless for the title-phrase lookup it looks like it should serve (verified live
+  before the change: `"pink album"` returned 0 against a title stored as `[新堂エル] the pink album
+  [dl版]`, while the bare `pink album` returned 1). It now means "this phrase appears anywhere in
+  the title", a strict superset of the previous match set — no archive a quoted query used to find
+  is lost, though additional ones can now match. The *tag* half of an exact token is untouched
+  (still the literal `INDEX_<tag>` key first, then the existing glob fallback). Additive to the API
+  surface alongside it: `GET /api/search/suggest` (title autocomplete; same filters, same
+  `restrict_to_archive_ids` guest scoping, `guest_visitor`-whitelisted in `route_policy.csv`).
+- **Search query language: real boolean structure and field/attribute operators (recorded
+  2026-10-10, same sign-off rule).** The filter string now also parses `|` (OR), `(`/`)` and
+  `{`/`}` (grouping), with `-` negating whatever atom follows it and juxtaposition (implicit AND)
+  binding tighter than OR; on top of that, `title:`/`filename:` scope a token to the title half
+  only, and `is:` (`new`/`untagged`/`tank`/`completed`/`incomplete`/`read`/`unread`), `has:`
+  (`patch`/`bookmark`), `in:` (`tank`), `size:` (`>=100M`, binary suffixes) and `read:>=80%`
+  query archive state rather than text; `bookmark:"name"` fuzzy-matches the names of your
+  own bookmarks. Two deliberate breaks from legacy, both the reason this needs recording:
+  (a) `|`, `(`, `)`, `{`, `}` are structural **outside quotes**, where legacy treated them as
+  ordinary text — a tag value containing one must now be quoted (`group:"serious graphics (ice)"`);
+  (b) `or`/`and` are deliberately *not* keywords, so an existing query searching for the literal
+  word `or` keeps its meaning. A query using none of the new syntax still parses to exactly the
+  conditions it did before (pinned by `grammar.rs`'s own tests), and `--a` still means "the tag
+  `-a`" rather than "not not a".
+- **Search query language, second batch: phrasal, category and numeric-state operators (recorded
+  2026-10-10, same sign-off rule).** Five more additions on top of the entry above, all sharing one
+  new rule that needs recording: a *recognized* operator namespace whose value is unrecognized
+  matches **nothing**, rather than falling back to a literal tag lookup — so a library whose own tag
+  is literally named `has:patch` must now quote it. `phrase:"a b"` requires those words adjacent and
+  in order across an archive's title+tags text (bare terms and `title:` stay substring matches per
+  the entry above, so this is the only way to ask for adjacency); `category:<name-or-SET_id>`
+  matches a category's members and evaluates a *dynamic* category's stored search as a nested query
+  (bounded by `MAX_CATEGORY_DEPTH`); `has:` gains `category` (static membership only — a dynamic
+  category's membership is deliberately not materialised, which is why `category:` exists) and
+  `split-suggestion` (whose data lives in the config DB, so the caller precomputes the id set and
+  the engine only intersects it); `date_added:` accepts `>=`/`>`/`<=`/`<` against a calendar day
+  (half-open bounds in the configured timezone) alongside the existing exact-day and raw-timestamp
+  forms; and the optional `sortby=relevance` orders title hits above tag hits, leaving the default
+  order untouched.

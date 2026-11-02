@@ -1,0 +1,458 @@
+/*
+ * Styles for the generated API pages.
+ *
+ * Every value here comes from the reference site's *computed* styles, pulled in a live browser
+ * session rather than guessed from its CSS (see CLAUDE.md's UI-migration rule): 288px sidebar,
+ * 14px/20px sidebar rows at 36px tall, 36px/700 page title, 24px/600 operation titles, 16px/500
+ * section headings, 14px/600 parameter names. Reproducing those numbers is the point — an
+ * "approximately similar" layout is what the first attempt shipped, and it read as a different
+ * product.
+ *
+ * Colours are Starlight's own custom properties rather than literals, so the site's light/dark
+ * switch applies to these blocks too (this is a Starlight site with its own theming, not a port of
+ * the product frontend's five legacy themes).
+ */
+
+/* ── The method badge + full-URL row under an operation heading ─────────────────────────────── */
+
+.api-endpoint {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin: 0.25rem 0 0.75rem;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.api-method {
+  font-family: var(--sl-font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid currentColor;
+}
+
+/* Method colours follow the reference site's own convention (get=green, delete=red, post=blue,
+   put/patch=amber), using Starlight's palette so they stay legible in both themes. */
+.api-method--get {
+  color: var(--sl-color-green);
+}
+.api-method--post {
+  color: var(--sl-color-blue);
+}
+.api-method--put,
+.api-method--patch {
+  color: var(--sl-color-orange);
+}
+.api-method--delete {
+  color: var(--sl-color-red);
+}
+.api-method--head,
+.api-method--options {
+  color: var(--sl-color-gray-3);
+}
+
+.api-endpoint__url {
+  font-family: var(--sl-font-mono);
+  font-size: 14px;
+  color: var(--sl-color-gray-2);
+  overflow-wrap: anywhere;
+}
+
+/* ── Parameter / response sections ──────────────────────────────────────────────────────────── */
+
+.api-section {
+  margin-top: 1.5rem;
+}
+
+.api-section__title {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
+  margin: 0 0 0.5rem;
+  color: var(--sl-color-white);
+}
+
+.api-params {
+  margin: 0;
+}
+
+.api-param + .api-param {
+  margin-top: 0.75rem;
+}
+
+.api-param__name {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  font-family: var(--sl-font-mono);
+  color: var(--sl-color-white);
+}
+
+.api-param__detail {
+  font-weight: 400;
+  color: var(--sl-color-gray-2);
+}
+
+.api-param__flag {
+  font-size: 12px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--sl-color-gray-3);
+}
+
+.api-param__description {
+  margin: 0.25rem 0 0;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--sl-color-gray-2);
+  /* The document's prose is hard-wrapped; keep its own paragraph breaks rather than reflowing
+     everything into one blob. */
+  white-space: pre-line;
+}
+
+.api-responses {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.api-response {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.api-response__summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  cursor: pointer;
+  font-size: 14px;
+  background: var(--sl-color-black);
+}
+
+.api-response__status {
+  font-family: var(--sl-font-mono);
+  font-weight: 600;
+  color: var(--sl-color-green);
+}
+
+.api-response__description {
+  color: var(--sl-color-gray-2);
+}
+
+.api-response__body {
+  margin: 0;
+  padding: 0.7rem;
+  max-height: 24rem;
+  overflow: auto;
+  font-size: 13px;
+  line-height: 20px;
+  border-top: 1px solid var(--sl-color-gray-5);
+}
+
+/* ── The request panel ──────────────────────────────────────────────────────────────────────── */
+
+.api-try {
+  margin-top: 1.5rem;
+  padding: 0.9rem 1rem 0.75rem;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 10px;
+  background: var(--sl-color-black);
+}
+
+.api-try__fields,
+.api-try__params {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.6rem;
+}
+
+.api-try__params {
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--sl-color-gray-5);
+}
+
+.api-try__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.api-try__label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--sl-color-gray-3);
+}
+
+.api-try__in {
+  margin-left: 0.35rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.api-try input {
+  font-family: var(--sl-font-mono);
+  font-size: 13px;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 6px;
+  background: var(--sl-color-bg);
+  color: var(--sl-color-white);
+}
+
+.api-try__actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.api-try__send,
+.api-try__copy {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 24px;
+  padding: 2px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid var(--sl-color-gray-5);
+  background: var(--sl-color-bg);
+  color: var(--sl-color-white);
+}
+
+/* The reference site's own "Test it" is a filled purple button at 13px/500 with 2px 8px padding and
+   an 8px radius; matched here rather than invented. */
+/* The pairing is Starlight's own `LinkButton` primary variant, measured off a rendered one rather
+   than guessed: `--sl-color-text-accent` as the fill with `--sl-color-black` on top. That is a light
+   blue fill in the dark theme (#b3c7ff, contrast 10.6) and a mid blue in the light theme (#3d50f5,
+   contrast 5.7) — both comfortably legible, which the two tokens I tried first were not:
+   `--sl-color-white` is the *highest-contrast text* token and is near-black in the light theme, and
+   `--sl-color-text-invert` (#17264f) sank to 3.2 on the bright dark-theme accent. */
+.api-try__send {
+  background: var(--sl-color-text-accent);
+  border-color: var(--sl-color-text-accent);
+  color: var(--sl-color-black);
+}
+
+.api-try__send:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.api-try__result {
+  margin-top: 0.75rem;
+}
+
+.api-try__status {
+  font-family: var(--sl-font-mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.api-try__status[data-ok='1'] {
+  color: var(--sl-color-green);
+}
+
+.api-try__status[data-ok='0'] {
+  color: var(--sl-color-red);
+}
+
+.api-try__body {
+  margin: 0.35rem 0 0;
+  padding: 0.7rem;
+  max-height: 24rem;
+  overflow: auto;
+  font-size: 13px;
+  line-height: 20px;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 8px;
+}
+
+.api-try__error {
+  margin: 0.75rem 0 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--sl-color-red);
+}
+
+.api-try__hint {
+  margin: 0.6rem 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--sl-color-gray-3);
+}
+
+
+/* ── Heading scale, matched to the reference site's computed values ──────────────────────────── */
+
+/* Page title: 36px/700/45px there; Starlight's default is 42px/600. Targeted via `#_top` as well
+   because Starlight renders the page title outside `.sl-markdown-content` — a `.sl-markdown-content
+   h1` rule alone silently did nothing (measured 42px/600 after the first attempt). */
+h1#_top,
+.sl-markdown-content h1 {
+  font-size: 36px;
+  font-weight: 700;
+  line-height: 45px;
+}
+
+/* Operation titles render as `h2` here (the reference uses `h3`, but only the rendered size
+   matters): 24px/600/33px there; Starlight's default is 35px/600. */
+.sl-markdown-content h2 {
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 33px;
+}
+
+/* Section headings inside an operation: 16px/500/24px in the reference. Written after the
+   `.api-section__title` rule above but with matching specificity, so the later h4 rule would have
+   won (measured 18px); both are stated here instead. */
+.sl-markdown-content h3,
+.sl-markdown-content h4,
+.api-section__title {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
+}
+
+/* Starlight sizes and centres the heading anchor icon in em of the heading's wrapper, which keeps
+   Starlight's own (larger) heading sizes; matching the wrapper to the scale above keeps the icon
+   in proportion and centred on the line. */
+.sl-markdown-content .sl-heading-wrapper {
+  --sl-anchor-icon-size: 0.7em;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h1 {
+  --sl-line-height-headings: 1.25;
+  font-size: 36px;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h2 {
+  --sl-line-height-headings: 1.375;
+  font-size: 24px;
+}
+
+.sl-markdown-content .sl-heading-wrapper:is(.level-h3, .level-h4) {
+  --sl-line-height-headings: 1.5;
+  font-size: 16px;
+}
+
+/* Sidebar geometry, from the reference's computed styles: a 288px column whose rows are 36px tall
+   with 6px/12px padding. Starlight's defaults measured 300px and 28px. */
+:root {
+  --sl-sidebar-width: 18rem; /* 288px */
+}
+
+#starlight__sidebar a {
+  font-size: 14px;
+  line-height: 20px;
+  min-height: 36px;
+  padding: 6px 6px 6px 12px;
+  display: flex;
+  align-items: center;
+}
+
+/* The reference's request buttons are a single 28px-tall row; without this they stretched to the
+   grid row's height (measured 46px). */
+.api-try__actions {
+  align-items: center;
+}
+
+.api-try__send,
+.api-try__copy {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* The one button-style link used on the API index and SDK pages. */
+.sdk-launch {
+  display: inline-block;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 24px;
+  padding: 4px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--sl-color-accent);
+  color: var(--sl-color-white);
+  background: var(--sl-color-accent);
+  text-decoration: none;
+}
+
+.sdk-launch:hover {
+  filter: brightness(1.1);
+}
+
+
+/* The credential note in the request panel. `.api-try__note--session` is the one that replaces the
+   token field entirely, so it carries the explanation and needs to read as prose. */
+.api-try__note {
+  margin: 0.6rem 0 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--sl-color-gray-2);
+}
+
+.api-try__note--session {
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 8px;
+  background: var(--sl-color-bg);
+}
+
+
+/* The administrator-token note. 117 operations refuse a guest token; the note is the only place a
+   reader learns that before a 403. */
+.api-try__note--role {
+  padding: 0.4rem 0.7rem;
+  border-left: 3px solid var(--sl-color-orange);
+  border-radius: 4px;
+  background: var(--sl-color-bg);
+  color: var(--sl-color-white);
+}
+
+
+/* Per-role behaviour notes. A callout rather than prose inside the description, because the
+   distinction it draws — same endpoint, different result depending on who asks — is the kind of
+   thing a reader skims past when it is buried in a paragraph. */
+.api-access-notes {
+  margin: 1rem 0;
+  padding: 0.6rem 0.9rem;
+  border-left: 3px solid var(--sl-color-blue);
+  border-radius: 4px;
+  background: var(--sl-color-bg);
+}
+
+.api-access-notes__title {
+  margin: 0 0 0.35rem;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--sl-color-gray-3);
+}
+
+.api-access-notes ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--sl-color-gray-2);
+}
+
+.api-access-notes li + li {
+  margin-top: 0.35rem;
+}

@@ -1,0 +1,22 @@
+[package]
+name = "lanrurugi-llm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono.workspace = true
+deadpool-redis.workspace = true
+futures-util.workspace = true
+lanrurugi-storage.workspace = true
+lanrurugi-core.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The seam tests (`tests/seam_matrix.rs`) stand a local axum stub in for the provider.
+axum.workspace = true

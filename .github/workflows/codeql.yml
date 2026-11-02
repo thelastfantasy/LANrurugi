@@ -1,0 +1,74 @@
+# CodeQL code scanning — the "Security and Quality" tab's code scanning half.
+#
+# Advanced setup rather than default setup, for two reasons: the default-setup API does not accept
+# `rust` in its `languages` field (only actions/c-cpp/csharp/go/java-kotlin/javascript-typescript/
+# python/ruby/swift), and default setup only ever scans the **default branch**, which here is `dev`
+# and holds no source yet. This workflow scans the branch that does hold it, and keeps scanning
+# `dev`/`main` once the code lands there.
+#
+# `build-mode: none` for Rust is GA since 2025-10: CodeQL extracts through rust-analyzer and only
+# runs build scripts, so this workspace is never actually built — no cmake/libclang/perl/redis
+# setup like `.github/workflows/ci.yml` needs. Build scripts do still run, hence the apt step.
+
+name: CodeQL
+
+on:
+  push:
+    # Same branch set as `ci.yml`, plus the feature branch that currently holds the whole tree —
+    # that entry can go once #76 lands and `delete-branch-on-merge.yml` removes the branch.
+    branches: [main, dev, 001-lanrurugi-full-rewrite]
+  pull_request:
+    branches: [main, dev, 001-lanrurugi-full-rewrite]
+  schedule:
+    # Weekly, Monday 03:17 UTC — off the hour so it isn't queued behind every other repo's cron.
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: rust
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+          - language: actions
+            build-mode: none
+    steps:
+      - uses: actions/checkout@v4
+
+      # `build-mode: none` still executes `build.rs`, and `lanrurugi-scanner`'s `libarchive2-sys`
+      # compiles bundled C from its build script — the same packages CI installs for a real build.
+      - name: Install native build dependencies (Rust build scripts)
+        if: matrix.language == 'rust'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev libxml2-dev libacl1-dev \
+            nasm libopenjp2-7-dev
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # Empty for `actions`, which has no path filtering to apply — the config file only
+          # carries `paths-ignore`.
+          config-file: ${{ matrix.language == 'actions' && '' || './.github/codeql/codeql-config.yml' }}
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

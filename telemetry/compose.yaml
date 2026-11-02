@@ -1,0 +1,65 @@
+# The anonymous heartbeat sink: Redis + the ingest service, behind the nginx that already serves
+# this NAS (no Cloudflare Tunnel — the host already has a public HTTPS path, so a second ingress
+# would only be one more thing to keep alive).
+#
+# One instance of this serves every deployment of the project. It is not part of a normal
+# LANrurugi installation, and a normal installation never needs this file.
+#
+# `redis` has no `ports:` on purpose: nothing but `ingest` may reach it. `ingest` publishes on
+# loopback only, which is enough because the nginx container runs with `network_mode: host` — its
+# `127.0.0.1` is this machine's loopback.
+name: lanrurugi-telemetry
+
+services:
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?put REDIS_PASSWORD in .env}
+    volumes:
+      # A dataset, not a container-local path: snapshots on the parent dataset then cover it.
+      - ${REDIS_DATA:-./data}:/data
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 6379 -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  ingest:
+    # Must be an image built from this repository: the released `:latest` predates the
+    # `telemetry-ingest` subcommand it is asked to run.
+    #   podman build -t lanrurugi-telemetry:local .     (or: docker build …)
+    image: ${LANRURUGI_IMAGE:?put LANRURUGI_IMAGE in .env — build it locally, it is not released yet}
+    # The image's own entrypoint would start a bundled Redis and `serve`; this service wants neither.
+    entrypoint: ["lanrurugi-server"]
+    command: ["telemetry-ingest", "--bind", "0.0.0.0:8099"]
+    environment:
+      # Keep the password alphanumeric: it sits inside a URL.
+      LANRURUGI_TELEMETRY_REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379/0
+      LANRURUGI_TELEMETRY_RETENTION_DAYS: ${RETENTION_DAYS:-400}
+      # Enables `GET /stats` (JSON) and `GET /` (HTML dashboard), both behind this bearer token.
+      # Left empty, neither route exists — the public surface stays write-only.
+      LANRURUGI_TELEMETRY_STATS_TOKEN: ${STATS_TOKEN:-}
+    ports:
+      # Loopback only. A bare `8099:8099` would bind 0.0.0.0 and put the sink on the LAN, where it
+      # would also never see `CF-IPCountry` (Cloudflare sets it at the edge).
+      - "127.0.0.1:8099:8099"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Only if this host ever loses its public ingress. Then remove the `ports:` above and point a
+  # Cloudflare Tunnel's public hostname at `http://ingest:8099` instead.
+  #
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   command: ["tunnel", "--no-autoupdate", "run", "--token", "${TUNNEL_TOKEN:?}"]
+  #   depends_on: [ingest]
+  #   restart: unless-stopped

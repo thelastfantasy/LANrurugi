@@ -1,0 +1,16 @@
+packages:
+  - "apps/*"
+  # The documentation site (`011-api-docs-site`). A pnpm workspace package so `--frozen-lockfile`
+  # and `--filter` work exactly as they already do for the frontend — but deliberately not under
+  # `apps/*`, which is where deployable applications live. This is a static docs build, not a
+  # second product app.
+  - "docs"
+allowBuilds:
+  '@fortawesome/fontawesome-free': true
+  # Telemetry-only postinstall, pulled in by `swagger-ui-dist`. Denied deliberately.
+  '@scarf/scarf': false
+  sharp: true
+  # Pulled in by `@scalar/api-reference`'s Vue dependency tree. Its only build script picks the
+  # Vue 2 or Vue 3 shim by detecting which one is installed; this workspace is Vue 3 only, so
+  # allowing it is both safe and what makes the package resolve correctly.
+  vue-demi: true

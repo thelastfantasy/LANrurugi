@@ -1,0 +1,12 @@
+[package]
+name = "lanrurugi-book"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+sha1.workspace = true

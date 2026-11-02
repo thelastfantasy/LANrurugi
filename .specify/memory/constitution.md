@@ -1,49 +1,57 @@
 <!--
 Sync Impact Report
 ===================
-Version change: 1.0.0 → 1.6.0 (MINOR — materially expanded, non-negotiable tooling/architecture
-constraints)
-Modified principles: III retitled "Resource-Conscious, Genuinely Concurrent Single-Process
-Architecture" (was "Resource-Conscious, Single-Process Architecture") and expanded with a
-concurrency-model bullet; no prior wording removed or weakened, purely additive.
-Added sections/content (across six amendments, 2026-07-05 to 2026-07-06):
-  - Technology Stack Constraints: toolchain version management (mise), git hook management
-    (lefthook), Docker runtime base image decision (Debian slim, not Ubuntu/Alpine), CJK font
-    bundling (fonts-noto-cjk) for server-side text rasterization, concurrency model
-    (tokio for I/O-bound, rayon for CPU-bound, bridged via spawn_blocking); repository-layout
-    declaration (single monorepo: one git repo, one Cargo workspace, one frontend app managed as
-    a `pnpm` workspace, with a consolidated top-level tree); Rust build-acceleration tooling
-    (sccache, mold, Swatinem/rust-cache — explicitly not Turborepo/Turbopack, which don't
-    accelerate rustc or apply to this project's already-fixed Vite bundler); and the project's
-    own license (MIT, `LICENSE` at repo root — compatible with Apache-2.0 dependencies already
-    chosen, and the concrete reason GPL-3.0 code like Koharu was correctly avoided; all
-    2026-07-06)
-  - Engineering Workflow & Quality Gates: new "Automated, non-bypassable local quality gates"
-    bullet (cargo check/cargo fmt/eslint enforced via lefthook + CI); new "Dependencies default to
-    the latest stable release, verified at implementation time" bullet (2026-07-06 — prompted by
-    checking `ort`'s version for Phase 2 and discovering both that the pinned version was already
-    current and that a more complete crate, `oar-ocr`, now exists on top of it)
-  - Principle III: new bullet mandating Phase 1 concurrency planning + a benchmark suite
-    comparing bulk-operation throughput against the previous system (mirrors the new
-    concurrency-benchmarking user story added to specs/001-lanrurugi-full-rewrite/spec.md)
+Version change: 1.7.0 → 1.8.0 (MINOR — one new principle added, two existing sections materially
+expanded; no prior wording removed or weakened, purely additive)
+Modified principles: III ("Resource-Conscious, Genuinely Concurrent Single-Process Architecture")
+gained a new bullet naming a specific anti-pattern (a loop of single-item `spawn_blocking` calls is
+not real parallelization) — prompted by a real audit of this codebase finding three call sites that
+technically satisfied the existing "off the async reactor" wording while still forfeiting genuine
+rayon-level parallelism.
+Added sections/content (2026-08-03, prompted by a session that (a) retrofitted ID newtypes across
+22 files because domain entity IDs were left as raw `String` at initial implementation, (b) fixed
+five CPU-bound-work-on-the-async-reactor violations including three loop-of-single-item-
+spawn_blocking near-misses, and (c) did a round of Library-page toolbar/table UI fidelity work that
+surfaced several frontend-specific process gaps not covered anywhere in this document):
+  - Principle III: new bullet on the loop-of-single-item-`spawn_blocking` anti-pattern (see above).
+  - Technology Stack Constraints: new "Near-identical logic across sibling modules/types MUST be
+    factored into a shared helper" bullet (citing this codebase's own `list_all_by_glob` extraction
+    across three repository types as precedent) and new "Domain entity identifiers are newtypes,
+    not raw `String`, from first implementation" bullet (citing the 22-file retrofit this session
+    performed as the concrete cost of not doing this at initial design time).
+  - New Principle VII, "Frontend Engineering Discipline & Legacy UI Fidelity": four bullets —
+    page-file organization (`index.tsx` exports only the page component; shared units go in a
+    dedicated file from the second consumer onward, mirroring the backend shared-helper bullet
+    above), CSS breakpoint discipline (conditional/media-query layout MUST be real stylesheet
+    classes, never inline `style` objects, which have no conditional mechanism at all), a
+    verification-discipline bullet (a component/behavior MUST NOT be reported "verified" from a
+    pure-function unit test alone — this project shipped exactly that mistake once this session),
+    and a legacy-UI-fidelity bullet elevating this project's existing `CLAUDE.md`
+    computed-style/DOM verification procedure from an operational rule to a governance-level
+    requirement, reasoning that Phase 1's "drop-in continuation" premise (already established for
+    data/API by Principles I/II) extends to the UI a user actually sees, not just the data
+    underneath it — added after explicit user confirmation that this belonged at the constitution
+    level, not only in `CLAUDE.md`.
 Removed sections: none
 Templates requiring updates:
   - .specify/templates/plan-template.md ✅ reviewed — "Constitution Check" gate is generic
     and reads from this file at plan time; no edit needed.
   - .specify/templates/spec-template.md ✅ reviewed — no constitution-specific references;
-    no edit needed. (Tooling/reuse-source details like the ESLint/lefthook template below are
-    implementation detail and deliberately kept out of spec.md per its own quality checklist.)
-  - .specify/templates/tasks-template.md ✅ reviewed — generic task/user-story structure. The
-    Setup phase of the next `/speckit-tasks` run for specs/001-lanrurugi-full-rewrite MUST include
-    a concrete task to adapt ESLint/lefthook/mise config from the user's existing
-    `~/jellyfin-suite` project (`apps/frontend/eslint.config.mjs`, `lefthook.yml`, `.mise.toml` —
-    same Rust + React19/TS/Vite stack) rather than authoring rules from scratch. Tracked in memory
-    (`jellyfin-suite-tooling-reference`) as a durable pointer until that tasks.md exists.
+    no edit needed.
+  - .specify/templates/tasks-template.md ✅ reviewed — generic task/user-story structure; no
+    edit needed. New frontend page/component work under any future `/speckit-tasks` run is
+    expected to already produce per-file tasks fine-grained enough to satisfy Principle VII's
+    page-file-organization bullet without a template change.
   - .specify/templates/checklist-template.md ✅ reviewed — generic; no edit needed.
   - Command files under .specify/templates/commands/ — none present in this repo layout
     (commands are Claude skills under .claude/skills/); no edit needed.
+  - CLAUDE.md ✅ reviewed — its existing "UI migration verification (mandatory)" section is the
+    concrete procedure Principle VII's legacy-UI-fidelity bullet now references and requires at
+    governance level; no wording conflict, no edit needed (CLAUDE.md's own SPECKIT-managed block
+    references "constitution Principle VI" once, for Phase 2 scope — unaffected by this
+    amendment's addition of Principle VII after it).
 Follow-up TODOs:
-  - None. Prior TODO(RATIFICATION_DATE) from v1.0.0 was already resolved.
+  - None.
 -->
 
 # LANrurugi Constitution
@@ -86,6 +94,12 @@ continue to work against LANrurugi without modification.
 - New, LANrurugi-only functionality MAY freely add new endpoints; this principle constrains
   changes to *existing* endpoints only.
 
+(Note, added pre-release: this project has deliberately broken this principle's API-key
+authentication-semantics clause ahead of its 1.0 release — legacy's Bearer-base64(apikey)/`?key=`
+mechanisms were removed in favor of a first-party token system; third-party clients relying on
+that legacy auth scheme are no longer guaranteed to work without modification. Endpoint
+shapes/paths themselves are unaffected.)
+
 ### III. Resource-Conscious, Genuinely Concurrent Single-Process Architecture
 
 A primary motivation for this rewrite is lower idle resource usage and a simpler deployment
@@ -114,6 +128,20 @@ the legacy Perl implementation had none, not just a byproduct of switching langu
   include a benchmark suite comparing bulk-operation throughput against the previous system on the
   same hardware (see the feature spec's concurrency-benchmarking user story), so this improvement
   is measured, not assumed.
+- **A loop of single-item `spawn_blocking` calls is not the same thing as parallelization, and MUST
+  NOT be treated as satisfying the bullet above.** Wrapping one item's CPU-bound work in
+  `run_blocking`/`spawn_blocking` only moves it off the async reactor for that one call; calling it
+  once per item inside a `for` loop over a collection still runs the collection strictly
+  sequentially, one item after another, each paying its own dispatch overhead on top. This is a
+  real, previously-shipped anti-pattern
+  in this codebase (a library-wide thumbnail-regeneration job, and a per-archive multi-page
+  thumbnail job, both iterated their item list calling a single-item `run_blocking`-wrapped
+  function once per item) — it technically satisfies "CPU work never runs inline on a Tokio
+  worker" but silently forfeits the actual parallelism this principle requires. Any operation that
+  is naturally "do CPU-bound work N times, once per item in a collection" MUST batch those N calls
+  through a single `rayon`-parallel dispatch (e.g. this codebase's own `parallel_map` helper)
+  covering the whole collection, not thread the collection through the async loop one
+  `spawn_blocking` call at a time.
 
 ### IV. Sandboxed, Language-Agnostic Plugin Extensibility
 
@@ -165,6 +193,52 @@ This project is explicitly split into two phases, and specs/plans MUST respect t
 - Phase 2 features, once built, MUST be optional/toggleable such that a user who never enables
   them sees no behavioral or performance regression in the Phase 1 experience.
 
+### VII. Frontend Engineering Discipline & Legacy UI Fidelity
+
+The frontend is a from-scratch React rewrite, not a generated skin over the backend's own API
+shapes — the same discipline this constitution already requires of the backend (small, single-
+responsibility units; verify against real behavior, not assumption) applies here too, plus
+requirements specific to reproducing an existing, already-shipped UI.
+
+- **A page's `index.tsx` MUST contain only that page's own default-exported component** — never a
+  second component, a standalone hook, or a pure helper function defined inline alongside it, even
+  a small one. Any such unit used by exactly this one page still belongs in its own file once it is
+  a distinct, nameable concern; any unit used by two or more consumers MUST live in a shared file
+  (e.g. a `shared.tsx` alongside the page's own directory) from the point a second consumer is
+  written, not refactored out once the page file has already grown large. This mirrors the backend
+  discipline above (Technology Stack Constraints: "near-identical logic... factored into a shared
+  helper... at the point the second near-duplicate is written") — the same rule, applied to
+  components/hooks instead of repository methods.
+- **Layout behavior that changes across breakpoints MUST be expressed as real CSS classes in a
+  stylesheet, never as inline `style` objects.** An inline `style` prop has no conditional/media-
+  query mechanism at all; a layout that needs to look different on mobile vs. desktop (a different
+  flex `order`, a different `flex-basis`, anything gated on viewport width) can only be expressed
+  correctly through an actual `@media` rule in a real stylesheet. Reach for inline `style` only for
+  values genuinely computed at render time from component state/props (e.g. a measured pixel
+  offset, a color derived from data) — never for what is fundamentally a static, breakpoint-driven
+  rule, even if it would be shorter to write inline in the moment.
+- **A component or user-facing behavior MUST NOT be reported as working/verified based only on a
+  unit test of the pure function/algorithm underneath it.** A pure function (e.g. a pagination-
+  window calculator, a tag-namespace parser) passing its own unit tests proves that function is
+  correct in isolation; it proves nothing about whether the component that's supposed to render its
+  output actually does so, is actually wired up, or actually reaches the DOM under real app state
+  (e.g. a guard condition hiding the component entirely in the test's own fixture data). A claim of
+  "verified" for anything user-visible MUST be backed by confirming the actual rendered output in a
+  real browser session against real or realistic app state — this project has shipped a case where
+  a component was reported working from pure-function test output alone and, in the running app,
+  never rendered at all.
+- **UI ported from real legacy LANraragi (an icon, a layout region, a component's markup structure)
+  MUST be verified against the real legacy reference's own computed styles/DOM, not eyeballed from
+  a screenshot or read from CSS source.** Phase 1's premise is that this is a drop-in continuation
+  of a user's existing experience (Principles I and II already establish this for data and API
+  compatibility); the same continuity bar applies to the UI a user actually sees and interacts
+  with day to day, not just to the data underneath it. A screenshot comparison alone is not
+  sufficient sign-off — subtle mismatches (an icon's size class, a few pixels of padding, a class-
+  order dependency in a legacy CSS selector) are easy to miss by eye at screenshot scale but still
+  real, user-visible drift from the reference. See this project's own `CLAUDE.md` for the concrete,
+  field-by-field verification procedure (`getComputedStyle`/`getBoundingClientRect` against a live
+  reference instance) this bullet requires.
+
 ## Technology Stack Constraints
 
 - **Repository layout**: A single monorepo — one git repository, one Cargo workspace, one
@@ -199,7 +273,7 @@ This project is explicitly split into two phases, and specs/plans MUST respect t
   independent of, and compatible with, the licenses of dependencies chosen elsewhere in this
   document — Apache-2.0 dependencies (e.g. `oar-ocr`, kha-white's `manga-ocr`) are freely usable
   from an MIT project with no copyleft interaction; GPL-3.0 code (e.g. Koharu, deliberately
-  avoided as a dependency per `specs/002-ocr-manga-translation/research.md` §1) would not be,
+  avoided as a dependency per `specs/004-ocr-manga-translation/research.md` §1) would not be,
   which is one more concrete reason that avoidance decision was correct, not just cautious.
 - **Backend**: Rust, Tokio async runtime, Axum web framework.
 - **Concurrency model**: `tokio` for all I/O-bound async work (HTTP handling, Redis access,
@@ -231,6 +305,36 @@ This project is explicitly split into two phases, and specs/plans MUST respect t
   `rustc` itself. Bundler-level tools (e.g. Turbopack) are unrelated: they address JS/TS frontend
   bundling speed, not Rust compilation, and this project's frontend bundler choice (Vite) is
   already fixed above.
+- **Near-identical logic across sibling modules/types MUST be factored into a shared helper, not
+  copy-pasted per type.** When two or more structs implement the same operation with only the
+  type/key differing (e.g. this codebase's `ArchiveRepository`/`CategoryRepository`/
+  `GroupingRepository` each independently hand-writing the same "list every key matching a glob,
+  fetch each one, collect the ones that still exist" `list_all` loop), extract the shared shape
+  into one function/trait the sibling types call into, at the point the second near-duplicate is
+  written — not deferred to a later cleanup pass once a third or fourth copy has accumulated.
+  Prefer a plain shared function (generic over the varying pieces, e.g. this codebase's
+  `list_all_by_glob<T, F, Fut>`) when the duplication is a single well-defined operation; prefer a
+  `trait` when multiple *related* operations recur together across the same set of types (a trait
+  models "this family of types shares a capability," not just "this one function happens to be
+  identical twice"). A `struct` MUST group fields that are genuinely read/written/passed together
+  as one unit (see this principle's Frontend counterpart below for the same discipline applied to
+  React components/hooks) — introducing a struct purely to reduce a function's parameter count,
+  with no real cohesion among its fields, is not by itself sufficient justification.
+- **Domain entity identifiers are newtypes, not raw `String`, from first implementation.** Every
+  primary-key-shaped field on a domain entity (e.g. an archive ID, category ID, tankoubon ID, stamp
+  ID) MUST be introduced as a dedicated newtype (a single-field tuple struct, e.g. `ArchiveId
+  (String)`) at the moment that entity is first modeled — not as a plain `String` "for now," with
+  the newtype conversion deferred to a later cleanup pass. A raw `String` ID field lets any other
+  entity's ID be passed to a function expecting this one with no compile-time signal; retrofitting
+  the newtype after the fact (once call sites already assume `String`) is a large, error-prone,
+  multi-crate change purely because the wrong choice was cheap to make and easy to keep making at
+  every new call site in the meantime. The newtype MUST stay `#[serde(transparent)]` (or
+  equivalent) so the wire/storage representation is unaffected — this is a compile-time safety
+  measure, not a data-shape change — and MUST NOT be introduced into pure external wire-format DTOs
+  (e.g. a backup-export JSON record, an HTTP response shape already fixed by Principle II) where a
+  plain `String` field is the correct, deliberate choice; the newtype belongs at the
+  domain/repository layer where cross-entity mixups are actually possible, converted explicitly at
+  the DTO boundary.
 - **Archive identity algorithm**: new scans use a "size-aware" fingerprint —
   `hash(first 512KB of file bytes ++ u64 big-endian file size)` — as the default going forward.
   Legacy `SHA-1(first 512KB)` remains supported as a read-compatible fallback for data migrated
@@ -323,4 +427,15 @@ the current version of this file; every `/speckit-specify` output touching data 
 API surface, or Phase 1/Phase 2 boundaries MUST be reviewed against Principles I, II, and VI before
 being marked ready for planning.
 
-**Version**: 1.6.0 | **Ratified**: 2026-07-05 | **Last Amended**: 2026-07-06
+**Agent communication language**: For all spec-kit workflows (`/speckit-specify`, `/speckit-clarify`,
+`/speckit-plan`, `/speckit-tasks`, `/speckit-implement`, `/speckit-constitution`, and any other
+spec-kit command), the AI agent's conversational responses to the user — chat replies, completion
+reports, clarification questions, and summaries — MUST be in Chinese (Simplified), matching this
+project's standing `CLAUDE.md` instruction. This does **NOT** extend to the spec-kit artifact files
+themselves: `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/`, `tasks.md`, and
+`quickstart.md` remain in English, matching this project's existing technical-documentation
+convention and the language already used throughout the `001`/`002`/`003` artifacts — these are
+technical design documents, not chat communication, and English keeps them consistent with the
+Rust/TypeScript code, comments, and commit history they describe.
+
+**Version**: 1.8.0 | **Ratified**: 2026-07-05 | **Last Amended**: 2026-08-03

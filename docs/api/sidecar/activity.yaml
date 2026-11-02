@@ -1,0 +1,183 @@
+# The activity log: who did what, when, from where.
+#
+# Visibility is scoped per caller rather than being one shared feed — a session sees everything, an
+# admin-role token sees its own entries plus every guest-role token's, and a guest-role token sees
+# only its own. Deletion and retention changes are **session-only**: `route_policy.csv` denies both
+# token roles, so a token can never erase its own trail or shorten how long that trail survives.
+"/api/activity":
+  get:
+    summary: List activity entries
+    description: |
+      A page of activity entries, newest first, scoped to what the caller is allowed to see (see
+      this file's header).
+
+      Entries whose target is an archive are annotated with whether that archive still exists, so a
+      client can render "deleted since" instead of a dead link.
+    tags: [activity]
+    parameters:
+      - name: cursor
+        in: query
+        schema: { type: string }
+        description: Opaque pagination cursor from a previous response's `next_cursor`.
+      - name: limit
+        in: query
+        schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+        description: >-
+          Clamped to a small fixed range regardless of what is asked for — an unbounded limit would
+          let one request force an arbitrarily large scan.
+      - name: start_ts
+        in: query
+        schema: { type: integer, format: int64 }
+        description: Only entries at or after this epoch-second timestamp.
+      - name: end_ts
+        in: query
+        schema: { type: integer, format: int64 }
+        description: Only entries at or before this epoch-second timestamp.
+      - name: actor
+        in: query
+        schema: { type: string }
+        description: Comma-separated actor keys; multiple values are OR'd together.
+      - name: action_type
+        in: query
+        schema: { type: string }
+        description: Comma-separated action types; multiple values are OR'd together.
+      - name: outcome
+        in: query
+        schema: { type: string }
+        description: Comma-separated outcomes; multiple values are OR'd together.
+    responses:
+      "200":
+        description: One page of entries.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entries]
+              properties:
+                entries:
+                  type: array
+                  items:
+                    type: object
+                    description: >-
+                      One activity entry: `id`, `timestamp`, `actor`, `auto_or_manual`,
+                      `action_type`, `target` (with an added `exists` flag for archive targets),
+                      `outcome`, and optional `client_ip`, `device_info`, `device_name`, `before`,
+                      `after` and `caused_by`.
+                next_cursor:
+                  type: string
+                  description: Pass back as `cursor` for the next page. Absent on the last page.
+                total_estimate:
+                  type: integer
+                  description: An estimate, not an exact count.
+  delete:
+    summary: Delete selected activity entries
+    description: |
+      Bulk delete by ID. Session-only — an API token of either role is refused, so a token cannot
+      erase its own audit trail.
+    tags: [activity]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ids]
+            properties:
+              ids: { type: array, items: { type: string } }
+    responses:
+      "200":
+        description: How many entries were removed.
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: "#/components/schemas/OperationResponse" }
+                - type: object
+                  properties:
+                    deleted_count: { type: integer }
+
+"/api/activity/{id}":
+  delete:
+    summary: Delete one activity entry
+    description: |
+      Deletes a single entry by ID. Session-only, for the same reason the bulk delete is.
+    tags: [activity]
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: Deleted.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "404":
+        description: No entry with that ID.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+
+"/api/activity/facets":
+  get:
+    summary: List activity filter facets
+    description: |
+      The distinct action types and actors present in the log, each with a count — so a client can
+      build a filter UI from what is actually there rather than from a hardcoded list.
+
+      Like the list endpoint, this is scoped to what the caller may see: an actor only appears if
+      the caller could read that actor's entries.
+    tags: [activity]
+    responses:
+      "200":
+        description: The available facets.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action_types, actors]
+              properties:
+                action_types:
+                  type: array
+                  items: { type: object }
+                actors:
+                  type: array
+                  items: { type: object }
+
+"/api/activity/retention":
+  get:
+    summary: Read the activity retention window
+    description: How long activity entries are kept, in seconds.
+    tags: [activity]
+    responses:
+      "200":
+        description: The current window.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [retention_secs]
+              properties:
+                retention_secs: { type: integer, format: int64 }
+  put:
+    summary: Set the activity retention window
+    description: |
+      Changes how long activity entries are kept. Session-only: a token must not be able to shorten
+      how long its own trail survives.
+    tags: [activity]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [retention_secs]
+            properties:
+              retention_secs: { type: integer, format: int64 }
+    responses:
+      "200":
+        description: Stored.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }

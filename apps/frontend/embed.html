@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="no-referrer" />
+    <title>LANrurugi</title>
+    <!--
+      The share card framed by other sites (017 US6). Its own entry, not the library app: a page
+      embedding a dozen cards must not start a dozen copies of the whole library. The server fills
+      `data-theme` with the sharing library's theme, as it does on index.html.
+    -->
+    <script id="theme-init" data-theme="">
+      document.documentElement.dataset.theme = document.currentScript.dataset.theme || ""
+    </script>
+  </head>
+  <body>
+    <div id="card-root"></div>
+    <script type="module" src="/src/embed/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,20 @@
+---
+// The method badge + full-URL row that sits directly under an operation's heading.
+//
+// Split out from `ApiOperation` because of where it goes: the reference site puts this row *before*
+// the operation's description prose, and that prose lives in the generated MDX (so markdown in it is
+// rendered properly) rather than inside a component.
+import { defaultServer, findOperation } from '../lib/openapi.mjs'
+
+interface Props {
+  op: string
+}
+const { op: operationId } = Astro.props
+const { method, path } = findOperation(operationId)
+const url = `${defaultServer().replace(/\/+$/, '')}${path}`
+---
+
+<div class="api-endpoint">
+  <span class={`api-method api-method--${method}`}>{method.toUpperCase()}</span>
+  <span class="api-endpoint__url">{url}</span>
+</div>

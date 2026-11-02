@@ -1,0 +1,136 @@
+# API-token management.
+#
+# Session-only: `route_policy.csv` denies both token roles against these routes. A token must never
+# be able to create, list, rename or revoke tokens — not even an admin-role one — because that would
+# let a leaked token mint itself a successor and survive its own revocation.
+"/api/tokens":
+  get:
+    summary: List API tokens
+    description: |
+      Every issued token's metadata. The token secret itself is **never** included: it is returned
+      exactly once, by the creation call below, and is not stored in a recoverable form.
+
+      Requires a session-cookie login.
+    tags: [api_tokens]
+    responses:
+      "200":
+        description: The issued tokens.
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: "#/components/schemas/ApiToken" }
+  post:
+    summary: Create an API token
+    description: |
+      Issues a new token and returns its secret — **the only time it is ever returned**. Store it
+      then; it cannot be recovered afterwards, only replaced.
+
+      The expiry is computed from the server's own clock, not from a client-supplied timestamp, so a
+      client with a skewed clock cannot mint a token that outlives what it asked for.
+    tags: [api_tokens]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [name]
+            properties:
+              name:
+                type: string
+                description: A human-readable label. Must not be empty.
+              role:
+                type: string
+                enum: [admin, guest]
+                default: admin
+                description: >-
+                  Defaults to `admin`, so a client that does not know about roles gets the
+                  pre-role-system behaviour rather than being silently downgraded.
+              expires_in_secs:
+                type: integer
+                format: int64
+                description: Seconds from issuance until the token stops working. Absent or `null` means a token that does not expire.
+    responses:
+      "200":
+        description: The token, including its secret under `data.token`.
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: "#/components/schemas/OperationResponse" }
+                - type: object
+                  properties:
+                    data:
+                      allOf:
+                        - { $ref: "#/components/schemas/ApiToken" }
+                        - type: object
+                          properties:
+                            token:
+                              type: string
+                              description: The token secret. Returned here and nowhere else.
+      "400":
+        description: The name was empty.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+
+"/api/tokens/{id}":
+  patch:
+    summary: Rename an API token
+    description: Changes a token's label. Requires a session-cookie login.
+    tags: [api_tokens]
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [name]
+            properties:
+              name: { type: string }
+    responses:
+      "200":
+        description: The renamed token.
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: "#/components/schemas/OperationResponse" }
+                - type: object
+                  properties:
+                    data: { $ref: "#/components/schemas/ApiToken" }
+      "404":
+        description: No such token.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+  delete:
+    summary: Revoke an API token
+    description: |
+      Permanently revokes a token. Anything still using it starts failing immediately; the token
+      cannot be un-revoked, only replaced.
+
+      Requires a session-cookie login.
+    tags: [api_tokens]
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: Revoked.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "404":
+        description: No such token.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
