@@ -10,10 +10,11 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use axum::extract::{ConnectInfo, DefaultBodyLimit, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -21,6 +22,7 @@ use axum::{Json, Router};
 use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::{Config, Pool, Runtime};
 use serde::Deserialize;
+use tower_http::services::ServeDir;
 
 /// The four fields plus JSON punctuation sit far below this; anything larger is not a client this
 /// service supports.
@@ -54,18 +56,29 @@ pub struct TelemetryIngestArgs {
     )]
     pub retention_days: u64,
 
-    /// Enables the read side: `GET /stats` (JSON) and `GET /` (a small HTML dashboard), both behind
-    /// `Authorization: Bearer <token>`. Unset — the default — means those routes do not exist at all,
-    /// so the public surface stays write-only.
+    /// Enables the read side: the dashboard at `/`, `/stats` (JSON) and `/api/series`. Callers
+    /// either log in at `/` with this value as the password (which sets a session cookie) or send
+    /// `Authorization: Bearer <token>`. Unset — the default — means the read side does not exist.
     #[arg(long, env = "LANRURUGI_TELEMETRY_STATS_TOKEN")]
     pub stats_token: Option<String>,
+
+    /// The built dashboard (`telemetry/ui/dist`). Served as static files rather than embedded, so
+    /// this binary still compiles without a Node build; when the directory is absent, `/` 404s and
+    /// the JSON endpoints keep working.
+    #[arg(
+        long,
+        env = "LANRURUGI_TELEMETRY_UI_DIR",
+        default_value = "/usr/local/share/lanrurugi/telemetry"
+    )]
+    pub ui_dir: PathBuf,
 }
 
 struct Ingest {
     pool: Pool,
     retention_secs: i64,
-    /// `None` disables the read side entirely (both routes 404 rather than 401).
+    /// `None` disables the read side entirely (the login route 404s, everything else 401s).
     stats_token: Option<String>,
+    ui_dir: PathBuf,
     /// Fixed-window per-IP counter. Bounded by clearing wholesale once it grows past `CLEAR_AT`
     /// (dropping the counts only loosens the limit for one window, never blocks anyone).
     hits: Mutex<HashMap<IpAddr, (u32, Instant)>>,
@@ -357,9 +370,13 @@ async fn collect(app: &Ingest) -> Result<Stats, Box<dyn std::error::Error + Send
     })
 }
 
-/// Bearer token, compared without an early return so a wrong token cannot be found byte by byte.
-/// The length is not secret (a token's length is fixed and public anyway); the contents are.
-fn authorized(app: &Ingest, headers: &HeaderMap) -> bool {
+/// Constant-time compare: a wrong secret must not be findable byte by byte.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// Bearer token, for scripts and monitoring.
+fn bearer_ok(app: &Ingest, headers: &HeaderMap) -> bool {
     let Some(expected) = app.stats_token.as_deref() else {
         return false;
     };
@@ -367,37 +384,116 @@ fn authorized(app: &Ingest, headers: &HeaderMap) -> bool {
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .map(|token| {
-            let (a, b) = (token.trim().as_bytes(), expected.as_bytes());
-            a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
-        })
+        .map(|token| constant_time_eq(token.trim().as_bytes(), expected.as_bytes()))
         .unwrap_or(false)
+}
+
+const SESSION_COOKIE: &str = "hb_session";
+const SESSION_TTL_SECS: i64 = 7 * 86_400;
+
+/// `<expiry>.<mac>`, where the mac is a keyed hash of the expiry keyed by the access secret itself
+/// — no second secret to manage, and a cookie cannot outlive or outrun the configured token.
+fn session_value(secret: &str, expires: i64) -> String {
+    let key = blake3::hash(secret.as_bytes());
+    let mac = blake3::keyed_hash(key.as_bytes(), expires.to_string().as_bytes());
+    format!("{expires}.{}", mac.to_hex())
+}
+
+fn session_valid(secret: &str, raw: &str) -> bool {
+    let Some((expires, _)) = raw.split_once('.') else {
+        return false;
+    };
+    let Ok(expires) = expires.parse::<i64>() else {
+        return false;
+    };
+    expires > chrono::Utc::now().timestamp()
+        && constant_time_eq(session_value(secret, expires).as_bytes(), raw.as_bytes())
+}
+
+fn session_cookie(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(axum::http::header::COOKIE)?
+        .to_str()
+        .ok()?
+        .split(';')
+        .filter_map(|part| part.trim().split_once('='))
+        .find(|(name, _)| *name == SESSION_COOKIE)
+        .map(|(_, value)| value)
+}
+
+/// Either credential opens the read side: a session cookie from the login form, or the bearer token
+/// for anything scripted.
+fn read_authorized(app: &Ingest, headers: &HeaderMap) -> bool {
+    if bearer_ok(app, headers) {
+        return true;
+    }
+    match (app.stats_token.as_deref(), session_cookie(headers)) {
+        (Some(secret), Some(raw)) => session_valid(secret, raw),
+        _ => false,
+    }
 }
 
 fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
 }
 
-async fn stats_json(State(app): State<Arc<Ingest>>, headers: HeaderMap) -> Response {
-    if !authorized(&app, &headers) {
-        return unauthorized();
-    }
-    match collect(&app).await {
-        Ok(stats) => axum::Json(stats).into_response(),
-        Err(error) => {
-            tracing::warn!(%error, "telemetry-ingest: stats query failed");
-            (StatusCode::SERVICE_UNAVAILABLE, "stats unavailable").into_response()
-        }
-    }
+#[derive(Debug, Deserialize)]
+struct LoginBody {
+    password: String,
 }
 
-async fn dashboard(State(app): State<Arc<Ingest>>, headers: HeaderMap) -> Response {
-    if !authorized(&app, &headers) {
+async fn login(
+    State(app): State<Arc<Ingest>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<LoginBody>,
+) -> Response {
+    let Some(secret) = app.stats_token.clone() else {
+        // No token configured means the read side does not exist, so there is nothing to log into.
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !allowed(&app, client_ip(&headers, peer.ip())) {
+        return (StatusCode::TOO_MANY_REQUESTS, "slow down").into_response();
+    }
+    if !constant_time_eq(body.password.trim().as_bytes(), secret.as_bytes()) {
+        return (StatusCode::UNAUTHORIZED, "wrong password").into_response();
+    }
+    let expires = chrono::Utc::now().timestamp() + SESSION_TTL_SECS;
+    let cookie = format!(
+        "{SESSION_COOKIE}={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={SESSION_TTL_SECS}",
+        session_value(&secret, expires)
+    );
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    response.headers_mut().insert(
+        axum::http::header::SET_COOKIE,
+        axum::http::HeaderValue::from_str(&cookie).expect("cookie is ASCII"),
+    );
+    response
+}
+
+async fn logout() -> Response {
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    response.headers_mut().insert(
+        axum::http::header::SET_COOKIE,
+        axum::http::HeaderValue::from_static(
+            "hb_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
+        ),
+    );
+    response
+}
+
+async fn session_info(State(app): State<Arc<Ingest>>, headers: HeaderMap) -> Response {
+    axum::Json(serde_json::json!({ "authenticated": read_authorized(&app, &headers) }))
+        .into_response()
+}
+
+async fn stats_json(State(app): State<Arc<Ingest>>, headers: HeaderMap) -> Response {
+    if !read_authorized(&app, &headers) {
         return unauthorized();
     }
     match collect(&app).await {
         Ok(stats) => {
-            let mut response = axum::response::Html(render_html(&stats)).into_response();
+            let mut response = axum::Json(stats).into_response();
             response.headers_mut().insert(
                 axum::http::header::CACHE_CONTROL,
                 axum::http::HeaderValue::from_static("no-store"),
@@ -411,99 +507,66 @@ async fn dashboard(State(app): State<Arc<Ingest>>, headers: HeaderMap) -> Respon
     }
 }
 
+/// Hard ceiling on `/api/series`, so one request cannot ask for an unbounded window.
+const MAX_SERIES_DAYS: i64 = 90;
+
+#[derive(Debug, Deserialize)]
+struct SeriesQuery {
+    days: Option<i64>,
+}
+
+/// Daily distinct installations, newest last — the dashboard's chart. One `SCARD` per day rather
+/// than a union, because "how many that day" is already the cardinality of that day's set.
+async fn series(
+    State(app): State<Arc<Ingest>>,
+    headers: HeaderMap,
+    Query(q): Query<SeriesQuery>,
+) -> Response {
+    if !read_authorized(&app, &headers) {
+        return unauthorized();
+    }
+    let days = q.days.unwrap_or(30).clamp(1, MAX_SERIES_DAYS);
+    let mut conn = match app.pool.get().await {
+        Ok(conn) => conn,
+        Err(error) => {
+            tracing::warn!(%error, "telemetry-ingest: series query failed");
+            return (StatusCode::SERVICE_UNAVAILABLE, "stats unavailable").into_response();
+        }
+    };
+    // Sized from the constant, not from `days`: a capacity derived from the query value reads as
+    // unbounded allocation even after the clamp (CodeQL flagged exactly that).
+    let mut points = Vec::with_capacity(MAX_SERIES_DAYS as usize);
+    for offset in (0..days).rev() {
+        let date = day(offset);
+        let key = format!("LANRURUGI_TELEMETRY:DAY:{date}");
+        match conn.scard::<_, u64>(&key).await {
+            Ok(count) => points.push(serde_json::json!({ "date": date, "count": count })),
+            Err(error) => {
+                tracing::warn!(%error, "telemetry-ingest: series query failed");
+                return (StatusCode::SERVICE_UNAVAILABLE, "stats unavailable").into_response();
+            }
+        }
+    }
+    axum::Json(serde_json::json!({ "days": points })).into_response()
+}
+
 async fn healthz() -> &'static str {
     "ok"
 }
 
-/// Deliberately inline: this is one page of static markup, not a frontend worth a build pipeline.
-const PAGE_CSS: &str = "\
-body{font:15px/1.45 system-ui,sans-serif;margin:0 auto;padding:24px;max-width:720px;background:#faf7f0;color:#2a2118}\
-h1{font-size:20px;margin:0 0 4px}\
-.meta{color:#8a7a68;font-size:12px;margin:0 0 24px}\
-.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 0 28px}\
-.cards div{background:#fff;border:1px solid #e5dccb;border-radius:10px;padding:14px}\
-.cards span{display:block;font-size:12px;letter-spacing:.08em;color:#8a7a68}\
-.cards strong{font-size:28px;font-variant-numeric:tabular-nums}\
-section{margin:0 0 24px}\
-h2{font-size:13px;margin:0 0 8px;color:#6b5d4d;text-transform:uppercase;letter-spacing:.08em}\
-table{width:100%;border-collapse:collapse}\
-td{padding:4px 0;vertical-align:middle}\
-.name{width:32%;font-family:ui-monospace,monospace;font-size:13px}\
-.bar{width:58%}\
-.bar span{display:block;height:8px;background:#b5541f;border-radius:4px;min-width:2px}\
-.count{text-align:right;font-variant-numeric:tabular-nums;width:10%}\
-.empty{color:#8a7a68;font-size:13px}";
-
-fn esc(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
-fn render_table(title: &str, entries: &[Entry]) -> String {
-    if entries.is_empty() {
-        return format!(
-            "<section><h2>{}</h2><p class=\"empty\">no data yet</p></section>",
-            esc(title)
-        );
-    }
-    let max = entries.iter().map(|e| e.count).max().unwrap_or(0).max(1);
-    let rows: String = entries
-        .iter()
-        .map(|entry| {
-            let percent = (entry.count as f64 / max as f64 * 100.0).round() as u32;
-            format!(
-                "<tr><td class=\"name\">{}</td><td class=\"bar\"><span style=\"width:{}%\"></span></td><td class=\"count\">{}</td></tr>",
-                esc(&entry.name),
-                percent,
-                entry.count
-            )
-        })
-        .collect();
-    format!(
-        "<section><h2>{}</h2><table>{rows}</table></section>",
-        esc(title)
-    )
-}
-
-fn render_html(stats: &Stats) -> String {
-    let mut body = String::new();
-    body.push_str(&format!(
-        "<p class=\"meta\">generated {}</p>",
-        esc(&stats.generated_at)
-    ));
-    body.push_str(&format!(
-        "<div class=\"cards\"><div><span>DAU</span><strong>{}</strong></div>\
-         <div><span>WAU</span><strong>{}</strong></div>\
-         <div><span>MAU</span><strong>{}</strong></div></div>",
-        stats.dau, stats.wau, stats.mau
-    ));
-    body.push_str(&render_table("Countries (30d)", &stats.countries));
-    body.push_str(&render_table("Versions (30d)", &stats.versions));
-    body.push_str(&render_table("Channels (30d)", &stats.channels));
-    format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
-         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
-         <title>LANrurugi installations</title><style>{PAGE_CSS}</style></head>\
-         <body><h1>LANrurugi installations</h1>{body}</body></html>"
-    )
-}
-
 fn router(app: Arc<Ingest>) -> Router {
-    let mut router = Router::new()
+    // The built Svelte bundle (`telemetry/ui/dist`) is served from disk, not embedded: the binary
+    // stays compilable without a Node build, and an image without the directory simply 404s `/`.
+    let ui = ServeDir::new(app.ui_dir.clone()).append_index_html_on_directories(true);
+    Router::new()
         .route("/v1/hb", post(heartbeat))
-        .route("/healthz", get(healthz));
-    // The read side only exists when a token is configured: an instance that forgets to set one
-    // exposes no reader at all, rather than one that answers 401 and advertises itself.
-    if app.stats_token.is_some() {
-        router = router
-            .route("/", get(dashboard))
-            .route("/stats", get(stats_json));
-    }
-    router
-        .fallback(|| async { StatusCode::NOT_FOUND })
+        .route("/healthz", get(healthz))
+        .route("/stats", get(stats_json))
+        .route("/api/series", get(series))
+        .route("/api/login", post(login))
+        .route("/api/logout", post(logout))
+        .route("/api/session", get(session_info))
+        .fallback_service(ui)
         .layer(DefaultBodyLimit::max(MAX_BODY))
         .with_state(app)
 }
@@ -519,6 +582,7 @@ pub async fn run(args: TelemetryIngestArgs) -> anyhow::Result<()> {
             .map(str::trim)
             .filter(|token| !token.is_empty())
             .map(str::to_string),
+        ui_dir: args.ui_dir.clone(),
         hits: Mutex::new(HashMap::new()),
     });
     let listener = tokio::net::TcpListener::bind(&args.bind).await?;
@@ -607,6 +671,7 @@ mod tests {
                 .expect("pool builds without connecting"),
             retention_secs: 86_400,
             stats_token: None,
+            ui_dir: PathBuf::from("/nonexistent"),
             hits: Mutex::new(HashMap::new()),
         };
         let ip: IpAddr = "203.0.113.1".parse().unwrap();
@@ -639,6 +704,7 @@ mod tests {
                 .expect("pool builds without connecting"),
             retention_secs: 86_400,
             stats_token: token.map(str::to_string),
+            ui_dir: PathBuf::from("/nonexistent"),
             hits: Mutex::new(HashMap::new()),
         }
     }
@@ -652,38 +718,53 @@ mod tests {
             axum::http::header::AUTHORIZATION,
             "Bearer s3cret".parse().unwrap(),
         );
-        assert!(authorized(&app, &correct));
+        assert!(read_authorized(&app, &correct));
 
         let mut wrong = HeaderMap::new();
         wrong.insert(
             axum::http::header::AUTHORIZATION,
             "Bearer s3cres".parse().unwrap(),
         );
-        assert!(!authorized(&app, &wrong));
+        assert!(!read_authorized(&app, &wrong));
 
-        // No token at all, and a token configured nowhere: both refuse.
-        assert!(!authorized(&app, &HeaderMap::new()));
-        assert!(!authorized(&app_with_token(None), &correct));
+        // No header at all, and no token configured: both refuse.
+        assert!(!read_authorized(&app, &HeaderMap::new()));
+        assert!(!read_authorized(&app_with_token(None), &correct));
     }
 
     #[test]
-    fn the_dashboard_escapes_every_value_it_renders() {
-        let stats = Stats {
-            generated_at: "2026-11-02T00:00:00Z".to_string(),
-            dau: 1,
-            wau: 2,
-            mau: 3,
-            countries: vec![Entry {
-                name: "<script>alert(1)</script>".to_string(),
-                count: 1,
-            }],
-            versions: Vec::new(),
-            channels: Vec::new(),
-        };
-        let html = render_html(&stats);
-        assert!(html.contains("&lt;script&gt;"));
-        assert!(!html.contains("<script>"));
-        // An empty breakdown says so rather than rendering an empty table.
-        assert!(html.contains("no data yet"));
+    fn a_session_cookie_is_scoped_to_the_configured_secret_and_expiry() {
+        let secret = "s3cret";
+        let future = chrono::Utc::now().timestamp() + 60;
+
+        let value = session_value(secret, future);
+        assert!(session_valid(secret, &value));
+
+        // A cookie minted for another secret, or one that has expired, must not open anything.
+        assert!(!session_valid("other-secret", &value));
+        assert!(!session_valid(secret, &session_value(secret, 1)));
+        assert!(!session_valid(secret, "garbage"));
+        assert!(!session_valid(secret, "notanumber.deadbeef"));
+    }
+
+    #[test]
+    fn a_session_cookie_opens_the_read_side_without_a_bearer() {
+        let app = app_with_token(Some("s3cret"));
+        let expires = chrono::Utc::now().timestamp() + 60;
+        let cookie = format!("{SESSION_COOKIE}={}", session_value("s3cret", expires));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(axum::http::header::COOKIE, cookie.parse().unwrap());
+        assert!(read_authorized(&app, &headers));
+
+        // A cookie that was not signed by this instance's secret is refused.
+        let mut forged = HeaderMap::new();
+        forged.insert(
+            axum::http::header::COOKIE,
+            format!("{SESSION_COOKIE}={}", session_value("other", expires))
+                .parse()
+                .unwrap(),
+        );
+        assert!(!read_authorized(&app, &forged));
     }
 }

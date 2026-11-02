@@ -36,9 +36,11 @@ serde.workspace = true
 serde_json.workspace = true
 base64 = "0.22"
 deadpool-redis.workspace = true
-# `telemetry-ingest`: the payload's id is a UUID and its keys are dated.
+# `telemetry-ingest`: the payload's id is a UUID, its keys are dated, and the dashboard's session
+# cookie is a keyed hash of its expiry rather than a second secret to keep in sync.
 uuid.workspace = true
 chrono.workspace = true
+blake3.workspace = true
 
 [dev-dependencies]
 reqwest.workspace = true

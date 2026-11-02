@@ -171,6 +171,15 @@ RUN chmod +x fetch-bubble-seg-model.sh && ./fetch-bubble-seg-model.sh /models/bu
 # mounts, so a self-hoster reads the whole site (guides, plugin SDK reference, API reference) from
 # their own instance with no internet access. The runtime image receives only `dist/`: Node, pnpm
 # and Deno are build-time here, exactly as they are for the frontend stage.
+# The telemetry dashboard (`telemetry/ui`, Svelte + Vite). Its own stage rather than part of
+# `frontend-builder`: separate package, separate lockfile, and the application image never needs it.
+FROM node:${NODE_VERSION}-slim AS telemetry-ui
+WORKDIR /ui
+COPY telemetry/ui/package.json telemetry/ui/package-lock.json ./
+RUN npm ci --no-fund --no-audit
+COPY telemetry/ui ./
+RUN npm run build
+
 FROM node:${NODE_VERSION}-slim AS docs-builder
 ARG PNPM_VERSION
 # Same corepack removal as `frontend-builder` above.
@@ -347,6 +356,10 @@ ENV LANRURUGI_THUMB_DIR=/home/koyomi/lanrurugi/thumb
 # taking the resize/animation conversion cache (and upload staging) with it.
 ENV LANRURUGI_TEMP_DIR=/temp
 ENV LANRURUGI_REDIS_URL=redis://127.0.0.1:16379
+# The dashboard bundle `telemetry-ingest` serves at `/`; unset in a normal deployment, which never
+# runs that subcommand at all.
+COPY --from=telemetry-ui /ui/dist /usr/local/share/lanrurugi/telemetry
+ENV LANRURUGI_TELEMETRY_UI_DIR=/usr/local/share/lanrurugi/telemetry
 # No telemetry ENV here on purpose: the heartbeat's endpoint is a constant in
 # `lanrurugi_api::heartbeat` so the image and the native packages report identically. Disabling is
 # per-instance (`--no-telemetry` / `LANRURUGI_NO_TELEMETRY=1`), not per-packaging.
