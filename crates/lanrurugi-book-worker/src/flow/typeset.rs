@@ -312,8 +312,8 @@ impl Typesetter {
         width: f32,
     ) -> Buffer {
         let mut buffer = Buffer::new(&mut self.fonts, metrics);
-        buffer.set_wrap(&mut self.fonts, Wrap::WordOrGlyph);
-        buffer.set_size(&mut self.fonts, Some(width), None);
+        buffer.set_wrap(Wrap::WordOrGlyph);
+        buffer.set_size(Some(width), None);
         let heading = matches!(block, Block::Heading { .. });
         let attrs = Attrs::new()
             .family(Family::Name(self.families.get(lang, heading)))
@@ -340,9 +340,9 @@ impl Typesetter {
                         },
                     )
                 });
-                buffer.set_rich_text(&mut self.fonts, spans, &attrs, Shaping::Advanced, None);
+                buffer.set_rich_text(spans, &attrs, Shaping::Advanced, None);
             }
-            _ => buffer.set_text(&mut self.fonts, text, &attrs, Shaping::Advanced),
+            _ => buffer.set_text(text, &attrs, Shaping::Advanced, None),
         }
         buffer.shape_until_scroll(&mut self.fonts, false);
         buffer
