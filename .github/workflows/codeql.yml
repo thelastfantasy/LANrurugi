@@ -61,7 +61,7 @@ jobs:
             zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev libxml2-dev libacl1-dev \
             nasm libopenjp2-7-dev
 
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -69,6 +69,6 @@ jobs:
           # carries `paths-ignore`.
           config-file: ${{ matrix.language == 'actions' && '' || './.github/codeql/codeql-config.yml' }}
 
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
