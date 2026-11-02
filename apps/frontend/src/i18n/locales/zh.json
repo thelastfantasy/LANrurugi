@@ -1196,6 +1196,7 @@
   "edit.usingAPluginWillSave": "使用插件将保存您可能对档案元数据所做的任何修改！",
   "upload.validUrlLinesCount": "有效 URL 行数：{{count}}",
   "Version %1 %2": "版本 %1 %2",
+  "settings.versionDialog.channelLabel": "安装渠道",
   "settings.versionDialog.changelogs": "查看更新日志 {{version}}",
   "settings.versionDialog.checkDisabled": "本实例已关闭更新检查。",
   "settings.versionDialog.checkFailed": "暂时无法检查更新（无法访问 GitHub）。",

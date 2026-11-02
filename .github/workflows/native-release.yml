@@ -16,6 +16,10 @@ env:
   BINARIES: -p lanrurugi-server -p lanrurugi-book-worker -p lanrurugi-embed-worker -p lanrurugi-gpu-worker
   # Turns off libarchive features whose system libraries users may not have (see the file).
   CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/packaging/libarchive-portable.cmake
+  # Stamped into the binary at compile time (`option_env!` in `lanrurugi_api::version`): a tarball
+  # has no runtime environment to read it from, so this is the only place the native channel can be
+  # recorded at all.
+  LANRURUGI_BUILD_CHANNEL: native
 
 jobs:
   assets:

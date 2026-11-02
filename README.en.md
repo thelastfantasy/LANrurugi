@@ -11,20 +11,17 @@ A self-hosted manga / doujinshi library manager. Rust backend, React frontend, a
 
 ## Relationship to LANraragi
 
-LANrurugi keeps LANraragi's library layout, tag syntax and HTTP API, so existing third-party clients,
-readers and migration flows keep working — switching over is mounting the same manga directory and
-importing a backup JSON. The rewrite is about speed and reliability: the backend is Rust + Tokio, so
-CPU-bound paths (thumbnails, OCR, image comparison) actually use every core, and downloads moved out of
-the plugin sandbox into the host process, which is what makes real byte-level progress and per-domain
-rate limiting possible. Feature-wise it is parity-first: existing LANraragi behaviour is preserved where
-it exists, and subscriptions, sharing/import, in-page translation and native packages are added on top.
-For the item-by-item comparison — including the differences that are deliberate — see
-[docs/comparison-with-lanraragi.md](./docs/comparison-with-lanraragi.md) (Chinese).
+LANrurugi keeps LANraragi's library layout, tag syntax and HTTP API, so existing clients, readers and
+migration flows keep working — mount the same manga directory and import a backup JSON. The rewrite is
+about speed and reliability: Rust + Tokio lets CPU-bound paths (thumbnails, OCR, image comparison) use
+every core, and moving downloads out of the plugin sandbox into the host process is what makes byte-level
+progress and per-domain rate limits possible. For the item-by-item comparison (including deliberate
+differences), see [docs/comparison-with-lanraragi.md](./docs/comparison-with-lanraragi.md).
 
 ## What it does
 
 - **Library and reading**: categories, tags, reading progress, full-text and tag search; shelf / grid / list
-  views, 12 UI languages.
+  views, 14 UI languages.
 - **Plugins**: metadata, download and login plugins run in Deno subprocesses with per-namespace permissions;
   the AI wizard can generate new ones for a site.
 - **Downloads**: byte-level progress, per-domain concurrency and rate limits; subscriptions that discover new
@@ -34,6 +31,10 @@ For the item-by-item comparison — including the differences that are deliberat
 - **In-page translation**: OCR → erase the original text → typeset the translation, on a cloud API or a local
   model, with per-volume font caching.
 - **E-books**: PDF, EPUB, MOBI/AZW3, DjVu, FB2 and TXT are catalogued and read like any archive.
+- **Recycle bin and safety password**: deletes go to the bin first, with a configurable retention window
+  and size cap; restoring brings back tags, categories, bookmarks and reading progress. Permanent delete
+  and emptying the bin need a separate four-digit safety password (lockout after repeated failures),
+  resettable with the login password or from the CLI.
 - **Native packages**: Linux (x86_64 / aarch64), macOS (Apple Silicon) and FreeBSD — unpack and run, no container.
 
 ## Quick start
@@ -59,7 +60,7 @@ don't point a real library at it).
 ## Documentation
 
 - User guide: <https://docs.lrrg.dev/en/>
-- API reference: <https://api.lrrg.dev/> — OpenAPI generated from the server's own routes, not hand-written
+- API reference: <https://api.lrrg.dev/> — OpenAPI generated from the server's routes
 - Plugin SDK: <https://sdk.lrrg.dev/>
 - For AI tools: <https://lrrg.dev/llms.txt>
 
@@ -70,8 +71,8 @@ a change must pass. Design documents live under `specs/`, one `spec.md` / `plan.
 
 ## Changelog
 
-Every `v*` tag produces a bilingual release note generated from the commit history — see
-[Releases](https://github.com/thelastfantasy/LANrurugi/releases). The in-app upgrade notice reads the same text.
+Every `v*` tag produces a bilingual release note from the commit history, also shown by the in-app
+upgrade notice: [Releases](https://github.com/thelastfantasy/LANrurugi/releases).
 
 ## License
 

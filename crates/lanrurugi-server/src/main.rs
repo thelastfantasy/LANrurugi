@@ -336,13 +336,12 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let redis = RedisDbs::connect(&args.redis_url)?;
     bootstrap(&redis, &args.library_path).await?;
     // Detached and best-effort: an unreachable sink must never delay or fail a startup.
-    lanrurugi_api::heartbeat::spawn(
-        redis.clone(),
-        lanrurugi_api::heartbeat::Options {
-            url: args.telemetry_url.clone(),
-            disabled: args.no_telemetry,
-        },
-    );
+    let heartbeat_options = lanrurugi_api::heartbeat::Options {
+        url: args.telemetry_url.clone(),
+        disabled: args.no_telemetry,
+    };
+    lanrurugi_api::heartbeat::log_status(&heartbeat_options);
+    lanrurugi_api::heartbeat::spawn(redis.clone(), heartbeat_options);
     if lanrurugi_server::mounts::in_container() {
         let redis_dir = bundled_redis_dir(&redis, &args.redis_url).await;
         let mut kept = vec![

@@ -335,6 +335,15 @@ ENV LANRURUGI_THUMB_DIR=/home/koyomi/lanrurugi/thumb
 # taking the resize/animation conversion cache (and upload staging) with it.
 ENV LANRURUGI_TEMP_DIR=/temp
 ENV LANRURUGI_REDIS_URL=redis://127.0.0.1:16379
+# No telemetry ENV here on purpose: the heartbeat's endpoint is a constant in
+# `lanrurugi_api::heartbeat` so the image and the native packages report identically. Disabling is
+# per-instance (`--no-telemetry` / `LANRURUGI_NO_TELEMETRY=1`), not per-packaging.
+# Which registry this image came from: `ghcr` or `dockerhub`. Both serve identical bytes, so it
+# cannot be derived at runtime — the workflow stamps it in, building the same layers twice (every
+# Rust layer is a cache hit; only this metadata differs). Deliberately the last instruction in the
+# stage so that stays true.
+ARG LANRURUGI_BUILD_CHANNEL=unknown
+ENV LANRURUGI_BUILD_CHANNEL=$LANRURUGI_BUILD_CHANNEL
 EXPOSE 3000
 # Sharing (017): iroh QUIC between instances; `share_udp_port`. Publishing it as host 443/udp is
 # recommended so the traffic sits on the HTTP/3 port.

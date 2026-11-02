@@ -24,6 +24,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
+      HAS_DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -63,9 +66,37 @@ jobs:
             # Diagnostics forwarding target, baked into the image (specs/018). Empty for
             # fork PRs, so nothing is sent from a build that never sees the secret.
             LANRURUGI_TRACKER_DSN=${{ secrets.LANRURUGI_TRACKER_DSN }}
+            # Which registry this image came from. Both serve identical bytes, so a deployment
+            # cannot work it out at runtime; the heartbeat's `channel` comes from here.
+            LANRURUGI_BUILD_CHANNEL=ghcr
           tags: |
             ghcr.io/thelastfantasy/lanrurugi:${{ steps.prefix.outputs.prefix }}-${{ steps.sha.outputs.short_sha }}-${{ matrix.arch }}
             ghcr.io/thelastfantasy/lanrurugi:${{ steps.prefix.outputs.prefix }}-${{ matrix.arch }}
+
+      # A second build, not a re-tag: `imagetools create` would copy the very same manifest, and
+      # then Docker Hub pulls would report `ghcr`. Every layer up to the final `ENV` is a cache
+      # hit, so this costs one metadata layer per architecture.
+      - uses: docker/login-action@v3
+        if: env.DOCKERHUB_IMAGE != '' && env.HAS_DOCKERHUB_TOKEN == 'true'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        if: env.DOCKERHUB_IMAGE != '' && env.HAS_DOCKERHUB_TOKEN == 'true'
+        with:
+          push: true
+          platforms: linux/${{ matrix.arch }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+          build-args: |
+            LANRURUGI_GIT_SHA=${{ steps.sha.outputs.short_sha }}
+            LANRURUGI_TRACKER_DSN=${{ secrets.LANRURUGI_TRACKER_DSN }}
+            LANRURUGI_BUILD_CHANNEL=dockerhub
+          tags: |
+            docker.io/${{ env.DOCKERHUB_IMAGE }}:${{ steps.prefix.outputs.prefix }}-${{ steps.sha.outputs.short_sha }}-${{ matrix.arch }}
+            docker.io/${{ env.DOCKERHUB_IMAGE }}:${{ steps.prefix.outputs.prefix }}-${{ matrix.arch }}
 
   amend-builds:
     runs-on: ubuntu-24.04
@@ -100,16 +131,25 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # One multi-arch manifest per tag, copied to every configured registry.
+      # One multi-arch manifest per tag, per registry. The two registries get *different* images
+      # (see `push`'s second build), so each manifest is assembled from its own per-arch tags —
+      # copying GHCR's into Docker Hub would undo the channel split.
       - name: publish multi-arch manifests
         run: |
           tags=""
           for tag in "${{ steps.prefix.outputs.prefix }}" "${{ steps.prefix.outputs.prefix }}-${{ steps.sha.outputs.short_sha }}"; do
             tags="$tags -t ghcr.io/thelastfantasy/lanrurugi:$tag"
-            if [ -n "$DOCKERHUB_IMAGE" ] && [ "$HAS_DOCKERHUB_TOKEN" = true ]; then
-              tags="$tags -t docker.io/$DOCKERHUB_IMAGE:$tag"
-            fi
           done
           docker buildx imagetools create $tags \
             ghcr.io/thelastfantasy/lanrurugi:${{ steps.prefix.outputs.prefix }}-${{ steps.sha.outputs.short_sha }}-amd64 \
             ghcr.io/thelastfantasy/lanrurugi:${{ steps.prefix.outputs.prefix }}-${{ steps.sha.outputs.short_sha }}-arm64
+
+          if [ -n "$DOCKERHUB_IMAGE" ] && [ "$HAS_DOCKERHUB_TOKEN" = true ]; then
+            hub_tags=""
+            for tag in "${{ steps.prefix.outputs.prefix }}" "${{ steps.prefix.outputs.prefix }}-${{ steps.sha.outputs.short_sha }}"; do
+              hub_tags="$hub_tags -t docker.io/$DOCKERHUB_IMAGE:$tag"
+            done
+            docker buildx imagetools create $hub_tags \
+              docker.io/$DOCKERHUB_IMAGE:${{ steps.prefix.outputs.prefix }}-${{ steps.sha.outputs.short_sha }}-amd64 \
+              docker.io/$DOCKERHUB_IMAGE:${{ steps.prefix.outputs.prefix }}-${{ steps.sha.outputs.short_sha }}-arm64
+          fi

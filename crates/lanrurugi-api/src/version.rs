@@ -181,6 +181,48 @@ pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Which published artifact this is: `ghcr`, `dockerhub`, `native`, `source`, `dev` or `unknown`.
+///
+/// Registries serve identical bytes, so "which one did this deployment pull from" cannot be
+/// derived at runtime — it has to be stamped in when the artifact is built. The workflows pass
+/// `LANRURUGI_BUILD_CHANNEL` (an image `--build-arg`, or the environment of a native `cargo build`,
+/// which `option_env!` bakes in). Runtime wins over compile time so an already-built image can be
+/// relabelled without a rebuild, and unknown values collapse to `unknown` rather than being echoed
+/// — this string reaches a public endpoint and a telemetry payload.
+///
+/// With nothing stamped, a debug build reports `dev`: that is somebody's working copy, and it is
+/// what makes the version dialog legible during local development. A release build with nothing
+/// stamped stays `unknown` — it is indistinguishable from a hand-rolled package.
+pub fn build_channel() -> &'static str {
+    static CHANNEL: OnceLock<&'static str> = OnceLock::new();
+    CHANNEL.get_or_init(|| {
+        let raw = std::env::var("LANRURUGI_BUILD_CHANNEL")
+            .ok()
+            .or_else(|| option_env!("LANRURUGI_BUILD_CHANNEL").map(str::to_string))
+            .unwrap_or_default();
+        classify_channel(&raw).unwrap_or(if cfg!(debug_assertions) {
+            "dev"
+        } else {
+            "unknown"
+        })
+    })
+}
+
+/// `None` when nothing was stamped at all, so [`build_channel`] can fall back to the build profile.
+fn classify_channel(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" => None,
+        "ghcr" => Some("ghcr"),
+        "dockerhub" | "docker-hub" => Some("dockerhub"),
+        "native" => Some("native"),
+        "source" => Some("source"),
+        "dev" => Some("dev"),
+        // Anything unrecognised collapses to `unknown` rather than being echoed: this string is
+        // served publicly and forwarded in the heartbeat.
+        _ => Some("unknown"),
+    }
+}
+
 /// Best-effort current git SHA:
 /// 1. runtime env (`LANRURUGI_GIT_SHA`) — set by a container entrypoint if desired;
 /// 2. compile-time env (`LANRURUGI_GIT_SHA`) — set in the Docker build via `ARG`/`ENV`;
@@ -254,6 +296,7 @@ fn details_json(version: &str, sha: Option<&str>) -> Value {
     json!({
         "version": version,
         "sha": sha,
+        "channel": build_channel(),
     })
 }
 
@@ -766,6 +809,8 @@ pub struct Deployment {
     pub os: &'static str,
     pub arch: &'static str,
     pub containerized: bool,
+    /// See [`build_channel`] — the published artifact this build came from.
+    pub channel: &'static str,
     pub process_memory_bytes: Option<u64>,
 }
 
@@ -781,6 +826,7 @@ pub fn deployment() -> Deployment {
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
         containerized: containerized(),
+        channel: build_channel(),
         process_memory_bytes: process_memory_bytes(),
     }
 }
@@ -788,6 +834,38 @@ pub fn deployment() -> Deployment {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_channels_are_whitelisted_never_echoed() {
+        // Nothing stamped: the caller decides from the build profile, so no value here.
+        assert_eq!(classify_channel(""), None);
+        assert_eq!(classify_channel("   "), None);
+
+        assert_eq!(classify_channel("GHCR"), Some("ghcr"));
+        assert_eq!(classify_channel("docker-hub"), Some("dockerhub"));
+        assert_eq!(classify_channel("native"), Some("native"));
+        assert_eq!(classify_channel("dev"), Some("dev"));
+
+        // Anything else is reported as `unknown`, never as the raw string.
+        assert_eq!(classify_channel("../../etc/passwd"), Some("unknown"));
+        assert_eq!(classify_channel("edge-2026"), Some("unknown"));
+    }
+
+    #[test]
+    fn a_debug_build_names_itself_dev() {
+        // Only when nothing was stamped — a stamped value always wins, which is what keeps the
+        // published images from ever claiming `dev`.
+        if std::env::var("LANRURUGI_BUILD_CHANNEL").is_err() {
+            assert_eq!(
+                build_channel(),
+                if cfg!(debug_assertions) {
+                    "dev"
+                } else {
+                    "unknown"
+                }
+            );
+        }
+    }
 
     #[test]
     fn a_deployment_always_names_a_version_and_a_start_time() {

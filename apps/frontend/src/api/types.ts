@@ -209,6 +209,8 @@ export interface VersionCheckResponse {
   details: {
     version: string
     sha: string | null
+    /** Which published artifact this is: `ghcr`, `dockerhub`, `native`, `dev` or `unknown`. */
+    channel: string
   }
   data: {
     isUpstream: boolean

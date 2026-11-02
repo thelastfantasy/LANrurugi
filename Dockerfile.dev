@@ -315,6 +315,13 @@ ENV LANRURUGI_TEMP_DIR=/temp
 # production build — without this every dev instance reports itself as `production` in the tracker,
 # which makes two deployments indistinguishable there (2026-11-01).
 ENV LANRURUGI_ENVIRONMENT=development
+# Same reason as the line above: this stage builds with `--release`, so `cfg!(debug_assertions)`
+# cannot keep the anonymous heartbeat out of a dev container — every restart would report itself as
+# a real installation. The channel makes it identifiable in `/api/version`; the refusal stops it
+# sending at all. Override with `LANRURUGI_NO_TELEMETRY=0` plus `LANRURUGI_TELEMETRY_URL=…` to test
+# the sink end to end from here.
+ENV LANRURUGI_BUILD_CHANNEL=dev
+ENV LANRURUGI_NO_TELEMETRY=1
 ENV LANRURUGI_REDIS_URL=redis://127.0.0.1:16379
 # Explicit, not left to `ort`'s own default `dlopen("libonnxruntime.so")` system-path search — see
 # the ORT-setup comment near this file's CPU/GPU tarball extraction steps for why

@@ -77,6 +77,9 @@ export function VersionDialog({ onClose }: { onClose: () => void }) {
       >
         {row(t("settings.versionDialog.versionLabel"), version)}
         {row(t("settings.versionDialog.commitLabel"), commit)}
+        {payload?.details.channel
+          ? row(t("settings.versionDialog.channelLabel"), payload.details.channel)
+          : null}
         {payload ? row(t("settings.versionDialog.upstreamLabel"), payload.data.isUpstream ? t("settings.versionDialog.yes") : t("settings.versionDialog.no")) : null}
       </div>
 

@@ -1135,6 +1135,7 @@
   "edit.usingAPluginWillSave": "Using a Plugin will save any modifications to archive metadata you might have made !",
   "upload.validUrlLinesCount": "Valid URL lines: {{count}}",
   "Version %1 %2": "Version %1 - %2",
+  "settings.versionDialog.channelLabel": "Install channel",
   "settings.versionDialog.changelogs": "Changelogs {{version}}",
   "settings.versionDialog.checkDisabled": "The update check is disabled on this instance.",
   "settings.versionDialog.checkFailed": "Could not check for updates (GitHub unreachable).",

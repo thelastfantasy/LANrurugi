@@ -53,11 +53,19 @@ pub struct TelemetryIngestArgs {
         default_value_t = DEFAULT_RETENTION_DAYS
     )]
     pub retention_days: u64,
+
+    /// Enables the read side: `GET /stats` (JSON) and `GET /` (a small HTML dashboard), both behind
+    /// `Authorization: Bearer <token>`. Unset — the default — means those routes do not exist at all,
+    /// so the public surface stays write-only.
+    #[arg(long, env = "LANRURUGI_TELEMETRY_STATS_TOKEN")]
+    pub stats_token: Option<String>,
 }
 
 struct Ingest {
     pool: Pool,
     retention_secs: i64,
+    /// `None` disables the read side entirely (both routes 404 rather than 401).
+    stats_token: Option<String>,
     /// Fixed-window per-IP counter. Bounded by clearing wholesale once it grows past `CLEAR_AT`
     /// (dropping the counts only loosens the limit for one window, never blocks anyone).
     hits: Mutex<HashMap<IpAddr, (u32, Instant)>>,
@@ -75,6 +83,10 @@ struct Heartbeat {
     arch: Option<String>,
     #[serde(default)]
     os: Option<String>,
+    /// Which published artifact this is (`ghcr`, `dockerhub`, `native`, `source`). Optional so a
+    /// client from before this field existed is still accepted — old clients keep reporting.
+    #[serde(default)]
+    channel: Option<String>,
 }
 
 impl Heartbeat {
@@ -92,6 +104,16 @@ impl Heartbeat {
                         "os must be a short identifier"
                     });
                 }
+            }
+        }
+        if let Some(channel) = &self.channel {
+            if channel.is_empty()
+                || channel.len() > 16
+                || !channel
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            {
+                return Err("channel must be a short lowercase identifier");
             }
         }
         Ok(())
@@ -138,13 +160,25 @@ fn allowed(app: &Ingest, peer: IpAddr) -> bool {
     entry.0 <= MAX_PER_MINUTE
 }
 
+/// Who to bucket the rate limit by. The direct peer is `cloudflared`/nginx — one address for every
+/// client on earth — so `CF-Connecting-IP` (overwritten by Cloudflare at the edge, never by the
+/// client) is what actually identifies a caller. Falling back to the peer keeps a LAN `curl` from
+/// sharing a bucket with everyone else.
+fn client_ip(headers: &HeaderMap, peer: IpAddr) -> IpAddr {
+    headers
+        .get("cf-connecting-ip")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(peer)
+}
+
 async fn heartbeat(
     State(app): State<Arc<Ingest>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<Heartbeat>,
 ) -> Response {
-    if !allowed(&app, peer.ip()) {
+    if !allowed(&app, client_ip(&headers, peer.ip())) {
         return (StatusCode::TOO_MANY_REQUESTS, "slow down").into_response();
     }
     if let Err(reason) = body.validate() {
@@ -189,17 +223,286 @@ async fn record(
     let _: () = conn.sadd(&version_key, &body.id).await?;
     let _: () = conn.expire(&version_key, ttl).await?;
 
+    // Which artifact the deployment came from. Nearly free (a handful of distinct channels) and
+    // the only way to tell a GHCR pull from a Docker Hub one, since the bytes are identical.
+    if let Some(channel) = &body.channel {
+        let channel_key = format!("LANRURUGI_TELEMETRY:CHAN:{day}:{channel}");
+        let _: () = conn.sadd(&channel_key, &body.id).await?;
+        let _: () = conn.expire(&channel_key, ttl).await?;
+        let _: () = conn
+            .sadd("LANRURUGI_TELEMETRY:VALUES:CHAN", channel)
+            .await?;
+    }
+
+    // The registry of seen values, so the read side never has to `SCAN` (or `KEYS`) the keyspace.
+    // Bounded by construction: one entry per release / channel / country ever seen.
+    let _: () = conn
+        .sadd("LANRURUGI_TELEMETRY:VALUES:VER", &body.version)
+        .await?;
+    let _: () = conn.sadd("LANRURUGI_TELEMETRY:VALUES:GEO", country).await?;
+
     Ok(())
+}
+
+/// One row of a breakdown, in the shape the JSON response serialises.
+#[derive(Debug, Clone, serde::Serialize)]
+struct Entry {
+    name: String,
+    count: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct Stats {
+    generated_at: String,
+    dau: u64,
+    wau: u64,
+    mau: u64,
+    countries: Vec<Entry>,
+    versions: Vec<Entry>,
+    channels: Vec<Entry>,
+}
+
+const WAU_DAYS: i64 = 7;
+const MAU_DAYS: i64 = 30;
+/// Caps each breakdown so one pathological value cannot make the page (or the query) enormous.
+const MAX_ENTRIES: usize = 20;
+
+fn day(offset: i64) -> String {
+    (chrono::Utc::now() - chrono::Duration::days(offset))
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+/// Counts distinct installations across `days` days ending today. `SUNIONSTORE` into a scratch key
+/// is O(total members) — fine for the 30-day window the dashboard asks for, and the reason the
+/// page never aggregates the whole 400-day retention.
+async fn union_count(
+    conn: &mut deadpool_redis::Connection,
+    keys: &[String],
+) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+    if keys.is_empty() {
+        return Ok(0);
+    }
+    let scratch = format!("LANRURUGI_TELEMETRY:SCRATCH:{}", uuid::Uuid::new_v4());
+    let _: () = conn.sunionstore(&scratch, keys).await?;
+    let count: u64 = conn.scard(&scratch).await?;
+    let _: () = conn.del(&scratch).await?;
+    Ok(count)
+}
+
+async fn day_keys(kind: &str, days: i64) -> Vec<String> {
+    (0..days)
+        .map(|offset| format!("LANRURUGI_TELEMETRY:{kind}:{}", day(offset)))
+        .collect()
+}
+
+/// Every value this dimension has ever recorded.
+async fn known_values(
+    conn: &mut deadpool_redis::Connection,
+    dimension: &str,
+) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+    let key = format!("LANRURUGI_TELEMETRY:VALUES:{dimension}");
+    let values: Vec<String> = conn.smembers(&key).await?;
+    Ok(values)
+}
+
+/// One breakdown over the last 30 days: for each known value, how many distinct installations
+/// reported it. `exact` picks between a Set union and a HyperLogLog merge — the country dimension
+/// is HLL by construction, the other two are exact sets.
+async fn breakdown(
+    conn: &mut deadpool_redis::Connection,
+    dimension: &str,
+    exact: bool,
+) -> Result<Vec<Entry>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut entries = Vec::new();
+    for value in known_values(conn, dimension).await? {
+        let keys: Vec<String> = (0..MAU_DAYS)
+            .map(|offset| format!("LANRURUGI_TELEMETRY:{dimension}:{}:{value}", day(offset)))
+            .collect();
+        let count = if exact {
+            union_count(conn, &keys).await?
+        } else {
+            conn.pfcount(keys).await?
+        };
+        if count > 0 {
+            entries.push(Entry { name: value, count });
+        }
+    }
+    entries.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.name.cmp(&b.name)));
+    entries.truncate(MAX_ENTRIES);
+    Ok(entries)
+}
+
+async fn collect(app: &Ingest) -> Result<Stats, Box<dyn std::error::Error + Send + Sync>> {
+    let mut conn = app
+        .pool
+        .get()
+        .await
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+
+    let dau: u64 = conn
+        .scard(format!("LANRURUGI_TELEMETRY:DAY:{}", day(0)))
+        .await?;
+    let wau = union_count(&mut conn, &day_keys("DAY", WAU_DAYS).await).await?;
+    let mau = union_count(&mut conn, &day_keys("DAY", MAU_DAYS).await).await?;
+
+    Ok(Stats {
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        dau,
+        wau,
+        mau,
+        countries: breakdown(&mut conn, "GEO", false).await?,
+        versions: breakdown(&mut conn, "VER", true).await?,
+        channels: breakdown(&mut conn, "CHAN", true).await?,
+    })
+}
+
+/// Bearer token, compared without an early return so a wrong token cannot be found byte by byte.
+/// The length is not secret (a token's length is fixed and public anyway); the contents are.
+fn authorized(app: &Ingest, headers: &HeaderMap) -> bool {
+    let Some(expected) = app.stats_token.as_deref() else {
+        return false;
+    };
+    headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(|token| {
+            let (a, b) = (token.trim().as_bytes(), expected.as_bytes());
+            a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+        })
+        .unwrap_or(false)
+}
+
+fn unauthorized() -> Response {
+    (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
+}
+
+async fn stats_json(State(app): State<Arc<Ingest>>, headers: HeaderMap) -> Response {
+    if !authorized(&app, &headers) {
+        return unauthorized();
+    }
+    match collect(&app).await {
+        Ok(stats) => axum::Json(stats).into_response(),
+        Err(error) => {
+            tracing::warn!(%error, "telemetry-ingest: stats query failed");
+            (StatusCode::SERVICE_UNAVAILABLE, "stats unavailable").into_response()
+        }
+    }
+}
+
+async fn dashboard(State(app): State<Arc<Ingest>>, headers: HeaderMap) -> Response {
+    if !authorized(&app, &headers) {
+        return unauthorized();
+    }
+    match collect(&app).await {
+        Ok(stats) => {
+            let mut response = axum::response::Html(render_html(&stats)).into_response();
+            response.headers_mut().insert(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-store"),
+            );
+            response
+        }
+        Err(error) => {
+            tracing::warn!(%error, "telemetry-ingest: stats query failed");
+            (StatusCode::SERVICE_UNAVAILABLE, "stats unavailable").into_response()
+        }
+    }
 }
 
 async fn healthz() -> &'static str {
     "ok"
 }
 
+/// Deliberately inline: this is one page of static markup, not a frontend worth a build pipeline.
+const PAGE_CSS: &str = "\
+body{font:15px/1.45 system-ui,sans-serif;margin:0 auto;padding:24px;max-width:720px;background:#faf7f0;color:#2a2118}\
+h1{font-size:20px;margin:0 0 4px}\
+.meta{color:#8a7a68;font-size:12px;margin:0 0 24px}\
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 0 28px}\
+.cards div{background:#fff;border:1px solid #e5dccb;border-radius:10px;padding:14px}\
+.cards span{display:block;font-size:12px;letter-spacing:.08em;color:#8a7a68}\
+.cards strong{font-size:28px;font-variant-numeric:tabular-nums}\
+section{margin:0 0 24px}\
+h2{font-size:13px;margin:0 0 8px;color:#6b5d4d;text-transform:uppercase;letter-spacing:.08em}\
+table{width:100%;border-collapse:collapse}\
+td{padding:4px 0;vertical-align:middle}\
+.name{width:32%;font-family:ui-monospace,monospace;font-size:13px}\
+.bar{width:58%}\
+.bar span{display:block;height:8px;background:#b5541f;border-radius:4px;min-width:2px}\
+.count{text-align:right;font-variant-numeric:tabular-nums;width:10%}\
+.empty{color:#8a7a68;font-size:13px}";
+
+fn esc(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn render_table(title: &str, entries: &[Entry]) -> String {
+    if entries.is_empty() {
+        return format!(
+            "<section><h2>{}</h2><p class=\"empty\">no data yet</p></section>",
+            esc(title)
+        );
+    }
+    let max = entries.iter().map(|e| e.count).max().unwrap_or(0).max(1);
+    let rows: String = entries
+        .iter()
+        .map(|entry| {
+            let percent = (entry.count as f64 / max as f64 * 100.0).round() as u32;
+            format!(
+                "<tr><td class=\"name\">{}</td><td class=\"bar\"><span style=\"width:{}%\"></span></td><td class=\"count\">{}</td></tr>",
+                esc(&entry.name),
+                percent,
+                entry.count
+            )
+        })
+        .collect();
+    format!(
+        "<section><h2>{}</h2><table>{rows}</table></section>",
+        esc(title)
+    )
+}
+
+fn render_html(stats: &Stats) -> String {
+    let mut body = String::new();
+    body.push_str(&format!(
+        "<p class=\"meta\">generated {}</p>",
+        esc(&stats.generated_at)
+    ));
+    body.push_str(&format!(
+        "<div class=\"cards\"><div><span>DAU</span><strong>{}</strong></div>\
+         <div><span>WAU</span><strong>{}</strong></div>\
+         <div><span>MAU</span><strong>{}</strong></div></div>",
+        stats.dau, stats.wau, stats.mau
+    ));
+    body.push_str(&render_table("Countries (30d)", &stats.countries));
+    body.push_str(&render_table("Versions (30d)", &stats.versions));
+    body.push_str(&render_table("Channels (30d)", &stats.channels));
+    format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+         <title>LANrurugi installations</title><style>{PAGE_CSS}</style></head>\
+         <body><h1>LANrurugi installations</h1>{body}</body></html>"
+    )
+}
+
 fn router(app: Arc<Ingest>) -> Router {
-    Router::new()
+    let mut router = Router::new()
         .route("/v1/hb", post(heartbeat))
-        .route("/healthz", get(healthz))
+        .route("/healthz", get(healthz));
+    // The read side only exists when a token is configured: an instance that forgets to set one
+    // exposes no reader at all, rather than one that answers 401 and advertises itself.
+    if app.stats_token.is_some() {
+        router = router
+            .route("/", get(dashboard))
+            .route("/stats", get(stats_json));
+    }
+    router
         .fallback(|| async { StatusCode::NOT_FOUND })
         .layer(DefaultBodyLimit::max(MAX_BODY))
         .with_state(app)
@@ -210,6 +513,12 @@ pub async fn run(args: TelemetryIngestArgs) -> anyhow::Result<()> {
     let app = Arc::new(Ingest {
         pool,
         retention_secs: (args.retention_days as i64) * 86_400,
+        stats_token: args
+            .stats_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .map(str::to_string),
         hits: Mutex::new(HashMap::new()),
     });
     let listener = tokio::net::TcpListener::bind(&args.bind).await?;
@@ -232,12 +541,29 @@ mod tests {
             version: "0.2.0".to_string(),
             arch: Some("x86_64".to_string()),
             os: Some("linux".to_string()),
+            channel: Some("ghcr".to_string()),
         }
     }
 
     #[test]
     fn accepts_a_well_formed_heartbeat() {
         assert!(hb().validate().is_ok());
+    }
+
+    #[test]
+    fn a_client_that_predates_the_channel_field_is_still_accepted() {
+        let mut body = hb();
+        body.channel = None;
+        assert!(body.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_odd_channels() {
+        for channel in ["", "GHCR", "a b", "x".repeat(17).as_str(), "ghcr;drop"] {
+            let mut body = hb();
+            body.channel = Some(channel.to_string());
+            assert!(body.validate().is_err(), "{channel:?} must be rejected");
+        }
     }
 
     #[test]
@@ -280,6 +606,7 @@ mod tests {
                 .create_pool(Some(Runtime::Tokio1))
                 .expect("pool builds without connecting"),
             retention_secs: 86_400,
+            stats_token: None,
             hits: Mutex::new(HashMap::new()),
         };
         let ip: IpAddr = "203.0.113.1".parse().unwrap();
@@ -288,5 +615,75 @@ mod tests {
         }
         assert!(!allowed(&app, ip));
         assert!(allowed(&app, "203.0.113.2".parse().unwrap()));
+    }
+
+    #[test]
+    fn rate_limit_buckets_by_the_forwarded_client_not_the_proxy() {
+        let proxy: IpAddr = "172.18.0.5".parse().unwrap();
+        let mut headers = HeaderMap::new();
+        assert_eq!(client_ip(&headers, proxy), proxy);
+
+        headers.insert("cf-connecting-ip", "198.51.100.7".parse().unwrap());
+        let forwarded: IpAddr = "198.51.100.7".parse().unwrap();
+        assert_eq!(client_ip(&headers, proxy), forwarded);
+
+        // A value that is not an address must not turn into one.
+        headers.insert("cf-connecting-ip", "not-an-ip".parse().unwrap());
+        assert_eq!(client_ip(&headers, proxy), proxy);
+    }
+
+    fn app_with_token(token: Option<&str>) -> Ingest {
+        Ingest {
+            pool: Config::from_url("redis://127.0.0.1:6379/0")
+                .create_pool(Some(Runtime::Tokio1))
+                .expect("pool builds without connecting"),
+            retention_secs: 86_400,
+            stats_token: token.map(str::to_string),
+            hits: Mutex::new(HashMap::new()),
+        }
+    }
+
+    #[test]
+    fn the_read_side_needs_the_exact_token() {
+        let app = app_with_token(Some("s3cret"));
+
+        let mut correct = HeaderMap::new();
+        correct.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer s3cret".parse().unwrap(),
+        );
+        assert!(authorized(&app, &correct));
+
+        let mut wrong = HeaderMap::new();
+        wrong.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer s3cres".parse().unwrap(),
+        );
+        assert!(!authorized(&app, &wrong));
+
+        // No token at all, and a token configured nowhere: both refuse.
+        assert!(!authorized(&app, &HeaderMap::new()));
+        assert!(!authorized(&app_with_token(None), &correct));
+    }
+
+    #[test]
+    fn the_dashboard_escapes_every_value_it_renders() {
+        let stats = Stats {
+            generated_at: "2026-11-02T00:00:00Z".to_string(),
+            dau: 1,
+            wau: 2,
+            mau: 3,
+            countries: vec![Entry {
+                name: "<script>alert(1)</script>".to_string(),
+                count: 1,
+            }],
+            versions: Vec::new(),
+            channels: Vec::new(),
+        };
+        let html = render_html(&stats);
+        assert!(html.contains("&lt;script&gt;"));
+        assert!(!html.contains("<script>"));
+        // An empty breakdown says so rather than rendering an empty table.
+        assert!(html.contains("no data yet"));
     }
 }

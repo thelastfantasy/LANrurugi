@@ -5,9 +5,12 @@
 //! exists so the project can answer "how many deployments are out there, in which countries", and
 //! carries nothing about them beyond a random install id, the version and the architecture.
 //!
-//! It is off unless a sink is configured (`--telemetry-url` / `LANRURUGI_TELEMETRY_URL`), so a
-//! build from source never phones home to a project endpoint the builder did not choose. The
-//! country is derived by the sink from the connection itself; no address is ever sent.
+//! **On by default in every release build** ([`DEFAULT_ENDPOINT`]), because the requirement is to
+//! count installations across all packaging channels at once — container and native alike — and
+//! any per-packaging default (a Dockerfile `ENV`, a package script) would cover one channel and
+//! silently miss the rest. A source build that does not want this uses `--no-telemetry`, and a
+//! debug build never sends at all. The country is derived by the sink from the connection itself;
+//! no address is ever sent.
 //!
 //! Startup must never wait on this: the send is a detached task with a short timeout whose result
 //! is discarded.
@@ -25,6 +28,14 @@ const LAST_SENT_KEY: &str = "LANRURUGI_HEARTBEAT_LAST";
 /// Kept a few days past the send it records, purely so a clock-skewed restart still sees it.
 const LAST_SENT_TTL_SECS: u64 = 3 * 86_400;
 
+/// The project's own sink, baked into the source rather than into one packaging.
+///
+/// The requirement is to count *every* installation, not only the container ones — so the default
+/// cannot live in a Dockerfile `ENV` or a packaging script, which would cover one channel each and
+/// silently miss the others. A constant covers every release build from this tree at once: the
+/// image, the native packages, `cargo install`, a distro build.
+const DEFAULT_ENDPOINT: &str = "https://hb.lrrg.dev/v1/hb";
+
 /// Why this build may not send. Both are deploy-time, like `--disable-update-check`.
 #[derive(Debug, Clone, Default)]
 pub struct Options {
@@ -39,10 +50,25 @@ impl Options {
         if self.disabled {
             return None;
         }
-        self.url
+        if let Some(url) = self
+            .url
             .as_deref()
             .map(str::trim)
             .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
+        {
+            return Some(url);
+        }
+        default_endpoint()
+    }
+}
+
+/// `None` in a debug build: `cargo run`, tests and the dev container are not installations, and
+/// their heartbeats would pollute the very numbers this exists to report.
+fn default_endpoint() -> Option<&'static str> {
+    if cfg!(debug_assertions) {
+        None
+    } else {
+        Some(DEFAULT_ENDPOINT)
     }
 }
 
@@ -60,12 +86,29 @@ pub fn spawn(redis: RedisDbs, options: Options) {
     });
 }
 
+/// One startup line so the behaviour is visible in `docker logs` rather than a surprise found in
+/// the README: on by default in the published image, one anonymous request a day, and here is the
+/// switch. Logged by `serve`, which is the only mode that ever sends.
+pub fn log_status(options: &Options) {
+    match options.active() {
+        Some(endpoint) => tracing::info!(
+            %endpoint,
+            "telemetry: one anonymous heartbeat per day (version/arch only) — disable with --no-telemetry"
+        ),
+        None if options.disabled => tracing::info!("telemetry: disabled by --no-telemetry"),
+        None => tracing::debug!("telemetry: no endpoint configured, nothing is sent"),
+    }
+}
+
 pub(crate) fn payload(instance_id: &str) -> serde_json::Value {
     json!({
         "id": instance_id,
         "version": crate::version::current_version(),
         "arch": std::env::consts::ARCH,
         "os": std::env::consts::OS,
+        // Which published artifact this is (`ghcr` / `dockerhub` / `native` / `source`), stamped
+        // in at build time — the only place that information exists at all.
+        "channel": crate::version::build_channel(),
     })
 }
 
@@ -122,7 +165,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn nothing_is_sent_without_a_sink() {
+    fn debug_builds_report_nothing() {
+        // `cargo test` is a debug build — the same path `cargo run` and the dev container take.
+        // Counting them would inflate the very numbers this feature reports.
+        assert!(default_endpoint().is_none());
         assert!(Options::default().active().is_none());
         // A stray empty env var (compose passthrough) must not count as a configured sink.
         let blank = Options {
@@ -130,6 +176,15 @@ mod tests {
             disabled: false,
         };
         assert!(blank.active().is_none());
+    }
+
+    #[test]
+    fn an_explicit_endpoint_reaches_a_debug_build_so_it_can_be_tested_locally() {
+        let options = Options {
+            url: Some("http://127.0.0.1:8099/v1/hb".to_string()),
+            disabled: false,
+        };
+        assert_eq!(options.active(), Some("http://127.0.0.1:8099/v1/hb"));
     }
 
     #[test]
@@ -147,6 +202,6 @@ mod tests {
         let object = value.as_object().expect("object");
         let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
         keys.sort_unstable();
-        assert_eq!(keys, ["arch", "id", "os", "version"]);
+        assert_eq!(keys, ["arch", "channel", "id", "os", "version"]);
     }
 }

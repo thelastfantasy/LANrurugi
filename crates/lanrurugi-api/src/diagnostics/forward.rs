@@ -820,6 +820,7 @@ mod tests {
             os: "linux",
             arch: "x86_64",
             containerized: true,
+            channel: "test",
             process_memory_bytes: Some(64 * 1024 * 1024),
         }
     }
