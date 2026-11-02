@@ -77,6 +77,15 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
+    ignore:
+      # TypeScript 7 is the native-compiler rewrite. `typescript-eslint` refuses to run against it
+      # ("typescript-eslint does not support TS 7.0"; upstream issue #10940 tracks >= 7.1), and this
+      # repository's lint gate runs eslint on every push — so a TS 7 PR can never go green. `tsc -b`
+      # itself only needs `baseUrl` dropped from `tsconfig.app.json` (verified locally: 353 unit
+      # tests pass), so remove this entry once typescript-eslint ships support.
+      - dependency-name: typescript
+        versions:
+          - ">=7.0.0"
 
   # Docker base images — **literal tags only**. One `docker` entry scans every filename containing
   # "dockerfile"/"containerfile" (case-insensitive) in `directory`, not just the literally-named
