@@ -43,6 +43,14 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
+    ignore:
+      # bincode 3.0.0 is published but is not a usable release: its whole `src/lib.rs` is
+      # `compile_error!("https://xkcd.com/2347/")`, so any PR to it can only ever fail to build.
+      # This repository's only direct use of bincode is a test in `lanrurugi-gpu-ipc` that pins
+      # tarpc's framing, so there is nothing to gain by chasing it either.
+      - dependency-name: bincode
+        versions:
+          - ">=3.0.0"
 
   # Whole pnpm workspace — one entry, not one per package.
   #
