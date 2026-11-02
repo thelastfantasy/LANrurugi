@@ -77,7 +77,10 @@ RUN cargo run --release -p lanrurugi-api-docgen -- --output /build/openapi.json
 FROM node:${NODE_VERSION}-slim AS frontend-builder
 ARG PNPM_VERSION
 WORKDIR /build
-RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+# `node:*-slim` stopped bundling `corepack` (unbundled from Node itself in v25), so the old
+# `corepack enable && corepack prepare pnpm@…` failed the whole image build with a bare
+# "corepack: not found" (2026-11-02). npm is still in the image; install pnpm directly.
+RUN npm install -g pnpm@${PNPM_VERSION} --no-fund --no-audit
 COPY pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/frontend ./apps/frontend
 # `docs/package.json` is copied even though this stage never builds the docs: `docs` is a member of
@@ -162,7 +165,8 @@ RUN chmod +x fetch-bubble-seg-model.sh && ./fetch-bubble-seg-model.sh /models/bu
 # and Deno are build-time here, exactly as they are for the frontend stage.
 FROM node:${NODE_VERSION}-slim AS docs-builder
 ARG PNPM_VERSION
-RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+# Same corepack removal as `frontend-builder` above.
+RUN npm install -g pnpm@${PNPM_VERSION} --no-fund --no-audit
 # Deno is needed only for `deno doc`; copied from the pinned `bin` variant image rather than
 # installed (Principle IV — a pinned tag, never an unverified installer).
 COPY --from=deno-bin /deno /usr/local/bin/deno
