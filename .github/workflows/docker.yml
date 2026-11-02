@@ -54,7 +54,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           push: true
           platforms: linux/${{ matrix.arch }}
@@ -82,7 +82,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         if: env.DOCKERHUB_IMAGE != '' && env.HAS_DOCKERHUB_TOKEN == 'true'
         with:
           push: true
