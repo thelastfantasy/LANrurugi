@@ -175,8 +175,8 @@ importers:
         specifier: ^6.1.2
         version: 6.1.2(vite@8.3.5(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
       cldr-annotations-derived-full:
-        specifier: 48.2.0
-        version: 48.2.0
+        specifier: 49.0.0
+        version: 49.0.0
       cldr-annotations-full:
         specifier: 48.2.0
         version: 48.2.0
@@ -2346,8 +2346,8 @@ packages:
     resolution: {integrity: sha512-77PSwercCZU2Fc4sX94eF8k8Pxte6JAwL4/ICZLFjJLqegs7kCuAsqqj/70NQF6TvDpgFjkubQB2FW2ZZddvQg==}
     engines: {node: '>=8'}
 
-  cldr-annotations-derived-full@48.2.0:
-    resolution: {integrity: sha512-log62km+AOzI7n/NEuNNFV0mg9DWnt67EYCh1RwxZq9dyRuyteB586LT83Ke8TchEfnwI9cIk2P31zO4nTvZmw==}
+  cldr-annotations-derived-full@49.0.0:
+    resolution: {integrity: sha512-dao837mPbiEytwUeJSEBs6lE/83mWf6v5fE/9SUMLDttkHMr0M8TPjsixkTeKSHA0u5nDGeoHOBoGzlEHAG7Aw==}
 
   cldr-annotations-full@48.2.0:
     resolution: {integrity: sha512-DV7A+rEcgUSNTRsVGNGqBZRmAkGfwhGHO5Q1dRwzBoBnVrHWp804JP7/QJdEc66iHmx3+zLWVIMCFLm0lW7PUQ==}
@@ -7008,7 +7008,7 @@ snapshots:
 
   ci-info@4.4.0: {}
 
-  cldr-annotations-derived-full@48.2.0: {}
+  cldr-annotations-derived-full@49.0.0: {}
 
   cldr-annotations-full@48.2.0: {}
 
