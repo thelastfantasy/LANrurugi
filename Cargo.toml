@@ -85,7 +85,7 @@ libc = "0.2"
 webpx = { version = "0.4", features = ["animation"] }
 # Pure-Rust JPEG XL decoder (`jxl-rs`, the implementation Chrome/Firefox use). Its animation API
 # is what lets an animated JXL be re-encoded for clients that cannot decode JXL at all.
-jxl = "0.7"
+jxl = "0.8"
 tiff = "0.11"
 # JPEG 2000 via OpenJPEG. The pure-Rust `openjp2` port aborts the process on a null component
 # buffer (an unchecked `from_raw_parts` in `ImageComponent::data()`), so this uses the C library —
