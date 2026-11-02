@@ -34,7 +34,7 @@ sentry-tracing.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-base64 = "0.22"
+base64 = "0.23"
 deadpool-redis.workspace = true
 # `telemetry-ingest`: the payload's id is a UUID, its keys are dated, and the dashboard's session
 # cookie is a keyed hash of its expiry rather than a second secret to keep in sync.
