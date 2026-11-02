@@ -28,7 +28,7 @@ jobs:
       DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
       HAS_DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Get commit sha
         id: sha
@@ -108,7 +108,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Get commit sha
         id: sha

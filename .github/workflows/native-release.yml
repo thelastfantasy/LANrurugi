@@ -26,7 +26,7 @@ jobs:
     name: frontend, docs, plugins
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
         with:
           install: true
@@ -57,7 +57,7 @@ jobs:
             runner: ubuntu-22.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # .mise.toml sets RUSTC_WRAPPER=sccache and .cargo/config.toml links with mold on Linux, so
       # both must be installed alongside the toolchain.
       - uses: jdx/mise-action@v4
@@ -114,7 +114,7 @@ jobs:
       # every dylib the binary does not actually reference.
       RUSTFLAGS: -C link-arg=-Wl,-dead_strip_dylibs
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # sccache because .mise.toml sets RUSTC_WRAPPER=sccache (mold is Linux-only).
       - uses: jdx/mise-action@v4
         with:
@@ -154,7 +154,7 @@ jobs:
     needs: assets
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           name: native-assets
@@ -195,7 +195,7 @@ jobs:
       # (`GET /api/version?since=`), so it is generated here from the commits this tag contains.
       # `fetch-depth: 0` is what the range arithmetic needs — the previous tag and the full log
       # between it and this one are not in a shallow clone.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Generate bilingual release notes

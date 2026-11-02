@@ -49,7 +49,7 @@ jobs:
           - language: actions
             build-mode: none
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # `build-mode: none` still executes `build.rs`, and `lanrurugi-scanner`'s `libarchive2-sys`
       # compiles bundled C from its build script — the same packages CI installs for a real build.

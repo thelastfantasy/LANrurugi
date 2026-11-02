@@ -23,7 +23,7 @@ jobs:
       DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
       HAS_DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Get version
         id: version
@@ -99,7 +99,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Get version
         id: version
