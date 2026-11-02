@@ -12,13 +12,13 @@
     "preview": "astro preview"
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.42.7",
+    "@astrojs/starlight": "^0.42.8",
     "@scalar/api-reference": "^1.76.3",
     "@scalar/starlight": "^0.2.19",
     "astro": "^7.4.4",
     "starlight-llms-txt": "0.12.0"
   },
   "devDependencies": {
-    "swagger-ui-dist": "^5.34.0"
+    "swagger-ui-dist": "^5.34.1"
   }
 }
