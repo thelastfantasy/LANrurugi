@@ -6,6 +6,8 @@
 [![CodeQL](https://github.com/thelastfantasy/LANrurugi/actions/workflows/codeql.yml/badge.svg?branch=dev)](https://github.com/thelastfantasy/LANrurugi/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
+[Homepage](https://lrrg.dev) · [Docs](https://docs.lrrg.dev) · [API](https://api.lrrg.dev) · [Plugin SDK](https://sdk.lrrg.dev)
+
 A self-hosted manga / doujinshi library manager. Rust backend, React frontend, a from-scratch rewrite of
 [LANraragi](https://github.com/Difegue/LANraragi).
 

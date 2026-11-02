@@ -6,6 +6,8 @@
 [![CodeQL](https://github.com/thelastfantasy/LANrurugi/actions/workflows/codeql.yml/badge.svg?branch=dev)](https://github.com/thelastfantasy/LANrurugi/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
+[主页](https://lrrg.dev) · [文档](https://docs.lrrg.dev) · [API 参考](https://api.lrrg.dev) · [插件 SDK](https://sdk.lrrg.dev)
+
 自托管的漫画 / 同人志库管理器。Rust 后端 + React 前端，从零重写 [LANraragi](https://github.com/Difegue/LANraragi)。
 
 ## 与 LANraragi 的关系
