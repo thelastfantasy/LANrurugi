@@ -23,10 +23,9 @@ use image::codecs::gif::GifDecoder;
 use image::imageops::FilterType;
 use image::{AnimationDecoder as _, DynamicImage, ImageBuffer, RgbaImage};
 use jxl::api::{
-    states, JxlColorType, JxlDataFormat, JxlDecoder as JxlApiDecoder, JxlDecoderOptions,
-    JxlOutputBuffer, JxlPixelFormat, ProcessingResult,
+    Event, ExtraChannel, JxlColorType, JxlDataFormat, JxlDecoder, JxlDecoderOptions,
+    JxlOutputBuffer, JxlPixelFormat,
 };
-use jxl::headers::extra_channels::ExtraChannel;
 use lanrurugi_core::concurrency::run_blocking;
 use thiserror::Error;
 use tiff::decoder::{Decoder as TiffDecoder, DecodingResult as TiffDecodingResult};
@@ -744,9 +743,20 @@ fn jxl_animation_info(bytes: &[u8]) -> Option<AnimationInfo> {
 
 fn jxl_basic_info(bytes: &[u8]) -> Option<jxl::api::JxlBasicInfo> {
     let mut input = bytes;
-    let decoder = JxlApiDecoder::<states::Initialized>::new(JxlDecoderOptions::default());
-    let decoder = drive_jxl(decoder.process(&mut input, None), &mut input).ok()?;
-    Some(decoder.basic_info().clone())
+    let mut decoder = JxlDecoder::new(JxlDecoderOptions::default());
+    // jxl 0.8 dropped the typestate machine: `process` reports progress as an `Event` and the
+    // decoder is a single mutable value, so "drive to the state I need" is a loop over events.
+    loop {
+        match decoder.process(&mut input, None, None).ok()? {
+            Event::BasicInfo => return decoder.basic_info().cloned(),
+            Event::NeedMoreInput { .. } | Event::Complete => return None,
+            _ => {}
+        }
+    }
+}
+
+fn jxl_error(error: jxl::error::Error) -> AnimationError {
+    AnimationError::JxlDecode(error.to_string())
 }
 
 /// Streams an animated JPEG XL through the pure-Rust decoder one frame at a time — the decoder
@@ -759,9 +769,20 @@ fn convert_jxl(
     has_alpha: bool,
 ) -> Result<Option<AnimatedWebp>, AnimationError> {
     let mut input = bytes;
-    let decoder = JxlApiDecoder::<states::Initialized>::new(JxlDecoderOptions::default());
-    let mut decoder = drive_jxl(decoder.process(&mut input, None), &mut input)?;
-    let info = decoder.basic_info().clone();
+    let mut decoder = JxlDecoder::new(JxlDecoderOptions::default());
+    loop {
+        match decoder.process(&mut input, None, None).map_err(jxl_error)? {
+            Event::BasicInfo => break,
+            Event::NeedMoreInput { .. } | Event::Complete => {
+                return Err(AnimationError::Invalid("truncated jxl".to_string()))
+            }
+            _ => {}
+        }
+    }
+    let info = decoder
+        .basic_info()
+        .cloned()
+        .ok_or_else(|| AnimationError::Invalid("jxl has no image info".to_string()))?;
     let canvas_width = u32::try_from(info.size.0)
         .map_err(|_| AnimationError::Invalid("jxl canvas is too large".to_string()))?;
     let canvas_height = u32::try_from(info.size.1)
@@ -800,7 +821,29 @@ fn convert_jxl(
     let mut frames_seen = 0usize;
     let mut elapsed_ms = 0i32;
     loop {
-        let frame_decoder = drive_jxl(decoder.process(&mut input, None), &mut input)?;
+        // Advance to this frame's header before allocating its canvas. Assigned on the only path
+        // that reaches the use below.
+        let has_more_frames: bool;
+        loop {
+            match decoder.process(&mut input, None, None).map_err(jxl_error)? {
+                Event::FrameHeader => break,
+                Event::NeedMoreInput { .. } => {
+                    return Err(AnimationError::Invalid("truncated jxl".to_string()))
+                }
+                Event::Complete => {
+                    return finish_jxl(
+                        encoder,
+                        elapsed_ms,
+                        frames_seen,
+                        canvas_width,
+                        canvas_height,
+                        target_width,
+                        target_height,
+                    )
+                }
+                _ => {}
+            }
+        }
         frames_seen += 1;
         if frames_seen > MAX_ANIMATION_FRAMES {
             return Err(AnimationError::Invalid(format!(
@@ -808,9 +851,9 @@ fn convert_jxl(
             )));
         }
         // JXL frame durations are seconds (rational tps); keep timestamps strictly increasing.
-        let duration_ms = frame_decoder
+        let duration_ms = decoder
             .frame_header()
-            .duration
+            .and_then(|header| header.duration)
             .map(|seconds| (seconds * 1000.0).round() as i32)
             .unwrap_or(0)
             .max(1);
@@ -822,19 +865,24 @@ fn convert_jxl(
                 canvas_height as usize,
                 canvas_width as usize * 4,
             );
-            let buffers = std::slice::from_mut(&mut output);
-            let mut result = frame_decoder.process(&mut input, buffers, None);
             loop {
-                match result.map_err(|error| AnimationError::JxlDecode(error.to_string()))? {
-                    ProcessingResult::Complete { result } => {
-                        decoder = result;
+                // Reborrow every round: the buffer must be handed back in unchanged until the
+                // frame completes.
+                let buffers = std::slice::from_mut(&mut output);
+                match decoder
+                    .process(&mut input, Some(buffers), None)
+                    .map_err(jxl_error)?
+                {
+                    Event::FrameComplete {
+                        has_more_frames: more,
+                    } => {
+                        has_more_frames = more;
                         break;
                     }
-                    // Retrying must hand the same output buffer back in, so this step cannot go
-                    // through `drive_jxl`.
-                    ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                        result = fallback.process(&mut input, buffers, None);
+                    Event::NeedMoreInput { .. } => {
+                        return Err(AnimationError::Invalid("truncated jxl".to_string()))
                     }
+                    _ => {}
                 }
             }
         }
@@ -854,11 +902,33 @@ fn convert_jxl(
         added.map_err(|error| AnimationError::WebpEncode(error.to_string()))?;
         elapsed_ms = elapsed_ms.saturating_add(duration_ms);
 
-        if !decoder.has_more_frames() {
+        if !has_more_frames {
             break;
         }
     }
 
+    finish_jxl(
+        encoder,
+        elapsed_ms,
+        frames_seen,
+        canvas_width,
+        canvas_height,
+        target_width,
+        target_height,
+    )
+}
+
+/// Shared tail of the JXL path: a single-frame animation is not worth converting, so it falls back
+/// to the original bytes like every other "not really an animation" case.
+fn finish_jxl(
+    encoder: AnimationEncoder,
+    elapsed_ms: i32,
+    frames_seen: usize,
+    canvas_width: u32,
+    canvas_height: u32,
+    target_width: u32,
+    target_height: u32,
+) -> Result<Option<AnimatedWebp>, AnimationError> {
     if frames_seen < 2 {
         return Ok(None);
     }
@@ -872,50 +942,6 @@ fn convert_jxl(
         width: target_width,
         height: target_height,
     }))
-}
-
-/// Drives one `jxl-rs` state-machine step to completion. Input is already in memory, so "needs more
-/// input" only means the step handed back a fallback decoder to retry with.
-fn drive_jxl<T, F>(
-    result: jxl::error::Result<ProcessingResult<T, F>>,
-    input: &mut &[u8],
-) -> Result<T, AnimationError>
-where
-    F: JxlRetry<T>,
-{
-    let mut result = result;
-    loop {
-        match result.map_err(|error| AnimationError::JxlDecode(error.to_string()))? {
-            ProcessingResult::Complete { result } => return Ok(result),
-            ProcessingResult::NeedsMoreInput { fallback, .. } => {
-                result = fallback.retry(input);
-            }
-        }
-    }
-}
-
-trait JxlRetry<T> {
-    fn retry(self, input: &mut &[u8]) -> jxl::error::Result<ProcessingResult<T, Self>>
-    where
-        Self: Sized;
-}
-
-impl JxlRetry<JxlApiDecoder<states::WithImageInfo>> for JxlApiDecoder<states::Initialized> {
-    fn retry(
-        self,
-        input: &mut &[u8],
-    ) -> jxl::error::Result<ProcessingResult<JxlApiDecoder<states::WithImageInfo>, Self>> {
-        self.process(input, None)
-    }
-}
-
-impl JxlRetry<JxlApiDecoder<states::WithFrameInfo>> for JxlApiDecoder<states::WithImageInfo> {
-    fn retry(
-        self,
-        input: &mut &[u8],
-    ) -> jxl::error::Result<ProcessingResult<JxlApiDecoder<states::WithFrameInfo>, Self>> {
-        self.process(input, None)
-    }
 }
 
 fn resize_frame(frame: &RgbaImage, target_width: u32, target_height: u32) -> Vec<u8> {
