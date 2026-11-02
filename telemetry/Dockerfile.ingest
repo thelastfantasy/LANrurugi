@@ -32,6 +32,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY lanrurugi-server /usr/local/bin/lanrurugi-server
+# The built dashboard (`telemetry/ui/dist`), served by `telemetry-ingest` at `/`.
+COPY ui /usr/local/share/lanrurugi/telemetry
+ENV LANRURUGI_TELEMETRY_UI_DIR=/usr/local/share/lanrurugi/telemetry
 ENV LANRURUGI_BUILD_CHANNEL=unknown
 
 EXPOSE 8099

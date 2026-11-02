@@ -142,15 +142,21 @@ environment:
 
 ## Reporting
 
-With `STATS_TOKEN` set, the sink serves both forms from the same process:
+With `STATS_TOKEN` set, the sink serves a dashboard at `/` and its data at `/stats`. The dashboard
+asks for that token as a password once, then keeps a signed session cookie (HttpOnly, Secure,
+SameSite=Lax, 7 days) — so it works in a browser and still lets a password manager save it.
 
 ```sh
 # JSON — DAU/WAU/MAU plus 30-day breakdowns by country, version and channel
 curl -s https://hb.example.com/stats -H "Authorization: Bearer $STATS_TOKEN" | jq
 
-# HTML dashboard for a phone browser (Bearer token; nginx can add Basic auth on top)
-curl -s https://hb.example.com/ -H "Authorization: Bearer $STATS_TOKEN"
+# daily distinct installations for the chart (1–90 days)
+curl -s "https://hb.example.com/api/series?days=30" -H "Authorization: Bearer $STATS_TOKEN"
 ```
+
+The dashboard itself is `telemetry/ui` (Svelte + Vite). Build it with `npm ci && npm run build`
+there; the image copies `dist/` to `/usr/local/share/lanrurugi/telemetry`
+(`LANRURUGI_TELEMETRY_UI_DIR`). Without that directory the binary still runs — `/` just 404s.
 
 ```
 {
