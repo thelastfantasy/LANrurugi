@@ -214,8 +214,8 @@ importers:
         specifier: ^0.42.8
         version: 0.42.8(astro@7.4.4(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))(typescript@6.0.3)
       '@scalar/api-reference':
-        specifier: ^1.76.3
-        version: 1.76.3(@oxc-project/types@0.155.0)(axios@1.21.0(debug@4.4.3))(lightningcss@1.33.0)(rolldown@1.2.15)(tailwindcss@4.3.3)(typescript@6.0.3)(vite@8.3.5(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))(zod@4.6.7)
+        specifier: ^1.76.4
+        version: 1.76.4(@oxc-project/types@0.155.0)(axios@1.21.0(debug@4.4.3))(lightningcss@1.33.0)(rolldown@1.2.15)(tailwindcss@4.3.3)(typescript@6.0.3)(vite@8.3.5(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))(zod@4.6.7)
       '@scalar/starlight':
         specifier: ^0.2.19
         version: 0.2.19(@astrojs/starlight@0.42.8(astro@7.4.4(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))(typescript@6.0.3))(astro@7.4.4(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
@@ -1456,8 +1456,8 @@ packages:
     resolution: {integrity: sha512-VmMAB9kuY2D7v4E1IQnbo2IsHzSmof0vawfloRlribxlvKcRr5zCmtaRMxfvScuhiiutBE7fZ9nZn+88owWprQ==}
     engines: {node: '>=22'}
 
-  '@scalar/api-reference@1.76.3':
-    resolution: {integrity: sha512-LZCl/yJ1g6712QwW26JBjXYXNTZpF5/6sIq/ueoHyXhMMKOgAxSwDopDbMGE+5frpHV4icwN1Wp9PPt7TtlCfw==}
+  '@scalar/api-reference@1.76.4':
+    resolution: {integrity: sha512-bHSVv494yuNTcBzmfZR3eYhckOTiu3L6IJmvM2kdKzBVmWqm+JhEHbYc7ydsv7FBSs3vTW9sCz00La2dFgWxVg==}
     engines: {node: '>=22'}
 
   '@scalar/astro@0.4.34':
@@ -5813,7 +5813,7 @@ snapshots:
       - typescript
       - universal-cookie
 
-  '@scalar/api-reference@1.76.3(@oxc-project/types@0.155.0)(axios@1.21.0(debug@4.4.3))(lightningcss@1.33.0)(rolldown@1.2.15)(tailwindcss@4.3.3)(typescript@6.0.3)(vite@8.3.5(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))(zod@4.6.7)':
+  '@scalar/api-reference@1.76.4(@oxc-project/types@0.155.0)(axios@1.21.0(debug@4.4.3))(lightningcss@1.33.0)(rolldown@1.2.15)(tailwindcss@4.3.3)(typescript@6.0.3)(vite@8.3.5(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))(zod@4.6.7)':
     dependencies:
       '@headlessui/vue': 1.7.23(vue@3.5.44(typescript@6.0.3))
       '@scalar/agent-chat': 0.12.49(axios@1.21.0(debug@4.4.3))(tailwindcss@4.3.3)(typescript@6.0.3)(zod@4.6.7)
