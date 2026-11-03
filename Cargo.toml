@@ -127,7 +127,7 @@ ab_glyph = "0.2"
 # HarfBuzz's Rust port — shaping (glyph advances/offsets), including vertical (`Direction::
 # TopToBottom`) text runs for CJK compositing. Chosen over hand-rolling vertical-CJK punctuation
 # rules because it already implements the OpenType `vert`/`vrt2` vertical-alternate lookup.
-harfrust = "0.13"
+harfrust = "0.15"
 # Unicode UAX#14 line-breaking (`icu_segmenter`) — CJK text wraps without whitespace, which the
 # prior hand-written `wrap_text`'s `split_whitespace` couldn't do at all.
 icu_segmenter = "2.3"

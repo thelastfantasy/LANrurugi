@@ -2889,15 +2889,15 @@ dependencies = [
 
 [[package]]
 name = "harfrust"
-version = "0.13.3"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "948d0741125ba89cd3e1c23e5642415b6ade7e1d29d67ba25fb925b533e989d6"
+checksum = "865dcc4105d51c323d8fedbb2d75b5e9c8ecddf5613f74c82f851d0afbc97114"
 dependencies = [
  "bitflags",
  "bytemuck",
- "once_cell",
- "read-fonts 0.43.3",
+ "read-fonts 0.46.0",
  "smallvec",
+ "yoke",
 ]
 
 [[package]]
@@ -4595,7 +4595,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "deadpool-redis",
- "harfrust 0.13.3",
+ "harfrust 0.15.0",
  "icu_segmenter",
  "image",
  "lanrurugi-core",
@@ -7228,13 +7228,16 @@ dependencies = [
 
 [[package]]
 name = "read-fonts"
-version = "0.43.3"
+version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "005c8acf251756c478b0bf402885bfd88a1476020c4c7e6060edc1aa68da38ea"
+checksum = "bdaa4fffe9ff3ca2c353fa9729792805b9b3e324695ff5a081f860612e81b330"
 dependencies = [
  "bytemuck",
+ "foldhash",
  "font-types 0.12.7",
  "once_cell",
+ "smallvec",
+ "yoke",
 ]
 
 [[package]]
