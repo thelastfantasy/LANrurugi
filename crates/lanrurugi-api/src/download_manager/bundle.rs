@@ -54,7 +54,7 @@ pub async fn bundle_into_one_archive(
         // WebP), where deflate costs real CPU per page and saves essentially nothing. The
         // tankoubon zip (`tankoubon_zip.rs`) already stores for the same reason. `large_file`
         // lifts the 4 GiB per-entry limit a long multi-page bundle can otherwise hit.
-        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+        let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default()
             .compression_method(zip::CompressionMethod::Stored)
             .large_file(true);
 
@@ -157,7 +157,7 @@ mod tests {
         let mut archive = zip::ZipArchive::new(file).unwrap();
         assert_eq!(archive.len(), 3);
         let mut names: Vec<String> = (0..archive.len())
-            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .map(|i| archive.by_index(i).unwrap().name().unwrap().into_owned())
             .collect();
         names.sort();
         assert_eq!(names, vec!["page000.jpg", "page001.jpg", "page002.jpg"]);

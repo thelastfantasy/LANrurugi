@@ -912,7 +912,7 @@ fn write_zip_entry<W: std::io::Write + std::io::Seek>(
         out_name = format!("{stem}_{crc:08x}.{ext}");
     }
     seen.insert(out_name.clone());
-    let options: zip::write::FileOptions<()> = zip::write::FileOptions::default();
+    let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
     writer
         .start_file(&out_name, options)
         .map_err(|e| e.to_string())?;
