@@ -521,7 +521,7 @@ mod tests {
     fn make_large_test_zip_with_image() -> tempfile::NamedTempFile {
         let file = tempfile::NamedTempFile::with_suffix(".zip").unwrap();
         let mut writer = zip::ZipWriter::new(file.reopen().unwrap());
-        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
         for (name, color) in [("page1.jpg", [255, 0, 0]), ("page2.jpg", [0, 255, 0])] {
             writer.start_file(name, options).unwrap();
             let img = image::RgbImage::from_pixel(900, 1200, image::Rgb(color));
@@ -544,7 +544,7 @@ mod tests {
     fn make_tiny_source_zip() -> (tempfile::NamedTempFile, usize) {
         let file = tempfile::NamedTempFile::with_suffix(".zip").unwrap();
         let mut writer = zip::ZipWriter::new(file.reopen().unwrap());
-        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
         let img = image::RgbImage::from_pixel(200, 300, image::Rgb([12, 34, 56]));
         let mut page = Vec::new();
         let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut page, 30);
@@ -573,7 +573,7 @@ mod tests {
     ) -> tempfile::NamedTempFile {
         let file = tempfile::NamedTempFile::with_suffix(".zip").unwrap();
         let mut writer = zip::ZipWriter::new(file.reopen().unwrap());
-        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
 
         for (name, color) in [(name1, [255, 0, 0]), (name2, [0, 255, 0])] {
             writer.start_file(name, options).unwrap();
@@ -919,7 +919,7 @@ mod tests {
     async fn corrupt_page_bytes_fail_with_a_decode_error() {
         let file = tempfile::NamedTempFile::with_suffix(".zip").unwrap();
         let mut writer = zip::ZipWriter::new(file.reopen().unwrap());
-        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
         writer.start_file("page1.jpg", options).unwrap();
         use std::io::Write;
         writer.write_all(b"not actually a jpeg").unwrap();

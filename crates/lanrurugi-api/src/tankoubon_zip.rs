@@ -227,7 +227,7 @@ mod tests {
         let mut archive = unzip(out);
 
         let names: Vec<String> = (0..archive.len())
-            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .map(|i| archive.by_index(i).unwrap().name().unwrap().into_owned())
             .collect();
         assert_eq!(
             names,
@@ -261,7 +261,10 @@ mod tests {
         let mut archive = unzip(out);
 
         assert_eq!(archive.len(), 2);
-        assert_eq!(archive.by_index(0).unwrap().name(), "01 - Present.zip");
+        assert_eq!(
+            archive.by_index(0).unwrap().name().unwrap(),
+            "01 - Present.zip"
+        );
         let mut note = String::new();
         archive
             .by_name("MISSING.txt")

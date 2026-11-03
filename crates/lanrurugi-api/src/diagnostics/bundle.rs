@@ -515,7 +515,12 @@ pub fn entries(body: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
     let mut out = Vec::with_capacity(archive.len());
     for index in 0..archive.len() {
         let mut file = archive.by_index(index).map_err(|e| e.to_string())?;
-        let name = file.name().to_string();
+        // zip 9 made `name()` fallible (it decodes the entry's name from bytes that may not be
+        // valid UTF-8); a nameless entry is useless to the caller, so surface it as an error.
+        let name = file
+            .name()
+            .map(|name| name.into_owned())
+            .map_err(|e| e.to_string())?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
         out.push((name, bytes));
@@ -647,7 +652,7 @@ mod tests {
         let bytes = archive(&plan(), &selection, &facts, &text, &serde_json::json!({})).unwrap();
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         let names: Vec<String> = (0..zip.len())
-            .map(|i| zip.by_index(i).unwrap().name().to_string())
+            .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
             .collect();
         assert!(names.contains(&"manifest.json".to_string()));
         assert!(names.contains(&"envelopes.ndjson.gz".to_string()));

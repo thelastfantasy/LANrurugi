@@ -85,7 +85,7 @@ fn write_one_archive(path: &Path, index: usize, page_count: usize) -> std::io::R
     let jpeg = page_jpeg_bytes(index);
     let file = std::fs::File::create(path)?;
     let mut writer = zip::ZipWriter::new(file);
-    let options: zip::write::FileOptions<'_, ()> =
+    let options: zip::write::FileOptions<'_, '_, ()> =
         zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
     for page in 0..page_count {

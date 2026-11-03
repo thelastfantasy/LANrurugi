@@ -689,7 +689,7 @@ mod tests {
         let path = dir.join(name);
         let file = std::fs::File::create(&path).unwrap();
         let mut writer = zip::ZipWriter::new(file);
-        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
         use std::io::Write;
         for i in 0..n_pages {
             writer.start_file(format!("page{i}.jpg"), options).unwrap();

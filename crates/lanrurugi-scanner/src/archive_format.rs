@@ -853,7 +853,7 @@ mod tests {
     fn make_test_zip_with_ext(ext: &str, entries: &[&str]) -> tempfile::NamedTempFile {
         let file = tempfile::NamedTempFile::with_suffix(format!(".{ext}")).unwrap();
         let mut writer = zip::ZipWriter::new(file.reopen().unwrap());
-        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
         for name in entries {
             writer.start_file(*name, options).unwrap();
             writer

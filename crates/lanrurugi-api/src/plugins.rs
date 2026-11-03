@@ -1064,7 +1064,7 @@ async fn export_plugin(
     let zip_bytes = tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
         let mut buf = std::io::Cursor::new(Vec::new());
         let mut writer = zip::ZipWriter::new(&mut buf);
-        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
         writer.start_file(ts_name, options)?;
         std::io::Write::write_all(&mut writer, &code)?;
         writer.finish()?;
@@ -1144,7 +1144,7 @@ async fn export_plugins_batch(
     let zip_bytes = tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
         let mut buf = std::io::Cursor::new(Vec::new());
         let mut writer = zip::ZipWriter::new(&mut buf);
-        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
         for (namespace, code) in entries {
             writer.start_file(format!("{namespace}.ts"), options)?;
             std::io::Write::write_all(&mut writer, &code)?;

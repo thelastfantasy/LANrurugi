@@ -39,7 +39,7 @@ fn bench_hashing(c: &mut Criterion) {
 fn make_test_archive_with_image() -> tempfile::NamedTempFile {
     let file = tempfile::NamedTempFile::with_suffix(".zip").unwrap();
     let mut writer = zip::ZipWriter::new(file.reopen().unwrap());
-    let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+    let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
     writer.start_file("page1.jpg", options).unwrap();
 
     let img = image::RgbImage::from_pixel(3000, 4000, image::Rgb([120, 60, 200]));
