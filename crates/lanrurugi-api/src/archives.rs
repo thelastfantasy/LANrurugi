@@ -1737,28 +1737,52 @@ pub(crate) async fn get_archive_thumbnail(
     };
     let page_param = params.page.filter(|page| *page > 0);
     let thumbnail_response = |content_type: &'static str, bytes: bytes::Bytes| {
-        (
-            [
-                (
+        // Every path that produces a thumbnail — disk read, on-demand regeneration, the fallback
+        // placeholder — funnels through here, so a validator hashed from the payload itself stays
+        // correct without threading file metadata through each of them. `no-cache` still forces
+        // revalidation on every navigation, but a matching validator turns that into a bodyless
+        // 304 instead of re-sending the whole image (100 tiles per page adds up).
+        let etag = thumbnail_etag(&bytes);
+        let unchanged = headers
+            .get(header::IF_NONE_MATCH)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value
+                    .split(',')
+                    .any(|candidate| candidate.trim().trim_start_matches("W/") == etag)
+            });
+        let mut response = if unchanged {
+            StatusCode::NOT_MODIFIED.into_response()
+        } else {
+            (
+                [(
                     header::CONTENT_TYPE,
                     header::HeaderValue::from_static(content_type),
-                ),
-                (
-                    header::CACHE_CONTROL,
-                    header::HeaderValue::from_static(THUMB_CACHE),
-                ),
-                (
-                    header::CONTENT_DISPOSITION,
-                    disposition_header(&thumbnail_disposition_for(
-                        &archive_name,
-                        page_param,
-                        content_type,
-                    )),
-                ),
-            ],
-            bytes,
-        )
-            .into_response()
+                )],
+                bytes,
+            )
+                .into_response()
+        };
+        let headers = response.headers_mut();
+        headers.insert(
+            header::CACHE_CONTROL,
+            header::HeaderValue::from_static(THUMB_CACHE),
+        );
+        headers.insert(
+            header::ETAG,
+            header::HeaderValue::from_str(&etag).expect("etag is ASCII"),
+        );
+        if !unchanged {
+            headers.insert(
+                header::CONTENT_DISPOSITION,
+                disposition_header(&thumbnail_disposition_for(
+                    &archive_name,
+                    page_param,
+                    content_type,
+                )),
+            );
+        }
+        response
     };
     let thumb_settings = match state.redis.config.get().await {
         Ok(mut conn) => lanrurugi_scanner::thumbnail::read_settings(&mut conn).await,
@@ -1803,6 +1827,15 @@ pub(crate) async fn get_archive_thumbnail(
 /// straight from a URL path segment — so without the `is_valid_archive_id` check this would join
 /// `..`/absolute segments into `thumb_dir` and `&id[0..2]` would panic on a short or
 /// non-char-boundary string.
+/// A strong validator for one thumbnail payload, quoted per RFC 9110. Truncated to 16 hex digits:
+/// this is a cache key for a user's own screen, not a security boundary, and the whole point is
+/// cheap revalidation on every navigation.
+fn thumbnail_etag(bytes: &[u8]) -> String {
+    let hash = blake3::hash(bytes);
+    let hex = hash.to_hex();
+    format!("\"{}\"", &hex.as_str()[..16])
+}
+
 fn thumbnail_disk_path(
     state: &AppState,
     id: &str,
@@ -4265,6 +4298,23 @@ async fn get_page_thumbnails(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_thumbnail_etag_is_stable_quoted_and_payload_dependent() {
+        let a = thumbnail_etag(b"one thumbnail");
+        assert_eq!(
+            a,
+            thumbnail_etag(b"one thumbnail"),
+            "same bytes, same validator"
+        );
+        assert_ne!(a, thumbnail_etag(b"another thumbnail"));
+        assert!(
+            a.starts_with('"') && a.ends_with('"'),
+            "RFC 9110 wants it quoted: {a}"
+        );
+        // 16 hex digits inside the quotes.
+        assert_eq!(a.len(), 18);
+    }
 
     #[test]
     fn canonical_archive_id_rebuilds_the_digits_and_rejects_anything_else() {
