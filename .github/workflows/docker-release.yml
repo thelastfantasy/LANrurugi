@@ -47,8 +47,10 @@ jobs:
         with:
           push: true
           platforms: linux/${{ matrix.arch }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Registry cache, same rationale as `docker.yml` — the Actions cache's 10 GB budget is
+          # shared with the Rust target cache, which every CI run needs.
+          cache-from: type=registry,ref=ghcr.io/thelastfantasy/lanrurugi:buildcache-release-${{ matrix.arch }}
+          cache-to: type=registry,ref=ghcr.io/thelastfantasy/lanrurugi:buildcache-release-${{ matrix.arch }},mode=max
           provenance: false
           build-args: |
             LANRURUGI_GIT_SHA=${{ steps.sha.outputs.short_sha }}
@@ -77,8 +79,7 @@ jobs:
         with:
           push: true
           platforms: linux/${{ matrix.arch }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=registry,ref=ghcr.io/thelastfantasy/lanrurugi:buildcache-release-${{ matrix.arch }}
           provenance: false
           build-args: |
             LANRURUGI_GIT_SHA=${{ steps.sha.outputs.short_sha }}
