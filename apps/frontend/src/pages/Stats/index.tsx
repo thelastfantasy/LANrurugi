@@ -17,6 +17,7 @@ import { IngestHistory } from "./IngestHistory"
 import { Preferences } from "./Preferences"
 import { ReadingHistory } from "./ReadingHistory"
 import { SizeDistribution } from "./SizeDistribution"
+import { StorageTreemap } from "./StorageTreemap"
 
 // Mirrors legacy stats.html.tt2 + stats.js: `#tagCloud` (jQCloud sphere, bare tag text, no link)
 // stays separate from the `#detailedStats` collapsible's `#tagList` (namespaced+linked entries).
@@ -160,6 +161,7 @@ export function Stats() {
           ) : null}
 
           <SizeDistribution buckets={overview.data.size_buckets} />
+          <StorageTreemap archives={archives.data} />
           <FormatDistribution formats={overview.data.formats} />
           <IngestHistory ingest={overview.data.ingest} />
           <ReadingHistory reading={overview.data.reading} />

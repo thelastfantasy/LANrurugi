@@ -2273,6 +2273,14 @@
   "upload.uploadFailed": "Upload failed",
   "upload.resumingFrom": "The server already has {{size}} — resuming from there",
   "stats.bucketArchivesEmpty": "No archives in this range.",
+  "stats.storageTreemap": "Storage usage",
+  "stats.storageTreemapHint": "Each box is an archive or a group, sized by its file size. Click a group to zoom into it; archives too small to read are folded into “Other”, which opens the same way.",
+  "stats.storageTreemapByArtist": "By artist",
+  "stats.storageTreemapAll": "All",
+  "stats.storageTreemapOther": "Other ({{n}})",
+  "stats.storageTreemapNoArtist": "Unknown artist",
+  "stats.storageTreemapShare": "{{percent}}% of the library",
+  "stats.storageTreemapTotal": "{{n}} archives · {{size}}",
   "library.searchPanelAddFilter": "Add {{token}} to the query",
   "library.searchPanelRemoveFilter": "Remove {{token}} from the query",
   "library.searchPanelValueFilter": "Add a {{token}} filter, then type the value between the quotes",
@@ -2867,5 +2875,10 @@
   "pluginParameters.importCookiesPlaceholder": "Paste the document.cookie string you copied manually from the site (name=value; name2=value2)",
   "pluginParameters.importCookiesApply": "Fill",
   "pluginParameters.importCookiesHint": "Only cookies that match a field below are filled; the rest are discarded. Remember to save afterwards.",
-  "pluginParameters.importCookiesResult": "Filled {{filled}} field(s); ignored {{ignored}} cookie(s)."
+  "pluginParameters.importCookiesResult": "Filled {{filled}} field(s); ignored {{ignored}} cookie(s).",
+  "stats.storageTreemapByFile": "By file",
+  "stats.storageTreemapByCategory": "By category",
+  "stats.storageTreemapNoCategory": "Unknown category",
+  "stats.storageTreemapColorsByArtist": "colours follow the artist",
+  "stats.storageTreemapColorsByCategory": "colours follow the category"
 }
