@@ -2273,6 +2273,14 @@
   "upload.uploadFailed": "上传失败",
   "upload.resumingFrom": "服务器已有 {{size}}，从该处续传",
   "stats.bucketArchivesEmpty": "该区间内没有档案。",
+  "stats.storageTreemap": "存储占用",
+  "stats.storageTreemapHint": "每个方块是一个档案或一个分组，面积就是它占用的空间。点击分组可以放大查看；太小的档案会收进“其他”，点进去同样能展开。",
+  "stats.storageTreemapByArtist": "按作者",
+  "stats.storageTreemapAll": "全部",
+  "stats.storageTreemapOther": "其他（{{n}}）",
+  "stats.storageTreemapNoArtist": "未知作者",
+  "stats.storageTreemapShare": "占全库 {{percent}}%",
+  "stats.storageTreemapTotal": "{{n}} 个档案 · {{size}}",
   "library.searchPanelAddFilter": "把 {{token}} 加入查询",
   "library.searchPanelRemoveFilter": "把 {{token}} 从查询中移除",
   "library.searchPanelValueFilter": "加入 {{token}} 过滤，然后在引号里输入取值",
@@ -2867,5 +2875,10 @@
   "pluginParameters.importCookiesPlaceholder": "粘贴你从站点手动复制的 document.cookie 字符串（name=value; name2=value2）",
   "pluginParameters.importCookiesApply": "填入",
   "pluginParameters.importCookiesHint": "只会填入能对应到下方字段的 cookie，其余丢弃；填完记得点“保存插件设置”。",
-  "pluginParameters.importCookiesResult": "已填入 {{filled}} 项，忽略 {{ignored}} 项。"
+  "pluginParameters.importCookiesResult": "已填入 {{filled}} 项，忽略 {{ignored}} 项。",
+  "stats.storageTreemapByFile": "按文件",
+  "stats.storageTreemapByCategory": "按类型",
+  "stats.storageTreemapNoCategory": "未知类型",
+  "stats.storageTreemapColorsByArtist": "颜色按作者",
+  "stats.storageTreemapColorsByCategory": "颜色按类型"
 }
