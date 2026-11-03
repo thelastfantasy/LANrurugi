@@ -151,7 +151,19 @@ jobs:
         # ever ran at all, hiding whatever those results would have been. `mise run test`
         # (`.mise.toml`'s own `[tasks.test]`) already carries this flag for the exact same reason
         # documented there — this step had drifted out of sync with it.
-        run: cargo test --workspace --no-fail-fast
+        #
+        # PRs run unit tests only. The workspace has 80+ integration-test binaries and linking them
+        # is where this job actually spends its time (a 2026-11-03 timing of the last successful
+        # dev run: 620s in `cargo test`, of which only 175s was test *execution* — the rest was
+        # compiling/linking those binaries). Every push to `dev` still runs the full suite (the
+        # branch trigger above), and `cargo clippy --all-targets` above still compiles/checks every
+        # integration target, so a PR cannot introduce an uncompilable test.
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            cargo test --workspace --no-fail-fast --lib --bins
+          else
+            cargo test --workspace --no-fail-fast
+          fi
 
       - name: sccache stats
         if: always()
