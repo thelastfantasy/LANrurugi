@@ -181,21 +181,51 @@ pub enum CompositeError {
 pub struct FontSet<'a> {
     /// Used when a region names no font, or names one not present here.
     pub fallback: &'a [u8],
-    /// Golden-set id → font file bytes.
+    /// harfrust 0.15 owns its font data (`Font` is an `Arc`), so the parsed face is cached next to
+    /// the bytes instead of being rebuilt for every region — a CJK face is several MB and
+    /// `ResolvedFont::load` runs once per drawn region.
+    hb_fallback: Option<harfrust::Font>,
+    /// Golden-set id → font file bytes (+ that face parsed for shaping).
     pub by_id: Vec<(String, &'a [u8])>,
+    hb_by_id: Vec<(String, harfrust::Font)>,
 }
 
 impl<'a> FontSet<'a> {
     pub fn new(fallback: &'a [u8]) -> Self {
         Self {
             fallback,
+            // `FontBlob` owns its bytes (only `&'static [u8]` converts for free), so this is a
+            // one-off copy per font set — built here rather than per region.
+            hb_fallback: harfrust::Font::new(fallback.to_vec(), 0),
             by_id: Vec::new(),
+            hb_by_id: Vec::new(),
         }
     }
 
+    /// Adds a face. A file harfrust cannot parse is still kept for rasterization; shaping then
+    /// falls back to the default face, matching how a partially-broken font set already behaved.
     pub fn with_font(mut self, id: impl Into<String>, font: &'a [u8]) -> Self {
-        self.by_id.push((id.into(), font));
+        let id = id.into();
+        if let Some(parsed) = harfrust::Font::new(font.to_vec(), 0) {
+            self.hb_by_id.push((id.clone(), parsed));
+        }
+        self.by_id.push((id, font));
         self
+    }
+
+    /// The parsed face for a byte slice this set handed out, if it has one.
+    fn shaper_for(&self, bytes: &'a [u8]) -> Option<&harfrust::Font> {
+        if std::ptr::eq(bytes, self.fallback) {
+            return self.hb_fallback.as_ref();
+        }
+        let index = self
+            .by_id
+            .iter()
+            .position(|(_, known)| std::ptr::eq(*known, bytes))?;
+        self.hb_by_id
+            .iter()
+            .find(|(id, _)| self.by_id.get(index).is_some_and(|(known, _)| known == id))
+            .map(|(_, font)| font)
     }
 
     /// Resolves a region's font bytes, falling back rather than failing — a missing font must
@@ -213,12 +243,11 @@ impl<'a> FontSet<'a> {
 /// because every call site that resolves one needs the other.
 struct ResolvedFont<'a> {
     raster: FontRef<'a>,
-    shaper_data: harfrust::ShaperData,
-    hb_font: harfrust::FontRef<'a>,
+    hb_font: harfrust::Font,
 }
 
 impl<'a> ResolvedFont<'a> {
-    fn load(bytes: &'a [u8]) -> Option<Self> {
+    fn load(bytes: &'a [u8], shaped: Option<&harfrust::Font>) -> Option<Self> {
         let raster = FontRef::try_from_slice(bytes).ok()?;
         // `from_index(_, 0)` rather than `FontRef::new` — this project's bundled CJK faces are
         // `.ttc` collections (e.g. Noto Sans/Serif CJK), and `harfrust::FontRef::new` only accepts
@@ -226,20 +255,19 @@ impl<'a> ResolvedFont<'a> {
         // face in a collection (matching `ab_glyph`'s own default). Confirmed live: using `new`
         // here made every region's `ResolvedFont::load` silently fail on this container's actual
         // fonts, so nothing was ever drawn despite the page reporting a successful composite.
-        let hb_font = harfrust::FontRef::from_index(bytes, 0).ok()?;
-        let shaper_data = harfrust::ShaperData::new(&hb_font);
-        Some(Self {
-            raster,
-            shaper_data,
-            hb_font,
-        })
+        let hb_font = match shaped {
+            Some(font) => font.clone(),
+            None => harfrust::Font::new(bytes.to_vec(), 0)?,
+        };
+        Some(Self { raster, hb_font })
     }
 
-    fn shaper(&self) -> harfrust::Shaper<'_> {
-        self.shaper_data
-            .shaper(&self.hb_font)
-            .instance(None)
-            .build()
+    /// harfrust 0.15 replaced the `ShaperData`/`Shaper` pair with a borrowed `ShaperFont` that is
+    /// created per shaping call, so this shapes into `buffer` in place rather than returning a
+    /// reusable shaper.
+    fn shape(&self, buffer: &mut harfrust::Buffer) -> Result<(), harfrust::ShapeError> {
+        let font = harfrust::ShaperFont::new(&self.hb_font);
+        harfrust::shape(&font, buffer, harfrust::ShapeOptions::new())
     }
 }
 
@@ -694,7 +722,8 @@ pub fn finish_composite_page(
             sampled_fg.or(region.fg_color).unwrap_or(DEFAULT_FG),
         );
         let bold = region.is_bold.unwrap_or(false);
-        let Some(font) = ResolvedFont::load(fonts.resolve(region.font.as_deref())) else {
+        let font_bytes = fonts.resolve(region.font.as_deref());
+        let Some(font) = ResolvedFont::load(font_bytes, fonts.shaper_for(font_bytes)) else {
             continue;
         };
 
@@ -2767,7 +2796,7 @@ fn shape_line(
 
     let scale = font_px / units_per_em;
 
-    let mut buffer = harfrust::UnicodeBuffer::new();
+    let mut buffer = harfrust::Buffer::new();
     buffer.push_str(text);
     buffer.guess_segment_properties();
     buffer.set_direction(direction);
@@ -2784,16 +2813,22 @@ fn shape_line(
     );
     if is_vertical_direction {
         if let Some(han) = harfrust::Script::from_iso15924_tag(harfrust::Tag::new(b"Hani")) {
-            buffer.set_script(han);
+            buffer.set_script(Some(han));
         }
     }
 
-    let shaper = font.shaper();
-    let output = shaper.shape(buffer, harfrust::ShapeOptions::new());
+    // 0.15's `shape` reports failures instead of returning an output; a font it refuses to shape
+    // is exactly the "nothing to draw" case this function already represents.
+    if font.shape(&mut buffer).is_err() {
+        return ShapedLine {
+            glyphs: Vec::new(),
+            advance: 0.0,
+        };
+    }
 
-    let mut glyphs = Vec::with_capacity(output.glyph_infos().len());
+    let mut glyphs = Vec::with_capacity(buffer.glyph_infos().len());
     let mut advance = 0.0;
-    for (info, pos) in output.glyph_infos().iter().zip(output.glyph_positions()) {
+    for (info, pos) in buffer.glyph_infos().iter().zip(buffer.glyph_positions()) {
         let x_advance = pos.x_advance as f32 * scale;
         // HarfBuzz's font-unit space has +y pointing up (mathematical convention) regardless of
         // direction, so a `TopToBottom` run's pen genuinely moves in -y as it advances down the
@@ -3229,7 +3264,7 @@ mod tests {
             return;
         };
         let fonts = FontSet::new(bytes);
-        let font = ResolvedFont::load(fonts.resolve(None)).unwrap();
+        let font = ResolvedFont::load(fonts.resolve(None), None).unwrap();
 
         // The real reported region: OCR bbox 93x199 grown by `LAYOUT_OVERFLOW_FRACTION` to
         // width 121, with the height clamped back to the original 199 (`composite_page`'s own
@@ -3253,7 +3288,7 @@ mod tests {
             return;
         };
         let fonts = FontSet::new(bytes);
-        let font = ResolvedFont::load(fonts.resolve(None)).unwrap();
+        let font = ResolvedFont::load(fonts.resolve(None), None).unwrap();
 
         let long = "不过刚才他好像说了奥尔玛这个名字对吧";
         assert!(long.chars().count() > SHORT_VERTICAL_MAX_CHARS);
@@ -3603,7 +3638,7 @@ mod tests {
         let Some(bytes) = load_test_font() else {
             return;
         };
-        let font = ResolvedFont::load(bytes).unwrap();
+        let font = ResolvedFont::load(bytes, None).unwrap();
         let upem = font.raster.units_per_em().unwrap_or(1000.0);
 
         let lines = wrap_text(
@@ -3624,7 +3659,7 @@ mod tests {
         let Some(bytes) = load_test_font() else {
             return;
         };
-        let font = ResolvedFont::load(bytes).unwrap();
+        let font = ResolvedFont::load(bytes, None).unwrap();
         let upem = font.raster.units_per_em().unwrap_or(1000.0);
 
         let lines = wrap_text(
@@ -3644,7 +3679,7 @@ mod tests {
         let Some(bytes) = load_test_font() else {
             return;
         };
-        let font = ResolvedFont::load(bytes).unwrap();
+        let font = ResolvedFont::load(bytes, None).unwrap();
         let upem = font.raster.units_per_em().unwrap_or(1000.0);
 
         let lines = wrap_text(
@@ -3668,8 +3703,8 @@ mod tests {
         let fonts = FontSet::new(bytes);
 
         // An unknown font id must still resolve to something drawable.
-        assert!(ResolvedFont::load(fonts.resolve(Some("no-such-font"))).is_some());
-        assert!(ResolvedFont::load(fonts.resolve(None)).is_some());
+        assert!(ResolvedFont::load(fonts.resolve(Some("no-such-font")), None).is_some());
+        assert!(ResolvedFont::load(fonts.resolve(None), None).is_some());
     }
 
     #[test]
@@ -3966,7 +4001,7 @@ mod tests {
             return;
         };
         let fonts = FontSet::new(bytes);
-        let font = ResolvedFont::load(fonts.resolve(None)).unwrap();
+        let font = ResolvedFont::load(fonts.resolve(None), None).unwrap();
         let upem = font.raster.units_per_em().unwrap_or(1000.0);
         let shape = ellipse_shape(80);
 
