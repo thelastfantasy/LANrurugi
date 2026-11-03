@@ -700,6 +700,7 @@ const FILTERABLE_CANDIDATE_FIELDS = [
   "category",
   "uploader",
   "pages",
+  "size",
 ];
 
 async function introspectPlugin(_mod: Record<string, unknown>) {

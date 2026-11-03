@@ -40,6 +40,8 @@ const FIELD_KINDS: Record<string, FieldKind> = {
   posted_at: "date",
   rating: "number",
   pages: "number",
+  // Bytes on the wire, entered in MB (see `SizeInput`).
+  size: "number",
   title: "text",
   category: "text",
   uploader: "text",
@@ -99,6 +101,43 @@ function defaultRule(fields: string[]): Condition {
   const field = fields[0] ?? "title"
   const kind = kindOf(field)
   return { kind: "rule", field, operator: defaultOperatorFor(kind), value: defaultValueFor(kind) }
+}
+
+/** Bytes in a MiB. E-Hentai prints a gallery's size this way and calls the unit "MB" (a 140,969,895
+ *  byte gallery reads "134.4 MB" on the site), so the form matches what the user just looked at
+ *  instead of introducing a second, slightly different "MB". */
+const BYTES_PER_MIB = 1024 * 1024
+
+/** A `size` rule: typed in MB, stored in bytes.
+ *
+ * Stored in bytes because that is what a source reports, and converting only at the edge keeps the
+ * host's comparison exact and independent of whatever unit this form happens to display. Two decimals
+ * is enough for a rule ("not bigger than 150.5 MB") and keeps a binary fraction from being echoed back
+ * into the box as `134.40000000000002`. */
+function SizeInput({ bytes, onChange }: { bytes: number; onChange: (bytes: number) => void }) {
+  // Own draft, like the plain number field: an emptied box is a legitimate mid-edit state, and
+  // deriving the input from the stored value would snap it back on the next keystroke.
+  const [draft, setDraft] = useState<number | "">(
+    bytes > 0 ? Math.round((bytes / BYTES_PER_MIB) * 100) / 100 : "",
+  )
+  return (
+    <div className="rule-value-with-unit">
+      <NullableNumberInput
+        className="stdinput"
+        style={{ width: 90 }}
+        step={1}
+        min={0}
+        value={draft}
+        onValueChange={(v) => {
+          setDraft(v)
+          onChange(v === "" ? 0 : Math.round(v * BYTES_PER_MIB))
+        }}
+      />
+      {/* A unit symbol, not prose: the same three letters in every language this UI ships, spelled
+          out literally the way `formatBytes` already does. */}
+      <span className="rule-unit">MB</span>
+    </div>
+  )
 }
 
 /** One row: a single comparison. */
@@ -179,18 +218,29 @@ function RuleRow({
           ))}
         </select>
       ) : kind === "number" ? (
-        // A draft, so clearing the box mid-edit does not slam the rule's value to 0 and fight the
-        // typist; committing a blank still writes 0, which is what this field always did.
-        <NullableNumberInput
-          className="stdinput"
-          style={{ width: 90 }}
-          step={0.1}
-          value={numberDraft}
-          onValueChange={(v) => {
-            setNumberDraft(v);
-            onChange({ ...rule, value: Number(v) || 0 });
-          }}
-        />
+        rule.field === "size" ? (
+          // `key` so switching to/from this field starts the MB box from the rule's own value: the
+          // stored unit differs from the displayed one, and a draft carried over from a rating rule
+          // would show a number the rule does not hold.
+          <SizeInput
+            key={rule.field}
+            bytes={typeof rule.value === "number" ? rule.value : 0}
+            onChange={(bytes) => onChange({ ...rule, value: bytes })}
+          />
+        ) : (
+          // A draft, so clearing the box mid-edit does not slam the rule's value to 0 and fight the
+          // typist; committing a blank still writes 0, which is what this field always did.
+          <NullableNumberInput
+            className="stdinput"
+            style={{ width: 90 }}
+            step={0.1}
+            value={numberDraft}
+            onValueChange={(v) => {
+              setNumberDraft(v);
+              onChange({ ...rule, value: Number(v) || 0 });
+            }}
+          />
+        )
       ) : (
         rule.field === "tags" ? (
           // The same tag input used for archive metadata, so completion works the same way wherever

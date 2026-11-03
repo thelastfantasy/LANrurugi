@@ -17,7 +17,7 @@ vi.mock("@/api/hooks", async (importOriginal) => ({
 // real English strings rather than the raw keys — the queries below match on those. Other suites in
 // this directory see the opposite, hence the differing convention.
 
-const FIELDS = ["title", "posted_at", "rating", "tags", "pages"]
+const FIELDS = ["title", "posted_at", "rating", "tags", "pages", "size"]
 
 /** Drives the editor the way the settings form does: it owns the condition and feeds it back. */
 function Harness({ initial }: { initial?: Condition }) {
@@ -113,6 +113,43 @@ describe("FieldRuleEditor", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Add condition" }))
     expect(screen.getByRole("combobox", { name: "How these conditions combine" })).toBeTruthy()
+  })
+
+  /// `size` is stored in bytes (what a source reports) but typed in MB — the unit e-hentai itself
+  /// prints. Both directions matter: a value written by someone else must come back readable, and a
+  /// typed one must reach the host exactly.
+  it("takes a size rule in MB and stores it in bytes", () => {
+    const mib = 1024 * 1024
+    render(
+      <Harness
+        initial={{
+          kind: "all",
+          children: [{ kind: "rule", field: "size", operator: "lte", value: 0 }],
+        }}
+      />,
+    )
+
+    const box = screen.getByRole("spinbutton") as HTMLInputElement
+    // An unset size is an empty box, not a 0 that would mean "must be empty".
+    expect(box.value).toBe("")
+    // The unit is a label beside the box, not a placeholder that disappears once a number is typed.
+    expect(screen.getByText("MB")).toBeTruthy()
+
+    fireEvent.change(box, { target: { value: "150" } })
+    const stored = state() as { children: { value: number }[] }
+    expect(stored.children[0].value).toBe(150 * mib)
+  })
+
+  it("renders a stored size in MB", () => {
+    render(
+      <Harness
+        initial={{
+          kind: "all",
+          children: [{ kind: "rule", field: "size", operator: "lte", value: 150 * 1024 * 1024 }],
+        }}
+      />,
+    )
+    expect((screen.getByRole("spinbutton") as HTMLInputElement).value).toBe("150")
   })
 
   it("inverts a rule into an exclusion and back", () => {

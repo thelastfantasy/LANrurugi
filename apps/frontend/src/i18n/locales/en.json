@@ -1932,6 +1932,7 @@
   "subscriptions.field.category": "Category",
   "subscriptions.field.uploader": "Uploader",
   "subscriptions.field.pages": "Pages",
+  "subscriptions.field.size": "Size",
   "subscriptions.operator.gte": "at least",
   "subscriptions.operator.lte": "at most",
   "subscriptions.operator.eq": "exactly",

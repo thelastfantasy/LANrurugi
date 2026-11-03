@@ -165,7 +165,7 @@ export function Plugins() {
           <CollapsibleSection id="maintenance-scripts" icon="fa-scroll" title={t("plugins.maintenanceScripts")}>
               <p>{t("plugins.librarywideMaintenanceScriptsOperateOn")}</p>
 
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "4px 0" }}>
+              <div className="plugin-script-row">
                 <span>
                   <b>{t("plugins.subfoldersToCategories")}</b>
                   <br />
@@ -180,7 +180,7 @@ export function Plugins() {
                 />
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "4px 0" }}>
+              <div className="plugin-script-row">
                 <span>
                   <b>{t("plugins.subfoldersToTankoubons")}</b>
                   <br />
@@ -195,7 +195,7 @@ export function Plugins() {
                 />
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "4px 0" }}>
+              <div className="plugin-script-row">
                 <span>
                   <b>{t("plugins.repairMojibakeNames")}</b>
                   <br />
@@ -261,7 +261,7 @@ export function Plugins() {
 
       {/* flex instead of text-align: center — a span and an input[type=button] baseline-align
           differently inline, offsetting the buttons. */}
-      <h1 style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8 }}>
+      <h1 className="plugin-actions" style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8 }}>
         <span className="stdbtn fileinput-button" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
           <span style={{ fontWeight: "normal" }}>{t("plugins.uploadPlugin")}</span>
           <input

@@ -467,6 +467,10 @@ export interface DiscoveredCandidate {
   uploader?: string;
   /** Length, so the host can show and filter on download cost before anything is spent. */
   pages?: number;
+  /** Whole-gallery size in **bytes** (an archive's total, not one page's), so a rule can turn down
+   *  a work that is simply too large before any of it is fetched. Absent when the source does not
+   *  report it — a `size` rule then reads as "not yet known" rather than as a rejection. */
+  size?: number;
 }
 
 /** `discover`'s return shape.

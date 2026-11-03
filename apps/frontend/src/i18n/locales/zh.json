@@ -1989,6 +1989,7 @@
   "subscriptions.field.category": "分类",
   "subscriptions.field.uploader": "上传者",
   "subscriptions.field.pages": "页数",
+  "subscriptions.field.size": "大小",
   "subscriptions.operator.gte": "不低于",
   "subscriptions.operator.lte": "不高于",
   "subscriptions.operator.eq": "等于",

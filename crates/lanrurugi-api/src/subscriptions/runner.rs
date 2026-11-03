@@ -1049,6 +1049,7 @@ mod tests {
             category: None,
             uploader: None,
             pages: None,
+            size: None,
         }
     }
 
