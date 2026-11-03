@@ -2826,12 +2826,15 @@ pub(crate) async fn start_download(
                                 // finished job is dropped when the process restarts, and "how big
                                 // was this" is exactly what a finished row still has to answer.
                                 if let Some(job) = jobs.get(&job_id_for_task).await {
-                                    let size = job.total_bytes.or(job.downloaded_bytes);
-                                    if let Some(size) = size {
+                                    if let Some(size) = job.total_bytes.or(job.downloaded_bytes) {
                                         item.file_size = Some(size);
-                                        if let Err(e) = repo.update(&item).await {
-                                            tracing::warn!(item_id, error = %e, "failed to persist completed download size");
-                                        }
+                                    }
+                                    // The rate lives on the in-memory job; persist it here so the
+                                    // completed row can still report how fast it ran after the
+                                    // job is gone (a restart drops the whole registry).
+                                    item.average_bytes_per_sec = job.average_bytes_per_sec;
+                                    if let Err(e) = repo.update(&item).await {
+                                        tracing::warn!(item_id, error = %e, "failed to persist completed download size");
                                     }
                                 }
                             }
@@ -2876,19 +2879,39 @@ pub(crate) async fn start_download(
                     // transient mutation state) instead of `Error` (which `jobs.fail` + a stored
                     // `QueueError` would otherwise imply this was a real failure).
                     Err(_) if cancel_for_task.is_cancelled() => {
+                        // Pause and Stop cancel the same token; the pause handler writes `Paused`
+                        // before cancelling, so which state to keep is read back here rather than
+                        // guessed. Overwriting a paused item with `Cancelled` would lose the
+                        // "resume me" state the row renders.
+                        let mut paused = false;
                         if let Some((repo, item_id)) = &queue_link {
-                            update_queue_item_state(
-                                repo,
-                                state_for_task.download_queue_tx.as_ref(),
-                                item_id,
-                                lanrurugi_storage::download_queue::DownloadQueueState::Cancelled,
-                                None,
-                                None,
-                                None,
-                            )
-                            .await;
+                            paused = repo
+                                .get(item_id)
+                                .await
+                                .ok()
+                                .flatten()
+                                .is_some_and(|item| {
+                                    item.state
+                                        == lanrurugi_storage::download_queue::DownloadQueueState::Paused
+                                });
+                            if !paused {
+                                update_queue_item_state(
+                                    repo,
+                                    state_for_task.download_queue_tx.as_ref(),
+                                    item_id,
+                                    lanrurugi_storage::download_queue::DownloadQueueState::Cancelled,
+                                    None,
+                                    None,
+                                    None,
+                                )
+                                .await;
+                            }
                         }
-                        jobs.fail(&job_id_for_task, "cancelled".to_string()).await
+                        jobs.fail(
+                            &job_id_for_task,
+                            if paused { "paused" } else { "cancelled" }.to_string(),
+                        )
+                        .await
                     }
                     Err(e) => {
                         if let Some((repo, item_id)) = &queue_link {

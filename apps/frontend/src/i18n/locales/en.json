@@ -1181,6 +1181,7 @@
   "logs.youCanCheckLanrurugiLogs": "You can check LANrurugi logs here for debugging purposes.",
   "categories.youCanCreateNewCategories": "You can create new categories here or edit existing ones.",
   "upload.waiting": "Waiting…",
+  "upload.waitingForServer": "Waiting for the download server…",
   "upload.youCanDownloadFilesFrom": "You can download files from remote URLs directly into LANrurugi from here.",
   "upload.youCanDragAndDrop": "You can drag and drop files into this window, or click the upload button.",
   "You can edit your Tag Rules in Server Configuration.": "You can edit your Tag Rules in Server Configuration.",
@@ -2855,5 +2856,9 @@
   "activity.actionType.tankoubon.recycle": "Tankoubon moved to recycle bin",
   "activity.actionType.tankoubon.restore": "Tankoubon restored from recycle bin",
   "activity.actionType.tankoubon.purge": "Tankoubon permanently deleted",
-  "components.layout.truncatedDownloadExpectedBytes": "Download incomplete: expected {{expected}} bytes, got {{got}}."
+  "components.layout.truncatedDownloadExpectedBytes": "Download incomplete: expected {{expected}} bytes, got {{got}}.",
+  "upload.pause": "Pause",
+  "upload.paused": "Paused",
+  "upload.resume": "Resume",
+  "activity.actionType.download_queue.pause": "Pause Download"
 }

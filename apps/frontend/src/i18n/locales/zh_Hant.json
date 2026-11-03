@@ -666,6 +666,7 @@
   "logs.youCanCheckLanrurugiLogs": "您可以在此檢視 LANrurugi 的日誌以進行除錯。",
   "categories.youCanCreateNewCategories": "您可在此建立新分類或編輯現有分類。",
   "upload.waiting": "Waiting…",
+  "upload.waitingForServer": "等待下載伺服器回應…",
   "upload.youCanDownloadFilesFrom": "您可以在此處直接從遠端 URL 下載檔案至 LANrurugi。",
   "upload.youCanDragAndDrop": "您可以將檔案拖曳進此視窗，或點擊上傳按鈕。",
   "You can edit your Tag Rules in Server Configuration.": "您可以在伺服器設定中編輯標籤規則。",
@@ -960,5 +961,9 @@
   "translation.masterSwitchHint": "預設關閉。開啟後閱讀器才會顯示翻譯按鈕；這是實驗功能，辨識與排版品質仍在改進。",
   "diagnostics.feedback.name": "稱呼",
   "diagnostics.feedback.email": "電子郵件(必填)",
-  "diagnostics.feedback.failed": "傳送失敗,請稍後再試。"
+  "diagnostics.feedback.failed": "傳送失敗,請稍後再試。",
+  "upload.pause": "暫停",
+  "upload.paused": "已暫停",
+  "upload.resume": "繼續",
+  "activity.actionType.download_queue.pause": "暫停下載"
 }

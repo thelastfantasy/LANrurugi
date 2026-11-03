@@ -61,6 +61,7 @@
   "components.layout.downloadWasInterruptedByA": "Download was interrupted by a server restart — retrying will attempt to resume from where it left off",
   "components.layout.aNewerRevisionIsAlreadyInLibrary": "A newer revision of this gallery is already in your library:",
   "upload.waiting": "Waiting…",
+  "upload.waitingForServer": "Waiting for the download server…",
   "settings.importLegacyConflictModeLabel": "If an archive already exists here:",
   "settings.importLegacyConflictModeOverwrite": "Overwrite with the other library's metadata",
   "settings.importLegacyConflictModeMerge": "Merge tags, keep this library's title/summary",
@@ -289,5 +290,9 @@
   "subscriptions.headers": "হেডাৰ",
   "subscriptions.credentialsHint": "এই চন্দাৰ পৰীক্ষাৰ সৈতে পঠিওৱা হয়। প্লাগিনৰ দৰে ই নিজে সতেজ নহয় — ম্যাদ উকলিলে পৰীক্ষাই নিঃশব্দে কম দেখিব।",
   "subscriptions.settling": "অপেক্ষাত — সাঁচি থোৱাৰ পিছত অলপ পলম কৰি প্ৰথম পৰীক্ষা চলিব",
-  "subscriptions.enableLabel": "সক্ৰিয়"
+  "subscriptions.enableLabel": "সক্ৰিয়",
+  "upload.pause": "Pause",
+  "upload.paused": "Paused",
+  "upload.resume": "Resume",
+  "activity.actionType.download_queue.pause": "Pause Download"
 }

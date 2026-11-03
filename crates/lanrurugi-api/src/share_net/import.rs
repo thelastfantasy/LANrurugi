@@ -1190,8 +1190,23 @@ pub async fn start(state: &AppState, queue_item_id: &str, import_id: ShareImport
                     .await;
             }
             Err(message) if cancel.is_cancelled() && message.is_empty() => {
-                set_queue_state(&state, &queue_item_id, DownloadQueueState::Cancelled, None).await;
-                state.jobs.fail(&job, "stopped").await;
+                // Pause and Stop cancel the same token; a pause already wrote `Paused`, which the
+                // retry/Start path can resume. Overwriting it with `Cancelled` would lose that.
+                let paused = state
+                    .download_queue
+                    .get(&queue_item_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some_and(|item| item.state == DownloadQueueState::Paused);
+                if !paused {
+                    set_queue_state(&state, &queue_item_id, DownloadQueueState::Cancelled, None)
+                        .await;
+                }
+                state
+                    .jobs
+                    .fail(&job, if paused { "paused" } else { "stopped" })
+                    .await;
             }
             Err(message) => {
                 set_queue_state(

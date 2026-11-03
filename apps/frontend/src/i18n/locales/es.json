@@ -476,6 +476,7 @@
   "components.layout.downloadWasInterruptedByA": "Download was interrupted by a server restart — retrying will attempt to resume from where it left off",
   "components.layout.aNewerRevisionIsAlreadyInLibrary": "A newer revision of this gallery is already in your library:",
   "upload.waiting": "Waiting…",
+  "upload.waitingForServer": "Waiting for the download server…",
   "settings.importLegacyConflictModeLabel": "If an archive already exists here:",
   "settings.importLegacyConflictModeOverwrite": "Overwrite with the other library's metadata",
   "settings.importLegacyConflictModeMerge": "Merge tags, keep this library's title/summary",
@@ -704,5 +705,9 @@
   "subscriptions.headers": "Cabeceras",
   "subscriptions.credentialsHint": "Se envían con las comprobaciones de esta suscripción. A diferencia de un plugin, no se renuevan: al caducar, las comprobaciones ven menos sin avisar.",
   "subscriptions.settling": "esperando — la primera comprobación aguarda un momento tras guardar",
-  "subscriptions.enableLabel": "Activada"
+  "subscriptions.enableLabel": "Activada",
+  "upload.pause": "Pause",
+  "upload.paused": "Paused",
+  "upload.resume": "Resume",
+  "activity.actionType.download_queue.pause": "Pause Download"
 }

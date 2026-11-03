@@ -39,6 +39,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/download_queue/{id}/start", post(start_queue_item))
         .route("/download_queue/{id}/stop", post(stop_queue_item))
+        .route("/download_queue/{id}/pause", post(pause_queue_item))
         .route("/download_queue/{id}/overwrite", post(overwrite_queue_item))
         .route("/download_queue/{id}/rename", post(rename_queue_item))
         .route("/download_queue/{id}/compare", post(compare_queue_item))
@@ -1162,7 +1163,9 @@ async fn start_one(
     // `metadata_preview_at` too, not just `title`/`metadata_preview`, matters just as much: that
     // field alone drives `ensure_metadata_cached`'s own independent 10-minute TTL cache-hit
     // check, which would otherwise return the stale cached value even after `title` was cleared.
-    if item.state != DownloadQueueState::Queued {
+    // `Paused` is deliberately exempt: resuming a paused download must keep the title/metadata the
+    // paused row was showing, not blank them and re-fetch.
+    if item.state != DownloadQueueState::Queued && item.state != DownloadQueueState::Paused {
         item.title = None;
         item.metadata_preview = None;
         item.metadata_preview_at = None;
@@ -1237,7 +1240,10 @@ async fn start_one(
 fn is_startable(state: DownloadQueueState) -> bool {
     matches!(
         state,
-        DownloadQueueState::Queued | DownloadQueueState::Error | DownloadQueueState::Cancelled
+        DownloadQueueState::Queued
+            | DownloadQueueState::Error
+            | DownloadQueueState::Cancelled
+            | DownloadQueueState::Paused
     )
 }
 
@@ -1359,6 +1365,84 @@ async fn stop_one(state: &AppState, id: &str) -> Result<(), StopError> {
         }
         None => Err(StopError::NotRunning),
     }
+}
+
+/// `POST /download_queue/{id}/pause` — cancels an in-flight item's transfer like `stop`, but labels
+/// the result `Paused` instead of `Cancelled`, keeping its `.part` file for a resume (issue #88).
+///
+/// The state is written *before* cancelling the token: the background task's own cancellation
+/// branch then re-reads the item and leaves a `Paused` item alone instead of overwriting it with
+/// `Cancelled` (see that branch in `plugins.rs`). The reverse order would race.
+async fn pause_queue_item(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    Path(id): Path<String>,
+) -> Response {
+    match pause_one(&state, &id).await {
+        Ok(()) => {
+            record_manual(
+                &state,
+                auth.as_ref().map(|e| &e.0),
+                action_types::DOWNLOAD_QUEUE_PAUSE,
+                ActivityTarget {
+                    id: Some(id.clone()),
+                    label: None,
+                    kind: Some("download_queue_item".to_string()),
+                },
+                Outcome::Success,
+                None,
+                None,
+            )
+            .await;
+            axum::Json(json!({ "operation": "pause_download_queue_item", "success": 1 }))
+                .into_response()
+        }
+        Err(StopError::NotFound) => {
+            not_found("pause_download_queue_item", format!("Item {id} not found."))
+        }
+        Err(StopError::NotRunning) => error(
+            StatusCode::CONFLICT,
+            "pause_download_queue_item",
+            format!("Item {id} is not currently downloading."),
+        ),
+        Err(StopError::Storage(e)) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "pause_download_queue_item",
+            e,
+        ),
+    }
+}
+
+async fn pause_one(state: &AppState, id: &str) -> Result<(), StopError> {
+    let item = state
+        .download_queue
+        .get(id)
+        .await
+        .map_err(|e| StopError::Storage(e.to_string()))?
+        .ok_or(StopError::NotFound)?;
+    if !is_in_flight(item.state) {
+        return Err(StopError::NotRunning);
+    }
+    let token = state
+        .download_cancellations
+        .lock()
+        .await
+        .get(id)
+        .cloned()
+        .ok_or(StopError::NotRunning)?;
+
+    crate::plugins::update_queue_item_state(
+        &state.download_queue,
+        state.download_queue_tx.as_ref(),
+        id,
+        DownloadQueueState::Paused,
+        item.job_id.clone(),
+        None,
+        None,
+    )
+    .await;
+    token.cancel();
+    Ok(())
 }
 
 /// `POST /download_queue/{id}/overwrite` — resolves a `PendingFilenameConflict` (see that type's
@@ -3208,6 +3292,13 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn paused_is_resumable_but_not_in_flight() {
+        assert!(is_startable(DownloadQueueState::Paused));
+        assert!(!is_in_flight(DownloadQueueState::Paused));
+        assert!(!is_bulk_startable(DownloadQueueState::Paused));
+    }
+
     /// The comparison overlay is a visual answer, so a source codec the requesting browser cannot
     /// decode has to be re-encoded; nothing else may be touched (a lossy re-encode of a page the
     /// browser could already read would degrade exactly the detail being compared).
@@ -3264,6 +3355,7 @@ mod tests {
             url: url.to_string(),
             plugin_namespace: "download/ehentai".to_string(),
             file_size: None,
+            average_bytes_per_sec: None,
             category: None,
             metadata_tags: Vec::new(),
             auto_fetch_metadata: false,

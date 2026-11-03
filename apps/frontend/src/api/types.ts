@@ -835,6 +835,10 @@ export interface JobRecord {
   downloaded_bytes?: number
   /** May stay absent even with `downloaded_bytes` present — render indeterminate, not 0/NaN. */
   total_bytes?: number
+  /** Average rate over the transfer itself (first byte onward), excluding time spent waiting for
+   *  the server and bytes already present from a resumed transfer. Absent for non-download jobs and
+   *  until a window exists — do not fall back to a whole-job average, it is what this replaces. */
+  average_bytes_per_sec?: number
   /** When the job actually started working, and when it reached a terminal state (epoch ms). Both
    *  absent until they happen; the second stays absent while the job runs, which is how a row tells
    *  "still going" from "finished" when it wants to show an elapsed time rather than a duration. */
@@ -862,6 +866,9 @@ export type DownloadQueueState =
   | "done"
   | "error"
   | "cancelled"
+  /** Interrupted by Pause (issue #88): resumable, and the row keeps the partial file's last known
+   *  progress. Start resumes it over `Range`. */
+  | "paused"
   /** Parked before any bytes transferred: the download is an older revision than an archive already
    * in the library, and the plugin's `relative_older_policy` asks the user first (issue #107).
    * Resolved via `POST /download_queue/{id}/confirm-older`, not the ordinary Start button. */
@@ -1033,6 +1040,10 @@ export interface DownloadQueueItem {
   plugin_namespace: string
   /** Known at creation for a local upload; a download reports size via the linked job instead. */
   file_size?: number | null
+  /** The transfer-window average rate (bytes/second), persisted when the download completes so a
+   *  finished row keeps its rate after the job's in-memory record is gone. Absent for rows that
+   *  completed before the field existed. */
+  average_bytes_per_sec?: number | null
   category: string | null
   auto_fetch_metadata: boolean
   overwrite_on_duplicate: boolean

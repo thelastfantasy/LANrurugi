@@ -374,7 +374,19 @@ async fn download_one_inner(
         }
     }
 
+    let response_wait = std::time::Instant::now();
     let response = request.send().await.map_err(DownloadError::Request)?;
+    // Some hosts (an H@H node handed a fresh 5 GB archive to package) take minutes before sending
+    // response headers; that silent window is the one phase with nothing to report, so at least
+    // leave a trace of where the time went.
+    let response_ms = response_wait.elapsed().as_millis();
+    if response_ms > 30_000 {
+        tracing::info!(
+            host = parsed_url.host_str().unwrap_or(""),
+            elapsed_ms = response_ms,
+            "download response headers took a while"
+        );
+    }
 
     // Three-way split on status, not just `is_success()` — `206` needs different handling from
     // `200` (append vs. overwrite), and both are "successful" by HTTP's own definition.
