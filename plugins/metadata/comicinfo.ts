@@ -108,7 +108,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   if (!(! lang)) { found_tags.push("language:" + lang); }
   let genres = (genre ?? "").split(',');
   if (calibretags) {
-    genres.push(calibretags.split(','));
+    genres.push(...calibretags.split(','));
   }
   for (let genre_tag of genres) {
     found_tags.push(legacyCompat.trim(genre_tag));

@@ -51,8 +51,9 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   if (! path_in_archive) {
     throw new PluginErrorException("No KSK metadata file found in archive");
   }
-  let filepath = path_in_archive;
-  let parsed_data = LoadFile(filepath);
+  // `sidecar_files` carries the file's *content*, not a path (plugin-sdk.ts's own contract), so
+  // there is nothing to open — the legacy `LoadFile` helper has no equivalent here.
+  let parsed_data = path_in_archive;
   let [tags, title] = tags_from_ksk_yaml(parsed_data, assume_english, add_released);
   ;
   logger.info(`Sending the following tags to LRR: ${tags}`);
