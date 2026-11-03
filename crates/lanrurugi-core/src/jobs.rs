@@ -48,6 +48,16 @@ pub struct JobStatus {
     /// known (spec FR-003: one combined indicator per job, not per-resource).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_bytes: Option<u64>,
+    /// Average transfer rate over the window that actually moved bytes (bytes/second), anchored at
+    /// the first progress tick rather than at `started_at`.
+    ///
+    /// A download's elapsed time includes everything before its first byte — plugin negotiation, a
+    /// server that spends minutes building an archive before answering — and dividing all bytes by
+    /// that whole duration made a 1.5 MB/s transfer read as 132 KB/s. Bytes already on disk from a
+    /// resumed transfer are excluded too (the anchor's own byte count is subtracted). Absent until
+    /// a window of at least a second exists, and for every non-download job.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub average_bytes_per_sec: Option<u64>,
     /// The rate limit actually in effect for this download job — the resolved `max_bytes_per_sec`
     /// for the download's first resource's hostname (`download_manager::domain_rules::resolve`,
     /// spec FR-009/FR-016), in bytes/second. `None` (genuinely absent from JSON, not `null` —
@@ -68,15 +78,19 @@ pub struct JobStatus {
     /// When this job actually started working (epoch ms), and when it reached a terminal state.
     ///
     /// Absent until the job leaves `Queued`, and for a job that has not finished — the queue's own
-    /// row shows "started at / took / average speed" from these two plus `downloaded_bytes`, which
-    /// no other field can express (a speed needs a duration, and `progress` alone cannot say how
-    /// long it has been like that). Persisted nowhere: an in-process registry means a server
-    /// restart drops a finished job's timing along with the job, and the queue row falls back to
-    /// the item's own `file_size`.
+    /// row shows "started at / took" from these two. Persisted nowhere: an in-process registry
+    /// means a server restart drops a finished job's timing along with the job, and the queue row
+    /// falls back to the item's own `file_size`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<i64>,
+    /// [`JobStatus::average_bytes_per_sec`]'s window: the first progress tick's byte count and
+    /// wall-clock time. Not serialized — the UI only needs the derived rate.
+    #[serde(skip)]
+    transfer_started_at: Option<i64>,
+    #[serde(skip)]
+    transfer_start_bytes: u64,
     pub result: Option<serde_json::Value>,
     /// `true` only when `finish()` was handed a `result` whose serialized size exceeded
     /// `MAX_JOB_RESULT_BYTES` — `result` itself is `None` in that case (the oversized value is
@@ -110,13 +124,41 @@ impl JobStatus {
             progress: 0.0,
             downloaded_bytes: None,
             total_bytes: None,
+            average_bytes_per_sec: None,
             rate_limit_bytes_per_sec: None,
             rate_limit_matched_pattern: None,
             started_at: None,
             finished_at: None,
+            transfer_started_at: None,
+            transfer_start_bytes: 0,
             result: None,
             result_truncated: false,
             error: None,
+        }
+    }
+
+    /// Applies one download-progress tick. `now` is a parameter rather than read here, so the
+    /// transfer-window arithmetic is unit-testable without sleeping.
+    fn record_download_progress(&mut self, downloaded: u64, total: Option<u64>, now: i64) {
+        if self.transfer_started_at.is_none() {
+            self.transfer_started_at = Some(now);
+            // Bytes already on disk (a resumed `.part`) were not moved by this attempt; counting
+            // them in the numerator would report the whole file as this attempt's throughput.
+            self.transfer_start_bytes = downloaded;
+        }
+        self.downloaded_bytes = Some(downloaded);
+        self.total_bytes = total;
+        if let Some(total) = total.filter(|&t| t > 0) {
+            self.progress = (downloaded as f32 / total as f32).clamp(0.0, 1.0);
+        }
+        if let Some(started) = self.transfer_started_at {
+            let elapsed_ms = now.saturating_sub(started);
+            // Below a second the sample is mostly poll jitter; keep the previous reading.
+            if elapsed_ms >= 1_000 {
+                let moved = downloaded.saturating_sub(self.transfer_start_bytes);
+                self.average_bytes_per_sec =
+                    Some((moved as f64 / (elapsed_ms as f64 / 1000.0)) as u64);
+            }
         }
     }
 }
@@ -227,11 +269,7 @@ impl JobRegistry {
     /// its last value.
     pub async fn set_download_progress(&self, id: &str, downloaded: u64, total: Option<u64>) {
         if let Some(job) = self.jobs.write().await.get_mut(id) {
-            job.downloaded_bytes = Some(downloaded);
-            job.total_bytes = total;
-            if let Some(total) = total.filter(|&t| t > 0) {
-                job.progress = (downloaded as f32 / total as f32).clamp(0.0, 1.0);
-            }
+            job.record_download_progress(downloaded, total, now_ms());
         }
     }
 
@@ -417,6 +455,45 @@ mod tests {
             "an unknown total must stay genuinely absent from JSON (indeterminate progress), \
              not null — got: {value}"
         );
+    }
+
+    #[test]
+    fn average_speed_measures_the_transfer_window_not_the_whole_job() {
+        let mut job = JobStatus::new("j".into(), "download_url");
+        job.record_download_progress(1_000_000, Some(10_000_000), 1_000_000);
+        assert_eq!(
+            job.average_bytes_per_sec, None,
+            "one tick is not a window yet"
+        );
+        job.record_download_progress(5_000_000, Some(10_000_000), 1_002_000);
+        assert_eq!(
+            job.average_bytes_per_sec,
+            Some(2_000_000),
+            "4 MB over the 2s window, not over the job's own (later) start"
+        );
+    }
+
+    #[test]
+    fn average_speed_excludes_bytes_already_on_disk_from_a_resumed_transfer() {
+        let mut job = JobStatus::new("j".into(), "download_url");
+        job.record_download_progress(5_000_000, Some(10_000_000), 0);
+        job.record_download_progress(5_400_000, Some(10_000_000), 2_000);
+        assert_eq!(
+            job.average_bytes_per_sec,
+            Some(200_000),
+            "only the 400 KB moved by this attempt count toward its rate"
+        );
+    }
+
+    #[test]
+    fn average_speed_is_absent_from_json_until_a_window_exists() {
+        let mut job = JobStatus::new("j".into(), "download_url");
+        job.record_download_progress(1_000, Some(10_000), 0);
+        let value = serde_json::to_value(&job).unwrap();
+        assert!(value.get("average_bytes_per_sec").is_none());
+        job.record_download_progress(3_000, Some(10_000), 1_500);
+        let value = serde_json::to_value(&job).unwrap();
+        assert_eq!(value["average_bytes_per_sec"], json!(1_333));
     }
 
     #[tokio::test]

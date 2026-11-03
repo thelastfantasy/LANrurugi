@@ -57,6 +57,11 @@ pub enum DownloadQueueState {
     /// needs to survive a page refresh, not just live in transient frontend mutation state. Treated
     /// as a startable state everywhere `Queued`/`Error` already are (see `start_one`'s guard).
     Cancelled,
+    /// A user-requested Pause interrupted this item's in-flight download, keeping its partial
+    /// `.part` file for a later resume (issue #88). Distinct from [`Self::Cancelled`] only in what
+    /// the user asked for and how the row reads; both are startable, and the next start goes
+    /// through the same `Range`/`If-Range` resume path as a retry after any other interruption.
+    Paused,
     /// The plugin's reported `version_history` places this download *earlier* in its series than an
     /// archive already in the library, and the effective `relative_older_policy` is
     /// `warn_then_conflict_menu` — so the item is parked here, before any bytes transfer, until the
@@ -168,6 +173,17 @@ pub struct DownloadQueueItem {
     /// (this field stays `None` for a download — see the frontend's own size-display fallback).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_size: Option<u64>,
+    /// The transfer-window average rate (bytes/second) this download's job measured, persisted when
+    /// the item completes — a `JobRegistry` job lives only in process memory, so without this a
+    /// completed row could not report its rate after a server restart. Absent for items completed
+    /// before this field existed, and for non-download origins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub average_bytes_per_sec: Option<u64>,
+    /// Whether the server actually serving this download honours `Range`/`If-Range`, learned from a
+    /// real resume attempt and read back at the next start (`download_manager::resume_support`).
+    /// `None` means no attempt has been observed yet; a pattern-wide record can answer it earlier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_support: Option<bool>,
     pub category: Option<String>,
     /// Tags the subscription wants merged onto the archive once this download is catalogued. Empty
     /// for all non-subscription queue origins.
@@ -329,6 +345,8 @@ impl DownloadQueueRepository {
             url: new_item.url,
             plugin_namespace: new_item.plugin_namespace,
             file_size: new_item.file_size,
+            average_bytes_per_sec: None,
+            resume_support: None,
             category: new_item.category,
             metadata_tags: new_item.metadata_tags,
             auto_fetch_metadata: new_item.auto_fetch_metadata,
@@ -495,6 +513,8 @@ mod tests {
             url: "https://example.com/x".to_string(),
             plugin_namespace: "download/x".to_string(),
             file_size: None,
+            average_bytes_per_sec: None,
+            resume_support: None,
             category: None,
             metadata_tags: Vec::new(),
             auto_fetch_metadata: false,

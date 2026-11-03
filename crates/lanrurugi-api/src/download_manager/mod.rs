@@ -10,6 +10,7 @@ pub mod filename;
 pub mod ingest;
 pub mod live_rate;
 pub mod rate_limit;
+pub mod resume_support;
 pub mod settings;
 pub mod stream;
 pub mod version_history;

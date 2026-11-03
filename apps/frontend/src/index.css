@@ -105,19 +105,6 @@ html::-webkit-scrollbar-thumb {
   --theme-muted: #9b9ba1;
 }
 
-/* Additive to `public/legacy/allcollapsible.css`'s own `.caret-right`/`.caret` glyph pairs (both
- * verified against that real vendor file — see `CollapsibleSection`'s own docs) — not a class
- * that file defines. `.caret-right`'s pair is ▼ closed / ▲ open; `.caret`'s pair (▶ closed / ▼
- * open, the one this project's own callers actually want per-page) uses the opposite
- * `float: left` layout. This keeps `.caret`'s exact glyph characters but on the right-hand-side
- * layout `.caret-right` uses, since every real page's title row already has its icon/badge on the
- * right and switching to a left-floated caret would visually collide with that. */
-.caret-right-down:after {
-  content: '\025BA';
-  font-weight: bold;
-  float: right;
-  margin-left: 1rem;
-}
 /* Additive: none of the vendored theme stylesheets (`public/legacy/themes/*.css`) define a
  * `.stdbtn`/checkbox `:disabled` rule at all — legacy's own real usage apparently never actually
  * disables one of these controls, so the gap was never noticed there. This project's download-
@@ -135,9 +122,6 @@ input[type="checkbox"]:disabled {
   cursor: not-allowed;
 }
 
-.caret-right-down.active:after {
-  content: '\025BC';
-}
 
 /* Additive: the reader overview overlay's page-grid briefly outlines whichever page it opened on
  * (`ArchiveOverviewOverlay.tsx`'s `PageGridCell`, `highlighted` prop) — a static outline alone is
@@ -189,6 +173,48 @@ input[type="checkbox"]:disabled {
 @keyframes lrr-indeterminate-bar {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(333%); }
+}
+
+/* A running determinate download's fill: a slow diagonal sheen over the solid state colour, so a
+ * bar that moves by a pixel every few seconds still reads as "working". The stripe is translucent
+ * white — the fill is the same green in every theme, the same reason the reading over it is white.
+ *
+ * This is a transformed layer, not a `background-position` animation: background-position repaints
+ * on the main thread every frame and competes with React's 5Hz progress updates, which read as a
+ * stuttering crawl; a transform on its own layer is handled by the compositor. The layer is one
+ * tile wider than the fill and translated by exactly one tile, so the loop is seamless; it is
+ * clipped by the fill's `overflow: hidden`.
+ * Disabled under reduced-motion, where the bar simply stays solid. */
+@keyframes lrr-flowing-stripes {
+  from { transform: translateX(0); }
+  to { transform: translateX(-24px); }
+}
+
+.lrr-flowing-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: calc(100% + 24px);
+  /* Four 25% stops make one self-contained tile, so shifting it by exactly the tile width loops
+     without a visible seam (a `repeating-linear-gradient` at 45° would not line up at that shift). */
+  background-image: linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.16) 25%,
+    transparent 25%,
+    transparent 50%,
+    rgba(255, 255, 255, 0.16) 50%,
+    rgba(255, 255, 255, 0.16) 75%,
+    transparent 75%
+  );
+  background-size: 24px 24px;
+  animation: lrr-flowing-stripes 0.8s linear infinite;
+  will-change: transform;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lrr-flowing-fill { animation: none; }
 }
 
 /* Shared scale-up entrance animation for every popup/modal-style dialog in this app
@@ -1411,16 +1437,12 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
    than every `.collapsible-title` in the app, or a `:has()` ancestor selector) so only these
    headings change: the caret becomes a flex item at the row's end, which is also what puts the tabs
    immediately to its left. */
-.queue-groups .caret-right-down {
+.queue-groups .collapsible-title {
   display: flex;
   align-items: center;
   /* A flex container drops the whitespace text node between the icon and the title, so the icon and
-     the name would otherwise touch — the gap replaces that space (and covers the caret too). */
+     the name would otherwise touch — the gap replaces that space. */
   gap: 8px;
-}
-
-.queue-groups .caret-right-down::after {
-  float: none;
 }
 
 .queue-group-title {

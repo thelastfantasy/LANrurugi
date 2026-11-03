@@ -2049,6 +2049,37 @@ export function useStopQueueItem() {
   })
 }
 
+/** Pause an in-flight transfer (issue #88). Cooperative like Stop, so the optimistic flip keeps
+ *  the row from looking stale until the server confirms; the partial file is kept for a resume. */
+export function usePauseQueueItem() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson("POST", `/download_queue/${encodeURIComponent(id)}/pause`),
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: ["download-queue"] })
+      const previous = queryClient.getQueryData<DownloadQueueListResponse>(["download-queue"])
+      queryClient.setQueryData<DownloadQueueListResponse>(["download-queue"], (data) =>
+        data
+          ? {
+              items: data.items.map((item) =>
+                item.id === id ? { ...item, state: "paused" } : item,
+              ),
+            }
+          : data,
+      )
+      return { previous }
+    },
+    onError: (_err, _id, context) => {
+      if (context?.previous) queryClient.setQueryData(["download-queue"], context.previous)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+      queryClient.invalidateQueries({ queryKey: ["jobs"] })
+    },
+  })
+}
+
 /** Overwrite B with the new download; `insertions` optionally packages B's unique pages into a
  * `.patch.zip` first. */
 export function useOverwriteQueueItem() {

@@ -4,6 +4,8 @@ import { useTranslation } from "react-i18next"
 import { usePluginSettings, useUpdatePluginSettings } from "@/api/hooks"
 import type { CustomArgValue, PluginSettings } from "@/api/types"
 import { NullableNumberInput } from "@/components/common-ui/Form/NumberInput"
+import { cookieNameForParameter, hasCookieParameters, parseCookieHeader } from "@/lib/cookies"
+import { FONT_SIZE_XS } from "@/theme"
 import { toast } from "@/toast"
 
 // Per-plugin custom-parameter settings — one input per `PluginInfo.parameters` entry. Rendered
@@ -48,6 +50,8 @@ function PluginParametersFormBody({
       return saved ?? ""
     }),
   )
+  const [cookieImportOpen, setCookieImportOpen] = useState(false)
+  const [cookieText, setCookieText] = useState("")
 
   function setValue(index: number, value: CustomArgValue) {
     setValues((v) => v.map((existing, i) => (i === index ? value : existing)))
@@ -62,6 +66,32 @@ function PluginParametersFormBody({
     setValue(index, checked)
     const next = values.map((existing, i) => (i === index ? checked : existing))
     void persist(next)
+  }
+
+  /** Fills the cookie-shaped fields from a pasted `document.cookie` string, ignoring cookies the
+   * form has no field for (and leaving non-cookie fields, and fields whose cookie is absent,
+   * untouched). It deliberately does not save: the values still go through the form's own Save
+   * button, so the user can review what was picked up first. */
+  function importCookies() {
+    const cookies = parseCookieHeader(cookieText)
+    const matched = new Set<string>()
+    let filled = 0
+    const next = parameters.map((param, i) => {
+      const cookieName = cookieNameForParameter(param)
+      if (!cookieName) return values[i]
+      const value = cookies.get(cookieName)
+      if (value === undefined) return values[i]
+      matched.add(cookieName)
+      filled += 1
+      return value
+    })
+    const ignored = [...cookies.keys()].filter((name) => !matched.has(name)).length
+    setValues(next)
+    setCookieText("")
+    toast({
+      text: t("pluginParameters.importCookiesResult", { filled, ignored }) ?? undefined,
+      icon: filled > 0 ? "success" : "info",
+    })
   }
 
   /** Saves and reports the outcome either way. A bare `.then(toast)` would leave a failed save's
@@ -81,8 +111,58 @@ function PluginParametersFormBody({
   const hasNonBoolParameters = parameters.some((param) => param.type !== "bool")
 
   return (
-    <table>
-      <tbody>
+    <>
+      {hasCookieParameters(parameters) && (
+        <div style={{ marginBottom: 8 }}>
+          <button
+            type="button"
+            className="stdbtn"
+            onClick={() => setCookieImportOpen((open) => !open)}
+          >
+            <i className="fa fa-cookie-bite" aria-hidden="true"></i>{" "}
+            {t("pluginParameters.importCookies")}
+          </button>
+          {cookieImportOpen && (
+            <div style={{ marginTop: 6 }}>
+              <textarea
+                className="stdinput"
+                style={{
+                  width: "100%",
+                  minHeight: 64,
+                  boxSizing: "border-box",
+                  fontFamily: "monospace",
+                }}
+                value={cookieText}
+                placeholder={t("pluginParameters.importCookiesPlaceholder") ?? undefined}
+                onChange={(e) => setCookieText(e.target.value)}
+              />
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  marginTop: 6,
+                  flexWrap: "wrap",
+                }}
+              >
+                <button
+                  type="button"
+                  className="stdbtn"
+                  disabled={!cookieText.trim()}
+                  onClick={importCookies}
+                >
+                  {t("pluginParameters.importCookiesApply")}
+                </button>
+                <span style={{ fontSize: FONT_SIZE_XS, opacity: 0.75 }}>
+                  {t("pluginParameters.importCookiesHint")}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      <table>
+        <tbody>
         {parameters.map((param, i) =>
           param.type === "bool" ? (
             // class="fa" supplies the Font Awesome glyphs config.css's ON/OFF switch look needs.
@@ -150,7 +230,8 @@ function PluginParametersFormBody({
             </td>
           </tr>
         )}
-      </tbody>
-    </table>
+        </tbody>
+      </table>
+    </>
   )
 }

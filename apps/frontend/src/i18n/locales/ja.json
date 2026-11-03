@@ -647,6 +647,7 @@
   "logs.youCanCheckLanrurugiLogs": "デバッグのため LANrurugi のログをここから確認できます。",
   "categories.youCanCreateNewCategories": "ここでは新しいカテゴリを作成したり、既存のカテゴリを編集したりできます。",
   "upload.waiting": "Waiting…",
+  "upload.waitingForServer": "Waiting for the download server…",
   "upload.youCanDownloadFilesFrom": "ここからURLを指定して、ファイルを直接 LANrurugi にダウンロードできます。",
   "You can edit your Tag Rules in Server Configuration.": "タグルールはサーバー設定画面で編集できます。",
   "reader.youCanNavigateBetweenPages": "以下の方法でページ間を移動できます :",
@@ -2630,5 +2631,15 @@
   "diagnostics.feedback.name": "お名前",
   "diagnostics.feedback.email": "メールアドレス(必須)",
   "diagnostics.feedback.failed": "送信に失敗しました。しばらくしてから再度お試しください。",
-  "components.layout.truncatedDownloadExpectedBytes": "ダウンロードが不完全です：{{expected}} バイトを期待しましたが、{{got}} バイトしか受信できませんでした。"
+  "components.layout.truncatedDownloadExpectedBytes": "ダウンロードが不完全です：{{expected}} バイトを期待しましたが、{{got}} バイトしか受信できませんでした。",
+  "upload.pause": "Pause",
+  "upload.paused": "Paused",
+  "upload.resume": "Resume",
+  "activity.actionType.download_queue.pause": "Pause Download",
+  "upload.noResumeSupport": "This source does not support resuming — pausing and continuing will restart the download.",
+  "pluginParameters.importCookies": "Fill from document.cookie",
+  "pluginParameters.importCookiesPlaceholder": "Paste the document.cookie string you copied manually from the site (name=value; name2=value2)",
+  "pluginParameters.importCookiesApply": "Fill",
+  "pluginParameters.importCookiesHint": "Only cookies that match a field below are filled; the rest are discarded. Remember to save afterwards.",
+  "pluginParameters.importCookiesResult": "Filled {{filled}} field(s); ignored {{ignored}} cookie(s)."
 }

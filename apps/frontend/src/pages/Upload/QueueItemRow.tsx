@@ -6,7 +6,9 @@ import {
   useConfirmOlderRevision,
   useDeleteQueueItem,
   useFetchQueueItemMetadata,
+  useJobProgressOverride,
   useOverwriteQueueItem,
+  usePauseQueueItem,
   useRenameQueueItem,
   useStartQueueItem,
   useStopQueueItem,
@@ -21,6 +23,8 @@ import type {
 import { Tooltip } from "@/components/common-ui/Display"
 ;
 import {
+  computeEta,
+  computeRemainingSpeed,
   computeSpeed,
   formatBytes,
   formatDuration,
@@ -62,7 +66,7 @@ function isToday(ms: number): boolean {
  * gone from the registry entirely. */
 export function RowStats({
   item,
-  job,
+  job: jobProp,
   subscriptionName,
   onOpenSubscriptions,
 }: {
@@ -72,6 +76,18 @@ export function RowStats({
   onOpenSubscriptions: () => void
 }) {
   const { t } = useTranslation()
+  // The same SSE-pushed bytes the progress bar uses: `computeSpeed` keeps one smoothing window per
+  // job, so the two must not feed it polled values and SSE values alternately — that made every
+  // other reading a negative delta and the displayed rate swing far wider than the transfer did.
+  const override = useJobProgressOverride(jobProp?.id)
+  const job =
+    jobProp && override
+      ? {
+          ...jobProp,
+          downloaded_bytes: override.downloaded_bytes,
+          total_bytes: override.total_bytes ?? jobProp.total_bytes,
+        }
+      : jobProp
   const running = job?.state === "active"
   /** Ticked rather than read from the clock during render: a running download's "elapsed" must
    *  actually move (progress events can be a minute apart on a slow transfer, and a frozen `2:13`
@@ -98,38 +114,59 @@ export function RowStats({
   const startedMs = job?.started_at ?? item.started_at ?? null
   const endedMs = job?.finished_at ?? item.finished_at ?? (running && now > 0 ? now : null)
   const durationMs = startedMs && endedMs && endedMs >= startedMs ? endedMs - startedMs : null
-  // The average is "bytes actually transferred ÷ time spent so far", so its numerator is
-  // `downloaded_bytes` — *not* `total_bytes`. Preferring the total made a still-running download
-  // report the rate it would need to finish in the time already spent: a 4%-complete 7.7GB transfer
-  // sitting at 783 KB/s displayed "30.3 MB/s average" (reported live). A total is only a valid
-  // stand-in once the transfer has ended, when the two are equal anyway.
+  // Prefer the two *measured* rates: the job's transfer-window average while the job is still in
+  // memory, then the value persisted onto the item when it completed. Deriving a rate here from
+  // the whole job duration included every minute spent waiting for the server's first byte (a
+  // 1.5 MB/s transfer read as 132 KB/s) and cannot exclude a resumed transfer's pre-existing
+  // bytes, so it is only the last resort for rows that predate both fields.
   const transferred =
     job?.downloaded_bytes ??
     (endedMs != null ? job?.total_bytes ?? item.file_size ?? null : null)
-  const average =
+  const legacyAverage =
     durationMs && durationMs > 0 && transferred != null
       ? (transferred / durationMs) * 1000
       : null
+  const average =
+    job?.average_bytes_per_sec ?? item.average_bytes_per_sec ?? legacyAverage
   // Kept separate for the trailing size: that one really is the whole payload.
   const bytes = job?.total_bytes ?? item.file_size ?? job?.downloaded_bytes ?? null
-  // Time remaining, shown only while the transfer is actually running: the rate is the same
-  // instantaneous one the progress bar prints (`computeSpeed`), falling back to this run's own
-  // average before it has two samples to work with — the average is smoother but lags a rate change
-  // by the whole run, so it is only the fallback. Unknown/zero/complete sizes yield no estimate
-  // rather than a made-up one.
-  const rate =
-    job?.downloaded_bytes != null
-      ? computeSpeed(job.id, job.downloaded_bytes) ?? average
-      : average
-  const remainingMs =
-    running &&
-    rate != null &&
-    rate > 0 &&
-    bytes != null &&
-    job?.downloaded_bytes != null &&
-    bytes > job.downloaded_bytes
-      ? ((bytes - job.downloaded_bytes) / rate) * 1000
+  // Time remaining, shown only while the transfer is actually running. It divides a large
+  // remainder by the rate, so it uses the calmest estimate available: the server's cumulative
+  // transfer average once it exists, else ~3 minutes of local history. The live 8s rate — the
+  // number the progress bar prints — makes the estimate bounce by minutes on every burst, which is
+  // exactly what this avoids; only the last ~10s switch to it, where the calm rate is too blunt for
+  // the final seconds. `computeEta` then turns that estimate into the actual readout (a 1s/s
+  // countdown between re-syncs, frozen during stalls, never negative).
+  const measuredAverage = job?.average_bytes_per_sec ?? item.average_bytes_per_sec ?? null
+  const calmRate =
+    measuredAverage ??
+    (job?.downloaded_bytes != null
+      ? computeRemainingSpeed(job.id, job.downloaded_bytes)
+      : null)
+  const remainingBytes =
+    bytes != null && job?.downloaded_bytes != null
+      ? Math.max(0, bytes - job.downloaded_bytes)
       : null
+  const calmMs =
+    remainingBytes != null && calmRate != null && calmRate > 0
+      ? (remainingBytes / calmRate) * 1000
+      : null
+  const liveRate =
+    job?.downloaded_bytes != null ? computeSpeed(job.id, job.downloaded_bytes) : null
+  const liveMs =
+    remainingBytes != null && liveRate != null && liveRate > 0
+      ? (remainingBytes / liveRate) * 1000
+      : null
+  const estimateMs =
+    calmMs != null && calmMs <= 10_000 && liveMs != null ? liveMs : calmMs
+  const remainingMs = job
+    ? computeEta(
+        job.id,
+        running ? estimateMs : null,
+        calmRate,
+        running ? (job.downloaded_bytes ?? null) : null,
+      )
+    : null
 
   const parts = [
     // Today reads as "today <time>"; anything older carries its real date, so a row from two days
@@ -245,6 +282,7 @@ export function QueueItemRow({
   const fetchMetadata = useFetchQueueItemMetadata();
   const start = useStartQueueItem();
   const stop = useStopQueueItem();
+  const pause = usePauseQueueItem();
   const confirmOlder = useConfirmOlderRevision();
   const del = useDeleteQueueItem();
   const overwriteConflict = useOverwriteQueueItem();
@@ -338,7 +376,8 @@ export function QueueItemRow({
           disabled={
             item.state !== "queued" &&
             item.state !== "error" &&
-            item.state !== "cancelled"
+            item.state !== "cancelled" &&
+            item.state !== "paused"
           }
           onChange={onToggleSelect}
         />
@@ -376,6 +415,21 @@ export function QueueItemRow({
                   <div style={{ fontSize: FONT_SIZE_XS, color: "#c79121" }}>
                     {t("upload.waiting")}
                   </div>
+                ) : job &&
+                  job.state === "active" &&
+                  job.downloaded_bytes == null ? (
+                  // Nothing has arrived yet — either the plugin is still resolving the download
+                  // URL or the server has not sent its first byte (an E-Hentai archive can take
+                  // minutes to be built). A 0% bar here reads as stalled; `progress` is still 0.
+                  <JobProgressBar
+                    job={job}
+                    pendingLabel={t(
+                      item.state === "starting"
+                        ? "upload.starting"
+                        : "upload.waitingForServer",
+                    )}
+                    inlineLabel
+                  />
                 ) : job ? (
                   job.rate_limit_bytes_per_sec != null &&
                   job.rate_limit_bytes_per_sec > 0 ? (
@@ -384,7 +438,7 @@ export function QueueItemRow({
                       pluginNamespace={item.plugin_namespace}
                     />
                   ) : (
-                    <JobProgressBar job={job} />
+                    <JobProgressBar job={job} inlineLabel />
                   )
                 ) : (
                   <span style={{ fontSize: FONT_SIZE_SM }}>
@@ -476,6 +530,32 @@ export function QueueItemRow({
                   </span>
                 </div>
               </>
+            ) : item.state === "paused" ? (
+              <>
+                <span
+                  style={{
+                    fontSize: FONT_SIZE_SM,
+                    display: "flex",
+                    ...(!item.title && { userSelect: "all" }),
+                  }}
+                  title={item.metadata_preview ? undefined : item.url}
+                >
+                  <TruncatedFilename
+                    text={item.title ?? item.url}
+                    isFilename={!item.title}
+                  />
+                </span>
+                <div style={{ fontSize: FONT_SIZE_XS, color: "#c79121" }}>
+                  {t("upload.paused")}
+                </div>
+                {/* The job that was cancelled by the pause still holds its last byte counts, so
+                    the row can keep showing where the transfer stopped (until a server restart
+                    drops the in-memory job). Only a known total gets a bar: the indeterminate
+                    variant would keep animating, which reads as "still downloading". */}
+                {job && job.downloaded_bytes != null && job.total_bytes != null ? (
+                  <JobProgressBar job={job} inlineLabel />
+                ) : null}
+              </>
             ) : (
               <span
                 style={{
@@ -500,6 +580,15 @@ export function QueueItemRow({
               subscriptionName={subscriptionName}
               onOpenSubscriptions={() => navigate(routes.settings("subscriptions"))}
             />
+            {item.resume_support === false &&
+              (item.state === "downloading" ||
+                item.state === "starting" ||
+                item.state === "waiting" ||
+                item.state === "paused") && (
+                <div style={{ fontSize: FONT_SIZE_XS, color: "#c79121" }}>
+                  {t("upload.noResumeSupport")}
+                </div>
+              )}
             {item.state === "error" && item.error && (
               <div
                 style={{ fontSize: FONT_SIZE_XS, color: item.error.kind === "already_patched" ? "#c79121" : STATE_COLOR.failed }}
@@ -565,6 +654,20 @@ export function QueueItemRow({
           </>
         )}
 
+        {/* Fixed width so a row whose state needs two buttons (pause + stop) does not narrow its
+            card relative to one that needs only one: every download row's card then ends at the
+            same x. 56px = two 26px tooltip-wrapped icon buttons plus their 4px gap — the width
+            has to match the *two*-button content exactly, or a `flex-basis` below it is overridden
+            by the content's minimum size and the cards drift apart again. */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-end",
+            gap: 4,
+            flex: "0 0 56px",
+          }}
+        >
         {item.pending_filename_conflict ? (
           <>
             <div style={{ position: "relative" }}>
@@ -655,23 +758,38 @@ export function QueueItemRow({
         ) : isLocalUpload ? null : item.state === "starting" ||
           item.state === "waiting" ||
           item.state === "downloading" ? (
-          <Tooltip label={t("upload.stop") ?? ""}>
-            <button
-              type="button"
-              className="stdbtn"
-              style={ICON_BUTTON_STYLE}
-              disabled={stop.isPending}
-              onClick={() => void stop.mutateAsync(item.id)}
-            >
-              <i className="fa fa-stop" aria-hidden="true"></i>
-            </button>
-          </Tooltip>
+          <>
+            <Tooltip label={t("upload.pause") ?? ""}>
+              <button
+                type="button"
+                className="stdbtn"
+                style={ICON_BUTTON_STYLE}
+                disabled={pause.isPending}
+                onClick={() => void pause.mutateAsync(item.id)}
+              >
+                <i className="fa fa-pause" aria-hidden="true"></i>
+              </button>
+            </Tooltip>
+            <Tooltip label={t("upload.stop") ?? ""}>
+              <button
+                type="button"
+                className="stdbtn"
+                style={ICON_BUTTON_STYLE}
+                disabled={stop.isPending}
+                onClick={() => void stop.mutateAsync(item.id)}
+              >
+                <i className="fa fa-stop" aria-hidden="true"></i>
+              </button>
+            </Tooltip>
+          </>
         ) : (
           <Tooltip
             label={
               (item.state === "error" || wasCancelled
                 ? t("upload.retry")
-                : t("library.download")) ?? ""
+                : item.state === "paused"
+                  ? t("upload.resume")
+                  : t("library.download")) ?? ""
             }
           >
             <button
@@ -681,7 +799,8 @@ export function QueueItemRow({
               disabled={
                 (item.state !== "queued" &&
                   item.state !== "error" &&
-                  item.state !== "cancelled") ||
+                  item.state !== "cancelled" &&
+                  item.state !== "paused") ||
                 start.isPending
               }
               onClick={() => {
@@ -689,12 +808,19 @@ export function QueueItemRow({
               }}
             >
               <i
-                className={`fa ${item.state === "error" || wasCancelled ? "fa-redo" : "fa-download"}`}
+                className={`fa ${
+                  item.state === "paused"
+                    ? "fa-play"
+                    : item.state === "error" || wasCancelled
+                      ? "fa-redo"
+                      : "fa-download"
+                }`}
                 aria-hidden="true"
               ></i>
             </button>
           </Tooltip>
         )}
+        </div>
 
         {!isLocalUpload && (
           <Tooltip

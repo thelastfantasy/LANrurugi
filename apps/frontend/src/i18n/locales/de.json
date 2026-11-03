@@ -510,6 +510,7 @@
   "logs.youCanCheckLanrurugiLogs": "Hier kannst du Logs von LANrurugi zum Debuggen ansehen.",
   "categories.youCanCreateNewCategories": "Hier können neue Kategorien erstellt oder Bestehende verändert werden.",
   "upload.waiting": "Waiting…",
+  "upload.waitingForServer": "Waiting for the download server…",
   "upload.youCanDownloadFilesFrom": "Sie können hier Dateien über URLs direkt mit LANrurugi herunterladen.",
   "You can edit your Tag Rules in Server Configuration.": "Sie können die Tag Regeln in den Servereinstellungen ändern.",
   "reader.youCanNavigateBetweenPages": "Sie können zwischen den Seiten navigieren, indem Sie:",
@@ -760,5 +761,15 @@
   "subscriptions.headers": "Header",
   "subscriptions.credentialsHint": "Werden mit den Prüfungen dieses Abonnements gesendet. Anders als ein Plugin erneuern sie sich nicht — nach Ablauf sehen Prüfungen stillschweigend weniger.",
   "subscriptions.settling": "wartet — die erste Prüfung beginnt kurz nach dem Speichern",
-  "subscriptions.enableLabel": "Aktiviert"
+  "subscriptions.enableLabel": "Aktiviert",
+  "upload.pause": "Pause",
+  "upload.paused": "Paused",
+  "upload.resume": "Resume",
+  "activity.actionType.download_queue.pause": "Pause Download",
+  "upload.noResumeSupport": "This source does not support resuming — pausing and continuing will restart the download.",
+  "pluginParameters.importCookies": "Fill from document.cookie",
+  "pluginParameters.importCookiesPlaceholder": "Paste the document.cookie string you copied manually from the site (name=value; name2=value2)",
+  "pluginParameters.importCookiesApply": "Fill",
+  "pluginParameters.importCookiesHint": "Only cookies that match a field below are filled; the rest are discarded. Remember to save afterwards.",
+  "pluginParameters.importCookiesResult": "Filled {{filled}} field(s); ignored {{ignored}} cookie(s)."
 }

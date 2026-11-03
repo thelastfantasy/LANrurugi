@@ -40,7 +40,14 @@ describe("RowStats", () => {
     vi.setSystemTime(started + 120_000)
     renderStats(
       item({ state: "downloading" }),
-      job({ state: "active", started_at: started, downloaded_bytes: 1024 * 1024 * 1024, total_bytes: 1024 * 1024 * 1024 }),
+      job({
+        state: "active",
+        started_at: started,
+        downloaded_bytes: 1024 * 1024 * 1024,
+        total_bytes: 1024 * 1024 * 1024,
+        // The server measures the rate over the transfer window; 8.5 MiB/s here.
+        average_bytes_per_sec: 8_912_896,
+      }),
     )
     await act(async () => {
       vi.advanceTimersByTime(1000)
@@ -52,16 +59,14 @@ describe("RowStats", () => {
     // `14:32:05`. Asserting one of the two made this test pass locally and fail in CI.
     expect(line).toMatch(/started today at \d{1,2}:32:05/)
     expect(line).toMatch(/2:01 elapsed/)
-    // 1 GB over 2 minutes is ~8.5 MB/s: the run's own average, not a last-poll reading.
     expect(line).toMatch(/8\.5 MB\/s avg/)
     expect(line).toMatch(/1\.0 GB/)
   })
 
-  it("averages the bytes actually transferred, not the total size", async () => {
-    // Regression guard for a live-reported bug: `total_bytes / elapsed` reports the rate a transfer
-    // would need to *finish* in the time already spent. The pre-existing case above could not catch
-    // it because it passes `downloaded_bytes === total_bytes` (both 1GB), where the wrong formula
-    // and the right one agree.
+  it("uses the server's transfer-window average instead of recomputing one from the job duration", async () => {
+    // A download can sit for minutes waiting for the server's first byte (an archive being built),
+    // and dividing all bytes by that whole duration made a 1.5 MB/s transfer read as ~846 KB/s.
+    // The server anchors its average at the first byte; this row must show that number as-is.
     const started = new Date(2026, 9, 7, 14, 32, 5).getTime()
     vi.setSystemTime(started + 120_000)
     renderStats(
@@ -71,6 +76,7 @@ describe("RowStats", () => {
         started_at: started,
         downloaded_bytes: 100 * 1024 * 1024,
         total_bytes: 1024 * 1024 * 1024,
+        average_bytes_per_sec: 1_572_864,
       }),
     )
     await act(async () => {
@@ -78,9 +84,8 @@ describe("RowStats", () => {
     })
 
     const line = screen.getByText(/started today/).textContent ?? ""
-    // 100MB in 2 minutes is ~0.83MB/s; the total (1GB) over the same 2 minutes would be ~8.5MB/s.
-    expect(line).toMatch(/KB\/s avg/)
-    expect(line).not.toMatch(/MB\/s avg/)
+    expect(line).toMatch(/1\.5 MB\/s avg/)
+    expect(line).not.toMatch(/846 KB\/s avg/)
     // The trailing size stays the whole payload, so "how big is this download" is still answerable.
     expect(line).toMatch(/1\.0 GB/)
   })
@@ -97,13 +102,15 @@ describe("RowStats", () => {
         started_at: started,
         downloaded_bytes: 100 * 1024 * 1024,
         total_bytes: 1024 * 1024 * 1024,
+        average_bytes_per_sec: 1024 * 1024,
       }),
     )
     await act(async () => {
       vi.advanceTimersByTime(1000)
     })
 
-    expect(screen.getByText(/started today/).textContent ?? "").toMatch(/18:38 left/)
+    // 924 MB left at the server's 1 MB/s, before `computeSpeed` has a second sample.
+    expect(screen.getByText(/started today/).textContent ?? "").toMatch(/15:24 left/)
   })
 
   it("shows no time remaining once the job is no longer running", () => {
@@ -130,11 +137,28 @@ describe("RowStats", () => {
     const line = screen.getByText(/started today/).textContent ?? ""
     expect(line).toMatch(/started today at 10:00:00/)
     expect(line).toMatch(/1:30 elapsed/)
-    // 90 MB in 90 s = 1 MB/s
-    expect(line).toMatch(/1\.0 MB\/s avg/)
-    // `file_size` is the completed size, and the average divides *that* by the persisted duration.
+    // No job and no persisted rate: the last-resort duration-based approximation still answers
+    // "roughly how fast was this", which is what a historical row has to offer.
     expect(line).toMatch(/1\.0 MB\/s avg/)
     expect(line).not.toContain(new Date(started).toLocaleDateString())
+  })
+
+  it("prefers the average persisted on the item over the duration-based approximation", () => {
+    const started = new Date(2026, 9, 7, 10, 0, 0).getTime()
+    vi.setSystemTime(started + 3_600_000)
+    renderStats(
+      item({
+        started_at: started,
+        finished_at: started + 90_000,
+        file_size: 90 * 1024 * 1024,
+        average_bytes_per_sec: 2 * 1024 * 1024,
+      }),
+      undefined,
+    )
+
+    const line = screen.getByText(/started today/).textContent ?? ""
+    expect(line).toMatch(/2\.0 MB\/s avg/)
+    expect(line).not.toMatch(/1\.0 MB\/s avg/)
   })
 
   it("adds the date to a start stamp from an earlier day", () => {

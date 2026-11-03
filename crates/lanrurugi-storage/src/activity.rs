@@ -110,6 +110,9 @@ pub mod action_types {
     /// context, but this is the one type a user filters by to see everything that was ingested.
     pub const ARCHIVE_INGEST: &str = "archive.ingest";
     pub const DOWNLOAD_QUEUE_STOP: &str = "download_queue.stop";
+    /// A transfer cancelled by Pause rather than by Stop (issue #88) — same cancellation mechanism,
+    /// different resulting queue state (`paused`, resumable) and wording in the activity log.
+    pub const DOWNLOAD_QUEUE_PAUSE: &str = "download_queue.pause";
     pub const DOWNLOAD_QUEUE_OVERWRITE: &str = "download_queue.overwrite";
     pub const DOWNLOAD_QUEUE_RENAME: &str = "download_queue.rename";
     pub const DOWNLOAD_QUEUE_COMPARE: &str = "download_queue.compare";

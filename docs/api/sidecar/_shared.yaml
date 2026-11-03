@@ -41,6 +41,14 @@ components:
             Expected total size, from the response's `Content-Length`. Absent when the server does
             not report one: render an indeterminate indicator rather than treating absence as zero.
             For a multi-resource download this is the sum across all resources.
+        average_bytes_per_sec:
+          type: integer
+          format: int64
+          description: >-
+            Average rate over the transfer window itself (first byte to the latest progress tick),
+            in bytes/second. Excludes time spent waiting for the server before the first byte, and
+            bytes already on disk from a resumed transfer. Absent until a window exists, and for
+            every non-download job.
         rate_limit_bytes_per_sec:
           type: integer
           format: int64

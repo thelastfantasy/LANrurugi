@@ -124,7 +124,15 @@ export function DownloadQueuePanel({
   const selectableItemIds = useMemo(
     () =>
       new Set(
-        items.filter((i) => i.state === "queued" || i.state === "error" || i.state === "cancelled").map((i) => i.id),
+        items
+          .filter(
+            (i) =>
+              i.state === "queued" ||
+              i.state === "error" ||
+              i.state === "cancelled" ||
+              i.state === "paused",
+          )
+          .map((i) => i.id),
       ),
     [items],
   )
@@ -364,7 +372,12 @@ export function DownloadQueuePanel({
                     job={item.job_id ? jobById.get(item.job_id) : undefined}
                     selected={effectiveSelected.has(item.id)}
                     onToggleSelect={() => {
-                      if (item.state !== "queued" && item.state !== "error" && item.state !== "cancelled")
+                      if (
+                        item.state !== "queued" &&
+                        item.state !== "error" &&
+                        item.state !== "cancelled" &&
+                        item.state !== "paused"
+                      )
                         return
                       setSelected((prev) => {
                         const next = new Set(prev)

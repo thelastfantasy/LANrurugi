@@ -1242,6 +1242,7 @@
   "logs.youCanCheckLanrurugiLogs": "您可以在此处查看LANrurugi日志以进行调试。",
   "categories.youCanCreateNewCategories": "您可以在这里创建新分类或编辑现有分类。",
   "upload.waiting": "等待中…",
+  "upload.waitingForServer": "等待下载服务器响应…",
   "upload.youCanDownloadFilesFrom": "您可以从这里将远程URL的文件直接下载到LANrurugi中。",
   "upload.youCanDragAndDrop": "您可以将文件拖放到此窗口中，或点击上传按钮。",
   "You can edit your Tag Rules in Server Configuration.": "您可以在服务器配置中编辑您的标签规则。",
@@ -2855,5 +2856,15 @@
   "activity.actionType.tankoubon.recycle": "单行本移入回收站",
   "activity.actionType.tankoubon.restore": "单行本从回收站恢复",
   "activity.actionType.tankoubon.purge": "单行本永久删除",
-  "components.layout.truncatedDownloadExpectedBytes": "下载不完整：预期 {{expected}} 字节，实际收到 {{got}} 字节。"
+  "components.layout.truncatedDownloadExpectedBytes": "下载不完整：预期 {{expected}} 字节，实际收到 {{got}} 字节。",
+  "upload.pause": "暂停",
+  "upload.paused": "已暂停",
+  "upload.resume": "继续",
+  "activity.actionType.download_queue.pause": "暂停下载",
+  "upload.noResumeSupport": "该源不支持断点续传，暂停后继续会重新下载。",
+  "pluginParameters.importCookies": "从 document.cookie 填入",
+  "pluginParameters.importCookiesPlaceholder": "粘贴你从站点手动复制的 document.cookie 字符串（name=value; name2=value2）",
+  "pluginParameters.importCookiesApply": "填入",
+  "pluginParameters.importCookiesHint": "只会填入能对应到下方字段的 cookie，其余丢弃；填完记得点“保存插件设置”。",
+  "pluginParameters.importCookiesResult": "已填入 {{filled}} 项，忽略 {{ignored}} 项。"
 }
