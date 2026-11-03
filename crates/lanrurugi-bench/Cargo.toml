@@ -21,7 +21,7 @@ rand = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 reqwest = { workspace = true }
-base64 = "0.22"
+base64 = "0.23"
 time = { version = "0.3", features = ["formatting"] }
 # Criterion (and the `plotters`/`ciborium` tree behind it) is used *only* by `benches/benches.rs`,
 # i.e. only with this crate's `bench` feature on — the lib/bin targets never reference it. It sits

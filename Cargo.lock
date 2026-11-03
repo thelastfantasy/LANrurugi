@@ -4172,7 +4172,7 @@ name = "lanrurugi-bench"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.1",
  "clap",
  "criterion",
  "image",
@@ -4208,7 +4208,7 @@ dependencies = [
 name = "lanrurugi-book-worker"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chardetng",
  "cosmic-text",
  "encoding_rs",
@@ -4231,7 +4231,7 @@ dependencies = [
 name = "lanrurugi-core"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bcrypt",
  "hmac",
  "rayon",
@@ -4501,7 +4501,7 @@ dependencies = [
  "anyhow",
  "axum",
  "bao-tree",
- "base64 0.22.1",
+ "base64 0.23.1",
  "blake3",
  "bytes",
  "chrono",
@@ -4543,7 +4543,7 @@ name = "lanrurugi-share-proto"
 version = "0.1.0"
 dependencies = [
  "argon2",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chacha20poly1305",
  "ed25519-dalek",
  "hkdf",

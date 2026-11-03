@@ -162,7 +162,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 regex = "1.13"
 quick-xml = "0.38"
-base64 = "0.22"
+base64 = "0.23"
 memmap2 = "0.9"
 cosmic-text = "0.19"
 # Already in the dependency tree transitively (a `criterion`/`clap` dependency of a dependency) —
