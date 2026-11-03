@@ -1,0 +1,129 @@
+---
+// Everything below an operation's description: its parameters, request body, responses, and the
+// request panel. The description itself is *not* here — the generated MDX carries it as ordinary
+// markdown between the heading and this component, so markdown in the document renders properly and
+// the site's right-hand outline sees the heading it hangs off.
+import ApiTryIt from './ApiTryIt.astro'
+import apiI18n from '../generated/api-i18n.json' with { type: 'json' }
+import {
+  localizeAccessNotes,
+  localizeParameter,
+  localizeResponse,
+  localeKey,
+} from '../lib/i18n-core.mjs'
+import { findOperation, inlineMarkdown, paramDetail, responseExample } from '../lib/openapi.mjs'
+import { labels } from '../lib/labels.mjs'
+
+interface Props {
+  op: string
+}
+const { op: operationId } = Astro.props
+const { op } = findOperation(operationId)
+const t = labels(Astro.currentLocale)
+// Body text follows the same overlay the pages were generated from, keyed by the English source so
+// one entry covers every occurrence of a repeated description.
+const overlay = apiI18n[localeKey(Astro.currentLocale)] ?? null
+
+// Behaviour that differs by role. OpenAPI cannot express it (see the docgen's `access_notes`
+// module), so it arrives as its own field and is rendered as a callout rather than buried in the
+// description.
+const accessNotes = localizeAccessNotes(overlay, op)
+
+const parameters = op.parameters ?? []
+const sections = [
+  { title: t.pathParameters, items: parameters.filter((p) => p.in === 'path') },
+  { title: t.queryParameters, items: parameters.filter((p) => p.in === 'query') },
+  // `Authorization` is described once for the whole document rather than per endpoint, so
+  // repeating it on every operation would be noise.
+  {
+    title: t.headerParameters,
+    items: parameters.filter((p) => p.in === 'header' && p.name.toLowerCase() !== 'authorization'),
+  },
+].filter((section) => section.items.length > 0)
+
+const requestBody = op.requestBody
+const requestSchema = requestBody?.content?.['application/json']?.schema
+const responses = Object.entries(op.responses ?? {}).map(([status, response]) => ({
+  status,
+  description: localizeResponse(overlay, response.description ?? ''),
+  body: responseExample(response),
+}))
+---
+
+{
+  accessNotes.length > 0 && (
+    <aside class="api-access-notes">
+      <p class="api-access-notes__title">{t.accessNotes}</p>
+      <ul>
+        {accessNotes.map((note) => (
+          <li set:html={inlineMarkdown(note)} />
+        ))}
+      </ul>
+    </aside>
+  )
+}
+
+{
+  sections.map((section) => (
+    <section class="api-section">
+      <h4 class="api-section__title">{section.title}</h4>
+      <dl class="api-params not-content">
+        {section.items.map((p) => {
+          const detail = paramDetail(p).join(' · ')
+          return (
+            <div class="api-param">
+              <dt class="api-param__name">
+                {p.name}
+                {detail && <span class="api-param__detail">{detail}</span>}
+                <span class="api-param__flag">{p.required ? t.required : t.optional}</span>
+              </dt>
+              {/* `inlineMarkdown` escapes the text first and then applies only `**bold**` and
+                  `` `code` `` — the two forms the document's prose actually uses. Plain text was
+                  the first attempt and showed `**Quotation Marks**` literally. */}
+              {p.description && (
+                <dd
+                  class="api-param__description"
+                  set:html={inlineMarkdown(localizeParameter(overlay, p.description))}
+                />
+              )}
+            </div>
+          )
+        })}
+      </dl>
+    </section>
+  ))
+}
+
+{
+  requestBody && (
+    <section class="api-section">
+      <h4 class="api-section__title">{t.requestBody}</h4>
+      <p class="api-param__description">
+        {requestSchema?.description ?? Object.keys(requestBody.content ?? {}).join(', ')}
+      </p>
+    </section>
+  )
+}
+
+<section class="api-section">
+  <h4 class="api-section__title">{t.responses}</h4>
+  <div class="api-responses not-content">
+    {
+      responses.map((response, index) => (
+        <details class="api-response" open={index === 0}>
+          <summary class="api-response__summary">
+            <span class="api-response__status">{response.status}</span>
+            <span class="api-response__description">{response.description}</span>
+          </summary>
+          {response.body ? (
+            <pre class="api-response__body">{response.body}</pre>
+          ) : (
+            <p class="api-param__description">{t.noExample}</p>
+          )}
+        </details>
+      ))
+    }
+  </div>
+</section>
+
+<ApiTryIt op={operationId} />

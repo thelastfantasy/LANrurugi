@@ -1,0 +1,8 @@
+# CodeQL scope for this repository (referenced from `.github/workflows/codeql.yml`).
+#
+# Only exclusions that are structurally non-product, not "alerts I don't like": the manual embed
+# harness is a set of hand-opened HTML fixtures for the iframe/embed flow (never served, never
+# shipped, not part of any build), and its inline `<script src="…">` tags account for every
+# `js/functionality-from-untrusted-source` finding in the repository.
+paths-ignore:
+  - "apps/frontend/tests/manual/**"

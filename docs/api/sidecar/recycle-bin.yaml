@@ -1,0 +1,341 @@
+# Recycle bin and safety password (`specs/019-recycle-bin-safety-password`). Session-only: every
+# route here is denied to both API-token roles by `route_policy.csv`, and the two irreversible
+# actions additionally require the four-digit safety password.
+"/api/recycle-bin":
+  get:
+    summary: List the recycle bin
+    description: |
+      Every recycled archive, newest deletion first, with its usage totals and the configured
+      retention/size bounds. A recycled archive is absent from every other read surface (search,
+      library, categories, shares, OPDS) until it is restored.
+
+      Requires a session-cookie login; API tokens of either role are rejected.
+    tags: [recycle-bin]
+    responses:
+      "200":
+        description: The bin's entries and totals.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                entries:
+                  type: array
+                  items: { $ref: "#/components/schemas/RecycleEntry" }
+                usage:
+                  type: object
+                  properties:
+                    count: { type: integer }
+                    bytes: { type: integer, format: int64 }
+                limits:
+                  type: object
+                  properties:
+                    retention_days:
+                      type: integer
+                      description: 0 means entries are kept forever.
+                    max_bytes:
+                      type: integer
+                      format: int64
+                      description: 0 means unlimited.
+                leftovers:
+                  type: object
+                  properties:
+                    count:
+                      type: integer
+                      description: Entry directories with no inventory record (a crashed delete).
+                safety_password:
+                  type: object
+                  properties:
+                    configured: { type: boolean }
+  delete:
+    summary: Empty the recycle bin
+    description: |
+      Permanently deletes every entry: payload files, thumbnails and inventory rows. Requires the
+      safety password in the body; the password is verified before any entry is resolved. A
+      partial failure still reports what was removed, and the survivors stay listed.
+    tags: [recycle-bin]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/SafetyPasswordBody" }
+    responses:
+      "200":
+        description: The empty operation's per-entry outcome.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                operation: { type: string }
+                success: { type: integer }
+                deleted: { type: integer }
+                failed:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      error: { type: string }
+      "403":
+        description: No safety password configured, or the supplied one is wrong.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "429":
+        description: Too many failed attempts; verification is temporarily locked.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+
+"/api/recycle-bin/{id}/restore":
+  post:
+    summary: Restore a recycled archive
+    description: |
+      Moves the stored file back to its original path (or, when that path is taken or gone, to a
+      free name beside it / the library root) and re-creates the archive record with its tags,
+      categories, bookmarks, stamps and reading progress. Fails with 409 when an archive with the
+      same content already exists again, or when the stored payload is missing or has changed size.
+    tags: [recycle-bin]
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: Restored; `path` is where the file actually landed.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                operation: { type: string }
+                success: { type: integer }
+                id: { type: string }
+                path: { type: string }
+                renamed:
+                  type: boolean
+                  description: True when the original path was unavailable and a new name was used.
+      "404":
+        description: No such entry.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "409":
+        description: The entry cannot be restored (identical archive exists, payload missing/changed, unsupported format).
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+
+"/api/recycle-bin/{id}":
+  delete:
+    summary: Permanently delete one entry
+    description: |
+      Removes the stored file, its sidecar patch, its thumbnails and its inventory row. Irreversible.
+      Requires the safety password in the body, verified before the entry is looked up so a wrong
+      password cannot reveal whether an id exists.
+    tags: [recycle-bin]
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/SafetyPasswordBody" }
+    responses:
+      "200":
+        description: Removed.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "403":
+        description: No safety password configured, or it is wrong.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "404":
+        description: No such entry.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "429":
+        description: Verification is locked after repeated failures.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+
+"/api/recycle-bin/{id}/thumbnail":
+  get:
+    summary: A recycled archive's cover
+    description: |
+      Serves the cover thumbnail retained for a recycled archive, so the bin page can show what was
+      deleted. 404 when the entry has no cover. Requires a session-cookie login.
+    tags: [recycle-bin]
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    responses:
+      "200":
+        description: The image bytes.
+        content:
+          image/webp: { schema: { type: string, format: binary } }
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/jxl: { schema: { type: string, format: binary } }
+      "404":
+        description: No such entry, or no thumbnail for it.
+
+"/api/safety-password":
+  get:
+    summary: Safety-password status
+    description: |
+      Whether a safety password is configured, whether this login session is currently locked out,
+      and how many attempts remain. Never returns the password or its hash.
+    tags: [recycle-bin]
+    responses:
+      "200":
+        description: The current state.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SafetyPasswordStatus" }
+  post:
+    summary: Set or change the safety password
+    description: |
+      Sets the four-digit safety password, or changes it when one is already configured (the
+      current password is then required and goes through the same lockout as a destructive action).
+      Only half-width ASCII digits are accepted.
+    tags: [recycle-bin]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [new_password]
+            properties:
+              current_password:
+                type: string
+                description: Required when a safety password is already configured.
+              new_password:
+                type: string
+                description: Exactly four ASCII digits.
+    responses:
+      "200":
+        description: The resulting status.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SafetyPasswordStatus" }
+      "400":
+        description: The new password is not exactly four ASCII digits.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "403":
+        description: The current safety password is missing or wrong.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "429":
+        description: Verification is locked after repeated failures.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+
+"/api/safety-password/reset":
+  post:
+    summary: Reset a forgotten safety password
+    description: |
+      Clears the safety password and its lockout when the caller proves the login password. The
+      next irreversible action then requires setting a new safety password. A wrong login password
+      does not count towards the safety-password lockout.
+    tags: [recycle-bin]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [login_password]
+            properties:
+              login_password: { type: string }
+    responses:
+      "200":
+        description: "Cleared — the status then reports `configured: false`."
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SafetyPasswordStatus" }
+      "403":
+        description: Wrong login password.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+
+components:
+  schemas:
+    SafetyPasswordBody:
+      type: object
+      required: [safety_password]
+      properties:
+        safety_password:
+          type: string
+          description: The four-digit safety password.
+    SafetyPasswordStatus:
+      type: object
+      properties:
+        configured:
+          type: boolean
+          description: Whether a safety password exists at all.
+        locked:
+          type: boolean
+          description: Whether this login session is currently locked out.
+        locked_until:
+          type: integer
+          format: int64
+          nullable: true
+          description: Unix seconds when the lock expires; null when not locked.
+        attempts_remaining:
+          type: integer
+          nullable: true
+          description: Failed-attempt budget left; null when no password is configured.
+    RecycleEntry:
+      type: object
+      description: One recycled archive.
+      properties:
+        id: { type: string }
+        title: { type: string }
+        name: { type: string }
+        original_path:
+          type: string
+          description: Absolute path the file was deleted from; the restore target.
+        file_name: { type: string }
+        size: { type: integer, format: int64 }
+        page_count: { type: integer }
+        deleted_at: { type: integer, format: int64 }
+        deleted_by:
+          type: object
+          properties:
+            kind:
+              type: string
+              enum: [session, token, guest, system]
+            label: { type: string }
+        expires_at:
+          type: integer
+          format: int64
+          nullable: true
+          description: Unix seconds; null when retention is "keep forever".
+        remaining_seconds:
+          type: integer
+          nullable: true
+        restorable:
+          type: boolean
+          description: False when a conflict prevents restoring this entry right now.
+        conflict:
+          type: string
+          nullable: true
+          enum: [identical_archive_exists, payload_missing, payload_size_mismatch, unsupported_schema]
+        has_thumbnail: { type: boolean }

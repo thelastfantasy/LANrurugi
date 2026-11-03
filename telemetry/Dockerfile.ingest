@@ -1,0 +1,42 @@
+# The heartbeat sink needs exactly one binary — no frontend, no plugins, no PDFium, no ONNX
+# Runtime, no Redis of its own. Reusing the repository's `rust-builder` stage (rather than building
+# the ~2 GB application image) keeps this small, and building inside bookworm keeps the glibc in
+# step with the TrueNAS host this runs on.
+#
+#   podman build --target rust-builder -t lrr-telemetry-builder .
+#   podman create --name lrr-telemetry-builder lrr-telemetry-builder
+#   podman cp lrr-telemetry-builder:/build/target/release/lanrurugi-server .
+#   podman build -f telemetry/Dockerfile.ingest -t lanrurugi-telemetry:local .
+#   podman rm lrr-telemetry-builder
+#
+# The last build's context is the directory holding the extracted binary, so it must contain
+# `lanrurugi-server` — copy the file next to this Dockerfile first.
+FROM debian:bookworm-slim
+
+# The sink never extracts an archive, renders a page or decodes an image, but the binary is linked
+# against the same archive/image libraries the full server uses (libarchive via `libxml2`,
+# `libopenjp2`, the compression set), so the shared objects still have to be present. This is the
+# full runtime stage's library list minus fonts, DjVuLibre, PDFium and ONNX Runtime.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libstdc++6 \
+        zlib1g \
+        libbz2-1.0 \
+        liblzma5 \
+        libzstd1 \
+        liblz4-1 \
+        libxml2 \
+        libopenjp2-7 \
+        libacl1 \
+        libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY lanrurugi-server /usr/local/bin/lanrurugi-server
+# The built dashboard (`telemetry/ui/dist`), served by `telemetry-ingest` at `/`.
+COPY ui /usr/local/share/lanrurugi/telemetry
+ENV LANRURUGI_TELEMETRY_UI_DIR=/usr/local/share/lanrurugi/telemetry
+ENV LANRURUGI_BUILD_CHANNEL=unknown
+
+EXPOSE 8099
+ENTRYPOINT ["lanrurugi-server"]
+CMD ["telemetry-ingest", "--bind", "0.0.0.0:8099"]

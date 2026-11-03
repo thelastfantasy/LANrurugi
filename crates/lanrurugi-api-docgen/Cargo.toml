@@ -1,0 +1,19 @@
+[package]
+name = "lanrurugi-api-docgen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# A build-time binary, deliberately NOT a dependency of `lanrurugi-api` (and depending on nothing
+# from the product). It consumes that crate's *source text* rather than its symbols — which is what
+# lets the route-completeness gate run without linking Redis, model assets, or `AppState`, and is
+# also what keeps the gate honest: it sees what is registered in the source, not what a refactor
+# intended to register.
+[dependencies]
+syn.workspace = true
+proc-macro2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde-saphyr.workspace = true
+clap.workspace = true
+anyhow.workspace = true

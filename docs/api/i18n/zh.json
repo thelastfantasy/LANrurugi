@@ -1,0 +1,1109 @@
+{
+  "_comment": "简体中文译文覆盖层。OpenAPI 文档本身保持英文（机器可读契约不应分语言），这里只在文档站渲染时替换显示的文本。键是英文原文，所以一条覆盖所有出现处。未收录的条目会原样回落到英文，生成器会报告未覆盖率。",
+  "patterns": {
+    "responseDescription": [
+      {
+        "match": "^The endpoint responded\\. Its exact shape is not documented yet — see the handler at (?<location>.+)\\.$",
+        "replace": "该端点已响应；其确切结构尚未记录，见 $<location> 处的 handler。"
+      }
+    ]
+  },
+  "parameters": {
+    "ID of the Archive to process.": "要处理的档案 ID。",
+    "ID of the Tankoubon to update.": "要更新的 Tankoubon ID。",
+    "Enable or disable Tankoubon grouping. Defaults to true.\nWhen enabled, Tankoubons will show in search results, replacing all the archive IDs they contain.": "启用或关闭 Tankoubon 分组，默认开启。\n开启时，搜索结果里会显示 Tankoubon，取代它包含的所有档案 ID。",
+    "Hide archives where reading progress has reached the end.": "隐藏已读到末尾的档案。",
+    "ID of the archive.": "档案 ID。",
+    "ID of the category you want to restrict this search to.": "限定本次搜索范围的分类 ID。",
+    "ID of the stamp.": "图章 ID。",
+    "Limit search to new archives only.": "只搜索未读过的档案。",
+    "Limit search to untagged archives only.": "只搜索未打标签的档案。",
+    "Disables the placeholder image, queues the thumbnail for extraction and returns a JSON with code 202. This parameter does nothing if the image already exists. (You will get the image with code 200 no matter what)": "关闭占位图，把缩略图排入提取队列，并返回 code 202 的 JSON。图片已存在时该参数不起作用。（无论哪种情况，只要图片已存在就会以 code 200 返回它）",
+    "ID of the Archive to download.": "要下载的档案 ID。",
+    "ID of the archive to use the Plugin on. This is only mandatory for metadata plugins.": "要在其上执行插件的档案 ID。只有元数据插件才必须提供。",
+    "Namespace of the plugin to use.": "要使用的插件命名空间。",
+    "Optional One-Shot argument to use when executing this Plugin.": "执行该插件时可选的 One-Shot 参数。",
+    "Order of the sort, either `asc` or `desc`.": "排序方向，`asc` 或 `desc`。",
+    "Page of the archive.": "档案的页码。",
+    "Position of the stamp in the page.": "图章在页面中的位置。",
+    "Priority of the Minion job. The higher the number, the more important the job is.": "Minion 任务的优先级。数字越大越优先。",
+    "Search query. This follows the same rules as the queries in `/api/search`.": "搜索查询串，规则与 `/api/search` 相同。",
+    "Text of the stamp.": "图章文本。",
+    "Add this parameter if you want to only get tags whose weight is at least the given minimum.  \nDefault is 1 if not specified, to get all tags.": "只想取权重不低于给定最小值的标签时传这个参数。  \n不传时默认为 1，即返回全部标签。",
+    "Archive ID to remove.": "要移除的档案 ID。",
+    "Arguments as a JSON array string": "参数，以 JSON 数组字符串给出",
+    "Category ID to add the downloaded URL to.": "把下载到的 URL 加入的分类 ID。",
+    "Category ID to add to.": "要加入的分类 ID。",
+    "Category ID to remove from.": "要移出的分类 ID。",
+    "Category ID. If passed, the OPDS catalog will be filtered to only show archives from this category.": "分类 ID。传入后，OPDS 目录会被过滤为只显示该分类下的档案。",
+    "Clamped to a small fixed range regardless of what is asked for — an unbounded limit would let one request force an arbitrarily large scan.": "无论请求多少都会被夹到一个小固定范围内——不设上限的话，单个请求就能强制触发任意大的扫描。",
+    "Comma-separated action types; multiple values are OR'd together.": "逗号分隔的操作类型；多个值是「或」的关系。",
+    "Comma-separated actor keys; multiple values are OR'd together.": "逗号分隔的操作者键；多个值是「或」的关系。",
+    "Comma-separated outcomes; multiple values are OR'd together.": "逗号分隔的结果；多个值是「或」的关系。",
+    "Current page to update the reading progress to.  \n**Must** be a positive integer, and inferior or equal to the total page number of the archive.": "要更新到的当前阅读页码。  \n**必须**是正整数，且不超过该档案的总页数。",
+    "Force a full background re-extraction of the Archive. Existing cached files might still be used in subsequent `/api/archives/:id/page` calls until the Archive is fully re-extracted.": "强制在后台完整重新提取该档案。在该档案完全重新提取完成之前，后续的 `/api/archives/:id/page` 调用仍可能用到已有的缓存文件。",
+    "Format of the returned backup. Defaults to `file`. `json` will return the backup as a JSON response.": "返回的备份格式，默认 `file`。`json` 会以 JSON 响应返回备份。",
+    "From which archive in the total result count this enumeration should start. The total number of archives displayed depends on the server-side page size preference.\n\nFrom 0.8.2 onwards, you can use \"-1\" here to get the full, unpaged list of IDs.": "从结果总数中的第几个档案开始枚举。单页显示的档案数取决于服务端的每页条数偏好。\n\n从 0.8.2 起，这里传 \"-1\" 可以取到完整的、不分页的 ID 列表。",
+    "From which archive in the total result count this enumeration should start. The total number of archives displayed depends on the server-side page size preference.  \n\nFrom 0.8.2 onwards, you can use \"-1\" here to get the full, unpaged data.": "从结果总数中的第几个档案开始枚举。单页显示的档案数取决于服务端的每页条数偏好。  \n\n从 0.8.2 起，这里传 \"-1\" 可以取到完整的、不分页的数据。",
+    "Global 1-indexed page number across all archives in the tankoubon. Page 1 is the first page of the first archive, and so on.": "跨整个 Tankoubon 内所有档案的全局页码，从 1 开始计数。第 1 页就是第一个档案的第一页，依此类推。",
+    "Global 1-indexed page number to update the reading progress to. Must be a positive integer.": "要更新到的全局页码，从 1 开始计数。必须是正整数。",
+    "How many archives you want to pull randomly. Defaults to 5.  \n\nIf the search doesn't return enough data to match your count, you will get the full search shuffled randomly.": "要随机取多少个档案，默认 5。  \n\n如果搜索结果的条数不够你要的数量，就返回全部搜索结果打乱后的结果。",
+    "ID of the Archive to append.": "要追加的档案 ID。",
+    "ID of the Archive to remove.": "要移除的档案 ID。",
+    "ID of the Job to query status for.": "要查询状态的任务 ID。",
+    "ID of the archive to process": "要处理的档案 ID",
+    "ID of the completed backup job.": "已完成的备份任务 ID。",
+    "Namespace by which you want to sort the results. There are specific sort keys you can use:\n- *title* if you want to sort by title\n- *lastread* if you want to sort by last read time. (If **Server-side Progress Tracking** is enabled)\n\n(Default value is title. If you sort by lastread, IDs that have never been read will be removed from the search.)": "结果排序所依据的命名空间。可用的排序键有：\n- *title*：按标题排序\n- *lastread*：按上次阅读时间排序（需开启 **服务端进度跟踪** ）\n\n（默认值是 title。按 lastread 排序时，从未读过的 ID 会被从搜索结果里移除。）",
+    "Namespace by which you want to sort the results. There are specific sort keys you can use:\n- *title* if you want to sort by title\n- *lastread* if you want to sort by last read time. (If **Server-side Progress Tracking** is enabled)  \n\n(Default value is title. If you sort by lastread, IDs that have never been read will be removed from the search.)": "结果排序所依据的命名空间。可用的排序键有：\n- *title*：按标题排序\n- *lastread*：按上次阅读时间排序（需开启 **服务端进度跟踪** ）  \n\n（默认值是 title。按 lastread 排序时，从未读过的 ID 会被从搜索结果里移除。）",
+    "New Summary of the Archive.": "档案的新摘要。",
+    "New Tags of the Archive.": "档案的新标签。",
+    "New Title of the Archive.": "档案的新标题。",
+    "Only `finished` is accepted; a missing or different value is a 400.": "只接受 `finished`；缺失或传入其他值会返回 400。",
+    "Only entries at or after this epoch-second timestamp.": "只返回该 Unix 秒级时间戳（含）之后的活动记录。",
+    "Only entries at or before this epoch-second timestamp.": "只返回该 Unix 秒级时间戳（含）之前的活动记录。",
+    "Opaque pagination cursor from a previous response's `next_cursor`.": "来自上一次响应 `next_cursor` 的不透明分页游标。",
+    "Page number of the chapter/section to delete.": "要删除的章节页码。",
+    "Page number where the chapter/section starts.": "章节的起始页码。",
+    "Page of the Archives list. Defaults to -1, which returns all archives.": "档案列表的页码。默认 -1，返回全部档案。",
+    "Page of the list of Tankoubons.  \nThe amount of tanks per page depends on the server `archives_per_page` setting.": "Tankoubon 列表的页码。  \n每页数量取决于服务端的 `archives_per_page` 设置。",
+    "Page you want to make the thumbnail out of. Defaults to 1.": "用哪一页生成缩略图，默认第 1 页。",
+    "Path to the image.": "图片路径。",
+    "Search query. You can use the following special characters in it:\n\n**Quotation Marks (\"...\")**\nExact string search. Allows a search term to include spaces. Everything placed inside a pair of quotation marks is treated as a singular term. Wildcard characters are still interpreted as wildcards.\n\n**Question Mark (?), Underscore (_)**\nWildcard. Can match any single character.\n\n**Asterisk (*), Percentage Sign (%)**\nWildcard. Can match any sequence of characters (including none).\n\n**Subtraction Sign (-)**\nExclusion. When placed before a term, prevents search results from including that term.\n\n**Dollar Sign ($)**\nAdd at the end of a tag to perform an exact tag search rather than displaying all elements that start with the term. Only matches tags regardless of search parameters and can be used as an exclusion to ignore misc tags in the search query.": "搜索查询串。可以在这当中使用下列特殊字符：\n\n**双引号 (\"...\")**\n精确字符串搜索。让一个搜索词可以包含空格；一对双引号内的所有内容会被当成单个词条处理。通配符仍然按通配符解释。\n\n**问号 (?)、下划线 (_)**\n通配符，匹配任意单个字符。\n\n**星号 (*)、百分号 (%)**\n通配符，匹配任意长度的字符序列（也可以一个都不匹配）。\n\n**减号 (-)**\n排除。放在某个词前面，搜索结果就不会包含该词。\n\n**美元符号 ($)**\n加在标签末尾，对该标签做精确搜索，而不是显示所有以该词开头的结果。它只匹配标签，不受搜索参数影响，因此也可以当作排除项，用来在搜索里忽略杂项标签。",
+    "Set to true to exclude namespaces configured in server settings from the results. Default behavior returns all tags.": "设为 true 时，把服务端设置里配置的命名空间从结果中排除。默认返回全部标签。",
+    "Specify which page you want to get a thumbnail for. Defaults to the cover, aka page 1.": "指定要取哪一页的缩略图，默认为封面，也就是第 1 页。",
+    "Title of the chapter/section.": "章节标题。",
+    "Type of plugins you want to list. You can use \"all\" to get all types at once.": "要列出的插件类型。传 \"all\" 可以一次取回所有类型。",
+    "Type of the job to instantiate.": "要实例化的任务类型。",
+    "URL to download": "要下载的 URL",
+    "Whether to force regeneration of all thumbnails even if they already exist.": "是否强制重新生成全部缩略图，即使它们已经存在。",
+    "Whether to generate all thumbnails, or only the missing ones.": "是生成全部缩略图，还是只生成缺失的那些。"
+  },
+  "responses": {
+    "Success response": "成功响应",
+    "Successful response": "成功响应",
+    "Error response": "错误响应",
+    "Generic error response": "通用错误响应",
+    "No archive ID response": "没有档案 ID 的响应",
+    "No archive ID response or other error": "没有档案 ID 的响应，或其他错误",
+    "Locked resource response": "资源被锁定的响应",
+    "Enqueued job": "已入队的任务",
+    "Result": "结果",
+    "Status": "状态",
+    "Search results": "搜索结果",
+    "The Tankoubon is currently locked for modification": "该 Tankoubon 当前被锁定，无法修改",
+    "The Stamp is currently locked for modification": "该图章当前被锁定，无法修改",
+    "The category ID is currently locked for modification": "该分类 ID 当前被锁定，无法修改",
+    "The Category is currently locked for modification": "该分类当前被锁定，无法修改",
+    "Archive TOC updated": "档案目录已更新",
+    "Archive metadata": "档案元数据",
+    "Archive metadata updated": "档案元数据已更新",
+    "Archive categories": "档案所属分类",
+    "Archive deleted response": "档案已删除的响应",
+    "Archive file": "档案文件",
+    "Archive page": "档案页面",
+    "Archive tankoubons": "档案所属的 Tankoubon",
+    "Archive thumbnail updated": "档案缩略图已更新",
+    "Archive uploaded successfully": "档案上传成功",
+    "Array of archive IDs": "档案 ID 数组",
+    "Array of archives": "档案数组",
+    "Array of plugins": "插件数组",
+    "Backup JSON file": "备份 JSON 文件",
+    "Categories": "分类列表",
+    "Category": "分类",
+    "Checksum mismatch": "校验和不匹配",
+    "Cleanup result": "清理结果",
+    "Cleared.": "已清除。",
+    "Deleted.": "已删除。",
+    "Duplicate archive": "重复的档案",
+    "How many entries were removed.": "移除了多少条记录。",
+    "How many jobs were cleared.": "清除了多少个任务。",
+    "If the thumbnail was already extracted, you get it directly.": "如果缩略图已经提取过，会直接返回它。",
+    "If thumbnails are already extracted and `force=0`": "缩略图已提取且 `force=0` 时",
+    "Image file for the requested page": "所请求页面的图片文件",
+    "Internal Server Error": "服务端内部错误",
+    "Invalid request": "请求无效",
+    "Job detail": "任务详情",
+    "Job not found or not completed": "任务不存在，或尚未完成",
+    "Job status data": "任务状态数据",
+    "No authenticated caller to scope the preferences to.": "没有已认证的调用者，无法确定偏好的归属。",
+    "No entry with that ID.": "没有该 ID 的记录。",
+    "No job with that ID is tracked.": "没有在跟踪该 ID 的任务。",
+    "No such queue item.": "没有该队列项。",
+    "No such session.": "没有该会话。",
+    "No such token.": "没有该令牌。",
+    "OPDS catalog XML": "OPDS 目录 XML",
+    "OPDS entry XML": "OPDS 条目 XML",
+    "One page of entries.": "一页记录。",
+    "Plugin result": "插件执行结果",
+    "Renamed.": "已重命名。",
+    "Revoked.": "已吊销。",
+    "Server info": "服务端信息",
+    "Started; the body carries the job id.": "已启动；响应体里带着任务 ID。",
+    "Stored.": "已保存。",
+    "Stored; the body echoes the resulting values.": "已保存；响应体会回显保存后的值。",
+    "Tankoubon": "Tankoubon",
+    "Tankoubon thumbnail updated": "Tankoubon 缩略图已更新",
+    "Tankoubons": "Tankoubon 列表",
+    "The IDs that were actually removed.": "实际被移除的那些 ID。",
+    "The active sessions.": "当前活跃的会话。",
+    "The available facets.": "可用的分面。",
+    "The current job list.": "当前任务列表。",
+    "The current window.": "当前时间窗口。",
+    "The effective preferences.": "生效中的偏好设置。",
+    "The issued tokens.": "已签发的令牌。",
+    "The item is currently downloading; stop it before deleting.": "该项正在下载；请先停止再删除。",
+    "The item is not in a startable state.": "该项当前不处于可启动状态。",
+    "The items that were added, and the ones that were not.": "已加入的项，以及未能加入的项。",
+    "The job is still queued or active; wait for it to finish or fail first.": "该任务仍在排队或执行中；请等它结束或失败后再操作。",
+    "The name was empty.": "名称为空。",
+    "The queue.": "队列。",
+    "The renamed token.": "重命名后的令牌。",
+    "The thumbnails are queued for extraction. You can use `/api/minion/:jobid` to track progress, by looking at `notes->progress` and `notes->pages`.": "缩略图已排入提取队列。可以用 `/api/minion/:jobid` 跟踪进度，查看 `notes->progress` 与 `notes->pages`。",
+    "The thumbnail is queued for extraction. Use `/api/minion/:jobid` to track when your thumbnail is ready.": "缩略图已排入提取队列。用 `/api/minion/:jobid` 跟踪它何时就绪。",
+    "The token, including its secret under `data.token`.": "该令牌，密钥在 `data.token` 下。",
+    "Which items started, and which were skipped and why.": "哪些项启动了、哪些被跳过以及原因。",
+    "Unprocessable Entity": "无法处理的实体",
+    "Unsupported file": "不支持的文件",
+    "Updated.": "已更新。",
+    "You get page URLs, and the ID of the background extract job.": "会返回页面 URL，以及后台提取任务的 ID。",
+    "`state` was missing, or was something other than `finished`.": "`state` 缺失，或者不是 `finished`。",
+    "Authentication required when authprogress is enabled": "开启 authprogress 时需要认证",
+    "Bad request": "请求有误",
+    "Search engine is not initialized yet. Please wait a few seconds.": "搜索引擎尚未初始化完成，请稍等几秒。"
+  },
+  "operations": {
+    "addArchiveToc": {
+      "summary": "向档案目录添加条目",
+      "description": "向指定档案的目录添加一个条目。  目录以 JSON 编码的键值数组存储，把页码映射到从该页开始的章节标题。  "
+    },
+    "addBookmark": {
+      "summary": "添加书签（`POST /archives/{id}/bookmarks/{page}`，不校验 `page` 是否超出该档案的页数）"
+    },
+    "addStamp": {
+      "summary": "添加图章标注",
+      "description": "在给定坐标处向该页面添加一个新图章。"
+    },
+    "addTankBookmark": {
+      "summary": "为 Tankoubon 添加书签（把 Tankoubon 全局页码换算到具体成员档案的页码）"
+    },
+    "addToCategory": {
+      "summary": "把档案加入分类",
+      "description": "把指定的档案 ID（见「档案 API」）加入给定分类。"
+    },
+    "addToQueue": {
+      "summary": "向队列添加下载项",
+      "description": "批量添加。调用者已经自行判断好每个 URL 匹配的是哪个下载插件的 `url_pattern`；这个端点唯一的校验是 `plugin_namespace` 能解析到一个已安装的插件。\n\n无效条目会被**逐条拒绝**，而不是让整批失败，因此粘贴的列表里有一个坏 URL 不会挡住其余的。请检查响应中的 `rejected`。"
+    },
+    "addToTankoubon": {
+      "summary": "把档案加入 Tankoubon",
+      "description": "把一个档案追加到 Tankoubon 的最后一位。"
+    },
+    "aiGroupSuggestions": {
+      "summary": "AI 分组建议"
+    },
+    "aiRenameChapter": {
+      "summary": "AI 重命名章节"
+    },
+    "aiRenameSuggestions": {
+      "summary": "AI 重命名建议"
+    },
+    "analyzeLogin": {
+      "summary": "分析登录"
+    },
+    "analyzeSplitSuggestion": {
+      "summary": "手动触发「立即分析该档案」"
+    },
+    "approvePending": {
+      "summary": "批准——这一刻之后，无人值守的匹配才变成要花钱的操作"
+    },
+    "batchDeleteArchives": {
+      "summary": "批量删除档案（`DELETE /archives`，请求体 `{ids: [...]}`）"
+    },
+    "blockSources": {
+      "summary": "用户自己投的反对票：这些作品从此不再被该订阅下载"
+    },
+    "blockedWorks": {
+      "summary": "用户显式屏蔽过的全部作品，最新的在前"
+    },
+    "bridgeCallback": {
+      "summary": "跨域登录回调"
+    },
+    "bulkDeleteActivity": {
+      "summary": "删除选中的活动记录",
+      "description": "按 ID 批量删除。仅限会话调用——任何角色的 API 令牌都会被拒绝，因此令牌无法抹掉自己的审计记录。"
+    },
+    "changePassword": {
+      "summary": "设置新的管理员密码，哈希方式与 legacy 存密码的方式一致（`{CRYPT}$2a$...`）"
+    },
+    "checkNow": {
+      "summary": "立即执行一次真实检查，而不是等排期（FR-024）"
+    },
+    "cleanDatabase": {
+      "summary": "清理数据库",
+      "description": "清理数据库：先隐藏、再移除那些文件已不在文件系统上的条目。  \n文件已不存在的条目在第一次清理时只做解除关联，因此不会出现在界面上——之后再跑一次清理才会**删除**这些已解除关联的条目。"
+    },
+    "cleanTempfolder": {
+      "summary": "清理临时目录",
+      "description": "清理服务端的临时目录。"
+    },
+    "clearCompleted": {
+      "summary": "清空已完成项（`POST /download_queue/clear_completed`，删除所有 `Done` 项并返回删除数量）"
+    },
+    "clearDuplicates": {
+      "summary": "清除重复项（`DELETE /database/duplicates`，对应 legacy 同一页面路由上的 `?delete=1` 参数）"
+    },
+    "clearFinishedJobs": {
+      "summary": "清除全部已完成任务",
+      "description": "移除已到达终止状态的任务——`finished` **或** `failed`。仍在进行中（`queued`、`active`）的任务保持被跟踪；等它们结束后再用单项端点处理。\n\n只接受 `state=finished`。这个名字的含义是「任何处于终止状态的任务」，所以 `failed` 的也会被一并清掉。"
+    },
+    "clearJob": {
+      "summary": "清除单个任务",
+      "description": "按 ID 清除单个任务，且只在该任务已到达终止状态后进行。\n\n仍处于 `queued` 或 `active` 的任务会返回 409，而不是被悄悄杀掉——一个工作还在跑却报告成功的任务，比一个错误更糟。"
+    },
+    "clearNewAll": {
+      "summary": "清除全部「新」标记",
+      "description": "清除全部档案上的「新！」标记。"
+    },
+    "clearNewArchiveFlag": {
+      "summary": "清除档案的「新」标记",
+      "description": "清除档案上的「新！」标记。"
+    },
+    "clearPageTranslation": {
+      "summary": "读者的「重新翻译」：丢弃本页的检测缓存、全部已翻译记录与合成结果"
+    },
+    "combinedHistory": {
+      "summary": "全部订阅的近期候选，合并成一条按时间倒序的流"
+    },
+    "compareQueueItem": {
+      "summary": "AI 质量对比判断（issue #77，针对某个下载队列项）"
+    },
+    "compareQueueItemPage": {
+      "summary": "对比视图里某一侧某一页的真实图片"
+    },
+    "compareQueueItemStream": {
+      "summary": "对比队列项的 SSE 流式版本"
+    },
+    "confirmOlderRevision": {
+      "summary": "确认保留较旧的版本（回答「是否用旧版本覆盖」这个提问）"
+    },
+    "create": {
+      "summary": "创建"
+    },
+    "createCategory": {
+      "summary": "创建分类",
+      "description": "创建一个新分类。"
+    },
+    "createTankoubon": {
+      "summary": "创建 Tankoubon",
+      "description": "创建一个新 Tankoubon，或更新已有 Tankoubon 的名称。"
+    },
+    "createToken": {
+      "summary": "创建 API 令牌",
+      "description": "签发一个新令牌并返回它的密钥——**这是它唯一一次被返回**。请当场保存；之后无法找回，只能替换。\n\n过期时间按服务端自己的时钟计算，而不是采用客户端提供的时间戳，因此时钟不准的客户端无法铸造出比它申请的有效期更长的令牌。"
+    },
+    "deleteActivity": {
+      "summary": "删除单条活动记录",
+      "description": "按 ID 删除单条记录。仅限会话调用，原因与批量删除相同。"
+    },
+    "deleteArchive": {
+      "summary": "删除档案",
+      "description": "同时删除档案元数据和服务器上存储的文件。  \n🙏 调用这个端点前请先向用户确认。"
+    },
+    "deleteArchiveToc": {
+      "summary": "从档案目录中移除条目",
+      "description": "从指定档案的目录中删除一个条目。  "
+    },
+    "deleteCategory": {
+      "summary": "删除分类",
+      "description": "删除一个分类。"
+    },
+    "deleteEntry": {
+      "summary": "删除条目"
+    },
+    "deleteImportSnapshot": {
+      "summary": "删除导入快照"
+    },
+    "deletePatch": {
+      "summary": "删除补丁（`DELETE /archives/{id}/patch`，删除 `.patch.zip` 旁挂文件并清理相关状态）"
+    },
+    "deletePluginOptions": {
+      "summary": "删除插件选项"
+    },
+    "deleteQueueItem": {
+      "summary": "删除一个队列项",
+      "description": "从队列中移除一个项。\n\n正在下载中的项会以 409 拒绝——把它的记录从正在运行的后台任务下面抽掉，会让那个任务无处更新，队列里既没有行可以显示进度，也没有办法停止传输。请先停止它。\n\n已经入库的队列项同样会被拒绝；请改为删除由此产生的那份档案。"
+    },
+    "deleteSelected": {
+      "summary": "删除选中的队列项",
+      "description": "按 ID 批量删除，语义与 `start_selected` 对齐：不存在或已被删除的 ID 是**静默无操作**，不是错误，所以可以安全地传入一份过期的选择。\n\n正在下载中的 ID 同样是静默无操作——这正是单项删除用 409 表达的同一套安全规则。"
+    },
+    "deleteStamp": {
+      "summary": "删除图章",
+      "description": "从某个档案中移除一个图章。"
+    },
+    "deleteTankoubon": {
+      "summary": "删除 Tankoubon",
+      "description": "从服务端移除一个 Tankoubon。这不会删除它底下的档案。"
+    },
+    "deleteToken": {
+      "summary": "吊销 API 令牌",
+      "description": "永久吊销一个令牌。仍在使用它的任何东西会立刻开始失败；令牌无法撤销吊销，只能替换。\n\n需要会话 cookie 登录。"
+    },
+    "detail": {
+      "summary": "详情"
+    },
+    "disable": {
+      "summary": "停用"
+    },
+    "discardReservation": {
+      "summary": "放弃预留"
+    },
+    "discardSearchCache": {
+      "summary": "丢弃搜索缓存",
+      "description": "丢弃存放用户历史搜索的缓存。"
+    },
+    "dismissPending": {
+      "summary": "忽略——把每个作品标记为已看过，后续检查就不会再问同样的问题"
+    },
+    "downloadArchive": {
+      "summary": "下载档案",
+      "description": "从服务端下载一个档案。"
+    },
+    "downloadBackup": {
+      "summary": "从已完成的任务下载备份 JSON",
+      "description": "下载由已完成的备份任务生成的备份 JSON 文件。"
+    },
+    "downloadImportSnapshot": {
+      "summary": "把完整的 `BackupDocument` 内容作为可下载的 JSON 文件返回（与导入时接受的格式相同）"
+    },
+    "downloadUrl": {
+      "summary": "把 URL 排入下载队列",
+      "description": "添加一个 URL，交由服务端下载并加入其书库。"
+    },
+    "dropDatabase": {
+      "summary": "清空数据库",
+      "description": "删除整个数据库，包括用户偏好设置。\n这是个相当危险的端点，调用它可能会让你作为客户端被锁在服务端之外！"
+    },
+    "enable": {
+      "summary": "启用"
+    },
+    "executeSplit": {
+      "summary": "执行拆分"
+    },
+    "exportComparePatch": {
+      "summary": "用用户挑选的页面生成 `.patch.zip`"
+    },
+    "exportPlugin": {
+      "summary": "导出插件（`GET /plugins/export?namespace=...`，见 `specs/006-ai-plugin-wizard` FR-028）"
+    },
+    "exportPluginsBatch": {
+      "summary": "批量导出插件（`POST /plugins/export-batch`，与单个导出相同，但一次处理多个命名空间）"
+    },
+    "fetchQueueItemMetadata": {
+      "summary": "「获取元数据」按钮的后端路径"
+    },
+    "forgetSeen": {
+      "summary": "让某个订阅重新考虑它已经处理过的作品"
+    },
+    "generate": {
+      "summary": "生成"
+    },
+    "generateStart": {
+      "summary": "启动插件生成（`POST /plugin-wizard/generate/start`，为何这样设计见该模块自身的顶部文档）"
+    },
+    "generateStream": {
+      "summary": "插件生成的 `EventSource` 兼容流式端点（`GET /plugin-wizard/generate/stream/{id}`）"
+    },
+    "getAllArchives": {
+      "summary": "获取全部档案",
+      "description": "返回数据库中全部档案的列表。按设计不包含 Tankoubon。  这个 JSON 里的 ID 可以用在其他端点上。"
+    },
+    "getArchive": {
+      "summary": "获取档案元数据（已废弃）",
+      "description": "获取指定档案的元数据（标题、标签）。"
+    },
+    "getArchiveCategories": {
+      "summary": "获取档案所属分类",
+      "description": "获取当前引用了该档案 ID 的全部分类。"
+    },
+    "getArchiveMetadata": {
+      "summary": "获取档案元数据",
+      "description": "获取指定档案的元数据（标题、标签）。"
+    },
+    "getArchiveTankoubons": {
+      "summary": "获取档案所属的 Tankoubon",
+      "description": "获取当前引用了该档案 ID 的全部 Tankoubon。"
+    },
+    "getArchiveThumbnail": {
+      "summary": "获取档案缩略图",
+      "description": "获取指定档案的缩略图。如果缩略图尚不存在，这个端点会返回一张占位图。若想把缩略图生成排入后台，可以使用 `no_fallback` 查询参数——这样你会拿到一个后台任务 ID，而不是占位图。"
+    },
+    "getAuthConfig": {
+      "summary": "获取认证配置"
+    },
+    "getBackupJson": {
+      "summary": "获取备份 JSON",
+      "description": "扫描整个数据库并以 JSON 形式返回备份。  数据库较大时建议改用 POST 版本——这个基础 GET 端点如果生成备份耗时过长可能会超时。  \n这份备份可以通过「备份与恢复」功能手动重新导入。"
+    },
+    "getCategory": {
+      "summary": "获取单个分类",
+      "description": "获取指定分类 ID 的详情。"
+    },
+    "getCategoryList": {
+      "summary": "获取全部分类",
+      "description": "获取服务端保存的全部分类。"
+    },
+    "getDuplicates": {
+      "summary": "读取所有已存储的重复组，把 ID 解析成当前的档案元数据，并剔除已失效的条目"
+    },
+    "getFacets": {
+      "summary": "列出活动记录的筛选项",
+      "description": "日志中出现过的操作类型与操作者，各自带计数——这样客户端可以按「实际存在的内容」来构建筛选界面，而不是按一份写死的列表。\n\n与列表端点一样，范围限定为调用者可见的内容：只有当调用者有权读取某操作者的记录时，该操作者才会出现。"
+    },
+    "getFiles": {
+      "summary": "提取档案",
+      "description": "获取指向档案内各图片的 URL 列表。  如有必要，这个端点还会启动一个后台 Minion 任务来解压该档案，使其可供阅读。"
+    },
+    "getFontPattern": {
+      "summary": "获取字体模式"
+    },
+    "getGlossary": {
+      "summary": "获取术语表"
+    },
+    "getHoverPageOrder": {
+      "summary": "读取已保存的 `BookmarkHoverGrid` 翻页顺序偏好"
+    },
+    "getLogLines": {
+      "summary": "获取日志行"
+    },
+    "getOnlyMatchingBookmarks": {
+      "summary": "读取「只显示自身匹配 `q` 的书签」这一已保存偏好"
+    },
+    "getOpdsCatalog": {
+      "summary": "获取 OPDS 目录",
+      "description": "以兼容 PSE 1.1 的 OPDS 1.2 目录形式获取档案索引。"
+    },
+    "getOpdsItem": {
+      "summary": "通过 OPDS 获取指定档案",
+      "description": "以 XML 返回某个特定的 OPDS 条目。结果中只会为该 ID 显示一个 `<entry>`，而不是全部档案。"
+    },
+    "getOpdsPage": {
+      "summary": "OPDS-PSE 分页图片",
+      "description": "以 XML 返回 OPDS-PSE 的某个具体图片页。"
+    },
+    "getPage": {
+      "summary": "获取档案的某一页",
+      "description": "获取档案的某一页。这个调用主要与 `/api/archives/files` 配合使用。"
+    },
+    "getPageDimensions": {
+      "summary": "返回前 `N` 页的自然像素宽高"
+    },
+    "getPageTextRegions": {
+      "summary": "检测结果，加上浏览器在本地翻译与合成所需的全部数据"
+    },
+    "getPageThumbnails": {
+      "summary": "获取页面缩略图"
+    },
+    "getPageTranslation": {
+      "summary": "为云端后端路径提供合成好的译文页面（T028）"
+    },
+    "getPluginOptions": {
+      "summary": "获取插件选项"
+    },
+    "getPluginSettings": {
+      "summary": "读取插件当前持久化的 `customargs`（`GET /plugins/settings?namespace=...`，按定义补齐/截断）"
+    },
+    "getPreferences": {
+      "summary": "读取调用者自己的偏好设置",
+      "description": "调用者自己的书库视图偏好；任何从未设置过的值都会回落到默认值。未认证的调用者拿到的是默认值——不是别人的设置。"
+    },
+    "getRecommendations": {
+      "summary": "获取推荐"
+    },
+    "getReport": {
+      "summary": "获取报告"
+    },
+    "getRetention": {
+      "summary": "读取活动记录的保留窗口",
+      "description": "活动记录保留多久，单位为秒。"
+    },
+    "getServerInfo": {
+      "summary": "获取服务端信息",
+      "description": "返回这个服务端所运行的 LRR 实例的一些基本信息。"
+    },
+    "getSettings": {
+      "summary": "获取设置"
+    },
+    "getSplitSuggestion": {
+      "summary": "获取拆分建议"
+    },
+    "getSplitTree": {
+      "summary": "返回档案内部的目录树（`GET /archives/{id}/split-tree`，含嵌套层级）"
+    },
+    "getStamp": {
+      "summary": "获取图章",
+      "description": "从某个档案获取一个图章。"
+    },
+    "getStatistics": {
+      "summary": "获取统计信息",
+      "description": "从数据库获取标签，并附带表示其流行度的数值。"
+    },
+    "getTankoubon": {
+      "summary": "获取单个 Tankoubon",
+      "description": "获取指定 tankoubon ID 的详情。"
+    },
+    "getTankoubonFull": {
+      "summary": "获取单个 Tankoubon 的完整详情",
+      "description": "获取指定 tankoubon ID 的详情，附带分页的档案元数据。\n每页的档案数取决于服务端的 `archives_per_page` 设置。"
+    },
+    "getTankoubonList": {
+      "summary": "获取全部 Tankoubon",
+      "description": "分页获取 Tankoubon 列表。"
+    },
+    "getTankoubonThumbnail": {
+      "summary": "获取 Tankoubon 缩略图",
+      "description": "获取指定 Tankoubon 的封面缩略图。  默认情况下，缩略图取自第一个档案的第一页。  如果缩略图尚不存在，这个端点会返回一张占位图。  若想把缩略图生成排入后台，  可以使用 `no_fallback` 查询参数。 "
+    },
+    "getTheme": {
+      "summary": "读取主题（issue #92：这个响应现在还带着 `language`，不只是 `theme`）"
+    },
+    "getTranslationScope": {
+      "summary": "报告该档案当前是否开启翻译，以及开启的是该档案自身的设置还是它所属 Tankoubon 的"
+    },
+    "getTranslationSettings": {
+      "summary": "获取翻译设置"
+    },
+    "getTranslationUsage": {
+      "summary": "FR-014 要求的四个粒度上的当前用量"
+    },
+    "getUntaggedArchives": {
+      "summary": "获取全部未打标签的档案",
+      "description": "获取没有任何标签记录的档案。  规则与批量打标签的筛选一致，因此 parody:、date_added:、series: 或 artist: 这类标签的存在不影响判定。"
+    },
+    "getVersion": {
+      "summary": "获取版本"
+    },
+    "health": {
+      "summary": "健康检查"
+    },
+    "ignoreGroupSuggestion": {
+      "summary": "忽略某条 AI 分组建议（「不要再建议这个组合」）"
+    },
+    "importLegacyCount": {
+      "summary": "本实例一共执行过多少次 LANraragi 导入——前端在导入前会读它"
+    },
+    "keepSideB": {
+      "summary": "保留书库中已有的那份档案、丢弃新下载的那份"
+    },
+    "list": {
+      "summary": "列表"
+    },
+    "listActivity": {
+      "summary": "列出活动记录",
+      "description": "一页活动记录，最新的在前，范围限定为调用者有权看到的内容（见本文件头部的说明）。\n\n目标为某个档案的记录会附带该档案是否仍然存在的标注，这样客户端可以显示「此后已被删除」，而不是一个死链接。"
+    },
+    "listBookmarks": {
+      "summary": "列出全部书签（`GET /bookmarks`，按档案聚合后依 `sort`/分页参数排序分页）"
+    },
+    "listBookmarksForArchive": {
+      "summary": "列出某个档案的书签页（不分页）"
+    },
+    "listBookmarksForTankoubon": {
+      "summary": "列出 Tankoubon 内所有成员档案的书签，并换算成 Tankoubon 全局页码"
+    },
+    "listComparePages": {
+      "summary": "列出一侧对比项的真实条目名列表（`GET /download_queue/{id}/compare/pages?side=a|b`）"
+    },
+    "listIgnoredGroupSuggestions": {
+      "summary": "列出被忽略的 AI 分组建议（支撑「显示已忽略的组合」）"
+    },
+    "listImportSnapshots": {
+      "summary": "导入快照的元数据列表，最新的在前（不含 `document` 内容）"
+    },
+    "listJobs": {
+      "summary": "列出正在跟踪的后台任务",
+      "description": "本实例正在跟踪的每一个任务，最新的在前。\n\n进度与字节数是尽力而为的：无法报告细粒度进度的任务会直接从 0 跳到 1，而不是伪造一个中间值；对于没有传输可报告的任务，字节字段是真正的缺失（而不是 `0`）。"
+    },
+    "listPending": {
+      "summary": "等待用户确认的已匹配作品"
+    },
+    "listPlugins": {
+      "summary": "列出可用插件",
+      "description": "列出给定类型的全部插件。"
+    },
+    "listQueue": {
+      "summary": "列出队列项",
+      "description": "下载队列中的每一个项，无论它当前处于什么状态。\n\n需要实时更新时请优先使用 `/download_queue/stream`，它会在状态变化发生时主动推送，而不必轮询。"
+    },
+    "listReservations": {
+      "summary": "列出预留"
+    },
+    "listSessions": {
+      "summary": "列出已登录设备",
+      "description": "每一个活跃的 refresh token 家族——也就是每一台当前已登录的设备——包括发出本次请求的这一台，它会被标记出来，以免客户端不小心提出吊销自己。\n\n需要会话 cookie 登录。任何角色的 API 令牌都会被拒绝。"
+    },
+    "listSources": {
+      "summary": "哪些来源可以支撑一个订阅，以及各自的间隔上下限——好让界面只提供合法选项"
+    },
+    "listTokens": {
+      "summary": "列出 API 令牌",
+      "description": "每一个已签发令牌的元数据。令牌密钥本身**绝不**包含在内：它只在下面那个创建调用中返回一次，且不会以可恢复的形式存储。\n\n需要会话 cookie 登录。"
+    },
+    "llmKeyStatus": {
+      "summary": "查询是否已配置 LLM 密钥（`GET /api/llm/key-status`，返回 `{ configured: true/false }`）"
+    },
+    "login": {
+      "summary": "登录"
+    },
+    "logout": {
+      "summary": "登出（refresh token 现在是有状态的，所以登出会真正吊销它）"
+    },
+    "lookup": {
+      "summary": "查询"
+    },
+    "minionJobDetail": {
+      "summary": "获取 Minion 任务的完整状态",
+      "description": "获取一个 Minion 任务的状态。  \n这个 API 主要供内部使用，但你可以用它来获取插件执行、URL 下载这类任务的详细状态。"
+    },
+    "minionJobStatus": {
+      "summary": "获取 Minion 任务的基本状态",
+      "description": "给定 Minion 任务 ID，检查它是成功还是失败。  \nMinion 任务用于缩略图、缓存预热、处理新进来的文件等各种场合。  \n对部分任务，你可以查看 notes 字段获取进度信息。详见 https://docs.mojolicious.org/Minion/Guide#Job-progress 。"
+    },
+    "opensearchXml": {
+      "summary": "OpenSearch 描述文档"
+    },
+    "overwriteQueueItem": {
+      "summary": "用新下载覆盖同名文件，从而解决 `PendingFilenameConflict`"
+    },
+    "parse": {
+      "summary": "解析"
+    },
+    "prepareBridge": {
+      "summary": "准备跨域登录"
+    },
+    "preview": {
+      "summary": "预览一次检查会做什么，但不真的执行"
+    },
+    "previewDraft": {
+      "summary": "预览一个还不存在的订阅"
+    },
+    "previewJudge": {
+      "summary": "在可能不同的条件下，重新评判一份已抓取的列表"
+    },
+    "putHoverPageOrder": {
+      "summary": "写入翻页顺序偏好（不记入活动日志——与 `settings.rs` 对显示类偏好采取的姿态一致）"
+    },
+    "putOnlyMatchingBookmarks": {
+      "summary": "写入「只显示匹配书签」偏好（不记入活动日志，与翻页顺序偏好姿态一致）"
+    },
+    "putPluginOptions": {
+      "summary": "写入插件选项"
+    },
+    "putPluginPriority": {
+      "summary": "持久化某个插件 `type` 分组内拖拽排序后的显示顺序（`PUT /plugins/priority`）"
+    },
+    "putPluginSettings": {
+      "summary": "写入插件设置"
+    },
+    "putPreferences": {
+      "summary": "更新调用者自己的偏好设置",
+      "description": "保存调用者的书库视图偏好。请求中省略的字段保持原样。需要已认证的调用者；未认证的调用会被拒绝，而不是悄悄写进一个共享的存储桶。"
+    },
+    "putRetention": {
+      "summary": "设置活动记录的保留窗口",
+      "description": "修改活动记录的保留时长。仅限会话调用：令牌不能缩短自己留下的痕迹能存活多久。"
+    },
+    "putSettings": {
+      "summary": "写入设置"
+    },
+    "queueArchivePageThumbnailExtraction": {
+      "summary": "提取页面缩略图",
+      "description": "为指定档案的每一页生成缩略图。  这个端点会把缩略图生成排入后台队列。  \n\n如果检测到全部缩略图都已存在，调用会返回 HTTP 200。  \n这个端点可以重复调用——如果该 ID 的缩略图任务已经在进行中，它只会把那个进行中任务的 ID 给你。"
+    },
+    "queueBackupJob": {
+      "summary": "排入一个备份任务",
+      "description": "排入一个 Minion 任务来生成备份 JSON 文件。  \n用返回的任务 ID 查看进度，完成后下载该文件。"
+    },
+    "queueImportLegacy": {
+      "summary": "导入调用者直接上传的 LANraragi（或 LANrurugi）备份 JSON 文件——不需要实例在线"
+    },
+    "queueMinionJob": {
+      "summary": "排入一个 Minion 任务",
+      "description": "按指定的类型和参数排入一个任务。  \n可用的任务类型及各自所需参数见 LANraragi::Utils::Minion 。  \n\n对于某个任务类型在给定服务端版本上是否存在，并没有 API 契约，所以除非你有充分理由，否则不建议使用它。  "
+    },
+    "queueRestoreJob": {
+      "summary": "排入一个恢复任务",
+      "description": "排入一个 Minion 任务，从备份 JSON 文件恢复。  \n用返回的任务 ID 查看进度。"
+    },
+    "queueStream": {
+      "summary": "推送下载队列项状态变化的 SSE 端点（`GET /download_queue/stream`）"
+    },
+    "rebuildIndex": {
+      "summary": "重建索引"
+    },
+    "recordLocalTranslation": {
+      "summary": "记录浏览器用它自己的本地模型得到的译文（T049a）"
+    },
+    "refresh": {
+      "summary": "刷新令牌（`POST /token/refresh`，legacy 没有对应端点）"
+    },
+    "regenThumbnails": {
+      "summary": "重新生成缩略图",
+      "description": "排入一个 Minion 任务，在服务端重新生成缺失的/全部的缩略图。"
+    },
+    "remove": {
+      "summary": "移除"
+    },
+    "removeBookmark": {
+      "summary": "删除书签（`DELETE /archives/{id}/bookmarks/{page}`，幂等）"
+    },
+    "removeFromCategory": {
+      "summary": "把档案移出分类",
+      "description": "把某个档案 ID 从一个分类中移除。"
+    },
+    "removeFromTankoubon": {
+      "summary": "把档案移出 Tankoubon",
+      "description": "把某个档案移出一个 Tankoubon。"
+    },
+    "removeTankBookmark": {
+      "summary": "删除 Tankoubon 书签（先换算全局页码再委托给档案级删除）"
+    },
+    "renameArchive": {
+      "summary": "重命名档案（`PUT /archives/{id}/rename`，新增端点，legacy 没有对应功能）"
+    },
+    "renameBookmark": {
+      "summary": "设置或清除该书签自身的名称（`PUT /archives/{id}/bookmarks/{page}/name`）"
+    },
+    "renameQueueItem": {
+      "summary": "把冲突的文件重新命名并入库，从而解决 `PendingFilenameConflict`"
+    },
+    "renameSession": {
+      "summary": "重命名一台已登录设备",
+      "description": "为某个会话设置自定义显示名，这样设备列表读起来是「客厅平板」而不是一串 user-agent。需要会话 cookie 登录。"
+    },
+    "renameTankBookmark": {
+      "summary": "重命名 Tankoubon 书签（同样是先换算再委托）"
+    },
+    "renameToken": {
+      "summary": "重命名 API 令牌",
+      "description": "修改令牌的标签。需要会话 cookie 登录。"
+    },
+    "repairMojibakeMetadata": {
+      "summary": "修复乱码元数据（`POST /database/scripts/repair-mojibake`）"
+    },
+    "resetFontPattern": {
+      "summary": "重置字体模式"
+    },
+    "resume": {
+      "summary": "解除系统施加的暂停"
+    },
+    "revokeSession": {
+      "summary": "吊销一台已登录设备",
+      "description": "通过吊销某个会话的整个 refresh token 家族来结束它，该设备必须重新登录。需要会话 cookie 登录。"
+    },
+    "runBench": {
+      "summary": "对调用者提供的 legacy/新版端点执行跨系统对比（两端都由调用者给出）"
+    },
+    "save": {
+      "summary": "保存"
+    },
+    "scanDuplicates": {
+      "summary": "把重复扫描排入后台任务（对应 legacy 的 `/api/minion/find_duplicates/queue`）"
+    },
+    "searchArchiveIds": {
+      "summary": "搜索档案 ID",
+      "description": "与 `/api/search` 一样搜索档案，但只返回匹配档案 ID 的有序列表，不带随附的元数据。"
+    },
+    "searchArchives": {
+      "summary": "搜索档案",
+      "description": "搜索档案。这个 JSON 里的 ID 可以用在其他端点上。"
+    },
+    "searchArchivesUngrouped": {
+      "summary": "原始档案搜索端点（`GET /search/archives`），共用 `/search` 的查询参数，但不会把成员档案折叠进 Tankoubon"
+    },
+    "searchRandomArchives": {
+      "summary": "随机搜索档案",
+      "description": "按给定的筛选条件和/或分类，随机取出一批档案。"
+    },
+    "searchSuggest": {
+      "summary": "为书库搜索框的标题自动补全提供数据的轻量端点"
+    },
+    "setNewArchiveFlag": {
+      "summary": "设置档案的「新」标记",
+      "description": "设置/恢复档案上的「新！」标记。"
+    },
+    "shinobuRescan": {
+      "summary": "重新扫描 filemap 并重启 Shinobu",
+      "description": "这会删除系统上已扫描文件的内部映射（即「filemap」）并重启 Shinobu，相当于触发一次对文件系统的完整重新扫描。"
+    },
+    "shinobuRestart": {
+      "summary": "重启 Shinobu",
+      "description": "重启 Shinobu 文件监视器"
+    },
+    "shinobuStatus": {
+      "summary": "获取 Shinobu 状态",
+      "description": "获取 FileWatcher 的当前状态。"
+    },
+    "shinobuStop": {
+      "summary": "停止 Shinobu",
+      "description": "停止文件监视器。用 `/api/shinobu/restart` 再次启动它。"
+    },
+    "splitProgressStream": {
+      "summary": "拆分进度流"
+    },
+    "stampedPages": {
+      "summary": "获取该档案中至少含有一个图章的页面",
+      "description": "获取该档案中至少含有一个图章的页面。"
+    },
+    "stampsByPage": {
+      "summary": "获取链接到该页面的图章",
+      "description": "获取链接到该页面的图章。"
+    },
+    "startAll": {
+      "summary": "启动全部排队项",
+      "description": "并发启动所有处于 `queued` 状态的项。每一项都会派生自己的后台任务；按域名限流与并发限制由下载管理器在下游统一执行，所以这里不再额外限速。\n\n它的范围刻意比单项启动更窄：处于 `error` 或 `cancelled` 的项必须逐个重试，而正在等待版本冲突答复的项**绝不会**被顺带启动——批量启动它等于用沉默回答了它正卡着的那个问题。"
+    },
+    "startBridge": {
+      "summary": "开始跨域登录"
+    },
+    "startQueueItem": {
+      "summary": "启动一个队列项",
+      "description": "解析该项自己的下载插件（用的是它被加入时选定的那个，而不是现在重新选），标记为正在启动，并在后台发起真正的下载。随着传输推进，该项的 `state`、`job_id` 与 `error` 始终保持最新。"
+    },
+    "startSelected": {
+      "summary": "启动选中的队列项",
+      "description": "与 `start_all` 相同，但只作用于给定的那些 ID。\n\n已经进行中、已经完成、或以其他方式无法启动的 ID 是**静默无操作**，不是错误——这样客户端可以直接传入一份选择，而不必先逐个复查当前状态。"
+    },
+    "status": {
+      "summary": "查询调用者是否「已登录」（用于权限门控判断，`GET /login/status`）"
+    },
+    "stopQueueItem": {
+      "summary": "停止进行中的队列项（`POST /download_queue/{id}/stop`，用于 `Starting`/`Downloading` 状态的项）"
+    },
+    "subfoldersToCategories": {
+      "summary": "按子目录批量建分类（`POST /database/scripts/subfolders-to-categories`，扫描档案目录并为每个子目录建一个分类）"
+    },
+    "subfoldersToTankoubons": {
+      "summary": "按子目录批量建 Tankoubon（`POST /database/scripts/subfolders-to-tankoubons`，只扫描**第一层子目录**）"
+    },
+    "tankAddStamp": {
+      "summary": "向 Tankoubon 添加图章"
+    },
+    "tankStampsByPage": {
+      "summary": "获取 Tankoubon 中某页的图章"
+    },
+    "trackingFor": {
+      "summary": "哪些订阅已经处理过某个作品（按其来源 URL 查）"
+    },
+    "trialRun": {
+      "summary": "试运行"
+    },
+    "unignoreGroupSuggestion": {
+      "summary": "取消忽略某条 AI 分组建议（`DELETE /tankoubons/ai-group-suggestions/ignore`）"
+    },
+    "update": {
+      "summary": "更新"
+    },
+    "updateArchiveMetadata": {
+      "summary": "更新档案元数据",
+      "description": "更新指定档案的标签与标题。  \n通过这个方法提交给服务端的数据会**覆盖**原有数据。"
+    },
+    "updateArchiveProgress": {
+      "summary": "更新阅读进度",
+      "description": "告诉服务端你当前正在展示/阅读这个档案的第几页，以便它相应地更新内部的阅读进度。  \n这个端点还会用服务端当前时间戳更新该档案的最后阅读时间。  \n\n只有在你确认用户确实正在阅读你展示的那一页时才应调用它。  \n**不要**在为了预加载图片而请求服务端时使用它。\n\n阅读进度是否允许回退由客户端决定。（网页端在用户开始重读前面的页面时会减小进度值）  \n不过建议在开始更新进度时顺手清掉档案上的「新！」标记——只要新标记还在，网页端就不会显示任何阅读进度。  \n\n⚠ 如果服务端配置为使用客户端进度跟踪，这个 API 调用会返回错误！  \n调用前请务必先用 `/api/info` 确认服务端是否跟踪阅读进度。"
+    },
+    "updateArchiveThumbnail": {
+      "summary": "更新档案缩略图",
+      "description": "更新指定档案的封面缩略图。你可以指定用哪一页作为缩略图，也可以使用默认缩略图。"
+    },
+    "updateBudget": {
+      "summary": "更新预算"
+    },
+    "updateCategory": {
+      "summary": "更新分类",
+      "description": "修改一个分类。"
+    },
+    "updateEntry": {
+      "summary": "编辑单条记录"
+    },
+    "updateQueueItem": {
+      "summary": "更新一个队列项",
+      "description": "部分更新：请求体中省略的字段会保留已存储的值，而不是被清空。约定与 `PUT /plugins/options` 相同。"
+    },
+    "updateStamp": {
+      "summary": "更新图章",
+      "description": "更新某个档案中的一个图章。"
+    },
+    "updateTankoubon": {
+      "summary": "更新 Tankoubon 的元数据与内容",
+      "description": "修改 Tankoubon 的完整元数据（名称、摘要、附加标签）或它的内容。  \n如果你只需要改名称，考虑直接用 PUT `/api/tankoubons`。  \n\n注意：如果不需要更新 `data` 里某个键对应的内容，就不要发送那个键——否则可能产生非预期的结果。"
+    },
+    "updateTankoubonProgress": {
+      "summary": "更新 Tankoubon 阅读进度",
+      "description": "告诉服务端你当前正在阅读这个 Tankoubon 的第几页，以便它相应地更新内部的阅读进度。\n页码是在该 tank 内所有档案上全局计数的（如果一个 tank 有两个档案，分别有 20 页和 25 页，那么第 26 页就是第 2 个档案的第 6 页）。\n⚠ 如果服务端配置为使用客户端进度跟踪，这个 API 调用会返回错误！\n调用前请务必先用 `/api/info` 确认服务端是否跟踪阅读进度。"
+    },
+    "updateTankoubonThumbnail": {
+      "summary": "更新 Tankoubon 缩略图",
+      "description": "用跨该 tank 内所有档案（按顺序）的全局页码，设置指定 Tankoubon 的封面缩略图。全局页码会自动换算到正确的档案与其中的局部页码。"
+    },
+    "updateTranslationScope": {
+      "summary": "设置当前实际管辖该档案的那个开关（若档案属于某个 Tankoubon，则是该 Tankoubon 的）"
+    },
+    "updateTranslationSettings": {
+      "summary": "更新翻译设置"
+    },
+    "uploadArchive": {
+      "summary": "上传档案",
+      "description": "把档案上传到服务端。  \n如果附带该档案的 SHA1 校验和，服务端会做一次可选的传输中文件完整性校验，并在服务端算出的校验和不匹配时拒绝这次上传。"
+    },
+    "uploadPlugin": {
+      "summary": "上传插件"
+    },
+    "usePluginAsync": {
+      "summary": "异步执行插件",
+      "description": "执行一个插件并返回与本次执行对应的 Minion 任务 ID。若你想执行耗时较长、用标准端点可能会超时的插件，这个端点很有用。"
+    },
+    "usePluginSync": {
+      "summary": "执行插件",
+      "description": "执行一个插件并返回结果。  如果用的是元数据插件，匹配到的档案不会在数据库中被修改。插件的更多说明见文档中对应的章节。"
+    }
+  },
+  "derived": {
+    "headline": "尚未在此参考中描述。这个端点会被列出，是因为服务端确实注册了它，但它的请求与响应形状还没有写下来。",
+    "noComment": "对应的 handler 是 `{handler}`，位于 {location}。",
+    "quoteVerbatim": "下面这段是 handler 自己的文档注释（{location}），**逐字引用、未翻译**——它是写给本代码库维护者看的，可能会提到内部标识符。",
+    "quoteTranslated": "下面这段是 handler 自己的文档注释（{location}）的**译文**；原文以源码为准。"
+  },
+  "quotedComments": {
+    "batchDeleteArchives": "`DELETE /archives`（issue #63），请求体 `{ids: [...]}`——沿用本代码库已有的「复数资源 + 用 JSON 请求体指明操作对象」这一形态（见 `activity.rs::bulk_delete_activity` 的 `DELETE /activity`），而不是 `POST .../batch-delete` 那种动作式路径；按 RFC 9110，`DELETE` **可以**带请求体（虽然一些较旧的代理/客户端在实践中会静默丢掉它，但 Axum 和本项目自己的前端都处理得很好，而且本仓库已有先例）。Batch 页面自己的「删除档案」操作此前是在前端按选中的档案逐个发 `DELETE /archives/{id}`，就是一个普通的顺序循环（没有原子性，没有统一的审计点，而且——由于每个请求只报告自己的成功/失败——调用方除非在操作前后对比整个书库，否则无法知道*哪些* id 失败了）。这里把同样的逐 id 工作（`delete_one_archive`，与单条删除端点完全相同的清理）放到服务端一个请求里完成，并返回逐 id 的结果列表，让前端能准确展示发生了什么，而不是假定全部成功。\n\n仅限会话调用（`route_policy.csv` 拒绝所有令牌角色以及 `anonymous`）——刻意比本文件里其他所有会修改档案的端点都更严格，那些端点 Token（Admin 或 Guest）都能调用。一个泄露或被写错的 API 令牌就能在一个请求里抹掉任意规模的库内容，其影响范围远大于令牌访问本来就允许的任何一个单目标端点；而本项目对批量删除并不存在像脚本化上传或元数据编辑那样的正当自动化场景——所以这条额外限制不会破坏任何真实工作流。",
+    "listBookmarksForArchive": "`GET /archives/{id}/bookmarks`——不分页，只返回这一个档案被标记书签的页面（升序，每项附带解析出的文件名）。读者用它判断当前页是否已加书签（那里只关心 `page`），`BookmarkHoverGrid` 也用它（它的标题需要 `page` 和 `filename` 两者，此前要额外发一次 `GET /archives/{id}/files`）。不要求档案存在——与 `remove_bookmark` 的姿态一致：档案不存在就只是没有书签可报告（也没有文件名可解析）。",
+    "addBookmark": "`POST /archives/{id}/bookmarks/{page}`——bookmarks 不拿档案真实的 `pagecount` 去校验 `page`，与 `update_progress`（`archives.rs`）自身的宽松处理一致：唯一的调用方是读者界面，它总是传入自己当前、已经合法的页码。",
+    "removeBookmark": "`DELETE /archives/{id}/bookmarks/{page}`——幂等，与 `BookmarksRepository::remove` 自身的契约一致；不会先检查档案是否存在，因为为一个已被删除的档案移除书签属于正当清理，不是错误。下面那次活动日志查询只是一次*尽力而为*的标签获取，与上述宽松处理是两回事——档案缺失时移除本身照常进行，只是 `target.label: None`（退化为只有 `target.id`，与任何其他「资源先消失」的操作类型相同）。",
+    "renameBookmark": "`PUT /archives/{id}/bookmarks/{page}/name`——设置或清除该书签自身的名称。书签本身不存在时返回 `404`（名称不能比它所命名的书签活得更久，而在不存在的书签上设置名称会静默留下一个 `NAMES_HASH_KEY` 孤儿条目，任何 `add_bookmark` 调用都不会清理它）——与 `add_stamp`「档案必须先存在」的姿态一致，只是这里检查的是书签存在性而非档案存在性。",
+    "getPageDimensions": "`GET /archives/{id}/page-dimensions?count=N`——只返回前 `N` 页的自然像素宽高，顺序与 `/files` 自己的 `pages` 数组一致（这样前端可以按下标直接配对，不必再做一次名称匹配）。它是对 `/files` 的**新增**端点，而不是折进 `/files`：`/files` 的既有调用方（第三方兼容的文件列表契约）不该被迫为一次需要逐条解析图片头的档案遍历买单；实际调用这个端点的只有无限滚动阅读视图（唯一真正需要它的调用方——用于在跳到恢复位置之前准确摆好尚未加载的 `<img>` 尺寸；为什么它只限定在跳转前的那些页而不是整个档案，见 `read_page_dimensions` 自身的文档）。",
+    "getPageTextRegions": "检测结果，加上浏览器在本地翻译与合成所需的全部数据。\n\n包含云端路径所组装的同一份 `context`，因此本地托管的后端也能获得 FR-007a–e 的一致性收益，尽管它的翻译调用从不经过本服务端。",
+    "getPageTranslation": "为云端后端路径提供合成好的译文页面（T028）。\n\n有缓存渲染结果时直接返回。未命中时它会**触发**真正的编排流程——OCR → 字体路由 → 批量翻译 → 合成 → 写缓存（`translation_pipeline::translate_page`）——覆盖本页及其预读窗口，然后立刻报告「尚未就绪」。\n\n这里刻意不等待该工作完成：一个完整的 OCR + LLM 周期要几十秒，而 FR-012 要求阅读界面在此期间继续显示原图并给出非阻塞的提示。客户端轮询即可；后续某次轮询就能拿到这次触发的缓存条目。阅读永远不应等待翻译（SC-007）。",
+    "clearPageTranslation": "阅读界面的「重新翻译」：丢弃本页的检测缓存、全部已翻译记录以及渲染出的图片，使下一次 `GET .../translation` 重新跑完整的 OCR → 翻译 → 合成流程，而不是复用过期缓存（例如由旧版流程产生的，或区域检测不完整的那一份）。",
+    "recordLocalTranslation": "记录浏览器用它自己的本地模型得到的译文（T049a）。\n\n**这里不会发生任何 LLM 调用**——它只是一次轻量写入。其目的是让本地后端翻译出的名称/术语仍然进入服务端共享的术语表，从而使后续同一卷的云端路径（或其他设备）请求与之保持一致。",
+    "deletePatch": "`DELETE /archives/{id}/patch`——删除旁挂的 `.patch.zip`（如果有），并清除该档案的 `has_patch` 标记。让用户可以撤销一个补丁——比如在重跑对比流程后换用另一个来源的页面——而不必改动档案本身。",
+    "renameArchive": "`PUT /archives/{id}/rename`——新增端点，legacy 没有对应功能（legacy 根本没有档案重命名功能；已核对 `~/LANraragi/lib/LANraragi/Controller/*.pm` 与 `public/js/edit.js`，任何地方都没有 `rename` 相关引用）。它重命名的是档案在磁盘上的文件（不只是存储的 `title`/`name`），并保持 `Archive::file` 与 `LRR_FILEMAP` 同步——参照 `download_manager::ingest` 自己那套「暂存文件改名进 `archive_dir`」的修正逻辑，那是「档案文件路径变了，要同步更新跟踪它的两处」最接近的既有先例。\n\n旁挂的 `.patch.zip`（它如何被关联见 `delete_patch` 自身的文档——同目录、同主文件名，纯靠文件名约定）会随档案一起改名：把它留在旧主文件名下会静默破坏 `patch::patch_path_for` 之后每一次查找，使一个已存在的补丁变得不可见，既不报错也不删除任何东西——这类「静默接近数据丢失」的 bug，远比让本函数直接拒绝这次改名要糟糕。",
+    "analyzeSplitSuggestion": "手动触发「立即分析该档案」的端点。",
+    "getSplitTree": "`GET /archives/{id}/split-tree`——返回档案内部的目录树，并递归展开其中嵌套的档案。这是只读的浏览用端点：它不调用 LLM，也不生成任何输出 ZIP。",
+    "getTranslationScope": "报告该档案当前是否开启翻译，以及开启的是它自己的设置还是从它所属的 Tankoubon 继承来的——后者是为了让阅读界面能告诉用户「这一项跟随整本书的设置」，而不是把一个只影响本文件的开关呈现得好像切换它会影响到别处。",
+    "updateTranslationScope": "设置当前实际管辖该档案的那个开关（若它属于某个 Tankoubon 则是该 Tankoubon 的，否则是该档案自身）——为什么在这里切换只会作用于其中之一、从不两者同时，见 `TranslationScopeRepository::set_enabled` 自身的文档。",
+    "runBench": "对调用者提供的 legacy/新版端点执行跨系统对比（从本 crate 的角度看两者都是外部 HTTP 目标——即使「新版」恰好就是这个正在运行的实例、通过它自己的监听地址访问——所以同一份实现能同等驱动两种情况，与 `lanrurugi-bench-compare` 独立运行时的方式一致）。",
+    "listBookmarks": "`GET /bookmarks`——全部书签，按档案聚合后依 `sort`/`cursor`/`limit` 排序分页。书签所属的档案已被删除时，它会被静默从结果中剔除，而不是让整个列表报错（与 `BookmarksRepository::list_all` 对个别格式错误条目已有的容忍一致——一个悬空引用不该拖垮其余全部仍然有效的书签）。",
+    "getHoverPageOrder": "`GET /bookmarks/hover-page-order`——已保存的 `BookmarkHoverGrid` 翻页顺序偏好（从未设置过时是 `None`；那种情况下前端会套用它自己的默认值 `\"pageDesc\"`）。",
+    "putHoverPageOrder": "不记入活动日志——属于仅影响显示的偏好，与 `settings.rs` 自己的 `theme` 字段采取的姿态相同（同样没有 `record_manual` 调用）。",
+    "getOnlyMatchingBookmarks": "`GET /bookmarks/only-matching`——已保存的「只显示自身匹配 `q` 的书签」偏好（从未设置过时为 `false`，与历史上一直显示全部的行为一致）。",
+    "putOnlyMatchingBookmarks": "不记入活动日志——与 `put_hover_page_order` 相同的「仅影响显示」姿态。",
+    "getDuplicates": "读取所有已存储的重复组，把 ID 解析成当前的档案元数据，并剔除自扫描以来已消失（被删除）的条目——与 legacy 在 `Controller/Duplicates.pm::index` 中的自愈行为一致（若剔除后组成员少于 2 个就丢弃整组，否则只移除消失的 ID 并重写该组）。",
+    "clearDuplicates": "`DELETE /database/duplicates`——对应 legacy 同一页面路由上的 `?delete=1` 参数。",
+    "scanDuplicates": "把扫描排入后台任务（对应 legacy 的 `/api/minion/find_duplicates/queue` 是由 Minion 承载而非同步执行），因为对每一对档案做哈希是 O(n²)，不该阻塞请求。",
+    "queueImportLegacy": "导入调用者直接上传的 LANraragi（或 LANrurugi）备份 JSON 文件——不连接任何远端 Redis 实例（原因见 `lanrurugi_backup::import_legacy` 自身的模块文档：官方 LANraragi Docker 镜像默认从不把它内置的 Redis 暴露到容器外）。与上面的 `queue_restore` 是相同的 multipart 文件上传形态，但这里刻意做成独立的 handler/解析/持久化路径，而不是 `queue_restore` 的一个变体——尽管两者的 JSON 形状表面相似却绝不能共用代码，原因见 `import_legacy` 自身的文档。",
+    "importLegacyCount": "本实例一共执行过多少次 LANraragi 导入——前端在展示导入界面之前会读它，以便在第 2 次及以后的导入时给出提醒（「你之前做过这个——建议先做一次完整备份」），而不必等导入本身完成。只读，与 `queue_import_legacy` 自己的递增（在真实导入完成后发生）分开，与 `ImportSnapshotRepository::import_count` 自身的读/增分离一致。",
+    "listImportSnapshots": "按时间倒序的元数据列表（不含 `document` 内容——见 `ImportSnapshotRepository::list_metadata` 自身的文档），供备份页面那个「时光机」式回滚点选择器使用。",
+    "downloadImportSnapshot": "把完整的 `BackupDocument` 内容作为可下载的 JSON 文件返回——与 `POST /database/restore` 接受的形状相同，因此前端自己的「恢复」流程可以把这个文件原样喂回去，两端都不需要任何格式转换。",
+    "repairMojibakeMetadata": "`POST /database/scripts/repair-mojibake`——为什么在导入器早已学会修复之后，已存储的记录里仍可能存在双重编码的文本，见 `crate::mojibake` 自身的文档。",
+    "subfoldersToCategories": "`POST /database/scripts/subfolders-to-categories`——扫描档案目录，并为每个直接包含档案的子目录创建一个静态分类（`FolderToCat.pm::run_script`）。\n\n响应里会报告它自己的墙上时钟耗时 `elapsed_ms`（从遍历目录到创建分类，含两端），以便与 `plugins/script/foldertocat.ts` 直接对比——那是一个真实的 `.ts` 脚本插件，自己完成完全相同的目录遍历与分组逻辑（用 `Deno.readDir`，而不是由宿主注入路径——用户要的是真正的正面对比，而不是让插件拿着别人遍历好的数据这种人为构造的场景），用来衡量把这类 I/O 密集的整库扫描放进 Deno 子进程插件沙箱、相对原生 Rust 究竟有多少真实开销。",
+    "subfoldersToTankoubons": "`POST /database/scripts/subfolders-to-tankoubons`——只扫描档案目录的**第一层子目录**，并为每个这样的子目录创建一个 Tankoubon。该第一层子目录下的所有档案（包括更深层嵌套子目录里的）都会被加入同一个 Tankoubon；嵌套子目录不会创建自己的 Tankoubon。允许重名；这是非破坏性操作，绝不会删除或去重已有的 Tankoubon。\n\n配置了 DeepSeek API 密钥时，该端点会尽力用 LLM 推断一个更好的 Tankoubon 名称以及一个 `artist:`/`circle:` 作者标签。没有密钥、或 LLM 调用失败时，它会回退到原始目录名并跳过作者标签。",
+    "clearCompleted": "`POST /download_queue/clear_completed`——删除所有 `Done` 状态的项，返回删除数量。刻意排除 `Error`——与 `Done` 不同，出错的项是一个可重试、仍可操作的状态（在本模块其他地方都与 `Queued`/`Cancelled` 归为一类：可选中、有重试按钮、显示自己的错误文本），而不是用户已经看完不想再管的「已完成」工作。想丢弃某个具体失败项的用户，仍可通过 `DELETE /download_queue/{id}` 单独处理（那个端点确实会清理 `pending_filename_conflict` 自己暂存的临时文件——`Done` 项从不带这种文件，所以本 handler 没有同类东西需要操心）。",
+    "queueStream": "`GET /download_queue/stream`——SSE 端点，推送由 `update_queue_item_state` 在每次成功写入 Redis 后广播的队列项增量状态变化。第一个事件是 `full`，携带当前完整列表，使客户端无需另外发一次 HTTP GET 即可完成初始化。",
+    "compareQueueItem": "`POST /download_queue/{id}/compare`——issue #77 针对 `PendingFilenameConflict` 的 AI 质量对比判断：把刚暂存下来的下载（`temp_path`，在响应中暴露为 [`imgcompare::Side::A`]）与已经入库、持有同名文件的那个档案（`existing_id` 自己的文件，暴露为 [`imgcompare::Side::B`]）做页面对齐与清晰度比较——只读，自身不解决任何冲突；前端之后仍会根据用户（借助或不借助这次对比）的决定去调用 `.../overwrite` 或 `.../rename`。响应里刻意不把 `A`/`B` 标为「新」/「旧」（见 [`lanrurugi_imgcompare::Side`] 自身的文档）——是这个 handler 为这个具体调用方赋予了那层含义。\n\n它与下面流式的 [`compare_queue_item_stream`] 并存（而不是被其取代），作为给不愿使用 SSE 的调用方准备的普通请求/响应降级方案——前端自己的 `ComparisonResultModal` 流程现在改走流式端点（原因见那个 handler 自身的文档）。",
+    "exportComparePatch": "`POST /download_queue/{id}/compare/export-patch`——用用户挑选的 A 侧独有页面（`ComparisonResult.a_unmatched_pages`，issue #77 自己的后续设计）构建一个 `.patch.zip`，并返回其原始字节供下载，可直接放到目标档案所在磁盘位置并命名为 `<档案文件名>.patch.zip`（`lanrurugi_scanner::patch`）——这个端点自己不会把它写到那里（已确认的设计：「补丁不需要应用，只要放在漫画目录内」——由用户放置的文件，而不是本服务端未经请求就安装的东西）。目标永远是 B（本次冲突所针对的库中已有档案）——补丁只会在用户保留的那一版之上追加 A 自己的额外页面，绝不会反过来。",
+    "keepSideB": "`POST /download_queue/{id}/compare/keep-b`——「保留库中已有的档案、丢弃这次下载」这一解决方式（issue #77 自己的后续设计）。它与本文件里其他所有解决动作都不同：那些都会把*暂存的*文件（A）以某种形式入库，要么替换 B（`overwrite_queue_item`），要么与 B 并存（`rename_queue_item`）——这一个则什么都不入库。B 已经在库里，就原样留在那里；实际发生的只有两件事：(1) `insertions`（如果有）会被直接写进 B 自己的旁挂 `.patch.zip`（不像 [`export_compare_patch`] 那样只是返回给用户自行放置——这个流程的前端在用户*选择*保留 B 的过程中已经引导他挑好了插入点，所以没有「现在去把这个文件放好」这一步留给他做），以及 (2) 该队列项被直接删除，与普通的 `DELETE /download_queue/{id}` 相同——它已经没有东西需要跟踪了（已确认的设计：补丁的存在本身体现在 B 旁边的磁盘文件上，而不是队列项的某个标记）。",
+    "compareQueueItemPage": "`GET /download_queue/{id}/compare/page?side=a|b&index=N`——`.../compare` 自身响应中某个 `PageComparison` 样本背后的真实页面图片，供前端的叠加/位移切换对比视图使用。`side=a` 读取尚未入库的暂存下载（`temp_path`——此时还不存在档案 ID，所以无法复用 `archives.rs` 自己的 `GET /archives/{id}/page`）；`side=b` 读取已有档案自己的文件。`index` 是自然排序下的页位置（与 `lanrurugi_imgcompare::PageComparison` 自己的 `a_page_index`/`b_page_index` 一致），每次调用都用 `list_pages` 现算成条目名，而不是缓存——这个端点每个冲突只会被访问寥寥几次（issue #77 自己确认的样本量为 3–5），为它加缓存不值得。",
+    "listComparePages": "`GET /download_queue/{id}/compare/pages?side=a|b`——对比中某一侧的真实条目名列表，按自然排序（页）顺序给出。前端自己那个「选择把 A 侧未匹配页面插入到哪里」的界面（issue #77 自己的后续设计）需要 B 的真实条目名，以便在 `.../export-patch` 里作为 `after_filename`/`before_filename` 发送——它除此之外只处理数字页码（与 `PageComparison.a_page_index`/`b_page_index` 一致），而 `patch.rs` 自己的 JSON schema 刻意不使用页码（为什么以条目名而非可能因档案重新扫描而漂移的下标作为稳定锚点，见该模块的文档）。",
+    "compareQueueItemStream": "`GET /download_queue/{id}/compare/stream`——上面 [`compare_queue_item`] 的 SSE 流式孪生版本，依据 issue #77 自己确认的两阶段设计（完整的阶段一/阶段二拆分见 `lanrurugi_imgcompare::compare_archives_streaming` 自身的文档）：开启一条 `EventSource` 兼容的流（用 GET 而非 POST——`EventSource` 无法发送请求体，也无法使用任何其他 HTTP 方法），每当出现一个 `CompareEvent::Sample` 就发出一个 `event: sample`（先粗后精，精确的替换样本随后陆续流入），最后发出一个终止性的 `event: done`，携带 `ComparisonResult` 其余字段——绝不把连接关闭/超时当作隐含的结束信号（「并且sse要有结束标记」）。前端在**第一个** `sample` 事件到达时就打开结果视图，而不是等整个对比完成；对于一对约 200 页的档案，否则会有好几秒的空白等待（「假设有6对结果（粗加工），可以用sse分6次发，发第一对的时候就开始显示modal，这样是一个很大的提速」）。\n\n缓存命中（策略与 `compare_queue_item` 自己的相同）会以一批 `sample` 事件（全部是 `phase: coarse`——缓存结果已经过两个阶段，而前端只关心「这个值是否是最终展示值」，一旦值本身已定，`Coarse` 与 `Precise` 其实没有区别）一次性重放，紧接着发出 `done`，因此重新打开一个已算好的对比依然是瞬时完成的。",
+    "confirmOlderRevision": "`POST /download_queue/{id}/confirm-older`——回答当一次下载被判定为比库中已有档案更*旧*的版本时弹出的那个 `AwaitingRevisionConfirmation` 提问（issue #107 的 `warn_then_conflict_menu`）。\n\n`proceed: true` 会把该决定记录到该项上并重新启动它——由于此时 `revision_confirmed` 已置位，重启会直接穿过同一套版本历史检查，而不会再次停在那里。`proceed: false` 会把该项移到 `Cancelled`，那本来就是「用户主动停下的、仍可重启」的状态，因此不需要新的终态。\n\n刻意与 `.../start` 分开：`AwaitingRevisionConfirmation` 不属于 `is_startable`，所以普通的启动按钮不会不小心跳过这个提问。",
+    "fetchQueueItemMetadata": "`POST /download_queue/{id}/fetch-metadata`——「获取元数据」按钮的后端路径。它跑的是与下载后自动抓取相同的那套插件 `execMetadata` + `metadata_preview` 缓存逻辑（`plugins::ensure_metadata_cached`），因此手动预览与自动抓取共用同一条代码路径（以及同一个 10 分钟 TTL），而不必让前端自己去调用 `POST /plugins/use`。",
+    "overwriteQueueItem": "`POST /download_queue/{id}/overwrite`——通过删除已有档案（B）并把暂存下载（A）以它原本预期的文件名入库来解决 `PendingFilenameConflict`。\n\n给定 `body.insertions` 时，会把 B 自己独有的页面打包成 `.patch.zip` 交给*新的* A 档案（issue #77 自己的后续设计：即使 A 总体上胜出，B 的某些页面可能仍值得保留）——这必须在调用 `resolve_conflict` **之前**读取 B 的页面并解析 B 自己的分类/标签/进度元数据，因为那次调用在把 A 入库的过程中会删除 B 的文件与记录（`pipeline.rs::delete_existing_archive`）——之后再想读就没有东西可读了。",
+    "renameQueueItem": "`POST /download_queue/{id}/rename`——通过改为以 `body.filename` 把暂存下载入库来解决 `PendingFilenameConflict`，原文件名的持有者（已有档案）保持不变（成为一个全新的、独立并存的档案）。如果 `filename` 本身也与某个其他档案冲突，该项会得到一个*新的* `PendingFilenameConflict`（仍可解决，只是针对另一个已有档案/文件名），而不是丢掉已经下载好的字节——见 `ingest::resolve_rename` 自身的文档。",
+    "stopQueueItem": "`POST /download_queue/{id}/stop`——取消一个进行中（`Starting`/`Downloading`）的队列项的下载，并把它退回 `Queued` 以便重新启动。这是协作式而非强制式的：它只是给该项在 `AppState::download_cancellations` 里的令牌发个信号——后台任务自己会在下一次 `tokio::select!` 轮询时察觉（见 `download_manager::stream::download_one`），并在真正结束前自行清理不完整的文件，此时 `start_download` 会把队列项状态改回去（见那里 `cancel_for_task.is_cancelled()` 分支）。没有令牌意味着要么该项其实从未在下载（没什么可停的），要么它恰好在本次请求到达前自己完成了——两者都是 `NotRunning`，并不值得大声报错，因为无论哪种情况，期望的最终状态（「这一项没有在下载」）都已经成立。",
+    "llmKeyStatus": "`GET /api/llm/key-status`——返回 `{ configured: true/false }`。",
+    "status": "`GET /login/status`——报告调用者就「是否显示仅管理员可见的界面」这一判断而言是否「已登录」，与 legacy 自己的 `userlogged` 模板变量一致（`Controller/Reader.pm`/`Index.pm`：`enable_pass == 0 || session('is_logged')`）。刻意做成自己的端点，而不是在 `/info` 上加一个新字段——`/info` 逐字段镜像 legacy 的第三方 `ServerInfo` OpenAPI schema（宪法原则 II），而 `logged_in` 在那个契约里没有位置。",
+    "logout": "由于 refresh token 现在是有状态的（`lanrurugi_storage::refresh_tokens`），登出现在会真的吊销——烧掉调用者 access token 所源自的整个 refresh token 家族（与 `rotate` 自己那条重放检测路径采取的补救相同），而不是只清掉浏览器 cookie、然后指望那个已成孤儿的 access token 在接下来几小时里自己安静过期。\n\n它从 *access* token 里读 `fid`（`session::COOKIE_NAME`，`Path=/`），而不是从 refresh cookie 读——这是刻意的，这样 `REFRESH_COOKIE_PATH` 就能继续只限定于 `POST /api/token/refresh`，不必再覆盖本端点。这里用的是 `family_id_ignoring_expiry` 而非平常那个会检查过期的验证器：用户在 access token 已经过期之后（闲置的标签页，还没碰到任何会触发静默刷新的端点）点击「登出」，他的 refresh token 家族仍然必须被真正吊销——一个已过期的 access token 仍能通过其签名证明来源真实，而这正是这里唯一需要的东西。",
+    "generateStart": "`POST /plugin-wizard/generate/start`——为什么生成被拆成这里加 `generate_stream`、而不是一个返回 JSON 的 `POST`，见本模块自身的顶部文档。它把请求体当作原始的 [`serde_json::Value`] 接收（而不是带类型的 `GenerateRequest`），正是为了让本端点永远不必重复实现 `GenerateRequest` 自己的字段/默认值处理——真正带类型的解析只在 `generate_stream` 时发生一次，针对的是这里原样暂存下来的内容。",
+    "generateStream": "`GET /plugin-wizard/generate/stream/{id}`——真正 `EventSource` 兼容的流式端点；完整的事件序列见本模块自身的顶部文档。`id` 是一次性的（本方法被调用的那一刻就从 `pending_generate_requests` 中移除），因此重放同一个 id（一个过期的书签、一次双击竞态）总会得到 `generation_not_found`，而不会静默重跑一个旧请求。",
+    "exportPlugin": "`GET /plugins/export?namespace=...`（`specs/006-ai-plugin-wizard` FR-028）——把一个已安装的插件（无论是否由向导创建）下载为包含它自己 `.ts` 文件的 `.zip`，文件以该命名空间自身最后一段路径命名（例如 `custom/metadata/foo` → 内含 `foo.ts` 的 `foo.zip`），而不是用完整命名空间，因为命名空间那个以 `/` 分隔的类别前缀在单独解压出来后没有意义。",
+    "exportPluginsBatch": "`POST /plugins/export-batch`——与 [`export_plugin`] 类似，但一次处理多个命名空间，打包进一个 `.zip`。每个条目以其完整命名空间路径存放（`custom/download/foo.ts`，而不只是 `foo.ts`），因为两个不同的命名空间可以共用同一个文件主名（`custom/download/foo` 与 `custom/metadata/foo`）——把两者都压成 `foo.ts` 会在写 zip 时静默丢掉其中一个。",
+    "putPluginPriority": "`PUT /plugins/priority`——持久化某个插件 `type` 分组内拖拽排序后的显示顺序（新增端点，legacy 没有对应功能：legacy 的 `plugins.html.tt2` 完全没有这种交互）。它把 `order` 中列出的每个命名空间在其自己的 `LRR_PLUGIN_<NS>` 哈希（与 `customargs`/`enabled` 同一处存储）里的 `priority` 字段重写为其在 `order` 中的位置，使后续的 `GET /plugins/{type}` 按此排序。实际类型与 `body.type` 不符的命名空间会被跳过（不写入，也不让整个请求报错）——为什么会有这个检查，见 `PutPluginPriorityBody::kind` 自身的文档。",
+    "getPluginSettings": "`GET /plugins/settings?namespace=...`——插件当前持久化的 `customargs`（会被补齐/截断到它自己声明的 `parameters.len()` 恰好长度——一个比插件当前声明更长或更短的过期已保存数组，例如插件升级增删过参数之后，会被静默调整到当前形状，而不是作为不匹配暴露出来，与 legacy 在 `get_plugin_parameters` 里「先填默认值再覆盖」的行为一致）以及 `enabled`（legacy 的「自动运行」开关——`is_plugin_enabled`，从未设置时为 `false`，与 legacy 自己那个以 `hexists` 为条件的默认值相同）。",
+    "searchArchivesUngrouped": "新增的原始档案搜索端点（`GET /search/archives`），共用 `/search` 的查询语法、筛选、排序与分页，但绝不把成员档案折叠到 Tankoubon 之后。它刻意是一个独立端点，而不是 `/search` 上的一个新默认行为：既有的分组搜索调用方保持完全一致的行为，而重复项/库成员检查则可以索取底层的档案记录，而不是一个 `TANK_` 聚合体。",
+    "searchSuggest": "新增的轻量端点，为书库搜索框的标题自动补全提供数据。与 `/search` 不同，它只返回前几个匹配项中的 `arcid` + `title`——没有标签、进度或体积——因为前端每敲一次键（已做防抖）就会调用它，而一次返回 100 条档案记录的完整 `/search` 页会有几百 KB 的 JSON，建议列表拿到后立刻就丢掉了。查询语法相同、筛选相同、默认的 `title` 排序也相同（这正是建议列表想要的），并且访客范围限制也相同：这里同样应用 `restrict_to_archive_ids`，因此 `guest_visitor` 绝不可能通过这个端点看到一个 `/search` 会拒绝返回的越界标题。",
+    "changePassword": "设置新的管理员密码，哈希方式与 legacy 存密码的方式一致（`{CRYPT}$2a$...`——见 `lanrurugi_core::password`），这样共用同一 Redis 的 legacy 实例也仍然接受它。空字符串会清除密码保护的实际效果，但方式与 legacy 配置页「留空则保持当前密码」的约定*不同*——这个端点总是设置提交上来的内容，因此除非用户确实想设一个空密码，前端绝不能提交空字段。",
+    "blockedWorks": "用户显式屏蔽过的全部作品，最新的在前，跨所有订阅。\n\n它有自己的端点，而不是在历史记录上加个筛选：屏蔽是一个*答复*——用户对这个作品说了不——而历史是不断被后续周期重写的决策日志（一个先入队后入库的作品在每条记录里都读作 `already_held`）。只有屏蔽列表始终保持在用户留下的样子，这正是它值得单独展示、并从这里撤销的原因。",
+    "combinedHistory": "全部订阅的近期候选，合并成一条按时间倒序的流。\n\n按订阅分开的历史已经存在，但它回答的是「*这条*规则做了什么」——而实际被问到的通常是另一个问题：最近来了什么，以及某个预期中的东西为什么没来。那需要把各个订阅交错在一起，而不是逐个读。",
+    "listPending": "已匹配、等待用户确认的作品。它之所以可达，仅仅因为 `auto_download` 默认关闭——否则那个默认值会让候选被记录下来却无从答复。",
+    "approvePending": "批准就是无人值守的匹配变成有人值守的花钱的时刻——在此之前不消耗任何下载额度。\n\n部分成功会如实上报而不是整体回滚：有多个条目时，其中一个入队失败没有理由把其余的也一并撤销批准，调用方会被告知究竟哪些没能入队。",
+    "dismissPending": "忽略会把每个作品标记为已看过，因此后续检查不会再提出同样的问题。这是用户在回答「不」——与预留不同，后者是系统在报告它*无法*下载某个东西。",
+    "previewDraft": "预览一个还不存在的订阅。\n\n带 id 的路由无法承担这件事：没有记录可读。而恰恰是在创建一个订阅的时候，「这条规则实际会抓到什么」最重要——之后用户就已经把规则定下来了。草稿是按来源当前的状态求值的，无论结果如何都不会存储任何东西。",
+    "previewJudge": "在可能不同的条件下，重新评判一份已抓取的列表。\n\n改一个条件并不会改变来源会返回什么——只有 `criteria` 影响请求——所以重新抓取纯属浪费、很慢，而且是对一个有限流的来源又多发一次请求。判断仍然发生在这里而不是浏览器里，因为条件树的第二份实现迟早会与真实的那份产生分歧。",
+    "listSources": "哪些来源可以支撑一个订阅，以及各自的间隔上下限——好让界面只提供可行的来源，并在用户提交*之前*就显示这些上下限，而不是通过一次拒绝来教会用户规则。",
+    "trackingFor": "哪些订阅已经处理过某个作品（按其来源 URL 查）。\n\n在删除档案之前询问，这样删除流程只会为「确实由某个订阅带进来」的档案提供「不要再让它回来」这个选项——对一个手动上传的文件提供该选项等于给了一个没有效果的开关，那比不给选项更糟。",
+    "blockSources": "用户自己投的「不」：这些作品从此不再被该订阅下载。\n\n刻意与「规则拒绝」区分开——规则读取的值会变化，所以拒绝是临时性的，每个周期都重新判定（FR-011i）；而这是一个答复，重新判定就等于把用户已经说过的话再问一遍。预览界面按行提供这一操作；`forget_seen` 可以撤销它。",
+    "checkNow": "立即执行一次真实检查，而不是等待排期（FR-024）。\n\n它是派生出去执行的，而不是被 await：一次检查要联系来源，还可能翻页遍历，比一个请求应该保持打开的时间更长。结果会出现在该订阅自己的历史里。",
+    "forgetSeen": "让某个订阅重新考虑它已经处理过的作品。\n\n「已看过」在其他情况下是永久性的，这对通常情形是正确的——用户故意删掉的作品绝不能在下次检查时回来。但有两种情况需要撤销它：一次误删，以及一条后来被放宽的规则（在旧规则下被拒绝的作品在被拒绝的那一刻就被记为已看过，所以没有任何东西会重新考虑它们）。\n\n带 `sources` 时只遗忘指定的那些。带 `all: true` 时清空整个集合——它被保留为一个独立的、显式的请求，因为在长期运行的订阅上，它可能一次匹配到全部历史目录，后果的量级不同。",
+    "preview": "预览一次检查会做什么，但不真的执行。\n\n它刻意可以作用于**已停用**的订阅：「这条规则实际会抓到什么」恰恰是在调整一条关掉的规则时问的。不会入队、不会记为已看过、也不会写日志，因此可以安全地反复运行——唯一的代价是向来源发一次请求。\n\n接受一个可选的请求体携带尚未保存的订阅，这样规则可以在提交之前先预览。没有这一点，用户就得先保存一条规则才能知道它做什么。",
+    "resume": "解除系统施加的暂停。与 `enable` 不同，因为被暂停的订阅是*被系统*停下的，它欠用户一个解释——恢复就是用户对这个解释的回应。",
+    "ignoreGroupSuggestion": "`POST /tankoubons/ai-group-suggestions/ignore`——对某一条具体建议执行「不要再建议这个」。幂等（忽略一个已被忽略的组合只会覆盖它的 `ignored_at` 时间戳，见 `IgnoredGroupSuggestionsRepository::ignore` 自身的契约）。",
+    "unignoreGroupSuggestion": "`DELETE /tankoubons/ai-group-suggestions/ignore`——重新启用一条此前被忽略的建议（前端「显示已忽略的组合」清单里自己的「取消忽略」按钮）。幂等——取消忽略一个当前并未被忽略的组合是无操作，不是错误。",
+    "listIgnoredGroupSuggestions": "`GET /tankoubons/ai-group-suggestions/ignored`——支撑「显示已忽略的组合」清单本身（标题由客户端针对已加载的档案列表解析，用的就是 `AiSmartTankoubonModal.tsx` 已经为主建议卡片构建的那张 `titleById` 映射——这个端点只需要返回原始的已忽略条目，不必在服务端做补全）。",
+    "aiRenameSuggestions": "把 tankoubon 的标题、成员档案名与顺序发给 DeepSeek，返回 AI 生成的改名建议（tankoubon 名称 + 每个档案的章节名）。必须配置 LLM 密钥；未配置时返回 400。",
+    "listBookmarksForTankoubon": "`GET /tankoubons/{id}/bookmarks`——Tankoubon 内所有成员档案的全部书签，并换算成 Tankoubon 自己的全局页码。不分页，按全局页码升序——与 `list_bookmarks_for_archive` 自身的契约一致（用法也相同，都是给 `BookmarkHoverGrid` 用，只是这里对应 Tankoubon 卡片而不是普通档案卡片）。已不存在的成员档案（或 `pagecount` 为空，例如尚未扫描）会静默不贡献任何内容，而不是让整个请求失败——与 `TankoubonFullResponse` 自身文档所描述的、`full_data` 静默省略缺失成员是同一种容忍。",
+    "addTankBookmark": "`POST /tankoubons/{id}/bookmarks/{page}`——把 Tankoubon 全局 `page` 换算到真实的成员档案 + 局部页码（`tankoubons::resolve_tank_page`），然后委托给 [`add_bookmark`] 自己的逻辑；写入本身仍然落在真实档案 ID 上，与在阅读 Tankoubon 时放置的图章相同（`stamps.rs` 自己的 Tankoubon 路由）——`bookmarks.rs` 底层的 `BookmarksRepository` 没有自己的 `TANK_` 概念，也永远不需要。",
+    "removeTankBookmark": "`DELETE /tankoubons/{id}/bookmarks/{page}`——与 [`add_tank_bookmark`] 相同的「先换算再委托」形态，委托对象是 [`remove_bookmark`]。",
+    "renameTankBookmark": "`PUT /tankoubons/{id}/bookmarks/{page}/name`——与 `add_tank_bookmark`/`remove_tank_bookmark` 相同的「先换算再委托」形态，委托对象是 [`rename_bookmark`]。",
+    "getTheme": "issue #92：这个响应现在还带着 `language`，不只是 `theme`——`useApplyTheme`/`useApplySettingsLanguage`（`apps/frontend/src/theme.ts`/`i18n/index.ts`）过去都从完整的、需要鉴权的 `GET /settings` 里读取各自那个字段（该响应还带着 API 密钥和其他确实属于机密的字段，无法公开，因此登录前会 401）——每个在会话存在之前渲染的页面（登录页自己那套特制的 `usePublicTheme` 回退除外）都撞上那个 401，而 `client.ts` 里那个*全局* 401 处理器在每一次上都强制跳转到 `/login`，不管发起调用的 hook 自己是否已经准备好了回退值，从而使 issue #92 自己「留在当前页、不要跳转」的要求对任何在登出状态下渲染的内容都失效（新加的 404 页面尤其如此——实测报告了一次真实的双重跳转：先闪一下 404 内容，然后还是去了 `/login`）。`theme`/`language` 是会话存在之前唯一需要的两个字段，而且两者都完全不机密，所以把 `language` 折进这个已经公开的端点，比为多一个字段再撑起一整套公开设置接口要简单。响应里还带着 `admin_theme`——始终是管理员自己的 `theme`，与访客资格无关——这样即使开启了访客模式、且访客主题是另一套，登录页也能用管理员的主题渲染。",
+    "refresh": "`POST /token/refresh`——legacy 没有对应端点。用 refresh cookie 换取一个新的 access token + 轮换后的 refresh cookie（轮换/重放检测的语义见 `lanrurugi_storage::refresh_tokens::rotate` 自身的文档）。前端会在任何其他端点返回 401 时透明地调用它（`apps/frontend/src/api/client.ts`），且在此之前不会跳转到 `/login`。",
+    "getTranslationUsage": "FR-014 要求的四个粒度上的当前用量。\n\n没有配置计量后端时返回一个全零结果而不是错误——本地托管的后端本来就没有用量可报告。",
+    "updateEntry": "编辑单条记录。在下一次翻译请求时生效（FR-007d）。"
+  },
+  "accessNotes": {
+    "listActivity": [
+      "**你能看到哪些条目取决于你的身份。** 网页会话能看到全部记录；管理员令牌能看到它自己产生的、以及所有 guest 令牌产生的记录；guest 令牌只能看到它自己产生的记录。所以令牌持有者看到的是完整日志的一个**子集**——返回空不代表什么都没发生。"
+    ],
+    "searchArchives": [
+      "访客（开启访客访问时的未认证访问者）只能看到所属分类被标记为「访客可见」的档案；其他身份能看到整个书库。"
+    ],
+    "searchArchiveIds": [
+      "作用域与 `/api/search` 相同：访客只会拿到访客可见档案的 ID。"
+    ],
+    "searchRandomArchives": [
+      "作用域与 `/api/search` 相同：访客只会在访客可见的档案中随机抽取。"
+    ],
+    "searchSuggest": [
+      "作用域与 `/api/search` 相同，因此访客不可能看到 `/api/search` 会拒绝返回的档案标题。"
+    ],
+    "getArchiveMetadata": [
+      "对**不在访客可见范围内**的档案，这里返回 **404** 而不是 403——刻意与「档案不存在」不可区分，因此这个响应无法被用来探测访客范围之外的档案是否存在。"
+    ],
+    "getFiles": [
+      "对**不在访客可见范围内**的档案，这里返回 **404** 而不是 403——刻意与「档案不存在」不可区分，因此这个响应无法被用来探测访客范围之外的档案是否存在。"
+    ],
+    "getPage": [
+      "对**不在访客可见范围内**的档案，这里返回 **404** 而不是 403——刻意与「档案不存在」不可区分，因此这个响应无法被用来探测访客范围之外的档案是否存在。"
+    ],
+    "getPageDimensions": [
+      "对**不在访客可见范围内**的档案，这里返回 **404** 而不是 403——刻意与「档案不存在」不可区分，因此这个响应无法被用来探测访客范围之外的档案是否存在。"
+    ],
+    "getArchiveThumbnail": [
+      "对**不在访客可见范围内**的档案，这里返回 **404** 而不是 403——刻意与「档案不存在」不可区分，因此这个响应无法被用来探测访客范围之外的档案是否存在。"
+    ],
+    "getPageThumbnails": [
+      "对**不在访客可见范围内**的档案，这里返回 **404** 而不是 403——刻意与「档案不存在」不可区分，因此这个响应无法被用来探测访客范围之外的档案是否存在。"
+    ],
+    "stampedPages": [
+      "对**不在访客可见范围内**的档案，这里返回 **404** 而不是 403——刻意与「档案不存在」不可区分，因此这个响应无法被用来探测访客范围之外的档案是否存在。"
+    ],
+    "stampsByPage": [
+      "对**不在访客可见范围内**的档案，这里返回 **404** 而不是 403——刻意与「档案不存在」不可区分，因此这个响应无法被用来探测访客范围之外的档案是否存在。"
+    ],
+    "listBookmarksForArchive": [
+      "对**不在访客可见范围内**的档案，这里返回 **404** 而不是 403——刻意与「档案不存在」不可区分，因此这个响应无法被用来探测访客范围之外的档案是否存在。"
+    ],
+    "getAllArchives": [
+      "**访客和匿名调用者完全不可达。** 这是无范围的列表：它返回书库中的全部档案，不做任何分类范围限制——给访客开放它等于绕过 `/api/search` 强制的那套「访客可见」限制。访客请走 `/api/search`。"
+    ]
+  }
+}

@@ -1,0 +1,143 @@
+/* The one control this page adds to Swagger UI: the base-URL input.
+ *
+ * Styled to sit in Swagger UI's own Servers block rather than beside it — the block's title is
+ * 12px/700 and its controls run the full width of that column, so matching those two facts is all
+ * the alignment this needs. Laid out as title-above-control, exactly like the Servers title and
+ * select it appears next to; a side-by-side row was what looked crooked before. */
+.server-override {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.server-override__title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #3b4151;
+}
+
+.server-override input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 10px;
+  font-family: monospace;
+  font-size: 12px;
+  color: #3b4151;
+  background: #fff;
+  border: 1px solid #b6b6b6;
+  border-radius: 4px;
+}
+
+.server-override input:focus {
+  outline: none;
+  border-color: #61affe;
+  box-shadow: 0 0 0 2px rgba(97, 175, 254, 0.25);
+}
+
+.server-override__hint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: #6b6b6b;
+}
+
+/* The top bar's Explore field is hidden.
+ *
+ * It loads a *different* OpenAPI document by URL — a capability with no use here: this page renders
+ * one document, and an instance serves its own copy at this same path, so there is nothing for a
+ * reader to type. What it did instead was look exactly like a search box: typing an endpoint name
+ * into it made Swagger UI fetch that name as a spec URL, 404, and replace the entire document with
+ * "Failed to load API definition" — reported live as "搜啥都是报错", with no obvious way back.
+ *
+ * Hiding rather than switching to `urls` (which renders a one-entry dropdown, equally useless) or to
+ * an inline `spec:`: the fetch from `./openapi.json` is the relationship worth keeping — this page
+ * renders the same published document every other consumer reads. The selector is spelled out to
+ * match Swagger UI's own `.swagger-ui .topbar .download-url-wrapper { display: flex }` — a bare
+ * `.download-url-wrapper` loses to it on specificity and does nothing (verified by measuring the
+ * computed style, not by assuming).
+ */
+.swagger-ui .topbar .download-url-wrapper {
+  display: none;
+}
+
+/* Keep the dark-mode toggle at the right-hand end of the top bar.
+ *
+ * It used to sit there because the Explore form it followed carried `margin-left: auto` — hiding
+ * that form left the toggle immediately after the logo instead. Same specificity as Swagger UI's own
+ * `.swagger-ui .topbar .dark-mode-toggle { margin-left: 10px }` and later in the cascade, so this
+ * wins; the alternative (leaving the hidden form in the flex row as a spacer) would keep layout that
+ * depends on an element nobody can see. */
+.swagger-ui .topbar .dark-mode-toggle {
+  margin-left: auto;
+}
+
+/* Link to the other locale. The two pages are separate static files — Swagger UI has no locale
+   concept of its own — so without this there is no way to reach the English page from the Chinese
+   one or back. */
+.swagger-ui .topbar .locale-switcher {
+  /* The top bar is a flex row, so without this the link stretches to fill the remaining width
+     instead of hugging its label. */
+  flex: 0 0 auto;
+  align-self: center;
+  margin-left: 16px;
+  padding: 4px 10px;
+  font-size: 13px;
+  color: #e4e6e6;
+  text-decoration: none;
+  border: 1px solid #6b6b6b;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.swagger-ui .topbar .locale-switcher:hover {
+  color: #fff;
+  border-color: #fff;
+}
+
+/* Swagger UI stacks its top bar into a column on narrow screens, which took four rows once the
+   theme switch, locale link and GitHub icon were in it. One row, like the other sites' bars. */
+.swagger-ui .topbar .topbar-wrapper {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+/* Neither the logo nor the switch gives up width; the switch's auto left margin takes the slack. */
+.swagger-ui .topbar .topbar-wrapper > a.link,
+.swagger-ui .topbar .lr-theme-switch {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 640px) {
+  .swagger-ui .topbar .wrapper {
+    padding: 0 16px;
+  }
+
+  .swagger-ui .topbar .lr-logo {
+    padding: 0;
+  }
+
+  /* `.topbar-wrapper` in the selector: swagger-theme.css loads later and sets these margins too. */
+  .swagger-ui .topbar .topbar-wrapper .locale-switcher,
+  .swagger-ui .topbar .topbar-wrapper .lr-github {
+    margin-left: 8px;
+  }
+}
+
+/* The homepage drops its wordmark at this width too; the icon and the API tag stay. */
+@media (max-width: 480px) {
+  .swagger-ui .topbar .lr-logo__name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+}
+
+/* Below this there is no room for the GitHub icon beside the switch and the locale link. */
+@media (max-width: 374px) {
+  .swagger-ui .topbar .topbar-wrapper .lr-github {
+    display: none;
+  }
+}

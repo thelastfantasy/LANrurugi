@@ -1,0 +1,21 @@
+#!/bin/sh
+# rc.d script (FreeBSD). install-service.sh fills @PREFIX@, @DATA@ and @USER@ and installs it as
+# /usr/local/etc/rc.d/lanrurugi; enable with `sysrc lanrurugi_enable=YES`.
+#
+# PROVIDE: lanrurugi
+# REQUIRE: LOGIN NETWORKING redis
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="lanrurugi"
+rcvar="lanrurugi_enable"
+load_rc_config $name
+: ${lanrurugi_enable:="NO"}
+: ${lanrurugi_user:="@USER@"}
+
+pidfile="/var/run/${name}.pid"
+command="/usr/sbin/daemon"
+command_args="-f -r -P ${pidfile} -u ${lanrurugi_user} /bin/sh -c 'set -a; . \"@DATA@/lanrurugi.env\"; exec \"@PREFIX@/bin/lanrurugi-server\" serve'"
+
+run_rc_command "$1"

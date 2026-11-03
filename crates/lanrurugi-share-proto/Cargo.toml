@@ -1,0 +1,23 @@
+[package]
+name = "lanrurugi-share-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Wire types, code derivation, knock records and tickets for sharing (specs/017-archive-sharing).
+# Deliberately free of tokio, iroh and filesystem access so it is testable on its own.
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+postcard.workspace = true
+argon2.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+chacha20poly1305.workspace = true
+ed25519-dalek.workspace = true
+pkarr.workspace = true
+rand.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

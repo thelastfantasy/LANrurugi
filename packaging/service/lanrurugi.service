@@ -1,0 +1,17 @@
+# systemd unit (Linux). install-service.sh fills @PREFIX@ and @DATA@ and installs it as
+# /etc/systemd/system/lanrurugi.service.
+[Unit]
+Description=LANrurugi manga and e-book library
+Wants=network-online.target
+After=network-online.target redis.service redis-server.service
+
+[Service]
+Type=simple
+User=@USER@
+EnvironmentFile=@DATA@/lanrurugi.env
+ExecStart=@PREFIX@/bin/lanrurugi-server serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

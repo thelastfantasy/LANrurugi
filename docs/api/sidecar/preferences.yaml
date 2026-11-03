@@ -1,0 +1,55 @@
+# Per-caller UI preferences. Scoped to whoever is asking: a session (or an admin-role token) gets
+# its own stored values, and an unauthenticated or guest caller gets the defaults rather than
+# somebody else's settings.
+"/api/preferences":
+  get:
+    summary: Read the caller's preferences
+    description: |
+      The caller's own library-view preferences, falling back to the defaults for any value that has
+      never been set. An unauthenticated caller gets the defaults — not another user's settings.
+    tags: [preferences]
+    responses:
+      "200":
+        description: The effective preferences.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                library_sortby:
+                  type: string
+                  description: The column the library view is sorted by.
+                library_sortdir:
+                  type: string
+                  description: Sort direction.
+  put:
+    summary: Update the caller's preferences
+    description: |
+      Stores the caller's library-view preferences. Fields omitted from the request are left as they
+      are. Requires an authenticated caller; an unauthenticated one is refused rather than silently
+      writing to a shared bucket.
+    tags: [preferences]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              library_sortby: { type: string }
+              library_sortdir: { type: string }
+    responses:
+      "200":
+        description: Stored; the body echoes the resulting values.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                library_sortby: { type: string }
+                library_sortdir: { type: string }
+      "403":
+        description: No authenticated caller to scope the preferences to.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }

@@ -1,0 +1,601 @@
+/* The embed card is shown inside other sites' pages, so it carries its own colours: by default the
+   sharer's library theme, or one the embedding page picks with `?theme=` / `theme="…"`, a preset
+   name or an object of colours (`src/embed/theme.ts`). `system`, `light` and `dark` are neutral and follow or fix the visitor's
+   scheme; the others echo the library themes of the same name. */
+.lrrg-card {
+  --card-bg: #ffffff;
+  --card-fg: #1d1f23;
+  --card-muted: #5f6670;
+  --card-border: #d9dde3;
+  --card-accent: #2f6fd6;
+  --card-tile: #d9dde3;
+  /* The QR code is always dark on light, for scanners; each theme tints it. */
+  --card-qrFg: #1d1f23;
+  --card-qrBg: #ffffff;
+  --card-qrFinder: #2f6fd6;
+  box-sizing: border-box;
+  max-width: 480px;
+  min-width: 260px;
+  /* A frame wider than the card's own 480px cap leaves it centred instead of hugging the left
+     edge; `auto` margins collapse to 0 when the frame is narrower than `min-width`, which keeps a
+     tiny frame scrolling to the right rather than clipping both sides. */
+  margin-inline: auto;
+  padding: 12px;
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  background: var(--card-bg);
+  color: var(--card-fg);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  [data-card-theme="system"] .lrrg-card {
+    --card-bg: #1c1f24;
+    --card-fg: #e6e8eb;
+    --card-muted: #9aa2ad;
+    --card-border: #343943;
+    --card-accent: #6ea3ff;
+    --card-tile: #343943;
+    --card-qrFg: #1c1f24;
+    --card-qrBg: #e6e8eb;
+    --card-qrFinder: #2a5db0;
+  }
+}
+[data-card-theme="dark"] .lrrg-card {
+  --card-bg: #1c1f24;
+  --card-fg: #e6e8eb;
+  --card-muted: #9aa2ad;
+  --card-border: #343943;
+  --card-accent: #6ea3ff;
+  --card-tile: #343943;
+  --card-qrFg: #1c1f24;
+  --card-qrBg: #e6e8eb;
+  --card-qrFinder: #2a5db0;
+}
+[data-card-theme="g"] .lrrg-card {
+  --card-bg: #edebdf;
+  --card-fg: #5c0d11;
+  --card-muted: #7d4a43;
+  --card-border: #5c0d12;
+  --card-accent: #5c0d11;
+  --card-tile: #e3e0d1;
+  --card-qrFg: #5c0d11;
+  --card-qrBg: #f2efdf;
+  --card-qrFinder: #9b4e03;
+}
+[data-card-theme="ex"] .lrrg-card {
+  --card-bg: #4f535b;
+  --card-fg: #f1f1f1;
+  --card-muted: #c2c4c8;
+  --card-border: #34353b;
+  --card-accent: #fffbdb;
+  --card-tile: #43464e;
+  --card-qrFg: #34353b;
+  --card-qrBg: #f1f1f1;
+  --card-qrFinder: #6b5a1e;
+}
+[data-card-theme="modern"] .lrrg-card {
+  --card-bg: #4f535b;
+  --card-fg: #dddddd;
+  --card-muted: #aeb2b9;
+  --card-border: #34353b;
+  --card-accent: #3b97ea;
+  --card-tile: #43464e;
+  --card-qrFg: #34353b;
+  --card-qrBg: #f0f1f3;
+  --card-qrFinder: #1f6fbf;
+}
+[data-card-theme="modern_red"] .lrrg-card {
+  --card-bg: #d83b66;
+  --card-fg: #efeaea;
+  --card-muted: #f6d3db;
+  --card-border: #be234b;
+  --card-accent: #ffffff;
+  --card-tile: #be234b;
+  --card-qrFg: #7a1230;
+  --card-qrBg: #fff3f5;
+  --card-qrFinder: #be234b;
+}
+[data-card-theme="modern_clear"] .lrrg-card {
+  --card-bg: #fcfcfc;
+  --card-fg: #34495e;
+  --card-muted: #6b7d8f;
+  --card-border: #d5dde0;
+  --card-accent: #ed2553;
+  --card-tile: #e1e7e9;
+  --card-qrFg: #34495e;
+  --card-qrBg: #ffffff;
+  --card-qrFinder: #ed2553;
+}
+html:has(.lrrg-card),
+body:has(.lrrg-card) {
+  margin: 0;
+  /* The library's body padding would push a minimum-width card past the frame's edge. */
+  padding: 0;
+  background: transparent;
+}
+.lrrg-card-covers {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.lrrg-card-covers-few {
+  justify-content: center;
+}
+/* Eight or more items: two rows of four, the "+N" tile a tile of its own in the second row. */
+.lrrg-card-covers-two-rows {
+  grid-template-columns: repeat(4, 1fr);
+}
+/* Under a row of covers the title and count are centred, like the covers and actions. A share's
+   title never takes more than two lines in a card, however long it is. */
+.lrrg-card > .lrrg-card-title,
+.lrrg-card > .lrrg-card-meta {
+  text-align: center;
+}
+.lrrg-card > .lrrg-card-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+/* A single item: cover on the left, title and actions beside it. */
+.lrrg-card-media {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+}
+.lrrg-card-media > img {
+  flex: none;
+  /* Keeps 3:4 when the text beside it is taller (narrow cards stack the actions). */
+  align-self: flex-start;
+  width: 34%;
+  max-width: 150px;
+  height: auto;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border-radius: 6px;
+  background: var(--card-tile);
+  cursor: zoom-in;
+}
+.lrrg-card-media-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+}
+/* The single-item layout clamps its title the same two lines the row layout does. */
+.lrrg-card-media-body .lrrg-card-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.lrrg-card-media-body .lrrg-card-meta {
+  margin: 0;
+}
+.lrrg-card-media-body .lrrg-card-main-actions {
+  justify-content: flex-start;
+}
+.lrrg-card-covers-more {
+  grid-template-columns: repeat(4, 1fr) 0.55fr;
+}
+.lrrg-card-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--card-tile);
+  color: var(--card-muted);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    color 150ms ease;
+}
+.lrrg-card-more:hover,
+.lrrg-card-more:focus-visible {
+  border-color: var(--card-accent);
+  color: var(--card-accent);
+}
+/* Every item, over the card; the list scrolls when it is longer than the frame. */
+.lrrg-card-list-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  overflow: hidden;
+  padding: 8px;
+  border-radius: 10px;
+  background: rgb(0 0 0 / 35%);
+}
+/* `min-width: 0` and the width cap keep a long title from widening the dialog past the card. */
+.lrrg-card-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 0;
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 25%);
+}
+.lrrg-card-list-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 6px 6px 12px;
+  border-bottom: 1px solid var(--card-border);
+  color: var(--card-muted);
+  font-size: 13px;
+}
+.lrrg-card-list-head > span {
+  flex: 1;
+  min-width: 0;
+}
+.lrrg-card-views {
+  display: flex;
+  gap: 2px;
+}
+.lrrg-card-views .lrrg-card-view {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--card-muted);
+}
+.lrrg-card-views .lrrg-card-view[aria-pressed="true"] {
+  background: var(--card-tile);
+  color: var(--card-accent);
+}
+.lrrg-card-list-head button {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--card-fg);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.lrrg-card-list-head button:hover,
+.lrrg-card-list-head button:focus-visible {
+  background: var(--card-tile);
+}
+.lrrg-card-list ul {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.lrrg-card-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 12px;
+}
+.lrrg-card-list li img,
+.lrrg-card-list .lrrg-card-previewable {
+  cursor: zoom-in;
+}
+.lrrg-card-list li img,
+.lrrg-card-list-nocover {
+  flex: none;
+  width: 36px;
+  height: 48px;
+  border-radius: 3px;
+  object-fit: cover;
+  background: var(--card-tile);
+}
+.lrrg-card-list-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lrrg-card-list-badge {
+  flex: none;
+  color: var(--card-muted);
+  font-size: 12px;
+}
+/* Icons: small covers in a grid, two lines of title under each. */
+ul.lrrg-card-list-icons {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  align-content: start;
+  gap: 8px 6px;
+  padding: 8px;
+}
+.lrrg-card-list-icons li {
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  text-align: center;
+}
+.lrrg-card-list-icons li img,
+.lrrg-card-list-icons .lrrg-card-list-nocover {
+  width: 56px;
+  height: 75px;
+}
+.lrrg-card-list-icons .lrrg-card-list-title {
+  align-self: stretch;
+  font-size: 12px;
+  line-height: 1.3;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.lrrg-card-list-icons .lrrg-card-list-badge {
+  font-size: 11px;
+}
+/* Thumbnails: covers alone, larger; titles are in the hover preview and tooltip. */
+ul.lrrg-card-list-thumbs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  align-content: start;
+  gap: 6px;
+  padding: 8px;
+}
+.lrrg-card-list-thumbs li {
+  position: relative;
+  padding: 0;
+}
+.lrrg-card-list-thumbs li img,
+.lrrg-card-list-thumbs .lrrg-card-list-nocover {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 3 / 4;
+}
+.lrrg-card-list-thumbs .lrrg-card-list-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.lrrg-card-list-thumbs .lrrg-card-list-badge {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--card-bg);
+}
+/* A hovered or focused cover, enlarged over the card with its item's title. It passes the pointer
+   through, so moving to the next cover switches the preview instead of closing it. */
+.lrrg-card {
+  position: relative;
+}
+.lrrg-card-preview {
+  position: absolute;
+  inset: 8px;
+  /* Above the item list, whose thumbnails enlarge too. */
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 25%);
+  pointer-events: none;
+  animation: lrrg-card-preview-in 120ms ease-out;
+}
+.lrrg-card-preview img {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-width: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+}
+/* The title is shown whole; the image gives up the height it needs. */
+.lrrg-card-preview p {
+  flex: none;
+  margin: 0;
+  font-weight: 600;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+@keyframes lrrg-card-preview-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lrrg-card-preview {
+    animation: none;
+  }
+}
+/* Covers are held to preview on touch: no callout, selection or drag while held. */
+.lrrg-card-covers img,
+.lrrg-card-list li img,
+.lrrg-card-media > img,
+.lrrg-card-previewable {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.lrrg-card-covers img {
+  cursor: zoom-in;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--card-tile);
+}
+.lrrg-card-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.lrrg-card-meta {
+  color: var(--card-muted);
+  font-size: 13px;
+  margin: 2px 0 8px;
+}
+.lrrg-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.lrrg-card-main-actions {
+  justify-content: center;
+}
+.lrrg-card-actions a svg,
+.lrrg-card-actions button svg {
+  flex: none;
+}
+.lrrg-card-actions a,
+.lrrg-card-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.lrrg-card-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.lrrg-card-actions button:disabled:hover {
+  background: transparent;
+  color: var(--card-accent);
+}
+/* A closed share: its mark, why, and the disabled actions below. */
+.lrrg-card-closed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 16px 8px 8px;
+  color: var(--card-muted);
+  text-align: center;
+}
+.lrrg-card-closed .lrrg-card-title {
+  color: var(--card-fg);
+}
+.lrrg-card-actions a,
+.lrrg-card-actions button {
+  padding: 6px 12px;
+  border: 1px solid var(--card-accent);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--card-accent);
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+}
+.lrrg-card-actions a:hover,
+.lrrg-card-actions button:hover,
+.lrrg-card-actions a:focus-visible,
+.lrrg-card-actions button:focus-visible {
+  background: var(--card-accent);
+  color: var(--card-bg);
+}
+/* The text column spans the QR code's height: the code at its top edge, Copy at its bottom. */
+.lrrg-card-import {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+}
+.lrrg-card-import > div {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-width: 0;
+}
+.lrrg-card-import .lrrg-card-meta {
+  margin: 2px 0 6px;
+}
+.lrrg-card-import .lrrg-card-actions {
+  justify-content: center;
+}
+.lrrg-card-import canvas {
+  width: 112px;
+  height: 112px;
+  align-self: center;
+  border-radius: 4px;
+  image-rendering: pixelated;
+  flex: none;
+}
+.lrrg-card-code {
+  font: 600 18px/1.3 ui-monospace, monospace;
+  letter-spacing: 0.06em;
+  overflow-wrap: anywhere;
+}
+.lrrg-card-state {
+  color: var(--card-muted);
+}
+/* A card that could not be fetched: the message plus a way to try again. */
+.lrrg-card-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 8px;
+  text-align: center;
+}
+.lrrg-card-retry {
+  color: var(--card-accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+/* Narrow (a sidebar): the published iframe snippet is a fixed 420px tall, so the card keeps one row
+   of covers and the QR code beside the code, shrunk, rather than stacking past that height. */
+.lrrg-card-hint-short {
+  display: none;
+}
+/* A sidebar: the short hint keeps the text column within the QR code's height. */
+@media (max-width: 359px) {
+  .lrrg-card-hint-long {
+    display: none;
+  }
+  .lrrg-card-hint-short {
+    display: inline;
+  }
+}
+@media (max-width: 320px) {
+  .lrrg-card-import {
+    gap: 8px;
+  }
+  .lrrg-card-import canvas {
+    width: 96px;
+    height: 96px;
+  }
+  /* Small enough that the code stays on one line and the column fits the code's height. */
+  .lrrg-card-code {
+    font-size: clamp(11px, 4.6vw, 13px);
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+  .lrrg-card-import .lrrg-card-meta {
+    font-size: 12px;
+  }
+  .lrrg-card-import .lrrg-card-actions button {
+    padding: 4px 10px;
+  }
+}

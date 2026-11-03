@@ -1,0 +1,29 @@
+# Tankoubon endpoints LANrurugi adds beyond the upstream contract.
+"/api/tankoubons/{id}/download":
+  get:
+    summary: Download a whole tankoubon as one zip
+    description: |
+      Every member archive in tankoubon order, each as its original file, stored rather than
+      re-compressed. Entries are named `NN - <title>.<ext>`, so they list in reading order. An archive
+      with a patch sidecar is delivered merged, as the single-archive download does.
+
+      The body is streamed as it is produced: there is no `Content-Length`, and nothing is prepared
+      on the server first. A member whose file cannot be read is left out, and a final `MISSING.txt`
+      names it.
+
+      Administrators only; read-only tokens and guest visitors are refused.
+    tags: [tankoubons]
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+        description: The tankoubon id (`TANK_…`).
+    responses:
+      "200":
+        description: The zip stream.
+        content:
+          application/zip:
+            schema: { type: string, format: binary }
+      "404":
+        description: No tankoubon with this id.

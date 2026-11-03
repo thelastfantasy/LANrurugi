@@ -1,0 +1,94 @@
+# The search box's own history — additive and LANrurugi-only, account-scoped like `/preferences`.
+# Server-side so one account sees one history, and so the engine can judge which entries relate to
+# what is being typed (browser-side containment cannot see that `クロガネ` and `くろがね` match).
+"/api/search/history":
+  get:
+    summary: The account's recent searches
+    description: >-
+      Newest first, at most 8 entries (the cap the browser-side version kept). With `filter`, only
+      the entries related to it, judged with the engine's own folding, so `くろ` still offers a stored
+      `クロガネ`; without it, the whole history. A caller with no account (e.g. a read-only token)
+      gets an empty list; guests are denied by the route policy.
+    tags: [search]
+    parameters:
+      - name: filter
+        in: query
+        required: false
+        schema: { type: string }
+        description: What the reader is typing; limits the answer to the related entries.
+    responses:
+      "200":
+        description: The (possibly filtered) history.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SearchHistory" }
+  post:
+    summary: Remember one applied filter
+    description: >-
+      Moves the entry to the front, removing any previous occurrence and trimming to the cap, in one
+      atomic pipeline. Called only for a genuinely applied filter.
+    tags: [search]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [filter]
+            properties:
+              filter: { type: string, description: The applied filter text. }
+    responses:
+      "200":
+        description: The history after the write.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SearchHistory" }
+      "400":
+        description: The filter was empty.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "403":
+        description: The caller has no account to keep a history for.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+  delete:
+    summary: Forget one entry
+    description: >-
+      What the search panel's `Delete` key calls on a highlighted history row. Removes every
+      occurrence, so a hand-edited list cannot leave a row the reader cannot dismiss.
+    tags: [search]
+    parameters:
+      - name: filter
+        in: query
+        required: true
+        schema: { type: string }
+        description: The exact history entry to forget.
+    responses:
+      "200":
+        description: The history after the removal.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SearchHistory" }
+      "400":
+        description: No filter to forget was given.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+      "403":
+        description: The caller has no account to keep a history for.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OperationResponse" }
+
+components:
+  schemas:
+    SearchHistory:
+      type: object
+      required: [history]
+      properties:
+        history:
+          type: array
+          items: { type: string }
+          description: Filter texts, newest first, at most 8.
