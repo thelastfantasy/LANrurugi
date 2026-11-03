@@ -58,8 +58,12 @@ jobs:
         with:
           push: true
           platforms: linux/${{ matrix.arch }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Registry cache, not `type=gha`: the Actions cache is capped at 10 GB per repo, and
+          # `mode=max` for these two multi-arch builds was filling ~8.5 GB of it — starving the
+          # Rust target cache, so every CI run compiled the whole workspace from scratch. The
+          # registry cache lives in GHCR and does not compete with it.
+          cache-from: type=registry,ref=ghcr.io/thelastfantasy/lanrurugi:buildcache-${{ matrix.arch }}
+          cache-to: type=registry,ref=ghcr.io/thelastfantasy/lanrurugi:buildcache-${{ matrix.arch }},mode=max
           provenance: false
           build-args: |
             LANRURUGI_GIT_SHA=${{ steps.sha.outputs.short_sha }}
@@ -87,8 +91,9 @@ jobs:
         with:
           push: true
           platforms: linux/${{ matrix.arch }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Reads the GHCR build's registry cache; only the final ENV layer differs, so there is
+          # no second cache to write.
+          cache-from: type=registry,ref=ghcr.io/thelastfantasy/lanrurugi:buildcache-${{ matrix.arch }}
           provenance: false
           build-args: |
             LANRURUGI_GIT_SHA=${{ steps.sha.outputs.short_sha }}
