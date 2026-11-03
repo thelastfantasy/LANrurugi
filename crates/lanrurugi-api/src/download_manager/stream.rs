@@ -108,6 +108,13 @@ pub enum DownloadError {
     HttpStatus(String, reqwest::StatusCode),
     #[error("failed to write to {0}: {1}")]
     Io(PathBuf, #[source] std::io::Error),
+    /// The transfer completed but wrote fewer bytes than the response's `Content-Length` declared.
+    /// Defense in depth, not truncation detection: hyper already errors on a dropped connection for
+    /// both `Content-Length` and `chunked` bodies — this catches the cases it cannot see, such as a
+    /// proxy that returns a complete but short response. Only raised when the response actually
+    /// declared a length (see the completion check's own note on `chunked`).
+    #[error("download truncated: expected {expected} bytes, got {got}")]
+    Truncated { expected: u64, got: u64 },
     /// The caller's `CancellationToken` fired (a user pressed Stop) — deliberately not converted
     /// to a `QueueError` variant the way every other member of this enum is: a user-requested stop
     /// isn't a failure to surface as an error state, it's handled by the caller reverting the
@@ -142,6 +149,10 @@ impl From<&DownloadError> for lanrurugi_core::queue_error::QueueError {
             // queue item to `Queued` instead of recording an error) — this arm only exists so the
             // match stays exhaustive; `Internal` is a harmless placeholder that should never
             // actually surface.
+            DownloadError::Truncated { expected, got } => QueueError::TruncatedDownload {
+                expected: *expected,
+                got: *got,
+            },
             DownloadError::Cancelled => QueueError::Internal,
         }
     }
@@ -580,6 +591,23 @@ async fn download_one_inner(
         .map_err(|e| DownloadError::Io(staging_path.clone(), e))?;
     drop(file);
 
+    // Defense in depth (issue #109): a complete-looking response whose byte count disagrees with its
+    // own `Content-Length` is not trustworthy — a proxy can hand back a short body that hyper has no
+    // way to call incomplete. Skipped when the response declared no length at all: nHentai answers
+    // with `Transfer-Encoding: chunked`, and demanding a length would break downloads that are
+    // perfectly fine.
+    if let Some(expected) = total_bytes {
+        if downloaded != expected {
+            if resume_paths.is_none() {
+                let _ = tokio::fs::remove_file(&staging_path).await;
+            }
+            return Err(DownloadError::Truncated {
+                expected,
+                got: downloaded,
+            });
+        }
+    }
+
     // Download genuinely complete — a resumable call's sidecar has done its job (nothing left to
     // resume) and its `.part` file gets the same extension-carrying rename a non-resumable
     // download's staging file already had from the start, so downstream page-counting sees the
@@ -629,6 +657,71 @@ mod tests {
             axum::serve(listener, router).await.unwrap();
         });
         (format!("http://{addr}"), handle)
+    }
+
+    /// The byte-count check (issue #109) must not fire when the response never declared a length:
+    /// nHentai answers with `Transfer-Encoding: chunked`, and demanding a `Content-Length` there
+    /// would break a download that is perfectly fine.
+    #[tokio::test]
+    async fn a_chunked_response_without_a_content_length_skips_the_byte_count_check() {
+        use axum::body::Body;
+        let body = b"chunked body with no declared length".to_vec();
+        let router = axum::Router::new().route(
+            "/archive.zip",
+            axum::routing::get(move || {
+                let body = body.clone();
+                async move { Body::from(body) }
+            }),
+        );
+        let (base_url, server) = spawn_test_server(router).await;
+
+        let manager = DownloadManager::new();
+        let staging_dir = std::env::temp_dir().join(format!("lrr-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&staging_dir).await.unwrap();
+        let req = DownloadRequest {
+            url: format!("{base_url}/archive.zip"),
+            method: None,
+            headers: vec![],
+            filename_hint: None,
+        };
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let result = download_one(
+            &manager,
+            &[],
+            &req,
+            &NoopRateResolver,
+            progress_tx,
+            &staging_dir,
+            &tokio_util::sync::CancellationToken::new(),
+            &|| {},
+            None,
+        )
+        .await
+        .expect("a response with no Content-Length must be accepted as-is");
+
+        while progress_rx.try_recv().is_ok() {}
+        assert_eq!(result.bytes_downloaded, 36);
+        let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+        server.abort();
+    }
+
+    /// The `Truncated` → `QueueError::TruncatedDownload` mapping is what the queue actually stores
+    /// and the frontend renders, so it is pinned here rather than only through the (unreachable
+    /// through hyper) end-to-end path.
+    #[test]
+    fn a_truncated_transfer_maps_to_the_structured_queue_error() {
+        let error = DownloadError::Truncated {
+            expected: 1000,
+            got: 900,
+        };
+        assert_eq!(
+            lanrurugi_core::queue_error::QueueError::from(&error),
+            lanrurugi_core::queue_error::QueueError::TruncatedDownload {
+                expected: 1000,
+                got: 900,
+            }
+        );
     }
 
     #[tokio::test]

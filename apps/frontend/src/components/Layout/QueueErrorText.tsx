@@ -29,6 +29,15 @@ export function QueueErrorText({ error }: { error: QueueError }) {
       return (
         <span>{t("components.layout.serverRespondedWithStatusStatus", { url: error.url, status: error.status })}</span>
       )
+    case "truncated_download":
+      return (
+        <span>
+          {t("components.layout.truncatedDownloadExpectedBytes", {
+            expected: error.expected,
+            got: error.got,
+          })}
+        </span>
+      )
     case "write_failed":
       return <span>{t("components.layout.failedToWriteTheDownloaded")}</span>
     case "bundle_failed":

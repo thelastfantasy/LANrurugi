@@ -17,6 +17,10 @@ export function pluginInfo() {
   return {
     namespace: "hitomiplugin",
     type: "metadata" as const,
+    // Its `oneshot_arg` is a real gallery URL, so the queue's "fetch metadata" action should be
+    // able to match this plugin by URL without the user picking it (issue #96).
+    url_pattern: "hitomi\\.la",
+    domain_match: ["hitomi.la"],
     parameters: [
     ],
     declared_permissions: { net: ["ltn.gold-usergeneratedcontent.net"], read: false, write: false },

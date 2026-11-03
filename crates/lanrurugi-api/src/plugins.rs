@@ -2735,6 +2735,20 @@ pub(crate) async fn start_download(
                         }
                         superseded_ids.retain(|superseded| !ids.contains(superseded));
                         superseded_ids.dedup();
+                        // Issue #109: a replacement that landed but cannot be read back (a
+                        // zero-page archive is this codebase's signature for exactly that — see
+                        // `filename_lock.rs`'s own incident notes) must not take the old revision
+                        // with it. Keep the old archive and say why, rather than turning an
+                        // upgrade into a silent loss.
+                        if !superseded_ids.is_empty() && !replacement_is_usable(&state_for_task, &ids).await
+                        {
+                            tracing::warn!(
+                                replacement = ?ids,
+                                superseded = ?superseded_ids,
+                                "replacement archive has no readable pages; keeping the superseded one"
+                            );
+                            superseded_ids.clear();
+                        }
                         for superseded in superseded_ids {
                             // Full user-delete path (file, search index, thumbnails, ...), not a
                             // bare record removal.
@@ -5108,4 +5122,25 @@ pub(crate) mod tests {
 
         tokio::fs::remove_file(&dispatcher_path).await.ok();
     }
+}
+
+/// Whether any of `ids` is a genuinely readable archive — the gate issue #109 puts in front of
+/// deleting the revision it replaces. A pagecount of zero is the shape every unreadable archive in
+/// this codebase has ended up with, so it is the cheapest honest signal available here.
+async fn replacement_is_usable(state: &AppState, ids: &[String]) -> bool {
+    for id in ids {
+        let pages = state
+            .repos
+            .archives
+            .get(&lanrurugi_core::ids::ArchiveId(id.clone()))
+            .await
+            .ok()
+            .flatten()
+            .map(|archive| archive.pagecount)
+            .unwrap_or(0);
+        if pages > 0 {
+            return true;
+        }
+    }
+    false
 }

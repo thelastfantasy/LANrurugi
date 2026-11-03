@@ -2629,5 +2629,6 @@
   "translation.masterSwitchHint": "既定ではオフです。オンにするとリーダーに翻訳ボタンが表示されます。実験的な機能で、認識と組版の品質は改善中です。",
   "diagnostics.feedback.name": "お名前",
   "diagnostics.feedback.email": "メールアドレス(必須)",
-  "diagnostics.feedback.failed": "送信に失敗しました。しばらくしてから再度お試しください。"
+  "diagnostics.feedback.failed": "送信に失敗しました。しばらくしてから再度お試しください。",
+  "components.layout.truncatedDownloadExpectedBytes": "ダウンロードが不完全です：{{expected}} バイトを期待しましたが、{{got}} バイトしか受信できませんでした。"
 }
