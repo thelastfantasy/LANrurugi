@@ -170,10 +170,17 @@ pub struct DownloadedFile {
     pub bytes_downloaded: u64,
 }
 
-/// One `(bytes_downloaded_so_far_for_this_resource, total_bytes_for_this_resource)` progress
-/// update from [`download_one`] — see that function's own docs on why this is delivered via
+/// One event from [`download_one`] — see that function's own docs on why this is delivered via
 /// channel rather than a direct `JobRegistry` write or an async callback.
-pub type ProgressUpdate = (u64, Option<u64>);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProgressUpdate {
+    /// `(bytes_downloaded_so_far_for_this_resource, total_bytes_for_this_resource)`.
+    Bytes { downloaded: u64, total: Option<u64> },
+    /// A resume attempt got its answer: `206` (`accepted: true`) or `200` (the server ignored
+    /// `Range`/`If-Range`, so the partial file was discarded). `pattern` is the domain-rule key the
+    /// observation belongs to (see `resume_support::pattern_for`).
+    ResumeOutcome { accepted: bool, pattern: String },
+}
 
 /// Performs one real streaming HTTP download of `req`, respecting `manager`'s per-domain
 /// concurrency/rate-limit rules (resolved against `req.url`'s hostname), sending a
@@ -256,6 +263,14 @@ pub async fn download_one(
     // keeps `RateLimiterMap`'s rate value resolution (still driven by the pattern's rule) while
     // giving every concurrent download an independent, always-fully-enforced quota.
     let rate_limit_key = format!("{}#{}", permit.matched_pattern, uuid::Uuid::new_v4());
+    // The resume registry groups observations by the plugin's matched domain rule (`*.hath.network`)
+    // rather than the exact H@H node hostname, which is different for every download. A catch-all
+    // `*` rule must never become a global observation, so the hostname is used in that case.
+    let resume_pattern = if permit.matched_pattern == "*" {
+        hostname.clone()
+    } else {
+        permit.matched_pattern.clone()
+    };
 
     // `RateLimiterMap` never evicts entries on its own — this download's own unique-keyed entry
     // must be removed once it's done, on every exit path (success, HTTP/IO/network error, or a
@@ -272,6 +287,7 @@ pub async fn download_one(
         &parsed_url,
         &rate_limit_key,
         resume_key,
+        &resume_pattern,
     )
     .await;
     manager.rate_limiters().release(&rate_limit_key).await;
@@ -332,6 +348,7 @@ async fn download_one_inner(
     parsed_url: &url::Url,
     rate_limit_key: &str,
     resume_key: Option<&str>,
+    resume_pattern: &str,
 ) -> Result<DownloadedFile, DownloadError> {
     let method = match &req.method {
         None => Method::GET,
@@ -396,6 +413,14 @@ async fn download_one_inner(
     }
 
     let resumed = status == reqwest::StatusCode::PARTIAL_CONTENT;
+    // Only a request that actually carried `Range` says anything about the server's support: a
+    // fresh download's `200` is not a rejection.
+    if matches!(resume_state, ResumeState::Resumable { .. }) {
+        let _ = progress_tx.send(ProgressUpdate::ResumeOutcome {
+            accepted: resumed,
+            pattern: resume_pattern.to_string(),
+        });
+    }
     if !resumed {
         // Either there was nothing to resume from, or the server ignored `Range`/`If-Range` (no
         // resume support, or the underlying content changed since the partial file was written)
@@ -589,14 +614,20 @@ async fn download_one_inner(
         if last_reported.elapsed() >= PROGRESS_REPORT_INTERVAL {
             // A closed receiver (caller stopped listening) is not a download failure — the
             // transfer itself is still succeeding, only its progress reporting is now a no-op.
-            let _ = progress_tx.send((downloaded, total_bytes));
+            let _ = progress_tx.send(ProgressUpdate::Bytes {
+                downloaded,
+                total: total_bytes,
+            });
             last_reported = std::time::Instant::now();
         }
     }
     // Final report always fires regardless of the throttle interval, so the caller's last-known
     // progress reflects the true final byte count rather than whatever the last periodic sample
     // happened to be.
-    let _ = progress_tx.send((downloaded, total_bytes));
+    let _ = progress_tx.send(ProgressUpdate::Bytes {
+        downloaded,
+        total: total_bytes,
+    });
 
     file.flush()
         .await
@@ -789,12 +820,14 @@ mod tests {
         assert_eq!(written, b"hello world, this is a test archive body");
         assert_eq!(result.bytes_downloaded, written.len() as u64);
 
-        let mut last_progress = (0u64, None::<u64>);
+        let mut last_downloaded = 0u64;
         while let Ok(update) = progress_rx.try_recv() {
-            last_progress = update;
+            if let ProgressUpdate::Bytes { downloaded, .. } = update {
+                last_downloaded = downloaded;
+            }
         }
         assert_eq!(
-            last_progress.0,
+            last_downloaded,
             written.len() as u64,
             "the final progress update must reflect the true final byte count"
         );
@@ -1139,8 +1172,10 @@ mod tests {
             )
             .await
             .unwrap();
-            while let Ok((downloaded, _total)) = progress_rx.try_recv() {
-                last_seen = base + downloaded;
+            while let Ok(update) = progress_rx.try_recv() {
+                if let ProgressUpdate::Bytes { downloaded, .. } = update {
+                    last_seen = base + downloaded;
+                }
             }
             combined_downloaded += result.bytes_downloaded;
             paths.push(result.path);

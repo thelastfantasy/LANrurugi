@@ -1044,6 +1044,10 @@ export interface DownloadQueueItem {
    *  finished row keeps its rate after the job's in-memory record is gone. Absent for rows that
    *  completed before the field existed. */
   average_bytes_per_sec?: number | null
+  /** Whether the server actually serving this download honours `Range`, learned from a real resume
+   *  attempt (or a previous download behind the same domain rule). `false` means pausing and
+   *  continuing restarts the transfer; absent means nothing has been observed yet. */
+  resume_support?: boolean | null
   category: string | null
   auto_fetch_metadata: boolean
   overwrite_on_duplicate: boolean

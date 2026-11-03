@@ -865,5 +865,6 @@
   "upload.pause": "Pause",
   "upload.paused": "Paused",
   "upload.resume": "Resume",
-  "activity.actionType.download_queue.pause": "Pause Download"
+  "activity.actionType.download_queue.pause": "Pause Download",
+  "upload.noResumeSupport": "This source does not support resuming — pausing and continuing will restart the download."
 }

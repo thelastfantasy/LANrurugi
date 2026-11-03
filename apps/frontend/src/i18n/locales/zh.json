@@ -2860,5 +2860,6 @@
   "upload.pause": "暂停",
   "upload.paused": "已暂停",
   "upload.resume": "继续",
-  "activity.actionType.download_queue.pause": "暂停下载"
+  "activity.actionType.download_queue.pause": "暂停下载",
+  "upload.noResumeSupport": "该源不支持断点续传，暂停后继续会重新下载。"
 }

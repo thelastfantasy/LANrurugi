@@ -3640,6 +3640,38 @@ async fn run_managed_downloads(
         }
     }
 
+    // Learn before any bytes move: if this domain-rule pattern has ever refused a resume, the row
+    // can warn before the user pauses instead of only after it happens. The first resource is the
+    // representative, the same one the rate-limit snapshot above uses.
+    if let (Some((repo, item_id)), Some(first)) = (&queue_link, downloads.first()) {
+        if let Ok(parsed) = url::Url::parse(&first.url) {
+            let host = parsed.host_str().unwrap_or("");
+            if !host.is_empty() {
+                let pattern = crate::download_manager::resume_support::pattern_for(&rules, host);
+                if let Some(supported) =
+                    crate::download_manager::resume_support::get(&state.redis.config, &pattern)
+                        .await
+                {
+                    if let Ok(Some(mut item)) = repo.get(item_id).await {
+                        if item.resume_support != Some(supported) {
+                            item.resume_support = Some(supported);
+                            if let Err(e) = repo.update(&item).await {
+                                tracing::warn!(item_id, error = %e, "could not record known resume support");
+                            }
+                            if let Some(tx) = &state.download_queue_tx {
+                                let _ = tx.send(serde_json::json!({
+                                    "kind": "update",
+                                    "id": item_id,
+                                    "resume_support": supported,
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let should_bundle =
         downloads.len() > 1 && resolve_bundle_as_archive(&declared, override_.as_ref());
 
@@ -3699,25 +3731,63 @@ async fn run_managed_downloads(
         // later regardless.
         let queue_tx = state.download_queue_tx.clone();
         let queue_item_id_for_drain = queue_item_id.map(str::to_string);
+        let queue_link_for_drain = queue_link.clone();
+        let redis_for_drain = state.redis.config.clone();
         let drain_task = tokio::spawn(async move {
+            use crate::download_manager::stream::ProgressUpdate;
+
             let mut known_totals = known_totals;
-            while let Some((downloaded, total)) = progress_rx.recv().await {
-                known_totals[index] = total;
-                let combined_total = known_totals
-                    .iter()
-                    .all(Option::is_some)
-                    .then(|| known_totals.iter().flatten().sum());
-                let combined_downloaded = base + downloaded;
-                jobs.set_download_progress(&job_id_for_drain, combined_downloaded, combined_total)
-                    .await;
-                if let (Some(tx), Some(item_id)) = (&queue_tx, &queue_item_id_for_drain) {
-                    let _ = tx.send(serde_json::json!({
-                        "kind": "progress",
-                        "id": item_id,
-                        "job_id": &job_id_for_drain,
-                        "downloaded_bytes": combined_downloaded,
-                        "total_bytes": combined_total,
-                    }));
+            while let Some(update) = progress_rx.recv().await {
+                match update {
+                    ProgressUpdate::Bytes { downloaded, total } => {
+                        known_totals[index] = total;
+                        let combined_total = known_totals
+                            .iter()
+                            .all(Option::is_some)
+                            .then(|| known_totals.iter().flatten().sum());
+                        let combined_downloaded = base + downloaded;
+                        jobs.set_download_progress(
+                            &job_id_for_drain,
+                            combined_downloaded,
+                            combined_total,
+                        )
+                        .await;
+                        if let (Some(tx), Some(item_id)) = (&queue_tx, &queue_item_id_for_drain) {
+                            let _ = tx.send(serde_json::json!({
+                                "kind": "progress",
+                                "id": item_id,
+                                "job_id": &job_id_for_drain,
+                                "downloaded_bytes": combined_downloaded,
+                                "total_bytes": combined_total,
+                            }));
+                        }
+                    }
+                    ProgressUpdate::ResumeOutcome { accepted, pattern } => {
+                        // Persist the observation under the domain-rule pattern so the next
+                        // download behind the same rule (a different H@H node, say) starts out
+                        // knowing, then put the same answer on this item for the row's warning.
+                        crate::download_manager::resume_support::set(
+                            &redis_for_drain,
+                            &pattern,
+                            accepted,
+                        )
+                        .await;
+                        if let Some((repo, item_id)) = &queue_link_for_drain {
+                            if let Ok(Some(mut item)) = repo.get(item_id).await {
+                                item.resume_support = Some(accepted);
+                                if let Err(e) = repo.update(&item).await {
+                                    tracing::warn!(item_id, error = %e, "could not persist resume support");
+                                }
+                            }
+                        }
+                        if let (Some(tx), Some(item_id)) = (&queue_tx, &queue_item_id_for_drain) {
+                            let _ = tx.send(serde_json::json!({
+                                "kind": "update",
+                                "id": item_id,
+                                "resume_support": accepted,
+                            }));
+                        }
+                    }
                 }
             }
             known_totals

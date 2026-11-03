@@ -580,6 +580,15 @@ export function QueueItemRow({
               subscriptionName={subscriptionName}
               onOpenSubscriptions={() => navigate(routes.settings("subscriptions"))}
             />
+            {item.resume_support === false &&
+              (item.state === "downloading" ||
+                item.state === "starting" ||
+                item.state === "waiting" ||
+                item.state === "paused") && (
+                <div style={{ fontSize: FONT_SIZE_XS, color: "#c79121" }}>
+                  {t("upload.noResumeSupport")}
+                </div>
+              )}
             {item.state === "error" && item.error && (
               <div
                 style={{ fontSize: FONT_SIZE_XS, color: item.error.kind === "already_patched" ? "#c79121" : STATE_COLOR.failed }}

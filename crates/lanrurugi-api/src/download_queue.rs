@@ -1189,6 +1189,9 @@ async fn start_one(
     // Without this the row would keep rendering the old banner through the entire new attempt —
     // the same bug `pending_filename_conflict` had to be cleared here for.
     item.pending_revision_confirmation = None;
+    // Re-learned from the domain registry (and this run's own resume attempt): the previous run may
+    // have used a different host, so its observation must not carry over.
+    item.resume_support = None;
 
     item.state = DownloadQueueState::Starting;
     // Stamped here rather than read off the job: this is the moment the item actually left the
@@ -3356,6 +3359,7 @@ mod tests {
             plugin_namespace: "download/ehentai".to_string(),
             file_size: None,
             average_bytes_per_sec: None,
+            resume_support: None,
             category: None,
             metadata_tags: Vec::new(),
             auto_fetch_metadata: false,

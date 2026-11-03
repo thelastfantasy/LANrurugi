@@ -179,6 +179,11 @@ pub struct DownloadQueueItem {
     /// before this field existed, and for non-download origins.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub average_bytes_per_sec: Option<u64>,
+    /// Whether the server actually serving this download honours `Range`/`If-Range`, learned from a
+    /// real resume attempt and read back at the next start (`download_manager::resume_support`).
+    /// `None` means no attempt has been observed yet; a pattern-wide record can answer it earlier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_support: Option<bool>,
     pub category: Option<String>,
     /// Tags the subscription wants merged onto the archive once this download is catalogued. Empty
     /// for all non-subscription queue origins.
@@ -341,6 +346,7 @@ impl DownloadQueueRepository {
             plugin_namespace: new_item.plugin_namespace,
             file_size: new_item.file_size,
             average_bytes_per_sec: None,
+            resume_support: None,
             category: new_item.category,
             metadata_tags: new_item.metadata_tags,
             auto_fetch_metadata: new_item.auto_fetch_metadata,
@@ -508,6 +514,7 @@ mod tests {
             plugin_namespace: "download/x".to_string(),
             file_size: None,
             average_bytes_per_sec: None,
+            resume_support: None,
             category: None,
             metadata_tags: Vec::new(),
             auto_fetch_metadata: false,
