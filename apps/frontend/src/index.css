@@ -237,6 +237,22 @@ input[type="checkbox"]:disabled {
   100% { transform: scale(1); opacity: 1; }
 }
 
+/* While a modal is open the page behind it must not scroll: not from a wheel or swipe over the
+ * backdrop, and not from a scroll that reaches the end of the dialog's own content.
+ *
+ * Derived from the DOM instead of toggled from JS. `Modal.tsx` used to hold an open-modal counter in
+ * module state and set `body.style.overflow` from it; that counter could drift out of sync with what
+ * was actually mounted (a second copy of the module, an unmount path that never ran its cleanup) and
+ * nothing could notice — an open modal then sat over a page that still scrolled. A selector cannot
+ * drift: the page is locked exactly while a dialog is mounted.
+ *
+ * `html` as well as `body`, because the viewport's scrolling box is `html`; `scrollbar-gutter:
+ * stable` above keeps the layout from shifting as the scrollbar goes. */
+html:has([data-overlay="modal"]),
+body:has([data-overlay="modal"]) {
+  overflow: hidden;
+}
+
 /* Additive: `Library/index.tsx`'s `.table-options` toolbar row (Sort by/Columns, the count-text-
  * plus-numbered-pager unit, Go to Page+gear) — the whole flex layout, not just the breakpoint
  * override, lives here as real CSS classes rather than inline `style` objects, since a genuinely
@@ -1250,6 +1266,22 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   font-size: 12px;
 }
 
+/* A number rule whose input unit differs from its stored one — `size` is typed in MB and stored in
+   bytes. The unit sits beside the box rather than in a placeholder, which would vanish the moment a
+   value was typed and leave the number ambiguous. */
+.rule-value-with-unit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.rule-unit {
+  font-size: 0.85em;
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
 /* Each condition inside a group gets its own banded row, so it is visible where one ends and the next
    begins — stacked controls with nothing between them read as one long list rather than as separate
    conditions. The band's colour comes from the themes; this only sets the shape. */
@@ -1273,6 +1305,12 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   /* Below this the three columns cannot hold a readable label, so the condition stacks instead. */
   .rule-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* A node's label and its labelled buttons share one line here; when they no longer both fit, the
+     buttons drop below the label instead of pushing the pair past the dialog's own edge. */
+  .group-header {
+    flex-wrap: wrap;
   }
 }
 
@@ -1341,6 +1379,9 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 .sub-modal-preview {
   max-height: 65vh;
   overflow-y: auto;
+  /* Stops at this pane's own end instead of carrying the scroll into the dialog's box and then into
+     the page — the page lock is the backstop, not the first line of defence. */
+  overscroll-behavior: contain;
   padding-right: 4px;
 }
 
@@ -1869,6 +1910,7 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 .sub-form-fields {
   height: 65vh;
   overflow-y: auto;
+  overscroll-behavior: contain;
   /* Room for the scrollbar so it does not sit on top of the inputs. */
   padding-right: 6px;
 }
@@ -1945,8 +1987,15 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 .rule-entry-actions {
   display: flex;
   flex: 0 0 auto;
-  flex-wrap: nowrap;
+  /* Wrapping, not `nowrap`: two labelled buttons are wider than a deeply-nested condition's column on
+     a phone, and a non-shrinking block simply spilled past the dialog's edge (reported on a phone,
+     2026-11-03). The comment below still holds — a button never gets its label clipped, it moves to
+     the next line instead. */
+  flex-wrap: wrap;
   gap: 6px;
+  /* Caps the block at the row's own width, which is what gives the wrap above something to wrap
+     against: a flex item is otherwise laid out at its max-content width and overflows. */
+  max-width: 100%;
   /* One right edge for every node's own controls — a rule's, a group's, an exclusion's, and a
      group's "add condition/group" row. They used to sit wherever their row happened to end (right
      after a rule's inputs, right after a group's label), which made a nested condition read as a
@@ -2027,6 +2076,7 @@ body div.ido {
   body h1 {
     flex-wrap: wrap;
   }
+
 }
 
 /*
@@ -2085,4 +2135,64 @@ body div.ido {
 .collapsible-title {
   user-select: none;
   -webkit-user-select: none;
+}
+
+/* The admin settings page's brand mark (`SettingsPage.tsx`), replacing legacy's `.logo-container`
+ * photo logo with the same SVG the favicon uses. `height` matches the size the old one occupied so
+ * the column's vertical rhythm does not change; the mark's own rounded background supplies the
+ * shape, which is why legacy's theme-coloured backdrop class is deliberately not applied here. */
+.brand-logo {
+  display: block;
+  height: 196px;
+  margin: 0 auto;
+}
+
+/* One maintenance script under the Plugins page's "维护脚本" section: an explanation and its single
+ * "运行" button.
+ *
+ * The button must not shrink. `body input.stdbtn { min-width: 0 }` in the phone-width clamp above
+ * exists so legacy's fixed-width buttons fit a 400px column, but inside a flex row it also lets the
+ * button be squeezed below its own label — an `<input>` clips its text, so "运行" came out cut in
+ * half (reported on a phone, 2026-11-03). The explanation wraps instead; below the phone breakpoint
+ * the button drops to its own line rather than competing for the same one. */
+.plugin-script-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.plugin-script-row > .stdbtn {
+  flex: 0 0 auto;
+  /* Right edge on its own line too, matching the desktop layout where it is pushed to the far side. */
+  margin-left: auto;
+}
+
+@media (max-width: 640px) {
+  .plugin-script-row {
+    flex-wrap: wrap;
+  }
+
+  /* The phone clamp above zeroes `.stdbtn`'s own `min-width`, which leaves the button at its label's
+     width (about 32px) — legible, but below a comfortable touch target. */
+  body .plugin-script-row > .stdbtn {
+    min-width: 64px !important;
+  }
+}
+
+/* The Plugins page's footer row pairs the upload control — a styled `<span>` wrapping the hidden file
+ * input, not a form control — with two real `.stdbtn` inputs. Form controls are border-box under the
+ * UA stylesheet, the span is not, so with the same declared 21px height the span rendered 26px (21
+ * plus 4px border and 1px padding) and stood 5px taller than its neighbours at every width. Matching
+ * the box model also brings its width back from 162px to the same 150px the buttons take. */
+.plugin-actions > .fileinput-button {
+  box-sizing: border-box;
+}
+
+/* A plugin's own description (`PluginCard`), rendered from the HTML its `pluginInfo()` carries — the
+ * shape legacy plugins use (`<br>` paragraphs, `<code>` around regexes). Long unbreakable runs such as
+ * a filename regex have no spaces to wrap on, so without this they widen the card past the viewport. */
+.plugin-description {
+  overflow-wrap: anywhere;
 }

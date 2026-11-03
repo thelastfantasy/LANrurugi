@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { createPortal } from "react-dom"
 
 import { IconButton } from "@/components/common-ui/Form"
@@ -11,23 +11,14 @@ import { FLOATING_POPUP_SHADOW } from "@/theme"
 const MAX_WIDTH = "calc(100vw - 40px)"
 const MAX_HEIGHT = "min(85vh, calc(100dvh - 40px))"
 
-/** Open modals, counted so a stacked modal closing does not unlock the page under the one below. */
-let openModals = 0
-let savedOverflow = ""
-
-/** Keeps the page behind an open modal from scrolling: a wheel or swipe over the backdrop, or past
- * the end of the modal's own content, otherwise scrolls the page. `html`'s `scrollbar-gutter:
- * stable` (index.css) keeps the layout from shifting when the scrollbar goes. */
-function useBodyScrollLock() {
-  useEffect(() => {
-    if (openModals++ === 0) {
-      savedOverflow = document.body.style.overflow
-      document.body.style.overflow = "hidden"
-    }
-    return () => {
-      if (--openModals === 0) document.body.style.overflow = savedOverflow
-    }
-  }, [])
+/** Whether a modal is already on screen, read from the DOM rather than from a module-level counter.
+ *
+ * The page behind is no longer locked from JS at all (see `index.css`'s `html:has([data-overlay=
+ * "modal"])` rule): a mutable counter is exactly what let the page scroll behind an open modal —
+ * it could drift out of sync with what was actually mounted, and nothing could notice. Asking the
+ * DOM what is mounted cannot drift. */
+function modalAlreadyOpen(): boolean {
+  return typeof document !== "undefined" && document.querySelector('[data-overlay="modal"]') !== null
 }
 
 /** Centered, fixed-position dialog — dimmed backdrop, `.id1`-styled box, round `fa-times` close
@@ -43,11 +34,10 @@ export function Modal({
   width?: number
   textAlign?: "left" | "center"
 }) {
-  useBodyScrollLock()
   // A modal opened on top of another one keeps a backdrop (a click outside still closes it) but does
   // not dim again: two stacked 60% backdrops turned the modal underneath nearly black. A shadow sets
   // it apart from the modal below instead.
-  const [stacked] = useState(() => openModals > 0)
+  const [stacked] = useState(modalAlreadyOpen)
   // Rendered into `body` rather than where it was declared. A fixed-position overlay still obeys an
   // ancestor's `display: none`, `overflow` or `transform`, so a modal opened from inside a collapsible
   // panel vanished — or collapsed to zero width — when that panel was closed.
@@ -72,6 +62,9 @@ export function Modal({
           alignItems: "flex-start",
           justifyContent: "center",
           overflowY: "auto",
+          // A dialog taller than the viewport scrolls here; stopping the chain at this layer keeps
+          // the page behind from moving as the end is reached.
+          overscrollBehavior: "contain",
           padding: "24px 12px",
           pointerEvents: "none",
         }}

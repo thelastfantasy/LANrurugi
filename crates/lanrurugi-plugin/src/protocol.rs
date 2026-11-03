@@ -353,6 +353,10 @@ pub struct DiscoveredCandidate {
     /// Length, so download cost can be judged before approving.
     #[serde(default)]
     pub pages: Option<u32>,
+    /// Whole-gallery size in bytes, when the source reports it. `u64` rather than `f64` because it is
+    /// a byte count and comparisons must be exact; a rule over it reads as "not yet known" when absent.
+    #[serde(default)]
+    pub size: Option<u64>,
 }
 
 /// `discover`'s return shape — mirrors `plugin-sdk.ts`'s `DiscoveryResult`.

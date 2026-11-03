@@ -307,7 +307,11 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       <br />
 
       <div className="left-column">
-        <img className="logo-container" src="/legacy/img/logo.png" alt="LANrurugi" />
+        {/* The brand mark — the same SVG the favicon uses, not the old photo-style PNG. It carries
+            its own rounded background, so legacy's `.logo-container` (a theme-coloured backdrop that
+            the transparent PNG sat on) is replaced rather than combined; keeping both showed a
+            coloured fringe where the two corner radii disagreed. */}
+        <img className="brand-logo" src="/favicon.svg" alt="LANrurugi" />
         <br />
         <h1 style={{ marginBottom: 2 }}>LANrurugi</h1>
         <span>

@@ -112,6 +112,11 @@ fn field_value<'a>(candidate: &'a DiscoveredCandidate, field: &str) -> FieldValu
         "pages" => candidate
             .pages
             .map_or(FieldValue::Absent, |p| FieldValue::Number(p as f64)),
+        // Bytes. An f64 holds every byte count a real gallery has exactly (9 PB is where it stops),
+        // and reusing `Number` is what gives `size` the same `gte`/`lte`/`eq` operators as the others.
+        "size" => candidate
+            .size
+            .map_or(FieldValue::Absent, |s| FieldValue::Number(s as f64)),
         // Any of the titles may satisfy a rule: a work is the same work whichever language it is
         // named in, so a rule written against the Japanese title must not fail because the English
         // one was compared instead.
@@ -501,6 +506,7 @@ mod tests {
             category: None,
             uploader: None,
             pages: None,
+            size: None,
         }
     }
 
@@ -579,6 +585,40 @@ mod tests {
         assert_eq!(
             evaluate_outcome(&dated("2023-11-14 12:00", Some(2.0)), &f, &[], NOW, &plain),
             Outcome::Rejected(RejectionRule::BelowMinimumRating)
+        );
+    }
+
+    /// The gallery's whole size, in bytes — a download-cost gate. A source that does not report it
+    /// must leave the rule *waiting*, not rejecting: "nothing is under 200 MB" and "I could not tell
+    /// how big this is" are different answers, and only one of them is about the work.
+    #[test]
+    fn a_size_rule_compares_whole_gallery_bytes() {
+        let mib = 1024.0 * 1024.0;
+        let f = with(rule(
+            "size",
+            FieldOperator::Lte,
+            RuleValue::Number(200.0 * mib),
+        ));
+
+        let mut small = candidate(&["a"], None);
+        small.size = Some(150 * 1024 * 1024);
+        assert_eq!(
+            evaluate_outcome(&small, &f, &[], NOW, &plain),
+            Outcome::Accepted
+        );
+
+        let mut big = candidate(&["a"], None);
+        big.size = Some(300 * 1024 * 1024);
+        assert_eq!(
+            evaluate_outcome(&big, &f, &[], NOW, &plain),
+            Outcome::Rejected(RejectionRule::FieldRule("size".into()))
+        );
+
+        assert_eq!(
+            evaluate_outcome(&candidate(&["a"], None), &f, &[], NOW, &plain),
+            Outcome::TooSoon(PendingReason::UnknownField {
+                field: "size".into()
+            })
         );
     }
 

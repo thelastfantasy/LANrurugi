@@ -523,6 +523,9 @@ interface DiscoveredCandidateResult {
   uploader?: string;
   /** Length, so download cost can be judged before approving. */
   pages?: number;
+  /** Whole-gallery size in **bytes** — the archive's own total, not one page's. Absent when the
+   *  source does not report it; a rule over `size` then waits rather than rejecting. */
+  size?: number;
 }
 
 /** `discover`'s return shape — mirrors `plugin-sdk.ts`'s `DiscoveryResult`.

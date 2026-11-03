@@ -1600,6 +1600,7 @@
   "subscriptions.field.category": "カテゴリ",
   "subscriptions.field.uploader": "投稿者",
   "subscriptions.field.pages": "ページ数",
+  "subscriptions.field.size": "サイズ",
   "subscriptions.operator.gte": "以上",
   "subscriptions.operator.lte": "以下",
   "subscriptions.operator.eq": "と等しい",

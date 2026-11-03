@@ -428,8 +428,8 @@ pub(crate) fn subscription_condition_system(fields: &[String]) -> String {
 操作符：
 - 文本字段 title, category, uploader，以及未知的自定义文本字段：
   equals/contains 的 value 为字符串；in/not_in 的 value 为字符串数组。
-- 数字字段 rating, pages：
-  gte/lte/eq 的 value 为数字。
+- 数字字段 rating, pages, size：
+  gte/lte/eq 的 value 为数字。size 的 value 单位是**字节**（例如 500MB 写成 524288000）。
 - 日期字段 posted_at：
   older_than/newer_than 的 value 为 "3h"/"12h"/"1d"/"7d"/"30d" 或秒数。
 - 列表字段 language, artist, group, parody, character, female, male, other, tags：

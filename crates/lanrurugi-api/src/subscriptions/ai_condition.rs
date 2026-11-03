@@ -79,7 +79,7 @@ const LIST_NAMESPACES: &[&str] = &[
 fn kind_of(field: &str) -> Kind {
     match field {
         "posted_at" => Kind::Date,
-        "rating" | "pages" => Kind::Number,
+        "rating" | "pages" | "size" => Kind::Number,
         "title" | "category" | "uploader" => Kind::Text,
         "tags" => Kind::List,
         other if LIST_NAMESPACES.contains(&other) => Kind::List,

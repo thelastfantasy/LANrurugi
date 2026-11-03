@@ -1,3 +1,4 @@
+import DOMPurify from "dompurify"
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useSearchParams } from "react-router-dom"
@@ -164,7 +165,15 @@ export function PluginCard({
         </div>
 
         <br />
-        <span>{plugin.description}</span>
+        {/* Legacy plugin descriptions are HTML — they carry `<br>` for paragraphs, `<code>` around
+            regexes and named entities (`&rarr;`, `&lt;`), which is how LANraragi rendered them. As
+            text they showed the markup itself. Sanitised rather than trusted: a description travels
+            inside the plugin file, and this page runs in the admin's own session.
+            `plugin-description` also lets long unbreakable regexes wrap instead of widening the card. */}
+        <span
+          className="plugin-description"
+          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(plugin.description ?? "") }}
+        />
         <br />
 
         {plugin.type === "script" && (

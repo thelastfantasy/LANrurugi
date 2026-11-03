@@ -98,6 +98,18 @@ export function preferredInterfaceLanguage(
   )
 }
 
+/** The setting a quick language switch should store: the picked language moved to the front, the rest
+ *  of the order kept, and "auto" meaning no explicit preference at all.
+ *
+ *  Moving rather than replacing is the point — the same list also chooses which spelling of a work's
+ *  title is shown, so dropping the other entries to honour one interface pick would silently change
+ *  more than the interface language. */
+export function languageOrderAfterPick(stored: string | undefined, picked: string): string {
+  if (picked === "auto") return "auto"
+  const rest = languageOrder(stored).filter((code) => code !== picked)
+  return [picked, ...rest].join(",")
+}
+
 /** Applies the server-side `language` setting on top of i18next's own detection, which has no
  * idea it exists. Falls back to the public `/theme` endpoint's `language` field while logged out. */
 export function useApplySettingsLanguage() {

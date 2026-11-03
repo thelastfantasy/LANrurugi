@@ -157,7 +157,9 @@ function decodeEntities(text: string): string {
  * timestamp (so no dependence on how the listing rendered a local date), and the **uploader** —
  * which the signed-in listing itself does not carry at all (only the guest 25-per-page layout links
  * `uploader/<name>`, and a check runs signed in). Reading it from here is what keeps `uploader`
- * populated for the layout a subscription actually sees, at no extra request.
+ * populated for the layout a subscription actually sees, at no extra request. It also carries the
+ * gallery's whole size (`filesize`, bytes), which no listing row shows — the one value a "not bigger
+ * than N MB" rule needs.
  *
  * Failure is swallowed: a missing original title is worth less than the listing itself, and losing
  * the whole check over it would be the wrong trade. */
@@ -184,7 +186,10 @@ async function addOriginalTitles(
   // `Promise.all` would fire them all at a site that rate-limits this endpoint — a small fixed
   // window gets most of the saving without inviting that.
   const GDATA_CONCURRENCY = 4;
-  const metaByGid = new Map<string, { jpn?: string; posted?: string; uploader?: string }>();
+  const metaByGid = new Map<
+    string,
+    { jpn?: string; posted?: string; uploader?: string; size?: number }
+  >();
 
   const batches: [number, string][][] = [];
   for (let offset = 0; offset < pairs.length; offset += GDATA_BATCH_SIZE) {
@@ -211,6 +216,13 @@ async function addOriginalTitles(
         // Always seconds since the Unix epoch in UTC, irrespective of the listing's own display.
         if (entry?.posted) meta.posted = String(entry.posted);
         if (entry?.uploader) meta.uploader = String(entry.uploader);
+        // Whole-gallery size in bytes, as a string on the wire (verified live: 140969895 for a
+        // 293-file gallery). The listing rows carry no size at all, so this is the only place it can
+        // come from — and it costs nothing extra, since this call runs for the titles regardless.
+        if (entry?.filesize) {
+          const bytes = Number(entry.filesize);
+          if (Number.isFinite(bytes)) meta.size = bytes;
+        }
         metaByGid.set(gid, meta);
       }
     } catch (e) {
@@ -231,6 +243,9 @@ async function addOriginalTitles(
     // The listing's own `uploader/<name>` link is kept when it had one (guest layout); the API is
     // authoritative otherwise. A rule over `uploader` is only answerable if this is populated.
     if (meta?.uploader) c.uploader = meta.uploader;
+    // In bytes. A rule over `size` is only answerable once this is populated, and the host treats a
+    // missing value as "cannot tell yet" rather than as "does not match".
+    if (meta?.size !== undefined) c.size = meta.size;
   }
 }
 
@@ -353,6 +368,11 @@ export async function discover(
       category: category?.trim(),
       uploader: uploader ? decodeURIComponent(uploader) : undefined,
       pages: pages ? Number(pages) : undefined,
+      // Declared here, filled in below: the listing itself never shows a size, `addOriginalTitles`
+      // reads it from `gdata`. The key has to be written where a candidate is built, because the
+      // host's field introspection is static — it scans this file for the property name, so a field
+      // only ever assigned from inside that helper would never be offered in the settings form.
+      size: undefined,
     });
   }
 
