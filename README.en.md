@@ -26,7 +26,7 @@ differences), see [docs/comparison-with-lanraragi.md](./docs/comparison-with-lan
   views, 14 UI languages.
 - **Plugins**: metadata, download and login plugins run in Deno subprocesses with per-namespace permissions;
   the AI wizard can generate new ones for a site.
-- **Downloads**: byte-level progress, per-domain concurrency and rate limits; subscriptions that discover new
+- **Downloads**: byte-level progress, pause / resume, per-domain concurrency and rate limits; subscriptions that discover new
   releases, apply your rules, and queue them after a preview.
 - **Sharing**: send an archive or a tankoubon to someone who reads it in the browser, downloads it, or imports
   it into their own instance — direct, hole-punched, or relayed, with no third-party service involved.

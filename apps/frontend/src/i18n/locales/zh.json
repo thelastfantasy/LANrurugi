@@ -2861,5 +2861,10 @@
   "upload.paused": "已暂停",
   "upload.resume": "继续",
   "activity.actionType.download_queue.pause": "暂停下载",
-  "upload.noResumeSupport": "该源不支持断点续传，暂停后继续会重新下载。"
+  "upload.noResumeSupport": "该源不支持断点续传，暂停后继续会重新下载。",
+  "pluginParameters.importCookies": "从 document.cookie 填入",
+  "pluginParameters.importCookiesPlaceholder": "粘贴你从站点手动复制的 document.cookie 字符串（name=value; name2=value2）",
+  "pluginParameters.importCookiesApply": "填入",
+  "pluginParameters.importCookiesHint": "只会填入能对应到下方字段的 cookie，其余丢弃；填完记得点“保存插件设置”。",
+  "pluginParameters.importCookiesResult": "已填入 {{filled}} 项，忽略 {{ignored}} 项。"
 }

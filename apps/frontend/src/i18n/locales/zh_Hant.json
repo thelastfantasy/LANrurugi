@@ -966,5 +966,10 @@
   "upload.paused": "已暫停",
   "upload.resume": "繼續",
   "activity.actionType.download_queue.pause": "暫停下載",
-  "upload.noResumeSupport": "該來源不支援斷點續傳，暫停後繼續會重新下載。"
+  "upload.noResumeSupport": "該來源不支援斷點續傳，暫停後繼續會重新下載。",
+  "pluginParameters.importCookies": "從 document.cookie 填入",
+  "pluginParameters.importCookiesPlaceholder": "貼上你從站點手動複製的 document.cookie 字串（name=value; name2=value2）",
+  "pluginParameters.importCookiesApply": "填入",
+  "pluginParameters.importCookiesHint": "只會填入能對應到下方欄位的 cookie，其餘丟棄；填完記得點「儲存外掛設定」。",
+  "pluginParameters.importCookiesResult": "已填入 {{filled}} 項，忽略 {{ignored}} 項。"
 }

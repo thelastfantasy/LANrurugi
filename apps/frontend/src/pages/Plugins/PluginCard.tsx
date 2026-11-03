@@ -204,12 +204,14 @@ export function PluginCard({
             <CollapsibleSection
               as="div"
               icon="fa-sliders"
-              iconClassName="fas fa-sliders-h fa-2x"
+              iconClassName="fas fa-sliders-h"
               open={settingsOpen}
               onOpenChange={setSettingsOpen}
-              titleStyle={{ padding: "5px 0 0 5px", display: "block" }}
+              // 4px top / 8px bottom: the line box's own content sits 4px low (font ascent vs the
+              // icon's baseline), so equal padding still read as bottom-heavy.
+              titleStyle={{ padding: "4px 12px 8px" }}
               bodyStyle={{ padding: "5px 0 0 0" }}
-              title={<b style={{ verticalAlign: "super" }}>{t("pluginParameters.pluginSettings")}</b>}
+              title={<b>{t("pluginParameters.pluginSettings")}</b>}
             >
                 {hasDownloadOptions && <PluginOptionsForm namespace={plugin.namespace} />}
                 {/* Deliberately its own box, outside the options form: everything in that form
