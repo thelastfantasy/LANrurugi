@@ -2854,5 +2854,6 @@
   "library.dissolveTankoubonOnly": "Only dissolve the Tankoubon (archives stay in the library)",
   "activity.actionType.tankoubon.recycle": "Tankoubon moved to recycle bin",
   "activity.actionType.tankoubon.restore": "Tankoubon restored from recycle bin",
-  "activity.actionType.tankoubon.purge": "Tankoubon permanently deleted"
+  "activity.actionType.tankoubon.purge": "Tankoubon permanently deleted",
+  "components.layout.truncatedDownloadExpectedBytes": "Download incomplete: expected {{expected}} bytes, got {{got}}."
 }

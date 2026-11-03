@@ -2854,5 +2854,6 @@
   "library.dissolveTankoubonOnly": "仅拆散单行本（档案保留在库中）",
   "activity.actionType.tankoubon.recycle": "单行本移入回收站",
   "activity.actionType.tankoubon.restore": "单行本从回收站恢复",
-  "activity.actionType.tankoubon.purge": "单行本永久删除"
+  "activity.actionType.tankoubon.purge": "单行本永久删除",
+  "components.layout.truncatedDownloadExpectedBytes": "下载不完整：预期 {{expected}} 字节，实际收到 {{got}} 字节。"
 }

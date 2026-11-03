@@ -19,6 +19,9 @@ export function pluginInfo() {
   return {
     namespace: "fakkumetadata",
     type: "metadata" as const,
+    // Its `oneshot_arg` is a real gallery URL — see `hitomi.ts`'s note (issue #96).
+    url_pattern: "fakku\\.net",
+    domain_match: ["fakku.net"],
     parameters: [
       { name: "param1", description: "Add 'Source' tag", required: false, type: "bool" },
       { name: "param2", description: "Only use current title for exact matches", required: false, type: "bool" },

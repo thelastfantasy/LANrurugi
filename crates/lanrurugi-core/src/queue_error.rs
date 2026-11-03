@@ -124,6 +124,13 @@ pub enum QueueError {
         existing_id: String,
         filename: String,
     },
+    /// The transfer finished with fewer bytes than the response's own `Content-Length` promised.
+    /// Only produced when the server actually declared a length: a `chunked` response declares no
+    /// total, so it is accepted as-is (nHentai does exactly that; see `stream.rs`'s own note).
+    TruncatedDownload {
+        expected: u64,
+        got: u64,
+    },
     /// Every other internal fault (Redis/DB/filesystem/timeout/task-panic) — deliberately not
     /// broken out into more specific kinds, since none of these are actionable by the user beyond
     /// "something went wrong, check the server logs".
@@ -174,6 +181,7 @@ impl QueueError {
             QueueError::StaleAfterRestart => 1005,
             QueueError::SupersededByNewerRevision { .. } => 1007,
             QueueError::ShareImport { .. } => 1008,
+            QueueError::TruncatedDownload { .. } => 1009,
         }
     }
 }

@@ -891,6 +891,7 @@ export type QueueError =
   | { kind: "already_patched"; existing_id: string; filename: string }
   | { kind: "superseded_by_newer_revision"; archive_id: string }
   | { kind: "share_import"; reason: string }
+  | { kind: "truncated_download"; expected: number; got: number }
 
 /** Set on a queue item whose download was blocked by a filename collision (content is new, only
  * the filename collides) and staged pending the user's overwrite/rename choice. */
