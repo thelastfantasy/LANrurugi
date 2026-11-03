@@ -271,3 +271,53 @@ while they still carried no rating.
 **Not verified end to end.** Compilation, unit tests, and route mounting were checked. No real
 subscription check has been run against a live source, and none of `quickstart.md`'s ten scenarios
 has been executed. The UI has not been visually reviewed.
+
+---
+
+## Addendum (2026-11-04) — gallery-size filter, and the UI batch it shipped with
+
+PR #170 (merged as `10e98de`, all CI green: Rust/Frontend/Docs/CodeQL).
+
+**Filtering on a work's size (FR-011a–e, the source-declared field mechanism).** E-Hentai's discovery
+extension now writes `size` — the whole gallery's byte count — from `gdata.filesize`. That call already
+runs for the original title, `posted` and `uploader`, so this costs no extra request; verified against a
+live gallery (293 files, 140,969,895 B ≈ 134.4 MiB; the value arrives as a JSON string and is coerced).
+Host side follows the existing source-declared path rather than adding a built-in rule:
+`DiscoveredCandidate.size: Option<u64>`, `matcher::field_value` maps it to `FieldValue::Number` (so
+`gte`/`lte`/`eq` work unchanged), `ai_condition::kind_of` treats it as numeric (value in **bytes**), and
+the dispatcher advertises it in `FILTERABLE_CANDIDATE_FIELDS` so the settings form only offers it for a
+source that actually writes it. The form enters **MB** (1024-based, matching what the site itself
+prints) and stores bytes, converting only at the edge. A source that reports no size leaves the rule
+`Pending(UnknownField)` — waiting, never a rejection, since "I could not tell how big this is" is not
+"it does not match".
+
+Tests: `matcher::tests::a_size_rule_compares_whole_gallery_bytes` (accept / reject / unknown), and the
+frontend's MB↔bytes cases in `fieldRuleEditor.test.tsx`.
+
+**Modal scroll lock.** `Modal.tsx` held an open-modal counter in module state and set
+`body.style.overflow` from it. That counter could drift out of sync with what was actually mounted —
+observed live: a modal open with `document.body.style.overflow` empty, so the page behind scrolled.
+Replaced with a lock derived from the DOM, `html:has([data-overlay="modal"]) { overflow: hidden }`, and
+`overscroll-behavior: contain` on the dialog's own scrolling panes and backdrop so a scroll reaching the
+end of the content does not carry into the page.
+
+**Mobile layout defects found while reviewing the same screens.** Condition action buttons (two labelled
+buttons in one flex row) had `flex-wrap: nowrap` and no width cap, so at a deeply nested condition
+(165px column) they spilled 146px past the dialog; now they wrap. The maintenance-script "run" buttons
+were flex-shrunk until their label was clipped (the phone-width clamp zeroes `.stdbtn`'s `min-width`);
+they now keep their width and wrap below the explanation. The plugins footer's upload control is a
+styled `<span>` wrapping the hidden file input, so it stayed `content-box` while real form controls are
+`border-box` — 26px against 21px at the same declared height; matching the box model makes the row
+uniform.
+
+**Display.** The settings page's logo is the brand mark (`/favicon.svg`) instead of the legacy bitmap,
+without legacy's theme-coloured backdrop (the two corner radii disagreed). Plugin descriptions are
+legacy HTML (`<br> paragraphs, <code> around regexes, entities) and were being rendered as text; they
+are now sanitised with DOMPurify and rendered as HTML — plugin files are not a trusted source for the
+admin's own session, so sanitising is not optional — with long unbreakable regexes allowed to wrap.
+
+**Language preference.** The settings sidebar's quick switch used to write a single language code into
+`settings.language`, replacing the ordered list; that same list also chooses which spelling of a work's
+title is shown, so the other entries were silently lost. It now moves the picked language to the front
+and keeps the rest (`languageOrderAfterPick`, unit-tested), and offers "自动" so the control can express
+what `"auto"` already means instead of showing the browser-detected language as a de-facto choice.
