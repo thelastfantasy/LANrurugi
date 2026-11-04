@@ -483,6 +483,8 @@ export function Reader() {
   const warmImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
   /** Per page: the in-flight/resolved metadata HEAD (box + will-the-server-convert). */
   const pageMetaRef = useRef<Map<number, Promise<PageMeta | null>>>(new Map());
+  /** Pages whose served-size HEAD has already been re-asked after their bitmap painted. */
+  const servedInfoReverifiedRef = useRef<Set<number>>(new Set());
   const pageTinyBlobsRef = useRef<Map<number, string>>(new Map());
   const pageTinyDimsRef = useRef<Map<number, { width: number; height: number }>>(new Map());
   const pageTinyFetchesRef = useRef<Map<number, AbortController>>(new Map());
@@ -1101,9 +1103,12 @@ export function Reader() {
     // writes the cache entry (and its size) the first HEAD could not have seen. Gating it on "no
     // info yet" left pages stuck on their entry size whenever a fast page turn raced the earlier
     // request (real report, 2026-11-04: flipping quickly showed the plain line).
-    void fetchResizedPageInfo(originalUrl, { fresh: true }).then((info) => {
-      if (info) setResizedPageInfo((prev) => ({ ...prev, [page]: info }));
-    });
+    if (!servedInfoReverifiedRef.current.has(page)) {
+      servedInfoReverifiedRef.current.add(page);
+      void fetchResizedPageInfo(originalUrl, { fresh: true }).then((info) => {
+        if (info) setResizedPageInfo((prev) => ({ ...prev, [page]: info }));
+      });
+    }
   }
 
   function toggleFullScreen() {
