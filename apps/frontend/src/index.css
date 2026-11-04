@@ -162,11 +162,57 @@ input[type="checkbox"]:disabled {
  * still downloading, the previous page's bitmap would otherwise sit there fully sharp while the
  * page number claims a different page has loaded. Blur it slightly for the short loading window so
  * the UI reads as "transitioning" rather than "the new page is broken/identical". */
+/* Was a `blur(8px)` on the whole page image. On a cross-page spread that is a layer of several
+ * thousand pixels, and blurring it re-rasterises that entire layer — on a phone this is enough to
+ * stall the compositor while a page is loading (looks like the browser freezing). A cheap opacity
+ * fade reads the same ("transitioning", not "the page broke") at a fraction of the cost. */
 #i3.loading #img,
 #i3.loading #img_doublepage {
-  filter: blur(8px);
-  transition: filter 150ms ease;
+  opacity: 0.55;
+  transition: opacity 150ms ease;
 }
+
+.reader-page-placeholder {
+  display: block;
+  background: rgba(127, 127, 127, 0.12);
+}
+
+/* Fallback band for the case where nothing about the incoming page is known yet (first visit, the
+   preview has not answered): something visible beats an empty area. */
+#i3.loading {
+  min-height: 55vh;
+}
+
+/* The file-info bar starts as just the filename and grows into the full "→ webp :: … · 原始 … ·
+   省 98%" comparison once the HEAD answers. That text is a different height from the filename
+   alone, and the bar sits *above* the page area — so every page turn that changed the numbers
+   nudged the page down a line ("下沉感", reported on desktop 2026-11-04). Two halves:
+   - reserve a line at all widths, so the bar never changes height on arrival;
+   - on a phone the comparison wraps to two lines, so reserve two there.
+   The full text is already in the bar's `title`, so clipping on desktop loses nothing. */
+#i1 .file-info {
+  /* `rem`, not `em`: the reserve is about the bar's height, and tying it to the root keeps the
+     page area still even when a theme changes the bar's own font-size. 1.08rem is one line at the
+     current theme's 16px root (17.3px). */
+  min-height: 1.08rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 768px) {
+  #i1 .file-info {
+    /* Two lines. The mobile themes run a 14px root, so 2rem is the same 28px reserve. */
+    min-height: 2rem;
+    white-space: normal;
+  }
+}
+
+/* A page that has no decoded pixels yet. The `<img>` already carries the target page's
+ * `width`/`height` (taken from the preview's `x-lrr-preview-*` headers), so the skeleton is drawn
+ * in the *final* shape of the incoming page — turning a page never re-lays-out the box, it just
+ * fills it in. Same pulse as the infinite-scroll placeholder above, for the same "loading, not
+ * missing" reading. */
 
 /* components/Display/JobProgress.tsx's indeterminate download bar (total_bytes unknown) — a
  * fixed-width block sliding back and forth inside the track, standing in for a real ratio. */
@@ -2113,6 +2159,16 @@ body div.ido {
  */
 #i3 {
   text-align: center;
+  /* Tapping the page turns it. Without this, a quick double tap is a *browser* gesture instead:
+     it selects the page filename/toolbar text (the selection highlight then follows the reader
+     around), and on some Android builds it zooms. `manipulation` keeps panning/pinch (which the
+     reader does want) and drops the double-tap-to-zoom; the selection/touch-callout rules cover
+     the rest. Scoped to the page area — the title, tooltips and dialogs keep their normal text
+     behaviour. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
   /* The page image is inline-level, so its line box adds leading/descender space below it — which
      the fit-height measurement (based on the image's own height) cannot account for, leaving the
      page a few pixels taller than the viewport. Zeroing the line height removes exactly that. */

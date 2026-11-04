@@ -3110,6 +3110,20 @@ pub(crate) async fn serve_page(
                 header::HeaderName::from_static("x-lrr-served-original"),
                 header::HeaderValue::from_static(if page.resized { "0" } else { "1" }),
             );
+            // What these bytes actually weigh. `Content-Length` on a HEAD describes the *entry*
+            // (see that branch below), so the reader's file-info bar had no way to show the
+            // served size for a page already converted and sitting in the cache — a 10 MB page
+            // served as 227 KB read as "unoptimized" (real report, 2026-11-04). A stat, not an
+            // encode: absent when the body is still the entry's own bytes.
+            if let crate::state::PageBody::File(path) = &page.body {
+                if let Ok(meta) = tokio::fs::metadata(path).await {
+                    header_map.insert(
+                        header::HeaderName::from_static("x-lrr-served-size"),
+                        header::HeaderValue::from_str(&meta.len().to_string())
+                            .unwrap_or(header::HeaderValue::from_static("0")),
+                    );
+                }
+            }
             if page.orig_width > 0 && page.orig_height > 0 {
                 header_map.insert(
                     header::HeaderName::from_static("x-lrr-page-dimensions"),
@@ -3467,18 +3481,43 @@ async fn fetch_page(
             return Ok(serve_original_page(archive_file, path, raw, content_type).await);
         }
         if head_only {
-            // Mirror the animation path's own value gate (`MIN_ANIMATION_DOWNSCALE_PERCENT`): a
-            // downscale under 20% is not worth a re-encode and comes back as the original bytes. A
-            // client that cannot decode the source has no such choice — it must be converted.
+            // Mirror the converter's own value gate: only a source *already in the output codec*
+            // needs the 20% downscale to justify a re-encode (see
+            // `MIN_ANIMATION_DOWNSCALE_PERCENT`'s own note — "a GIF is worth converting even at its
+            // own size, because GIF's per-frame coding is far worse than WebP's"). Applying that
+            // gate to every animation made HEAD answer "served as-is" for a 10 MB GIF while the GET
+            // happily converted it, so the file-info bar described a page that was never sent
+            // (real report, 2026-11-04).
             let source_short = source_dims.map(|(w, h)| w.min(h)).unwrap_or(0);
-            let worth_it = source_short == 0
+            let source_is_output_codec = content_type == EncodeFormat::Webp.content_type();
+            let worth_it = !source_is_output_codec
+                || source_short == 0
                 || (effective_max_short_edge as u64) * 100 < (source_short as u64) * 80;
             if !client_cannot_decode_source && !worth_it {
                 return Ok(serve_original_page(archive_file, path, raw, content_type).await);
             }
+            // Same rule as the still path: when this variant is already cached, report what a GET
+            // would actually send, not the entry's own size — the bar's "省 X%" is computed from it
+            // and a HEAD that only ever names the original weight leaves an animated page looking
+            // unoptimized.
+            let cached = resize_cache_path(
+                &state.library.temp_dir,
+                id,
+                path,
+                effective_threshold,
+                effective_max_short_edge,
+                effective_quality,
+                false,
+                EncodeFormat::Webp,
+                true,
+            );
+            let served_size = tokio::fs::metadata(&cached)
+                .await
+                .map(|meta| meta.len())
+                .unwrap_or(raw.len() as u64);
             return Ok(metadata_only(
                 EncodeFormat::Webp.content_type(),
-                raw.len() as u64,
+                served_size,
                 source_dims,
                 true,
             ));
