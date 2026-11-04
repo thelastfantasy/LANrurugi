@@ -110,6 +110,27 @@ for (const button of document.querySelectorAll(".copy-btn")) {
   });
 }
 
+/* ---- compose block: stable / beta image channel ------------------------------------------ */
+
+const composeTabs = document.querySelectorAll(".compose-tab");
+for (const tab of composeTabs) {
+  tab.addEventListener("click", () => {
+    const code = document.getElementById("compose-yaml");
+    if (!code) return;
+    // Only the tag changes. Rewriting the whole block from a template would drop the host port the
+    // editor above already wrote into it.
+    code.textContent = code.textContent.replace(
+      /(lanrurugi:)(latest|beta)/,
+      `$1${tab.dataset.composeTag}`,
+    );
+    for (const other of composeTabs) {
+      const active = other === tab;
+      other.classList.toggle("active", active);
+      other.setAttribute("aria-selected", String(active));
+    }
+  });
+}
+
 /* ---- host port: the compose block edits it, step 3's URL follows ------------------------- */
 
 const portEditor = document.querySelector(".port-edit");

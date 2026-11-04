@@ -542,6 +542,10 @@
             </li>
           </ol>
           <div class="code-wrap">
+            <div class="compose-tabs" role="tablist" aria-label="镜像通道">
+              <button type="button" role="tab" aria-selected="true" class="compose-tab active" data-compose-tag="latest">stable</button>
+              <button type="button" role="tab" aria-selected="false" class="compose-tab" data-compose-tag="beta">beta</button>
+            </div>
             <button type="button" class="copy-btn" data-target="compose-yaml" data-copied="{{t:start.copied}}">
               <span data-i18n="start.copy">复制</span>
             </button>

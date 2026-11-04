@@ -1912,6 +1912,41 @@ main {
   min-width: 0;
 }
 
+/* Channel switch in the compose window's title bar. `stable` is what most readers want, so it is
+   the default and the beta pill is the deliberate second step. The three dots live at 22px, so the
+   row starts after them. */
+.compose-tabs {
+  position: absolute;
+  top: 10px;
+  left: 92px;
+  z-index: 1;
+  display: flex;
+  gap: 6px;
+}
+
+.compose-tab {
+  padding: 2px 10px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: #f5efdc;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 900;
+  opacity: 0.55;
+  cursor: pointer;
+}
+
+.compose-tab:hover {
+  opacity: 0.85;
+}
+
+.compose-tab.active {
+  border-color: #f0a500;
+  color: #f0a500;
+  opacity: 1;
+}
+
 .copy-btn {
   position: absolute;
   top: 9px;
