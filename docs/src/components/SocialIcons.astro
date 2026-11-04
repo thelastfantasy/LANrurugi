@@ -2,6 +2,8 @@
 // Top-bar links: the GitHub icon (the same one the homepage, Swagger UI and SDK bars carry) and the
 // documentation version picker. Only links that resolve are listed — there is no public demo,
 // Discord or upstream-project link on purpose.
+import versionsJson from '../../public/versions.json'
+
 import { Icon } from '@astrojs/starlight/components'
 import config from 'virtual:starlight/user-config'
 
@@ -13,14 +15,23 @@ const LINKS: Record<Locale, { label: string; href: string; external: boolean }[]
   en: [{ label: 'GitHub', href: 'https://github.com/thelastfantasy/LANrurugi', external: true }],
 }
 
-// Versions offered by the picker. There is exactly one today: the repository has no release tags
-// (`git tag` is empty), so "which version of the docs am I reading" currently has a single honest
-// answer. Kept as a list so the day a release is tagged this is a one-line change — and so the
-// selector is the reference site's *shape* rather than a fabricated second option.
-const VERSIONS: Record<Locale, { value: string; label: string }[]> = {
-  zh: [{ value: 'current', label: '当前版本' }],
-  en: [{ value: 'current', label: 'Current Release' }],
-}
+// Every release is published under its own path (`/v1.0.0/`), and its docs, API reference and SDK
+// reference live inside that path — so "which version am I reading" has to be answerable *and*
+// switchable. The options come from `public/versions.json`, generated at build time from the release
+// tags, which is the same file the version-history page renders: one source, no chance of the menu
+// offering something the history page does not list.
+const ALL_VERSIONS = 10
+// Bundled at build time (a static JSON import), not read with `fs`: this file is compiled into a
+// chunk under `dist/`, so a relative `fs` path resolves against the output tree, not the source.
+const versions: { version: string; date: string; prerelease: boolean }[] = versionsJson
+const offered = versions.slice(0, ALL_VERSIONS)
+// The build's own base (`/v1.0.0/` for a released version, `/` for a local build). The selector
+// keeps the reader's current page by swapping only this prefix.
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, '')
+const currentVersion = BASE.replace(/^\//, '') || versions[0]?.version || 'dev'
+// Where the version trees live. A per-version build has a base like `/1.0.0-beta.1`; the
+// unversioned offline copy has `/docs`, and its single tree stays right where it is.
+const ROOT = BASE.replace(/\/v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, '')
 
 // Fail loudly at build time if a configured `social` entry is not represented here, so adding one in
 // `astro.config.mjs` and forgetting this component cannot silently drop it.
@@ -54,10 +65,13 @@ const versionLabel = locale === 'zh' ? '文档版本' : 'Documentation version'
   }
   <label class="nav-links__version">
     <span class="sr-only">{versionLabel}</span>
-    <select>
-      {VERSIONS[locale].map((version) => (
-        <option value={version.value}>{version.label}</option>
+    <select data-lr-version-select data-root={ROOT} data-base={BASE}>
+      {offered.map((entry) => (
+        <option value={entry.version} selected={entry.version === currentVersion}>
+          v{entry.version}
+        </option>
       ))}
+      <option value="__all__">{locale === 'zh' ? '所有版本…' : 'All versions…'}</option>
     </select>
   </label>
 </nav>
@@ -95,14 +109,64 @@ const versionLabel = locale === 'zh' ? '文档版本' : 'Documentation version'
   }
 
   /* The reference site puts its version picker above the sidebar; Starlight keeps its global
-     pickers (theme, language) in this bar, so a third one belongs beside them rather than in a
+     pickers (theme, language) in this bar, so the version belongs beside them rather than in a
      second, separately-positioned control. */
   .nav-links__version select {
-    font-size: var(--sl-text-sm);
+    font-size: var(--sl-text-xs);
+    font-variant-numeric: tabular-nums;
     padding: 0.15rem 0.4rem;
     border: 1px solid var(--sl-color-gray-5);
     border-radius: 6px;
     background: var(--sl-color-bg);
+    color: var(--sl-color-gray-2);
+    max-width: 11rem;
+  }
+
+  .nav-links__version select:hover {
     color: var(--sl-color-white);
+    border-color: var(--sl-color-gray-4);
   }
 </style>
+
+<script>
+  // Keeps the reader on the same page when switching versions: the path minus the current version
+  // prefix is appended to the chosen version. A page that version never had is not guessed at —
+  // `pages.json` (written by the docs build) says what exists, and the version root is the honest
+  // fallback.
+  const KNOWN_PAGES = new Map<string, Promise<Set<string> | null>>();
+
+  function pages(version: string, root: string): Promise<Set<string> | null> {
+    if (!KNOWN_PAGES.has(version)) {
+      const prefix = root ? root + '/' : '/';
+      KNOWN_PAGES.set(
+        version,
+        fetch(`${prefix}v${version}/pages.json`)
+          .then((response) => (response.ok ? response.json() : null))
+          .then((data) => (Array.isArray(data) ? new Set<string>(data) : null))
+          .catch(() => null),
+      );
+    }
+    return KNOWN_PAGES.get(version)!;
+  }
+
+  async function navigate(select: HTMLSelectElement) {
+    const root = select.dataset.root ?? '';
+    const prefix = root ? root + '/' : '/';
+    const version = select.value;
+    if (version === '__all__') {
+      // The history page for *this* build lives inside this build's own tree, wherever that is.
+      window.location.href = `${select.dataset.base ?? ''}/versions/`;
+      return;
+    }
+    const rest = window.location.pathname.replace(/^.*?\/v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\//, '');
+    const known = await pages(version, root);
+    const target = !known || known.size === 0 || known.has(rest) ? rest : '';
+    window.location.href = `${prefix}v${version}/${target}`;
+  }
+
+  for (const select of document.querySelectorAll<HTMLSelectElement>('[data-lr-version-select]')) {
+    select.addEventListener('change', () => void navigate(select));
+    const current = select.selectedOptions[0]?.value;
+    select.value = current ?? select.options[0]?.value ?? '';
+  }
+</script>

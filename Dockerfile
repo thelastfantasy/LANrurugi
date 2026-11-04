@@ -369,6 +369,11 @@ ENV LANRURUGI_TELEMETRY_UI_DIR=/usr/local/share/lanrurugi/telemetry
 # stage so that stays true.
 ARG LANRURUGI_BUILD_CHANNEL=unknown
 ENV LANRURUGI_BUILD_CHANNEL=$LANRURUGI_BUILD_CHANNEL
+# Which release line this image follows for updates: `stable` (published as `latest`) or `beta`
+# (published as `beta`). Baked in like the channel, because the running container cannot see which
+# tag it was pulled by — without it `docker pull …:beta` would sit on the stable update track.
+ARG LANRURUGI_RELEASE_TRACK=stable
+ENV LANRURUGI_RELEASE_TRACK=$LANRURUGI_RELEASE_TRACK
 EXPOSE 3000
 # Sharing (017): iroh QUIC between instances; `share_udp_port`. Publishing it as host 443/udp is
 # recommended so the traffic sits on the HTTP/3 port.

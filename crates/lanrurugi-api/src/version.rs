@@ -223,6 +223,29 @@ fn classify_channel(raw: &str) -> Option<&'static str> {
     }
 }
 
+/// Which release line this *artifact* belongs to — `stable` unless it was built from a tag with a
+/// prerelease suffix. Stamped exactly like [`build_channel`], and for the same reason: the image
+/// cannot tell its own tag at runtime, so `docker pull …:beta` would otherwise default to the stable
+/// update track and never see the beta it is following.
+///
+/// An explicit `release_track` setting still wins (see `settings::read_release_track`): this is only
+/// the default a fresh deployment starts on.
+pub fn build_track() -> &'static str {
+    static TRACK: OnceLock<&'static str> = OnceLock::new();
+    TRACK.get_or_init(|| {
+        let raw = std::env::var("LANRURUGI_RELEASE_TRACK")
+            .ok()
+            .or_else(|| option_env!("LANRURUGI_RELEASE_TRACK").map(str::to_string))
+            .unwrap_or_default();
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "beta" => "beta",
+            // Unrecognised values, a debug build and a plain source checkout all mean "stable":
+            // the beta line is something an artifact is *deliberately* built for.
+            _ => "stable",
+        }
+    })
+}
+
 /// Best-effort current git SHA:
 /// 1. runtime env (`LANRURUGI_GIT_SHA`) — set by a container entrypoint if desired;
 /// 2. compile-time env (`LANRURUGI_GIT_SHA`) — set in the Docker build via `ARG`/`ENV`;
@@ -388,21 +411,26 @@ async fn latest_release_for(track: Track) -> Result<Value, String> {
         return github_get("/releases/latest").await;
     }
     let releases = github_get(&format!("/releases?per_page={CHANGELOG_LIMIT}")).await?;
-    match newest_prerelease(&releases) {
+    // Beta means "newest of anything", not "newest prerelease": once 1.0.0 ships it is newer than
+    // 1.0.0-beta.3, and a beta deployment still sitting on the beta would never be told.
+    match newest_release(&releases, true) {
         Some(release) => Ok(release),
         None => github_get("/releases/latest").await,
     }
 }
 
-/// The highest prerelease in a `/releases` payload, or `None` when there is no usable one.
+/// The highest release in a `/releases` payload, or `None` when there is no usable one.
+///
+/// `include_prerelease: false` restricts it to stable releases (the beta track passes `true`, since
+/// a stable release outranks the prereleases that preceded it).
 ///
 /// Split out from [`latest_release_for`] so the ordering rule (drafts skipped, unparseable tags
 /// ignored, semver order rather than GitHub's own list order) is testable without an HTTP stub.
-fn newest_prerelease(releases: &Value) -> Option<Value> {
+fn newest_release(releases: &Value, include_prerelease: bool) -> Option<Value> {
     releases
         .as_array()?
         .iter()
-        .filter(|release| release["prerelease"].as_bool() == Some(true))
+        .filter(|release| include_prerelease || release["prerelease"].as_bool() != Some(true))
         .filter(|release| release["draft"].as_bool() != Some(true))
         .filter_map(|release| {
             let tag = release["tag_name"].as_str()?;
@@ -1020,7 +1048,7 @@ mod tests {
     }
 
     #[test]
-    fn the_newest_prerelease_ignores_drafts_and_unparseable_tags() {
+    fn the_newest_release_ignores_drafts_and_unparseable_tags() {
         let releases = json!([
             {"tag_name": "v0.2.0-beta.1", "prerelease": true, "draft": false},
             {"tag_name": "v0.2.0-beta.10", "prerelease": true, "draft": false},
@@ -1029,15 +1057,42 @@ mod tests {
             {"tag_name": "v0.1.0", "prerelease": false, "draft": false},
         ]);
         assert_eq!(
-            newest_prerelease(&releases)
+            newest_release(&releases, true)
                 .and_then(|release| release["tag_name"].as_str().map(str::to_string)),
             Some("v0.2.0-beta.10".to_string()),
             "numeric ordering, drafts and unparseable tags skipped"
         );
-        assert!(
-            newest_prerelease(&json!([{"tag_name": "v0.1.0", "prerelease": false}])).is_none(),
-            "no prerelease means the caller falls back to the stable latest"
+        assert_eq!(
+            newest_release(&releases, false)
+                .and_then(|release| release["tag_name"].as_str().map(str::to_string)),
+            Some("v0.1.0".to_string()),
+            "without prereleases the stable release is the answer"
         );
+    }
+
+    #[test]
+    fn the_beta_track_prefers_a_stable_release_over_an_older_prerelease() {
+        // Beta means "newest of anything": once 1.0.0 ships, a deployment on 1.0.0-beta.3 has to be
+        // told about it, even though a newer prerelease does not exist.
+        let releases = json!([
+            {"tag_name": "v1.0.0-beta.3", "prerelease": true, "draft": false},
+            {"tag_name": "v1.0.0", "prerelease": false, "draft": false},
+        ]);
+        assert_eq!(
+            newest_release(&releases, true)
+                .and_then(|release| release["tag_name"].as_str().map(str::to_string)),
+            Some("v1.0.0".to_string())
+        );
+        assert!(
+            newest_release(&json!([{"tag_name": "v0.1.0", "prerelease": false}]), true).is_some(),
+            "a lone stable release is still a valid answer for the beta track"
+        );
+    }
+
+    #[test]
+    fn the_stamped_track_defaults_to_stable() {
+        // Whatever the environment says, an unrecognised value must not put a deployment on beta.
+        assert!(matches!(build_track(), "stable" | "beta"));
     }
 
     #[test]

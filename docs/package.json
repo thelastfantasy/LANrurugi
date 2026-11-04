@@ -6,10 +6,11 @@
   "scripts": {
     "prepare-static-assets": "node scripts/prepare-static-assets.mjs",
     "generate-api-pages": "node scripts/generate-api-pages.mjs",
-    "build": "pnpm run prepare-static-assets && pnpm run generate-api-pages && astro build",
+    "build": "pnpm run prepare-static-assets && pnpm run generate-versions && pnpm run generate-api-pages && astro build && node scripts/generate-pages.mjs",
     "build:swagger": "node scripts/build-swagger.mjs",
-    "dev": "pnpm run prepare-static-assets && pnpm run generate-api-pages && astro dev",
-    "preview": "astro preview"
+    "dev": "pnpm run prepare-static-assets && pnpm run generate-versions && pnpm run generate-api-pages && astro dev",
+    "preview": "astro preview",
+    "generate-versions": "node scripts/generate-versions.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.42.8",

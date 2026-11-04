@@ -456,3 +456,39 @@ h1#_top,
 .api-access-notes li + li {
   margin-top: 0.35rem;
 }
+
+/* Two compose snippets (stable / beta) stacked in one window with a tab bar in its title area —
+   Starlight's Expressive Code build here has no tab-group support, so the grouping is done by the
+   script at the end of this file: it hides every frame but the selected one and fills the title
+   bar with one button per frame title. Scoped to `.lr-code-tabs`, which the install page puts
+   around exactly those two blocks. */
+.lr-code-tabs__bar {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  margin-inline-start: 12px;
+}
+
+.lr-code-tabs__tab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 4px 10px;
+  border-radius: 5px 5px 0 0;
+  opacity: 0.6;
+  cursor: pointer;
+}
+
+.lr-code-tabs__tab[aria-selected="true"] {
+  opacity: 1;
+  background: var(--sl-color-gray-6, rgba(127, 127, 127, 0.18));
+}
+
+.lr-code-tabs__tab:focus-visible {
+  outline: 2px solid var(--sl-color-accent);
+  outline-offset: 1px;
+}

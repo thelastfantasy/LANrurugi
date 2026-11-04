@@ -1,0 +1,455 @@
+name: 'Release'
+
+# One tag, one workflow, one visible outcome. The previous split (docker-release.yml +
+# native-release.yml, both firing on the same tag) could leave a half-published release: one
+# channel succeeded while the other failed, and there is no safe way to "undo" a pushed image tag.
+# Everything is built first and staged under throwaway tags; only `amend-builds` — which runs after
+# every build job succeeded — moves anything to a real tag and creates the GitHub release. A failure
+# before that point leaves nothing user-visible, and re-running the same tag is enough to retry.
+#
+# `amend-builds` keeps its job name on purpose: `crates/lanrurugi-api/src/version.rs` looks for
+# exactly that check run to decide whether an update is known to have a pullable multi-arch image.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
+  HAS_DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+  BINARIES: -p lanrurugi-server -p lanrurugi-book-worker -p lanrurugi-embed-worker -p lanrurugi-gpu-worker
+  # Turns off libarchive features whose system libraries users may not have (see the file).
+  CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/packaging/libarchive-portable.cmake
+  # Stamped into the binary at compile time (`option_env!` in `lanrurugi_api::version`): a tarball
+  # has no runtime environment to read it from, so this is the only place the native channel can be
+  # recorded at all.
+  LANRURUGI_BUILD_CHANNEL: native
+  # Per-run staging prefix: two releases running at once cannot overwrite each other's layers.
+  STAGING: staging-${{ github.run_id }}
+
+jobs:
+  docker:
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    name: docker-${{ matrix.arch }}
+    runs-on: ubuntu-24.04${{ matrix.arch == 'arm64' && '-arm' || '' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Get version
+        id: version
+        run: |
+          echo "lanrurugi_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+
+      # A version with a prerelease suffix is published as `beta`, and the image is stamped to
+      # follow the beta update track — the tag and the image must not disagree.
+      - name: Resolve track
+        id: track
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          case "$version" in
+            *-*) echo "track=beta" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "track=stable" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Get commit sha
+        id: sha
+        run: |
+          echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v7
+        with:
+          push: true
+          platforms: linux/${{ matrix.arch }}
+          # Registry cache, same rationale as `docker.yml` — the Actions cache's 10 GB budget is
+          # shared with the Rust target cache, which every CI run needs.
+          cache-from: type=registry,ref=ghcr.io/thelastfantasy/lanrurugi:buildcache-release-${{ matrix.arch }}
+          cache-to: type=registry,ref=ghcr.io/thelastfantasy/lanrurugi:buildcache-release-${{ matrix.arch }},mode=max
+          provenance: false
+          build-args: |
+            LANRURUGI_GIT_SHA=${{ steps.sha.outputs.short_sha }}
+            # The tracker groups events/sessions by `release`, which wants a version rather than a
+            # commit: `lanrurugi@0.2.0`. Local builds pass no value and fall back to the SHA.
+            LANRURUGI_RELEASE=lanrurugi@${{ steps.version.outputs.lanrurugi_version }}
+            # Diagnostics forwarding target, baked into the image (specs/018). Empty for
+            # fork PRs, so nothing is sent from a build that never sees the secret.
+            LANRURUGI_TRACKER_DSN=${{ secrets.LANRURUGI_TRACKER_DSN }}
+            # Stamped per registry: identical bytes cannot say where a deployment pulled them from.
+            LANRURUGI_BUILD_CHANNEL=ghcr
+            # ...and the same for the release line: the pushed tag says it, the image must agree.
+            LANRURUGI_RELEASE_TRACK=${{ steps.track.outputs.track }}
+          tags: |
+            ghcr.io/thelastfantasy/lanrurugi:${{ env.STAGING }}-${{ matrix.arch }}
+
+      # Second build for Docker Hub, not a re-tag: `imagetools create` would copy GHCR's manifest
+      # and Docker Hub pulls would then report `ghcr`. All Rust layers are cache hits.
+      - uses: docker/login-action@v4
+        if: env.DOCKERHUB_IMAGE != '' && env.HAS_DOCKERHUB_TOKEN == 'true'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v7
+        if: env.DOCKERHUB_IMAGE != '' && env.HAS_DOCKERHUB_TOKEN == 'true'
+        with:
+          push: true
+          platforms: linux/${{ matrix.arch }}
+          cache-from: type=registry,ref=ghcr.io/thelastfantasy/lanrurugi:buildcache-release-${{ matrix.arch }}
+          provenance: false
+          build-args: |
+            LANRURUGI_GIT_SHA=${{ steps.sha.outputs.short_sha }}
+            LANRURUGI_RELEASE=lanrurugi@${{ steps.version.outputs.lanrurugi_version }}
+            LANRURUGI_TRACKER_DSN=${{ secrets.LANRURUGI_TRACKER_DSN }}
+            LANRURUGI_BUILD_CHANNEL=dockerhub
+            LANRURUGI_RELEASE_TRACK=${{ steps.track.outputs.track }}
+          tags: |
+            docker.io/${{ env.DOCKERHUB_IMAGE }}:${{ env.STAGING }}-${{ matrix.arch }}
+
+  assets:
+    name: frontend, docs, plugins
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+        with:
+          install: true
+          cache: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: docs
+      - name: Generate the API document
+        run: cargo run -p lanrurugi-api-docgen
+      - name: Build frontend, docs and plugin bundle
+        run: scripts/build-native-assets.sh native-assets
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-assets
+          path: native-assets
+          retention-days: 7
+
+  linux:
+    name: linux-${{ matrix.arch }}
+    needs: assets
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      # .mise.toml sets RUSTC_WRAPPER=sccache and .cargo/config.toml links with mold on Linux, so
+      # both must be installed alongside the toolchain.
+      - uses: jdx/mise-action@v4
+        with:
+          install: true
+          install_args: rust deno sccache mold
+          cache: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: native-linux-${{ matrix.arch }}
+      - name: Resolve track
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          case "$version" in
+            *-*) echo "LANRURUGI_RELEASE_TRACK=beta" >> "$GITHUB_ENV" ;;
+            *)   echo "LANRURUGI_RELEASE_TRACK=stable" >> "$GITHUB_ENV" ;;
+          esac
+      # libarchive2-sys links xml2/acl/crypto by name, so their -dev packages must exist here; the
+      # toolchain file keeps libarchive from using xml2/acl, and --as-needed then drops them from
+      # the binary. Redis comes from redis.io because 22.04's own package is 6.0.
+      - name: Build and smoke-test dependencies
+        run: |
+          curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis.gpg
+          echo "deb [signed-by=/usr/share/keyrings/redis.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/redis.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake pkg-config nasm zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev \
+            libxml2-dev libacl1-dev libssl-dev \
+            redis djvulibre-bin fonts-noto-cjk fonts-noto-color-emoji
+      - name: Build release binaries
+        run: cargo build --release --locked $BINARIES
+      - uses: actions/download-artifact@v8
+        with:
+          name: native-assets
+          path: native-assets
+      - name: Package
+        run: scripts/package-native.sh "linux-${{ matrix.arch }}" "${GITHUB_REF_NAME#v}" target/release native-assets dist
+      - name: Linked libraries
+        run: ldd target/release/lanrurugi-server target/release/lanrurugi-book-worker
+      - name: Smoke test
+        env:
+          SMOKE_EXPECT: pdfium onnxruntime djvulibre deno
+          SMOKE_LIBRARY: smoke-library
+          SMOKE_STRICT: '1'
+        run: |
+          scripts/smoke-sample-library.sh smoke-library
+          scripts/smoke-native.sh dist/*.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-linux-${{ matrix.arch }}
+          path: dist/*.tar.gz
+
+  macos:
+    name: macos-arm64
+    needs: assets
+    runs-on: macos-14
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+      # libarchive2-sys names libb2/xml2 at link time even when libarchive does not use them; drop
+      # every dylib the binary does not actually reference.
+      RUSTFLAGS: -C link-arg=-Wl,-dead_strip_dylibs
+    steps:
+      - uses: actions/checkout@v7
+      # sccache because .mise.toml sets RUSTC_WRAPPER=sccache (mold is Linux-only).
+      - uses: jdx/mise-action@v4
+        with:
+          install: true
+          install_args: rust deno sccache
+          cache: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: native-macos-arm64
+      - name: Resolve track
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          case "$version" in
+            *-*) echo "LANRURUGI_RELEASE_TRACK=beta" >> "$GITHUB_ENV" ;;
+            *)   echo "LANRURUGI_RELEASE_TRACK=stable" >> "$GITHUB_ENV" ;;
+          esac
+      - name: Build and smoke-test dependencies
+        run: brew install cmake pkg-config nasm xz lz4 zstd libb2 redis djvulibre
+      - name: Build release binaries
+        run: cargo build --release --locked $BINARIES
+      - uses: actions/download-artifact@v8
+        with:
+          name: native-assets
+          path: native-assets
+      - name: Package
+        run: scripts/package-native.sh macos-arm64 "${GITHUB_REF_NAME#v}" target/release native-assets dist
+      - name: Linked libraries
+        run: otool -L target/release/lanrurugi-server target/release/lanrurugi-book-worker
+      - name: Smoke test
+        env:
+          SMOKE_EXPECT: pdfium onnxruntime djvulibre deno
+          SMOKE_LIBRARY: smoke-library
+          SMOKE_STRICT: '1'
+        run: |
+          scripts/smoke-sample-library.sh smoke-library
+          scripts/smoke-native.sh dist/*.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-macos-arm64
+          path: dist/*.tar.gz
+
+  freebsd:
+    name: freebsd-x86_64
+    needs: assets
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: native-assets
+          path: native-assets
+      # PDFium and ONNX Runtime come from FreeBSD packages here, not from the tarball; the smoke
+      # test still expects them, installed the way the guide says.
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          release: '14.3'
+          usesh: true
+          envs: 'BINARIES GITHUB_REF_NAME CMAKE_TOOLCHAIN_FILE LANRURUGI_RELEASE_TRACK'
+          prepare: |
+            pkg install -y curl git bash cmake pkgconf nasm lz4 zstd \
+              redis deno djvulibre pdfium onnxruntime \
+              noto-serif-sc noto-sans-sc
+          run: |
+            case "${GITHUB_REF_NAME}" in
+              *-*) export LANRURUGI_RELEASE_TRACK=beta ;;
+              *)   export LANRURUGI_RELEASE_TRACK=stable ;;
+            esac
+            curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal \
+              --default-toolchain "$(sed -n 's/^rust = { version = "\([^"]*\)".*/\1/p' .mise.toml)"
+            . "$HOME/.cargo/env"
+            cargo build --release --locked $BINARIES
+            ldd target/release/lanrurugi-server
+            scripts/package-native.sh freebsd-x86_64 "${GITHUB_REF_NAME#v}" target/release native-assets dist
+            scripts/smoke-sample-library.sh smoke-library
+            SMOKE_EXPECT="pdfium onnxruntime djvulibre deno" SMOKE_LIBRARY=smoke-library SMOKE_STRICT=1 \
+              scripts/smoke-native.sh dist/*.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-freebsd-x86_64
+          path: dist/*.tar.gz
+
+  # This tag's docs, built once and frozen. Rebuilding an old tag years later would need that tag's
+  # lockfile and toolchain (and its `lanrurugi-api-docgen` to still compile); shipping the built tree
+  # as a release asset is what makes `/v<version>/` permanent.
+  docs:
+    name: docs
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      # Full history so this build's own selector lists every release, not just this tag.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v4
+        with:
+          install: true
+          cache: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: docs
+      - name: Generate the API document
+        run: cargo run -p lanrurugi-api-docgen
+      - name: Generate the plugin SDK reference
+        run: mise run docs-sdk
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+      - name: Build the docs for this tag
+        env:
+          DOCS_SITE_URL: ${{ vars.DOCS_SITE_URL || 'https://docs.lrrg.dev' }}
+          DOCS_SDK_URL: ${{ vars.DOCS_SDK_URL || 'https://sdk.lrrg.dev/' }}
+          DOCS_SWAGGER_URL: ${{ vars.DOCS_SWAGGER_URL || 'https://api.lrrg.dev/' }}
+        run: DOCS_BASE="/v${GITHUB_REF_NAME#v}/" mise run docs-build
+      - name: Package
+        run: |
+          set -euo pipefail
+          cd docs/dist
+          zip -qr "$GITHUB_WORKSPACE/docs-${GITHUB_REF_NAME#v}.zip" .
+          ls -la "$GITHUB_WORKSPACE"/docs-*.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: docs-site
+          path: docs-*.zip
+
+  # The only job that publishes anything. Its check-run name is load-bearing (see the header).
+  amend-builds:
+    name: amend-builds
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [docker, linux, macos, freebsd, docs]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # A version with a prerelease suffix (`1.0.0-beta.1`) is NOT the stable channel: it publishes
+      # under `beta`, never `latest`, and its GitHub release is marked pre-release so
+      # `/releases/latest` — which is what the stable track compares against — keeps pointing at the
+      # last stable build.
+      - name: Resolve channel
+        id: channel
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          case "$version" in
+            *-*) channel=beta; prerelease=true ;;
+            *)   channel=latest; prerelease=false ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "$version → $channel (prerelease=$prerelease)"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/login-action@v4
+        if: env.DOCKERHUB_IMAGE != '' && env.HAS_DOCKERHUB_TOKEN == 'true'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # One multi-arch manifest per tag, per registry — each assembled from its own per-arch staging
+      # tags, since the two registries hold different images (see the Docker Hub build above).
+      - name: Publish multi-arch manifests
+        env:
+          VERSION: ${{ steps.channel.outputs.version }}
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+        run: |
+          short_sha=$(git rev-parse --short HEAD)
+          tags=""
+          for tag in "$VERSION" "$VERSION-$short_sha" "$CHANNEL"; do
+            tags="$tags -t ghcr.io/thelastfantasy/lanrurugi:$tag"
+          done
+          docker buildx imagetools create $tags \
+            ghcr.io/thelastfantasy/lanrurugi:${{ env.STAGING }}-amd64 \
+            ghcr.io/thelastfantasy/lanrurugi:${{ env.STAGING }}-arm64
+
+          if [ -n "$DOCKERHUB_IMAGE" ] && [ "$HAS_DOCKERHUB_TOKEN" = true ]; then
+            hub_tags=""
+            for tag in "$VERSION" "$VERSION-$short_sha" "$CHANNEL"; do
+              hub_tags="$hub_tags -t docker.io/$DOCKERHUB_IMAGE:$tag"
+            done
+            docker buildx imagetools create $hub_tags \
+              docker.io/$DOCKERHUB_IMAGE:${{ env.STAGING }}-amd64 \
+              docker.io/$DOCKERHUB_IMAGE:${{ env.STAGING }}-arm64
+          fi
+
+      # The release body *is* the changelog: the app's own upgrade overlay renders it
+      # (`GET /api/version?since=`), so it is generated here from the commits this tag contains.
+      - name: Generate bilingual release notes
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        # The release must still publish when translation fails (no key, GitHub/DeepSeek outage):
+        # the script degrades to Chinese-only on its own, this guards only a crash.
+        run: |
+          python3 scripts/release-changelog.py --output release-notes.md \
+            || printf '# %s\n' "${GITHUB_REF_NAME}" > release-notes.md
+          head -20 release-notes.md
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: package-*
+          path: dist
+          merge-multiple: true
+
+      # The frozen docs tree travels with the release: the deploy pipeline downloads every
+      # `docs-*.zip` it can find, so this asset is what keeps `/v<version>/` online.
+      - uses: actions/download-artifact@v8
+        with:
+          name: docs-site
+          path: docs-asset
+
+      - name: Checksums
+        run: cd dist && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          body_path: release-notes.md
+          prerelease: ${{ steps.channel.outputs.prerelease }}
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+            docs-asset/docs-*.zip
