@@ -3496,9 +3496,28 @@ async fn fetch_page(
             if !client_cannot_decode_source && !worth_it {
                 return Ok(serve_original_page(archive_file, path, raw, content_type).await);
             }
+            // Same rule as the still path: when this variant is already cached, report what a GET
+            // would actually send, not the entry's own size — the bar's "省 X%" is computed from it
+            // and a HEAD that only ever names the original weight leaves an animated page looking
+            // unoptimized.
+            let cached = resize_cache_path(
+                &state.library.temp_dir,
+                id,
+                path,
+                effective_threshold,
+                effective_max_short_edge,
+                effective_quality,
+                false,
+                EncodeFormat::Webp,
+                true,
+            );
+            let served_size = tokio::fs::metadata(&cached)
+                .await
+                .map(|meta| meta.len())
+                .unwrap_or(raw.len() as u64);
             return Ok(metadata_only(
                 EncodeFormat::Webp.content_type(),
-                raw.len() as u64,
+                served_size,
                 source_dims,
                 true,
             ));
