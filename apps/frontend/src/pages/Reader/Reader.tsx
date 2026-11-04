@@ -117,6 +117,12 @@ function readerFullShortEdge(): number {
   const physical = Math.max(physicalFromViewport, physicalFromScreen);
   return Math.max(960, Math.min(1440, physical || 960));
 }
+/** Whole KB the server says it will send for an already-converted page, if it said so. */
+function servedInfoKb(info: ResizedPageInfo | null | undefined): number | undefined {
+  if (!info?.servedBytes) return undefined;
+  return Math.floor(info.servedBytes / 1024);
+}
+
 /** `.pagecount`'s font-size, scaled up alongside the paginator icons above. */
 const PAGINATOR_PAGECOUNT_FONT_SIZE = "1.25rem";
 /** Matches `toast.tsx`'s own `AUTO_CLOSE_TIME.info` default. */
@@ -2168,7 +2174,16 @@ export function Reader() {
         window.location.origin,
       ).searchParams.get("path") ?? "")
     : "";
-  const servedKb = spread.right === null ? servedSizesKb[spread.left] : undefined;
+  // The served byte count comes from either the Resource Timing entry for the loaded image (exact,
+  // but absent when the image came straight from the HTTP cache: a cached response reports
+  // `encodedBodySize: 0`) or the server's own `x-lrr-served-size` on the HEAD. Falling back to the
+  // latter is what keeps an already-converted page from rendering the plain "name :: WxH :: size"
+  // line — which reads as "not optimized" because that size is the *entry's* (real report,
+  // 2026-11-04: a 10 MB page served as 227 KB showed 10 MB).
+  const servedKb =
+    spread.right === null
+      ? (servedSizesKb[spread.left] ?? servedInfoKb(leftResizeInfo))
+      : undefined;
   const leftDims =
     spread.right === null ? pageDimensions[spread.left] : undefined;
   let resizedFileInfo: React.ReactNode | null = null;

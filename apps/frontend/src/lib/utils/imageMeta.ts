@@ -21,6 +21,9 @@ export interface ResizedPageInfo {
   origSizeBytes: number
   origWidth: number
   origHeight: number
+  /** Weight of the bytes a GET returns, when the server already has them cached. Absent when the
+   *  conversion has not happened yet — the served size is genuinely unknown until it does. */
+  servedBytes?: number
 }
 
 export async function fetchResizedPageInfo(url: string): Promise<ResizedPageInfo | null> {
@@ -34,7 +37,14 @@ export async function fetchResizedPageInfo(url: string): Promise<ResizedPageInfo
     const origWidth = Number(dims[0])
     const origHeight = Number(dims[1])
     if (Number.isNaN(origWidth) || Number.isNaN(origHeight)) return null
-    return { servedFormat, origSizeBytes: origSize, origWidth, origHeight }
+    const servedBytes = Number(res.headers.get("x-lrr-served-size"))
+    return {
+      servedFormat,
+      origSizeBytes: origSize,
+      origWidth,
+      origHeight,
+      ...(Number.isNaN(servedBytes) ? {} : { servedBytes }),
+    }
   } catch {
     return null
   }

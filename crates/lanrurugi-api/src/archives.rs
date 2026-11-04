@@ -3110,6 +3110,20 @@ pub(crate) async fn serve_page(
                 header::HeaderName::from_static("x-lrr-served-original"),
                 header::HeaderValue::from_static(if page.resized { "0" } else { "1" }),
             );
+            // What these bytes actually weigh. `Content-Length` on a HEAD describes the *entry*
+            // (see that branch below), so the reader's file-info bar had no way to show the
+            // served size for a page already converted and sitting in the cache — a 10 MB page
+            // served as 227 KB read as "unoptimized" (real report, 2026-11-04). A stat, not an
+            // encode: absent when the body is still the entry's own bytes.
+            if let crate::state::PageBody::File(path) = &page.body {
+                if let Ok(meta) = tokio::fs::metadata(path).await {
+                    header_map.insert(
+                        header::HeaderName::from_static("x-lrr-served-size"),
+                        header::HeaderValue::from_str(&meta.len().to_string())
+                            .unwrap_or(header::HeaderValue::from_static("0")),
+                    );
+                }
+            }
             if page.orig_width > 0 && page.orig_height > 0 {
                 header_map.insert(
                     header::HeaderName::from_static("x-lrr-page-dimensions"),
