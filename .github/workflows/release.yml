@@ -124,7 +124,10 @@ jobs:
 
   assets:
     name: frontend, docs, plugins
-    runs-on: ubuntu-22.04
+    # 24.04, and a cache key of its own: this job shares nothing with the 22.04 packaging jobs, and
+    # reusing the `docs` key mixed caches built against a newer glibc into a 22.04 runner — linking
+    # failed with "version `GLIBC_2.39' not found" on the second release attempt (2026-11-04).
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v4
@@ -133,7 +136,7 @@ jobs:
           cache: true
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: docs
+          shared-key: release-assets
       - name: Generate the API document
         run: cargo run -p lanrurugi-api-docgen
       - name: Build frontend, docs and plugin bundle
