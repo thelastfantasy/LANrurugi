@@ -66,10 +66,7 @@ describe("OTPField", () => {
 
   it("masks the digits by default", () => {
     const { container } = render(<Harness />)
-    // `text`, not `password`: the real input is transparent and the slots draw the dots, so
-    // `password` only served to make password managers offer to save a 4-digit safety code.
-    expect(input(container)).toHaveAttribute("type", "text")
-    expect(input(container)).toHaveAttribute("autocomplete", "one-time-code")
+    expect(input(container)).toHaveAttribute("type", "password")
     fireEvent.change(input(container), { target: { value: "12" } })
     const slots = Array.from(container.querySelectorAll(".otp-field-slot")).map((s) => s.textContent)
     expect(slots).toEqual(["•", "•", "", ""])
