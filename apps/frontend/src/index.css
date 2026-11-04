@@ -162,10 +162,14 @@ input[type="checkbox"]:disabled {
  * still downloading, the previous page's bitmap would otherwise sit there fully sharp while the
  * page number claims a different page has loaded. Blur it slightly for the short loading window so
  * the UI reads as "transitioning" rather than "the new page is broken/identical". */
+/* Was a `blur(8px)` on the whole page image. On a cross-page spread that is a layer of several
+ * thousand pixels, and blurring it re-rasterises that entire layer — on a phone this is enough to
+ * stall the compositor while a page is loading (looks like the browser freezing). A cheap opacity
+ * fade reads the same ("transitioning", not "the page broke") at a fraction of the cost. */
 #i3.loading #img,
 #i3.loading #img_doublepage {
-  filter: blur(8px);
-  transition: filter 150ms ease;
+  opacity: 0.55;
+  transition: opacity 150ms ease;
 }
 
 /* The file-info bar starts as just the filename and grows into the full "→ webp :: … · 原始 … ·
