@@ -3101,6 +3101,13 @@ pub(crate) async fn update_queue_item_state(
                                 "title": &item.title,
                                 "metadata_preview": &item.metadata_preview,
                                 "error": &item.error,
+                                // The client merges this delta as a plain field spread, so anything
+                                // left out keeps its previous value: without these three a row that
+                                // just finished kept showing only its start time until something
+                                // refetched the whole list (real report, 2026-11-04).
+                                "finished_at": &item.finished_at,
+                                "file_size": &item.file_size,
+                                "average_bytes_per_sec": &item.average_bytes_per_sec,
                                 // Included so a client's delta merge (a plain field spread) can
                                 // never keep showing a stale older-revision banner after the item
                                 // has moved on to some other state.
