@@ -37,6 +37,23 @@ redis-server --port "$redis_port" --bind 127.0.0.1 --dir "$data/redis" --save ""
     >"$work/redis.log" 2>&1 &
 redis_pid=$!
 
+# Wait until it actually answers: on macOS the first start takes long enough that the server's own
+# connection attempt raced ahead of it and the smoke test failed on "Connection refused" (first
+# release attempt, 2026-11-04).
+ready=""
+for _ in $(seq 1 50); do
+    if redis-cli -h 127.0.0.1 -p "$redis_port" ping 2>/dev/null | grep -q PONG; then
+        ready=1
+        break
+    fi
+    sleep 0.2
+done
+if [ -z "$ready" ]; then
+    echo "smoke-native: FAIL — redis did not start on port $redis_port" >&2
+    cat "$work/redis.log" >&2 || true
+    exit 1
+fi
+
 # Started from another directory on purpose: resources must be found from the install prefix.
 (
     cd /
