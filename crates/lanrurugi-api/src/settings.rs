@@ -231,6 +231,22 @@ pub(crate) async fn read_queue_retention_days(state: &AppState) -> i64 {
     }
 }
 
+/// Which release line the update check follows — `"stable"` unless the operator opted into beta.
+/// Unknown/absent values fall back to `stable`: a corrupted field must not silently put a
+/// deployment on the beta track.
+pub(crate) async fn read_release_track(state: &AppState) -> String {
+    match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "release_track")
+            .await
+            .ok()
+            .flatten()
+            .filter(|s| s == "beta")
+            .unwrap_or_else(|| "stable".to_string()),
+        Err(_) => "stable".to_string(),
+    }
+}
+
 pub(crate) async fn read_new_badge_mode(state: &AppState) -> String {
     match state.redis.config.get().await {
         Ok(mut conn) => conn
@@ -348,6 +364,10 @@ const STRING_FIELDS: &[(&str, &str)] = &[
     // a list of length one.
     ("language", "auto"),
     ("htmltitle", "LANrurugi"),
+    // Which release line the update check follows: `stable` (the default) or `beta`. A string in the
+    // existing config hash rather than a new key, same reasoning as `language` above — one place
+    // (`STRING_FIELDS`) declares a field, and an older deployment simply reads the default.
+    ("release_track", "stable"),
     ("excludednamespaces", "source, date_added"),
     // IANA timezone identifier (e.g. `"Asia/Tokyo"`, `"UTC"` — anything `chrono_tz` accepts),
     // used by date display/search-range math (see `lanrurugi_search::engine`'s `date_added`
@@ -527,6 +547,11 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
         || BOOL_FIELDS.iter().any(|(k, _)| *k == key);
     if !is_known_field {
         return Err(format!("Unknown settings field: \"{key}\"."));
+    }
+    if key == "release_track" && !matches!(value.as_str(), Some("stable") | Some("beta")) {
+        return Err(format!(
+            "Field \"release_track\" must be \"stable\" or \"beta\", got {value}."
+        ));
     }
     if key == "theme" || key == "guest_theme" {
         let is_valid_theme = value

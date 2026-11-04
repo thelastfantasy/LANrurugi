@@ -22,6 +22,7 @@ lanrurugi-scanner.workspace = true
 lanrurugi-plugin.workspace = true
 lanrurugi-bench.workspace = true
 lanrurugi-imgcompare.workspace = true
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
