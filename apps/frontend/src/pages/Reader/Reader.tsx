@@ -332,6 +332,8 @@ export function Reader() {
   const [resizedPageInfo, setResizedPageInfo] = useState<
     Record<number, ResizedPageInfo | null>
   >({});
+
+
   const [markerPlacementMode, setMarkerPlacementMode] = useState(false);
   const supportsHover = useSupportsHover();
   // Shared by both toolbars, so changing the primary action in one updates the other too.
@@ -513,6 +515,40 @@ export function Reader() {
         readerSettings.mangaMode,
         (page) => widespreads[page],
       );
+
+  // TEMPORARY diagnostics for the reader freeze (open the reader with `?readerDebug=1`). Counts
+  // renders per second and logs long tasks, so a hang can be told apart from a JS render loop
+  // without a profiler. Remove once the cause is fixed.
+  const debugRendersRef = useRef(0);
+  const readerDebug = window.location.search.includes("readerDebug");
+  if (readerDebug) debugRendersRef.current += 1;
+  useEffect(() => {
+    if (!readerDebug) return;
+    const id = window.setInterval(() => {
+      const renders = debugRendersRef.current;
+      debugRendersRef.current = 0;
+      console.warn(
+        `[reader] ${renders} renders/s · page=${spread.left} info=${resizedPageInfo[spread.left] === undefined ? "pending" : "known"} ready=${String(mainReady[spread.left])}`,
+      );
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [readerDebug, spread.left, resizedPageInfo, mainReady]);
+  useEffect(() => {
+    if (!readerDebug || typeof PerformanceObserver === "undefined") return;
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (entry.duration > 200) {
+          console.warn(`[reader] long task ${entry.duration.toFixed(0)}ms`);
+        }
+      }
+    });
+    try {
+      observer.observe({ entryTypes: ["longtask"] });
+    } catch {
+      // Safari has no longtask entry type; the render counter alone still works there.
+    }
+    return () => observer.disconnect();
+  }, [readerDebug]);
 
   const currentSpreadLoaded =
     (pageDimensions[spread.left] !== undefined &&
