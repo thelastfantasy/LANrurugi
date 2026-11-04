@@ -2,6 +2,9 @@
 // Top-bar links: the GitHub icon (the same one the homepage, Swagger UI and SDK bars carry) and the
 // documentation version picker. Only links that resolve are listed — there is no public demo,
 // Discord or upstream-project link on purpose.
+import fs from 'node:fs'
+import path from 'node:path'
+
 import { Icon } from '@astrojs/starlight/components'
 import config from 'virtual:starlight/user-config'
 
@@ -13,14 +16,33 @@ const LINKS: Record<Locale, { label: string; href: string; external: boolean }[]
   en: [{ label: 'GitHub', href: 'https://github.com/thelastfantasy/LANrurugi', external: true }],
 }
 
-// Versions offered by the picker. There is exactly one today: the repository has no release tags
-// (`git tag` is empty), so "which version of the docs am I reading" currently has a single honest
-// answer. Kept as a list so the day a release is tagged this is a one-line change — and so the
-// selector is the reference site's *shape* rather than a fabricated second option.
-const VERSIONS: Record<Locale, { value: string; label: string }[]> = {
-  zh: [{ value: 'current', label: '当前版本' }],
-  en: [{ value: 'current', label: 'Current Release' }],
+// The version badge reads the workspace's own `Cargo.toml`, so it cannot drift from what was built:
+// the docs ship in the same tree as the server, and every release builds both from one tag. A
+// prerelease (`1.0.0-beta.1`) is shown as such and links to its own GitHub release.
+//
+// This replaced an inert `<select>` with a single "current version" option: a picker whose only
+// choice is "the one you are reading" is a control that promises something it cannot do. When
+// versioned doc trees actually exist, this is where the picker comes back.
+// `import.meta.url` is the reliable path while Astro compiles this file; `process.cwd()` (the
+// `docs/` package root) is the fallback, and `dev` the honest answer when neither resolves.
+let buildVersion = 'dev'
+for (const candidate of [
+  path.resolve(new URL('../../../Cargo.toml', import.meta.url).pathname),
+  path.resolve(process.cwd(), '../Cargo.toml'),
+]) {
+  try {
+    const manifest = fs.readFileSync(candidate, 'utf8')
+    const found = /^version = "(.*)"/m.exec(manifest)?.[1]
+    if (found) {
+      buildVersion = found
+      break
+    }
+  } catch {
+    // Try the next candidate.
+  }
 }
+const isPrerelease = buildVersion.includes('-')
+const releaseHref = `https://github.com/thelastfantasy/LANrurugi/releases/tag/v${buildVersion}`
 
 // Fail loudly at build time if a configured `social` entry is not represented here, so adding one in
 // `astro.config.mjs` and forgetting this component cannot silently drop it.
@@ -52,14 +74,14 @@ const versionLabel = locale === 'zh' ? '文档版本' : 'Documentation version'
       </a>
     ))
   }
-  <label class="nav-links__version">
-    <span class="sr-only">{versionLabel}</span>
-    <select>
-      {VERSIONS[locale].map((version) => (
-        <option value={version.value}>{version.label}</option>
-      ))}
-    </select>
-  </label>
+  <a
+    class:list={['nav-links__version', isPrerelease && 'nav-links__version--beta']}
+    href={releaseHref}
+    rel="noreferrer"
+    title={`${versionLabel}: v${buildVersion}`}
+  >
+    v{buildVersion}
+  </a>
 </nav>
 
 <style>
@@ -95,14 +117,31 @@ const versionLabel = locale === 'zh' ? '文档版本' : 'Documentation version'
   }
 
   /* The reference site puts its version picker above the sidebar; Starlight keeps its global
-     pickers (theme, language) in this bar, so a third one belongs beside them rather than in a
+     pickers (theme, language) in this bar, so the version belongs beside them rather than in a
      second, separately-positioned control. */
-  .nav-links__version select {
-    font-size: var(--sl-text-sm);
-    padding: 0.15rem 0.4rem;
+  .nav-links__version {
+    display: inline-flex;
+    align-items: center;
+    font-size: var(--sl-text-xs);
+    font-variant-numeric: tabular-nums;
+    padding: 0.15rem 0.5rem;
     border: 1px solid var(--sl-color-gray-5);
-    border-radius: 6px;
+    border-radius: 999px;
     background: var(--sl-color-bg);
+    color: var(--sl-color-gray-2);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .nav-links__version:hover {
     color: var(--sl-color-white);
+    border-color: var(--sl-color-gray-4);
+  }
+
+  /* A prerelease is not what most readers should install, so it is marked rather than looking like
+     any other version. */
+  .nav-links__version--beta {
+    border-color: var(--lr-beta, #c79121);
+    color: var(--lr-beta, #c79121);
   }
 </style>

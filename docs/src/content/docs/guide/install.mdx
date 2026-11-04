@@ -3,6 +3,8 @@ title: 安装（Docker / NAS）
 description: 用 Docker 或 Compose 在服务器/NAS 上部署 LANrurugi。
 ---
 
+import CodeTabs from "../../../components/CodeTabs.astro";
+
 LANrurugi 的服务端是一个常驻进程，前端静态资源、HTTP API、文件监视器和后台任务都在里面；插件、电子书解析和
 AI 推理在按需启动的子进程里运行。它有自己的数据库，不读取也不改动 LANraragi 的数据库，两者可以同时运行。
 
@@ -22,7 +24,9 @@ AI 推理在按需启动的子进程里运行。它有自己的数据库，不�
 
 把下面这段保存为 `compose.yaml`，按注释把左侧的宿主机目录改成你自己的，然后启动：
 
-```yaml
+<div class="lr-code-tabs">
+
+```yaml title="stable"
 services:
   lanrurugi:
     image: ghcr.io/thelastfantasy/lanrurugi:latest
@@ -43,6 +47,29 @@ services:
       - LANRURUGI_FORCE_SECURE_COOKIES=false
     restart: unless-stopped
 ```
+```yaml title="beta"
+services:
+  lanrurugi:
+    image: ghcr.io/thelastfantasy/lanrurugi:beta
+    container_name: lanrurugi
+    ports:
+      - "3000:3000"
+    volumes:
+      # 书库，可以直接指向旧版 LANraragi 的 content 目录
+      - ./data/manga:/home/koyomi/lanrurugi/content
+      # 缩略图缓存
+      - ./data/thumb:/home/koyomi/lanrurugi/thumb
+      # Redis 数据，LANrurugi 专用；LANraragi 的元数据通过备份 JSON 导入
+      - ./data/database:/home/koyomi/lanrurugi/database
+      # 推荐和单行本整理用的本地模型，首次用到时自动下载，非必需
+      - ./data/models:/home/koyomi/lanrurugi/models
+    environment:
+      # 经 HTTPS 反向代理访问时改为 true
+      - LANRURUGI_FORCE_SECURE_COOKIES=false
+    restart: unless-stopped
+```
+
+</div>
 
 ```sh
 docker compose up -d      # 或 podman compose up -d
@@ -173,3 +200,5 @@ pnpm --filter lanrurugi-frontend run dev
 
 - [快速开始](../quickstart/)
 - [用文档站测试 API](../api-testing/)
+
+<CodeTabs />

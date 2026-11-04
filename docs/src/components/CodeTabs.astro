@@ -1,0 +1,78 @@
+---
+// Turns the `stable` / `beta` compose blocks (wrapped in `.lr-code-tabs` by the install page) into
+// one tabbed window. Starlight's Expressive Code build here has no tab-group support, so this does
+// the minimum: hide every frame but the selected one, and put one button per frame title into the
+// first frame's title bar. No framework, no re-render — the frames themselves (and their copy
+// buttons) stay exactly as Expressive Code emitted them.
+---
+
+<script>
+  const SELECTED = '[aria-selected="true"]';
+
+  function build(container) {
+    const frames = Array.from(container.querySelectorAll(':scope > .expressive-code'));
+    if (frames.length < 2) return;
+    const first = frames[0];
+    const bar = document.createElement('div');
+    bar.className = 'lr-code-tabs__bar';
+    bar.setAttribute('role', 'tablist');
+
+    const buttons = frames.map((frame, index) => {
+      const label = frame.querySelector('.frame .title')?.textContent?.trim() ?? String(index + 1);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'lr-code-tabs__tab';
+      button.textContent = label;
+      button.setAttribute('role', 'tab');
+      button.setAttribute('aria-selected', index === 0 ? 'true' : 'false');
+      button.addEventListener('click', () => select(index));
+      bar.append(button);
+      return button;
+    });
+
+    function select(active) {
+      frames.forEach((frame, index) => {
+        frame.hidden = index !== active;
+      });
+      buttons.forEach((button, index) => {
+        button.setAttribute('aria-selected', index === active ? 'true' : 'false');
+        button.tabIndex = index === active ? 0 : -1;
+      });
+      // The bar lives in the *visible* frame's title row: hiding the frame it started in would hide
+      // the tabs along with it, so it is moved instead of duplicated.
+      const header = frames[active].querySelector('.frame > .header');
+      if (!header) return;
+      header.querySelector(':scope > .title')?.remove();
+      if (bar.parentElement !== header) header.append(bar);
+    }
+
+    bar.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      const current = buttons.findIndex((button) => button.getAttribute('aria-selected') === 'true');
+      const next = (current + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+      select(next);
+      buttons[next].focus();
+      event.preventDefault();
+    });
+
+    // No frame keeps its own title text: the tab strip is the title from now on.
+    frames.forEach((frame) => frame.querySelector('.frame > .header > .title')?.remove());
+
+    // Every block after the first keeps its own `.expressive-code` wrapper: hiding that wrapper is
+    // what makes the group read as one window rather than N stacked ones.
+    frames.slice(1).forEach((frame) => {
+      frame.hidden = true;
+    });
+    select(0);
+  }
+
+  function start() {
+    document.querySelectorAll('.lr-code-tabs').forEach(build);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start, { once: true });
+  } else {
+    start();
+  }
+</script>
