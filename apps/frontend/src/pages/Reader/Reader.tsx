@@ -580,7 +580,12 @@ export function Reader() {
             margin: "0 auto",
           }
         : {
+            // Fit-width and container modes let the page take the area's width, so the ratio-derived
+            // height matches the image's own. `margin: 0 auto` is a no-op at 100% but keeps the box
+            // centred if a future cap makes it narrower.
             width: "100%",
+            maxWidth: "100%",
+            margin: "0 auto",
             aspectRatio: `${placeholderDims.width} / ${placeholderDims.height}`,
           };
 
