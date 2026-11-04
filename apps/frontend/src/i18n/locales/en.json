@@ -2880,5 +2880,7 @@
   "stats.storageTreemapByCategory": "By category",
   "stats.storageTreemapNoCategory": "Unknown category",
   "stats.storageTreemapColorsByArtist": "colours follow the artist",
-  "stats.storageTreemapColorsByCategory": "colours follow the category"
+  "stats.storageTreemapColorsByCategory": "colours follow the category",
+  "settings.versionDialog.trackLabel": "Release track",
+  "settings.versionDialog.trackDevValue": "{{track}} (dev build)"
 }

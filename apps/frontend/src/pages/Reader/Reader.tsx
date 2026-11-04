@@ -35,6 +35,7 @@ import {
 import { Footer } from "@/components/Layout";
 import { confirmDialog, promptDialog } from "@/dialog";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
+import { useHasPhysicalKeyboard } from "@/hooks/useHasPhysicalKeyboard";
 import { useIsNarrowViewport } from "@/hooks/useIsNarrowViewport";
 import {
   clamp,
@@ -339,6 +340,9 @@ export function Reader() {
    */
   const [fitHeightPx, setFitHeightPx] = useState<number | null>(null);
   const isMobileToolbarViewport = useIsNarrowViewport("(max-width: 768px)");
+  // Keyboard-shortcut help is meaningless on a touch-only phone; `useHasPhysicalKeyboard`
+  // explains what "has a keyboard" can actually mean in a browser.
+  const hasPhysicalKeyboard = useHasPhysicalKeyboard();
   const [navState, setNavState] = useState<ArchiveNavState>({
     ids: [],
     index: -1,
@@ -1828,15 +1832,17 @@ export function Reader() {
             }}
           />
         )}
-        <Tooltip label={helpContent} maxWidth={420}>
-          <IconButton
-            variant="ghost-btn"
-            icon="fas fa-question-circle fa-2x"
-            title={t("reader.help") ?? undefined}
-            size={32}
-            style={{ marginRight: 13, borderRadius: "50%" }}
-          />
-        </Tooltip>
+        {hasPhysicalKeyboard ? (
+          <Tooltip label={helpContent} maxWidth={420}>
+            <IconButton
+              variant="ghost-btn"
+              icon="fas fa-question-circle fa-2x"
+              title={t("reader.help") ?? undefined}
+              size={32}
+              style={{ marginRight: 13, borderRadius: "50%" }}
+            />
+          </Tooltip>
+        ) : null}
       </div>
       <div className="absolute-options absolute-right">
         <IconButton
@@ -2083,15 +2089,17 @@ export function Reader() {
             }}
           />
         )}
-        <Tooltip label={helpContent} maxWidth={420}>
-          <IconButton
-            variant="ghost-btn"
-            icon="fas fa-question-circle fa-2x"
-            title={t("reader.help") ?? undefined}
-            size={32}
-            style={{ borderRadius: "50%" }}
-          />
-        </Tooltip>
+        {hasPhysicalKeyboard ? (
+          <Tooltip label={helpContent} maxWidth={420}>
+            <IconButton
+              variant="ghost-btn"
+              icon="fas fa-question-circle fa-2x"
+              title={t("reader.help") ?? undefined}
+              size={32}
+              style={{ borderRadius: "50%" }}
+            />
+          </Tooltip>
+        ) : null}
         {renderOpenPdfButton({ borderRadius: "50%" })}
         <IconButton
           variant="ghost-btn"

@@ -23,3 +23,5 @@ export * from "./useSupportsHover"
 export * from "./useTagCloudHighlight"
 
 export * from "./useTankoubonReading"
+
+export * from "./useHasPhysicalKeyboard"
