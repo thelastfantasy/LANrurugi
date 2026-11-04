@@ -1,0 +1,33 @@
+---
+title: 版本历史
+description: LANrurugi 的所有发布版本，以及每个版本对应的用户指南、API 参考和插件 SDK 文档。
+---
+
+import versions from '../../../public/versions.json'
+// Version trees live at the site root (`/1.0.0/`), so a build whose own base is a version
+// path has to strip that segment before composing links to a *different* version.
+export const base = import.meta.env.BASE_URL.replace(/\/$/, '')
+export const rootBase = base.replace(/\/v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, '')
+
+
+
+每个发布版本都固定了一份属于它自己的文档：用户指南、HTTP API 参考（由该版本的路由表生成）和插件 SDK
+参考（由该版本的插件类型生成）。旧版本不会被新版本覆盖，因为一份 1.0.0 的 API 文档描述的就该是 1.0.0
+实际提供的接口。
+
+<p class="lr-versions__summary">
+  共 <strong>{versions.length}</strong> 个版本，最新为 <strong>v{versions[0].version}</strong>。
+</p>
+
+<div class="lr-versions">
+  {versions.map((entry) => (
+    <a class="lr-versions__row" href={`${rootBase}/v${entry.version}/`}>
+      <span class="lr-versions__name">
+        v{entry.version}
+        {entry.prerelease && <span class="lr-versions__badge">预发布</span>}
+      </span>
+      <span class="lr-versions__date">{entry.date}</span>
+      <span class="lr-versions__links">用户指南 · API 参考 · SDK</span>
+    </a>
+  ))}
+</div>

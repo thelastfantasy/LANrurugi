@@ -112,6 +112,9 @@ export default defineConfig({
             { label: 'llms.txt', slug: 'guide/llms-txt' },
           ],
         },
+        // Reachable from the header's version selector ("所有版本…") as well; listed here so it is
+        // also findable by browsing, which is how most people will look for an older release.
+        { label: '版本历史', translations: { en: 'Version history' }, slug: 'versions' },
         {
           label: '插件开发',
           translations: { en: 'Writing Plugins' },
