@@ -550,6 +550,20 @@ export function Reader() {
     return () => observer.disconnect();
   }, [readerDebug]);
 
+  // Readiness is per *element*, not per page number: the `<img>` is remounted on every visit (see
+  // its `key`), so a remembered `mainReady[p]` from an earlier visit is stale the moment that page
+  // is shown again — it reported "ready" while the new element had no bitmap, which left both the
+  // placeholder and the preview underlay hidden (real report, 2026-11-04: rapid prev-paging made
+  // the placeholder vanish). Reset the map whenever the spread changes; the next paint is what
+  // marks a page ready again. Adjusted during render rather than in an effect on purpose — this is
+  // derived state, and an effect would render one frame with the stale value first.
+  const spreadKey = `${spread.left}-${spread.right ?? "none"}`;
+  const [renderedSpreadKey, setRenderedSpreadKey] = useState(spreadKey);
+  if (spreadKey !== renderedSpreadKey) {
+    setRenderedSpreadKey(spreadKey);
+    setMainReady({});
+  }
+
   const currentSpreadLoaded =
     (pageDimensions[spread.left] !== undefined &&
       (spread.right === null || pageDimensions[spread.right] !== undefined)) ||
@@ -2322,7 +2336,8 @@ export function Reader() {
           id="i3"
           ref={imageAreaRef}
           className={
-            !readerSettings.infiniteScroll && !currentSpreadLoaded
+            !readerSettings.infiniteScroll &&
+            (!currentSpreadLoaded || !mainReady[spread.left])
               ? "loading"
               : undefined
           }
@@ -2387,8 +2402,7 @@ export function Reader() {
                 style={{ position: "relative", display: "inline-flex" }}
               >
                 <span style={{ position: "relative", display: "inline-flex" }}>
-                  {pageTinyBlobs[spread.left] &&
-                  pageDimensions[spread.left] === undefined ? (
+                  {pageTinyBlobs[spread.left] && !mainReady[spread.left] ? (
                     <img
                       className="reader-image"
                       key={`tiny-left-${spread.left}`}
@@ -2406,10 +2420,6 @@ export function Reader() {
                   ) : null}
                   <img
                     id="img"
-                    // The box is already sized from the preview's own `x-lrr-preview-*` dimensions,
-                    // so a pending page can show a pulse *in its final shape* instead of leaving a
-                    // hole that only resolves once the bitmap lands.
-                    data-pending={mainReady[spread.left] ? undefined : "true"}
                     // Remounting on a page turn is what makes the *old* page stop being displayed:
                     // Chrome keeps painting the previous bitmap (and even reports its
                     // `naturalWidth`) until a changed `src` finishes decoding, which on a 20 MB page
@@ -2439,6 +2449,10 @@ export function Reader() {
                     }
                     alt={`${t("reader.page")} ${spread.left}`}
                     fetchPriority="high"
+                    // Large pages (a 4900x4300 JPEG is routine here) should decode off the main
+                    // thread: a synchronous decode shows up as a ~300ms long task on every page turn,
+                    // which is what made fast paging feel like the reader had frozen.
+                    decoding="async"
                     onLoad={(e) => onImageLoad(spread.left, e)}
                     onError={onImageError}
                     draggable={false}
@@ -2464,7 +2478,7 @@ export function Reader() {
                   <span style={{ position: "relative", display: "inline-flex" }}>
                     {spread.right !== null &&
                     pageTinyBlobs[spread.right] &&
-                    pageDimensions[spread.right] === undefined ? (
+                    !mainReady[spread.right] ? (
                       <img
                         className="reader-image"
                         key={`tiny-right-${spread.right}`}
@@ -2480,9 +2494,6 @@ export function Reader() {
                     ) : null}
                     <img
                       id="img_doublepage"
-                      data-pending={
-                        spread.right !== null && !mainReady[spread.right] ? "true" : undefined
-                      }
                       key={`right-${spread.right ?? "none"}`}
                       ref={rightImgRef}
                       data-page={spread.right ?? undefined}

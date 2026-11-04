@@ -183,6 +183,29 @@ input[type="checkbox"]:disabled {
   }
 }
 
+/* A page that has no decoded pixels yet. Drawn on the page *area*, not on the `<img>`: before the
+ * bitmap exists the image's own box can resolve to 0x0 (its wrapper is shrink-to-fit and the image
+ * carries `max-width: 100%`), which made a placeholder painted on the image invisible — rapid page
+ * turns looked like the placeholder had disappeared (real report, 2026-11-04). The area always has
+ * the viewport's width, so the same tint is visible no matter what the image is doing.
+ * Static fill, deliberately: the box can be several thousand pixels wide, and animating a gradient
+ * over a layer that large re-rasterises it every frame. */
+#i3.loading {
+  background: rgba(127, 127, 127, 0.12);
+  min-height: 55vh;
+}
+
+/* The file-info bar starts as just the filename and grows into the full "→ webp :: … · 原始 … ·
+   省 98%" comparison once the HEAD answers — which wraps to two lines on a phone, shoving the page
+   area up by a line the moment the numbers arrive. Reserve that height on narrow viewports so the
+   numbers appear without anything moving. (No skeleton of its own: the HEAD is one small request
+   and its answer is the content, so there is nothing worth drawing a placeholder *for*.) */
+@media (max-width: 768px) {
+  #i1 .file-info {
+    min-height: 2.6em;
+  }
+}
+
 /* A page that has no decoded pixels yet. The `<img>` already carries the target page's
  * `width`/`height` (taken from the preview's `x-lrr-preview-*` headers), so the skeleton is drawn
  * in the *final* shape of the incoming page — turning a page never re-lays-out the box, it just
