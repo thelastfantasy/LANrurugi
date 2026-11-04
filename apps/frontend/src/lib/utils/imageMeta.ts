@@ -26,9 +26,19 @@ export interface ResizedPageInfo {
   servedBytes?: number
 }
 
-export async function fetchResizedPageInfo(url: string): Promise<ResizedPageInfo | null> {
+export async function fetchResizedPageInfo(
+  url: string,
+  options: { fresh?: boolean } = {},
+): Promise<ResizedPageInfo | null> {
   try {
-    const res = await fetch(url, { method: "HEAD" })
+    // `fresh` bypasses the browser's own copy: the page responses are `max-age=300`, so a second
+    // HEAD within that window would replay the *first* answer — which, taken before the image was
+    // ever converted, cannot carry `x-lrr-served-size` (issue: a converted page kept showing its
+    // entry size on mobile, where the timing entry is 0 for a cached image).
+    const res = await fetch(url, {
+      method: "HEAD",
+      ...(options.fresh ? { cache: "no-store" as const } : {}),
+    })
     const servedFormat = res.headers.get("x-lrr-resized")
     if (servedFormat !== "webp" && servedFormat !== "jxl") return null
     const origSize = Number(res.headers.get("x-lrr-original-size"))

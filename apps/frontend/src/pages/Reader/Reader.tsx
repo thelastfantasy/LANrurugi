@@ -1096,6 +1096,13 @@ export function Reader() {
       void fetchResizedPageInfo(originalUrl).then((info) => {
         setResizedPageInfo((prev) => ({ ...prev, [page]: info }));
       });
+    } else if (resizedPageInfo[page] && resizedPageInfo[page].servedBytes === undefined) {
+      // The first HEAD ran before this page had ever been converted, so it could not report what
+      // the server would actually send — the conversion happened on the GET that just painted.
+      // Ask again, bypassing the cached HEAD, now that the served bytes exist on disk.
+      void fetchResizedPageInfo(originalUrl, { fresh: true }).then((info) => {
+        if (info) setResizedPageInfo((prev) => ({ ...prev, [page]: info }));
+      });
     }
   }
 
@@ -2224,7 +2231,13 @@ export function Reader() {
   // page the server is about to convert is the *wrong* number — rendering it first and then
   // swapping to "→ webp … 省 98%" made every converted page flash 10 MB before settling
   // (real report, 2026-11-04). Show the bare filename until the answer is in.
-  const resizeInfoPending = resizedPageInfo[spread.left] === undefined;
+  const pageResizeInfo = resizedPageInfo[spread.left];
+  // Pending until we can state a *correct* size: no answer yet, or an answer that says "converted"
+  // but was taken before the conversion existed (no `servedBytes`, and the timing entry is 0 for an
+  // image served from cache, so `servedKb` is unavailable too).
+  const resizeInfoPending =
+    pageResizeInfo === undefined ||
+    (Boolean(pageResizeInfo) && servedKb === undefined);
   const fileinfo = (
     <div className="file-info" title={displayedFileInfo}>
       {resizedFileInfo ??
