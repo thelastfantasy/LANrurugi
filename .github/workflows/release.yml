@@ -284,7 +284,7 @@ jobs:
           usesh: true
           envs: 'BINARIES GITHUB_REF_NAME CMAKE_TOOLCHAIN_FILE LANRURUGI_RELEASE_TRACK'
           prepare: |
-            pkg install -y curl git bash cmake pkgconf nasm \
+            pkg install -y curl git bash cmake pkgconf nasm llvm \
               redis deno djvulibre pdfium onnxruntime \
               noto-serif-sc noto-sans-sc
             # Best-effort: base already ships `liblz4.so`/`libzstd.so` (which is what the build
@@ -297,6 +297,15 @@ jobs:
               *-*) export LANRURUGI_RELEASE_TRACK=beta ;;
               *)   export LANRURUGI_RELEASE_TRACK=stable ;;
             esac
+            # `libarchive2-sys` runs bindgen, which needs libclang; the base image has none, and the
+            # versioned directory name changes with the package, so it is discovered rather than
+            # hardcoded. Without this the build died with "Unable to find libclang" (2026-11-04).
+            export LIBCLANG_PATH="$(ls -d /usr/local/llvm*/lib 2>/dev/null | head -1)"
+            if [ -z "$LIBCLANG_PATH" ]; then
+              echo "libclang not found after installing llvm" >&2
+              exit 1
+            fi
+            echo "LIBCLANG_PATH=$LIBCLANG_PATH"
             curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal \
               --default-toolchain "$(sed -n 's/^rust = { version = "\([^"]*\)".*/\1/p' .mise.toml)"
             . "$HOME/.cargo/env"
