@@ -26,6 +26,7 @@ import {
 } from "@/api/hooks";
 import { Menu, MenuItem, MenuSeparator, Tooltip } from "@/components/common-ui/Display";
 import { IconButton, ToggleButtonMenu } from "@/components/common-ui/Form";
+import { currentRating,RatingWidget } from "@/components/common-ui/Form/RatingWidget";
 import {
   ForbiddenPage,
   FormatBadge,
@@ -371,6 +372,9 @@ export function Reader() {
   const infiniteScrollResumePageRef = useRef<number | null>(null);
   const [archiveTransition, setArchiveTransition] = useState<{
     direction: "prev" | "next";
+    /** Whether the finished work had *no* rating when this sheet opened. Snapshotted on purpose:
+     * deciding live would make the rating control vanish the instant the reader used it. */
+    unratedAtOpen: boolean;
     /** Fetched from `/api/reader/recommendations/{id}` while the overlay shows. `null` = still
      * loading / model not ready / fetch failed (the panel then shows nothing to pick). */
     recommendations:
@@ -1051,6 +1055,7 @@ export function Reader() {
       : undefined;
     setArchiveTransition({
       direction,
+      unratedAtOpen: currentRating(metadata.data?.tags ?? "") === 0,
       recommendations: cached?.recommendations ?? null,
     });
     if (!archiveId || cached) return;
@@ -2763,6 +2768,27 @@ export function Reader() {
               <p style={{ fontSize: 16, fontWeight: "bold", color: "#fff" }}>
                 {t("reader.youMightAlsoLike")}
               </p>
+              {/* The end of a volume is where someone is most likely to rate it, and the sheet is
+                  already up — but only offer it while the work is still unrated, since a rated one
+                  can be changed from its own page. `stopPropagation`: the overlay's own click
+                  closes it, which would swallow the star click. */}
+              {archiveId && archiveTransition.unratedAtOpen && (
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 8,
+                    margin: "2px 0 10px",
+                  }}
+                >
+                  <span style={{ fontSize: 13, color: "rgba(255,255,255,0.82)" }}>
+                    {t("reader.rateThis")}
+                  </span>
+                  <RatingWidget archiveId={archiveId} tags={metadata.data.tags} size={26} />
+                </div>
+              )}
               {archiveTransition.recommendations === null && (
                 /* Skeleton while the (un-prefetched) LLM rerank is in flight — grey card shapes
                  matching the real cards' dimensions. */
