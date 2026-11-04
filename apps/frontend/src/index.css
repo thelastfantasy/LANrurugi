@@ -190,8 +190,14 @@ input[type="checkbox"]:disabled {
  * the viewport's width, so the same tint is visible no matter what the image is doing.
  * Static fill, deliberately: the box can be several thousand pixels wide, and animating a gradient
  * over a layer that large re-rasterises it every frame. */
-#i3.loading {
+.reader-page-placeholder {
+  display: block;
   background: rgba(127, 127, 127, 0.12);
+}
+
+/* Fallback band for the case where nothing about the incoming page is known yet (first visit, the
+   preview has not answered): something visible beats an empty area. */
+#i3.loading {
   min-height: 55vh;
 }
 

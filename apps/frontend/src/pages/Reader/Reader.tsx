@@ -567,6 +567,22 @@ export function Reader() {
   /** The incoming page's known box (preview/full-size dimensions), used to size the placeholder. */
   const placeholderDims =
     pageTinyDims[spread.left] ?? pageDimensions[spread.left] ?? lastDimsRef.current ?? null;
+  /** Sizing for that placeholder, in the fit mode currently selected. */
+  const placeholderStyle: React.CSSProperties | null =
+    !placeholderDims || mainReady[spread.left]
+      ? null
+      : readerSettings.fitMode === FIT_MODE.FIT_HEIGHT && !isFullscreen
+        ? {
+            height: fitHeightPx !== null ? `${fitHeightPx}px` : "90vh",
+            aspectRatio: `${placeholderDims.width} / ${placeholderDims.height}`,
+            width: "fit-content",
+            maxWidth: "100%",
+            margin: "0 auto",
+          }
+        : {
+            width: "100%",
+            aspectRatio: `${placeholderDims.width} / ${placeholderDims.height}`,
+          };
 
   const currentSpreadLoaded =
     (pageDimensions[spread.left] !== undefined &&
@@ -2345,25 +2361,19 @@ export function Reader() {
               ? "loading"
               : undefined
           }
-          /* Reserve the box the incoming page will occupy, in the *current* fit mode:
-             `aspect-ratio` comes from the dimensions the preview already reported, and the height
-             cap mirrors what the image itself gets — `maxHeight` in fit-height, nothing extra in
-             fit-width (where a tall page legitimately runs several screens high, unlike the fixed
-             `55vh` band this used to draw). */
-          style={{
-            ...(placeholderDims && !mainReady[spread.left]
-              ? {
-                  aspectRatio: `${placeholderDims.width} / ${placeholderDims.height}`,
-                  ...(readerSettings.fitMode === FIT_MODE.FIT_HEIGHT && !isFullscreen
-                    ? { maxHeight: fitHeightPx !== null ? `${fitHeightPx}px` : "90vh" }
-                    : {}),
-                }
-              : {}),
-            ...(!currentSpreadLoaded && lastSpreadHeightRef.current !== null
+          style={
+            !currentSpreadLoaded && lastSpreadHeightRef.current !== null
               ? { minHeight: lastSpreadHeightRef.current }
-              : {}),
-          }}
+              : undefined
+          }
         >
+          {/* The box the incoming page will occupy. A child rather than the area's own background:
+              in fit-height the box is narrower than the area, and a block element with only
+              `aspect-ratio`/`max-height` stays pinned to the start edge — `width: fit-content` plus
+              `margin: 0 auto` is what centres it in the current fit mode. */}
+          {placeholderStyle ? (
+            <div className="reader-page-placeholder" style={placeholderStyle} aria-hidden="true" />
+          ) : null}
           {readerSettings.infiniteScroll ? (
             <div id="display" className="infinite-scroll" ref={infiniteScrollRootRef}>
               {pages.data.pages.map((url, i) => {
