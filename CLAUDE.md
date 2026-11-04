@@ -233,20 +233,35 @@ similar-looking icons in the same region and the visual difference at screenshot
 subtle enough to miss by eye). A claim of "matches legacy" is not valid until this comparison has
 actually been run and the values shown to agree — not assumed, not eyeballed from a screenshot.
 
-## Issue tracking: never open a new issue
+## Issue tracking: only when the user asks
 
-**Do not create GitHub issues — under any circumstances** (stated directly by the user,
-2026-10-09: "任何情况都不要新开issue"). A problem that surfaces mid-session but isn't resolved in
-that same turn is either fixed now or reported in the conversation itself; "file it and move on" is
-not an option, and neither is a local memo/scratch file.
+**Do not create GitHub issues on your own initiative.** Creating one when the user asks for it (e.g.
+"你创建issues：…", or a batch of beta-test findings to file) is expected, not a violation — the rule
+is about not filing unprompted, not about never writing one. Corrected by the user 2026-11-04:
+"任何情况都不要新开issue不对，准确的来说是不在我没要求时就自动创建issue".
+
+So: a problem that surfaces mid-session and that the user has not asked to file is either fixed now
+or reported in the conversation itself; "file it and move on" is not an option, and neither is a
+local memo/scratch file.
 
 Adding a comment to, or closing, an *already existing* issue is not opening one — but ask before
-touching issue bookkeeping at all, since the point of this rule is to stop spending turns on it
-rather than to move that work somewhere else. Any content that does end up on an existing issue
+touching issue bookkeeping the user did not ask for, since the point of the rule is to stop spending
+turns on it rather than to move that work somewhere else. Any content that does end up on an issue
 must be in Chinese.
 
 Earlier revisions of this file told the agent to open an issue per mid-session problem (and to
 prefer appending to an existing one); that instruction is superseded by the rule above.
+
+## Pull requests: create them, never merge
+
+Opening a PR (branch → commit → push → `gh pr create`) is fine, and is what the user wants for a
+filed issue's fix. **Merging is never the agent's call** — no `gh pr merge`, no pushing the base
+branch, no force-pushing over a branch under review. Stated by the user 2026-11-04: "可以创建pr，但
+不要合并".
+
+Base an ordinary change on `dev`; `main` is the release branch. Reference the issue it answers in
+the body. A docs/UI-only PR is still unverified until the user looks at it — the preview deploy is
+where they do that, so don't claim visual sign-off in the description.
 
 ## GitHub milestones — `m0` (first release) and `m1` (future plan)
 

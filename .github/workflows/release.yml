@@ -281,9 +281,14 @@ jobs:
           usesh: true
           envs: 'BINARIES GITHUB_REF_NAME CMAKE_TOOLCHAIN_FILE LANRURUGI_RELEASE_TRACK'
           prepare: |
-            pkg install -y curl git bash cmake pkgconf nasm lz4 zstd \
+            pkg install -y curl git bash cmake pkgconf nasm \
               redis deno djvulibre pdfium onnxruntime \
               noto-serif-sc noto-sans-sc
+            # Best-effort: base already ships `liblz4.so`/`libzstd.so` (which is what the build
+            # links against), and these packages are not published for every point release — asking
+            # for them unconditionally aborted the whole release on 14.3 with "No packages available
+            # to install matching 'lz4'" (first release attempt, 2026-11-04).
+            pkg install -y lz4 zstd || true
           run: |
             case "${GITHUB_REF_NAME}" in
               *-*) export LANRURUGI_RELEASE_TRACK=beta ;;

@@ -150,7 +150,10 @@ site-search button[data-open-modal] {
   border-spacing: 0;
   border: var(--lr-border-thin);
   border-radius: 10px;
-  overflow: hidden;
+  /* `auto` clips to the rounded border just like `hidden` did, but leaves the table scrollable on
+     narrow screens; plain `hidden` cut off the extra columns with no way to reach them. */
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .sl-markdown-content th {
