@@ -1563,6 +1563,24 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   opacity: 1;
 }
 
+/* Narrow layout: the label moves into a tooltip, leaving icon + count (+ the amber "undecided"
+   badge, which only one tab can have). With `height: auto` and block flow those extra pieces wrap,
+   so the two tabs came out different heights (82px vs 44px, real report 2026-11-04). A fixed
+   column box makes both identical no matter what a tab carries. */
+@media (max-width: 640px) {
+  .stdbtn.queue-tab {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    width: 3.2rem;
+    height: 3.2rem;
+    padding: 0;
+    line-height: 1.1;
+  }
+}
+
 /* The icon-only twin of `.pill-btn`, for sitting immediately beside it: square in purpose, round
    (and the same height) so the pair reads as one control group rather than a box next to a pill.
    Colours stay `.stdbtn`'s own. */
