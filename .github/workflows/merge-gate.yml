@@ -1,0 +1,31 @@
+name: Merge Gate
+
+# `main` is the release line and only ever takes a merge from `dev` — the branch whose CI has
+# actually been running since the last release. Nothing in GitHub's branch protection can express
+# "pull requests must come from branch X", so this job is that rule: it fails for any other head
+# branch, and `main`'s protection requires it by name.
+#
+# Kept in its own workflow rather than bolted onto `ci.yml` so the rule is greppable and its
+# history reads on its own. It runs only for pull requests *into* `main`, so ordinary `dev` work
+# never pays for it.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  source-branch:
+    name: Source Branch (dev only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require dev as the head branch
+        run: |
+          head="${{ github.head_ref }}"
+          if [ "$head" != "dev" ]; then
+            echo "::error::main only accepts pull requests from dev (this one comes from '$head')."
+            exit 1
+          fi
+          echo "Head branch is dev — allowed."
