@@ -231,19 +231,23 @@ pub(crate) async fn read_queue_retention_days(state: &AppState) -> i64 {
     }
 }
 
-/// Which release line the update check follows — `"stable"` unless the operator opted into beta.
-/// Unknown/absent values fall back to `stable`: a corrupted field must not silently put a
+/// Which release line the update check follows. An explicit setting wins; otherwise the track the
+/// artifact was *built* for (`docker pull …:beta` gets beta updates without any configuration).
+/// Anything unset or unrecognised falls back to `stable`: a corrupted field must not silently put a
 /// deployment on the beta track.
 pub(crate) async fn read_release_track(state: &AppState) -> String {
-    match state.redis.config.get().await {
+    let stored = match state.redis.config.get().await {
         Ok(mut conn) => conn
             .hget::<_, _, Option<String>>(CONFIG_KEY, "release_track")
             .await
             .ok()
-            .flatten()
-            .filter(|s| s == "beta")
-            .unwrap_or_else(|| "stable".to_string()),
-        Err(_) => "stable".to_string(),
+            .flatten(),
+        Err(_) => None,
+    };
+    match stored.as_deref() {
+        Some("beta") => "beta".to_string(),
+        Some("stable") => "stable".to_string(),
+        _ => crate::version::build_track().to_string(),
     }
 }
 
