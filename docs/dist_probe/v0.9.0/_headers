@@ -1,0 +1,6 @@
+# Cloudflare Pages response headers, shared by the docs, Swagger UI and SDK deployments. The
+# *.pages.dev hosts are for checking a deploy only; the lrrg.dev subdomains are the indexed copies.
+https://:project.pages.dev/*
+  X-Robots-Tag: noindex
+https://:version.:project.pages.dev/*
+  X-Robots-Tag: noindex
