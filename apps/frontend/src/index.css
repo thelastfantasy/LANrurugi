@@ -172,24 +172,6 @@ input[type="checkbox"]:disabled {
   transition: opacity 150ms ease;
 }
 
-/* The file-info bar starts as just the filename and grows into the full "→ webp :: … · 原始 … ·
-   省 98%" comparison once the HEAD answers — which wraps to two lines on a phone, shoving the page
-   area up by a line the moment the numbers arrive. Reserve that height on narrow viewports so the
-   numbers appear without anything moving. (No skeleton of its own: the HEAD is one small request
-   and its answer is the content, so there is nothing worth drawing a placeholder *for*.) */
-@media (max-width: 768px) {
-  #i1 .file-info {
-    min-height: 2.6em;
-  }
-}
-
-/* A page that has no decoded pixels yet. Drawn on the page *area*, not on the `<img>`: before the
- * bitmap exists the image's own box can resolve to 0x0 (its wrapper is shrink-to-fit and the image
- * carries `max-width: 100%`), which made a placeholder painted on the image invisible — rapid page
- * turns looked like the placeholder had disappeared (real report, 2026-11-04). The area always has
- * the viewport's width, so the same tint is visible no matter what the image is doing.
- * Static fill, deliberately: the box can be several thousand pixels wide, and animating a gradient
- * over a layer that large re-rasterises it every frame. */
 .reader-page-placeholder {
   display: block;
   background: rgba(127, 127, 127, 0.12);
@@ -202,13 +184,23 @@ input[type="checkbox"]:disabled {
 }
 
 /* The file-info bar starts as just the filename and grows into the full "→ webp :: … · 原始 … ·
-   省 98%" comparison once the HEAD answers — which wraps to two lines on a phone, shoving the page
-   area up by a line the moment the numbers arrive. Reserve that height on narrow viewports so the
-   numbers appear without anything moving. (No skeleton of its own: the HEAD is one small request
-   and its answer is the content, so there is nothing worth drawing a placeholder *for*.) */
+   省 98%" comparison once the HEAD answers. That text is a different height from the filename
+   alone, and the bar sits *above* the page area — so every page turn that changed the numbers
+   nudged the page down a line ("下沉感", reported on desktop 2026-11-04). Two halves:
+   - reserve a line at all widths, so the bar never changes height on arrival;
+   - on a phone the comparison wraps to two lines, so reserve two there.
+   The full text is already in the bar's `title`, so clipping on desktop loses nothing. */
+#i1 .file-info {
+  min-height: 1.6em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 @media (max-width: 768px) {
   #i1 .file-info {
     min-height: 2.6em;
+    white-space: normal;
   }
 }
 
@@ -217,14 +209,6 @@ input[type="checkbox"]:disabled {
  * in the *final* shape of the incoming page — turning a page never re-lays-out the box, it just
  * fills it in. Same pulse as the infinite-scroll placeholder above, for the same "loading, not
  * missing" reading. */
-#i3 #img[data-pending],
-#i3 #img_doublepage[data-pending] {
-  /* Deliberately a *static* tint, not the pulsing gradient used for infinite-scroll placeholders:
-     this element can be several thousand pixels wide (the box carries the page's real dimensions),
-     and animating `background-position` over a layer that large re-rasterises the whole thing every
-     frame — enough to wedge the compositor on a heavy page. A flat tint costs one fill. */
-  background: rgba(127, 127, 127, 0.12);
-}
 
 /* components/Display/JobProgress.tsx's indeterminate download bar (total_bytes unknown) — a
  * fixed-width block sliding back and forth inside the track, standing in for a real ratio. */
