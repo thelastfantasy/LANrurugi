@@ -2007,12 +2007,6 @@ export function Reader() {
           {t("reader.downloadThisArchive")}
         </MenuItem>
       )}
-      {loggedIn && downloadArchiveId && (
-        <MenuItem onClick={() => setShareItem({ kind: "archive", id: downloadArchiveId })}>
-          <i className="fas fa-share-nodes" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
-          {isTank ? t("reader.shareThisArchive") : t("share.action.share")}
-        </MenuItem>
-      )}
       {loggedIn && isTank && archiveId && (
         <MenuItem onClick={() => setShareItem({ kind: "tankoubon", id: archiveId })}>
           <i className="fas fa-share-nodes" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
@@ -2103,16 +2097,23 @@ export function Reader() {
             />
           </Tooltip>
         ) : null}
-        {loggedIn && archiveId ? (
-          <IconButton
-            variant="ghost-btn"
-            icon="fas fa-share-nodes fa-2x"
-            title={(isTank ? t("reader.shareWholeTankoubon") : t("share.action.share")) ?? undefined}
-            size={32}
-            style={{ borderRadius: "50%" }}
-            onClick={() => setShareItem({ kind: isTank ? "tankoubon" : "archive", id: archiveId })}
-          />
-        ) : null}
+        {/* Moved out of the overflow menu, not duplicated: this is the same action that entry
+            performed (the archive currently being shown — a tank's member when reading one), so the
+            menu no longer offers it. The tank-wide share stays in the menu, since that is a
+            different action. */}
+        {(() => {
+          const shareId = downloadArchiveId ?? archiveId;
+          return loggedIn && shareId ? (
+            <IconButton
+              variant="ghost-btn"
+              icon="fas fa-share-nodes fa-2x"
+              title={t("share.action.share") ?? undefined}
+              size={32}
+              style={{ borderRadius: "50%" }}
+              onClick={() => setShareItem({ kind: "archive", id: shareId })}
+            />
+          ) : null;
+        })()}
         {renderOpenPdfButton({ borderRadius: "50%" })}
         <IconButton
           variant="ghost-btn"
