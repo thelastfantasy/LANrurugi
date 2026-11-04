@@ -1,0 +1,34 @@
+---
+title: Version history
+description: Every LANrurugi release, with the user guide, API reference and plugin SDK docs that belong to it.
+---
+
+import versions from '../../../../public/versions.json'
+// Version trees live at the site root (`/1.0.0/`), so a build whose own base is a version
+// path has to strip that segment before composing links to a *different* version.
+export const base = import.meta.env.BASE_URL.replace(/\/$/, '')
+export const rootBase = base.replace(/\/v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, '')
+
+
+
+Every release keeps its own copy of the documentation: the user guide, the HTTP API reference
+(generated from that release's own route table) and the plugin SDK reference (generated from its
+plugin types). Older versions are never overwritten by newer ones — a 1.0.0 API reference should
+describe exactly what 1.0.0 served.
+
+<p class="lr-versions__summary">
+  <strong>{versions.length}</strong> version(s), newest v{versions[0].version}.
+</p>
+
+<div class="lr-versions">
+  {versions.map((entry) => (
+    <a class="lr-versions__row" href={`${rootBase}/v${entry.version}/`}>
+      <span class="lr-versions__name">
+        v{entry.version}
+        {entry.prerelease && <span class="lr-versions__badge">pre-release</span>}
+      </span>
+      <span class="lr-versions__date">{entry.date}</span>
+      <span class="lr-versions__links">Guide · API · SDK</span>
+    </a>
+  ))}
+</div>
