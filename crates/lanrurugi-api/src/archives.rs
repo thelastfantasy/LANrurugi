@@ -3496,10 +3496,11 @@ async fn fetch_page(
             if !client_cannot_decode_source && !worth_it {
                 return Ok(serve_original_page(archive_file, path, raw, content_type).await);
             }
-            // Same rule as the still path: when this variant is already cached, report what a GET
-            // would actually send, not the entry's own size — the bar's "省 X%" is computed from it
-            // and a HEAD that only ever names the original weight leaves an animated page looking
-            // unoptimized.
+            // Same rule as the still path: when this variant is already cached, answer with the
+            // cached file itself. A HEAD never sends a body, and the response builder stats a
+            // `File` body to emit `x-lrr-served-size` — which is what lets the file-info bar show
+            // the converted weight *and* the original one. Reporting the cached size as
+            // `orig_size` instead would have relabelled the 10 MB source as 3 MB.
             let cached = resize_cache_path(
                 &state.library.temp_dir,
                 id,
@@ -3511,13 +3512,22 @@ async fn fetch_page(
                 EncodeFormat::Webp,
                 true,
             );
-            let served_size = tokio::fs::metadata(&cached)
-                .await
-                .map(|meta| meta.len())
-                .unwrap_or(raw.len() as u64);
+            if tokio::fs::metadata(&cached).await.is_ok() {
+                let dims = read_cache_dims(&cached, EncodeFormat::Webp).await;
+                let etag = page_file_etag(&cached.to_string_lossy(), "webp-anim").await;
+                return Ok(FetchedPage {
+                    content_type: EncodeFormat::Webp.content_type(),
+                    body: crate::state::PageBody::File(cached),
+                    resized: true,
+                    orig_size: raw.len() as u64,
+                    orig_width: dims.map(|d| d.0).unwrap_or(0),
+                    orig_height: dims.map(|d| d.1).unwrap_or(0),
+                    etag,
+                });
+            }
             return Ok(metadata_only(
                 EncodeFormat::Webp.content_type(),
-                served_size,
+                raw.len() as u64,
                 source_dims,
                 true,
             ));
