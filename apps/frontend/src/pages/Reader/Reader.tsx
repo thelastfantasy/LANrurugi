@@ -1939,6 +1939,9 @@ export function Reader() {
           lineHeight: 1,
           margin: 0,
           padding: 0,
+          // `nowrap`: the space around "/" is a legitimate break opportunity, and on a narrow
+          // toolbar the counter wrapped into "380 /" + "656" (real report, 2026-11-04).
+          whiteSpace: "nowrap",
         }}
       >
         <span className="current-page">{currentPage}</span> /{" "}
@@ -2099,6 +2102,16 @@ export function Reader() {
               style={{ borderRadius: "50%" }}
             />
           </Tooltip>
+        ) : null}
+        {loggedIn && archiveId ? (
+          <IconButton
+            variant="ghost-btn"
+            icon="fas fa-share-nodes fa-2x"
+            title={(isTank ? t("reader.shareWholeTankoubon") : t("share.action.share")) ?? undefined}
+            size={32}
+            style={{ borderRadius: "50%" }}
+            onClick={() => setShareItem({ kind: isTank ? "tankoubon" : "archive", id: archiveId })}
+          />
         ) : null}
         {renderOpenPdfButton({ borderRadius: "50%" })}
         <IconButton
