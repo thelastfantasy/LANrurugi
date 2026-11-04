@@ -1181,7 +1181,11 @@ export function Reader() {
     if (!servedInfoReverifiedRef.current.has(page)) {
       servedInfoReverifiedRef.current.add(page);
       void fetchResizedPageInfo(originalUrl, { fresh: true }).then((info) => {
-        if (info) setResizedPageInfo((prev) => ({ ...prev, [page]: info }));
+        // Store the `null` too: a fresh HEAD saying "served as-is" is a *settled* answer, and the
+        // bar can then show the plain line without waiting forever. A cached HEAD's `null` is not
+        // trusted (it can predate the page's conversion), which is why the prefetch above ignores
+        // it.
+        setResizedPageInfo((prev) => ({ ...prev, [page]: info }));
       });
     }
   }
@@ -2315,13 +2319,18 @@ export function Reader() {
   // Pending until we can state a *correct* size: no answer yet, or an answer that says "converted"
   // but was taken before the conversion existed (no `servedBytes`, and the timing entry is 0 for an
   // image served from cache, so `servedKb` is unavailable too).
+  // The bar must settle in *one* step: until the page's HEAD has answered we cannot say whether
+  // this page will be converted, so anything drawn now (the bare filename, or name :: size) is a
+  // line that will be replaced — the "renders twice, filename first" report (2026-11-04). Keep the
+  // previous page's finished line on screen instead; with the height already reserved, the swap is
+  // a text change in place, not a jump.
   const resizeInfoPending =
     pageResizeInfo === undefined ||
     (Boolean(pageResizeInfo) && servedKb === undefined);
   const fileinfo = (
     <div className="file-info" title={displayedFileInfo}>
       {resizedFileInfo ??
-        (resizeInfoPending ? pageEntryName || displayedFileInfo : displayedFileInfo)}
+        (resizeInfoPending ? (lastFileInfoRef.current ?? "") : displayedFileInfo)}
     </div>
   );
 
