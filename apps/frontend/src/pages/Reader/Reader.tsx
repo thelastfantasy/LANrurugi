@@ -26,6 +26,7 @@ import {
 } from "@/api/hooks";
 import { Menu, MenuItem, MenuSeparator, Tooltip } from "@/components/common-ui/Display";
 import { IconButton, ToggleButtonMenu } from "@/components/common-ui/Form";
+import { currentRating,RatingWidget } from "@/components/common-ui/Form/RatingWidget";
 import {
   ForbiddenPage,
   FormatBadge,
@@ -35,6 +36,7 @@ import {
 import { Footer } from "@/components/Layout";
 import { confirmDialog, promptDialog } from "@/dialog";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
+import { useHasPhysicalKeyboard } from "@/hooks/useHasPhysicalKeyboard";
 import { useIsNarrowViewport } from "@/hooks/useIsNarrowViewport";
 import {
   clamp,
@@ -116,6 +118,12 @@ function readerFullShortEdge(): number {
   const physical = Math.max(physicalFromViewport, physicalFromScreen);
   return Math.max(960, Math.min(1440, physical || 960));
 }
+/** Whole KB the server says it will send for an already-converted page, if it said so. */
+function servedInfoKb(info: ResizedPageInfo | null | undefined): number | undefined {
+  if (!info?.servedBytes) return undefined;
+  return Math.floor(info.servedBytes / 1024);
+}
+
 /** `.pagecount`'s font-size, scaled up alongside the paginator icons above. */
 const PAGINATOR_PAGECOUNT_FONT_SIZE = "1.25rem";
 /** Matches `toast.tsx`'s own `AUTO_CLOSE_TIME.info` default. */
@@ -325,6 +333,8 @@ export function Reader() {
   const [resizedPageInfo, setResizedPageInfo] = useState<
     Record<number, ResizedPageInfo | null>
   >({});
+
+
   const [markerPlacementMode, setMarkerPlacementMode] = useState(false);
   const supportsHover = useSupportsHover();
   // Shared by both toolbars, so changing the primary action in one updates the other too.
@@ -339,6 +349,9 @@ export function Reader() {
    */
   const [fitHeightPx, setFitHeightPx] = useState<number | null>(null);
   const isMobileToolbarViewport = useIsNarrowViewport("(max-width: 768px)");
+  // Keyboard-shortcut help is meaningless on a touch-only phone; `useHasPhysicalKeyboard`
+  // explains what "has a keyboard" can actually mean in a browser.
+  const hasPhysicalKeyboard = useHasPhysicalKeyboard();
   const [navState, setNavState] = useState<ArchiveNavState>({
     ids: [],
     index: -1,
@@ -359,6 +372,9 @@ export function Reader() {
   const infiniteScrollResumePageRef = useRef<number | null>(null);
   const [archiveTransition, setArchiveTransition] = useState<{
     direction: "prev" | "next";
+    /** Whether the finished work had *no* rating when this sheet opened. Snapshotted on purpose:
+     * deciding live would make the rating control vanish the instant the reader used it. */
+    unratedAtOpen: boolean;
     /** Fetched from `/api/reader/recommendations/{id}` while the overlay shows. `null` = still
      * loading / model not ready / fetch failed (the panel then shows nothing to pick). */
     recommendations:
@@ -473,6 +489,8 @@ export function Reader() {
   const warmImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
   /** Per page: the in-flight/resolved metadata HEAD (box + will-the-server-convert). */
   const pageMetaRef = useRef<Map<number, Promise<PageMeta | null>>>(new Map());
+  /** Pages whose served-size HEAD has already been re-asked after their bitmap painted. */
+  const servedInfoReverifiedRef = useRef<Set<number>>(new Set());
   const pageTinyBlobsRef = useRef<Map<number, string>>(new Map());
   const pageTinyDimsRef = useRef<Map<number, { width: number; height: number }>>(new Map());
   const pageTinyFetchesRef = useRef<Map<number, AbortController>>(new Map());
@@ -501,6 +519,79 @@ export function Reader() {
         readerSettings.mangaMode,
         (page) => widespreads[page],
       );
+
+  // TEMPORARY diagnostics for the reader freeze (open the reader with `?readerDebug=1`). Counts
+  // renders per second and logs long tasks, so a hang can be told apart from a JS render loop
+  // without a profiler. Remove once the cause is fixed.
+  const debugRendersRef = useRef(0);
+  const readerDebug = window.location.search.includes("readerDebug");
+  if (readerDebug) debugRendersRef.current += 1;
+  useEffect(() => {
+    if (!readerDebug) return;
+    const id = window.setInterval(() => {
+      const renders = debugRendersRef.current;
+      debugRendersRef.current = 0;
+      console.warn(
+        `[reader] ${renders} renders/s · page=${spread.left} info=${resizedPageInfo[spread.left] === undefined ? "pending" : "known"} ready=${String(mainReady[spread.left])}`,
+      );
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [readerDebug, spread.left, resizedPageInfo, mainReady]);
+  useEffect(() => {
+    if (!readerDebug || typeof PerformanceObserver === "undefined") return;
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (entry.duration > 200) {
+          console.warn(`[reader] long task ${entry.duration.toFixed(0)}ms`);
+        }
+      }
+    });
+    try {
+      observer.observe({ entryTypes: ["longtask"] });
+    } catch {
+      // Safari has no longtask entry type; the render counter alone still works there.
+    }
+    return () => observer.disconnect();
+  }, [readerDebug]);
+
+  // Readiness is per *element*, not per page number: the `<img>` is remounted on every visit (see
+  // its `key`), so a remembered `mainReady[p]` from an earlier visit is stale the moment that page
+  // is shown again — it reported "ready" while the new element had no bitmap, which left both the
+  // placeholder and the preview underlay hidden (real report, 2026-11-04: rapid prev-paging made
+  // the placeholder vanish). Reset the map whenever the spread changes; the next paint is what
+  // marks a page ready again. Adjusted during render rather than in an effect on purpose — this is
+  // derived state, and an effect would render one frame with the stale value first.
+  const spreadKey = `${spread.left}-${spread.right ?? "none"}`;
+  const [renderedSpreadKey, setRenderedSpreadKey] = useState(spreadKey);
+  if (spreadKey !== renderedSpreadKey) {
+    setRenderedSpreadKey(spreadKey);
+    setMainReady({});
+  }
+
+  /** The incoming page's known box (preview/full-size dimensions), used to size the placeholder. */
+  const placeholderDims =
+    pageTinyDims[spread.left] ?? pageDimensions[spread.left] ?? lastDimsRef.current ?? null;
+  /** Sizing for that placeholder, in the fit mode currently selected. */
+  const placeholderStyle: React.CSSProperties | null =
+    !placeholderDims || mainReady[spread.left]
+      ? null
+      : readerSettings.fitMode === FIT_MODE.FIT_HEIGHT && !isFullscreen
+        ? {
+            height: fitHeightPx !== null ? `${fitHeightPx}px` : "90vh",
+            aspectRatio: `${placeholderDims.width} / ${placeholderDims.height}`,
+            width: "fit-content",
+            maxWidth: "100%",
+            margin: "0 auto",
+          }
+        : {
+            // Fit-width and container modes let the page take the area's width, so the ratio-derived
+            // height matches the image's own. `margin: 0 auto` is a no-op at 100% but keeps the box
+            // centred if a future cap makes it narrower.
+            width: "100%",
+            maxWidth: "100%",
+            margin: "0 auto",
+            aspectRatio: `${placeholderDims.width} / ${placeholderDims.height}`,
+          };
 
   const currentSpreadLoaded =
     (pageDimensions[spread.left] !== undefined &&
@@ -759,7 +850,11 @@ export function Reader() {
       const url = pages.data.pages[page - 1]?.url
       if (!url) continue
       prefetchedPageSizesRef.current.add(page)
-      const absoluteUrl = new URL(url, window.location.origin).toString()
+      // The *visible* URL, `max_short_edge` included: the file-info bar reports the variant actually
+      // being displayed, and `x-lrr-served-size` only exists for the cache entry that variant
+      // produces. Asking with the bare `pages[].url` queried a cache entry nothing ever wrote, so a
+      // converted page fell back to its entry size (real report, 2026-11-04).
+      const absoluteUrl = pageStreamUrl(page) ?? new URL(url, window.location.origin).toString()
       void fetchContentLengthKb(absoluteUrl).then((kb) => {
         if (kb !== null) {
           setPageSizesKb((prev) =>
@@ -775,7 +870,7 @@ export function Reader() {
         }
       })
     }
-  }, [pages.data, spread.left, spread.right]);
+  }, [spread.left, spread.right, pageStreamUrl, pages.data]);
 
   useEffect(() => {
     if (!archiveId || totalPages === 0) return;
@@ -960,6 +1055,7 @@ export function Reader() {
       : undefined;
     setArchiveTransition({
       direction,
+      unratedAtOpen: currentRating(metadata.data?.tags ?? "") === 0,
       recommendations: cached?.recommendations ?? null,
     });
     if (!archiveId || cached) return;
@@ -1074,16 +1170,26 @@ export function Reader() {
       const kb = Math.floor(timing.encodedBodySize / 1024);
       setServedSizesKb((prev) => (prev[page] === kb ? prev : { ...prev, [page]: kb }));
     }
-    // The file-info HEADs always use the original server URL, so Content-Length/resize metadata
-    // keeps working regardless of the variant the reader is displaying.
-    const originalUrl = pages.data?.pages[page - 1]?.url ?? img.src;
+    // Same URL the `<img>` itself loaded (see the file-info note in the prefetch effect above):
+    // the served-size header only exists for the cache entry this exact variant writes.
+    const originalUrl = pageStreamUrl(page) ?? pages.data?.pages[page - 1]?.url ?? img.src;
     if (pageSizesKb[page] === undefined) {
       void fetchContentLengthKb(originalUrl).then((kb) => {
         if (kb !== null) setPageSizesKb((prev) => ({ ...prev, [page]: kb }));
       });
     }
-    if (resizedPageInfo[page] === undefined) {
-      void fetchResizedPageInfo(originalUrl).then((info) => {
+    // One cache-bypassing HEAD per painted page. Deliberately unconditional: this request is what
+    // makes the numbers *final*, because the conversion that just produced these bytes is what
+    // writes the cache entry (and its size) the first HEAD could not have seen. Gating it on "no
+    // info yet" left pages stuck on their entry size whenever a fast page turn raced the earlier
+    // request (real report, 2026-11-04: flipping quickly showed the plain line).
+    if (!servedInfoReverifiedRef.current.has(page)) {
+      servedInfoReverifiedRef.current.add(page);
+      void fetchResizedPageInfo(originalUrl, { fresh: true }).then((info) => {
+        // Store the `null` too: a fresh HEAD saying "served as-is" is a *settled* answer, and the
+        // bar can then show the plain line without waiting forever. A cached HEAD's `null` is not
+        // trusted (it can predate the page's conversion), which is why the prefetch above ignores
+        // it.
         setResizedPageInfo((prev) => ({ ...prev, [page]: info }));
       });
     }
@@ -1828,15 +1934,17 @@ export function Reader() {
             }}
           />
         )}
-        <Tooltip label={helpContent} maxWidth={420}>
-          <IconButton
-            variant="ghost-btn"
-            icon="fas fa-question-circle fa-2x"
-            title={t("reader.help") ?? undefined}
-            size={32}
-            style={{ marginRight: 13, borderRadius: "50%" }}
-          />
-        </Tooltip>
+        {hasPhysicalKeyboard ? (
+          <Tooltip label={helpContent} maxWidth={420}>
+            <IconButton
+              variant="ghost-btn"
+              icon="fas fa-question-circle fa-2x"
+              title={t("reader.help") ?? undefined}
+              size={32}
+              style={{ marginRight: 13, borderRadius: "50%" }}
+            />
+          </Tooltip>
+        ) : null}
       </div>
       <div className="absolute-options absolute-right">
         <IconButton
@@ -1933,6 +2041,9 @@ export function Reader() {
           lineHeight: 1,
           margin: 0,
           padding: 0,
+          // `nowrap`: the space around "/" is a legitimate break opportunity, and on a narrow
+          // toolbar the counter wrapped into "380 /" + "656" (real report, 2026-11-04).
+          whiteSpace: "nowrap",
         }}
       >
         <span className="current-page">{currentPage}</span> /{" "}
@@ -1996,12 +2107,6 @@ export function Reader() {
         <MenuItem onClick={() => window.location.assign(`/api/archives/${downloadArchiveId}/download`)}>
           <i className="fas fa-download" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
           {t("reader.downloadThisArchive")}
-        </MenuItem>
-      )}
-      {loggedIn && downloadArchiveId && (
-        <MenuItem onClick={() => setShareItem({ kind: "archive", id: downloadArchiveId })}>
-          <i className="fas fa-share-nodes" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
-          {isTank ? t("reader.shareThisArchive") : t("share.action.share")}
         </MenuItem>
       )}
       {loggedIn && isTank && archiveId && (
@@ -2083,15 +2188,34 @@ export function Reader() {
             }}
           />
         )}
-        <Tooltip label={helpContent} maxWidth={420}>
-          <IconButton
-            variant="ghost-btn"
-            icon="fas fa-question-circle fa-2x"
-            title={t("reader.help") ?? undefined}
-            size={32}
-            style={{ borderRadius: "50%" }}
-          />
-        </Tooltip>
+        {hasPhysicalKeyboard ? (
+          <Tooltip label={helpContent} maxWidth={420}>
+            <IconButton
+              variant="ghost-btn"
+              icon="fas fa-question-circle fa-2x"
+              title={t("reader.help") ?? undefined}
+              size={32}
+              style={{ borderRadius: "50%" }}
+            />
+          </Tooltip>
+        ) : null}
+        {/* Moved out of the overflow menu, not duplicated: this is the same action that entry
+            performed (the archive currently being shown — a tank's member when reading one), so the
+            menu no longer offers it. The tank-wide share stays in the menu, since that is a
+            different action. */}
+        {(() => {
+          const shareId = downloadArchiveId ?? archiveId;
+          return loggedIn && shareId ? (
+            <IconButton
+              variant="ghost-btn"
+              icon="fas fa-share-nodes fa-2x"
+              title={t("share.action.share") ?? undefined}
+              size={32}
+              style={{ borderRadius: "50%" }}
+              onClick={() => setShareItem({ kind: "archive", id: shareId })}
+            />
+          ) : null;
+        })()}
         {renderOpenPdfButton({ borderRadius: "50%" })}
         <IconButton
           variant="ghost-btn"
@@ -2146,7 +2270,16 @@ export function Reader() {
         window.location.origin,
       ).searchParams.get("path") ?? "")
     : "";
-  const servedKb = spread.right === null ? servedSizesKb[spread.left] : undefined;
+  // The served byte count comes from either the Resource Timing entry for the loaded image (exact,
+  // but absent when the image came straight from the HTTP cache: a cached response reports
+  // `encodedBodySize: 0`) or the server's own `x-lrr-served-size` on the HEAD. Falling back to the
+  // latter is what keeps an already-converted page from rendering the plain "name :: WxH :: size"
+  // line — which reads as "not optimized" because that size is the *entry's* (real report,
+  // 2026-11-04: a 10 MB page served as 227 KB showed 10 MB).
+  const servedKb =
+    spread.right === null
+      ? (servedSizesKb[spread.left] ?? servedInfoKb(leftResizeInfo))
+      : undefined;
   const leftDims =
     spread.right === null ? pageDimensions[spread.left] : undefined;
   let resizedFileInfo: React.ReactNode | null = null;
@@ -2182,9 +2315,27 @@ export function Reader() {
       </>
     );
   }
+  // `resizedPageInfo` is `undefined` until that page's HEAD answers (`null` once it says the page
+  // is served as-is). While it is pending, the only size available is the entry's, which for a
+  // page the server is about to convert is the *wrong* number — rendering it first and then
+  // swapping to "→ webp … 省 98%" made every converted page flash 10 MB before settling
+  // (real report, 2026-11-04). Show the bare filename until the answer is in.
+  const pageResizeInfo = resizedPageInfo[spread.left];
+  // Pending until we can state a *correct* size: no answer yet, or an answer that says "converted"
+  // but was taken before the conversion existed (no `servedBytes`, and the timing entry is 0 for an
+  // image served from cache, so `servedKb` is unavailable too).
+  // The bar must settle in *one* step: until the page's HEAD has answered we cannot say whether
+  // this page will be converted, so anything drawn now (the bare filename, or name :: size) is a
+  // line that will be replaced — the "renders twice, filename first" report (2026-11-04). Keep the
+  // previous page's finished line on screen instead; with the height already reserved, the swap is
+  // a text change in place, not a jump.
+  const resizeInfoPending =
+    pageResizeInfo === undefined ||
+    (Boolean(pageResizeInfo) && servedKb === undefined);
   const fileinfo = (
     <div className="file-info" title={displayedFileInfo}>
-      {resizedFileInfo ?? displayedFileInfo}
+      {resizedFileInfo ??
+        (resizeInfoPending ? (lastFileInfoRef.current ?? "") : displayedFileInfo)}
     </div>
   );
 
@@ -2224,7 +2375,8 @@ export function Reader() {
           id="i3"
           ref={imageAreaRef}
           className={
-            !readerSettings.infiniteScroll && !currentSpreadLoaded
+            !readerSettings.infiniteScroll &&
+            (!currentSpreadLoaded || !mainReady[spread.left])
               ? "loading"
               : undefined
           }
@@ -2234,6 +2386,27 @@ export function Reader() {
               : undefined
           }
         >
+          {/* The box the incoming page will occupy. A child rather than the area's own background:
+              in fit-height the box is narrower than the area, and a block element with only
+              `aspect-ratio`/`max-height` stays pinned to the start edge — `width: fit-content` plus
+              `margin: 0 auto` is what centres it in the current fit mode. */}
+          {placeholderStyle ? (
+            // The visible page is still 0x0 while its bitmap is missing, so the image's own click
+            // surface has no area — taps fell on a dead region and paging stalled until the image
+            // started painting (real report, 2026-11-04). This row spans the whole area (the box
+            // inside it keeps the page's width/ratio), so the usual "left half / right half" turn
+            // works during loading too.
+            <div
+              className="reader-page-placeholder-row"
+              onClick={(e) => {
+                const isLeftHalf = e.clientX < window.innerWidth / 2;
+                e.preventDefault();
+                goTo(isLeftHalf ? "prev" : "next");
+              }}
+            >
+              <div className="reader-page-placeholder" style={placeholderStyle} />
+            </div>
+          ) : null}
           {readerSettings.infiniteScroll ? (
             <div id="display" className="infinite-scroll" ref={infiniteScrollRootRef}>
               {pages.data.pages.map((url, i) => {
@@ -2289,8 +2462,7 @@ export function Reader() {
                 style={{ position: "relative", display: "inline-flex" }}
               >
                 <span style={{ position: "relative", display: "inline-flex" }}>
-                  {pageTinyBlobs[spread.left] &&
-                  pageDimensions[spread.left] === undefined ? (
+                  {pageTinyBlobs[spread.left] && !mainReady[spread.left] ? (
                     <img
                       className="reader-image"
                       key={`tiny-left-${spread.left}`}
@@ -2337,6 +2509,10 @@ export function Reader() {
                     }
                     alt={`${t("reader.page")} ${spread.left}`}
                     fetchPriority="high"
+                    // Large pages (a 4900x4300 JPEG is routine here) should decode off the main
+                    // thread: a synchronous decode shows up as a ~300ms long task on every page turn,
+                    // which is what made fast paging feel like the reader had frozen.
+                    decoding="async"
                     onLoad={(e) => onImageLoad(spread.left, e)}
                     onError={onImageError}
                     draggable={false}
@@ -2362,7 +2538,7 @@ export function Reader() {
                   <span style={{ position: "relative", display: "inline-flex" }}>
                     {spread.right !== null &&
                     pageTinyBlobs[spread.right] &&
-                    pageDimensions[spread.right] === undefined ? (
+                    !mainReady[spread.right] ? (
                       <img
                         className="reader-image"
                         key={`tiny-right-${spread.right}`}
@@ -2592,6 +2768,27 @@ export function Reader() {
               <p style={{ fontSize: 16, fontWeight: "bold", color: "#fff" }}>
                 {t("reader.youMightAlsoLike")}
               </p>
+              {/* The end of a volume is where someone is most likely to rate it, and the sheet is
+                  already up — but only offer it while the work is still unrated, since a rated one
+                  can be changed from its own page. `stopPropagation`: the overlay's own click
+                  closes it, which would swallow the star click. */}
+              {archiveId && archiveTransition.unratedAtOpen && (
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 8,
+                    margin: "2px 0 10px",
+                  }}
+                >
+                  <span style={{ fontSize: 13, color: "rgba(255,255,255,0.82)" }}>
+                    {t("reader.rateThis")}
+                  </span>
+                  <RatingWidget archiveId={archiveId} tags={metadata.data.tags} size={26} />
+                </div>
+              )}
               {archiveTransition.recommendations === null && (
                 /* Skeleton while the (un-prefetched) LLM rerank is in flight — grey card shapes
                  matching the real cards' dimensions. */

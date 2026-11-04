@@ -80,6 +80,17 @@ export function VersionDialog({ onClose }: { onClose: () => void }) {
         {payload?.details.channel
           ? row(t("settings.versionDialog.channelLabel"), payload.details.channel)
           : null}
+        {payload?.details.track
+          ? row(
+              t("settings.versionDialog.trackLabel"),
+              // A local dev build has no published release line: the value here is just whatever
+              // the setting currently says, so label it rather than implying this binary came from
+              // that channel.
+              payload.details.channel === "dev"
+                ? t("settings.versionDialog.trackDevValue", { track: payload.details.track })
+                : payload.details.track,
+            )
+          : null}
         {payload ? row(t("settings.versionDialog.upstreamLabel"), payload.data.isUpstream ? t("settings.versionDialog.yes") : t("settings.versionDialog.no")) : null}
       </div>
 

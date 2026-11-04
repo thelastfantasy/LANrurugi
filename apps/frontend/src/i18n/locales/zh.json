@@ -2880,5 +2880,8 @@
   "stats.storageTreemapByCategory": "按类型",
   "stats.storageTreemapNoCategory": "未知类型",
   "stats.storageTreemapColorsByArtist": "颜色按作者",
-  "stats.storageTreemapColorsByCategory": "颜色按类型"
+  "stats.storageTreemapColorsByCategory": "颜色按类型",
+  "settings.versionDialog.trackLabel": "发布通道",
+  "settings.versionDialog.trackDevValue": "{{track}}（开发版）",
+  "reader.rateThis": "给这部作品评分"
 }

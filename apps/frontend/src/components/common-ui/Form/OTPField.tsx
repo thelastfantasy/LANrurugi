@@ -91,9 +91,19 @@ export function OTPField({
           ref={inputRef}
           id={rootId}
           className="otp-field-input"
-          type={mask ? "password" : "text"}
+          // Always `"text"`: the real input is fully transparent (see `.otp-field-input` in the
+          // theme files) and the dots are drawn by the slots above it, so `type="password"` bought
+          // no masking — it only told every password manager "this is a credential, offer to save
+          // it". Emptying the recycle bin then prompted 1Password to store a 4-digit safety code
+          // (real report, 2026-11-04). The data-* attributes are each manager's own opt-out.
+          type="text"
           inputMode="numeric"
           autoComplete="one-time-code"
+          data-1p-ignore
+          data-lpignore="true"
+          data-bwignore="true"
+          data-dashlane-ignore="true"
+          data-form-type="other"
           pattern="[0-9]*"
           maxLength={length}
           value={value}

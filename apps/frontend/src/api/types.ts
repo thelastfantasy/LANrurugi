@@ -211,6 +211,9 @@ export interface VersionCheckResponse {
     sha: string | null
     /** Which published artifact this is: `ghcr`, `dockerhub`, `native`, `dev` or `unknown`. */
     channel: string
+    /** Which release line the update check follows: `stable` or `beta`. Distinct from `channel`
+     *  (where the artifact came from, not what it is allowed to be updated to). */
+    track: string
   }
   data: {
     isUpstream: boolean

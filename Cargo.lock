@@ -4117,6 +4117,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rustls",
+ "semver",
  "sentry",
  "sentry-panic",
  "sentry-tower",
