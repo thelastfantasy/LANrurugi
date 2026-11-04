@@ -2365,6 +2365,10 @@ export function Reader() {
                   ) : null}
                   <img
                     id="img"
+                    // The box is already sized from the preview's own `x-lrr-preview-*` dimensions,
+                    // so a pending page can show a pulse *in its final shape* instead of leaving a
+                    // hole that only resolves once the bitmap lands.
+                    data-pending={mainReady[spread.left] ? undefined : "true"}
                     // Remounting on a page turn is what makes the *old* page stop being displayed:
                     // Chrome keeps painting the previous bitmap (and even reports its
                     // `naturalWidth`) until a changed `src` finishes decoding, which on a 20 MB page
@@ -2435,6 +2439,9 @@ export function Reader() {
                     ) : null}
                     <img
                       id="img_doublepage"
+                      data-pending={
+                        spread.right !== null && !mainReady[spread.right] ? "true" : undefined
+                      }
                       key={`right-${spread.right ?? "none"}`}
                       ref={rightImgRef}
                       data-page={spread.right ?? undefined}

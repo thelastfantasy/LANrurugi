@@ -168,6 +168,18 @@ input[type="checkbox"]:disabled {
   transition: filter 150ms ease;
 }
 
+/* A page that has no decoded pixels yet. The `<img>` already carries the target page's
+ * `width`/`height` (taken from the preview's `x-lrr-preview-*` headers), so the skeleton is drawn
+ * in the *final* shape of the incoming page — turning a page never re-lays-out the box, it just
+ * fills it in. Same pulse as the infinite-scroll placeholder above, for the same "loading, not
+ * missing" reading. */
+#i3 #img[data-pending],
+#i3 #img_doublepage[data-pending] {
+  background: linear-gradient(90deg, rgba(127, 127, 127, 0.08) 25%, rgba(127, 127, 127, 0.15) 37%, rgba(127, 127, 127, 0.08) 63%);
+  background-size: 400% 100%;
+  animation: lrr-loading-placeholder-pulse 1.4s ease infinite;
+}
+
 /* components/Display/JobProgress.tsx's indeterminate download bar (total_bytes unknown) — a
  * fixed-width block sliding back and forth inside the track, standing in for a real ratio. */
 @keyframes lrr-indeterminate-bar {
