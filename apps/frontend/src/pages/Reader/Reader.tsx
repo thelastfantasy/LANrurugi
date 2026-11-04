@@ -769,7 +769,11 @@ export function Reader() {
       const url = pages.data.pages[page - 1]?.url
       if (!url) continue
       prefetchedPageSizesRef.current.add(page)
-      const absoluteUrl = new URL(url, window.location.origin).toString()
+      // The *visible* URL, `max_short_edge` included: the file-info bar reports the variant actually
+      // being displayed, and `x-lrr-served-size` only exists for the cache entry that variant
+      // produces. Asking with the bare `pages[].url` queried a cache entry nothing ever wrote, so a
+      // converted page fell back to its entry size (real report, 2026-11-04).
+      const absoluteUrl = pageStreamUrl(page) ?? new URL(url, window.location.origin).toString()
       void fetchContentLengthKb(absoluteUrl).then((kb) => {
         if (kb !== null) {
           setPageSizesKb((prev) =>
@@ -785,7 +789,7 @@ export function Reader() {
         }
       })
     }
-  }, [pages.data, spread.left, spread.right]);
+  }, [spread.left, spread.right, pageStreamUrl, pages.data]);
 
   useEffect(() => {
     if (!archiveId || totalPages === 0) return;
@@ -1084,26 +1088,22 @@ export function Reader() {
       const kb = Math.floor(timing.encodedBodySize / 1024);
       setServedSizesKb((prev) => (prev[page] === kb ? prev : { ...prev, [page]: kb }));
     }
-    // The file-info HEADs always use the original server URL, so Content-Length/resize metadata
-    // keeps working regardless of the variant the reader is displaying.
-    const originalUrl = pages.data?.pages[page - 1]?.url ?? img.src;
+    // Same URL the `<img>` itself loaded (see the file-info note in the prefetch effect above):
+    // the served-size header only exists for the cache entry this exact variant writes.
+    const originalUrl = pageStreamUrl(page) ?? pages.data?.pages[page - 1]?.url ?? img.src;
     if (pageSizesKb[page] === undefined) {
       void fetchContentLengthKb(originalUrl).then((kb) => {
         if (kb !== null) setPageSizesKb((prev) => ({ ...prev, [page]: kb }));
       });
     }
-    if (resizedPageInfo[page] === undefined) {
-      void fetchResizedPageInfo(originalUrl).then((info) => {
-        setResizedPageInfo((prev) => ({ ...prev, [page]: info }));
-      });
-    } else if (resizedPageInfo[page] && resizedPageInfo[page].servedBytes === undefined) {
-      // The first HEAD ran before this page had ever been converted, so it could not report what
-      // the server would actually send — the conversion happened on the GET that just painted.
-      // Ask again, bypassing the cached HEAD, now that the served bytes exist on disk.
-      void fetchResizedPageInfo(originalUrl, { fresh: true }).then((info) => {
-        if (info) setResizedPageInfo((prev) => ({ ...prev, [page]: info }));
-      });
-    }
+    // One cache-bypassing HEAD per painted page. Deliberately unconditional: this request is what
+    // makes the numbers *final*, because the conversion that just produced these bytes is what
+    // writes the cache entry (and its size) the first HEAD could not have seen. Gating it on "no
+    // info yet" left pages stuck on their entry size whenever a fast page turn raced the earlier
+    // request (real report, 2026-11-04: flipping quickly showed the plain line).
+    void fetchResizedPageInfo(originalUrl, { fresh: true }).then((info) => {
+      if (info) setResizedPageInfo((prev) => ({ ...prev, [page]: info }));
+    });
   }
 
   function toggleFullScreen() {
