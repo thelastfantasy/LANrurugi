@@ -1570,6 +1570,55 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   opacity: 1;
 }
 
+/* Download rows on a phone: every extra item in this wrapping flex row costs a whole line, and the
+   two flag checkboxes are non-actionable once an item leaves `queued` — they were drawing an empty
+   box and a tick on a line of their own, which is most of the wasted height (reported 2026-11-04). */
+/* The download page keeps the desktop two-column skeleton on a phone: the left column is gone but
+   its `padding-left: 24px` still indents everything, and each nested level adds its own inset
+   (`.ido` padding, `.collapsible-body` padding), so the queue rows only got ~316px of a 390px
+   viewport. Collapse those levels below 640px — re-reported as "space wasted between the accordion
+   and the container" on 2026-11-04. */
+@media (max-width: 640px) {
+  /* `body` prefixes: `.ido` and `.collapsible-body` carry their padding from legacy rules with a
+     element-qualified selector, which outranks a bare class. */
+  body div.ido {
+    padding: 3px;
+    margin: 4px 2px;
+  }
+
+  /* Inline on the element (`padding-left: 24px`), left over from the desktop two-column layout —
+     only `!important` reaches it. */
+  body .ido .right-column {
+    padding-left: 0 !important;
+  }
+
+  .queue-groups {
+    margin: 4px 0;
+  }
+
+  /* Legacy indents each accordion item twice more (the `li`'s own margin + padding, then the body's
+     10px), so the rows still sat ~25px in from each edge. */
+  body .queue-groups > li.option-flyout {
+    margin: 4px 0;
+    padding: 3px 0;
+  }
+
+  body .queue-groups .collapsible-body {
+    padding: 0 2px !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .queue-item-row {
+    gap: 2px;
+    padding: 2px;
+  }
+
+  .queue-item-flag:disabled {
+    display: none;
+  }
+}
+
 /* The icon-only twin of `.pill-btn`, for sitting immediately beside it: square in purpose, round
    (and the same height) so the pair reads as one control group rather than a box next to a pill.
    Colours stay `.stdbtn`'s own. */

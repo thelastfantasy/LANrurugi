@@ -361,6 +361,7 @@ export function QueueItemRow({
   return (
     <>
       <div
+        className="queue-item-row"
         style={{
           display: "flex",
           alignItems: "center",
@@ -385,7 +386,11 @@ export function QueueItemRow({
         <TooltipIfPresent
           preview={item.metadata_preview}
           url={item.url}
-          wrapperStyle={{ flex: "1 1 180px", minWidth: 0 }}
+          // A smaller basis than the old 180px: on a phone the sum of the row's items just
+          // exceeded the line, so the two icon buttons wrapped to a line of their own and every
+          // row doubled in height for 26px of content (reported 2026-11-04). The title still
+          // grows to fill a desktop row.
+          wrapperStyle={{ flex: "1 1 110px", minWidth: 0 }}
         >
           <div
             style={{
@@ -626,6 +631,7 @@ export function QueueItemRow({
           <>
             <Tooltip label={t("upload.autoFetchMetadata") ?? ""}>
               <input
+                className="queue-item-flag"
                 type="checkbox"
                 checked={item.auto_fetch_metadata}
                 disabled={item.state !== "queued"}
@@ -640,6 +646,7 @@ export function QueueItemRow({
 
             <Tooltip label={t("upload.overwriteDuplicate") ?? ""}>
               <input
+                className="queue-item-flag"
                 type="checkbox"
                 checked={item.overwrite_on_duplicate}
                 disabled={item.state !== "queued"}

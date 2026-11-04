@@ -2882,5 +2882,6 @@
   "stats.storageTreemapColorsByArtist": "colours follow the artist",
   "stats.storageTreemapColorsByCategory": "colours follow the category",
   "settings.versionDialog.trackLabel": "Release track",
-  "settings.versionDialog.trackDevValue": "{{track}} (dev build)"
+  "settings.versionDialog.trackDevValue": "{{track}} (dev build)",
+  "reader.rateThis": "Rate this work"
 }
