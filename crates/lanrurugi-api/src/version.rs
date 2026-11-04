@@ -126,10 +126,10 @@ fn remember_failure(slot: &Mutex<Option<(String, Instant)>>, key: &str) {
 
 /// The body returned when GitHub cannot be consulted — also used while a remembered failure is
 /// still fresh, so a failing deployment answers page loads without leaving the process.
-fn fail_open_body(version: &str, sha: Option<&str>) -> Response {
+fn fail_open_body(version: &str, sha: Option<&str>, track: Track) -> Response {
     axum::Json(json!({
         "enabled": true,
-        "details": details_json(version, sha),
+        "details": details_json(version, sha, track),
         "data": {
             "isUpstream": false,
             "isRelease": false,
@@ -292,11 +292,58 @@ pub(crate) fn current_sha() -> Option<String> {
         .clone()
 }
 
-fn details_json(version: &str, sha: Option<&str>) -> Value {
+/// Which release line this deployment follows, from the `release_track` setting.
+///
+/// Distinct from [`build_channel`]: that one says *where the artifact came from* (ghcr/dockerhub/
+/// native/dev), this one says *which releases the update check is allowed to offer*.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Track {
+    Stable,
+    Beta,
+}
+
+impl Track {
+    fn from_setting(raw: &str) -> Self {
+        if raw.eq_ignore_ascii_case("beta") {
+            Self::Beta
+        } else {
+            Self::Stable
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Beta => "beta",
+        }
+    }
+}
+
+/// Orders two release tags (`v0.1.1-beta.2` vs `v0.1.0`), returning `None` when either is not a
+/// parseable version — callers then fall back to string equality rather than guessing.
+///
+/// Needed because the update check used to answer `isLatest` with plain string equality, which
+/// cannot tell `beta.2` from `beta.1`, and would call a newer beta "not the latest beta".
+fn compare_tags(left: &str, right: &str) -> Option<std::cmp::Ordering> {
+    let parse = |tag: &str| semver::Version::parse(tag.trim_start_matches('v')).ok();
+    parse(left)?.partial_cmp(&parse(right)?)
+}
+
+/// Whether `candidate` is the same or a newer version than `current`, using semver ordering when
+/// both parse and falling back to exact string equality otherwise.
+fn is_at_least(current: &str, candidate: &str) -> bool {
+    match compare_tags(current, candidate) {
+        Some(ordering) => ordering != std::cmp::Ordering::Less,
+        None => current == candidate,
+    }
+}
+
+fn details_json(version: &str, sha: Option<&str>, track: Track) -> Value {
     json!({
         "version": version,
         "sha": sha,
         "channel": build_channel(),
+        "track": track.as_str(),
     })
 }
 
@@ -330,8 +377,49 @@ async fn github_get(path: &str) -> Result<Value, String> {
     response.json::<Value>().await.map_err(|e| e.to_string())
 }
 
-async fn fetch_version_info(version: &str, sha: Option<&str>) -> Result<Value, String> {
-    let latest_release = github_get("/releases/latest").await?;
+/// The release the update check compares against, on this deployment's track.
+///
+/// `stable` asks GitHub for `/releases/latest`, which by definition excludes prereleases. `beta`
+/// lists releases and takes the highest *prerelease* by semver order, falling back to the stable
+/// latest when no beta exists (an operator who opted into beta before one was published should see
+/// the normal stable answer, not "no releases at all").
+async fn latest_release_for(track: Track) -> Result<Value, String> {
+    if track == Track::Stable {
+        return github_get("/releases/latest").await;
+    }
+    let releases = github_get(&format!("/releases?per_page={CHANGELOG_LIMIT}")).await?;
+    match newest_prerelease(&releases) {
+        Some(release) => Ok(release),
+        None => github_get("/releases/latest").await,
+    }
+}
+
+/// The highest prerelease in a `/releases` payload, or `None` when there is no usable one.
+///
+/// Split out from [`latest_release_for`] so the ordering rule (drafts skipped, unparseable tags
+/// ignored, semver order rather than GitHub's own list order) is testable without an HTTP stub.
+fn newest_prerelease(releases: &Value) -> Option<Value> {
+    releases
+        .as_array()?
+        .iter()
+        .filter(|release| release["prerelease"].as_bool() == Some(true))
+        .filter(|release| release["draft"].as_bool() != Some(true))
+        .filter_map(|release| {
+            let tag = release["tag_name"].as_str()?;
+            semver::Version::parse(tag.trim_start_matches('v'))
+                .ok()
+                .map(|parsed| (parsed, release.clone()))
+        })
+        .max_by(|(left, _), (right, _)| left.cmp(right))
+        .map(|(_, release)| release)
+}
+
+async fn fetch_version_info(
+    version: &str,
+    sha: Option<&str>,
+    track: Track,
+) -> Result<Value, String> {
+    let latest_release = latest_release_for(track).await?;
     let tags = github_get("/tags?per_page=100").await?;
     let tag_array = tags
         .as_array()
@@ -378,7 +466,9 @@ async fn fetch_version_info(version: &str, sha: Option<&str>) -> Result<Value, S
         return Ok(json!({
             "isUpstream": false,
             "isRelease": true,
-            "isLatest": latest_tag == tag_name,
+            // Ordered rather than `==`: on the beta track the newest release may legitimately be
+            // older or newer than this build's own tag (`0.1.1-beta.2` vs `0.1.1-beta.1`).
+            "isLatest": is_at_least(&tag_name, &latest_tag),
             "version": {
                 "tag": tag_name,
                 "sha": tag_sha,
@@ -632,9 +722,12 @@ async fn get_version(State(state): State<AppState>, Query(query): Query<VersionQ
         // ensuring it treats this exactly like the old client-side `debugMode` path (no toast).
         let version = current_version();
         let sha = current_sha();
+        // Reported even here: the version dialog shows the track regardless of whether this
+        // deployment is allowed to check for updates at all.
+        let track = Track::from_setting(&crate::settings::read_release_track(&state).await);
         return axum::Json(json!({
             "enabled": false,
-            "details": details_json(version, sha.as_deref()),
+            "details": details_json(version, sha.as_deref(), track),
             "data": {
                 "isUpstream": false,
                 "isRelease": false,
@@ -653,7 +746,15 @@ async fn get_version(State(state): State<AppState>, Query(query): Query<VersionQ
 
     let version = current_version();
     let sha = current_sha();
-    let cache_key = format!("{},{}", version, sha.as_deref().unwrap_or("unknown"));
+    let track = Track::from_setting(&crate::settings::read_release_track(&state).await);
+    // The track is part of the key: switching it must not serve the other track's cached answer
+    // for up to `CACHE_TTL`.
+    let cache_key = format!(
+        "{},{},{}",
+        version,
+        sha.as_deref().unwrap_or("unknown"),
+        track.as_str()
+    );
 
     // Cloned out of the guard rather than read inside the `if let`: a `std::sync::MutexGuard` held
     // across the `changelog_for(..).await` below makes this handler's future `!Send`, which axum
@@ -670,7 +771,7 @@ async fn get_version(State(state): State<AppState>, Query(query): Query<VersionQ
     if let Some(cached_data) = cached_data {
         let mut body = json!({
             "enabled": true,
-            "details": details_json(version, sha.as_deref()),
+            "details": details_json(version, sha.as_deref(), track),
             "data": cached_data,
             "cached": true,
         });
@@ -682,12 +783,12 @@ async fn get_version(State(state): State<AppState>, Query(query): Query<VersionQ
 
     if recently_failed(&FAILED, &cache_key) {
         // A recent failure is still fresh: answer from it instead of paying the round trips again.
-        return fail_open_body(version, sha.as_deref());
+        return fail_open_body(version, sha.as_deref(), track);
     }
 
     match version_inflight()
         .run(cache_key.clone(), || {
-            fetch_version_info(version, sha.as_deref())
+            fetch_version_info(version, sha.as_deref(), track)
         })
         .await
     {
@@ -699,7 +800,7 @@ async fn get_version(State(state): State<AppState>, Query(query): Query<VersionQ
             });
             let mut body = json!({
                 "enabled": true,
-                "details": details_json(version, sha.as_deref()),
+                "details": details_json(version, sha.as_deref(), track),
                 "data": data,
                 "cached": false,
             });
@@ -713,7 +814,7 @@ async fn get_version(State(state): State<AppState>, Query(query): Query<VersionQ
             remember_failure(&FAILED, &cache_key);
             // Fail open with current-only data: the UI may show the version badge but must not
             // claim a nonexistent update is available just because GitHub was unreachable.
-            fail_open_body(version, sha.as_deref())
+            fail_open_body(version, sha.as_deref(), track)
         }
     }
 }
@@ -899,11 +1000,62 @@ mod tests {
         assert!(!failure_covers(None, "v1,abc", now));
     }
 
+    #[test]
+    fn beta_tags_are_ordered_not_compared_as_strings() {
+        use std::cmp::Ordering;
+        // The exact case string equality got wrong: beta.2 is newer than beta.1.
+        assert_eq!(
+            compare_tags("v0.1.1-beta.2", "v0.1.1-beta.1"),
+            Some(Ordering::Greater)
+        );
+        // A plain release outranks a prerelease of the same version.
+        assert_eq!(
+            compare_tags("v0.1.1", "v0.1.1-beta.2"),
+            Some(Ordering::Greater)
+        );
+        // Unparseable tags fall back to equality rather than guessing an order.
+        assert_eq!(compare_tags("nightly", "v0.1.1"), None);
+        assert!(is_at_least("v0.1.1-beta.2", "v0.1.1-beta.1"));
+        assert!(!is_at_least("v0.1.1-beta.1", "v0.1.1-beta.2"));
+    }
+
+    #[test]
+    fn the_newest_prerelease_ignores_drafts_and_unparseable_tags() {
+        let releases = json!([
+            {"tag_name": "v0.2.0-beta.1", "prerelease": true, "draft": false},
+            {"tag_name": "v0.2.0-beta.10", "prerelease": true, "draft": false},
+            {"tag_name": "v0.2.0-beta.2", "prerelease": true, "draft": true},
+            {"tag_name": "nightly", "prerelease": true, "draft": false},
+            {"tag_name": "v0.1.0", "prerelease": false, "draft": false},
+        ]);
+        assert_eq!(
+            newest_prerelease(&releases)
+                .and_then(|release| release["tag_name"].as_str().map(str::to_string)),
+            Some("v0.2.0-beta.10".to_string()),
+            "numeric ordering, drafts and unparseable tags skipped"
+        );
+        assert!(
+            newest_prerelease(&json!([{"tag_name": "v0.1.0", "prerelease": false}])).is_none(),
+            "no prerelease means the caller falls back to the stable latest"
+        );
+    }
+
+    #[test]
+    fn a_track_only_switches_on_the_exact_beta_value() {
+        assert_eq!(Track::from_setting("beta"), Track::Beta);
+        assert_eq!(Track::from_setting("BETA"), Track::Beta);
+        assert_eq!(Track::from_setting("stable"), Track::Stable);
+        // Anything else — an empty or corrupted field — stays on stable rather than opting a
+        // deployment into betas by accident.
+        assert_eq!(Track::from_setting(""), Track::Stable);
+        assert_eq!(Track::from_setting("nightly"), Track::Stable);
+    }
+
     #[tokio::test]
     async fn fail_open_body_claims_no_update_and_needs_no_github() {
         // What a failing deployment serves on every page load: the version badge may render, but it
         // must never advertise a release that was not actually observed.
-        let response = fail_open_body("1.2.3", Some("abcdef1234567890"));
+        let response = fail_open_body("1.2.3", Some("abcdef1234567890"), Track::Stable);
         assert_eq!(response.status(), axum::http::StatusCode::OK);
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -941,7 +1093,7 @@ mod tests {
         // The handler is not exercised here (it's async and needs AppState); this test documents
         // that the shape helpers never require a Redis connection or an outbound HTTP call.
         let sha = current_sha();
-        let details = details_json(current_version(), sha.as_deref());
+        let details = details_json(current_version(), sha.as_deref(), Track::Stable);
         assert_eq!(details["version"], current_version());
     }
 

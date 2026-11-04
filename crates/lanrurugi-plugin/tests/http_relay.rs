@@ -77,6 +77,16 @@ impl StubOrigin {
                     let revalidated = lower.contains("if-none-match");
                     state.heads.lock().expect("heads lock").push(head);
 
+                    // Keep `/coalesce` in flight long enough that the second relayed request
+                    // necessarily arrives while the first is still pending. Without this the stub
+                    // answers on a local socket in microseconds and the two plugin fetches can be
+                    // handled one after the other — which is not a coalescing failure, but did
+                    // look like one: `hits("/coalesce") == 2` intermittently on CI
+                    // (`concurrent identical requests must collapse onto one upstream request`).
+                    if path == "/coalesce" {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                    }
+
                     let accepts_gzip = lower.contains("accept-encoding:") && lower.contains("gzip");
                     let response = if path == "/gzipped" && accepts_gzip {
                         format!(
