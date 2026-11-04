@@ -191,7 +191,10 @@ input[type="checkbox"]:disabled {
    - on a phone the comparison wraps to two lines, so reserve two there.
    The full text is already in the bar's `title`, so clipping on desktop loses nothing. */
 #i1 .file-info {
-  min-height: 1.6em;
+  /* `rem`, not `em`: the reserve is about the bar's height, and tying it to the root keeps the
+     page area still even when a theme changes the bar's own font-size. 1.08rem is one line at the
+     current theme's 16px root (17.3px). */
+  min-height: 1.08rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -199,7 +202,8 @@ input[type="checkbox"]:disabled {
 
 @media (max-width: 768px) {
   #i1 .file-info {
-    min-height: 2.6em;
+    /* Two lines. The mobile themes run a 14px root, so 2rem is the same 28px reserve. */
+    min-height: 2rem;
     white-space: normal;
   }
 }
