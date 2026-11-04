@@ -172,6 +172,13 @@ input[type="checkbox"]:disabled {
   transition: opacity 150ms ease;
 }
 
+.reader-page-placeholder-row {
+  display: block;
+  width: 100%;
+  /* The page's own tap target while it has no bitmap; the visible box inside keeps the ratio. */
+  cursor: pointer;
+}
+
 .reader-page-placeholder {
   display: block;
   background: rgba(127, 127, 127, 0.12);

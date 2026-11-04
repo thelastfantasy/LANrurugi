@@ -2386,7 +2386,21 @@ export function Reader() {
               `aspect-ratio`/`max-height` stays pinned to the start edge — `width: fit-content` plus
               `margin: 0 auto` is what centres it in the current fit mode. */}
           {placeholderStyle ? (
-            <div className="reader-page-placeholder" style={placeholderStyle} aria-hidden="true" />
+            // The visible page is still 0x0 while its bitmap is missing, so the image's own click
+            // surface has no area — taps fell on a dead region and paging stalled until the image
+            // started painting (real report, 2026-11-04). This row spans the whole area (the box
+            // inside it keeps the page's width/ratio), so the usual "left half / right half" turn
+            // works during loading too.
+            <div
+              className="reader-page-placeholder-row"
+              onClick={(e) => {
+                const isLeftHalf = e.clientX < window.innerWidth / 2;
+                e.preventDefault();
+                goTo(isLeftHalf ? "prev" : "next");
+              }}
+            >
+              <div className="reader-page-placeholder" style={placeholderStyle} />
+            </div>
           ) : null}
           {readerSettings.infiniteScroll ? (
             <div id="display" className="infinite-scroll" ref={infiniteScrollRootRef}>
