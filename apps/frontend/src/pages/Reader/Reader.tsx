@@ -2219,9 +2219,16 @@ export function Reader() {
       </>
     );
   }
+  // `resizedPageInfo` is `undefined` until that page's HEAD answers (`null` once it says the page
+  // is served as-is). While it is pending, the only size available is the entry's, which for a
+  // page the server is about to convert is the *wrong* number — rendering it first and then
+  // swapping to "→ webp … 省 98%" made every converted page flash 10 MB before settling
+  // (real report, 2026-11-04). Show the bare filename until the answer is in.
+  const resizeInfoPending = resizedPageInfo[spread.left] === undefined;
   const fileinfo = (
     <div className="file-info" title={displayedFileInfo}>
-      {resizedFileInfo ?? displayedFileInfo}
+      {resizedFileInfo ??
+        (resizeInfoPending ? pageEntryName || displayedFileInfo : displayedFileInfo)}
     </div>
   );
 
