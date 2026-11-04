@@ -564,6 +564,10 @@ export function Reader() {
     setMainReady({});
   }
 
+  /** The incoming page's known box (preview/full-size dimensions), used to size the placeholder. */
+  const placeholderDims =
+    pageTinyDims[spread.left] ?? pageDimensions[spread.left] ?? lastDimsRef.current ?? null;
+
   const currentSpreadLoaded =
     (pageDimensions[spread.left] !== undefined &&
       (spread.right === null || pageDimensions[spread.right] !== undefined)) ||
@@ -2341,11 +2345,24 @@ export function Reader() {
               ? "loading"
               : undefined
           }
-          style={
-            !currentSpreadLoaded && lastSpreadHeightRef.current !== null
+          /* Reserve the box the incoming page will occupy, in the *current* fit mode:
+             `aspect-ratio` comes from the dimensions the preview already reported, and the height
+             cap mirrors what the image itself gets — `maxHeight` in fit-height, nothing extra in
+             fit-width (where a tall page legitimately runs several screens high, unlike the fixed
+             `55vh` band this used to draw). */
+          style={{
+            ...(placeholderDims && !mainReady[spread.left]
+              ? {
+                  aspectRatio: `${placeholderDims.width} / ${placeholderDims.height}`,
+                  ...(readerSettings.fitMode === FIT_MODE.FIT_HEIGHT && !isFullscreen
+                    ? { maxHeight: fitHeightPx !== null ? `${fitHeightPx}px` : "90vh" }
+                    : {}),
+                }
+              : {}),
+            ...(!currentSpreadLoaded && lastSpreadHeightRef.current !== null
               ? { minHeight: lastSpreadHeightRef.current }
-              : undefined
-          }
+              : {}),
+          }}
         >
           {readerSettings.infiniteScroll ? (
             <div id="display" className="infinite-scroll" ref={infiniteScrollRootRef}>
