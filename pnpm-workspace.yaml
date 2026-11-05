@@ -14,3 +14,10 @@ allowBuilds:
   # Vue 2 or Vue 3 shim by detecting which one is installed; this workspace is Vue 3 only, so
   # allowing it is both safe and what makes the package resolve correctly.
   vue-demi: true
+
+# `wrangler` pulls `esbuild` and `workerd`, both of which have a postinstall step that fetches their
+# platform binary. pnpm treats an unapproved build script as an error (ERR_PNPM_IGNORED_BUILDS), so
+# they are allowed explicitly here rather than with a blanket switch.
+onlyBuiltDependencies:
+  - esbuild
+  - workerd
