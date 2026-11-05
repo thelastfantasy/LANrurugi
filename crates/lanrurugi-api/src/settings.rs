@@ -457,6 +457,10 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     // `devmode` (had zero server-side behavior of its own — see `main.rs`'s
     // `--disable-update-check` flag, which replaces the one real thing it controlled).
     ("guestmode", false),
+    // Background scanning yields to interactive traffic (see `lanrurugi_core::activity` and
+    // `full_scan`'s idle gate). On by default: an instance nobody configured should stay usable
+    // while its first full scan runs. Off means "scan as fast as it can, whatever the UI feels like".
+    ("idlescan", true),
     // Auto-start the cross-origin handoff when a trusted peer origin has no local session.
     ("sso_auto_redirect", true),
     ("enablecors", false),

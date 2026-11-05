@@ -98,6 +98,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [archiveSplitSuggestionsEnabled, setArchiveSplitSuggestionsEnabled] = useState(settings.archive_split_suggestions_enabled)
   const [archiveSplitDeleteOriginalEnabled, setArchiveSplitDeleteOriginalEnabled] = useState(settings.archive_split_delete_original_enabled)
   const [guestmode, setGuestmode] = useState(settings.guestmode)
+  const [idlescan, setIdlescan] = useState(settings.idlescan)
   const [newbadgemode, setNewbadgemode] = useState(settings.newbadgemode)
   const [recommendprecision, setRecommendprecision] = useState(settings.recommendprecision)
   const [keyInput, setKeyInput] = useState("")
@@ -182,6 +183,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       archiveSplitSuggestionsEnabled !== settings.archive_split_suggestions_enabled ||
       archiveSplitDeleteOriginalEnabled !== settings.archive_split_delete_original_enabled ||
       guestmode !== settings.guestmode ||
+      idlescan !== settings.idlescan ||
       accessTokenLifetimeSecs !== settings.access_token_lifetime_secs ||
       refreshTokenLifetimeSecs !== settings.refresh_token_lifetime_secs ||
       refreshTokenIdleLifetimeSecs !== settings.refresh_token_idle_lifetime_secs ||
@@ -208,7 +210,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       htmltitle, language, pagesize, enableresize, sizethreshold, readerquality,
       localprogress, authprogress, stampautobookmark, stampautounbookmark, subfoldersToTankoubons,
       archiveSplitSuggestionsEnabled, archiveSplitDeleteOriginalEnabled,
-      guestmode, accessTokenLifetimeSecs,
+      guestmode, idlescan, accessTokenLifetimeSecs,
       refreshTokenLifetimeSecs, refreshTokenIdleLifetimeSecs, maxLoginDevices,
       trustedOrigins, ssoAutoRedirect, enablecors, tempmaxsize,
       recycleRetentionDays, recycleMaxSizeGb,
@@ -244,6 +246,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       archive_split_suggestions_enabled: archiveSplitSuggestionsEnabled,
       archive_split_delete_original_enabled: archiveSplitDeleteOriginalEnabled,
       guestmode,
+      idlescan,
       access_token_lifetime_secs: accessTokenLifetimeSecs,
       refresh_token_lifetime_secs: refreshTokenLifetimeSecs,
       refresh_token_idle_lifetime_secs: refreshTokenIdleLifetimeSecs,
@@ -571,7 +574,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
 
           <LlmUsageSection />
 
-          <WorkersSection />
+          <WorkersSection idlescan={idlescan} setIdlescan={setIdlescan} />
         </ul>
       </form>
 

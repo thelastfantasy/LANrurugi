@@ -6,12 +6,18 @@ import { CollapsibleSection } from "@/components/Display"
 import { routes } from "@/lib/routes"
 import { FONT_SIZE_SM } from "@/theme"
 
-import { ActionRow, Row } from "./shared"
+import { ActionRow, CheckboxRow, Row } from "./shared"
 
 /** Status only: the watcher recovers by itself (and scans for what it missed), so there is no
  * restart button; a library on a network share, whose changes may never raise events, is
  * covered by "Rescan archive directory". `/api/shinobu/restart` stays for legacy clients. */
-export function WorkersSection() {
+export function WorkersSection({
+  idlescan,
+  setIdlescan,
+}: {
+  idlescan: boolean
+  setIdlescan: (value: boolean) => void
+}) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const shinobuStatus = useShinobuStatus()
@@ -52,6 +58,16 @@ export function WorkersSection() {
             )}
             <br />
           </Row>
+          {/* Sits with the watcher because it governs the same thing: what the background is
+              allowed to do while somebody is using the instance. */}
+          <CheckboxRow
+            id="idlescan"
+            checked={idlescan}
+            onChange={setIdlescan}
+            label={t("settings.idleScan")}
+          >
+            {t("settings.idleScanDescription")}
+          </CheckboxRow>
           <ActionRow
             id="open-minion"
             label={t("settings.openJobConsole")}

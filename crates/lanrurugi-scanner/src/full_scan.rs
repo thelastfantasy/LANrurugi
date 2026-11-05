@@ -49,10 +49,43 @@ use crate::watcher::is_watched_archive_path;
 /// I/O and hashing genuine overlap (constitution Principle III, FR-022) instead of the serial
 /// one-file-at-a-time loop this function used to run.
 fn scan_concurrency() -> usize {
-    std::thread::available_parallelism()
+    // `available_parallelism() * 4` was the wrong default: ingest work is CPU-bound (decode, hash,
+    // thumbnail), so four tasks per core simply saturates the machine and starves the HTTP handlers
+    // sharing the process — a 1.1 TB library made `/api/info` take ~60 s on a 12-core box. Half the
+    // cores leaves the API real headroom, and `LANRURUGI_SCAN_CONCURRENCY` overrides it outright for
+    // operators who want the old behaviour (or a smaller number).
+    if let Ok(raw) = std::env::var("LANRURUGI_SCAN_CONCURRENCY") {
+        if let Ok(parsed) = raw.trim().parse::<usize>() {
+            if parsed > 0 {
+                return parsed;
+            }
+        }
+    }
+    (std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
-        * 4
+        / 2)
+    .max(2)
+}
+
+/// How long after an interactive request the scan keeps yielding, and how long it will yield before
+/// forcing progress regardless. The second is what keeps a polling UI (which always looks "busy")
+/// from pausing the scan forever.
+const IDLE_GRACE_MS: u64 = 3_000;
+const IDLE_FORCE_AFTER_MS: u64 = 300_000;
+
+/// Whether the `idlescan` setting is on. Read per file: one `HGET` next to an ingest that already
+/// does dozens of Redis round-trips, and it means a settings change takes effect without a restart.
+async fn idle_scan_enabled(config_pool: &Pool) -> bool {
+    let Ok(mut conn) = config_pool.get().await else {
+        return true;
+    };
+    conn.hget::<_, _, Option<String>>(lanrurugi_storage::keys::CONFIG_KEY, "idlescan")
+        .await
+        .ok()
+        .flatten()
+        .map(|value| value != "false" && value != "0")
+        .unwrap_or(true)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -101,6 +134,17 @@ pub async fn full_scan(
 ) -> ScanSummary {
     let mut paths = Vec::new();
     walk(library_path, &mut paths);
+    // Newest first. The library view is sorted by date added, so a first scan that starts at the
+    // oldest file leaves the user staring at an empty list until it reaches the end; starting with
+    // the most recently added archives puts what they just downloaded on screen first, and the old
+    // backlog fills in behind it. `Option<SystemTime>` orders `None` lowest, so unreadable mtimes
+    // end up last rather than first.
+    paths.sort_by_key(|path| {
+        std::fs::metadata(path)
+            .and_then(|meta| meta.modified())
+            .ok()
+            .map(std::cmp::Reverse)
+    });
     let mut summary = ScanSummary {
         scanned: paths.len(),
         ..Default::default()
@@ -152,6 +196,21 @@ pub async fn full_scan(
                 .acquire_owned()
                 .await
                 .expect("semaphore is never closed");
+            // Yield while somebody is using the instance. Bounded by `IDLE_FORCE_AFTER_MS` so a
+            // request stream that never goes idle cannot stall the scan indefinitely.
+            let mut waited = 0u64;
+            while idle_scan_enabled(&config_pool).await {
+                let now = lanrurugi_core::activity::now_ms();
+                if !lanrurugi_core::activity::request_within(now, IDLE_GRACE_MS) {
+                    break;
+                }
+                if waited >= IDLE_FORCE_AFTER_MS {
+                    tracing::warn!("full_scan: idle gate held too long, forcing progress");
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                waited += 500;
+            }
             let result = ingest_file(
                 &archives,
                 &config_pool,

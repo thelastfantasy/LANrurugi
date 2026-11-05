@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod concurrency;
 pub mod crypto;
 pub mod entities;

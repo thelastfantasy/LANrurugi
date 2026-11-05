@@ -2883,5 +2883,7 @@
   "stats.storageTreemapColorsByCategory": "colours follow the category",
   "settings.versionDialog.trackLabel": "Release track",
   "settings.versionDialog.trackDevValue": "{{track}} (dev build)",
-  "reader.rateThis": "Rate this work"
+  "reader.rateThis": "Rate this work",
+  "settings.idleScan": "Idle-time scanning",
+  "settings.idleScanDescription": "Pause scanning while somebody is using the instance and resume when it goes quiet; forces progress after 5 minutes without any."
 }
