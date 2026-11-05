@@ -2645,5 +2645,7 @@
   "pluginParameters.importCookiesResult": "Filled {{filled}} field(s); ignored {{ignored}} cookie(s).",
   "settings.versionDialog.trackLabel": "リリースチャンネル",
   "settings.versionDialog.trackDevValue": "{{track}}（開発ビルド）",
-  "reader.rateThis": "この作品を評価する"
+  "reader.rateThis": "この作品を評価する",
+  "settings.idleScan": "アイドル時スキャン",
+  "settings.idleScanDescription": "利用中はスキャンを一時停止し、空闲後に再開します。5 分間進展がない場合は強制的に進めます。"
 }

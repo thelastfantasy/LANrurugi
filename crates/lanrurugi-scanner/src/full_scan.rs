@@ -49,10 +49,80 @@ use crate::watcher::is_watched_archive_path;
 /// I/O and hashing genuine overlap (constitution Principle III, FR-022) instead of the serial
 /// one-file-at-a-time loop this function used to run.
 fn scan_concurrency() -> usize {
-    std::thread::available_parallelism()
+    // `available_parallelism() * 4` was the wrong default: ingest work is CPU-bound (decode, hash,
+    // thumbnail), so four tasks per core simply saturates the machine and starves the HTTP handlers
+    // sharing the process — a 1.1 TB library made `/api/info` take ~60 s on a 12-core box. Half the
+    // cores leaves the API real headroom, and `LANRURUGI_SCAN_CONCURRENCY` overrides it outright for
+    // operators who want the old behaviour (or a smaller number).
+    if let Ok(raw) = std::env::var("LANRURUGI_SCAN_CONCURRENCY") {
+        if let Ok(parsed) = raw.trim().parse::<usize>() {
+            if parsed > 0 {
+                return parsed;
+            }
+        }
+    }
+    (std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
-        * 4
+        / 2)
+    .max(2)
+}
+
+/// How long after an interactive request the scan keeps yielding.
+const IDLE_GRACE_MS: u64 = 3_000;
+/// Trickle that keeps a busy instance from stalling the scan forever: this many archives per minute
+/// get through even while somebody is reading or the machine is under pressure. A fixed floor rate
+/// rather than a timeout — a timeout makes progress bursty (nothing for minutes, then one) and, with
+/// N concurrent tasks, still only N files per timeout.
+const IDLE_FLOOR_PER_MINUTE: f64 = 2.0;
+
+/// Token bucket for [`IDLE_FLOOR_PER_MINUTE`], shared by every task in one scan.
+struct FloorRate {
+    tokens: f64,
+    last: std::time::Instant,
+}
+
+impl FloorRate {
+    fn new() -> Self {
+        Self {
+            tokens: 1.0,
+            last: std::time::Instant::now(),
+        }
+    }
+
+    /// Refill from elapsed time, then take one token if there is one.
+    fn try_take(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        let elapsed = now.duration_since(self.last).as_secs_f64();
+        self.last = now;
+        self.tokens = self.tokens.max(0.0) + elapsed * IDLE_FLOOR_PER_MINUTE / 60.0;
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn near_cap(&mut self) {
+        if self.tokens > 2.0 {
+            self.tokens = 2.0;
+        }
+    }
+}
+
+/// Whether the `idlescan` setting is on. Read per file: one `HGET` next to an ingest that already
+/// does dozens of Redis round-trips, and it means a settings change takes effect without a restart.
+async fn idle_scan_enabled(config_pool: &Pool) -> bool {
+    let Ok(mut conn) = config_pool.get().await else {
+        return true;
+    };
+    conn.hget::<_, _, Option<String>>(lanrurugi_storage::keys::CONFIG_KEY, "idlescan")
+        .await
+        .ok()
+        .flatten()
+        .map(|value| value != "false" && value != "0")
+        .unwrap_or(true)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -101,6 +171,17 @@ pub async fn full_scan(
 ) -> ScanSummary {
     let mut paths = Vec::new();
     walk(library_path, &mut paths);
+    // Newest first. The library view is sorted by date added, so a first scan that starts at the
+    // oldest file leaves the user staring at an empty list until it reaches the end; starting with
+    // the most recently added archives puts what they just downloaded on screen first, and the old
+    // backlog fills in behind it. `Option<SystemTime>` orders `None` lowest, so unreadable mtimes
+    // end up last rather than first.
+    paths.sort_by_key(|path| {
+        std::fs::metadata(path)
+            .and_then(|meta| meta.modified())
+            .ok()
+            .map(std::cmp::Reverse)
+    });
     let mut summary = ScanSummary {
         scanned: paths.len(),
         ..Default::default()
@@ -133,11 +214,13 @@ pub async fn full_scan(
 
     let total = paths.len().max(1);
     let semaphore = Arc::new(Semaphore::new(scan_concurrency()));
+    let floor = Arc::new(tokio::sync::Mutex::new(FloorRate::new()));
     let completed = Arc::new(AtomicUsize::new(0));
     let mut tasks = tokio::task::JoinSet::new();
 
     for path in paths {
         let semaphore = semaphore.clone();
+        let floor = floor.clone();
         let archives = archives.clone();
         let config_pool = config_pool.clone();
         let search_pool = search_pool.clone();
@@ -152,6 +235,27 @@ pub async fn full_scan(
                 .acquire_owned()
                 .await
                 .expect("semaphore is never closed");
+            // Yield while somebody is using the instance, or while the kernel reports the machine
+            // is stalling on I/O or CPU (which also covers scrubs, backups and other containers —
+            // the request beacon cannot see those). The floor rate guarantees progress either way.
+            while idle_scan_enabled(&config_pool).await {
+                let busy = lanrurugi_core::activity::request_within(
+                    lanrurugi_core::activity::now_ms(),
+                    IDLE_GRACE_MS,
+                ) || lanrurugi_core::activity::under_pressure();
+                if !busy {
+                    break;
+                }
+                let allowed = {
+                    let mut bucket = floor.lock().await;
+                    bucket.near_cap();
+                    bucket.try_take()
+                };
+                if allowed {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
             let result = ingest_file(
                 &archives,
                 &config_pool,

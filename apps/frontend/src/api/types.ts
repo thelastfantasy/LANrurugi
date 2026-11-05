@@ -140,6 +140,8 @@ export interface Settings {
   archive_split_delete_original_enabled: boolean
   /** Site-wide guest-mode master switch; see `Category.visible_to_guest` for the per-category half. */
   guestmode: boolean
+  /** Background scanning yields to interactive traffic (default on). */
+  idlescan: boolean
   enableresize: boolean
   enablewebp: boolean
   /** Generate thumbnail files as JPEG XL; non-JXL browsers fall back to on-demand WebP/JPEG. */

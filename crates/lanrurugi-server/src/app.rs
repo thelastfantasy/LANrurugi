@@ -86,6 +86,11 @@ pub fn build_app(
         .merge(lanrurugi_api::health::router().with_state(health_state))
         .merge(lanrurugi_api::opensearch::router().with_state(opensearch_state));
 
+    // The scanner reads this to decide whether it should be taking new work right now. Applied to
+    // the whole router, not just the API: a reader flipping pages only issues GETs, and the scan has
+    // to yield to those too (`lanrurugi_core::activity`).
+    router = router.layer(axum::middleware::from_fn(note_activity));
+
     if let Some(dir) = docs_dir {
         router = router.nest_service("/docs", ServeDir::new(dir));
     }
@@ -221,6 +226,16 @@ pub fn build_app(
 /// step can't complete: the file is missing/unreadable, or the Redis lookup fails/returns an
 /// unrecognized value. A broken index page would be far worse than one that occasionally still has
 /// to flash once.
+/// Marks the instance as "in use" for the background scanner's idle gate. Cheap on purpose: one
+/// relaxed atomic store per request, nothing allocated, no await point added to the request path.
+async fn note_activity(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    lanrurugi_core::activity::note_request();
+    next.run(request).await
+}
+
 async fn serve_index(
     state: AppState,
     dir: PathBuf,
