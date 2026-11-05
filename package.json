@@ -1,5 +1,6 @@
 {
 	"devDependencies": {
-		"@stylistic/eslint-plugin": "^5.10.0"
+		"@stylistic/eslint-plugin": "^5.10.0",
+		"wrangler": "^4.42.0"
 	}
 }
