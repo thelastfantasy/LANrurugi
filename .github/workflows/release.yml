@@ -74,13 +74,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The published image is ~6 GB of CUDA runtime plus ~8 GB of ORT/PDFium, built twice per
+      # architecture: the runner's 14 GB filled up mid-build and the job died with
+      # "No space left on device" *before the build even started* (2026-11-05, beta2). Dropping the
+      # preinstalled toolchains this job never uses is the cheapest 20 GB.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          df -h /
       - uses: docker/build-push-action@v7
         with:
           push: true
           platforms: linux/${{ matrix.arch }}
           # Registry cache, same rationale as `docker.yml` — the Actions cache's 10 GB budget is
           # shared with the Rust target cache, which every CI run needs.
-          cache-from: type=registry,ref=ghcr.io/thelastfantasy/lanrurugi:buildcache-release-${{ matrix.arch }}
+          cache-from: type=gha,scope=release-${{ matrix.arch }}
+          cache-to: type=gha,scope=release-${{ matrix.arch }},mode=max
           cache-to: type=registry,ref=ghcr.io/thelastfantasy/lanrurugi:buildcache-release-${{ matrix.arch }},mode=max
           provenance: false
           build-args: |
@@ -106,12 +116,22 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # The published image is ~6 GB of CUDA runtime plus ~8 GB of ORT/PDFium, built twice per
+      # architecture: the runner's 14 GB filled up mid-build and the job died with
+      # "No space left on device" *before the build even started* (2026-11-05, beta2). Dropping the
+      # preinstalled toolchains this job never uses is the cheapest 20 GB.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          df -h /
       - uses: docker/build-push-action@v7
         if: env.DOCKERHUB_IMAGE != '' && env.HAS_DOCKERHUB_TOKEN == 'true'
         with:
           push: true
           platforms: linux/${{ matrix.arch }}
-          cache-from: type=registry,ref=ghcr.io/thelastfantasy/lanrurugi:buildcache-release-${{ matrix.arch }}
+          cache-from: type=gha,scope=release-${{ matrix.arch }}
+          cache-to: type=gha,scope=release-${{ matrix.arch }},mode=max
           provenance: false
           build-args: |
             LANRURUGI_GIT_SHA=${{ steps.sha.outputs.short_sha }}
