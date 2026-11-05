@@ -68,11 +68,48 @@ fn scan_concurrency() -> usize {
     .max(2)
 }
 
-/// How long after an interactive request the scan keeps yielding, and how long it will yield before
-/// forcing progress regardless. The second is what keeps a polling UI (which always looks "busy")
-/// from pausing the scan forever.
+/// How long after an interactive request the scan keeps yielding.
 const IDLE_GRACE_MS: u64 = 3_000;
-const IDLE_FORCE_AFTER_MS: u64 = 300_000;
+/// Trickle that keeps a busy instance from stalling the scan forever: this many archives per minute
+/// get through even while somebody is reading or the machine is under pressure. A fixed floor rate
+/// rather than a timeout — a timeout makes progress bursty (nothing for minutes, then one) and, with
+/// N concurrent tasks, still only N files per timeout.
+const IDLE_FLOOR_PER_MINUTE: f64 = 2.0;
+
+/// Token bucket for [`IDLE_FLOOR_PER_MINUTE`], shared by every task in one scan.
+struct FloorRate {
+    tokens: f64,
+    last: std::time::Instant,
+}
+
+impl FloorRate {
+    fn new() -> Self {
+        Self {
+            tokens: 1.0,
+            last: std::time::Instant::now(),
+        }
+    }
+
+    /// Refill from elapsed time, then take one token if there is one.
+    fn try_take(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        let elapsed = now.duration_since(self.last).as_secs_f64();
+        self.last = now;
+        self.tokens = self.tokens.max(0.0) + elapsed * IDLE_FLOOR_PER_MINUTE / 60.0;
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn near_cap(&mut self) {
+        if self.tokens > 2.0 {
+            self.tokens = 2.0;
+        }
+    }
+}
 
 /// Whether the `idlescan` setting is on. Read per file: one `HGET` next to an ingest that already
 /// does dozens of Redis round-trips, and it means a settings change takes effect without a restart.
@@ -177,11 +214,13 @@ pub async fn full_scan(
 
     let total = paths.len().max(1);
     let semaphore = Arc::new(Semaphore::new(scan_concurrency()));
+    let floor = Arc::new(tokio::sync::Mutex::new(FloorRate::new()));
     let completed = Arc::new(AtomicUsize::new(0));
     let mut tasks = tokio::task::JoinSet::new();
 
     for path in paths {
         let semaphore = semaphore.clone();
+        let floor = floor.clone();
         let archives = archives.clone();
         let config_pool = config_pool.clone();
         let search_pool = search_pool.clone();
@@ -196,20 +235,26 @@ pub async fn full_scan(
                 .acquire_owned()
                 .await
                 .expect("semaphore is never closed");
-            // Yield while somebody is using the instance. Bounded by `IDLE_FORCE_AFTER_MS` so a
-            // request stream that never goes idle cannot stall the scan indefinitely.
-            let mut waited = 0u64;
+            // Yield while somebody is using the instance, or while the kernel reports the machine
+            // is stalling on I/O or CPU (which also covers scrubs, backups and other containers —
+            // the request beacon cannot see those). The floor rate guarantees progress either way.
             while idle_scan_enabled(&config_pool).await {
-                let now = lanrurugi_core::activity::now_ms();
-                if !lanrurugi_core::activity::request_within(now, IDLE_GRACE_MS) {
+                let busy = lanrurugi_core::activity::request_within(
+                    lanrurugi_core::activity::now_ms(),
+                    IDLE_GRACE_MS,
+                ) || lanrurugi_core::activity::under_pressure();
+                if !busy {
                     break;
                 }
-                if waited >= IDLE_FORCE_AFTER_MS {
-                    tracing::warn!("full_scan: idle gate held too long, forcing progress");
+                let allowed = {
+                    let mut bucket = floor.lock().await;
+                    bucket.near_cap();
+                    bucket.try_take()
+                };
+                if allowed {
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                waited += 500;
             }
             let result = ingest_file(
                 &archives,

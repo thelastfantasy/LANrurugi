@@ -59,10 +59,15 @@ environment:
   - LANRURUGI_SCAN_CONCURRENCY=2
 ```
 
-The scan also **yields to interactive traffic**: while a request arrived within the last 3 seconds it
-stops taking new work, and resumes once the requests stop. If it goes 5 minutes without progress it
-forces through, so a constantly-polling UI cannot pause it forever. That behaviour can be turned off
-in Settings → "Background workers" → "Idle-time scanning".
+The scan also **yields when the instance is busy**. It stops taking new work when either:
+
+- a request arrived within the last 3 seconds, or
+- the kernel reports I/O or CPU stalls — read from Linux's PSI (`/proc/pressure/{io,cpu}`), so a ZFS
+  scrub, a backup or a neighbour container competing for the disks makes it back off too. Systems
+  without PSI only use the request signal.
+
+It never stops completely: **2 archives per minute get through regardless** (a fixed floor rate,
+not a timeout). This can be turned off in Settings → "Background workers" → "Idle-time scanning".
 
 ## Deployment switches
 

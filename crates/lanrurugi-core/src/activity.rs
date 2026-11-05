@@ -34,3 +34,28 @@ pub fn request_within(now: u64, window_ms: u64) -> bool {
     let last = last_request_ms();
     last != 0 && now.saturating_sub(last) < window_ms
 }
+
+/// Kernel-reported stall time, as the percentage of the last 10 seconds in which at least one task
+/// was stalled on `kind` (`"io"` or `"cpu"`). Linux-only (PSI, kernel ≥ 4.20); `None` elsewhere or
+/// when the file is unreadable, which callers treat as "no pressure signal".
+///
+/// This is the honest answer to "is the machine busy": it is measured by the kernel across every
+/// process and container, so a ZFS scrub, a backup or a neighbour's container shows up here, while
+/// the request beacon above cannot see any of them.
+pub fn pressure_avg10(kind: &str) -> Option<f64> {
+    let text = std::fs::read_to_string(format!("/proc/pressure/{kind}")).ok()?;
+    let some = text.lines().find(|line| line.starts_with("some"))?;
+    let field = some.split_whitespace().find(|f| f.starts_with("avg10="))?;
+    field.trim_start_matches("avg10=").parse().ok()
+}
+
+/// Whether the machine is under enough CPU or I/O pressure that a background scan should stand
+/// aside. Thresholds are percentages of wall time stalled in the last 10 seconds: 10% I/O stall
+/// already means something is waiting on the disks, and 25% CPU stall means the scheduler is
+/// queueing work.
+pub fn under_pressure() -> bool {
+    const IO_STALL: f64 = 10.0;
+    const CPU_STALL: f64 = 25.0;
+    pressure_avg10("io").is_some_and(|v| v > IO_STALL)
+        || pressure_avg10("cpu").is_some_and(|v| v > CPU_STALL)
+}
