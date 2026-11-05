@@ -114,9 +114,13 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [enablecors, setEnablecors] = useState(settings.enablecors)
 
   // `?? 16`/`?? 3`: an older backend does not return these two fields at all, and a `NumberInput`
-  // with an `undefined` value renders empty. Same reason `thumbnailFormat` below is normalized.
-  const [logMaxFileMb, setLogMaxFileMb] = useState(settings.logmaxfilemb ?? 16)
-  const [logMaxFiles, setLogMaxFiles] = useState(settings.logmaxfiles ?? 3)
+  // with an `undefined` value renders empty. The same normalized values are what the dirty check
+  // below compares against — comparing a number against `undefined` would mark the form dirty on
+  // load and show the save bar before anything was touched (found live on a stale dev container).
+  const savedLogMaxFileMb = settings.logmaxfilemb ?? 16
+  const savedLogMaxFiles = settings.logmaxfiles ?? 3
+  const [logMaxFileMb, setLogMaxFileMb] = useState(savedLogMaxFileMb)
+  const [logMaxFiles, setLogMaxFiles] = useState(savedLogMaxFiles)
   const [recycleRetentionDays, setRecycleRetentionDays] = useState(settings.recycle_retention_days)
   const [recycleMaxSizeGb, setRecycleMaxSizeGb] = useState(settings.recycle_max_size_gb)
   const [tempmaxsize, setTempmaxsize] = useState(settings.tempmaxsize)
@@ -196,8 +200,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       ssoAutoRedirect !== settings.sso_auto_redirect ||
       enablecors !== settings.enablecors ||
       tempmaxsize !== settings.tempmaxsize ||
-      logMaxFileMb !== settings.logmaxfilemb ||
-      logMaxFiles !== settings.logmaxfiles ||
+      logMaxFileMb !== savedLogMaxFileMb ||
+      logMaxFiles !== savedLogMaxFiles ||
       recycleRetentionDays !== settings.recycle_retention_days ||
       recycleMaxSizeGb !== settings.recycle_max_size_gb ||
       replacedupe !== settings.replacedupe ||
