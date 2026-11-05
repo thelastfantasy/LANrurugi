@@ -165,6 +165,15 @@ pub async fn full_scan(
         scanned: paths.len(),
         ..Default::default()
     };
+    // Issue #206: a first scan of a 1.1 TB library takes hours, and the old code said nothing at
+    // all until it finished — impossible to tell "still working" from "stuck". This line lands
+    // before the first file is touched (the same moment the `startup_scan` job goes active), and
+    // the periodic one below gives a rate and an ETA.
+    tracing::info!(
+        found = paths.len(),
+        library = %library_path.display(),
+        "library scan: found files on disk, cataloguing the ones not yet in the library"
+    );
 
     // The cheap path-only pre-filter (see this module's own docs) — a single `HKEYS` plus
     // in-memory set operations, no file I/O. A Redis error here just disables the optimization
@@ -191,7 +200,11 @@ pub async fn full_scan(
         summary.already_known = before - paths.len();
     }
 
-    let total = paths.len().max(1);
+    let total_files = paths.len();
+    let total = total_files.max(1);
+    // ~5% steps, but never so fine that a small library logs a line per file.
+    let progress_every = (total_files / 20).max(25);
+    let started = std::time::Instant::now();
     // Bounding concurrency rather than spawning one task per file keeps this resource-conscious at
     // the SC-008 target scale (~100k files) while still overlapping files' I/O and hashing
     // (constitution Principle III, FR-022). See `lanrurugi_core::concurrency::scan_concurrency`.
@@ -251,6 +264,20 @@ pub async fn full_scan(
             .await;
             let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
             jobs.set_progress(&job_id, done as f32 / total as f32).await;
+            if done.is_multiple_of(progress_every) || done == total_files {
+                let elapsed = started.elapsed().as_secs_f64();
+                // Documents per second, not bytes: archive sizes differ by two orders of
+                // magnitude, so a byte-based ETA would swing wildly.
+                let rate = done as f64 / elapsed.max(0.001);
+                let eta = (total_files.saturating_sub(done)) as f64 / rate;
+                tracing::info!(
+                    done,
+                    total = total_files,
+                    elapsed_s = elapsed as u64,
+                    eta_s = eta as u64,
+                    "library scan progress"
+                );
+            }
             (path, result)
         });
     }

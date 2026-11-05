@@ -73,6 +73,11 @@ export function Login() {
         <form onSubmit={handleSubmit} name="loginForm" method="post" className="login-card">
           <h1 className="login-title">{t("app.adminLogin")}</h1>
           <p className="login-hint">{t("login.thisPageRequiresYouTo")}</p>
+          {/* Issue #206: a fresh instance used to open on a bare password box, so a first-time
+              admin had no way to learn that a default password exists or that a wizard follows.
+              Deliberately does not print the password itself — this page can be reached by anyone,
+              and the password belongs in the install docs, not in an unauthenticated page. */}
+          <p className="login-hint">{t("login.firstRunHint")}</p>
 
           <label className="login-label" htmlFor="pw_field">
             {t("login.adminPassword")}

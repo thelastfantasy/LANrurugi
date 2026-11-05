@@ -48,6 +48,8 @@ services:
       - ./data/database:/home/koyomi/lanrurugi/database
       # Local model for recommendations and tankoubon grouping, downloaded on first use; optional
       - ./data/models:/home/koyomi/lanrurugi/models
+      # Logs: rolled daily (or sooner when a file passes its size cap), a few files kept per category
+      - ./data/log:/log
     environment:
       # Set to true when served over HTTPS through a reverse proxy
       - LANRURUGI_FORCE_SECURE_COOKIES=false
@@ -69,6 +71,8 @@ services:
       - ./data/database:/home/koyomi/lanrurugi/database
       # Local model for recommendations and tankoubon grouping, downloaded on first use; optional
       - ./data/models:/home/koyomi/lanrurugi/models
+      # Logs: rolled daily (or sooner when a file passes its size cap), a few files kept per category
+      - ./data/log:/log
     environment:
       # Set to true when served over HTTPS through a reverse proxy
       - LANRURUGI_FORCE_SECURE_COOKIES=false

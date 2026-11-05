@@ -316,6 +316,8 @@ ENV LANRURUGI_THUMB_DIR=/home/koyomi/lanrurugi/thumb
 # working directory, i.e. the container's own writable layer, which a container recreate discards —
 # taking the resize/animation conversion cache (and upload staging) with it.
 ENV LANRURUGI_TEMP_DIR=/temp
+# Matches `compose.dev.yaml`'s `/log` volume (see the Dockerfile's own comment on this pair).
+ENV LANRURUGI_LOG_DIRECTORY=/log
 # The dev image compiles in release mode too, so `cfg!(debug_assertions)` can't tell it apart from a
 # production build — without this every dev instance reports itself as `production` in the tracker,
 # which makes two deployments indistinguishable there (2026-11-01).
