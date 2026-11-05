@@ -87,11 +87,12 @@ jobs:
         with:
           push: true
           platforms: linux/${{ matrix.arch }}
-          # Registry cache, same rationale as `docker.yml` — the Actions cache's 10 GB budget is
-          # shared with the Rust target cache, which every CI run needs.
+          # Actions cache, scoped per architecture, not `type=registry`: the registry cache image
+          # had to be rebuilt and pushed on every run, which is disk this runner does not have
+          # (the beta2 build died on it). Duplicate keys here are a hard workflow-file error —
+          # GitHub rejected the whole file and the run had zero jobs (2026-11-05).
           cache-from: type=gha,scope=release-${{ matrix.arch }}
           cache-to: type=gha,scope=release-${{ matrix.arch }},mode=max
-          cache-to: type=registry,ref=ghcr.io/thelastfantasy/lanrurugi:buildcache-release-${{ matrix.arch }},mode=max
           provenance: false
           build-args: |
             LANRURUGI_GIT_SHA=${{ steps.sha.outputs.short_sha }}
@@ -116,15 +117,9 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # The published image is ~6 GB of CUDA runtime plus ~8 GB of ORT/PDFium, built twice per
-      # architecture: the runner's 14 GB filled up mid-build and the job died with
-      # "No space left on device" *before the build even started* (2026-11-05, beta2). Dropping the
-      # preinstalled toolchains this job never uses is the cheapest 20 GB.
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
-          df -h /
+      # No second "Free disk space" step here: the one above already ran on this same runner,
+      # and this build only adds the handful of layers whose build-args differ (channel/target
+      # registry), so it starts from a disk that already has the freed 20 GB.
       - uses: docker/build-push-action@v7
         if: env.DOCKERHUB_IMAGE != '' && env.HAS_DOCKERHUB_TOKEN == 'true'
         with:
