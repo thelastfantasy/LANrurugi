@@ -1693,15 +1693,24 @@ main {
     text-box: none;
   }
 
+  /* A big picture stacked above the paragraph pushed the text down a whole screen. Float a smaller
+     one instead so the copy wraps around it: same "the mascot introduces the block" reading order,
+     without a column of empty space beside the text. */
   .ds-note {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 14px;
-    padding: 22px;
+    display: block;
+    padding: 20px;
   }
 
   .ds-mascot {
-    width: 80px;
+    float: left;
+    width: 64px;
+    margin: 2px 14px 6px 0;
+  }
+
+  .ds-text::after {
+    content: "";
+    display: block;
+    clear: both;
   }
 
   .topbar {
