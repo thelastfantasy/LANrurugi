@@ -83,12 +83,18 @@ jobs:
             export LIBCLANG_PATH="$(ls -d /usr/local/llvm*/lib 2>/dev/null | head -1)"
             echo "LIBCLANG_PATH=$LIBCLANG_PATH"
 
+            # One directory at a time: passing all three paths to a single `ls` makes it exit
+            # non-zero as soon as *any* of them is missing, so the test never matched even when the
+            # library existed (found by the debug workflow's own listing, 2026-11-05).
             link_flags=""
             for lib in lzma z bz2 lz4 zstd iconv; do
-              if ls /lib/lib${lib}.so* /usr/lib/lib${lib}.so* /usr/local/lib/lib${lib}.so* >/dev/null 2>&1; then
-                link_flags="$link_flags -C link-arg=-l${lib}"
-                echo "linking -l${lib}"
-              fi
+              for dir in /lib /usr/lib /usr/local/lib; do
+                if ls "$dir/lib${lib}.so"* >/dev/null 2>&1; then
+                  link_flags="$link_flags -C link-arg=-l${lib}"
+                  echo "linking -l${lib} from $dir"
+                  break
+                fi
+              done
             done
             export RUSTFLAGS="${link_flags} -C link-arg=-L/usr/local/lib -C link-arg=-L/lib"
             echo "RUSTFLAGS=$RUSTFLAGS"
