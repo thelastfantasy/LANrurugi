@@ -12,13 +12,14 @@
 
 name: CodeQL
 
+# Deliberately NOT on every pull request or `dev` push (2026-11-05): three analyzers, one of them
+# `rust`, took ~13 minutes per run and nothing gates on the result — the Security tab is read when
+# someone thinks to look. One scan of the release branch per week plus one on every merge to `main`
+# keeps that tab current at a fraction of the runner time; run it by hand from the Actions tab when
+# a security-relevant change lands on `dev`.
 on:
   push:
-    # Same branch set as `ci.yml`, plus the feature branch that currently holds the whole tree —
-    # that entry can go once #76 lands and `delete-branch-on-merge.yml` removes the branch.
-    branches: [main, dev, 001-lanrurugi-full-rewrite]
-  pull_request:
-    branches: [main, dev, 001-lanrurugi-full-rewrite]
+    branches: [main]
   schedule:
     # Weekly, Monday 03:17 UTC — off the hour so it isn't queued behind every other repo's cron.
     - cron: "17 3 * * 1"
