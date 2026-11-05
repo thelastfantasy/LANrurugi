@@ -25,10 +25,9 @@ fn scanner_config(state: &AppState) -> lanrurugi_scanner::handle::ScannerConfig 
     lanrurugi_scanner::handle::ScannerConfig {
         archive_dir: state.library.archive_dir.clone(),
         thumb_dir: state.library.thumb_dir.clone(),
-        config_pool: state.redis.config.clone(),
-        search_pool: state.redis.search.clone(),
+        // The scanner's own pools, never `state.redis.{config,search}` — issue #206.
+        pools: state.redis.scanner.clone(),
         equivalence: state.equivalence.clone(),
-        archives: (*state.repos.archives).clone(),
         new_archive_tx: Some(state.new_archive_tx.clone()),
         locks: state.filename_locks.clone(),
         jobs: state.jobs.clone(),

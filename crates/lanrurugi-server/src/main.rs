@@ -1033,10 +1033,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let config = lanrurugi_scanner::handle::ScannerConfig {
             archive_dir: args.library_path.clone(),
             thumb_dir: args.thumb_dir.clone(),
-            config_pool: redis.config.clone(),
-            search_pool: redis.search.clone(),
+            // The scanner's own pools, never `redis.{config,search}` — issue #206.
+            pools: redis.scanner.clone(),
             equivalence: state.equivalence.clone(),
-            archives: (*repos.archives).clone(),
             new_archive_tx: Some(new_archive_tx.clone()),
             locks: filename_locks.clone(),
             jobs: jobs.clone(),
@@ -1066,7 +1065,6 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     {
         let job_id = jobs.create("startup_scan").await;
         let jobs = jobs.clone();
-        let repos = repos.clone();
         let redis = redis.clone();
         let library_path = args.library_path.clone();
         let thumb_dir = args.thumb_dir.clone();
@@ -1076,9 +1074,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             jobs.mark_active(&job_id).await;
             let scan_summary = lanrurugi_scanner::full_scan::full_scan(
                 &library_path,
-                &repos.archives,
-                &redis.config,
-                &redis.search,
+                &redis.scanner,
                 equivalence.clone(),
                 &thumb_dir,
                 &jobs,
@@ -1093,7 +1089,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 errors = scan_summary.errors,
                 "startup scan complete"
             );
-            let heal_summary = lanrurugi_scanner::full_scan::heal_pagecounts(&repos.archives).await;
+            // Same pools as the scan above — this is background work, not a request.
+            let heal_summary =
+                lanrurugi_scanner::full_scan::heal_pagecounts(&redis.scanner.archives()).await;
             jobs.finish(
                 &job_id,
                 serde_json::json!({
@@ -1479,9 +1477,7 @@ async fn rebuild_index(args: RebuildIndexArgs) -> anyhow::Result<()> {
     let equivalence = std::sync::Arc::new(lanrurugi_search::Equivalence::default());
     let scan_summary = lanrurugi_scanner::full_scan::full_scan(
         &args.library_path,
-        &repos.archives,
-        &redis.config,
-        &redis.search,
+        &redis.scanner,
         equivalence.clone(),
         &args.thumb_dir,
         &jobs,

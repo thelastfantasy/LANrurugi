@@ -35,6 +35,7 @@ use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
 use lanrurugi_core::jobs::JobRegistry;
 use lanrurugi_search::Equivalence;
+use lanrurugi_storage::redis::ScannerPools;
 use lanrurugi_storage::repository::ArchiveRepository;
 use serde::Serialize;
 use tokio::sync::Semaphore;
@@ -43,30 +44,6 @@ use crate::events::IngestEvent;
 
 use crate::pipeline::{ingest_file, IngestOutcome, FILEMAP_KEY};
 use crate::watcher::is_watched_archive_path;
-
-/// Bounding concurrency rather than spawning one task per file unconditionally keeps this
-/// resource-conscious at the SC-008 target scale (~100k files) while still giving multiple files'
-/// I/O and hashing genuine overlap (constitution Principle III, FR-022) instead of the serial
-/// one-file-at-a-time loop this function used to run.
-fn scan_concurrency() -> usize {
-    // `available_parallelism() * 4` was the wrong default: ingest work is CPU-bound (decode, hash,
-    // thumbnail), so four tasks per core simply saturates the machine and starves the HTTP handlers
-    // sharing the process — a 1.1 TB library made `/api/info` take ~60 s on a 12-core box. Half the
-    // cores leaves the API real headroom, and `LANRURUGI_SCAN_CONCURRENCY` overrides it outright for
-    // operators who want the old behaviour (or a smaller number).
-    if let Ok(raw) = std::env::var("LANRURUGI_SCAN_CONCURRENCY") {
-        if let Ok(parsed) = raw.trim().parse::<usize>() {
-            if parsed > 0 {
-                return parsed;
-            }
-        }
-    }
-    (std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-        / 2)
-    .max(2)
-}
 
 /// How long after an interactive request the scan keeps yielding.
 const IDLE_GRACE_MS: u64 = 3_000;
@@ -157,18 +134,20 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
 /// as `pipeline::run`'s own parameter of the same name: `Catalogued` for a genuinely brand-new
 /// archive (never `Rekeyed`/`Unchanged`/`Rejected`; see that function's own docs for why), and
 /// `Failed` for a real error/timeout (or a panicked task, where the path is unknown).
-#[allow(clippy::too_many_arguments)]
 pub async fn full_scan(
     library_path: &Path,
-    archives: &ArchiveRepository,
-    config_pool: &Pool,
-    search_pool: &Pool,
+    pools: &ScannerPools,
     equivalence: Arc<Equivalence>,
     thumb_dir: &Path,
     jobs: &JobRegistry,
     job_id: &str,
     new_archive_tx: Option<tokio::sync::mpsc::UnboundedSender<IngestEvent>>,
 ) -> ScanSummary {
+    // Every write this scan makes goes through the scanner's own pools, so it queues behind other
+    // scan writes rather than behind (or in front of) the API's requests — issue #206.
+    let archives = pools.archives();
+    let config_pool = &pools.config;
+    let search_pool = &pools.search;
     let mut paths = Vec::new();
     walk(library_path, &mut paths);
     // Newest first. The library view is sorted by date added, so a first scan that starts at the
@@ -213,7 +192,12 @@ pub async fn full_scan(
     }
 
     let total = paths.len().max(1);
-    let semaphore = Arc::new(Semaphore::new(scan_concurrency()));
+    // Bounding concurrency rather than spawning one task per file keeps this resource-conscious at
+    // the SC-008 target scale (~100k files) while still overlapping files' I/O and hashing
+    // (constitution Principle III, FR-022). See `lanrurugi_core::concurrency::scan_concurrency`.
+    let semaphore = Arc::new(Semaphore::new(
+        lanrurugi_core::concurrency::scan_concurrency(),
+    ));
     let floor = Arc::new(tokio::sync::Mutex::new(FloorRate::new()));
     let completed = Arc::new(AtomicUsize::new(0));
     let mut tasks = tokio::task::JoinSet::new();
@@ -534,6 +518,20 @@ mod tests {
         Some((archive, config, search))
     }
 
+    /// A scan's pools, from the scratch pools these tests already hold — the scan only ever takes
+    /// `ScannerPools`, so a test cannot accidentally hand it a repository on the wrong pool.
+    fn scanner_pools(
+        archive: &deadpool_redis::Pool,
+        config: &deadpool_redis::Pool,
+        search: &deadpool_redis::Pool,
+    ) -> ScannerPools {
+        ScannerPools {
+            archive: archive.clone(),
+            config: config.clone(),
+            search: search.clone(),
+        }
+    }
+
     /// End-to-end demonstration of User Story 6: a historically false-merged pair (both files
     /// share a legacy-colliding leading byte range) is fully split apart by
     /// `rekey_all` (T074, re-keys the one tracked record) followed by `full_scan` (T074/T075,
@@ -547,6 +545,7 @@ mod tests {
             return;
         };
         let archives = ArchiveRepository::new(archive_pool.clone());
+        let pools = scanner_pools(&archive_pool, &config_pool, &search_pool);
         let dir = tempfile::tempdir().unwrap();
         let thumb_dir = tempfile::tempdir().unwrap();
 
@@ -623,9 +622,7 @@ mod tests {
         let scan_job_id = jobs.create("scan").await;
         let scan_summary = full_scan(
             dir.path(),
-            &archives,
-            &config_pool,
-            &search_pool,
+            &pools,
             std::sync::Arc::new(Equivalence::default()),
             thumb_dir.path(),
             &jobs,
@@ -681,6 +678,7 @@ mod tests {
             return;
         };
         let archives = ArchiveRepository::new(archive_pool.clone());
+        let pools = scanner_pools(&archive_pool, &config_pool, &search_pool);
         let dir = tempfile::tempdir().unwrap();
         let thumb_dir = tempfile::tempdir().unwrap();
 
@@ -700,9 +698,7 @@ mod tests {
         let job_id = jobs.create("scan").await;
         let scan_summary = full_scan(
             dir.path(),
-            &archives,
-            &config_pool,
-            &search_pool,
+            &pools,
             std::sync::Arc::new(Equivalence::default()),
             thumb_dir.path(),
             &jobs,
@@ -751,7 +747,7 @@ mod tests {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
         };
-        let archives = ArchiveRepository::new(archive_pool.clone());
+        let pools = scanner_pools(&archive_pool, &config_pool, &search_pool);
         let dir = tempfile::tempdir().unwrap();
         let thumb_dir = tempfile::tempdir().unwrap();
 
@@ -768,9 +764,7 @@ mod tests {
         let job_id = jobs.create("scan").await;
         full_scan(
             dir.path(),
-            &archives,
-            &config_pool,
-            &search_pool,
+            &pools,
             std::sync::Arc::new(Equivalence::default()),
             thumb_dir.path(),
             &jobs,

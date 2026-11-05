@@ -59,6 +59,10 @@ environment:
   - LANRURUGI_SCAN_CONCURRENCY=2
 ```
 
+The scan uses its **own Redis connection pools**, sized from the concurrency above, so even a very
+high setting cannot make an API request wait behind it for a connection — the other half of why
+pages used to take tens of seconds.
+
 The scan also **yields when the instance is busy**. It stops taking new work when either:
 
 - a request arrived within the last 3 seconds, or
