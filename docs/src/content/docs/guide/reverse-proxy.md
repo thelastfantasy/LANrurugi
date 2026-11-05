@@ -90,10 +90,9 @@ services:
     # 由 Traefik 对外提供服务时，不需要再发布 3000 端口
     volumes:
       - ./data/manga:/home/koyomi/lanrurugi/content
-      - ./data/thumb:/home/koyomi/lanrurugi/thumb
-      - ./data/database:/home/koyomi/lanrurugi/database
-      - ./data/models:/home/koyomi/lanrurugi/models
+      - ./data/lanrurugi:/data   # 缩略图 / Redis / 模型 / 日志
     environment:
+      - LANRURUGI_DATA_DIR=/data
       - LANRURUGI_FORCE_SECURE_COOKIES=true
     labels:
       - traefik.enable=true

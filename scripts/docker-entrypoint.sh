@@ -10,7 +10,33 @@
 # ungracefully (no AOF/RDB flush) on `docker stop` instead of shutting down cleanly first.
 set -e
 
-redis-server /etc/lanrurugi/redis.conf &
+# One directory for everything this instance persists (thumbnails, the bundled Redis, downloaded
+# models, rotating logs), so a deployment only has to mount the library plus one volume:
+#
+#   -v /srv/manga:/home/koyomi/lanrurugi/content
+#   -v /srv/lanrurugi-data:/data
+#   -e LANRURUGI_DATA_DIR=/data
+#
+# Unset keeps the per-path defaults the image has always used, which is what every existing
+# deployment's compose expects — changing those silently would write thumbnails and the database
+# into the container's writable layer, i.e. lose them on the next recreate. `--dir` on the Redis
+# command line (below) overrides the `dir` baked into redis.conf, which is the only one of these
+# paths that is not an environment variable on the server side.
+DATA_DIR="${LANRURUGI_DATA_DIR:-}"
+if [ -n "$DATA_DIR" ]; then
+  : "${LANRURUGI_THUMB_DIR:=$DATA_DIR/thumb}"
+  : "${LANRURUGI_LOG_DIRECTORY:=$DATA_DIR/log}"
+  : "${LANRURUGI_TEMP_DIR:=$DATA_DIR/temp}"
+  # The server derives the recommendation model directory from the thumbnail directory's parent,
+  # so `$DATA_DIR/models` follows from the line above without its own variable.
+  export LANRURUGI_THUMB_DIR LANRURUGI_LOG_DIRECTORY LANRURUGI_TEMP_DIR
+fi
+REDIS_DIR="${LANRURUGI_DATABASE_DIR:-${DATA_DIR:+$DATA_DIR/database}}"
+REDIS_DIR="${REDIS_DIR:-/home/koyomi/lanrurugi/database}"
+mkdir -p "$REDIS_DIR" "${LANRURUGI_THUMB_DIR:-/home/koyomi/lanrurugi/thumb}" \
+  "${LANRURUGI_LOG_DIRECTORY:-/log}" "${LANRURUGI_TEMP_DIR:-/temp}"
+
+redis-server /etc/lanrurugi/redis.conf --dir "$REDIS_DIR" &
 REDIS_PID=$!
 
 redis_ready=false

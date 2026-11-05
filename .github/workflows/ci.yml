@@ -150,6 +150,12 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
+      # Cheap, no build: catches the beta.1/beta.2 class of mistake at PR time — the release
+      # Dockerfile built and copied fewer binaries than Dockerfile.dev, so every shipped image was
+      # missing the embed and GPU workers. See the script's own header.
+      - name: release image binary parity
+        run: scripts/check-image-binaries.sh
+
       # PRs and `dev` merges: a compile-only check (`--all-targets` still covers every test and
       # bench target). `main`: the full lint gate, since that is the only place a lint can still
       # stop a release. The pre-commit hook runs clippy locally, so a warning usually never gets

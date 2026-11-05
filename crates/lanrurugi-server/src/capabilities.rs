@@ -51,6 +51,15 @@ fn loader_path_dirs() -> Vec<PathBuf> {
         .collect()
 }
 
+/// A binary the server spawns from its own directory (`lanrurugi-*-worker`), found the same way
+/// `embed_worker_client::worker_binary_path` does. Missing ones are a packaging mistake, not a
+/// platform limitation — the beta.1/beta.2 images shipped without two of them and nothing said so.
+fn sibling_binary(name: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let path = exe.parent()?.join(name);
+    path.is_file().then_some(path)
+}
+
 /// Logs what is available, and one warning naming every feature that is not.
 pub fn log_summary(deno_bin: &str) {
     let extra = loader_path_dirs();
@@ -73,6 +82,9 @@ pub fn log_summary(deno_bin: &str) {
     let ocr_model = lanrurugi_ocr::find_model_dir().ok();
     let inpaint_model = lanrurugi_inpaint::model_discovery::find_model_dir().ok();
     let bubble_model = lanrurugi_ocr::bubble_segment::model_discovery::find_model_dir().ok();
+    let book_worker = sibling_binary("lanrurugi-book-worker");
+    let embed_worker = sibling_binary("lanrurugi-embed-worker");
+    let gpu_worker = sibling_binary("lanrurugi-gpu-worker");
 
     let show = |found: &Option<PathBuf>| match found {
         Some(path) => path.display().to_string(),
@@ -86,6 +98,9 @@ pub fn log_summary(deno_bin: &str) {
         ocr_model = %show(&ocr_model),
         inpaint_model = %show(&inpaint_model),
         bubble_model = %show(&bubble_model),
+        book_worker = %show(&book_worker),
+        embed_worker = %show(&embed_worker),
+        gpu_worker = %show(&gpu_worker),
         // "bundled": no system CA certificates; HTTPS trusts the Mozilla roots in the binary.
         tls_roots = lanrurugi_core::http_client::root_source().as_str(),
         "optional components"
@@ -105,6 +120,22 @@ pub fn log_summary(deno_bin: &str) {
         unavailable.push("recommendations, OCR and translation (ONNX Runtime)");
     } else if ocr_model.is_none() || inpaint_model.is_none() {
         unavailable.push("translation (models not downloaded — run fetch-models.sh)");
+    }
+    // A missing worker is a packaging bug, never something an operator can fix from settings — and
+    // it fails silently everywhere else (each call site degrades to "no result"), so this warning
+    // is the only place it surfaces at all.
+    if book_worker.is_none() {
+        unavailable.push("e-books (lanrurugi-book-worker missing next to the server)");
+    }
+    if embed_worker.is_none() {
+        unavailable.push(
+            "recommendations and AI grouping (lanrurugi-embed-worker missing next to the server)",
+        );
+    }
+    if gpu_worker.is_none() {
+        unavailable.push(
+            "local translation, inpainting (lanrurugi-gpu-worker missing next to the server)",
+        );
     }
     if !unavailable.is_empty() {
         tracing::warn!(

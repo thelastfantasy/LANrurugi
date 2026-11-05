@@ -961,6 +961,29 @@ async fn ai_group_suggestions(
         }
     }
 
+    // Nothing could be vectorized at all — no cache hits and every `embed()` failed. That is an
+    // environment problem (the worker binary is missing from the image, or the model download
+    // failed), not "this library happens to have no same-series pairs", and the two must not look
+    // the same to a user staring at an empty list (beta.1/beta.2 shipped exactly that).
+    let scored_archives = ungrouped_ids
+        .iter()
+        .filter(|id| vectors_by_id.contains_key(*id))
+        .count();
+    if ungrouped_ids.len() >= MIN_GROUP_SIZE && scored_archives == 0 {
+        tracing::warn!(
+            candidates = ungrouped_ids.len(),
+            "ai_group_suggestions: no archive could be embedded; the local worker or model is unavailable"
+        );
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(json!({
+                "error": "embed_unavailable",
+                "message": "The local embedding worker or its model is unavailable, so titles cannot be compared.",
+            })),
+        )
+            .into_response();
+    }
+
     // The borrowed `&str`/`&[f32]` views `group_by_similarity` wants are built INSIDE the blocking
     // closure (not passed in from out here) — `spawn_blocking` requires a `'static` closure, and a
     // `HashMap<&str, _>` borrowing from `vectors_by_id`/`tags_by_id` can't satisfy that from the

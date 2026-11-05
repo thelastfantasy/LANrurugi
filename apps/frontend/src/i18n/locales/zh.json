@@ -2890,5 +2890,7 @@
   "settings.logMaxFileSize": "单个日志文件上限",
   "settings.logMaxFileSizeHelp": "一个分类的日志文件超过这个大小就立即滚动（单位 MB，默认 16），不用等到第二天。",
   "settings.logMaxFiles": "每个分类保留的日志文件数",
-  "settings.logMaxFilesHelp": "含正在写入的那一个（默认 3）。超出数量的最旧文件会被删除；滚动后的文件名为 general-20251105.log，同一天多次滚动再加 -2、-3。"
+  "settings.logMaxFilesHelp": "含正在写入的那一个（默认 3）。超出数量的最旧文件会被删除；滚动后的文件名为 general-20251105.log，同一天多次滚动再加 -2、-3。",
+  "library.aiGroupingUnavailable": "本地模型不可用",
+  "library.aiGroupingUnavailableHint": "AI 分组需要本地的 embedding 模型（推荐功能的那个）。它不在镜像里或还没下载完成，所以没法比较标题。修好之后这条功能会自己恢复。"
 }

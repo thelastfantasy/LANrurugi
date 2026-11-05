@@ -2890,5 +2890,7 @@
   "settings.logMaxFileSize": "Log file size limit",
   "settings.logMaxFileSizeHelp": "A category's log file rolls over as soon as it passes this size (MB, default 16) instead of waiting for the next day.",
   "settings.logMaxFiles": "Log files kept per category",
-  "settings.logMaxFilesHelp": "Including the one being written (default 3). Older files beyond that are deleted; rolled files are named general-20251105.log, with -2, -3 appended when a day rolls more than once."
+  "settings.logMaxFilesHelp": "Including the one being written (default 3). Older files beyond that are deleted; rolled files are named general-20251105.log, with -2, -3 appended when a day rolls more than once.",
+  "library.aiGroupingUnavailable": "Local model unavailable",
+  "library.aiGroupingUnavailableHint": "AI grouping needs the local embedding model (the one recommendations use). It is missing from the image or has not finished downloading, so titles cannot be compared. This recovers by itself once it is available."
 }
