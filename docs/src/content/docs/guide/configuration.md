@@ -54,6 +54,12 @@ Docker 用 `-e` 或 compose 的 `environment`。注意镜像的启动命令里�
 这两项也可以在 **设置 → 后台程序** 里改，改完下一次滚动就按新值来，不需要重启。优先级：
 设置页 > 环境变量 > 内置默认（环境变量只是部署时的默认值）。
 
+日志目录必须落在**某个持久化挂载**里。镜像默认写 `/log`（Dockerfile 里设了
+`LANRURUGI_LOG_DIRECTORY=/log`），所以 compose 要给它一个卷——单独挂 `./data/log:/log` 最简单；
+也可以把 `LANRURUGI_LOG_DIRECTORY` 指到已经挂好的目录下面（比如
+`/home/koyomi/lanrurugi/database/log`），这样不用多一个挂载点，代价是日志和 Redis 数据混在同一个
+卷里。**只有"写进容器可写层"的日志会在每次升级/重建容器时消失**——容器 stop/start 不会。
+
 `general.log` 是当前文件；跨天（本地时间）或超过大小上限时，它会被改名成
 `general-20251105.log`，同一天再滚一次就是 `general-20251105-2.log`，超出的最旧文件直接删除。
 所以每个类别最多 `LANRURUGI_LOG_MAX_FILES` 个文件，五个类别合计不超过

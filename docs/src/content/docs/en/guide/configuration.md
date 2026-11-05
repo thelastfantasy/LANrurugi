@@ -59,6 +59,14 @@ Both are also editable in **Settings → Background workers**; a saved change ap
 rollover, with no restart. Precedence: Settings, then the environment variables, then the built-in
 defaults (the environment is a deploy-time default only).
 
+The log directory has to live inside **something that survives the container**. The image writes to
+`/log` by default (`LANRURUGI_LOG_DIRECTORY=/log` in the Dockerfile), so compose has to give it a
+volume — mounting `./data/log:/log` is the simplest option. Alternatively point
+`LANRURUGI_LOG_DIRECTORY` at a directory inside an existing mount (for example
+`/home/koyomi/lanrurugi/database/log`): no extra mount point, at the cost of mixing logs into the
+Redis data volume. Only logs left in the container's writable layer are lost on every
+upgrade/recreate — a plain stop/start keeps them.
+
 `general.log` is the active file; when the day changes (local time) or the size cap is crossed it is
 renamed to `general-20251105.log`, or `general-20251105-2.log` if the same day rolls twice, and the
 oldest files beyond the limit are deleted. Each category therefore keeps at most
