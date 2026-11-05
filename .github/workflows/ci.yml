@@ -18,6 +18,12 @@ env:
 permissions:
   contents: read
 
+# A fix-up push to the same PR cancels its previous run instead of leaving it to finish; pushes to
+# `main`/`dev` are never cancelled (they are the record for that commit).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   rust:
     name: Rust (check, fmt, clippy, test)
@@ -114,8 +120,9 @@ jobs:
             sleep 1
           done
 
-      - name: cargo check
-        run: cargo check --workspace
+      # No separate `cargo check` step: `cargo clippy` below compiles the same graph and fails on
+      # the same errors while also applying the lint gate, so a check-then-clippy pair paid for the
+      # same compilation twice.
 
       # License gate (issue #108). The Chinese/Japanese text-normalization ecosystem contains
       # crates that would be legally incompatible with this MIT-licensed project — `zhconv`
@@ -152,14 +159,15 @@ jobs:
         # (`.mise.toml`'s own `[tasks.test]`) already carries this flag for the exact same reason
         # documented there — this step had drifted out of sync with it.
         #
-        # PRs run unit tests only. The workspace has 80+ integration-test binaries and linking them
-        # is where this job actually spends its time (a 2026-11-03 timing of the last successful
-        # dev run: 620s in `cargo test`, of which only 175s was test *execution* — the rest was
-        # compiling/linking those binaries). Every push to `dev` still runs the full suite (the
-        # branch trigger above), and `cargo clippy --all-targets` above still compiles/checks every
-        # integration target, so a PR cannot introduce an uncompilable test.
+        # The full suite runs on `main` only — every commit there arrived through a dev merge, so
+        # the release branch is the one place a complete integration pass actually protects
+        # something. PRs and `dev` merges run the unit subset: the workspace has 80+ integration
+        # binaries and linking them dominates this step (a 2026-11-03 timing: 620 s in `cargo test`,
+        # of which 175 s was execution). `cargo clippy --all-targets` above still compiles/checks
+        # every integration target, so neither a PR nor a dev merge can introduce an uncompilable
+        # test — the fast runs just skip executing them.
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ "${{ github.event_name }}" = "pull_request" ] || [ "${{ github.ref_name }}" = "dev" ]; then
             cargo test --workspace --no-fail-fast --lib --bins
           else
             cargo test --workspace --no-fail-fast

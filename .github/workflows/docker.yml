@@ -6,12 +6,29 @@ name: 'Push Docker Images'
 # upstream/trunk build can be told an update is actually available (not merely that a newer commit
 # exists on GitHub).
 
+# `edge` is no longer rebuilt for every merge into `dev` (2026-11-05): two full multi-arch image
+# builds on every push, neither of them a required check, was the single biggest consumer of runner
+# minutes here. It now rebuilds nightly from `dev` — or immediately when something that actually
+# shapes the image changes (Dockerfile, entrypoint, redis.conf, compose files, this workflow).
+#
+# Consequence worth knowing: `GET /api/version`'s "is the newest commit's image pullable" check
+# looks for this workflow's `amend-builds` run on that commit, so it now says "not yet pullable"
+# for most trunk commits until the next night. Tagged releases (`v*`) are unaffected — they build
+# their own images in release.yml.
 on:
   push:
-    # The default branch — so `edge` tracks the newest merged code, and the `amend-builds` check
-    # run lands on the same commits `GET /api/version` inspects (it reads `/commits?per_page=1`,
-    # i.e. the default branch). `main` keeps no image channel of its own; releases cover users.
     branches: [dev]
+    paths:
+      - "Dockerfile"
+      - "Dockerfile.dev"
+      - "scripts/docker-entrypoint.sh"
+      - "redis.conf"
+      - "compose.yaml"
+      - "compose.dev.yaml"
+      - ".github/workflows/docker.yml"
+  schedule:
+    # Nightly, 19:23 UTC — off the hour; `dev` is usually quiet then.
+    - cron: "23 19 * * *"
   workflow_dispatch:
 
 jobs:
