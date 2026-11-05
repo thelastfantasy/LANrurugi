@@ -284,7 +284,7 @@ jobs:
           usesh: true
           envs: 'BINARIES GITHUB_REF_NAME CMAKE_TOOLCHAIN_FILE LANRURUGI_RELEASE_TRACK'
           prepare: |
-            pkg install -y curl git bash cmake pkgconf nasm llvm libiconv \
+            pkg install -y curl git bash cmake pkgconf nasm llvm \
               redis deno djvulibre pdfium onnxruntime \
               noto-serif-sc noto-sans-sc
             # Best-effort: base already ships `liblz4.so`/`libzstd.so` (which is what the build
@@ -312,14 +312,11 @@ jobs:
             # that actually exists, so a base-only image and a ports-heavy one both link.
             link_flags=""
             for lib in lzma z bz2 lz4 zstd iconv; do
-              # FreeBSD keeps base libraries in /lib (libz.so.6, liblzma.so.6) and ports ones in
-              # /usr/local/lib; checking only /usr/lib matched nothing, so no `-l` was emitted.
-              if ls /lib/lib${lib}.so* /usr/lib/lib${lib}.so* /usr/local/lib/lib${lib}.so* >/dev/null 2>&1; then
+              if ls /usr/lib/lib${lib}.so* /usr/local/lib/lib${lib}.so* >/dev/null 2>&1; then
                 link_flags="$link_flags -C link-arg=-l${lib}"
-                echo "linking -l${lib}"
               fi
             done
-            export RUSTFLAGS="${link_flags} -C link-arg=-L/usr/local/lib -C link-arg=-L/lib"
+            export RUSTFLAGS="${link_flags} -C link-arg=-L/usr/local/lib"
             echo "RUSTFLAGS=$RUSTFLAGS"
             curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal \
               --default-toolchain "$(sed -n 's/^rust = { version = "\([^"]*\)".*/\1/p' .mise.toml)"
