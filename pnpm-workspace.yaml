@@ -14,3 +14,9 @@ allowBuilds:
   # Vue 2 or Vue 3 shim by detecting which one is installed; this workspace is Vue 3 only, so
   # allowing it is both safe and what makes the package resolve correctly.
   vue-demi: true
+
+# `eslint` 10 and `@typescript-eslint` still pin `minimatch@^10`, and the whole `<11.0.1` range
+# carries an unfixed ReDoS advisory (Dependabot, 2026-11-04). No upstream release moves it yet, so
+# it is forced here; 11.0.1 still ships the CommonJS entry point the lint tooling loads.
+overrides:
+  minimatch@<11.0.1: 11.0.1
