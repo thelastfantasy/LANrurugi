@@ -657,11 +657,11 @@ async fn run_rebuild_sequence(
         }
     };
 
+    // The scan half of the rebuild runs on the scanner's pools, not the request pools this
+    // handler is itself holding (issue #206).
     let scan_summary = lanrurugi_scanner::full_scan::full_scan(
         &state.library.archive_dir,
-        &repos.archives,
-        &state.redis.config,
-        &state.redis.search,
+        &state.redis.scanner,
         state.equivalence.clone(),
         &state.library.thumb_dir,
         jobs,

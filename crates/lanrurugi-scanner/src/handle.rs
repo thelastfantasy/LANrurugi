@@ -11,11 +11,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use deadpool_redis::Pool;
 use lanrurugi_core::filename_lock::FilenameLocks;
 use lanrurugi_core::jobs::JobRegistry;
 use lanrurugi_search::Equivalence;
-use lanrurugi_storage::repository::ArchiveRepository;
+use lanrurugi_storage::redis::ScannerPools;
 use serde::Serialize;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -27,10 +26,9 @@ use crate::watcher::WatcherSignal;
 pub struct ScannerConfig {
     pub archive_dir: PathBuf,
     pub thumb_dir: PathBuf,
-    pub config_pool: Pool,
-    pub search_pool: Pool,
+    /// The scanner's own pools (`RedisDbs::scanner`) — never the API's request pools (issue #206).
+    pub pools: ScannerPools,
     pub equivalence: Arc<Equivalence>,
-    pub archives: ArchiveRepository,
     pub new_archive_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::events::IngestEvent>>,
     pub locks: FilenameLocks,
     pub jobs: JobRegistry,
@@ -209,9 +207,9 @@ async fn watch_until_failure(
 ) -> String {
     let mut ingest = AbortOnDrop(tokio::spawn(crate::pipeline::run(
         rx,
-        config.archives.clone(),
-        config.config_pool.clone(),
-        config.search_pool.clone(),
+        config.pools.archives(),
+        config.pools.config.clone(),
+        config.pools.search.clone(),
         config.equivalence.clone(),
         config.thumb_dir.clone(),
         config.new_archive_tx.clone(),
@@ -249,9 +247,7 @@ async fn run_catch_up(config: &ScannerConfig, reason: &str) {
     config.jobs.mark_active(&job_id).await;
     let summary = crate::full_scan::full_scan(
         &config.archive_dir,
-        &config.archives,
-        &config.config_pool,
-        &config.search_pool,
+        &config.pools,
         config.equivalence.clone(),
         &config.thumb_dir,
         &config.jobs,
