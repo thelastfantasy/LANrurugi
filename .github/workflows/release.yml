@@ -284,7 +284,9 @@ jobs:
           usesh: true
           envs: 'BINARIES GITHUB_REF_NAME CMAKE_TOOLCHAIN_FILE LANRURUGI_RELEASE_TRACK'
           prepare: |
-            pkg install -y curl git bash cmake pkgconf nasm llvm \
+            # `llvm` for bindgen (`libarchive2-sys`); `libiconv` because base only provides
+            # `iconv_open`, while the static archive calls `libiconv_open`.
+            pkg install -y curl git bash cmake pkgconf nasm llvm libiconv \
               redis deno djvulibre pdfium onnxruntime \
               noto-serif-sc noto-sans-sc
             # Best-effort: base already ships `liblz4.so`/`libzstd.so` (which is what the build
@@ -310,13 +312,21 @@ jobs:
             # nothing tells the final link to pull in the libraries those filters call (the glibc
             # Linux runners resolve them implicitly; FreeBSD does not). Add one `-l` per library
             # that actually exists, so a base-only image and a ports-heavy one both link.
+            # One directory at a time: `ls a b c` exits non-zero as soon as *any* path is missing,
+            # so the old check never matched even when the library existed. Verified by the
+            # dedicated debug workflow (2026-11-05): all six are found — libz/libbz2/liblzma in
+            # /usr/lib, liblz4/libzstd/libiconv in /usr/local/lib.
             link_flags=""
             for lib in lzma z bz2 lz4 zstd iconv; do
-              if ls /usr/lib/lib${lib}.so* /usr/local/lib/lib${lib}.so* >/dev/null 2>&1; then
-                link_flags="$link_flags -C link-arg=-l${lib}"
-              fi
+              for dir in /lib /usr/lib /usr/local/lib; do
+                if ls "$dir/lib${lib}.so"* >/dev/null 2>&1; then
+                  link_flags="$link_flags -C link-arg=-l${lib}"
+                  echo "linking -l${lib} from $dir"
+                  break
+                fi
+              done
             done
-            export RUSTFLAGS="${link_flags} -C link-arg=-L/usr/local/lib"
+            export RUSTFLAGS="${link_flags} -C link-arg=-L/usr/local/lib -C link-arg=-L/lib"
             echo "RUSTFLAGS=$RUSTFLAGS"
             curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal \
               --default-toolchain "$(sed -n 's/^rust = { version = "\([^"]*\)".*/\1/p' .mise.toml)"
