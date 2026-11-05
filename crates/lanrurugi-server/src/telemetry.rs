@@ -30,7 +30,7 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::prelude::*;
@@ -133,23 +133,80 @@ fn categorize(target: &str) -> &'static str {
 
 /// When a category's active file is rolled over and how many files that category keeps in total.
 #[derive(Debug, Clone, Copy)]
-struct Rotation {
+pub struct Rotation {
     max_file_bytes: u64,
     /// Including the active `<category>.log`.
     keep_files: usize,
 }
 
 impl Rotation {
-    fn from_env() -> Self {
-        let mb = positive_env("LANRURUGI_LOG_MAX_FILE_MB").unwrap_or(DEFAULT_MAX_FILE_MB);
-        let keep_files = positive_env("LANRURUGI_LOG_MAX_FILES")
-            .map(|n| n as usize)
-            .unwrap_or(DEFAULT_MAX_FILES);
+    pub fn new(max_file_mb: u64, keep_files: usize) -> Self {
         Self {
-            max_file_bytes: mb.saturating_mul(1024 * 1024),
-            keep_files,
+            max_file_bytes: max_file_mb.max(1).saturating_mul(1024 * 1024),
+            keep_files: keep_files.max(1),
         }
     }
+
+    fn from_env() -> Self {
+        Self::new(
+            positive_env("LANRURUGI_LOG_MAX_FILE_MB").unwrap_or(DEFAULT_MAX_FILE_MB),
+            positive_env("LANRURUGI_LOG_MAX_FILES")
+                .map(|n| n as usize)
+                .unwrap_or(DEFAULT_MAX_FILES),
+        )
+    }
+}
+
+/// The limits the writer consults on every rollover. Installed from `Rotation::from_env` on first
+/// use, then replaced by [`configure_from_settings`] once `serve` has read the Settings page's
+/// values — so changing them there applies to the next rollover instead of needing a restart.
+static ROTATION: OnceLock<RwLock<Rotation>> = OnceLock::new();
+
+fn current_rotation() -> Rotation {
+    *ROTATION
+        .get_or_init(|| RwLock::new(Rotation::from_env()))
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Settings win over `LANRURUGI_LOG_MAX_FILE_MB`/`_MAX_FILES`, which win over the built-in
+/// defaults: the environment is a deploy-time default, the Settings page is the live answer.
+pub async fn configure_from_settings(redis: &lanrurugi_storage::redis::RedisDbs) {
+    use deadpool_redis::redis::AsyncCommands;
+    let mut rotation = Rotation::from_env();
+    let Ok(mut conn) = redis.config.get().await else {
+        set_rotation(rotation);
+        return;
+    };
+    let Ok(fields) = conn
+        .hgetall::<_, HashMap<String, String>>(lanrurugi_storage::keys::CONFIG_KEY)
+        .await
+    else {
+        set_rotation(rotation);
+        return;
+    };
+    if let Some(mb) = fields
+        .get("logmaxfilemb")
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+    {
+        rotation = Rotation::new(mb, rotation.keep_files);
+    }
+    if let Some(files) = fields
+        .get("logmaxfiles")
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+    {
+        rotation = Rotation::new(rotation.max_file_bytes / (1024 * 1024), files);
+    }
+    set_rotation(rotation);
+}
+
+fn set_rotation(rotation: Rotation) {
+    let lock = ROTATION.get_or_init(|| RwLock::new(rotation));
+    *lock
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = rotation;
 }
 
 fn local_date(at: std::time::SystemTime) -> chrono::NaiveDate {
@@ -173,21 +230,32 @@ struct CategoryFile {
 
 struct CategorizedMakeWriter {
     log_dir: PathBuf,
-    rotation: Rotation,
+    /// Tests pin the limits; production reads the process-wide ones on every decision.
+    fixed_rotation: Option<Rotation>,
     files: Mutex<HashMap<&'static str, Arc<CategoryFile>>>,
 }
 
 impl CategorizedMakeWriter {
     fn new(log_dir: PathBuf) -> Self {
-        Self::with_rotation(log_dir, Rotation::from_env())
+        Self {
+            log_dir,
+            fixed_rotation: None,
+            files: Mutex::new(HashMap::new()),
+        }
     }
 
+    /// Test-only: production goes through [`current_rotation`], which the Settings page updates.
+    #[cfg(test)]
     fn with_rotation(log_dir: PathBuf, rotation: Rotation) -> Self {
         Self {
             log_dir,
-            rotation,
+            fixed_rotation: Some(rotation),
             files: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn rotation(&self) -> Rotation {
+        self.fixed_rotation.unwrap_or_else(current_rotation)
     }
 
     fn active_path(&self, category: &str) -> PathBuf {
@@ -202,7 +270,7 @@ impl CategorizedMakeWriter {
         let today = chrono::Local::now().date_naive();
         if let Some(state) = files.get(category) {
             let new_day = state.day != today;
-            let too_big = state.bytes.load(Ordering::Relaxed) >= self.rotation.max_file_bytes;
+            let too_big = state.bytes.load(Ordering::Relaxed) >= self.rotation().max_file_bytes;
             if !new_day && !too_big {
                 return SharedFile {
                     state: state.clone(),
@@ -228,7 +296,7 @@ impl CategorizedMakeWriter {
             return false;
         };
         let day = meta.modified().ok().map(local_date).unwrap_or(today);
-        day == today && meta.len() < self.rotation.max_file_bytes
+        day == today && meta.len() < self.rotation().max_file_bytes
     }
 
     fn append_to(&self, category: &str, day: chrono::NaiveDate) -> CategoryFile {
@@ -288,7 +356,7 @@ impl CategorizedMakeWriter {
     /// Deletes this category's oldest rotated files so that the active one plus what remains fits
     /// in `keep_files`.
     fn prune(&self, category: &str) {
-        let keep = self.rotation.keep_files.saturating_sub(1);
+        let keep = self.rotation().keep_files.saturating_sub(1);
         let prefix = format!("{category}-");
         let Ok(entries) = std::fs::read_dir(&self.log_dir) else {
             return;

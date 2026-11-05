@@ -2648,5 +2648,9 @@
   "settings.versionDialog.trackDevValue": "{{track}}（開発ビルド）",
   "reader.rateThis": "この作品を評価する",
   "settings.idleScan": "アイドル時スキャン",
-  "settings.idleScanDescription": "利用中はスキャンを一時停止し、空闲後に再開します。5 分間進展がない場合は強制的に進めます。"
+  "settings.idleScanDescription": "利用中はスキャンを一時停止し、空闲後に再開します。5 分間進展がない場合は強制的に進めます。",
+  "settings.logMaxFileSize": "ログファイルのサイズ上限",
+  "settings.logMaxFileSizeHelp": "カテゴリのログファイルがこのサイズ（MB、既定 16）を超えると、翌日を待たずにローテーションします。",
+  "settings.logMaxFiles": "カテゴリごとに保持するログファイル数",
+  "settings.logMaxFilesHelp": "書き込み中のものを含みます（既定 3）。超えた分は古い順に削除されます。ローテーション後の名前は general-20251105.log、同日に複数回ローテーションすると -2、-3 が付きます。"
 }

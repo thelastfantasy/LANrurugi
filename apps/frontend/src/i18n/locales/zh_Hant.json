@@ -972,5 +972,9 @@
   "pluginParameters.importCookiesPlaceholder": "貼上你從站點手動複製的 document.cookie 字串（name=value; name2=value2）",
   "pluginParameters.importCookiesApply": "填入",
   "pluginParameters.importCookiesHint": "只會填入能對應到下方欄位的 cookie，其餘丟棄；填完記得點「儲存外掛設定」。",
-  "pluginParameters.importCookiesResult": "已填入 {{filled}} 項，忽略 {{ignored}} 項。"
+  "pluginParameters.importCookiesResult": "已填入 {{filled}} 項，忽略 {{ignored}} 項。",
+  "settings.logMaxFileSize": "單個日誌檔案上限",
+  "settings.logMaxFileSizeHelp": "一個分類的日誌檔案超過這個大小就立即滾動（單位 MB，預設 16），不用等到隔天。",
+  "settings.logMaxFiles": "每個分類保留的日誌檔案數",
+  "settings.logMaxFilesHelp": "含正在寫入的那一個（預設 3）。超出數量的最舊檔案會被刪除；滾動後的檔名為 general-20251105.log，同一天多次滾動再加 -2、-3。"
 }
