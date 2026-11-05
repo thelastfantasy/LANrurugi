@@ -158,11 +158,36 @@ listening on port 3000):
 podman compose up -d --build      # or: docker compose up -d --build
 ```
 
+## The first start scans the whole library
+
+On a fresh instance the first start opens **every archive** in the library (page tables, hashing,
+thumbnails). On a large library this takes a long time, and **the web UI is slow while it runs** —
+the background scan and foreground requests compete for the same resources, so one page load can
+take tens of seconds.
+
+To tell whether it is progressing, watch the counters in the logs:
+
+```sh
+docker compose logs -f | grep -c "failed to ingest"   # how many files failed
+docker compose logs -f | tail -5                       # which file is being processed
+```
+
+The scan is **one-off**: each archive is recorded once it has been processed, and later starts only
+look at new or changed files — already-known paths are skipped without touching the disk at all. To
+try the interface first, point the library at a small directory with a few archives, then switch to
+the full library once everything looks right.
+
+:::note[Do not assume it is broken]
+Pages taking tens of seconds to answer and `Redis error: timed out` in the logs are both symptoms of
+the scan saturating the machine, not data corruption. They stop once it finishes.
+:::
+
 ## First login
 
-The first visit opens the first-run wizard: change the admin password, add a DeepSeek API key for
-the AI features, and import a LANraragi backup. Every step can be skipped, and the wizard can be
-rerun from Settings later.
+The first-run wizard **only appears after you log in**: the first page you see is the login page, and
+the wizard opens once you sign in with the default password below (change the admin password, add a
+DeepSeek API key for the AI features, and import a LANraragi backup — every step can be skipped, and
+the wizard can be rerun from Settings later).
 
 A brand-new instance — or one migrated from an old installation whose password was never changed —
 uses LANraragi's own default administrator password, **`kamimamita`**.
