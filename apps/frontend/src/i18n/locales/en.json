@@ -2886,5 +2886,9 @@
   "settings.versionDialog.trackDevValue": "{{track}} (dev build)",
   "reader.rateThis": "Rate this work",
   "settings.idleScan": "Idle-time scanning",
-  "settings.idleScanDescription": "Pause scanning while somebody is using the instance and resume when it goes quiet; forces progress after 5 minutes without any."
+  "settings.idleScanDescription": "Pause scanning while somebody is using the instance and resume when it goes quiet; forces progress after 5 minutes without any.",
+  "settings.logMaxFileSize": "Log file size limit",
+  "settings.logMaxFileSizeHelp": "A category's log file rolls over as soon as it passes this size (MB, default 16) instead of waiting for the next day.",
+  "settings.logMaxFiles": "Log files kept per category",
+  "settings.logMaxFilesHelp": "Including the one being written (default 3). Older files beyond that are deleted; rolled files are named general-20251105.log, with -2, -3 appended when a day rolls more than once."
 }

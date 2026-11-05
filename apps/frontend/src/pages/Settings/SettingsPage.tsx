@@ -113,6 +113,10 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [ssoAutoRedirect, setSsoAutoRedirect] = useState(settings.sso_auto_redirect)
   const [enablecors, setEnablecors] = useState(settings.enablecors)
 
+  // `?? 16`/`?? 3`: an older backend does not return these two fields at all, and a `NumberInput`
+  // with an `undefined` value renders empty. Same reason `thumbnailFormat` below is normalized.
+  const [logMaxFileMb, setLogMaxFileMb] = useState(settings.logmaxfilemb ?? 16)
+  const [logMaxFiles, setLogMaxFiles] = useState(settings.logmaxfiles ?? 3)
   const [recycleRetentionDays, setRecycleRetentionDays] = useState(settings.recycle_retention_days)
   const [recycleMaxSizeGb, setRecycleMaxSizeGb] = useState(settings.recycle_max_size_gb)
   const [tempmaxsize, setTempmaxsize] = useState(settings.tempmaxsize)
@@ -192,6 +196,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       ssoAutoRedirect !== settings.sso_auto_redirect ||
       enablecors !== settings.enablecors ||
       tempmaxsize !== settings.tempmaxsize ||
+      logMaxFileMb !== settings.logmaxfilemb ||
+      logMaxFiles !== settings.logmaxfiles ||
       recycleRetentionDays !== settings.recycle_retention_days ||
       recycleMaxSizeGb !== settings.recycle_max_size_gb ||
       replacedupe !== settings.replacedupe ||
@@ -213,6 +219,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       guestmode, idlescan, accessTokenLifetimeSecs,
       refreshTokenLifetimeSecs, refreshTokenIdleLifetimeSecs, maxLoginDevices,
       trustedOrigins, ssoAutoRedirect, enablecors, tempmaxsize,
+      logMaxFileMb, logMaxFiles,
       recycleRetentionDays, recycleMaxSizeGb,
       replacedupe, savedThumbnailFormat, thumbnailFormat, webpquality, excludednamespaces, tagruleson,
       tagrules, usedateadded, usedatemodified, timezone, newbadgemode, recommendprecision,
@@ -255,6 +262,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       sso_auto_redirect: ssoAutoRedirect,
       enablecors,
       tempmaxsize,
+      logmaxfilemb: logMaxFileMb,
+      logmaxfiles: logMaxFiles,
       recycle_retention_days: recycleRetentionDays,
       recycle_max_size_gb: recycleMaxSizeGb,
       replacedupe,
@@ -574,7 +583,14 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
 
           <LlmUsageSection />
 
-          <WorkersSection idlescan={idlescan} setIdlescan={setIdlescan} />
+          <WorkersSection
+            idlescan={idlescan}
+            setIdlescan={setIdlescan}
+            logMaxFileMb={logMaxFileMb}
+            setLogMaxFileMb={setLogMaxFileMb}
+            logMaxFiles={logMaxFiles}
+            setLogMaxFiles={setLogMaxFiles}
+          />
         </ul>
       </form>
 

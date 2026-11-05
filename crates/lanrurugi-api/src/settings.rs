@@ -446,6 +446,11 @@ const NUMBER_FIELDS: &[(&str, i64)] = &[
     // specs/019 — the recycle bin's two bounds, enforced by `recycle::sweep`.
     ("recycle_retention_days", DEFAULT_RECYCLE_RETENTION_DAYS),
     ("recycle_max_size_gb", DEFAULT_RECYCLE_MAX_SIZE_GB),
+    // Log rotation (`lanrurugi_server::telemetry`): a category file rolls when it passes this many
+    // megabytes, and only this many files are kept per category (the active one included). Read
+    // once at startup and on every rollover decision, so a saved change applies without a restart.
+    ("logmaxfilemb", 16),
+    ("logmaxfiles", 3),
 ];
 
 const BOOL_FIELDS: &[(&str, bool)] = &[

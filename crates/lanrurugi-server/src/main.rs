@@ -334,6 +334,10 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     ));
 
     let redis = RedisDbs::connect(&args.redis_url)?;
+    // Log rotation limits live in Settings; the writer installed above consults them on its next
+    // rollover, so this has to happen before the first one. Failures leave the environment
+    // defaults in place — logging must never be the reason the server refuses to start.
+    telemetry::configure_from_settings(&redis).await;
     bootstrap(&redis, &args.library_path).await?;
     // Detached and best-effort: an unreachable sink must never delay or fail a startup.
     let heartbeat_options = lanrurugi_api::heartbeat::Options {
