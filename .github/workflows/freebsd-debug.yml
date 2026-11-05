@@ -1,0 +1,111 @@
+name: FreeBSD (debug)
+
+# A dedicated workflow for iterating on the FreeBSD package, extracted from `release.yml` so one
+# round trip is "assets + freebsd" instead of the whole release matrix (docker ×2, linux ×2, macOS,
+# docs). Manual only: it exists to get this one platform green, after which `release.yml` runs it
+# again as part of the atomic release.
+on:
+  workflow_dispatch:
+    inputs:
+      full_binaries:
+        description: 'Build all four binaries (default: only lanrurugi-server, for a faster loop)'
+        type: boolean
+        default: false
+      run_smoke:
+        description: 'Run the packaging smoke test (slow; off by default)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/packaging/libarchive-portable.cmake
+  LANRURUGI_BUILD_CHANNEL: native
+
+jobs:
+  assets:
+    name: frontend, docs, plugins
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+        with:
+          install: true
+          cache: true
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-assets
+      - name: Generate the API document
+        run: cargo run -p lanrurugi-api-docgen
+      - name: Build frontend, docs and plugin bundle
+        run: scripts/build-native-assets.sh native-assets
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-assets
+          path: native-assets
+          retention-days: 7
+
+  freebsd:
+    name: freebsd-x86_64
+    needs: assets
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: native-assets
+          path: native-assets
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          release: '14.3'
+          usesh: true
+          envs: 'CMAKE_TOOLCHAIN_FILE LANRURUGI_BUILD_CHANNEL FULL_BINARIES RUN_SMOKE'
+          prepare: |
+            pkg install -y curl git bash cmake pkgconf nasm llvm libiconv \
+              redis deno djvulibre pdfium onnxruntime \
+              noto-serif-sc noto-sans-sc
+            pkg install -y lz4 zstd || true
+          run: |
+            set -euxo pipefail
+            # What the linker can actually find, before any guessing: the previous failure was
+            # entirely "no library was passed", so this listing is the first thing to read.
+            ls -l /lib/libz.so* /lib/liblzma.so* /lib/libbz2.so* /lib/liblz4.so* /lib/libzstd.so* 2>/dev/null || true
+            ls -l /usr/lib/libz.so* /usr/lib/liblzma.so* /usr/lib/libbz2.so* 2>/dev/null || true
+            ls -l /usr/local/lib/libiconv.so* /usr/local/lib/liblz4.so* /usr/local/lib/libzstd.so* 2>/dev/null || true
+            pkg info -l llvm | grep -m3 libclang || true
+
+            export LIBCLANG_PATH="$(ls -d /usr/local/llvm*/lib 2>/dev/null | head -1)"
+            echo "LIBCLANG_PATH=$LIBCLANG_PATH"
+
+            link_flags=""
+            for lib in lzma z bz2 lz4 zstd iconv; do
+              if ls /lib/lib${lib}.so* /usr/lib/lib${lib}.so* /usr/local/lib/lib${lib}.so* >/dev/null 2>&1; then
+                link_flags="$link_flags -C link-arg=-l${lib}"
+                echo "linking -l${lib}"
+              fi
+            done
+            export RUSTFLAGS="${link_flags} -C link-arg=-L/usr/local/lib -C link-arg=-L/lib"
+            echo "RUSTFLAGS=$RUSTFLAGS"
+
+            curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal \
+              --default-toolchain "$(sed -n 's/^rust = { version = "\([^"]*\)".*/\1/p' .mise.toml)"
+            . "$HOME/.cargo/env"
+
+            if [ "${FULL_BINARIES:-false}" = "true" ]; then
+              binaries="-p lanrurugi-server -p lanrurugi-book-worker -p lanrurugi-embed-worker -p lanrurugi-gpu-worker"
+            else
+              binaries="-p lanrurugi-server"
+            fi
+            cargo build --release --locked $binaries
+            ldd target/release/lanrurugi-server || true
+
+            if [ "${RUN_SMOKE:-false}" = "true" ]; then
+              scripts/package-native.sh freebsd-x86_64 "${GITHUB_REF_NAME#v}" target/release native-assets dist
+              scripts/smoke-sample-library.sh smoke-library
+              SMOKE_EXPECT="pdfium onnxruntime djvulibre deno" SMOKE_LIBRARY=smoke-library SMOKE_STRICT=1 \
+                scripts/smoke-native.sh dist/*.tar.gz
+            fi
+        env:
+          FULL_BINARIES: ${{ inputs.full_binaries }}
+          RUN_SMOKE: ${{ inputs.run_smoke }}
