@@ -42,6 +42,8 @@ services:
       - ./data/database:/home/koyomi/lanrurugi/database
       # 推荐和单行本整理用的本地模型，首次用到时自动下载，非必需
       - ./data/models:/home/koyomi/lanrurugi/models
+      # 日志：按天（或超过单文件上限）滚动，每个分类保留有限个文件
+      - ./data/log:/log
     environment:
       # 经 HTTPS 反向代理访问时改为 true
       - LANRURUGI_FORCE_SECURE_COOKIES=false
@@ -63,6 +65,8 @@ services:
       - ./data/database:/home/koyomi/lanrurugi/database
       # 推荐和单行本整理用的本地模型，首次用到时自动下载，非必需
       - ./data/models:/home/koyomi/lanrurugi/models
+      # 日志：按天（或超过单文件上限）滚动，每个分类保留有限个文件
+      - ./data/log:/log
     environment:
       # 经 HTTPS 反向代理访问时改为 true
       - LANRURUGI_FORCE_SECURE_COOKIES=false

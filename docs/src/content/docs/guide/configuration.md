@@ -39,6 +39,23 @@ Docker 用 `-e` 或 compose 的 `environment`。注意镜像的启动命令里�
 
 原生安装包和 Docker 镜像会把最后两项自己填好，只有自己打包或想换位置时才需要设。
 
+### 日志
+
+日志默认**同时写 stderr 和文件**：按类别分成 `general` / `shinobu` / `plugins` / `redis` /
+`http` 五个文件（设置 → 日志页面读的就是这几个），镜像里落在挂载的 `/log` 目录。
+
+文件会自动滚动，不会随运行时间无限增长：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `LANRURUGI_LOG_MAX_FILE_MB` | `16` | 单个文件超过这个大小就立刻滚动，不必等到第二天 |
+| `LANRURUGI_LOG_MAX_FILES` | `3` | 每个类别保留几个文件（含当前正在写的那个） |
+
+`general.log` 是当前文件；跨天（本地时间）或超过大小上限时，它会被改名成
+`general-20251105.log`，同一天再滚一次就是 `general-20251105-2.log`，超出的最旧文件直接删除。
+所以每个类别最多 `LANRURUGI_LOG_MAX_FILES` 个文件，五个类别合计不超过
+`5 × LOG_MAX_FILES × LOG_MAX_FILE_MB`（默认约 240 MB）。
+
 ### 书库扫描
 
 | 变量 | 默认值 | 说明 |

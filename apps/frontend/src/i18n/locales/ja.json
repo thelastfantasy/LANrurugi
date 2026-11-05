@@ -573,6 +573,7 @@
   "This archive seems to be in RAR format!": "このアーカイブは RAR 形式のようです！",
   "This page allows you to search for potential duplicates in your library.": "このページでは、ライブラリ内の重複候補を検索できます。",
   "login.thisPageRequiresYouTo": "このページを表示するにはログインしてください。",
+  "login.firstRunHint": "初めてのデプロイですか？インストールガイドの既定パスワードでログインすると、初期設定を案内します。",
   "plugins.thisPluginDependsOnThe": "このプラグインはログインプラグインに依存しています",
   "This plugin will trigger on URLs matching this regex!": "このプラグインは、この正規表現に一致するURLで実行されます！",
   "batch.thisRemovesTheNewFlag": "選択したアーカイブの「新着」フラグを解除します。",
