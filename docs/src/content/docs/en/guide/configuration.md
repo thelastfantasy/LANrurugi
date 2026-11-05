@@ -42,6 +42,33 @@ for how to change the port.
 The native packages and the Docker image fill the last two themselves; set them only for your own
 packaging or to relocate the files.
 
+### Library scanning
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `LANRURUGI_SCAN_CONCURRENCY` | half the cores (minimum 2) | How many archives the first full scan processes at once |
+
+Scanning is CPU-heavy (decompress, hash, thumbnail). Too much concurrency saturates the machine and
+makes the web UI unusable — the old default was `cores × 4` (48 parallel tasks on 12 cores), which
+made a single page load take tens of seconds.
+
+Lower it when the library is large and you want to keep using the instance while it scans:
+
+```yaml
+environment:
+  - LANRURUGI_SCAN_CONCURRENCY=2
+```
+
+The scan also **yields when the instance is busy**. It stops taking new work when either:
+
+- a request arrived within the last 3 seconds, or
+- the kernel reports I/O or CPU stalls — read from Linux's PSI (`/proc/pressure/{io,cpu}`), so a ZFS
+  scrub, a backup or a neighbour container competing for the disks makes it back off too. Systems
+  without PSI only use the request signal.
+
+It never stops completely: **2 archives per minute get through regardless** (a fixed floor rate,
+not a timeout). This can be turned off in Settings → "Background workers" → "Idle-time scanning".
+
 ## Deployment switches
 
 | Variable | Default | Notes |

@@ -54,7 +54,11 @@ export function JobRow({
           </span>
         </td>
         <td>
-          <JobProgressBar job={job} color={STATE_COLOR[job.state]} />
+          {/* `inlineLabel`: the reading sits inside the bar instead of in a fixed 224px column
+              beside it. In a table cell that fixed column is what made the table wider than the
+              page (the header cell and the row overlapped, with a horizontal scrollbar under
+              them), because a table's min-content width counts every non-shrinkable piece. */}
+          <JobProgressBar job={job} color={STATE_COLOR[job.state]} inlineLabel />
         </td>
         <td
           style={{ textAlign: "center", cursor: "pointer" }}
