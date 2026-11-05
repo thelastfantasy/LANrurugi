@@ -355,6 +355,10 @@ ENV LANRURUGI_THUMB_DIR=/home/koyomi/lanrurugi/thumb
 # working directory, i.e. the container's own writable layer, which a container recreate discards —
 # taking the resize/animation conversion cache (and upload staging) with it.
 ENV LANRURUGI_TEMP_DIR=/temp
+# Same for the `/log` volume: `--log-dir` defaults to `./log`, and a container recreate would take
+# the category log files with it. Naming it here keeps the mount and the process in agreement even
+# if the image's working directory ever changes.
+ENV LANRURUGI_LOG_DIRECTORY=/log
 ENV LANRURUGI_REDIS_URL=redis://127.0.0.1:16379
 # The dashboard bundle `telemetry-ingest` serves at `/`; unset in a normal deployment, which never
 # runs that subcommand at all.

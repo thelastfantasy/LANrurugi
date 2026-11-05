@@ -42,6 +42,29 @@ for how to change the port.
 The native packages and the Docker image fill the last two themselves; set them only for your own
 packaging or to relocate the files.
 
+### Logs
+
+Logs go to **both stderr and files** by default, split by category into `general`, `shinobu`,
+`plugins`, `redis` and `http` (the five files behind Settings → Logs); in the image they land in the
+mounted `/log` directory.
+
+Files roll over, so they do not grow for the life of the instance:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `LANRURUGI_LOG_MAX_FILE_MB` | `16` | Roll as soon as one file passes this size, without waiting for the next day |
+| `LANRURUGI_LOG_MAX_FILES` | `3` | Files kept per category, including the one currently being written |
+
+Both are also editable in **Settings → Background workers**; a saved change applies to the next
+rollover, with no restart. Precedence: Settings, then the environment variables, then the built-in
+defaults (the environment is a deploy-time default only).
+
+`general.log` is the active file; when the day changes (local time) or the size cap is crossed it is
+renamed to `general-20251105.log`, or `general-20251105-2.log` if the same day rolls twice, and the
+oldest files beyond the limit are deleted. Each category therefore keeps at most
+`LANRURUGI_LOG_MAX_FILES` files, so all five together stay under
+`5 × LOG_MAX_FILES × LOG_MAX_FILE_MB` (about 240 MB by default).
+
 ### Library scanning
 
 | Variable | Default | Meaning |
@@ -58,6 +81,10 @@ Lower it when the library is large and you want to keep using the instance while
 environment:
   - LANRURUGI_SCAN_CONCURRENCY=2
 ```
+
+The scan uses its **own Redis connection pools**, sized from the concurrency above, so even a very
+high setting cannot make an API request wait behind it for a connection — the other half of why
+pages used to take tens of seconds.
 
 The scan also **yields when the instance is busy**. It stops taking new work when either:
 

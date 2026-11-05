@@ -42,6 +42,8 @@ services:
       - ./data/database:/home/koyomi/lanrurugi/database
       # 推荐和单行本整理用的本地模型，首次用到时自动下载，非必需
       - ./data/models:/home/koyomi/lanrurugi/models
+      # 日志：按天（或超过单文件上限）滚动，每个分类保留有限个文件
+      - ./data/log:/log
     environment:
       # 经 HTTPS 反向代理访问时改为 true
       - LANRURUGI_FORCE_SECURE_COOKIES=false
@@ -63,6 +65,8 @@ services:
       - ./data/database:/home/koyomi/lanrurugi/database
       # 推荐和单行本整理用的本地模型，首次用到时自动下载，非必需
       - ./data/models:/home/koyomi/lanrurugi/models
+      # 日志：按天（或超过单文件上限）滚动，每个分类保留有限个文件
+      - ./data/log:/log
     environment:
       # 经 HTTPS 反向代理访问时改为 true
       - LANRURUGI_FORCE_SECURE_COOKIES=false
@@ -148,10 +152,26 @@ compose 里对应写 `command`：
 podman compose up -d --build      # 或 docker compose up -d --build
 ```
 
+## 首次启动会全量扫描书库
+
+第一次启动时，LANrurugi 会把书库目录整个走一遍，**每个还没收录的档案都要打开一次**（解压、算哈希、
+生成缩略图）。所以：
+
+- 一次 1.1 TB / 6644 个档案的书库，首次扫描要跑几个小时
+- 扫描期间网页能打开，但会明显变慢——扫描是 CPU 密集的，默认只用一半核心、并且在有交互请求时让路
+- 日志里出现 `Redis error: timed out` 是扫描和交互请求在抢资源，不是书库或数据库损坏
+- 判断扫描在推进：设置 → 日志（`shinobu.log`）里会先有一行
+  `library scan: found files on disk ... found=N`，之后每约 5% 打一行 `done/total/elapsed/eta`；
+  设置 → 后台程序（`/jobs`）里 `startup_scan` 有实时进度条
+- **扫描是一次性的**：已经收录的档案不会被重扫，之后每次启动只补扫新增文件
+- 想先试跑：把书库指向一个小目录，确认收录和阅读都正常，再换成完整书库目录
+- 扫描忙时会让路（设置 →「后台程序」→「闲时扫描」，默认开）；关掉后它会一直占着机器往前扫
+
 ## 首次登录
 
-首次打开时会出现首次运行向导：修改管理员密码、填写 AI 功能用的 DeepSeek API 密钥、从 LANraragi 备份导入
-数据，每一步都可以跳过，之后也能在设置页面重新运行。
+**登录之后**才会出现首次运行向导（未登录时首页只有登录页——实例有没有初始化，只有登录后才会告诉你）：
+修改管理员密码、填写 AI 功能用的 DeepSeek API 密钥、从 LANraragi 备份导入数据。每一步都可以跳过，
+之后也能在设置页面重新运行。
 
 一个全新实例——或者从一个从未修改过密码的旧版安装迁移过来的实例——使用的是旧版 LANraragi 自身的默认
 管理员密码 **`kamimamita`**。

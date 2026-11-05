@@ -580,6 +580,7 @@
   "This option can potentially consume a lot of RAM if enabled and used on large images! Use with caution.": "啟用此選項並處理大圖片時，可能會大量占用記憶體！請小心使用。",
   "This page allows you to search for potential duplicates in your library.": "這個頁面可讓您在資料庫中搜尋潛在的重複檔案。",
   "login.thisPageRequiresYouTo": "此頁面需要您登入。",
+  "login.firstRunHint": "首次部署？用安裝文件裡的預設密碼登入，隨後會引導你完成初始設定。",
   "plugins.thisPluginDependsOnThe": "此外掛依賴於登入外掛",
   "This plugin recommends a cooldown of <span id=\"cooldown\">-1</span> seconds.": "此外掛建議的冷卻時間為 <span id=\"cooldown\">-1</span> 秒。",
   "This plugin will trigger on URLs matching this regex!": "當網址符合此正則表達式時會觸發此腳本！",
@@ -971,5 +972,9 @@
   "pluginParameters.importCookiesPlaceholder": "貼上你從站點手動複製的 document.cookie 字串（name=value; name2=value2）",
   "pluginParameters.importCookiesApply": "填入",
   "pluginParameters.importCookiesHint": "只會填入能對應到下方欄位的 cookie，其餘丟棄；填完記得點「儲存外掛設定」。",
-  "pluginParameters.importCookiesResult": "已填入 {{filled}} 項，忽略 {{ignored}} 項。"
+  "pluginParameters.importCookiesResult": "已填入 {{filled}} 項，忽略 {{ignored}} 項。",
+  "settings.logMaxFileSize": "單個日誌檔案上限",
+  "settings.logMaxFileSizeHelp": "一個分類的日誌檔案超過這個大小就立即滾動（單位 MB，預設 16），不用等到隔天。",
+  "settings.logMaxFiles": "每個分類保留的日誌檔案數",
+  "settings.logMaxFilesHelp": "含正在寫入的那一個（預設 3）。超出數量的最舊檔案會被刪除；滾動後的檔名為 general-20251105.log，同一天多次滾動再加 -2、-3。"
 }

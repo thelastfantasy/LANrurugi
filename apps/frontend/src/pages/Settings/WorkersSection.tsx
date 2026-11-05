@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
 import { useShinobuStatus } from "@/api/hooks"
+import { NumberInput } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
 import { routes } from "@/lib/routes"
 import { FONT_SIZE_SM } from "@/theme"
@@ -14,9 +15,17 @@ import { ActionRow, CheckboxRow, Row } from "./shared"
 export function WorkersSection({
   idlescan,
   setIdlescan,
+  logMaxFileMb,
+  setLogMaxFileMb,
+  logMaxFiles,
+  setLogMaxFiles,
 }: {
   idlescan: boolean
   setIdlescan: (value: boolean) => void
+  logMaxFileMb: number
+  setLogMaxFileMb: (value: number) => void
+  logMaxFiles: number
+  setLogMaxFiles: (value: number) => void
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -68,6 +77,29 @@ export function WorkersSection({
           >
             {t("settings.idleScanDescription")}
           </CheckboxRow>
+          {/* Log rotation is a background-worker concern too, and the files live under
+              `--log-dir`; these two values are read on the next rollover, so a save applies
+              without a restart. */}
+          <Row label={t("settings.logMaxFileSize")}>
+            <div style={{ display: "flex", justifyContent: "flex-start" }}>
+              <NumberInput
+                min={1}
+                value={logMaxFileMb}
+                onValueChange={(value) => setLogMaxFileMb(Math.max(1, Math.floor(value)))}
+              />
+            </div>
+            <p>{t("settings.logMaxFileSizeHelp")}</p>
+          </Row>
+          <Row label={t("settings.logMaxFiles")}>
+            <div style={{ display: "flex", justifyContent: "flex-start" }}>
+              <NumberInput
+                min={1}
+                value={logMaxFiles}
+                onValueChange={(value) => setLogMaxFiles(Math.max(1, Math.floor(value)))}
+              />
+            </div>
+            <p>{t("settings.logMaxFilesHelp")}</p>
+          </Row>
           <ActionRow
             id="open-minion"
             label={t("settings.openJobConsole")}

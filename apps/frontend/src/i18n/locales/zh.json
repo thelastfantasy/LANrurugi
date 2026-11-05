@@ -1109,6 +1109,7 @@
   "This option can potentially consume a lot of RAM if enabled and used on large images! Use with caution.": "如果启用并在大图像上使用，此选项可能会消耗大量内存！请谨慎使用。",
   "This page allows you to search for potential duplicates in your library.": "此界面可搜索库中潜在的重复项。",
   "login.thisPageRequiresYouTo": "此页面需要您登录。",
+  "login.firstRunHint": "首次部署？用安装文档里的默认密码登录，随后会引导你完成初始设置。",
   "plugins.thisPluginDependsOnThe": "此插件依赖登录插件",
   "plugins.generatedByWizard": "由 AI 插件向导生成",
   "plugins.exportAsZip": "导出为 .zip",
@@ -2885,5 +2886,9 @@
   "settings.versionDialog.trackDevValue": "{{track}}（开发版）",
   "reader.rateThis": "给这部作品评分",
   "settings.idleScan": "闲时扫描",
-  "settings.idleScanDescription": "有人在使用时暂停扫描，空闲后继续；连续 5 分钟没有进展会强制推进。"
+  "settings.idleScanDescription": "有人在使用时暂停扫描，空闲后继续；连续 5 分钟没有进展会强制推进。",
+  "settings.logMaxFileSize": "单个日志文件上限",
+  "settings.logMaxFileSizeHelp": "一个分类的日志文件超过这个大小就立即滚动（单位 MB，默认 16），不用等到第二天。",
+  "settings.logMaxFiles": "每个分类保留的日志文件数",
+  "settings.logMaxFilesHelp": "含正在写入的那一个（默认 3）。超出数量的最旧文件会被删除；滚动后的文件名为 general-20251105.log，同一天多次滚动再加 -2、-3。"
 }

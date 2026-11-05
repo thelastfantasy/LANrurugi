@@ -573,6 +573,7 @@
   "This archive seems to be in RAR format!": "このアーカイブは RAR 形式のようです！",
   "This page allows you to search for potential duplicates in your library.": "このページでは、ライブラリ内の重複候補を検索できます。",
   "login.thisPageRequiresYouTo": "このページを表示するにはログインしてください。",
+  "login.firstRunHint": "初めてのデプロイですか？インストールガイドの既定パスワードでログインすると、初期設定を案内します。",
   "plugins.thisPluginDependsOnThe": "このプラグインはログインプラグインに依存しています",
   "This plugin will trigger on URLs matching this regex!": "このプラグインは、この正規表現に一致するURLで実行されます！",
   "batch.thisRemovesTheNewFlag": "選択したアーカイブの「新着」フラグを解除します。",
@@ -2647,5 +2648,9 @@
   "settings.versionDialog.trackDevValue": "{{track}}（開発ビルド）",
   "reader.rateThis": "この作品を評価する",
   "settings.idleScan": "アイドル時スキャン",
-  "settings.idleScanDescription": "利用中はスキャンを一時停止し、空闲後に再開します。5 分間進展がない場合は強制的に進めます。"
+  "settings.idleScanDescription": "利用中はスキャンを一時停止し、空闲後に再開します。5 分間進展がない場合は強制的に進めます。",
+  "settings.logMaxFileSize": "ログファイルのサイズ上限",
+  "settings.logMaxFileSizeHelp": "カテゴリのログファイルがこのサイズ（MB、既定 16）を超えると、翌日を待たずにローテーションします。",
+  "settings.logMaxFiles": "カテゴリごとに保持するログファイル数",
+  "settings.logMaxFilesHelp": "書き込み中のものを含みます（既定 3）。超えた分は古い順に削除されます。ローテーション後の名前は general-20251105.log、同日に複数回ローテーションすると -2、-3 が付きます。"
 }

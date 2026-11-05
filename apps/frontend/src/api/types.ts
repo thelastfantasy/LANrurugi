@@ -102,6 +102,10 @@ export interface Settings {
   /** Days a finished download-queue entry is kept; `0` keeps them all. Swept hourly by the
    *  subscription scheduler. */
   download_queue_retention_days: number
+  /** Size cap for one category's active log file, in megabytes: past this it rolls over. */
+  logmaxfilemb: number
+  /** Files kept per log category, including the one currently being written. */
+  logmaxfiles: number
   /** How long a recycled archive stays recoverable; `0` keeps it forever. */
   recycle_retention_days: number
   /** Recycle-bin size cap in GiB; `0` means unlimited. */

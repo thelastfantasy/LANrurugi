@@ -18,6 +18,12 @@ env:
 permissions:
   contents: read
 
+# A fix-up push to the same PR cancels its previous run instead of leaving it to finish; pushes to
+# `main`/`dev` are never cancelled (they are the record for that commit).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   rust:
     name: Rust (check, fmt, clippy, test)
@@ -114,8 +120,9 @@ jobs:
             sleep 1
           done
 
-      - name: cargo check
-        run: cargo check --workspace
+      # No separate `cargo check` step: `cargo clippy` below compiles the same graph and fails on
+      # the same errors while also applying the lint gate, so a check-then-clippy pair paid for the
+      # same compilation twice.
 
       # License gate (issue #108). The Chinese/Japanese text-normalization ecosystem contains
       # crates that would be legally incompatible with this MIT-licensed project — `zhconv`
@@ -123,7 +130,10 @@ jobs:
       # search-equivalence evaluation. `deny.toml` allowlists permissive licenses only, so any
       # GPL/LGPL/AGPL dependency fails this step. `--all-features` (cargo-deny-action's default
       # `arguments`) is intentional: the optional OCR/inpaint/ONNX crates are checked too.
+      # Only on `main`: the lockfile a release ships is the one that matters, and this action
+      # spends minutes in its own container on every PR otherwise.
       - name: cargo deny (licenses)
+        if: github.ref == 'refs/heads/main'
         uses: EmbarkStudios/cargo-deny-action@v2
         # The job-level `RUSTC_WRAPPER=sccache` must not leak into this action's own Alpine
         # container (which has no sccache): `cargo metadata` would then fail with
@@ -140,7 +150,16 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
+      # PRs and `dev` merges: a compile-only check (`--all-targets` still covers every test and
+      # bench target). `main`: the full lint gate, since that is the only place a lint can still
+      # stop a release. The pre-commit hook runs clippy locally, so a warning usually never gets
+      # this far.
+      - name: cargo check
+        if: github.ref != 'refs/heads/main'
+        run: cargo check --workspace --all-targets
+
       - name: cargo clippy
+        if: github.ref == 'refs/heads/main'
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: cargo test
@@ -152,18 +171,14 @@ jobs:
         # (`.mise.toml`'s own `[tasks.test]`) already carries this flag for the exact same reason
         # documented there — this step had drifted out of sync with it.
         #
-        # PRs run unit tests only. The workspace has 80+ integration-test binaries and linking them
-        # is where this job actually spends its time (a 2026-11-03 timing of the last successful
-        # dev run: 620s in `cargo test`, of which only 175s was test *execution* — the rest was
-        # compiling/linking those binaries). Every push to `dev` still runs the full suite (the
-        # branch trigger above), and `cargo clippy --all-targets` above still compiles/checks every
-        # integration target, so a PR cannot introduce an uncompilable test.
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            cargo test --workspace --no-fail-fast --lib --bins
-          else
-            cargo test --workspace --no-fail-fast
-          fi
+        # The suite itself is the long half of this job (620 s on a warm cache: 175 s executing,
+        # the rest linking 80+ integration binaries) and it runs only where its result can still
+        # stop something — a push to `main`, i.e. the dev→main release merge. PRs and `dev` merges
+        # get check/fmt/clippy (~3 min), the same set the local pre-push hook enforces;
+        # `cargo clippy --all-targets` still compiles every test target, so a test that no longer
+        # builds fails before it can reach `main`.
+        if: github.ref == 'refs/heads/main'
+        run: cargo test --workspace --no-fail-fast
 
       - name: sccache stats
         if: always()
@@ -197,10 +212,18 @@ jobs:
       - name: eslint
         run: pnpm --filter lanrurugi-frontend run lint
 
-      - name: build (includes tsc type-check)
+      # Type-check on every push (seconds); the production bundle and the unit tests only on a
+      # `main` push, next to the Rust suite — see the `cargo test` step's own comment for why the
+      # long half of CI is parked at the release merge.
+      - name: tsc type-check
+        run: pnpm --filter lanrurugi-frontend exec tsc -b --force
+
+      - name: build (vite bundle)
+        if: github.ref == 'refs/heads/main'
         run: pnpm --filter lanrurugi-frontend run build
 
       - name: vitest (unit)
+        if: github.ref == 'refs/heads/main'
         run: pnpm --filter lanrurugi-frontend run test:unit
 
   # 011-api-docs-site. Split into generate and build on purpose rather than run as one job:
@@ -265,7 +288,10 @@ jobs:
     # the publish steps below additionally require those two to have passed, so nothing ships from a
     # commit whose tests failed.
     needs: [docs-generate, rust, frontend]
-    if: always() && needs.docs-generate.result == 'success'
+    # Publishing only ever happened on `main`; building the three sites on every PR was minutes of
+    # Astro/SDK/Swagger work for output nobody read. The `docs-generate` gate (required on `dev`
+    # too) still catches a route table the reference no longer matches.
+    if: always() && github.ref == 'refs/heads/main' && needs.docs-generate.result == 'success'
     # Job-level so the `if:` on the deploy step below can see it: a step's own `env` is not
     # available to that step's `if` condition, but the job-level `env` context is.
     env:

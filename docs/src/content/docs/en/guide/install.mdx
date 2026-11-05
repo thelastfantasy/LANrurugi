@@ -48,6 +48,8 @@ services:
       - ./data/database:/home/koyomi/lanrurugi/database
       # Local model for recommendations and tankoubon grouping, downloaded on first use; optional
       - ./data/models:/home/koyomi/lanrurugi/models
+      # Logs: rolled daily (or sooner when a file passes its size cap), a few files kept per category
+      - ./data/log:/log
     environment:
       # Set to true when served over HTTPS through a reverse proxy
       - LANRURUGI_FORCE_SECURE_COOKIES=false
@@ -69,6 +71,8 @@ services:
       - ./data/database:/home/koyomi/lanrurugi/database
       # Local model for recommendations and tankoubon grouping, downloaded on first use; optional
       - ./data/models:/home/koyomi/lanrurugi/models
+      # Logs: rolled daily (or sooner when a file passes its size cap), a few files kept per category
+      - ./data/log:/log
     environment:
       # Set to true when served over HTTPS through a reverse proxy
       - LANRURUGI_FORCE_SECURE_COOKIES=false
@@ -158,11 +162,32 @@ listening on port 3000):
 podman compose up -d --build      # or: docker compose up -d --build
 ```
 
+## The first start scans the whole library
+
+On its first start LANrurugi walks the entire library directory and **opens every archive it has not
+catalogued yet** (unpack, hash, thumbnail). So:
+
+- a 1.1 TB / 6,644-archive library takes hours to scan the first time
+- the web UI stays usable but is noticeably slower — scanning is CPU-bound, uses half the cores by
+  default, and steps aside while requests are being served
+- `Redis error: timed out` in the log means the scan is competing with interactive requests; it is
+  not a damaged archive or database
+- to see that it is making progress: Settings → Logs (`shinobu.log`) first gets
+  `library scan: found files on disk ... found=N`, then a `done/total/elapsed/eta` line about every
+  5%; Settings → Background workers (`/jobs`) shows a live progress bar for `startup_scan`
+- **the scan is one-off**: already-catalogued archives are never re-scanned, and later starts only
+  pick up new files
+- to try it out first, point the library at a small directory, confirm cataloguing and reading work,
+  then switch it to the full one
+- the scan yields while the instance is busy (Settings → "Background workers" → "Idle-time
+  scanning", on by default); turn that off and it will scan regardless
+
 ## First login
 
-The first visit opens the first-run wizard: change the admin password, add a DeepSeek API key for
-the AI features, and import a LANraragi backup. Every step can be skipped, and the wizard can be
-rerun from Settings later.
+The first-run wizard appears **after you log in** (an anonymous visitor only sees the login page —
+whether the instance has been initialised is something only a logged-in administrator is told):
+change the admin password, add a DeepSeek API key for the AI features, and import a LANraragi
+backup. Every step can be skipped, and the wizard can be rerun from Settings later.
 
 A brand-new instance — or one migrated from an old installation whose password was never changed —
 uses LANraragi's own default administrator password, **`kamimamita`**.
