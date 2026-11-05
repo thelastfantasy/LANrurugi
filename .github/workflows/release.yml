@@ -306,6 +306,18 @@ jobs:
               exit 1
             fi
             echo "LIBCLANG_PATH=$LIBCLANG_PATH"
+            # The bundled libarchive is static, and its optional codec filters stay enabled, but
+            # nothing tells the final link to pull in the libraries those filters call (the glibc
+            # Linux runners resolve them implicitly; FreeBSD does not). Add one `-l` per library
+            # that actually exists, so a base-only image and a ports-heavy one both link.
+            link_flags=""
+            for lib in lzma z bz2 lz4 zstd iconv; do
+              if ls /usr/lib/lib${lib}.so* /usr/local/lib/lib${lib}.so* >/dev/null 2>&1; then
+                link_flags="$link_flags -C link-arg=-l${lib}"
+              fi
+            done
+            export RUSTFLAGS="${link_flags} -C link-arg=-L/usr/local/lib"
+            echo "RUSTFLAGS=$RUSTFLAGS"
             curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal \
               --default-toolchain "$(sed -n 's/^rust = { version = "\([^"]*\)".*/\1/p' .mise.toml)"
             . "$HOME/.cargo/env"
