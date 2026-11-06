@@ -255,6 +255,12 @@ export function reportError(error: unknown, context?: Record<string, string>): v
   })
 }
 
+/** A handled, non-fatal condition worth seeing in the report window on its own (not just as a
+ * breadcrumb attached to some later error). */
+export function reportWarning(message: string, data?: Record<string, unknown>): void {
+  Sentry.captureMessage(message, { level: "warning", extra: data })
+}
+
 /** A breadcrumb for something worth knowing before an error, without an error of its own. */
 export function note(message: string, data?: Record<string, unknown>): void {
   Sentry.addBreadcrumb({ category: "app", level: "info", message, data })

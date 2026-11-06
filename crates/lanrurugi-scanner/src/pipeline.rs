@@ -362,10 +362,6 @@ pub async fn ingest_file_with_policy(
         }
     }
 
-    let _: () = config_conn
-        .hset(FILEMAP_KEY, &path_str, id.as_str())
-        .await?;
-
     let catalogue_settings = CatalogueSettings {
         thumb: crate::thumbnail::read_settings(&mut config_conn).await,
         date_added: read_date_added_settings(&mut config_conn).await,
@@ -382,6 +378,13 @@ pub async fn ingest_file_with_policy(
         catalogue_settings,
     )
     .await?;
+    // Only now: a mapping written before the catalogue step is what leaves a file "known" but
+    // recordless if that step fails or the process dies (89 files were in exactly that state on a
+    // real library). `full_scan` also repairs any such entry it finds, so this only has to stop
+    // creating new ones.
+    let _: () = config_conn
+        .hset(FILEMAP_KEY, &path_str, id.as_str())
+        .await?;
     Ok(IngestOutcome::Catalogued { id })
 }
 

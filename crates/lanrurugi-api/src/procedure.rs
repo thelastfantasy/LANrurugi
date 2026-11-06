@@ -246,6 +246,20 @@ fn route_forbidden_response() -> Response {
 /// `tower_http`/`axum`'s own framework-level request-lifecycle events, a different concern from
 /// this app-level identity audit trail).
 fn trace_request(request: &Request, auth: &AuthContext, allowed: bool) {
+    // Ingest endpoints are not user actions: the browser posts an envelope roughly every second
+    // while diagnostics capture is on, so a line per POST buries everything else in `general.log`
+    // (reported 2026-11-06 from a phone with the report window open). Kept at DEBUG so `RUST_LOG`
+    // can still bring it back.
+    const INGEST_PATHS: &[&str] = &["/diagnostics/envelope"];
+    if INGEST_PATHS.contains(&request.uri().path()) {
+        tracing::debug!(
+            method = %request.method(),
+            path = %request.uri().path(),
+            allowed,
+            "ingest request"
+        );
+        return;
+    }
     tracing::info!(
         method = %request.method(),
         path = %request.uri().path(),
