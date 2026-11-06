@@ -28,6 +28,7 @@
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -55,7 +56,12 @@ pub fn init(log_dir: Option<&Path>) {
     // Stderr, not stdout: `lanrurugi bench` prints its final JSON report to stdout, and log
     // lines interleaved into that same stream would corrupt it for any caller piping the
     // output into a JSON parser.
+    // Colours only when something is actually rendering them. `docker logs` and TrueNAS's own web
+    // shell are not TTYs, and `tracing-subscriber`'s default is "always colour", which is how those
+    // two ended up full of `\u{1b}[2m` … `\u{1b}[0m` around every field (an interactive `docker logs
+    // -f` from a real terminal still gets colours).
     let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(std::io::stderr().is_terminal())
         .with_writer(std::io::stderr)
         .with_filter(env_filter());
 
