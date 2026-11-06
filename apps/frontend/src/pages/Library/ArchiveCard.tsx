@@ -165,6 +165,12 @@ export function ArchiveCard({
           <img
             src={thumbFailed ? "/legacy/img/noThumb.png" : thumbSrc}
             alt={archive.title}
+            // A full page is ~170 thumbnails: `lazy` keeps the ones below the fold out of the
+            // browser's six-connections-per-host queue (which is what made the same cards always
+            // pop in last), and `async` decodes off the main thread so a large JPEG/WebP does not
+            // stall the ones after it.
+            loading="lazy"
+            decoding="async"
             style={thumbLoaded || thumbFailed ? undefined : { display: "none" }}
             onLoad={() => {
               loadedThumbs.add(thumbSrc)
