@@ -2467,3 +2467,40 @@ body div.ido {
 .selection-strip .carousel-slide {
   height: 100%;
 }
+
+/* The AI grouping drawer's compact pager uses the shared `NumberInput`, whose own stepper is
+   `../../components/common-ui/Form/NumberInput.tsx`'s absolutely-positioned pair; inside this pill
+   it would overlay the "/ total" label, so it stays hidden and the pill's ← → do the stepping.
+   The rest normalises `.stdinput`'s standalone-form sizing (`margin: 4px 1px 0`, `width: 80%`),
+   which made the number sit in a 12px box in Firefox inside this 26px pill. */
+.ai-pager .number-input-wrapper {
+  /* The component sets `display: inline-block` inline, which a plain stylesheet rule cannot beat. */
+  display: inline-flex !important;
+  align-items: stretch;
+  height: 100% !important;
+}
+
+.ai-pager input.ai-pager-number {
+  /* Sized by its own content rather than by a pixel guess: `field-sizing: content` tracks the
+     digits actually typed, so "1" and "1000" occupy exactly what they need. The `min-width` keeps
+     an emptied field from collapsing, and `ch` makes that minimum scale with the theme's font. */
+  field-sizing: content;
+  width: auto !important;
+  min-width: 2.5ch;
+  max-width: none !important;
+  flex: 0 0 auto;
+  height: 100% !important;
+  margin: 0 !important;
+  padding: 0 2px !important;
+  border-top: 0 !important;
+  border-bottom: 0 !important;
+  background: transparent !important;
+  text-align: center;
+  font: inherit;
+  box-sizing: border-box;
+}
+
+.ai-pager .number-input-stepper {
+  display: none !important;
+}
+}
