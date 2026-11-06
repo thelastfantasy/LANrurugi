@@ -772,6 +772,40 @@ struct AiGroupSuggestionsQuery {
     include_ignored: bool,
 }
 
+/// Persistent suggestions cache (config DB). One entry: the fingerprint it was computed for plus
+/// the exact payload the endpoint returned. There is no TTL — the fingerprint covers every input
+/// that can change the answer (candidate set, Tankoubon membership, grouping settings, dismissed
+/// pairs), so a stale entry is never read, and an unchanged library returns instantly.
+const SUGGESTIONS_CACHE_KEY: &str = "LANRURUGI_GROUP_SUGGESTIONS_CACHE";
+
+/// Everything that changes which suggestions come out, folded into one hash. Deliberately over-
+/// inclusive: a false miss costs a recompute, a false hit returns groups that no longer exist.
+fn suggestions_fingerprint(
+    ungrouped_ids: &[String],
+    tankoubons: &[lanrurugi_core::entities::Grouping],
+    ignored: &std::collections::HashSet<String>,
+    settings: &GroupingSettings,
+) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    let mut ids: Vec<&String> = ungrouped_ids.iter().collect();
+    ids.sort();
+    ids.hash(&mut hasher);
+    for tank in tankoubons {
+        tank.tankid.as_str().hash(&mut hasher);
+        let mut members: Vec<String> = tank.archives.iter().map(|a| a.to_string()).collect();
+        members.sort();
+        members.hash(&mut hasher);
+    }
+    let mut ignored_sorted: Vec<&String> = ignored.iter().collect();
+    ignored_sorted.sort();
+    ignored_sorted.hash(&mut hasher);
+    format!("{:?}", settings).hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
 async fn ai_group_suggestions(
     State(state): State<AppState>,
     Query(query): Query<AiGroupSuggestionsQuery>,
@@ -835,6 +869,40 @@ async fn ai_group_suggestions(
         || (ungrouped_ids.len() < MIN_GROUP_SIZE && existing_tankoubons.is_empty())
     {
         return axum::Json(json!({ "suggestions": Vec::<GroupSuggestion>::new() })).into_response();
+    }
+
+    // Everything the answer depends on, before the expensive part: an unchanged library and
+    // unchanged settings mean the previous list is still exact, however long ago it was computed.
+    let ignored_for_fingerprint = match state.ignored_group_suggestions.ignored_fingerprints().await
+    {
+        Ok(fps) => fps,
+        Err(e) => {
+            return error(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "ai_group_suggestions",
+                e.to_string(),
+            )
+        }
+    };
+    let fingerprint = suggestions_fingerprint(
+        &ungrouped_ids,
+        &existing_tankoubons,
+        &ignored_for_fingerprint,
+        &GroupingSettings::default(),
+    );
+    if let Ok(mut conn) = state.redis.config.get().await {
+        if let Ok(Some(raw)) = conn.get::<_, Option<String>>(SUGGESTIONS_CACHE_KEY).await {
+            if let Ok(cached) = serde_json::from_str::<serde_json::Value>(&raw) {
+                if cached.get("fingerprint").and_then(|v| v.as_str()) == Some(fingerprint.as_str())
+                {
+                    tracing::debug!("ai_group_suggestions: cache hit");
+                    return axum::Json(json!({
+                        "suggestions": cached.get("suggestions").cloned().unwrap_or_else(|| json!([])),
+                    }))
+                    .into_response();
+                }
+            }
+        }
     }
 
     // Title + tags for every ungrouped archive — tags come straight from the archive record
@@ -1098,7 +1166,13 @@ async fn ai_group_suggestions(
     )
     .await;
 
-    axum::Json(json!({ "suggestions": suggestions })).into_response()
+    let payload = json!({ "suggestions": suggestions });
+    if let Ok(mut conn) = state.redis.config.get().await {
+        let entry =
+            json!({ "fingerprint": fingerprint, "suggestions": payload["suggestions"].clone() });
+        let _: Result<(), _> = conn.set(SUGGESTIONS_CACHE_KEY, entry.to_string()).await;
+    }
+    axum::Json(payload).into_response()
 }
 
 /// Repository for the harness's labels and records, on the config pool.
