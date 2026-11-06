@@ -1007,3 +1007,45 @@ div.ido.share-closed p:last-child {
 .share-detail-actions .share-detail-save {
   margin-left: auto;
 }
+
+/* Settings → Sharing → LANrurugi 节点: one row per node string, and a separate box to add one.
+   Reading and editing the same long string in one place is what made it easy to delete by accident. */
+.share-node-list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.share-node-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.share-node-list .share-result-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.share-node-tag {
+  flex: 0 0 auto;
+  opacity: 0.7;
+  font-size: 0.9em;
+}
+
+.share-node-add {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.share-node-add .share-form-wide,
+.share-node-add > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}

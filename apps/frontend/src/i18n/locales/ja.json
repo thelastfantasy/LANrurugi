@@ -2677,5 +2677,10 @@
   "common.removeTag": "タグを削除",
   "share.settings.showAdvanced": "詳細オプションを表示",
   "share.nodes.relayTlsHint": "トンネル/リバースプロキシ方式は公開アドレス不要です。ドメインを本機の http://localhost:<ポート> に向けてください。",
-  "share.nodes.ownRelayHint": "インスタンス間は自前のノード鍵で暗号化されます（BT と同じく自己署名・公開鍵で検証、証明書は不要）。ここには借りたいノードだけを書きます。"
+  "share.nodes.ownRelayHint": "インスタンス間は自前のノード鍵で暗号化されます（BT と同じく自己署名・公開鍵で検証、証明書は不要）。ここには借りたいノードだけを書きます。",
+  "share.nodes.own": "このインスタンス",
+  "share.nodes.added": "追加済み",
+  "share.nodes.none": "追加されたノードはありません。",
+  "share.nodes.add": "追加",
+  "share.nodes.addPlaceholder": "lrrg-node:…@host:443"
 }

@@ -2915,5 +2915,10 @@
   "common.removeTag": "移除标签",
   "share.settings.showAdvanced": "显示高级选项",
   "share.nodes.relayTlsHint": "隧道/反代模式无需公网地址：把 <域名> 指向本机 http://localhost:<端口> 即可。",
-  "share.nodes.ownRelayHint": "实例之间本来就用自己的节点密钥加密（和 BT 一样：自签、按公钥校验、不需要任何证书），这里只需要填你想借助的节点。"
+  "share.nodes.ownRelayHint": "实例之间本来就用自己的节点密钥加密（和 BT 一样：自签、按公钥校验、不需要任何证书），这里只需要填你想借助的节点。",
+  "share.nodes.own": "本实例",
+  "share.nodes.added": "已添加",
+  "share.nodes.none": "还没有添加任何节点。",
+  "share.nodes.add": "添加",
+  "share.nodes.addPlaceholder": "lrrg-node:…@host:443"
 }

@@ -1002,5 +1002,10 @@
   "share.settings.showAdvanced": "顯示進階選項",
   "share.settings.defaultPermissionsHint": "至少選擇一項；新建分享預設使用這些權限。",
   "share.nodes.relayTlsHint": "隧道/反向代理模式無需公網位址：把 <網域> 指向本機 http://localhost:<連接埠> 即可。",
-  "share.nodes.ownRelayHint": "實例之間本來就用自己的節點密鑰加密（和 BT 一樣：自簽、依公鑰校驗、不需要任何憑證），這裡只需要填你想借助的節點。"
+  "share.nodes.ownRelayHint": "實例之間本來就用自己的節點密鑰加密（和 BT 一樣：自簽、依公鑰校驗、不需要任何憑證），這裡只需要填你想借助的節點。",
+  "share.nodes.own": "本實例",
+  "share.nodes.added": "已加入",
+  "share.nodes.none": "尚未加入任何節點。",
+  "share.nodes.add": "加入",
+  "share.nodes.addPlaceholder": "lrrg-node:…@host:443"
 }

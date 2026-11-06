@@ -4,7 +4,7 @@ import { type MouseEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Modal, Tooltip } from "@/components/common-ui/Display";
-import { Switch } from "@/components/common-ui/Form";
+import { Input, Switch } from "@/components/common-ui/Form";
 import { CollapsibleSection, DateTimeStack } from "@/components/Display";
 import { useSaveShareSettings, useShares, useShareSettings } from "@/share/api";
 import { copyWithToast } from "@/share/clipboard";
@@ -20,7 +20,6 @@ import {
   AltScheduleEditor,
   SharingEndpointStatus,
   SharingEndpointSummary,
-  SharingNodeString,
 } from "./SharingStatus";
 
 const DEFAULT_FIELDS: SettingField[] = [
@@ -104,16 +103,6 @@ const LIMIT_FIELDS: SettingField[] = [
     key: "share_import_concurrency",
     kind: "number",
     label: "share.limits.importConcurrency",
-  },
-];
-
-const NODE_FIELDS: SettingField[] = [
-  {
-    key: "share_nodes",
-    kind: "lines",
-    label: "share.nodes.list",
-    hint: true,
-    placeholder: "lrrg-node:…@host:443",
   },
 ];
 
@@ -340,6 +329,90 @@ function PanelBody({ panel }: { panel: Panel }) {
  * sense together for this app's own use (a node string carries both), and every other knob — port,
  * certificate mode, rate cap, allow-list, public URL — has a default that is right for that case, so
  * they live behind "advanced" instead of in front of it. */
+/** The node list and the "add one" box are deliberately two separate pieces: the list is read-only
+ *  rows with their own copy/remove buttons, so editing it never means editing a long string by
+ *  hand, and the add box never shows text that could be mistaken for the current value. */
+function SharingNodeList() {
+  const { t } = useTranslation();
+  const settings = useShareSettings();
+  const save = useSaveShareSettings();
+  const [draft, setDraft] = useState("");
+  const own = (
+    settings.data?.endpoint as { node_string?: string | null } | undefined
+  )?.node_string;
+  const added = String(settings.data?.share_nodes ?? "");
+  const rows = added
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const write = (next: string[]) =>
+    save.mutate({ share_nodes: next.join("\n") });
+
+  return (
+    <>
+      <ul className="share-node-list">
+        {own && (
+          <li>
+            <span className="share-node-tag">{t("share.nodes.own")}</span>
+            <code className="share-result-value">{own}</code>
+            <button
+              type="button"
+              className="stdbtn"
+              onClick={() =>
+                void copyWithToast(
+                  own,
+                  t("share.result.copied"),
+                  t("share.result.copyFailed"),
+                )
+              }
+            >
+              {t("share.result.copy")}
+            </button>
+          </li>
+        )}
+        {rows.map((line) => (
+          <li key={line}>
+            <span className="share-node-tag">{t("share.nodes.added")}</span>
+            <code className="share-result-value">{line}</code>
+            <button
+              type="button"
+              className="stdbtn"
+              disabled={save.isPending}
+              onClick={() => write(rows.filter((r) => r !== line))}
+            >
+              {t("common.remove")}
+            </button>
+          </li>
+        ))}
+        {!own && rows.length === 0 && (
+          <li className="share-result-note">{t("share.nodes.none")}</li>
+        )}
+      </ul>
+      <div className="share-node-add">
+        <Input
+          rows={2}
+          value={draft}
+          onValueChange={setDraft}
+          placeholder={t("share.nodes.addPlaceholder")}
+        />
+        <button
+          type="button"
+          className="stdbtn"
+          disabled={!draft.trim().startsWith("lrrg-node:") || save.isPending}
+          onClick={() => {
+            const line = draft.trim();
+            if (!rows.includes(line)) write([...rows, line]);
+            setDraft("");
+          }}
+        >
+          {t("share.nodes.add")}
+        </button>
+      </div>
+    </>
+  );
+}
+
 function SharingNodeBlock() {
   const { t } = useTranslation();
   const settings = useShareSettings();
@@ -365,16 +438,8 @@ function SharingNodeBlock() {
           aria-label={t("share.nodes.heading")}
         />
       </div>
-      {/* The string a friend adds to *their* "使用的节点" list: it is produced here, so the switch
-          has to exist for the field below it to be usable at all. Everything else (port,
-          certificate mode, rate cap, allow-list) runs on defaults. */}
-      {on && (
-        <div style={{ margin: "10px 0 0 22px" }}>
-          <SharingNodeString />
-        </div>
-      )}
       <div style={{ margin: "10px 0 0 22px" }}>
-        <ShareSettingsForm fields={NODE_FIELDS} />
+        <SharingNodeList />
       </div>
     </div>
   );
