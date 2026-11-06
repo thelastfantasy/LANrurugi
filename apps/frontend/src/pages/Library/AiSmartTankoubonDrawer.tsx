@@ -444,7 +444,15 @@ function SuggestionCard({
       </div>
 
       <DrawerFooter>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            flexWrap: "wrap",
+          }}
+        >
           {total <= MAX_PAGE_DOTS ? (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 4, maxWidth: "60%" }}>
               {Array.from({ length: total }, (_, i) => (
@@ -498,7 +506,7 @@ function SuggestionCard({
               </button>
             </div>
           )}
-          <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+          <div className="ai-footer-actions" style={{ display: "flex", gap: 8, flexShrink: 0 }}>
             <input
               type="button"
               className="stdbtn ai-pill-btn"
