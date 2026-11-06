@@ -42,7 +42,8 @@
    theme defines those on that class), and this compound selector — one step more specific — takes
    over the box model that made it collapse. */
 .lrrg-datetime-trigger.stdinput {
-  margin: 0;
+  /* `.stdinput`'s own margin, not zero: the trigger has to line up with every other field in a
+     form row (it sat flush while the fields beside it carried their 4px top margin). */
   max-width: none;
   /* Font size stays `.stdinput`'s own (8pt), so this matches every other field on the page — the
      wrapper's 0.9em is for its label, not for the control. */

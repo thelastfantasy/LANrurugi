@@ -160,7 +160,7 @@ export function ShareFieldsForm({
         <span>{t("share.form.daysOrUntil")}</span>
         <DateTimeField
           mode="date"
-          label={t("share.form.expiryDate")}
+          ariaLabel={t("share.form.expiryDate")}
           value={value.expiresAt === "" ? "" : localDateOf(value.expiresAt)}
           onChange={(v) => set({ expiresAt: v ? endOfLocalDay(v) : "" })}
           style={{ width: "auto" }}
