@@ -2361,6 +2361,20 @@ body div.ido {
 }
 
 
+/* Only on a phone: the drawer is full width there and the two actions sized themselves to their
+   own labels, which looked ragged next to the pager. Desktop keeps their natural width. */
+@media (max-width: 40rem) {
+  .ai-primary-action {
+    width: 118px;
+    flex-shrink: 0;
+  }
+
+  .ai-ignore-action {
+    width: 96px;
+    flex-shrink: 0;
+  }
+}
+
 /* The AI grouping drawer's footer mixes a custom pill with legacy `.stdbtn`s. `.stdbtn` carries
    `margin: 4px 1px 0` (its own 1px side inset plus a top offset for legacy's table rows), which
    pushed those buttons a couple of pixels below the `align-items: center` line and made the pager

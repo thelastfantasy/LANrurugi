@@ -511,19 +511,13 @@ function SuggestionCard({
           <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
             <input
               type="button"
-              className="stdbtn ai-pill-btn"
               value={t("library.donTSuggestThisAgain") ?? undefined}
               // Never wider than the primary action: a longer locale must not push the last
               // button off the row or make "don't suggest this again" the widest thing in it.
               // Same box as the primary action: 71px (its intrinsic width) was too tight for the
               // four characters, and "must not be wider than the other two" is satisfied by
               // matching the primary exactly.
-              style={{
-                flexShrink: 0,
-                whiteSpace: "nowrap",
-                width: IGNORE_ACTION_WIDTH,
-                boxSizing: "border-box",
-              }}
+              className="stdbtn ai-pill-btn ai-ignore-action"
               disabled={ignoreGroupSuggestion.isPending}
               onClick={() => void handleIgnore()}
             />
@@ -538,10 +532,9 @@ function SuggestionCard({
               return (
                 <button
                   type="button"
-                  className="stdbtn ai-checkable-btn"
                   disabled={!canConfirm}
                   onClick={() => void handleConfirm()}
-                  style={{ width: PRIMARY_ACTION_WIDTH, flexShrink: 0 }}
+                  className="stdbtn ai-checkable-btn ai-primary-action"
                 >
                   {/* Centred across the whole button, not just the space the toggle leaves: the
                       toggle is positioned absolutely so the label sits on the button's own centre
@@ -586,14 +579,6 @@ function SuggestionCard({
  *  instant; creating or ignoring a group drops it, and the explicit re-check button forces past it. */
 /** Above this many suggestions the footer shows one compact pager instead of one dot per card. */
 const MAX_PAGE_DOTS = 20
-
-/** Natural width of the primary action with its ✅ toggle present — the same box is rendered in
- *  both card states (toggle hidden, not removed), so this only has to be wide enough for the
- *  toggle case; the plain "add to Tankoubon" label then occupies exactly the same width. */
-const PRIMARY_ACTION_WIDTH = 118
-
-/** "Don't suggest this again": its own label plus breathing room, never wider than the primary. */
-const IGNORE_ACTION_WIDTH = 96
 
 const SUGGESTION_CACHE_TTL_MS = 10 * 60 * 1000
 let suggestionCache: { at: number; suggestions: AiGroupSuggestion[] } | null = null
