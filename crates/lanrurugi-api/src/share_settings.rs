@@ -34,7 +34,7 @@ const FIELDS: &[(&str, Kind, &str)] = &[
     ("share_pkarr_relays", Kind::Text, ""),
     ("share_node_rendezvous", Kind::Bool, "0"),
     ("share_node_relay", Kind::Bool, "0"),
-    ("share_node_relay_tls", Kind::Text, "acme"),
+    ("share_node_relay_tls", Kind::Text, "proxy"),
     ("share_node_relay_port", Kind::Port, "11205"),
     ("share_node_relay_cert", Kind::Text, ""),
     ("share_node_relay_key", Kind::Text, ""),

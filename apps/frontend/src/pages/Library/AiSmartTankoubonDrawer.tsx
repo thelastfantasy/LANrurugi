@@ -20,7 +20,7 @@ import {
   useUnignoreGroupSuggestion,
 } from "@/api/hooks"
 import { Drawer, DrawerFooter, Tooltip } from "@/components/common-ui/Display"
-import { IconButton } from "@/components/common-ui/Form"
+import { IconButton, NumberInput } from "@/components/common-ui/Form"
 import { AiSkeleton, ArchiveChecklistItem } from "@/components/Display"
 import { useHorizontalSwipe, useIsNarrowViewport } from "@/hooks"
 import { routes } from "@/lib/routes"
@@ -485,13 +485,12 @@ function SuggestionCard({
               >
                 <i className="fa fa-chevron-left" aria-hidden="true" />
               </button>
-              <input
-                type="number"
+              <NumberInput
+                className="ai-pager-number"
                 min={1}
                 max={total}
                 value={page + 1}
-                onChange={(e) => {
-                  const next = Number(e.target.value)
+                onValueChange={(next) => {
                   if (Number.isFinite(next) && next >= 1 && next <= total) onJump(next - 1)
                 }}
                 aria-label={t("library.groupSuggestionPage") ?? undefined}

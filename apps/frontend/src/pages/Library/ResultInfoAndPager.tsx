@@ -46,7 +46,8 @@ export function ResultInfoAndPager({
           end: rangeEnd,
           total: totalFiltered,
         })}
-        {totalRecords > totalFiltered && ` (filtered from ${totalRecords} total entries)`}
+        {totalRecords > totalFiltered &&
+          ` ${t("library.filteredFromTotalEntries", { total: totalRecords })}`}
       </div>
       <div style={{ textAlign: "center" }}>
         {pagingWindow(page, pageCount).map((p, i) =>

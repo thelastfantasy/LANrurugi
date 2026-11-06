@@ -360,6 +360,17 @@ div.ido.share-closed p:last-child {
   gap: 6px;
 }
 
+/* Scoped here on purpose (not `common-ui`): in this row the date trigger's empty state sits right
+   next to the days field's placeholder, and the generic 0.6-opacity treatment read as a different
+   colour rather than the same "nothing entered yet" grey. */
+.share-expiry .lrrg-datetime-trigger[data-empty="true"] .lrrg-datetime-value,
+.share-expiry
+  .lrrg-datetime-trigger:has(.lrrg-datetime-value:empty)
+  .lrrg-datetime-value {
+  color: graytext;
+  opacity: 1;
+}
+
 .share-dialog-tabs {
   display: flex;
   gap: 4px;
@@ -995,4 +1006,63 @@ div.ido.share-closed p:last-child {
 /* Save sits at the far end, apart from the code and revoke actions. */
 .share-detail-actions .share-detail-save {
   margin-left: auto;
+}
+
+/* Settings → Sharing → LANrurugi 节点. One grid for both the list and the add row, so the copy
+   button of a row and the "add" button line up in the same column, and the code column takes
+   whatever is left without pushing the button off. */
+/* Aligned with the title text of the panel row above (20px icon + 6px gap). */
+.share-node-body {
+  margin: 10px 0 0 26px;
+}
+
+.share-node-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.share-node-list li {
+  display: grid;
+  grid-template-columns: 4.5em minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.share-node-list .share-result-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+/* `.stdbtn` carries legacy's `min-width: 150px`, which is what pushed these buttons past the
+   container's right edge; the grid column sizes to the label instead. */
+.share-node-list .stdbtn,
+.share-node-add .stdbtn {
+  min-width: 0;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.share-node-tag {
+  opacity: 0.7;
+  font-size: 0.9em;
+  line-height: 1.4;
+}
+
+.share-node-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+}
+
+.share-node-add .stdinput,
+.share-node-add textarea {
+  width: 100%;
+  max-width: none;
+  margin: 0;
 }

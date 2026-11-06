@@ -48,12 +48,16 @@ export function parseLocal(value: string): Date | null {
 
 export function DateTimeField({
   label,
+  ariaLabel,
   value,
   onChange,
   mode = "datetime",
   style,
 }: {
   label?: string
+  /** Screen-reader name when no visible label is wanted — a form row that already labels the field
+   *  in its own left column should not get a second caption above the control. */
+  ariaLabel?: string
   /** `YYYY-MM-DD HH:MM` for `datetime`, `YYYY-MM-DD` for `date`. */
   value: string
   onChange: (next: string) => void
@@ -73,7 +77,7 @@ export function DateTimeField({
           ref={anchor}
           className="stdinput lrrg-datetime-trigger"
           style={{ width: "100%", ...style }}
-          aria-label={label ?? value ?? undefined}
+          aria-label={ariaLabel ?? label ?? value ?? undefined}
         >
           <span className="lrrg-datetime-value">{value || t("datetime.pickDate")}</span>
           <i className="far fa-calendar" aria-hidden="true" />

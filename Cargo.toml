@@ -162,7 +162,7 @@ maxminddb = "0.32"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 regex = "1.13"
-quick-xml = "0.38"
+quick-xml = "0.42"
 base64 = "0.23"
 memmap2 = "0.9"
 cosmic-text = "0.19"
@@ -181,7 +181,7 @@ ferrous-opencc = { version = "0.4", default-features = false, features = ["t2s-c
 # can't do that on its own. `chrono-tz` carries its own bundled tzdata (no system `tzdata` dep).
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 chrono-tz = "0.10"
-sysinfo = "0.33"
+sysinfo = "0.40"
 # `011-api-docs-site`: `syn` parses Rust source (never runs it) to recover the route table, since
 # axum's `Router` exposes no way to enumerate what was registered; `serde-saphyr` reads the vendored
 # upstream OpenAPI YAML and the hand-written sidecar fragments — chosen over the deprecated
