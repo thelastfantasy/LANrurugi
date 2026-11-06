@@ -360,6 +360,23 @@ div.ido.share-closed p:last-child {
   gap: 6px;
 }
 
+/* The days field is a `NullableNumberInput`, i.e. an `input.stdinput` inside a
+   `.number-input-wrapper`; the date field is a bare `input.stdinput` in the same row. `.stdinput`
+   carries `margin: 4px 1px 0`, which the wrapper turns into extra height above the input's own box
+   (inline-block doesn't collapse child margins), so the two controls sat a few pixels apart
+   vertically. Same box for both here: no margin, one explicit height, centred. */
+.share-expiry input.stdinput,
+.share-expiry .number-input-wrapper input {
+  margin: 0;
+  height: 24px;
+  box-sizing: border-box;
+}
+
+.share-expiry .number-input-wrapper {
+  display: inline-flex;
+  align-items: center;
+}
+
 .share-dialog-tabs {
   display: flex;
   gap: 4px;
