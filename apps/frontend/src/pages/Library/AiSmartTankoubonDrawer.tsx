@@ -22,7 +22,7 @@ import {
 import { Drawer, DrawerFooter, Tooltip } from "@/components/common-ui/Display"
 import { IconButton } from "@/components/common-ui/Form"
 import { AiSkeleton, ArchiveChecklistItem } from "@/components/Display"
-import { useHorizontalSwipe } from "@/hooks"
+import { useHorizontalSwipe, useIsNarrowViewport } from "@/hooks"
 import { routes } from "@/lib/routes"
 import { Z_OVERLAY_ABOVE_LEGACY_MODAL } from "@/theme"
 import { toast } from "@/toast"
@@ -207,6 +207,7 @@ function SuggestionCard({
   onJump: (page: number) => void
 }) {
   const { t } = useTranslation()
+  const narrow = useIsNarrowViewport()
   const createTankoubon = useCreateTankoubon()
   const ignoreGroupSuggestion = useIgnoreGroupSuggestion()
   const aiRenameTankoubon = useAiRenameTankoubon()
@@ -536,19 +537,30 @@ function SuggestionCard({
                   onClick={() => void handleConfirm()}
                   className="stdbtn ai-checkable-btn ai-primary-action"
                 >
-                  {/* Centred across the whole button, not just the space the toggle leaves: the
-                      toggle is positioned absolutely so the label sits on the button's own centre
-                      line in both states. */}
-                  <span style={{ flex: "0 1 auto", textAlign: "center", whiteSpace: "nowrap" }}>
+                  {/* A spacer matching the toggle's width keeps the label on the button's own
+                      centre line — without it the label shifted left by half the toggle. */}
+                  {/* Equal spacers either side of the label: the label sits on the button's centre
+                      line in both card states, and both states occupy exactly the same width — the
+                      right slot holds the ✅ toggle when there is one and stays empty otherwise. */}
+                  {narrow && <span aria-hidden="true" style={{ width: 35, flexShrink: 0 }} />}
+                  {/* Mobile only: `6em` fits the longer of the two labels, so the two card states
+                      cannot differ by a character. Desktop keeps its natural sizing. */}
+                  <span
+                    className="ai-primary-label"
+                    style={{ flex: "0 1 auto", whiteSpace: "nowrap" }}
+                  >
                     {isAddToExisting ? t("library.addToTankoubon") : t("library.createTankoubon")}
                   </span>
+                  <span
+                    style={
+                      narrow
+                        ? { width: 35, flexShrink: 0, display: "inline-flex", justifyContent: "center" }
+                        : { display: "inline-flex", flexShrink: 0 }
+                    }
+                  >
                   <Tooltip
                     label={t("library.autorenameAndReorderChaptersWith")}
-                    wrapperStyle={
-                      showToggle
-                        ? { display: "inline-flex", flexShrink: 0, marginLeft: 6 }
-                        : { display: "none" }
-                    }
+                    wrapperStyle={showToggle ? { display: "inline-flex" } : { display: "none" }}
                     zIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL}
                   >
                     <span className="ai-checkable-btn-toggle" onClick={(e) => e.stopPropagation()}>
@@ -563,6 +575,7 @@ function SuggestionCard({
                       </span>
                     </span>
                   </Tooltip>
+                  </span>
                 </button>
               )
             })()}

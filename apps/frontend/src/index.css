@@ -692,7 +692,11 @@ body:has([data-overlay="modal"]) {
   gap: 8px;
   border-radius: 999px;
   padding: 5px 12px;
-  height: auto;
+  /* The one change that applies everywhere: a fixed height, so the two button shapes ("create"
+     with its toggle, "add to Tankoubon" without) do not differ by a couple of pixels. Everything
+     else below is phone-only; desktop keeps legacy `.stdbtn`'s own sizing. */
+  height: 28px;
+  box-sizing: border-box;
   line-height: normal;
 }
 .ai-checkable-btn-toggle {
@@ -2346,23 +2350,23 @@ body div.ido {
 }
 
 
-/* Phone only — desktop keeps every button exactly as it was (legacy `.stdbtn` sizing, its 150px
-   min-width, its own margins). On a phone the drawer is full width and the actions sized
-   themselves to their own labels, which looked ragged next to the pager. */
+/* Phone only. Desktop keeps legacy `.stdbtn`'s own sizing, centring and margins; the only rule
+   that applies everywhere is the shared height above. */
 @media (max-width: 40rem) {
+  /* `.stdbtn`'s own 4px top margin and 150px floor are what made these buttons uneven here. */
   .ai-grouping-footer .stdbtn {
-    /* `.stdbtn`'s own 150px floor and 4px top margin are what made these buttons uneven here. */
-    min-width: 0;
     margin: 0;
-    height: 28px;
-    box-sizing: border-box;
+    min-width: 0;
     justify-content: center;
     text-align: center;
-    position: relative;
+  }
+
+  .ai-primary-label {
+    min-width: 6em;
+    text-align: center;
   }
 
   .ai-primary-action {
-    width: 118px;
     flex-shrink: 0;
   }
 
