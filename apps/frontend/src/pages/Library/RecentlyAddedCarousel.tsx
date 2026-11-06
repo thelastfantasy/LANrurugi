@@ -110,6 +110,10 @@ const CAROUSEL_MODE_ICON: Record<CarouselMode, IconType> = {
   bookmark: FaBookmark,
 }
 
+/** Height of the selection strip, and of the "nothing selected yet" hint that replaces it — equal
+ *  so entering/leaving the first selection does not shift the grid below. */
+const SELECTION_STRIP_HEIGHT = 148
+
 export function RecentlyAddedCarousel({
   filter,
   category,
@@ -462,31 +466,30 @@ export function RecentlyAddedCarousel({
             style={{ width: "100%", boxSizing: "border-box" }}
           >
             {selectedIds.length === 0 ? (
-              <div style={{ padding: "8px 0" }}>
-                <div
-                  className="id1"
-                  style={{ width: "100%", boxSizing: "border-box" }}
-                >
-                  <div className="id2"></div>
-                  <div
-                    className="id3"
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    <i className="fa fa-glasses fa-4x" aria-hidden="true"></i>
-                    <span style={{ marginTop: 12 }}>
-                      {t("library.clickArchivesToAddThem")}
-                    </span>
-                  </div>
-                  <div className="id4"></div>
-                </div>
+              // Same height as the strip below: this used to render legacy's thumbnail box
+              // (`div.id3` alone is 280px), so picking the *first* archive replaced a 330px block
+              // with a 140px strip and pushed the whole grid up — the "big repaint" reported when
+              // entering selection mode. A stable box means only its content changes.
+              <div
+                style={{
+                  padding: "8px 0",
+                  minHeight: SELECTION_STRIP_HEIGHT,
+                  boxSizing: "border-box",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                }}
+              >
+                <i className="fa fa-glasses fa-2x" aria-hidden="true"></i>
+                <span>{t("library.clickArchivesToAddThem")}</span>
               </div>
             ) : (
-              <div style={{ padding: "8px 0", position: "relative" }} ref={selectionListRef}>
+              <div
+                style={{ padding: "8px 0", position: "relative", minHeight: SELECTION_STRIP_HEIGHT }}
+                ref={selectionListRef}
+              >
                 <SortableList
                   items={selectedIds}
                   getId={(id) => id}
