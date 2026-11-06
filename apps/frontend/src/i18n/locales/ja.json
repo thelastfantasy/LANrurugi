@@ -2682,5 +2682,12 @@
   "share.nodes.added": "追加済み",
   "share.nodes.none": "追加されたノードはありません。",
   "share.nodes.add": "追加",
-  "share.nodes.addPlaceholder": "lrrg-node:…@host:443"
+  "share.nodes.addPlaceholder": "lrrg-node:…@host:443",
+  "share.settings.statusHint.active": "閲覧・閲覧（オンライン）・ダウンロードができます。",
+  "share.settings.statusHint.exhausted": "ダウンロード回数の上限に達しました。閲覧は可能で、新しいダウンロードは拒否されます。",
+  "share.settings.statusHint.expired": "有効期限を過ぎており、リンクは無効です。",
+  "share.settings.statusHint.revoked": "共有者が取り消したため、リンクは無効です。",
+  "share.settings.permissionsHint.import": "受け取り側は共有内容を自分のライブラリに取り込めます。",
+  "share.settings.permissionsHint.read": "受け取り側はオンラインで閲覧できます。",
+  "share.settings.permissionsHint.download": "受け取り側はファイルをダウンロードできます。"
 }

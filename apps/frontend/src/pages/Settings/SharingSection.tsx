@@ -208,11 +208,40 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 /** A column header with an explanation behind its own info icon (the header text stays short). */
+/** The tooltip body takes nodes, not one long sentence: each status / permission gets its own
+ *  line with its own name in front, which is what makes the legend scannable. */
 function HeaderWithHint({ label, hint }: { label: string; hint: string }) {
+  const { t } = useTranslation();
+  const isStatus = hint === t("share.settings.statusHint");
+  const rows = isStatus
+    ? (["active", "exhausted", "expired", "revoked"] as const).map((k) => ({
+        name: t(`share.status.${k}`),
+        text: t(`share.settings.statusHint.${k}`),
+      }))
+    : hint === t("share.settings.permissionsHint")
+      ? (["import", "read", "download"] as const).map((k) => ({
+          name: t(`share.permission.${k}`),
+          text: t(`share.settings.permissionsHint.${k}`),
+        }))
+      : null;
   return (
     <>
       {label}
-      <Tooltip label={hint}>
+      <Tooltip
+        label={
+          rows ? (
+            <span style={{ display: "grid", gap: 4, textAlign: "left" }}>
+              {rows.map((r) => (
+                <span key={r.name} style={{ display: "block" }}>
+                  <strong>{r.name}</strong>：{r.text}
+                </span>
+              ))}
+            </span>
+          ) : (
+            hint
+          )
+        }
+      >
         <i className="fa fa-info-circle share-th-hint" aria-label={hint} />
       </Tooltip>
     </>

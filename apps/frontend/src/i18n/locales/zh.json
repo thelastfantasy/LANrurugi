@@ -2920,5 +2920,12 @@
   "share.nodes.added": "已添加",
   "share.nodes.none": "还没有添加任何节点。",
   "share.nodes.add": "添加",
-  "share.nodes.addPlaceholder": "lrrg-node:…@host:443"
+  "share.nodes.addPlaceholder": "lrrg-node:…@host:443",
+  "share.settings.statusHint.active": "可以浏览、阅读、下载。",
+  "share.settings.statusHint.exhausted": "下载次数已用尽，仍可浏览和在线阅读，新下载会被拒绝。",
+  "share.settings.statusHint.expired": "超过有效期，链接失效。",
+  "share.settings.statusHint.revoked": "分享方主动撤销，链接失效。",
+  "share.settings.permissionsHint.import": "对方可以把分享的内容导入自己的库。",
+  "share.settings.permissionsHint.read": "对方可以在线浏览和阅读。",
+  "share.settings.permissionsHint.download": "对方可以把文件下载到本地。"
 }
