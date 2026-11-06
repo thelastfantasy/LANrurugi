@@ -128,13 +128,17 @@ pub fn precompute_worker_budget() -> usize {
 /// fresh instance is cheap (`sysinfo::System::new_all()` is the expensive part, done once) and
 /// avoids carrying stale readings from a previous, possibly very different, run.
 pub struct LoadThrottle {
-    sys: sysinfo::System,
+    /// `None` when this host's process table cannot be read at all (sysinfo 0.40's constructors
+    /// are fallible); the throttle then simply never backs off.
+    sys: Option<sysinfo::System>,
 }
 
 impl LoadThrottle {
     pub fn new() -> Self {
         Self {
-            sys: sysinfo::System::new_all(),
+            // sysinfo 0.40's constructors are fallible; an unreadable /proc is not a reason to
+            // refuse to run the job, it just means this throttle has no load signal.
+            sys: sysinfo::System::new_all().ok(),
         }
     }
 
@@ -144,8 +148,11 @@ impl LoadThrottle {
     /// spaces calls further apart than that once the library is more than a couple hundred
     /// archives, so no explicit rate-limiting is added here.
     pub fn sample_and_backoff(&mut self, batch_elapsed: Duration) -> Duration {
-        self.sys.refresh_cpu_usage();
-        let cpu_pct = self.sys.global_cpu_usage();
+        let Some(sys) = self.sys.as_mut() else {
+            return Duration::ZERO;
+        };
+        sys.refresh_cpu_usage();
+        let cpu_pct = sys.global_cpu_usage();
         let delay = if cpu_pct > 80.0 {
             batch_elapsed * 3
         } else if cpu_pct > 50.0 {
