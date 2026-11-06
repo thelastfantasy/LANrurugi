@@ -216,7 +216,9 @@ export async function fetchJson<T>(path: string, retried = false): Promise<T> {
  * never carries it and cannot ask the server to distinguish the two. Always make one refresh
  * attempt on `logged_in:false`; a genuinely logged-out visitor pays one extra 401 and a short
  * recheck, which is much better than logging out an admin whose refresh token is still good. */
-export async function fetchLoginStatusWithRefresh<T extends { logged_in: boolean; guest_mode_enabled: boolean }>(): Promise<T> {
+export async function fetchLoginStatusWithRefresh<
+  T extends { logged_in: boolean; guest_mode_enabled: boolean; access_token_lifetime_secs?: number },
+>(): Promise<T> {
   const status = await fetchJson<T>("/login/status")
   if (status.logged_in) {
     // Rotate before the access token lapses rather than after the first rejected request. Waiting
@@ -228,7 +230,13 @@ export async function fetchLoginStatusWithRefresh<T extends { logged_in: boolean
     // 4-hour lifetime; `tryRefreshOnce` itself dedupes across tabs and skips when another tab has
     // refreshed more recently.
     const lastRefreshAt = Number(localStorage.getItem(LAST_REFRESH_AT_KEY) ?? 0)
-    if (Date.now() - lastRefreshAt > PROACTIVE_REFRESH_AFTER_MS) {
+    // Half the token's actual lifetime, capped at 30 minutes — an operator who shortens
+    // `access_token_lifetime_secs` (say to 10 minutes) gets a 5-minute cadence instead of one that
+    // overshoots the lifetime, and the default 4 hours still refreshes on the 30-minute cap. The
+    // floor keeps a pathologically short lifetime from turning this into a refresh loop.
+    const lifetimeMs = (status.access_token_lifetime_secs ?? 4 * 60 * 60) * 1000
+    const thresholdMs = Math.max(60_000, Math.min(PROACTIVE_REFRESH_AFTER_MS, lifetimeMs / 2))
+    if (Date.now() - lastRefreshAt > thresholdMs) {
       void tryRefreshWithRetry().catch(() => {
         /* the session is still valid; a failed proactive rotation is retried on the next tick */
       })
