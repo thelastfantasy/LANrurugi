@@ -998,5 +998,6 @@
   "library.nextSuggestion": "下一組",
   "library.filteredFromTotalEntries": "(從 {{total}} 條中篩選)",
   "common.refresh": "重新整理",
-  "common.removeTag": "移除標籤"
+  "common.removeTag": "移除標籤",
+  "share.settings.showAdvanced": "顯示進階選項"
 }

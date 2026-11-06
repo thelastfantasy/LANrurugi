@@ -2912,5 +2912,6 @@
   "library.nextSuggestion": "下一组",
   "library.filteredFromTotalEntries": "(从 {{total}} 条中筛选)",
   "common.refresh": "刷新",
-  "common.removeTag": "移除标签"
+  "common.removeTag": "移除标签",
+  "share.settings.showAdvanced": "显示高级选项"
 }

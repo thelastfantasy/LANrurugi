@@ -2912,5 +2912,6 @@
   "library.nextSuggestion": "Next suggestion",
   "library.filteredFromTotalEntries": "(filtered from {{total}} total entries)",
   "common.refresh": "Refresh",
-  "common.removeTag": "Remove tag"
+  "common.removeTag": "Remove tag",
+  "share.settings.showAdvanced": "Show advanced options"
 }

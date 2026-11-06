@@ -2674,5 +2674,6 @@
   "library.nextSuggestion": "次の提案",
   "library.filteredFromTotalEntries": "(全 {{total}} 件から絞り込み)",
   "common.refresh": "更新",
-  "common.removeTag": "タグを削除"
+  "common.removeTag": "タグを削除",
+  "share.settings.showAdvanced": "詳細オプションを表示"
 }
