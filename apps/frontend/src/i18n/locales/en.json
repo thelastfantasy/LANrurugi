@@ -2927,5 +2927,8 @@
   "share.settings.statusHint.revoked": "The sharer revoked it; the link no longer works.",
   "share.settings.permissionsHint.import": "The recipient can import the shared content into their own library.",
   "share.settings.permissionsHint.read": "The recipient can browse and read it online.",
-  "share.settings.permissionsHint.download": "The recipient can download the files."
+  "share.settings.permissionsHint.download": "The recipient can download the files.",
+  "share.nodes.code": "node code",
+  "share.nodes.rotate": "Destroy and rebuild",
+  "share.nodes.rotateConfirm": "Destroy this node's identity and mint a new node code? Codes and node strings handed out before will stop working."
 }

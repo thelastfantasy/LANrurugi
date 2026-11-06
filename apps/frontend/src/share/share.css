@@ -1066,3 +1066,15 @@ div.ido.share-closed p:last-child {
   max-width: none;
   margin: 0;
 }
+
+/* The node code is the short form (16 characters); it gets a little more presence than a row of
+   ordinary text, and the rotate button sits under the add box so it is never one stray click away
+   from the copy button. */
+.share-node-code {
+  font-size: 1.1em;
+  letter-spacing: 0.08em;
+}
+
+.share-node-rotate {
+  margin: 8px 0 10px;
+}
