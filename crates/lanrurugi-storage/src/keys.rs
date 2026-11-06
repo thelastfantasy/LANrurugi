@@ -252,6 +252,11 @@ pub const SHARE_PREPARE_KEY: &str = "LANRURUGI_SHARE_PREPARE";
 /// This instance's iroh secret key.
 pub const SHARE_NODE_SECRET_KEY: &str = "LANRURUGI_SHARE_NODE_SECRET";
 
+/// The node's short public name (`lanrurugi_share_proto::node_code::NodeCode`). Kept next to the
+/// secret, and retired by the same rotate action: a code that no longer matches the identity would
+/// resolve to a record nobody publishes.
+pub const SHARE_NODE_CODE_KEY: &str = "LANRURUGI_SHARE_NODE_CODE";
+
 /// One import of another instance's share (receiving side).
 pub fn share_import_key(id: &lanrurugi_core::ids::ShareImportId) -> String {
     format!("LANRURUGI_SHARE_IMPORT:{id}")

@@ -187,6 +187,11 @@ pub async fn start(state: &AppState) -> Result<Arc<ShareNet>, String> {
             Err(e) => tracing::warn!(error = %e, "relay role could not start"),
         }
     }
+    // The node record a peer's 16-character code resolves to: republished on every (re)start, so
+    // it always carries the addresses the endpoint actually has right now.
+    if settings.flag("share_node_relay") || settings.flag("share_node_rendezvous") {
+        nodes::publish_node_record(state, &net, &settings).await;
+    }
     tracing::info!(endpoint = %net.id(), "sharing endpoint started");
     Ok(net)
 }

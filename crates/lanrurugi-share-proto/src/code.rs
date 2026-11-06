@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use crate::hint::RouteHint;
 
 /// Crockford's alphabet: no I, L, O or U.
-const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+pub(crate) const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 pub const CODE_LEN: usize = 10;
 pub const SHORT_CODE_LEN: usize = 8;

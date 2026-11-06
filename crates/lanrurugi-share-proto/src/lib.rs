@@ -8,5 +8,6 @@ pub mod derive;
 pub mod framing;
 pub mod hint;
 pub mod messages;
+pub mod node_code;
 pub mod record;
 pub mod ticket;

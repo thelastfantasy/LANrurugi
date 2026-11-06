@@ -99,6 +99,36 @@ pub(crate) fn unhex(text: &str) -> Option<Vec<u8>> {
 
 /// This instance's long-term secret (also its iroh key), created on first use and included in
 /// backups so the instance keeps its identity across restores.
+/// This instance's node code, created once and kept forever (like a share code) until the user
+/// rotates it.
+pub(crate) async fn node_code(
+    state: &AppState,
+) -> Result<lanrurugi_share_proto::node_code::NodeCode, String> {
+    use lanrurugi_share_proto::node_code::NodeCode;
+    let mut conn = state.redis.config.get().await.map_err(|e| e.to_string())?;
+    let existing: Option<String> = conn
+        .get(keys::SHARE_NODE_CODE_KEY)
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Some(stored) = existing {
+        if let Ok(code) = NodeCode::parse(&stored) {
+            return Ok(code);
+        }
+        tracing::warn!("the stored node code is malformed; minting a new one");
+    }
+    let fresh = NodeCode::generate();
+    let _: bool = conn
+        .set_nx(keys::SHARE_NODE_CODE_KEY, fresh.as_str())
+        .await
+        .map_err(|e| e.to_string())?;
+    let stored: Option<String> = conn
+        .get(keys::SHARE_NODE_CODE_KEY)
+        .await
+        .map_err(|e| e.to_string())?;
+    let stored = stored.ok_or_else(|| "the node code could not be stored".to_string())?;
+    NodeCode::parse(&stored).map_err(|e| e.to_string())
+}
+
 pub(crate) async fn node_secret(state: &AppState) -> Result<[u8; 32], String> {
     let mut conn = state.redis.config.get().await.map_err(|e| e.to_string())?;
     let existing: Option<String> = conn
@@ -1057,6 +1087,7 @@ async fn settings_with_status(state: &AppState) -> Value {
                 "direct_addresses": addr.ip_addrs().map(|a| a.to_string()).collect::<Vec<_>>(),
                 "proxy": crate::share_net::followed_proxy(),
                 "node_string": crate::share_net::nodes::node_string(&net.id(), &settings),
+                "node_code": node_code(state).await.ok().map(|c| c.display()),
             })
         }
         None => json!({ "running": false }),
@@ -1115,7 +1146,10 @@ async fn rotate_node_secret(State(state): State<AppState>) -> Response {
             )
         }
     };
-    let _: Result<i64, _> = conn.del(keys::SHARE_NODE_SECRET_KEY).await;
+    // The code is derived from the identity being replaced, so both go together.
+    let _: Result<i64, _> = conn
+        .del(&[keys::SHARE_NODE_SECRET_KEY, keys::SHARE_NODE_CODE_KEY])
+        .await;
     match crate::share_net::start(&state).await {
         Ok(_) => axum::Json(json!({ "rotated": true })).into_response(),
         Err(e) => error(

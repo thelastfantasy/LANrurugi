@@ -1014,5 +1014,8 @@
   "share.settings.statusHint.revoked": "分享方主動撤銷，連結失效。",
   "share.settings.permissionsHint.import": "對方可以把分享的內容匯入自己的庫。",
   "share.settings.permissionsHint.read": "對方可以在線上瀏覽與閱讀。",
-  "share.settings.permissionsHint.download": "對方可以把檔案下載到本機。"
+  "share.settings.permissionsHint.download": "對方可以把檔案下載到本機。",
+  "share.nodes.code": "節點碼",
+  "share.nodes.rotate": "銷毀重建",
+  "share.nodes.rotateConfirm": "銷毀目前的節點識別並產生新的節點碼？先前發出的節點碼與節點字串都會失效。"
 }
