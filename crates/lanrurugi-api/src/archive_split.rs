@@ -846,7 +846,7 @@ fn read_proc_status_kb(key: &str) -> Option<u64> {
 fn sysinfo_rss_kb() -> Option<u64> {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
     let pid = Pid::from_u32(std::process::id());
-    let mut sys = System::new();
+    let mut sys = System::new().ok()?;
     sys.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[pid]),
         true,
