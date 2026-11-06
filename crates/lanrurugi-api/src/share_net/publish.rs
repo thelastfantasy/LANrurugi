@@ -103,11 +103,12 @@ fn http_client() -> reqwest::Client {
 
 /// Sends one request to a configured LANrurugi node.
 async fn ask_node(
+    state: &crate::AppState,
     net: &ShareNet,
     node: &super::nodes::NodeRef,
     request: lanrurugi_share_proto::messages::Request,
 ) -> Option<lanrurugi_share_proto::messages::Response> {
-    let addr = super::nodes::node_addr(node).await?;
+    let addr = super::nodes::node_addr(state, node).await?;
     let conn = super::connect(net, addr).await.ok()?;
     super::call(&conn, request).await.ok().map(|(r, _)| r)
 }
@@ -125,7 +126,7 @@ fn relay_endpoint(relay: &str, keys: &DerivedKeys) -> String {
 }
 
 /// The record's relay list: the relays this endpoint can currently be reached through.
-fn advertised_relays(net: &ShareNet, settings: &ShareSettings) -> Vec<String> {
+pub(super) fn advertised_relays(net: &ShareNet, settings: &ShareSettings) -> Vec<String> {
     let mut relays: Vec<String> = net
         .endpoint()
         .addr()
@@ -176,6 +177,7 @@ pub async fn publish_share(state: &AppState, net: &ShareNet, share: &Share) {
         async move {
             let ok = matches!(
                 ask_node(
+                    state,
                     net,
                     node,
                     lanrurugi_share_proto::messages::Request::RendezvousPut {
@@ -361,6 +363,7 @@ pub async fn resolve(
         let net = net.clone();
         async move {
             let answer = ask_node(
+                state,
                 &net,
                 node,
                 lanrurugi_share_proto::messages::Request::RendezvousGet { lookup_pubkey },

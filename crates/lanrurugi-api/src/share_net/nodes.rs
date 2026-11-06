@@ -28,10 +28,24 @@ pub struct NodeRef {
     pub endpoint_id: [u8; 32],
     pub addr: String,
     pub relay: Option<String>,
+    /// Set when the entry was a bare node code (`NodeCode`): the address is then looked up from the
+    /// record published under the code instead of being spelled out in the string.
+    pub code: Option<String>,
 }
 
 pub fn parse_node(entry: &str) -> Option<NodeRef> {
-    let rest = entry.trim().strip_prefix("lrrg-node:")?;
+    let entry = entry.trim();
+    // A bare node code is the short form of the same thing: the address lives in the record that
+    // code resolves to, so there is nothing to parse out of the string itself.
+    if let Ok(code) = lanrurugi_share_proto::node_code::NodeCode::parse_prefixed(entry) {
+        return Some(NodeRef {
+            endpoint_id: [0u8; 32],
+            addr: String::new(),
+            relay: None,
+            code: Some(code.as_str().to_string()),
+        });
+    }
+    let rest = entry.strip_prefix("lrrg-node:")?;
     let (head, query) = rest.split_once('?').unwrap_or((rest, ""));
     let (id, addr) = head.split_once('@')?;
     let endpoint_id = parse_endpoint_hex(id)?;
@@ -53,6 +67,7 @@ pub fn parse_node(entry: &str) -> Option<NodeRef> {
         endpoint_id,
         addr: addr.to_string(),
         relay,
+        code: None,
     })
 }
 
@@ -113,8 +128,96 @@ pub fn own_relay_url(settings: &ShareSettings) -> Option<String> {
     Some(format!("https://{}/", url.host_str()?))
 }
 
+/// The pkarr records a node code resolves to live beside the share records, same relay, same
+/// `/{public key}` layout.
+fn node_relay_url(relay: &str, code: &lanrurugi_share_proto::node_code::NodeCode) -> String {
+    format!(
+        "{}/{}",
+        relay.trim_end_matches('/'),
+        code.lookup_keypair().public_key().to_z32()
+    )
+}
+
+/// Publishes this instance's node record under its own code, so a peer holding the 16-character
+/// code can find the endpoint id and the relays to reach it through.
+pub async fn publish_node_record(
+    state: &crate::AppState,
+    net: &super::ShareNet,
+    settings: &ShareSettings,
+) {
+    let Ok(code) = crate::shares::node_code(state).await else {
+        return;
+    };
+    let relays = super::publish::pkarr_relays(settings);
+    if relays.is_empty() {
+        return;
+    }
+    let knock = lanrurugi_share_proto::record::KnockV1 {
+        endpoint_id: *net.id().as_bytes(),
+        relay_urls: super::publish::advertised_relays(net, settings),
+    };
+    let keys = lanrurugi_share_proto::derive::DerivedKeys {
+        lookup_key: code.lookup_keypair(),
+        record_key: code.record_key(),
+    };
+    let Ok(packet) = lanrurugi_share_proto::record::seal(&keys, &knock) else {
+        return;
+    };
+    let payload = packet.to_relay_payload();
+    let client = reqwest::Client::new();
+    for relay in relays {
+        let url = node_relay_url(&relay, &code);
+        let ok = client
+            .put(&url)
+            .header("content-type", "application/pkarr.org/relays#payload")
+            .body(payload.clone())
+            .send()
+            .await
+            .is_ok_and(|r| r.status().is_success());
+        crate::share_net::status::record_rendezvous(&relay, ok);
+    }
+}
+
+/// Reads a node record back. `None` means "this code is not published anywhere I can see", which
+/// the caller reports as a failed connection rather than as a bad code.
+pub async fn resolve_node_code(state: &crate::AppState, code: &str) -> Option<EndpointAddr> {
+    use lanrurugi_share_proto::node_code::NodeCode;
+    let code = NodeCode::parse(code).ok()?;
+    let settings = crate::share_settings::load(state).await;
+    let relays = super::publish::pkarr_relays(&settings);
+    let keys = lanrurugi_share_proto::derive::DerivedKeys {
+        lookup_key: code.lookup_keypair(),
+        record_key: code.record_key(),
+    };
+    let client = reqwest::Client::new();
+    for relay in relays {
+        let url = node_relay_url(&relay, &code);
+        let Ok(response) = client.get(&url).send().await else {
+            continue;
+        };
+        let Ok(bytes) = response.bytes().await else {
+            continue;
+        };
+        let Ok(packet) =
+            pkarr::SignedPacket::from_relay_payload(&keys.lookup_key.public_key(), &bytes)
+        else {
+            continue;
+        };
+        let Ok(knock) = lanrurugi_share_proto::record::open(&keys, &packet) else {
+            continue;
+        };
+        return super::endpoint_addr(&knock.endpoint_id, &knock.relay_urls, None);
+    }
+    None
+}
+
 /// The endpoint address of a configured node, its port resolved by DNS.
-pub async fn node_addr(node: &NodeRef) -> Option<EndpointAddr> {
+pub async fn node_addr(state: &crate::AppState, node: &NodeRef) -> Option<EndpointAddr> {
+    // A code-based node carries no address: the record under the code supplies the endpoint id and
+    // the relays, and iroh resolves the actual address through those.
+    if let Some(code) = &node.code {
+        return resolve_node_code(state, code).await;
+    }
     let direct = tokio::net::lookup_host(&node.addr)
         .await
         .ok()

@@ -103,11 +103,24 @@ impl NodeCode {
 
     /// The pkarr key pair the node's record is published under and looked up by.
     pub fn lookup_keypair(&self) -> pkarr::Keypair {
+        pkarr::Keypair::from_secret_key(&self.secrets().0)
+    }
+
+    /// The node record's sealing key. Like a share's knock record, it is derived from the code, so
+    /// the record is readable by whoever holds the code and by nobody else.
+    pub fn record_key(&self) -> [u8; 32] {
+        self.secrets().1
+    }
+
+    fn secrets(&self) -> ([u8; 32], [u8; 32]) {
         let hkdf = Hkdf::<Sha256>::new(Some(NODE_LOOKUP_SALT), self.0.as_bytes());
-        let mut secret = [0u8; 32];
-        hkdf.expand(b"node-lookup", &mut secret)
+        let mut lookup = [0u8; 32];
+        let mut record = [0u8; 32];
+        hkdf.expand(b"node-lookup", &mut lookup)
             .expect("32 bytes is a valid HKDF-SHA256 output length");
-        pkarr::Keypair::from_secret_key(&secret)
+        hkdf.expand(b"node-record", &mut record)
+            .expect("32 bytes is a valid HKDF-SHA256 output length");
+        (lookup, record)
     }
 
     /// `SHA-256(lookup public key)`, the same shape a share code uses for LAN resolution.
