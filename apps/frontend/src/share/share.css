@@ -360,6 +360,16 @@ div.ido.share-closed p:last-child {
   gap: 6px;
 }
 
+/* Scoped here on purpose (not `common-ui`): in this row the date trigger's empty state sits right
+   next to the days field's placeholder, and the generic 0.6-opacity treatment read as a different
+   colour rather than the same "nothing entered yet" grey. */
+.share-expiry .lrrg-datetime-trigger[data-empty="true"] .lrrg-datetime-value,
+.share-expiry
+  .lrrg-datetime-trigger:has(.lrrg-datetime-value:empty)
+  .lrrg-datetime-value {
+  color: graytext;
+  opacity: 1;
+}
 
 .share-dialog-tabs {
   display: flex;
