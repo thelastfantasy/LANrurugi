@@ -168,21 +168,24 @@ jobs:
         if: github.ref == 'refs/heads/main'
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: cargo test
-        # `--no-fail-fast` — without it, `cargo test --workspace` aborts the moment any single
-        # test binary reports a failure, silently skipping every crate still queued behind it
-        # (workspace members run in dependency order, not all at once). Confirmed live, 2026-08-28:
-        # a `lanrurugi-server` test failure cut a CI run off before `lanrurugi-storage`'s own tests
-        # ever ran at all, hiding whatever those results would have been. `mise run test`
-        # (`.mise.toml`'s own `[tasks.test]`) already carries this flag for the exact same reason
-        # documented there — this step had drifted out of sync with it.
-        #
-        # The suite itself is the long half of this job (620 s on a warm cache: 175 s executing,
-        # the rest linking 80+ integration binaries) and it runs only where its result can still
-        # stop something — a push to `main`, i.e. the dev→main release merge. PRs and `dev` merges
-        # get check/fmt/clippy (~3 min), the same set the local pre-push hook enforces;
-        # `cargo clippy --all-targets` still compiles every test target, so a test that no longer
-        # builds fails before it can reach `main`.
+      # Three tiers, because the expensive part of this job is *linking* test binaries, not running
+      # them (620 s on a warm cache: 175 s executing, the rest linking 80+ integration binaries):
+      #
+      #   pull_request     nothing executes; `cargo check --all-targets` already compiles every test
+      #                    target, so a test that no longer builds still fails here
+      #   push to `dev`    the unit subset (`--lib --bins`, ~2-3 min) — a merge into the default
+      #                    branch means the code is final, so it gets one real execution pass
+      #   push to `main`   the full suite, including the integration binaries, right before release
+      #
+      # `--no-fail-fast` is not optional: without it `cargo test --workspace` aborts on the first
+      # failing binary, silently skipping every crate still queued behind it (confirmed live
+      # 2026-08-28: a `lanrurugi-server` failure cut a run off before `lanrurugi-storage`'s own
+      # tests ever ran). `mise run test` carries the same flag for the same reason.
+      - name: cargo test (unit subset)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        run: cargo test --workspace --no-fail-fast --lib --bins
+
+      - name: cargo test (full suite)
         if: github.ref == 'refs/heads/main'
         run: cargo test --workspace --no-fail-fast
 
