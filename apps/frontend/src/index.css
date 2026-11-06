@@ -2350,3 +2350,11 @@ body div.ido {
   overflow-wrap: anywhere;
 }
 
+
+/* The AI grouping drawer's footer mixes a custom pill with legacy `.stdbtn`s. `.stdbtn` carries
+   `margin: 4px 1px 0` (its own 1px side inset plus a top offset for legacy's table rows), which
+   pushed those buttons a couple of pixels below the `align-items: center` line and made the pager
+   look like it floated high. Zeroed here; the flex `gap` does the spacing. */
+.ai-grouping-footer .stdbtn {
+  margin: 0;
+}

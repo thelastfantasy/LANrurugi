@@ -445,6 +445,7 @@ function SuggestionCard({
 
       <DrawerFooter>
         <div
+          className="ai-grouping-footer"
           style={{
             display: "flex",
             alignItems: "center",
