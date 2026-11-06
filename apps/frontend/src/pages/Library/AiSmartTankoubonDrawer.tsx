@@ -450,7 +450,6 @@ function SuggestionCard({
             alignItems: "center",
             justifyContent: "space-between",
             gap: 12,
-            flexWrap: "wrap",
           }}
         >
           {total <= MAX_PAGE_DOTS ? (
@@ -506,11 +505,12 @@ function SuggestionCard({
               </button>
             </div>
           )}
-          <div className="ai-footer-actions" style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+          <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
             <input
               type="button"
               className="stdbtn ai-pill-btn"
               value={t("library.donTSuggestThisAgain") ?? undefined}
+              style={{ flexShrink: 0, whiteSpace: "nowrap" }}
               disabled={ignoreGroupSuggestion.isPending}
               onClick={() => void handleIgnore()}
             />
@@ -521,7 +521,7 @@ function SuggestionCard({
                 disabled={!canConfirm}
                 onClick={() => void handleConfirm()}
               >
-                <span style={{ flex: 1, textAlign: "center" }}>{t("library.createTankoubon")}</span>
+                <span style={{ flex: "0 1 auto", textAlign: "center", whiteSpace: "nowrap" }}>{t("library.createTankoubon")}</span>
                 <Tooltip
                   label={t("library.autorenameAndReorderChaptersWith")}
                   wrapperStyle={{ display: "inline-flex", flexShrink: 0 }}

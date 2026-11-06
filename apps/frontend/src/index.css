@@ -2350,19 +2350,3 @@ body div.ido {
   overflow-wrap: anywhere;
 }
 
-/* AI grouping drawer's footer actions. On a phone the drawer is full width, and the two buttons
-   ("don't suggest again" / "create Tankoubon") sized themselves to their own label, so the row
-   looked ragged next to the pager. Below 40rem they share the row evenly instead. */
-@media (max-width: 40rem) {
-  .ai-footer-actions {
-    flex: 1 1 100%;
-    width: 100%;
-  }
-
-  .ai-footer-actions > * {
-    flex: 1 1 0;
-    min-width: 0;
-    justify-content: center;
-    text-align: center;
-  }
-}
