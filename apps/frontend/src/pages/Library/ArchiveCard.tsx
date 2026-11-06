@@ -165,11 +165,10 @@ export function ArchiveCard({
           <img
             src={thumbFailed ? "/legacy/img/noThumb.png" : thumbSrc}
             alt={archive.title}
-            // A full page is ~170 thumbnails: `lazy` keeps the ones below the fold out of the
-            // browser's six-connections-per-host queue (which is what made the same cards always
-            // pop in last), and `async` decodes off the main thread so a large JPEG/WebP does not
-            // stall the ones after it.
-            loading="lazy"
+            // `decoding="async"` only: decoding off the main thread keeps one large JPEG/WebP from
+            // stalling the images behind it. Deliberately *not* `loading="lazy"` — this element is
+            // `display: none` until it has loaded, and a hidden lazy image is exactly the case
+            // browsers defer indefinitely, which left cards spinning instead of loading.
             decoding="async"
             style={thumbLoaded || thumbFailed ? undefined : { display: "none" }}
             onLoad={() => {
