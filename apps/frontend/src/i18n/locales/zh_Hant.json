@@ -995,5 +995,8 @@
   "library.aiGroupingRecheck": "重新檢查",
   "library.groupSuggestionPage": "跳到第幾組",
   "library.previousSuggestion": "上一組",
-  "library.nextSuggestion": "下一組"
+  "library.nextSuggestion": "下一組",
+  "library.filteredFromTotalEntries": "(從 {{total}} 條中篩選)",
+  "common.refresh": "重新整理",
+  "common.removeTag": "移除標籤"
 }

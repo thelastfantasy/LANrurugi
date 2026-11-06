@@ -2671,5 +2671,8 @@
   "library.aiGroupingRecheck": "再確認",
   "library.groupSuggestionPage": "提案番号へ移動",
   "library.previousSuggestion": "前の提案",
-  "library.nextSuggestion": "次の提案"
+  "library.nextSuggestion": "次の提案",
+  "library.filteredFromTotalEntries": "(全 {{total}} 件から絞り込み)",
+  "common.refresh": "更新",
+  "common.removeTag": "タグを削除"
 }
