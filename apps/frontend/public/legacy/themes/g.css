@@ -1595,7 +1595,7 @@ textarea {
     align-items: center;
     flex-wrap: nowrap;
     min-width: 0;
-    height: 26px;
+    height: 28px; /* matches `.ai-pill-btn` */
     border: 1px solid #5C0D1166;
     border-radius: 999px;
     overflow: hidden;
