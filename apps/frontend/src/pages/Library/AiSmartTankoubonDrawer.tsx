@@ -445,9 +445,6 @@ function SuggestionCard({
 
       <DrawerFooter>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          {/* Up to a handful of suggestions a dot per card is a nice affordance; with hundreds
-              (a big library produces four figures) it wraps into a wall of dots and pushes the
-              buttons off the bar, so past `MAX_PAGE_DOTS` it becomes one compact pager instead. */}
           {total <= MAX_PAGE_DOTS ? (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 4, maxWidth: "60%" }}>
               {Array.from({ length: total }, (_, i) => (
@@ -467,13 +464,27 @@ function SuggestionCard({
               ))}
             </div>
           ) : (
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "nowrap", minWidth: 0 }}>
+            /* One joined segmented pager instead of a dot per card: a library with hundreds of
+               suggestions turned the dots into a wall that wrapped and pushed the buttons onto a
+               second row. Only the container's outer corners are round. */
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                flexWrap: "nowrap",
+                minWidth: 0,
+                height: PAGER_CONTROL_HEIGHT,
+                border: "1px solid rgba(128,128,128,0.35)",
+                borderRadius: 999,
+                overflow: "hidden",
+              }}
+            >
               <button
                 type="button"
-                className="stdbtn"
                 disabled={page === 0}
                 onClick={() => onJump(Math.max(0, page - 1))}
-                style={{ minWidth: 28, flexShrink: 0 }}
+                style={PAGER_SEGMENT}
+                aria-label={t("library.previousSuggestion") ?? undefined}
               >
                 <i className="fa fa-chevron-left" aria-hidden="true" />
               </button>
@@ -487,17 +498,35 @@ function SuggestionCard({
                   if (Number.isFinite(next) && next >= 1 && next <= total) onJump(next - 1)
                 }}
                 aria-label={t("library.groupSuggestionPage") ?? undefined}
-                style={{ width: 56, flexShrink: 0, textAlign: "center" }}
+                style={{
+                  width: 52,
+                  height: "100%",
+                  padding: "0 2px",
+                  boxSizing: "border-box",
+                  textAlign: "center",
+                  border: 0,
+                  background: "transparent",
+                  color: "inherit",
+                  font: "inherit",
+                }}
               />
-              <span style={{ whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", opacity: 0.7 }}>
+              <span
+                style={{
+                  padding: "0 8px",
+                  whiteSpace: "nowrap",
+                  fontVariantNumeric: "tabular-nums",
+                  opacity: 0.75,
+                  lineHeight: `${PAGER_CONTROL_HEIGHT}px`,
+                }}
+              >
                 / {total}
               </span>
               <button
                 type="button"
-                className="stdbtn"
                 disabled={page >= total - 1}
                 onClick={() => onJump(Math.min(total - 1, page + 1))}
-                style={{ minWidth: 28, flexShrink: 0 }}
+                style={PAGER_SEGMENT}
+                aria-label={t("library.nextSuggestion") ?? undefined}
               >
                 <i className="fa fa-chevron-right" aria-hidden="true" />
               </button>
@@ -530,7 +559,6 @@ function SuggestionCard({
                       checked={autoRename}
                       onChange={(e) => setAutoRename(e.target.checked)}
                     />
-                    {/* Must follow the checkbox in DOM order for the `~` sibling selector. */}
                     <i className="fa fa-robot" aria-hidden="true" />
                     <span className="ai-checkable-btn-toggle-circle">
                       <i className="fa fa-check" aria-hidden="true" />
@@ -560,6 +588,23 @@ function SuggestionCard({
  *  instant; creating or ignoring a group drops it, and the explicit re-check button forces past it. */
 /** Above this many suggestions the footer shows one compact pager instead of one dot per card. */
 const MAX_PAGE_DOTS = 20
+/** Shared height for the compact pager's arrows, number box and "/ total" label. */
+const PAGER_CONTROL_HEIGHT = 26
+
+/** One segment of the joined pager. The outer corners come from the container's own radius. */
+const PAGER_SEGMENT = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 26,
+  height: "100%",
+  padding: 0,
+  background: "transparent",
+  color: "inherit",
+  cursor: "pointer",
+  flexShrink: 0,
+  font: "inherit",
+} as const
 
 const SUGGESTION_CACHE_TTL_MS = 10 * 60 * 1000
 let suggestionCache: { at: number; suggestions: AiGroupSuggestion[] } | null = null

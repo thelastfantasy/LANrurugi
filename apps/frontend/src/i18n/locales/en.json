@@ -2907,5 +2907,7 @@
   "library.aiGroupingEmptyHintTags": "The titles or tags have to show they belong together (artist, series name, volume)",
   "library.aiGroupingEmptyHintThreshold": "A high similarity threshold skips titles that are close but not identical",
   "library.aiGroupingRecheck": "Check again",
-  "library.groupSuggestionPage": "Jump to suggestion number"
+  "library.groupSuggestionPage": "Jump to suggestion number",
+  "library.previousSuggestion": "Previous suggestion",
+  "library.nextSuggestion": "Next suggestion"
 }
