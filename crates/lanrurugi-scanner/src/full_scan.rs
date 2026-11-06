@@ -757,6 +757,31 @@ mod tests {
         let path_str = path.to_string_lossy().to_string();
 
         let placeholder_id = "0000000000000000000000000000000000000000";
+        // The mapping only counts as "already known" while its archive record exists: the scan
+        // prunes entries whose archive is gone (the debris of an ingest that died between writing
+        // the mapping and writing the record), so this test needs a real record behind it.
+        archives
+            .save(&Archive {
+                id: lanrurugi_core::ids::ArchiveId(placeholder_id.to_string()),
+                name: "known".into(),
+                title: "Known".into(),
+                file: path_str.clone(),
+                tags: String::new(),
+                summary: String::new(),
+                arcsize: 1,
+                pagecount: 1,
+                isnew: false,
+                lastreadpage: 0,
+                lastreadtime: 0,
+                thumbhash: None,
+                toc: vec![],
+                stamp_ids: vec![],
+                heal_failed_at: None,
+                corrupted_pages: vec![],
+                has_patch: false,
+            })
+            .await
+            .unwrap();
         let mut config_conn = config_pool.get().await.unwrap();
         use deadpool_redis::redis::AsyncCommands;
         let _: () = config_conn
@@ -793,14 +818,21 @@ mod tests {
 
         // The placeholder id is untouched — proof `size_aware_id`/`ingest_file` never ran on this
         // path (a real hash would never collide with an all-zero placeholder).
-        assert!(archives
+        // The record still exists but nothing touched it: `ingest_file` would have rewritten
+        // `file`/`title` for a real re-ingest.
+        let untouched = archives
             .get(&lanrurugi_core::ids::ArchiveId(placeholder_id.to_string()))
             .await
             .unwrap()
-            .is_none());
+            .expect("the placeholder record is kept");
+        assert_eq!(untouched.title, "Known");
 
         let real_id =
             lanrurugi_core::ids::ArchiveId(lanrurugi_storage::id::size_aware_id(&path).unwrap());
+        // Hermetic: an earlier run of this same test (before the filemap-pruning behaviour existed)
+        // could have left a record under the size-aware id, and `size_aware_id` depends only on the
+        // file's own size and mtime, not on the temp path.
+        let _ = archives.delete(&real_id).await;
         assert!(
             archives.get(&real_id).await.unwrap().is_none(),
             "the real content hash must never have been computed or catalogued either"
