@@ -29,6 +29,13 @@ export interface ArchiveMetadata {
   has_patch?: boolean
   /** LANrurugi-only: whether an Archive split suggestion exists for this archive. */
   has_split_suggestion?: boolean
+  /** Only on a Tankoubon row that matched because of its members rather than its own record
+   *  (see the search engine's `fold_tanks`): which members matched, so the card can say why it is
+   *  in a result set its own tags do not explain. */
+  match_reason?: {
+    kind: "members"
+    members: { arcid: string; name: string }[]
+  }
 }
 
 /** `DELETE /archives` — per-id outcome of a batch delete. */

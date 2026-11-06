@@ -1568,3 +1568,19 @@ textarea {
   text-align: center;
   margin: 10px 0 0;
 }
+
+/* Search-result note: this Tankoubon matched through its members, not its own tags (see the
+   search engine's `fold_tanks`). Hover/focus shows which volumes. */
+.match-reason-icon {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 3px;
+    opacity: 0.75;
+    cursor: help;
+}
+
+.match-reason-icon:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 1px;
+    border-radius: 3px;
+}

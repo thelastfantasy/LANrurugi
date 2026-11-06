@@ -18,7 +18,9 @@ use lanrurugi_storage::bookmarks::BookmarksRepository;
 use thiserror::Error;
 
 use crate::grammar::{parse_query, Expr, Field, Token};
-use crate::keys::{NEW_KEY, TANKGROUPED_KEY, TITLES_FOLDED_KEY, TITLES_KEY, UNTAGGED_KEY};
+use crate::keys::{
+    NEW_KEY, SOURCE_TAGGED_KEY, TANKGROUPED_KEY, TITLES_FOLDED_KEY, TITLES_KEY, UNTAGGED_KEY,
+};
 
 #[derive(Debug, Error)]
 pub enum SearchError {
@@ -100,6 +102,11 @@ pub struct SearchResult {
     pub total: i64,
     pub filtered_count: usize,
     pub ids: Vec<String>,
+    /// Tankoubons whose match came from their members rather than their own record: tank id →
+    /// the member ids that matched. Empty unless `groupby_tanks` with an attribute filter folded
+    /// one in (see `fold_tanks`); the search API turns this into the "why did this single volume
+    /// show up" note on the card.
+    pub member_matches: HashMap<String, Vec<String>>,
 }
 
 /// Owns the two Redis pools and the canonical `Equivalence` used by every search/index entry
@@ -383,7 +390,29 @@ pub async fn search(
         .await
         .unwrap_or(false);
 
-    let mut filtered: HashSet<String> = if params.groupby_tanks {
+    // With grouping on, the candidate set is normally `LRR_TANKGROUPED` (Tankoubon rows plus the
+    // archives that never got folded into one) — which means every attribute filter is answered
+    // from the *tank record's own* tags, and a tank whose members all carry `source:` but whose own
+    // record does not is invisible to `has:source`, while its members are not candidates either.
+    // Legacy has the same shape but exempts `newonly` (`Search.pm`'s
+    // `tank_has_archive_in_set`); this generalises that to every attribute by evaluating over
+    // everything and folding the matches back into their tanks afterwards (see `fold_tanks`).
+    // Guest requests keep the plain candidate set: folding a guest-visible member into a tank that
+    // is *not* guest-visible would surface content the caller may not see.
+    let member_aware = params.groupby_tanks && params.restrict_to_archive_ids.is_none();
+    let mut filtered: HashSet<String> = if member_aware {
+        let mut all: HashSet<String> = archive_conn
+            .keys::<_, Vec<String>>(ARCHIVE_KEY_GLOB)
+            .await?
+            .into_iter()
+            .collect();
+        all.extend(
+            archive_conn
+                .keys::<_, Vec<String>>("TANK_??????????")
+                .await?,
+        );
+        all
+    } else if params.groupby_tanks {
         search_conn
             .smembers::<_, Vec<String>>(TANKGROUPED_KEY)
             .await?
@@ -582,6 +611,12 @@ pub async fn search(
         eval_expr(&mut ctx, &expr, filtered).await?
     };
 
+    let (filtered, member_matches) = if member_aware {
+        fold_tanks(&mut archive_conn, &mut search_conn, filtered).await?
+    } else {
+        (filtered, HashMap::new())
+    };
+
     let total: i64 = if params.groupby_tanks {
         search_conn.scard(TANKGROUPED_KEY).await?
     } else {
@@ -609,7 +644,51 @@ pub async fn search(
         total,
         filtered_count: ordered.len(),
         ids: ordered,
+        member_matches,
     })
+}
+
+/// Collapses a member-level match set back into the rows the grouped list shows.
+///
+/// Keeps every candidate that is itself a row (a standalone archive or a Tankoubon the filter
+/// matched directly) and adds any Tankoubon with at least one matching member; member archives
+/// themselves drop out, exactly as they never being candidates would have done. One `ZRANGEBYSCORE`
+/// per tank the filter did not match directly (scores ≥ 1 hold member ids; lower scores are the
+/// tank's own name/summary/tags fields).
+async fn fold_tanks(
+    archive_conn: &mut deadpool_redis::Connection,
+    search_conn: &mut deadpool_redis::Connection,
+    matched: HashSet<String>,
+) -> Result<(HashSet<String>, HashMap<String, Vec<String>>)> {
+    let grouped: HashSet<String> = search_conn
+        .smembers::<_, Vec<String>>(TANKGROUPED_KEY)
+        .await?
+        .into_iter()
+        .collect();
+    let mut out: HashSet<String> = matched
+        .iter()
+        .filter(|id| grouped.contains(*id))
+        .cloned()
+        .collect();
+    let mut reasons: HashMap<String, Vec<String>> = HashMap::new();
+    for tank in grouped.iter().filter(|id| id.starts_with("TANK_")) {
+        if out.contains(tank) {
+            continue;
+        }
+        let members: Vec<String> = archive_conn
+            .zrangebyscore(tank.as_str(), 1, "+inf")
+            .await
+            .unwrap_or_default();
+        let hits: Vec<String> = members
+            .into_iter()
+            .filter(|id| matched.contains(id))
+            .collect();
+        if !hits.is_empty() {
+            out.insert(tank.clone());
+            reasons.insert(tank.clone(), hits);
+        }
+    }
+    Ok((out, reasons))
 }
 
 /// The `is:` / `has:` / `in:` / `size:` attribute operators — questions about an archive's *state*
@@ -650,6 +729,7 @@ async fn attribute_filter(
             has_filter(
                 archive_pool,
                 archive_conn,
+                search_conn,
                 ctx.bookmarks,
                 ctx.split_suggestions,
                 &value,
@@ -753,6 +833,7 @@ async fn state_filter(
 async fn has_filter(
     archive_pool: &Pool,
     archive_conn: &mut deadpool_redis::Connection,
+    search_conn: &mut deadpool_redis::Connection,
     bookmarks: &BookmarksRepository,
     split_suggestions: Option<&HashSet<String>>,
     value: &str,
@@ -808,6 +889,11 @@ async fn has_filter(
                 .cloned()
                 .collect())
         }
+        // "This archive has at least one `source:` tag." A maintained set rather than a per-archive
+        // `HGET tags` walk: the point of `has:source` is sweeping a whole library for missing
+        // sources, which is exactly when a per-id round trip would hurt most. Negation composes
+        // like any other atom, so `-has:source` is "has no source at all".
+        "source" => intersect_members(search_conn, SOURCE_TAGGED_KEY, scope).await,
         "patch" => {
             let mut ids = HashSet::new();
             for id in scope {

@@ -982,5 +982,10 @@
   "settings.libraryCounters": "已掃描到的檔案 {{files}} 個 · 已入庫 {{archives}} 個檔案 · 補丁 {{patches}} 個",
   "Batch Operations": "批次處理",
   "Batch operations apply to the current filter": "未選取檔案——批次處理將作用於目前篩選結果",
-  "Batch process all {{n}} results": "批次處理全部 {{n}} 個結果"
+  "Batch process all {{n}} results": "批次處理全部 {{n}} 個結果",
+  "library.withSource": "有來源",
+  "library.withoutSource": "缺少來源",
+  "library.archivesWithASourceTag": "帶有 source: 標籤的檔案（has:source）",
+  "library.archivesWithoutASourceTag": "沒有任何 source: 標籤的檔案（-has:source）",
+  "library.tankMatchedThroughMembers": "這本單行本本身沒有命中，是其中這些卷命中了目前條件：{{members}}"
 }

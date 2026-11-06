@@ -322,6 +322,11 @@ export const QUICK_FILTERS: readonly QuickFilter[] = [
   { token: "has:bookmark" },
   { token: "has:category" },
   { token: "has:split-suggestion" },
+  { token: "has:source" },
+  // The one negated chip. "Which archives never got a source tag" is a real maintenance query that
+  // nothing else answers, and typing the leading minus by hand is exactly the kind of thing a chip
+  // exists to avoid. Negation is a whole-term operator, so it toggles independently of `has:source`.
+  { token: "-has:source" },
   // Membership, size and length: the three non-state things worth a single click. `is:tank` is
   // deliberately absent — the Library's own selector already covers Tankoubon rows, and having
   // both it and `in:tank` (membership) in one row reads as two spellings of the same filter.
