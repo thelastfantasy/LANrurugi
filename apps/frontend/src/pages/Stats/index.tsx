@@ -46,7 +46,10 @@ export function Stats() {
   const tagCloudSizeRatio = sphereSizeRatio(sorted.length)
 
   const archiveCount = archives.data?.length ?? 0
-  const contentSizeGb = (archives.data ?? []).reduce((sum, a) => sum + a.size, 0) / 1e9
+  // GiB, like legacy's own `/stats` page (`/ (1024**3)`), not decimal GB: the two screens are
+  // compared side by side, and dividing by 1e9 made the same library read as 1276 GB here against
+  // 1213 GB there — a 63 GB "difference" that was pure unit choice (reported 2026-11-06).
+  const contentSizeGb = (archives.data ?? []).reduce((sum, a) => sum + a.size, 0) / 1024 ** 3
   const pagesRead = info.data?.total_pages_read ?? 0
   const totals = overview.data?.totals
 

@@ -978,5 +978,6 @@
   "settings.logMaxFiles": "每個分類保留的日誌檔案數",
   "settings.logMaxFilesHelp": "含正在寫入的那一個（預設 3）。超出數量的最舊檔案會被刪除；滾動後的檔名為 general-20251105.log，同一天多次滾動再加 -2、-3。",
   "library.aiGroupingUnavailable": "本機模型無法使用",
-  "library.aiGroupingUnavailableHint": "AI 分組需要本機的 embedding 模型（推薦功能用的那個）。它不在映像檔裡或還沒下載完成，所以無法比對標題。修好之後這項功能會自行恢復。"
+  "library.aiGroupingUnavailableHint": "AI 分組需要本機的 embedding 模型（推薦功能用的那個）。它不在映像檔裡或還沒下載完成，所以無法比對標題。修好之後這項功能會自行恢復。",
+  "settings.libraryCounters": "已掃描到的檔案 {{files}} 個 · 已入庫 {{archives}} 個檔案 · 補丁 {{patches}} 個"
 }

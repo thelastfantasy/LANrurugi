@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { useShinobuStatus } from "@/api/hooks"
+import { useLibraryStatus, useShinobuStatus } from "@/api/hooks"
 import { NumberInput } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
 import { routes } from "@/lib/routes"
@@ -30,6 +30,7 @@ export function WorkersSection({
   const { t } = useTranslation()
   const navigate = useNavigate()
   const shinobuStatus = useShinobuStatus()
+  const libraryStatus = useLibraryStatus()
   const status = shinobuStatus.data
   // Older servers report only `is_alive`.
   const watcherState = status?.state ?? (status?.is_alive ? "running" : "stopped")
@@ -59,6 +60,16 @@ export function WorkersSection({
             {t("settings.fileWatcherInProcess")}
             <br />
             {t("settings.fileWatcherDescription")} {t("settings.fileWatcherSelfHeals", { button: t("settings.rescanArchiveDirectory") })}
+            {libraryStatus.data && (
+              <>
+                <br />
+                {t("settings.libraryCounters", {
+                  files: libraryStatus.data.files_known,
+                  archives: libraryStatus.data.archives,
+                  patches: libraryStatus.data.patches,
+                })}
+              </>
+            )}
             {watcherState === "recovering" && status?.last_error && (
               <>
                 <br />

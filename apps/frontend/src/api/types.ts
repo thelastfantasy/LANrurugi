@@ -259,6 +259,13 @@ export interface ChangelogRelease {
   body: string
 }
 
+/** `/api/settings/library-status` — the background-program section's own counters. */
+export interface LibraryStatus {
+  files_known: number
+  archives: number
+  patches: number
+}
+
 export interface ShinobuStatus {
   is_alive: 0 | 1
   pid: number

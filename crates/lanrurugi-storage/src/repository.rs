@@ -104,6 +104,27 @@ impl ArchiveRepository {
         Ok(ids.into_iter().map(ArchiveId).collect())
     }
 
+    /// Archives carrying a page patch (`has_patch`), one pipelined `HGET` per archive.
+    ///
+    /// The settings page's background-program section shows this as the patch count; the sidecar
+    /// `.patch.zip` files sit next to each archive, so there is no index to count more cheaply.
+    pub async fn count_patched(&self) -> Result<usize> {
+        let ids = self.list_ids().await?;
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.pool.get().await?;
+        let mut pipe = redis::pipe();
+        for id in &ids {
+            pipe.hget(id.as_str(), "has_patch");
+        }
+        let flags: Vec<Option<String>> = pipe.query_async(&mut conn).await?;
+        Ok(flags
+            .into_iter()
+            .filter(|flag| flag.as_deref() == Some("true"))
+            .count())
+    }
+
     pub async fn list_all(&self) -> Result<Vec<Archive>> {
         // One `KEYS` + one pipelined `HGETALL` per id, in a single round trip.
         //

@@ -31,6 +31,9 @@ import {
 /** Which half of a group's list a tab shows. */
 type QueueTab = "manual" | "subscription"
 
+/** Rows a group shows before its list starts scrolling instead of growing the page. */
+const QUEUE_SCROLL_AFTER = 25
+
 /** Right-column panel: the persistent queue, grouped by `plugin_namespace`, with bulk
  * Select All / Invert Selection / Start / Clear Completed / Delete actions. */
 export function DownloadQueuePanel({
@@ -362,7 +365,18 @@ export function DownloadQueuePanel({
                 caretStyle="right-down"
                 defaultOpen
               >
-                {shown.map((item) =>
+                {/* 25 rows is where a group stops being scannable and starts pushing the rest of
+                    the page away; past that it scrolls instead of growing (a 310-URL paste used to
+                    make the panel thousands of pixels tall). `70vh` keeps it usable on a short
+                    window, where 25 rows would not fit anyway. */}
+                <div
+                  style={
+                    shown.length > QUEUE_SCROLL_AFTER
+                      ? { maxHeight: "min(1000px, 70vh)", overflowY: "auto" }
+                      : undefined
+                  }
+                >
+                  {shown.map((item) =>
                   item.origin === "share_import" ? (
                     <ShareImportRow key={item.id} item={item} job={item.job_id ? jobById.get(item.job_id) : undefined} />
                   ) : (
@@ -390,6 +404,7 @@ export function DownloadQueuePanel({
                   />
                   ),
                 )}
+                </div>
               </CollapsibleSection>
             )
           })}

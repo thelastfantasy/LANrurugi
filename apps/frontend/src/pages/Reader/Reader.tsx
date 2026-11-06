@@ -348,6 +348,9 @@ export function Reader() {
    * cannot chase itself.
    */
   const [fitHeightPx, setFitHeightPx] = useState<number | null>(null);
+  // Bumped when the real page paints: the image's own height feeds `box.top` for everything below
+  // it, so the first measurement (taken while the area was still empty) is not final.
+  const [measureTick, setMeasureTick] = useState(0);
   const isMobileToolbarViewport = useIsNarrowViewport("(max-width: 768px)");
   // Keyboard-shortcut help is meaningless on a touch-only phone; `useHasPhysicalKeyboard`
   // explains what "has a keyboard" can actually mean in a browser.
@@ -453,17 +456,26 @@ export function Reader() {
       frame = requestAnimationFrame(measure);
     };
     schedule();
+    // A fresh install renders the reader before the theme stylesheet and the fonts have applied,
+    // and that first layout is where `box.top` sits much lower than it eventually will — the page
+    // then renders at that early, too-small height with a screen of empty space below it until the
+    // reader is reopened in another fit mode (reported 2026-11-06; only ever on first use, because
+    // the second load has the stylesheet cached). A late pass plus one after the fonts settle
+    // covers both.
     const settled = window.setTimeout(schedule, 250);
+    const late = window.setTimeout(schedule, 1_200);
+    void document.fonts?.ready.then(schedule);
     window.addEventListener("resize", schedule);
     const observer = new ResizeObserver(schedule);
     if (imageAreaRef.current) observer.observe(imageAreaRef.current);
     return () => {
       cancelAnimationFrame(frame);
       window.clearTimeout(settled);
+      window.clearTimeout(late);
       window.removeEventListener("resize", schedule);
       observer.disconnect();
     };
-  }, [readerSettings.fitMode, readerSettings.hideHeader, readerSettings.infiniteScroll, isFullscreen]);
+  }, [readerSettings.fitMode, readerSettings.hideHeader, readerSettings.infiniteScroll, isFullscreen, measureTick]);
 
   const lastSpreadHeightRef = useRef<number | null>(null);
   const lastFileInfoRef = useRef<string | null>(null);
@@ -1144,6 +1156,9 @@ export function Reader() {
     );
     if (isPreview) return;
     setMainReady((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
+    if (readerSettings.fitMode === FIT_MODE.FIT_HEIGHT && !isFullscreen) {
+      setMeasureTick((tick) => tick + 1);
+    }
     if (img.naturalWidth > 0 && img.naturalHeight > 0) {
       lastDimsRef.current = { width: img.naturalWidth, height: img.naturalHeight };
     }
@@ -1988,6 +2003,7 @@ export function Reader() {
         />
         <FitMenuButton
           isFullscreen={isFullscreen}
+          fullscreenHost={isFullscreen ? containerRef.current : null}
           onToggleFullscreen={toggleFullScreen}
           onSelectFitMode={(mode) => updateReaderSettings({ fitMode: mode })}
           primary={fitAction}
@@ -2230,6 +2246,7 @@ export function Reader() {
         />
         <FitMenuButton
           isFullscreen={isFullscreen}
+          fullscreenHost={isFullscreen ? containerRef.current : null}
           onToggleFullscreen={toggleFullScreen}
           onSelectFitMode={(mode) => updateReaderSettings({ fitMode: mode })}
           primary={fitAction}
