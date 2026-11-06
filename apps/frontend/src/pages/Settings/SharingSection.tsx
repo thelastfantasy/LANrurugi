@@ -4,8 +4,9 @@ import { type MouseEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Modal, Tooltip } from "@/components/common-ui/Display";
+import { Switch } from "@/components/common-ui/Form";
 import { CollapsibleSection, DateTimeStack } from "@/components/Display";
-import { useShares } from "@/share/api";
+import { useSaveShareSettings, useShares, useShareSettings } from "@/share/api";
 import { copyWithToast } from "@/share/clipboard";
 import {
   type SettingField,
@@ -19,6 +20,7 @@ import {
   AltScheduleEditor,
   SharingEndpointStatus,
   SharingEndpointSummary,
+  SharingNodeString,
 } from "./SharingStatus";
 
 const DEFAULT_FIELDS: SettingField[] = [
@@ -340,6 +342,10 @@ function PanelBody({ panel }: { panel: Panel }) {
  * they live behind "advanced" instead of in front of it. */
 function SharingNodeBlock() {
   const { t } = useTranslation();
+  const settings = useShareSettings();
+  const save = useSaveShareSettings();
+  const on = settings.data?.share_node_relay === true;
+
   return (
     <div className="share-node-block">
       <div className="share-panel-row">
@@ -350,13 +356,24 @@ function SharingNodeBlock() {
             {t("share.nodes.ownRelayHint")}
           </div>
         </div>
+        <Switch
+          checked={on}
+          disabled={save.isPending}
+          onCheckedChange={(next) =>
+            save.mutate({ share_node_relay: next, share_node_rendezvous: next })
+          }
+          aria-label={t("share.nodes.heading")}
+        />
       </div>
-      {/* Only what needs no public address: which instance-to-instance relays this endpoint may
-          use. Acting as a relay *for other people* is the one thing that cannot avoid a public
-          endpoint and a certificate for a domain, so it is not part of the normal settings — the
-          endpoint's own connections are encrypted by its node key, like BitTorrent's, with no
-          certificate to obtain and no traffic shape that differs from HTTP/3. */}
-      <div style={{ margin: "8px 0 0 22px" }}>
+      {/* The string a friend adds to *their* "使用的节点" list: it is produced here, so the switch
+          has to exist for the field below it to be usable at all. Everything else (port,
+          certificate mode, rate cap, allow-list) runs on defaults. */}
+      {on && (
+        <div style={{ margin: "10px 0 0 22px" }}>
+          <SharingNodeString />
+        </div>
+      )}
+      <div style={{ margin: "10px 0 0 22px" }}>
         <ShareSettingsForm fields={NODE_FIELDS} />
       </div>
     </div>

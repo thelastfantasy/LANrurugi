@@ -188,7 +188,10 @@ with `X-Forwarded-For`. Private ranges are not trusted by default: anyone on the
 write that header.
 
 To avoid public services, list your own or a friend's nodes under **Settings → Sharing → LANrurugi
-nodes**; they then handle lookup and relaying. When this instance relays for others, you can cap
+nodes**; they then handle lookup and relaying. That is the only field to fill in: connections
+between instances are already encrypted with each instance's own node key (self-signed, verified by
+public key — no certificate to obtain, like BitTorrent), and need no public address. When this
+instance relays for others, you can cap
 each connection's speed or admit only listed instances.
 
 ## Version compatibility

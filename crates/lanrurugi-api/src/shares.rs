@@ -61,7 +61,6 @@ pub fn router() -> Router<AppState> {
             "/shares/settings",
             get(get_share_settings).put(put_share_settings),
         )
-        .route("/shares/relay-credentials", post(put_relay_credentials))
         .route("/shares/by-item/{item_id}", get(shares_by_item))
         .route("/shares/{id}", get(get_share).patch(update_share))
         .route(
@@ -1098,87 +1097,6 @@ async fn settings_with_status(state: &AppState) -> Value {
         }),
     );
     value
-}
-
-/// Uploads a relay's TLS certificate or private key as PEM text and points the matching setting at
-/// the file it was written to. Those two settings hold a **server-side path** (`share_net::nodes`
-/// reads them with `load_certs(Path::new(..))`), so a browser file picker alone could never fill
-/// them in — the file has to be written where the server can read it.
-///
-/// Written next to the relay's own node key (`temp_dir/share`), which is where every other
-/// per-relay material already lives. The private key is created mode 0600.
-async fn put_relay_credentials(
-    State(state): State<AppState>,
-    Json(body): Json<Map<String, Value>>,
-) -> Response {
-    const OP: &str = "put_relay_credentials";
-    let kind = body.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-    let pem = body
-        .get("pem")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim();
-    let (setting, file, mode) = match kind {
-        "cert" => ("share_node_relay_cert", "relay-cert.pem", 0o644),
-        "key" => ("share_node_relay_key", "relay-key.pem", 0o600),
-        _ => {
-            return error(
-                axum::http::StatusCode::BAD_REQUEST,
-                OP,
-                "kind must be \"cert\" or \"key\"".to_string(),
-            )
-        }
-    };
-    if !pem.starts_with("-----BEGIN ") || !pem.contains("-----END ") {
-        return error(
-            axum::http::StatusCode::BAD_REQUEST,
-            OP,
-            "not a PEM file".to_string(),
-        );
-    }
-    let dir = state.library.temp_dir.join("share");
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        return error(
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            OP,
-            e.to_string(),
-        );
-    }
-    let path = dir.join(file);
-    if let Err(e) = write_private_file(&path, pem.as_bytes(), mode) {
-        return error(
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            OP,
-            e.to_string(),
-        );
-    }
-    let mut body = Map::new();
-    body.insert(
-        setting.to_string(),
-        Value::String(path.to_string_lossy().to_string()),
-    );
-    match share_settings::save(&state, &body).await {
-        Ok(_) => axum::Json(json!({ "path": path.to_string_lossy() })).into_response(),
-        Err(e) => error(axum::http::StatusCode::BAD_REQUEST, OP, e),
-    }
-}
-
-/// Writes `bytes` to `path` with an explicit mode — `std::fs::write` would leave a private key at
-/// whatever the process umask allows.
-fn write_private_file(path: &std::path::Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(mode)
-        .open(path)?;
-    file.write_all(bytes)?;
-    // An existing file keeps its own mode through `truncate`, so set it again explicitly.
-    use std::os::unix::fs::PermissionsExt;
-    let perms = std::fs::Permissions::from_mode(mode);
-    std::fs::set_permissions(path, perms)
 }
 
 async fn put_share_settings(
