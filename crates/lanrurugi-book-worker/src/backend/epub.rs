@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::Read;
 
 use quick_xml::events::{BytesStart, Event};
-use quick_xml::Reader;
+use quick_xml::{Reader, XmlVersion};
 use zip::ZipArchive;
 
 use super::{Container, Failure, Pages, Result};
@@ -199,7 +199,7 @@ impl Epub {
             loop {
                 match reader.read_event() {
                     Ok(Event::Start(e) | Event::Empty(e))
-                        if e.local_name().as_ref() == b"EncryptionMethod" =>
+                        if e.local_name().as_ref() == "EncryptionMethod" =>
                     {
                         let algorithm = attr(&e, "Algorithm").unwrap_or_default();
                         if !FONT_OBFUSCATION.contains(&algorithm.as_str()) {
@@ -335,8 +335,12 @@ fn intern(images: &mut Vec<String>, path: String) -> ImageRef {
 
 fn attr(e: &BytesStart, local: &str) -> Option<String> {
     e.attributes().flatten().find_map(|a| {
-        (a.key.local_name().as_ref() == local.as_bytes())
-            .then(|| a.unescape_value().ok().map(|v| v.into_owned()))
+        (a.key.local_name().as_ref() == local)
+            .then(|| {
+                a.normalized_value(XmlVersion::default())
+                    .ok()
+                    .map(|v| v.into_owned())
+            })
             .flatten()
     })
 }
@@ -351,7 +355,7 @@ fn rootfile(container: &str) -> Option<String> {
     let mut reader = reader(container);
     loop {
         match reader.read_event() {
-            Ok(Event::Start(e) | Event::Empty(e)) if e.local_name().as_ref() == b"rootfile" => {
+            Ok(Event::Start(e) | Event::Empty(e)) if e.local_name().as_ref() == "rootfile" => {
                 return attr(&e, "full-path");
             }
             Ok(Event::Eof) | Err(_) => return None,
@@ -369,7 +373,7 @@ fn parse_package(opf: &str, base: &str) -> Package {
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
+                let name = e.local_name().as_ref().to_owned();
                 text.clear();
                 if name == "meta" {
                     meta_property = attr(&e, "property");
@@ -378,14 +382,13 @@ fn parse_package(opf: &str, base: &str) -> Package {
                 current = Some(name);
             }
             Ok(Event::Empty(e)) => {
-                let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
+                let name = e.local_name().as_ref().to_owned();
                 handle_package_element(&mut package, &name, &e, base);
             }
-            Ok(Event::Text(t)) => text.push_str(&t.decode().unwrap_or_default()),
-            Ok(Event::GeneralRef(r)) => text.push_str(&markup::decode_entities(&format!(
-                "&{};",
-                String::from_utf8_lossy(&r)
-            ))),
+            Ok(Event::Text(t)) => text.push_str(&t.xml_content(XmlVersion::default())),
+            Ok(Event::GeneralRef(r)) => {
+                text.push_str(&markup::decode_entities(&format!("&{};", r.as_ref())))
+            }
             Ok(Event::End(_)) => {
                 let value = text.trim().to_owned();
                 match current.take().as_deref() {
@@ -452,34 +455,29 @@ fn parse_nav(xhtml: &str) -> Vec<(String, String, u32)> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => match e.local_name().as_ref() {
-                b"nav" => {
+                "nav" => {
                     if attr(&e, "type").is_some_and(|t| t.split_whitespace().any(|t| t == "toc")) {
                         in_toc = true;
                     }
                 }
-                b"ol" if in_toc => ol_depth += 1,
-                b"a" if in_toc => {
-                    link = Some((attr(&e, "href").unwrap_or_default(), String::new()))
-                }
+                "ol" if in_toc => ol_depth += 1,
+                "a" if in_toc => link = Some((attr(&e, "href").unwrap_or_default(), String::new())),
                 _ => {}
             },
             Ok(Event::Text(t)) => {
                 if let Some((_, title)) = &mut link {
-                    title.push_str(&t.decode().unwrap_or_default());
+                    title.push_str(&t.xml_content(XmlVersion::default()));
                 }
             }
             Ok(Event::GeneralRef(r)) => {
                 if let Some((_, title)) = &mut link {
-                    title.push_str(&markup::decode_entities(&format!(
-                        "&{};",
-                        String::from_utf8_lossy(&r)
-                    )));
+                    title.push_str(&markup::decode_entities(&format!("&{};", r.as_ref())));
                 }
             }
             Ok(Event::End(e)) => match e.local_name().as_ref() {
-                b"nav" => in_toc = false,
-                b"ol" if in_toc => ol_depth = ol_depth.saturating_sub(1),
-                b"a" => {
+                "nav" => in_toc = false,
+                "ol" if in_toc => ol_depth = ol_depth.saturating_sub(1),
+                "a" => {
                     if let Some((href, title)) = link.take() {
                         let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
                         out.push((title, href, ol_depth.saturating_sub(1)));
@@ -504,25 +502,25 @@ fn parse_ncx(ncx: &str) -> Vec<(String, String, u32)> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => match e.local_name().as_ref() {
-                b"navPoint" => {
+                "navPoint" => {
                     depth += 1;
                     label.clear();
                 }
-                b"navLabel" => in_label = true,
+                "navLabel" => in_label = true,
                 _ => {}
             },
-            Ok(Event::Empty(e)) if e.local_name().as_ref() == b"content" && depth > 0 => {
+            Ok(Event::Empty(e)) if e.local_name().as_ref() == "content" && depth > 0 => {
                 let src = attr(&e, "src").unwrap_or_default();
                 let title = label.split_whitespace().collect::<Vec<_>>().join(" ");
                 out.push((title, src, depth - 1));
             }
-            Ok(Event::Text(t)) if in_label => label.push_str(&t.decode().unwrap_or_default()),
-            Ok(Event::GeneralRef(r)) if in_label => label.push_str(&markup::decode_entities(
-                &format!("&{};", String::from_utf8_lossy(&r)),
-            )),
+            Ok(Event::Text(t)) if in_label => label.push_str(&t.xml_content(XmlVersion::default())),
+            Ok(Event::GeneralRef(r)) if in_label => {
+                label.push_str(&markup::decode_entities(&format!("&{};", r.as_ref())))
+            }
             Ok(Event::End(e)) => match e.local_name().as_ref() {
-                b"navPoint" => depth = depth.saturating_sub(1),
-                b"navLabel" => in_label = false,
+                "navPoint" => depth = depth.saturating_sub(1),
+                "navLabel" => in_label = false,
                 _ => {}
             },
             Ok(Event::Eof) | Err(_) => break,
