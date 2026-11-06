@@ -445,23 +445,64 @@ function SuggestionCard({
 
       <DrawerFooter>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, maxWidth: "60%" }}>
-            {Array.from({ length: total }, (_, i) => (
-              <span
-                key={i}
-                onClick={() => onJump(i)}
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: "50%",
-                  background: i === page ? "rgba(128,128,128,0.7)" : "rgba(128,128,128,0.2)",
-                  cursor: "pointer",
-                  transition: "background 0.2s",
-                  flexShrink: 0,
+          {/* Up to a handful of suggestions a dot per card is a nice affordance; with hundreds
+              (a big library produces four figures) it wraps into a wall of dots and pushes the
+              buttons off the bar, so past `MAX_PAGE_DOTS` it becomes one compact pager instead. */}
+          {total <= MAX_PAGE_DOTS ? (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4, maxWidth: "60%" }}>
+              {Array.from({ length: total }, (_, i) => (
+                <span
+                  key={i}
+                  onClick={() => onJump(i)}
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: "50%",
+                    background: i === page ? "rgba(128,128,128,0.7)" : "rgba(128,128,128,0.2)",
+                    cursor: "pointer",
+                    transition: "background 0.2s",
+                    flexShrink: 0,
+                  }}
+                />
+              ))}
+            </div>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "nowrap", minWidth: 0 }}>
+              <button
+                type="button"
+                className="stdbtn"
+                disabled={page === 0}
+                onClick={() => onJump(Math.max(0, page - 1))}
+                style={{ minWidth: 28, flexShrink: 0 }}
+              >
+                <i className="fa fa-chevron-left" aria-hidden="true" />
+              </button>
+              <input
+                type="number"
+                min={1}
+                max={total}
+                value={page + 1}
+                onChange={(e) => {
+                  const next = Number(e.target.value)
+                  if (Number.isFinite(next) && next >= 1 && next <= total) onJump(next - 1)
                 }}
+                aria-label={t("library.groupSuggestionPage") ?? undefined}
+                style={{ width: 56, flexShrink: 0, textAlign: "center" }}
               />
-            ))}
-          </div>
+              <span style={{ whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", opacity: 0.7 }}>
+                / {total}
+              </span>
+              <button
+                type="button"
+                className="stdbtn"
+                disabled={page >= total - 1}
+                onClick={() => onJump(Math.min(total - 1, page + 1))}
+                style={{ minWidth: 28, flexShrink: 0 }}
+              >
+                <i className="fa fa-chevron-right" aria-hidden="true" />
+              </button>
+            </div>
+          )}
           <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
             <input
               type="button"
@@ -517,6 +558,9 @@ function SuggestionCard({
  *  score pairs (~20 s on a 6 000-archive library, measured on the NAS). The drawer body remounts on
  *  every open, so without this each open paid that again. A short client-side cache makes reopening
  *  instant; creating or ignoring a group drops it, and the explicit re-check button forces past it. */
+/** Above this many suggestions the footer shows one compact pager instead of one dot per card. */
+const MAX_PAGE_DOTS = 20
+
 const SUGGESTION_CACHE_TTL_MS = 10 * 60 * 1000
 let suggestionCache: { at: number; suggestions: AiGroupSuggestion[] } | null = null
 

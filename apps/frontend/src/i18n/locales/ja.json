@@ -2668,5 +2668,6 @@
   "library.aiGroupingEmptyHintSameSeries": "同じシリーズの未収録の巻が 2 冊以上必要です",
   "library.aiGroupingEmptyHintTags": "タイトルやタグから同系列と分かる必要があります（作家・シリーズ名・巻数）",
   "library.aiGroupingEmptyHintThreshold": "類似度のしきい値が高いと、近いが一致しないタイトルは組になりません",
-  "library.aiGroupingRecheck": "再確認"
+  "library.aiGroupingRecheck": "再確認",
+  "library.groupSuggestionPage": "提案番号へ移動"
 }

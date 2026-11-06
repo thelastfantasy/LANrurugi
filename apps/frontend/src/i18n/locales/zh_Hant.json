@@ -992,5 +992,6 @@
   "library.aiGroupingEmptyHintSameSeries": "同一個系列至少要有兩本還沒併入單行本",
   "library.aiGroupingEmptyHintTags": "標題或標籤裡能看出同系列（藝術家、系列名、卷號）",
   "library.aiGroupingEmptyHintThreshold": "相似度閾值太高時，相近但不完全一致的標題不會被配對",
-  "library.aiGroupingRecheck": "重新檢查"
+  "library.aiGroupingRecheck": "重新檢查",
+  "library.groupSuggestionPage": "跳到第幾組"
 }
