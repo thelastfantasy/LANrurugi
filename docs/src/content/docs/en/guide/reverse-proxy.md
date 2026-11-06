@@ -98,10 +98,9 @@ services:
     # Traefik serves it, so port 3000 no longer needs publishing
     volumes:
       - ./data/manga:/home/koyomi/lanrurugi/content
-      - ./data/thumb:/home/koyomi/lanrurugi/thumb
-      - ./data/database:/home/koyomi/lanrurugi/database
-      - ./data/models:/home/koyomi/lanrurugi/models
+      - ./data/lanrurugi:/data   # 缩略图 / Redis / 模型 / 日志
     environment:
+      - LANRURUGI_DATA_DIR=/data
       - LANRURUGI_FORCE_SECURE_COOKIES=true
     labels:
       - traefik.enable=true

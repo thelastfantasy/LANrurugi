@@ -66,7 +66,14 @@ ARG LANRURUGI_RELEASE=
 ENV LANRURUGI_GIT_SHA=${LANRURUGI_GIT_SHA}
 ENV LANRURUGI_RELEASE=${LANRURUGI_RELEASE}
 ENV LANRURUGI_TRACKER_DSN=${LANRURUGI_TRACKER_DSN}
-RUN cargo build --release -p lanrurugi-server -p lanrurugi-book-worker
+# Every binary the server spawns at runtime, not just the ones on the main paths: leaving
+# `lanrurugi-embed-worker` and `lanrurugi-gpu-worker` out here is what shipped beta.1/beta.2 images
+# where recommendations, AI grouping and local translation silently did nothing (the spawn fails
+# with `BinaryNotFound`, the call sites swallow it, and the UI shows an empty list rather than an
+# error). `scripts/check-image-binaries.sh` now fails a PR that lets the two lists drift apart
+# again, and release.yml runs the built image once to confirm all four are executable.
+RUN cargo build --release -p lanrurugi-server -p lanrurugi-book-worker \
+    -p lanrurugi-embed-worker -p lanrurugi-gpu-worker
 # The API reference document, generated from the crate source already copied above. Built here
 # rather than in the docs stage because the generator is Rust: it parses the API crate's route
 # registrations, which is exactly the source this stage has. `docs/api/` (the vendored upstream
@@ -258,6 +265,10 @@ COPY --from=deno-bin /deno /usr/local/bin/deno
 COPY --from=redis-bin /usr/local/bin/redis-server /usr/local/bin/redis-cli /usr/local/bin/
 COPY --from=rust-builder /build/target/release/lanrurugi-server /usr/local/bin/lanrurugi-server
 COPY --from=rust-builder /build/target/release/lanrurugi-book-worker /usr/local/bin/lanrurugi-book-worker
+# Spawned on demand next to the server (`embed_worker_client` / `gpu_worker_client` look for them in
+# the running executable's own directory) — see the `cargo build` comment above.
+COPY --from=rust-builder /build/target/release/lanrurugi-embed-worker /usr/local/bin/lanrurugi-embed-worker
+COPY --from=rust-builder /build/target/release/lanrurugi-gpu-worker /usr/local/bin/lanrurugi-gpu-worker
 # E-book support: the worker subprocess sits next to `lanrurugi-server` (the client looks for it
 # there), PDFium beside it with its BSD license and third-party notices; DjVuLibre's tools come from
 # apt (`djvulibre-bin`) and are run as separate programs (GPL, not linked).

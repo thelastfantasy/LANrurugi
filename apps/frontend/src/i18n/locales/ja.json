@@ -2652,5 +2652,7 @@
   "settings.logMaxFileSize": "ログファイルのサイズ上限",
   "settings.logMaxFileSizeHelp": "カテゴリのログファイルがこのサイズ（MB、既定 16）を超えると、翌日を待たずにローテーションします。",
   "settings.logMaxFiles": "カテゴリごとに保持するログファイル数",
-  "settings.logMaxFilesHelp": "書き込み中のものを含みます（既定 3）。超えた分は古い順に削除されます。ローテーション後の名前は general-20251105.log、同日に複数回ローテーションすると -2、-3 が付きます。"
+  "settings.logMaxFilesHelp": "書き込み中のものを含みます（既定 3）。超えた分は古い順に削除されます。ローテーション後の名前は general-20251105.log、同日に複数回ローテーションすると -2、-3 が付きます。",
+  "library.aiGroupingUnavailable": "ローカルモデルが利用できません",
+  "library.aiGroupingUnavailableHint": "AI グループ化にはローカルの embedding モデル（推薦機能で使うもの）が必要です。イメージに含まれていないか、ダウンロードが完了していないため、タイトルを比較できません。利用可能になれば自動的に復旧します。"
 }

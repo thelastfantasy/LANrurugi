@@ -492,3 +492,103 @@ h1#_top,
   outline: 2px solid var(--sl-color-accent);
   outline-offset: 1px;
 }
+
+/*
+ * Version history (`content/docs/versions.mdx`). The page renders `.lr-versions__row` entries with
+ * three spans each; these classes had no styles at all, so every span stayed inline and the whole
+ * history collapsed into one run-on line ("v1.0.0-beta.2 预发布 2026-11-06 用户指南 · API 参考 ·
+ * SDKv1.0.0-beta.1 …"). One row per release, with the links pushed to the end.
+ */
+.lr-versions {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+	margin: 1.5rem 0;
+}
+
+.lr-versions__row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto auto;
+	align-items: baseline;
+	gap: 0.35rem 1.25rem;
+	padding: 0.6rem 0.85rem;
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.4rem;
+	color: inherit;
+	text-decoration: none;
+}
+
+.lr-versions__row:hover {
+	border-color: var(--sl-color-accent);
+	text-decoration: none;
+}
+
+.lr-versions__name {
+	font-weight: 600;
+}
+
+.lr-versions__badge {
+	margin-inline-start: 0.5rem;
+	padding: 0.05rem 0.4rem;
+	border-radius: 0.25rem;
+	background: var(--sl-color-accent-low, rgba(127, 127, 127, 0.18));
+	font-size: var(--sl-text-xs);
+	font-weight: 500;
+	white-space: nowrap;
+}
+
+.lr-versions__date,
+.lr-versions__links {
+	color: var(--sl-color-gray-3);
+	font-size: var(--sl-text-sm);
+	white-space: nowrap;
+}
+
+@media (max-width: 40rem) {
+	.lr-versions__row {
+		grid-template-columns: 1fr;
+		gap: 0.2rem;
+		text-align: start;
+	}
+
+	.lr-versions__date,
+	.lr-versions__links {
+		white-space: normal;
+	}
+}
+
+/*
+ * Version picker on phones. Starlight hides the header's right group below 50rem, and the same
+ * component is rendered again inside the mobile menu's footer (`MobileMenuFooter`) — where it sat
+ * as an unlabelled `<select>` in a row with the GitHub icon. Give it a labelled full-width row so
+ * "switch documentation version" is findable without a manual guess.
+ */
+.nav-links__version-label {
+	display: none;
+}
+
+@media (max-width: 50rem) {
+	.mobile-preferences .nav-links {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.mobile-preferences .nav-links__version {
+		flex: 1 1 100%;
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+
+	.mobile-preferences .nav-links__version-label {
+		display: block;
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-2);
+	}
+
+	.mobile-preferences .nav-links__version select {
+		width: 100%;
+	}
+}
