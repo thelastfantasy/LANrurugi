@@ -1027,7 +1027,7 @@ div.ido.share-closed p:last-child {
 
 .share-node-list li {
   display: grid;
-  grid-template-columns: 4.5em minmax(0, 1fr) 6.5em;
+  grid-template-columns: 4.5em minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
 }
@@ -1038,10 +1038,13 @@ div.ido.share-closed p:last-child {
   line-height: 1.4;
 }
 
+/* `.stdbtn` carries legacy's `min-width: 150px`, which is what pushed these buttons past the
+   container's right edge; the grid column sizes to the label instead. */
 .share-node-list .stdbtn,
 .share-node-add .stdbtn {
-  width: 100%;
+  min-width: 0;
   margin: 0;
+  white-space: nowrap;
 }
 
 .share-node-tag {
@@ -1052,7 +1055,7 @@ div.ido.share-closed p:last-child {
 
 .share-node-add {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 6.5em;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
   gap: 8px;
 }
