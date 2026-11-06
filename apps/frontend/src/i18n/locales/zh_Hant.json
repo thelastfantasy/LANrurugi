@@ -986,5 +986,6 @@
   "library.withSource": "有來源",
   "library.withoutSource": "缺少來源",
   "library.archivesWithASourceTag": "帶有 source: 標籤的檔案（has:source）",
-  "library.archivesWithoutASourceTag": "沒有任何 source: 標籤的檔案（-has:source）"
+  "library.archivesWithoutASourceTag": "沒有任何 source: 標籤的檔案（-has:source）",
+  "library.tankMatchedThroughMembers": "這本單行本本身沒有命中，是其中這些卷命中了目前條件：{{members}}"
 }

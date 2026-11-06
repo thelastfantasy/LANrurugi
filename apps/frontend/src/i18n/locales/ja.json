@@ -2662,5 +2662,6 @@
   "library.withSource": "source あり",
   "library.withoutSource": "source なし",
   "library.archivesWithASourceTag": "source: タグを持つアーカイブ（has:source）",
-  "library.archivesWithoutASourceTag": "source: タグを一切持たないアーカイブ（-has:source）"
+  "library.archivesWithoutASourceTag": "source: タグを一切持たないアーカイブ（-has:source）",
+  "library.tankMatchedThroughMembers": "この単行本自体は条件に一致せず、次の巻が一致しています：{{members}}"
 }
