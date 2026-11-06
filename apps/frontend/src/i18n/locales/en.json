@@ -2913,5 +2913,7 @@
   "library.filteredFromTotalEntries": "(filtered from {{total}} total entries)",
   "common.refresh": "Refresh",
   "common.removeTag": "Remove tag",
-  "share.settings.showAdvanced": "Show advanced options"
+  "share.settings.showAdvanced": "Show advanced options",
+  "share.nodes.relayTlsHint": "Tunnel or reverse-proxy mode needs no public address: point the domain at this machine's http://localhost:<port>.",
+  "share.nodes.ownRelayHint": "Instances already encrypt with their own node keys — self-signed and verified by public key, like BitTorrent, with no certificate to obtain. Fill in only the nodes you want to borrow."
 }

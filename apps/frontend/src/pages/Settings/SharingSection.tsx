@@ -4,9 +4,8 @@ import { type MouseEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Modal, Tooltip } from "@/components/common-ui/Display";
-import { Switch } from "@/components/common-ui/Form";
 import { CollapsibleSection, DateTimeStack } from "@/components/Display";
-import { useSaveShareSettings, useShares, useShareSettings } from "@/share/api";
+import { useShares } from "@/share/api";
 import { copyWithToast } from "@/share/clipboard";
 import {
   type SettingField,
@@ -20,7 +19,6 @@ import {
   AltScheduleEditor,
   SharingEndpointStatus,
   SharingEndpointSummary,
-  SharingNodeString,
 } from "./SharingStatus";
 
 const DEFAULT_FIELDS: SettingField[] = [
@@ -110,73 +108,10 @@ const LIMIT_FIELDS: SettingField[] = [
 const NODE_FIELDS: SettingField[] = [
   {
     key: "share_nodes",
-    advanced: true,
     kind: "lines",
     label: "share.nodes.list",
     hint: true,
     placeholder: "lrrg-node:…@host:443",
-  },
-  {
-    key: "share_node_rendezvous",
-    kind: "bool",
-    label: "share.nodes.offerRendezvous",
-  },
-  {
-    key: "share_node_relay",
-    kind: "bool",
-    label: "share.nodes.offerRelay",
-    hint: true,
-  },
-  {
-    key: "share_node_relay_tls",
-    advanced: true,
-    kind: "choice",
-    label: "share.nodes.relayTls",
-    options: ["acme", "files", "proxy"],
-  },
-  {
-    key: "share_node_relay_port",
-    advanced: true,
-    kind: "number",
-    label: "share.nodes.relayPort",
-    hint: true,
-  },
-  {
-    key: "share_node_relay_cert",
-    advanced: true,
-    kind: "text",
-    label: "share.nodes.relayCert",
-    onlyWhen: { key: "share_node_relay_tls", value: "files" },
-  },
-  {
-    key: "share_node_relay_key",
-    advanced: true,
-    kind: "text",
-    label: "share.nodes.relayKey",
-    onlyWhen: { key: "share_node_relay_tls", value: "files" },
-  },
-  {
-    key: "share_node_relay_rate",
-    advanced: true,
-    kind: "number",
-    label: "share.nodes.relayRate",
-    hint: true,
-  },
-  {
-    key: "share_node_relay_allow",
-    advanced: true,
-    kind: "lines",
-    label: "share.nodes.relayAllow",
-    hint: true,
-    placeholder: "lrrg-node:…@host:443",
-  },
-  {
-    key: "share_self_relay_url",
-    advanced: true,
-    kind: "text",
-    label: "share.nodes.selfRelayUrl",
-    hint: true,
-    placeholder: "https://relay.example.org",
   },
 ];
 
@@ -405,47 +340,25 @@ function PanelBody({ panel }: { panel: Panel }) {
  * they live behind "advanced" instead of in front of it. */
 function SharingNodeBlock() {
   const { t } = useTranslation();
-  const settings = useShareSettings();
-  const save = useSaveShareSettings();
-  const [advanced, setAdvanced] = useState(false);
-  const on = settings.data?.share_node_relay === true;
-
   return (
     <div className="share-node-block">
       <div className="share-panel-row">
         <i className="fa fa-server fa-fw" aria-hidden="true"></i>
         <div className="share-panel-text">
           <div className="share-panel-title">{t("share.nodes.heading")}</div>
-          <div className="share-panel-desc">{t("share.panel.nodesDesc")}</div>
+          <div className="share-panel-desc">
+            {t("share.nodes.ownRelayHint")}
+          </div>
         </div>
-        <Switch
-          checked={on}
-          disabled={save.isPending}
-          onCheckedChange={(next) =>
-            save.mutate({ share_node_relay: next, share_node_rendezvous: next })
-          }
-          aria-label={t("share.nodes.heading")}
-        />
       </div>
-      {on && (
-        <div style={{ margin: "8px 0 0 22px" }}>
-          <SharingNodeString />
-        </div>
-      )}
-      <div style={{ margin: "6px 0 0 22px" }}>
-        <button
-          type="button"
-          className="stdbtn"
-          onClick={() => setAdvanced((v) => !v)}
-        >
-          {t("share.settings.showAdvanced")}
-        </button>
+      {/* Only what needs no public address: which instance-to-instance relays this endpoint may
+          use. Acting as a relay *for other people* is the one thing that cannot avoid a public
+          endpoint and a certificate for a domain, so it is not part of the normal settings — the
+          endpoint's own connections are encrypted by its node key, like BitTorrent's, with no
+          certificate to obtain and no traffic shape that differs from HTTP/3. */}
+      <div style={{ margin: "8px 0 0 22px" }}>
+        <ShareSettingsForm fields={NODE_FIELDS} />
       </div>
-      {advanced && (
-        <div style={{ margin: "8px 0 0 22px" }}>
-          <ShareSettingsForm fields={NODE_FIELDS} />
-        </div>
-      )}
     </div>
   );
 }
