@@ -546,21 +546,14 @@ function SuggestionCard({
                   {/* Centred across the whole button, not just the space the toggle leaves: the
                       toggle is positioned absolutely so the label sits on the button's own centre
                       line in both states. */}
-                  <span style={{ flex: "1 1 auto", textAlign: "center", whiteSpace: "nowrap" }}>
+                  <span style={{ flex: "0 1 auto", textAlign: "center", whiteSpace: "nowrap" }}>
                     {isAddToExisting ? t("library.addToTankoubon") : t("library.createTankoubon")}
                   </span>
                   <Tooltip
                     label={t("library.autorenameAndReorderChaptersWith")}
                     wrapperStyle={
                       showToggle
-                        ? {
-                            display: "inline-flex",
-                            flexShrink: 0,
-                            position: "absolute",
-                            right: 8,
-                            top: "50%",
-                            transform: "translateY(-50%)",
-                          }
+                        ? { display: "inline-flex", flexShrink: 0, marginLeft: 6 }
                         : { display: "none" }
                     }
                     zIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL}
