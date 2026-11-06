@@ -4,8 +4,9 @@ import { type MouseEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Modal, Tooltip } from "@/components/common-ui/Display";
+import { Switch } from "@/components/common-ui/Form";
 import { CollapsibleSection, DateTimeStack } from "@/components/Display";
-import { useShares } from "@/share/api";
+import { useSaveShareSettings, useShares, useShareSettings } from "@/share/api";
 import { copyWithToast } from "@/share/clipboard";
 import {
   type SettingField,
@@ -332,7 +333,7 @@ function ShareCodeCell({ code }: { code: string }) {
   );
 }
 
-type Panel = "defaults" | "connectivity" | "network" | "nodes" | "limits";
+type Panel = "defaults" | "connectivity" | "network" | "limits";
 
 const PANELS: {
   id: Panel;
@@ -358,12 +359,6 @@ const PANELS: {
     description: "share.panel.networkDesc",
   },
   {
-    id: "nodes",
-    icon: "fa-server",
-    title: "share.nodes.heading",
-    description: "share.panel.nodesDesc",
-  },
-  {
     id: "limits",
     icon: "fa-gauge",
     title: "share.limits.heading",
@@ -387,15 +382,6 @@ function PanelBody({ panel }: { panel: Panel }) {
       );
     case "network":
       return <ShareSettingsForm fields={NETWORK_FIELDS} />;
-    case "nodes":
-      return (
-        <>
-          <h3>{t("share.panel.ownNode")}</h3>
-          <SharingNodeString />
-          <h3>{t("share.detail.settings")}</h3>
-          <ShareSettingsForm fields={NODE_FIELDS} />
-        </>
-      );
     case "limits":
       return (
         <>
@@ -405,6 +391,57 @@ function PanelBody({ panel }: { panel: Panel }) {
         </>
       );
   }
+}
+
+/** Acting as a LANrurugi node, as one switch. The relay role and the rendezvous role only make
+ * sense together for this app's own use (a node string carries both), and every other knob — port,
+ * certificate mode, rate cap, allow-list, public URL — has a default that is right for that case, so
+ * they live behind "advanced" instead of in front of it. */
+function SharingNodeBlock() {
+  const { t } = useTranslation();
+  const settings = useShareSettings();
+  const save = useSaveShareSettings();
+  const [advanced, setAdvanced] = useState(false);
+  const on = settings.data?.share_node_relay === true;
+
+  return (
+    <div className="share-node-block">
+      <div className="share-panel-row">
+        <i className="fa fa-server fa-fw" aria-hidden="true"></i>
+        <div className="share-panel-text">
+          <div className="share-panel-title">{t("share.nodes.heading")}</div>
+          <div className="share-panel-desc">{t("share.panel.nodesDesc")}</div>
+        </div>
+        <Switch
+          checked={on}
+          disabled={save.isPending}
+          onCheckedChange={(next) =>
+            save.mutate({ share_node_relay: next, share_node_rendezvous: next })
+          }
+          aria-label={t("share.nodes.heading")}
+        />
+      </div>
+      {on && (
+        <div style={{ margin: "8px 0 0 22px" }}>
+          <SharingNodeString />
+        </div>
+      )}
+      <div style={{ margin: "6px 0 0 22px" }}>
+        <button
+          type="button"
+          className="stdbtn"
+          onClick={() => setAdvanced((v) => !v)}
+        >
+          {t("share.settings.showAdvanced")}
+        </button>
+      </div>
+      {advanced && (
+        <div style={{ margin: "8px 0 0 22px" }}>
+          <ShareSettingsForm fields={NODE_FIELDS} />
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** Settings → Sharing: every share, plus the instance-wide sharing settings (017 US2, FR-005,
@@ -519,6 +556,7 @@ export function SharingSection() {
         <SharingHelping />
 
         <h3>{t("share.detail.settings")}</h3>
+        <SharingNodeBlock />
         <div className="share-panels">
           {PANELS.map((p) => (
             <div key={p.id} className="share-panel-row">
