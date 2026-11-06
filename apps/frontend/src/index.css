@@ -692,7 +692,11 @@ body:has([data-overlay="modal"]) {
   gap: 8px;
   border-radius: 999px;
   padding: 5px 12px;
-  height: auto;
+  /* The one change that applies everywhere: a fixed height, so the two button shapes ("create"
+     with its toggle, "add to Tankoubon" without) do not differ by a couple of pixels. Everything
+     else below is phone-only; desktop keeps legacy `.stdbtn`'s own sizing. */
+  height: 28px;
+  box-sizing: border-box;
   line-height: normal;
 }
 .ai-checkable-btn-toggle {
@@ -2343,4 +2347,54 @@ body div.ido {
  * a filename regex have no spaces to wrap on, so without this they widen the card past the viewport. */
 .plugin-description {
   overflow-wrap: anywhere;
+}
+
+
+/* Phone only. Desktop keeps legacy `.stdbtn`'s own sizing, centring and margins; the only rule
+   that applies everywhere is the shared height above. */
+@media (max-width: 40rem) {
+  /* Phone-only: `.stdbtn`'s own 4px top margin and 150px floor are what made these buttons
+     uneven next to the pager. Desktop uses the `Pc*` components and keeps legacy sizing. */
+  .ai-grouping-footer .stdbtn {
+    margin: 0;
+    min-width: 0;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .ai-primary-action {
+    /* 125 = label (6em ceiling) + the ✅ toggle + padding: the exact content width, so the pager
+       on the left still fits on the row at 390px (140 pushed it into a squeeze). */
+    width: 125px;
+    flex-shrink: 0;
+  }
+
+  .ai-ignore-action {
+    /* Natural width plus a little padding: its four characters need ~52px of text. */
+    min-width: 76px;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+}
+
+/* Thin scrollbar for a download-queue group's own scroll area. Native scrollbars are wide enough to
+   look like a second border inside the group; where a browser (or an OS setting) hides them, nothing
+   here forces one back. */
+.queue-items-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(128, 128, 128, 0.55) transparent;
+}
+
+.queue-items-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.queue-items-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.queue-items-scroll::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.55);
+  border-radius: 3px;
 }

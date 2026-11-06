@@ -26,7 +26,9 @@ import type { ArchiveMetadata } from "@/api/types";
 import { confirmDialog, promptDialog } from "@/dialog";
 import {
   NEW_ONLY,
+  NO_SOURCE_ONLY,
   PAGE_SIZE,
+  SOURCE_ONLY,
   TANKOUBON_ONLY,
   UNTAGGED_ONLY,
 } from "@/lib/constants";
@@ -338,10 +340,21 @@ export function useLibrary() {
   const isBuiltinSelector =
     selectedCategory === NEW_ONLY ||
     selectedCategory === UNTAGGED_ONLY ||
-    selectedCategory === TANKOUBON_ONLY;
+    selectedCategory === TANKOUBON_ONLY ||
+    selectedCategory === SOURCE_ONLY ||
+    selectedCategory === NO_SOURCE_ONLY;
+  // The two source filters are search-syntax atoms rather than Redis-backed flags: `has:source`
+  // reads a maintained membership set, and `-has:source` is ordinary negation of the same atom.
+  const builtinFilter =
+    selectedCategory === SOURCE_ONLY
+      ? "has:source"
+      : selectedCategory === NO_SOURCE_ONLY
+        ? "-has:source"
+        : "";
   /** The filters every search-shaped request shares — the applied search *and* the autocomplete's
    *  own hit counts, so a candidate's stated count is the number the page will actually show. */
   const searchContext = {
+    filter: [appliedFilter, builtinFilter].filter(Boolean).join(" "),
     category:
       !isBuiltinSelector && selectedCategory ? selectedCategory : undefined,
     newonly: selectedCategory === NEW_ONLY,
@@ -351,7 +364,6 @@ export function useLibrary() {
     groupbyTanks,
   };
   const search = useSearch({
-    filter: appliedFilter,
     sortby,
     order: effectiveSortDir(sortby, order),
     start: page * PAGE_SIZE,
@@ -391,7 +403,10 @@ export function useLibrary() {
   const searchHistory = useSearchHistory(debouncedFilter, { enabled: loggedIn });
   const recentSearches = searchHistory.data?.history ?? [];
 
-  const titleSuggest = useSearchSuggest({ filter: debouncedFilter, ...searchContext }, 6);
+  const titleSuggest = useSearchSuggest(
+    { ...searchContext, filter: [debouncedFilter, builtinFilter].filter(Boolean).join(" ") },
+    6,
+  );
   const phraseRows = useMemo(
     () => phraseSuggestions(debouncedFilter),
     [debouncedFilter],
@@ -525,6 +540,46 @@ export function useLibrary() {
     if (selectedIds.length === 0) return;
     // `/batch` reads (and clears) the selection from this same localStorage key on load.
     localStorage.setItem(MSM_SELECTION_KEY, JSON.stringify(selectedIds));
+    window.open("/batch", "_blank");
+  }
+
+  /** Batch operations over everything the current filter matches, with no manual selection —
+   *  "run a tag scan over every untagged archive" is the case this exists for.
+   *
+   *  `/search` pages by a fixed `pagesize` (100 by default) and returns no id-only projection, so
+   *  this walks the pages it already knows the count of rather than adding another endpoint for
+   *  one button. Ids are handed to `/batch` through the same `MSM_SELECTION_KEY` handoff. */
+  async function runBatchOnFilter() {
+    const total = search.data?.recordsFiltered ?? 0;
+    if (total === 0) return;
+    const options = {
+      sortby,
+      order: effectiveSortDir(sortby, order),
+      ...searchContext,
+    };
+    const ids: string[] = [];
+    let start = 0;
+    while (ids.length < total) {
+      const params = new URLSearchParams();
+      if (options.filter) params.set("filter", options.filter)
+      if (options.category) params.set("category", options.category)
+      if (options.sortby) params.set("sortby", options.sortby)
+      if (options.order) params.set("order", options.order)
+      if (options.newonly) params.set("newonly", "true")
+      if (options.untaggedonly) params.set("untaggedonly", "true")
+      if (options.tankonly) params.set("tankonly", "true")
+      if (options.hidecompleted) params.set("hidecompleted", "true")
+      if (options.groupbyTanks === false) params.set("groupby_tanks", "false")
+      params.set("start", String(start))
+      const page = await fetchJson<{ data?: { arcid: string }[] }>(`/search?${params.toString()}`)
+        .catch(() => null)
+      const rows = page?.data ?? []
+      if (rows.length === 0) break
+      for (const row of rows) ids.push(row.arcid)
+      start += rows.length
+    }
+    if (ids.length === 0) return;
+    localStorage.setItem(MSM_SELECTION_KEY, JSON.stringify(ids));
     window.open("/batch", "_blank");
   }
 
@@ -807,6 +862,8 @@ export function useLibrary() {
     selectedTankIds,
     canMerge,
     runBatchOnSelection,
+    runBatchOnFilter,
+    filteredCount: search.data?.recordsFiltered ?? 0,
     mergeSelectionIntoTankoubon,
     searchInputRef,
     setArchiveProgress,

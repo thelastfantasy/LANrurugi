@@ -434,6 +434,14 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     {
         tracing::warn!(error = %e, "archive-to-category/tankoubon reverse-index backfill skipped");
     }
+    // Same one-time, self-healing shape: a library that predates `has:source` has no
+    // `LRR_SOURCE_TAGGED` set, and without this the filter would read as "nothing has a source"
+    // (and `-has:source` as "everything is missing one") until every archive is edited by hand.
+    match lanrurugi_search::indexer::backfill_source_tagged(&repos.archives, &redis.search).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(count = n, "has:source index built"),
+        Err(e) => tracing::warn!(error = %e, "has:source index backfill skipped"),
+    }
     let recommend_cache = Arc::new(
         lanrurugi_storage::recommend_cache::RecommendCacheRepository::new(redis.config.clone()),
     );

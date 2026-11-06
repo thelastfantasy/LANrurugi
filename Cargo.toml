@@ -30,7 +30,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/thelastfantasy/LANrurugi"
@@ -113,7 +113,7 @@ ort = { version = "=2.0.0-rc.13", features = ["load-dynamic", "cuda", "openvino"
 # Apache-2.0 `manga-ocr` weights, since general-purpose PP-OCR recognition is weak on manga's
 # vertical/stylized Japanese lettering. CPU execution provider only — see research.md §1's
 # OpenVINO-EP-hang finding for why no GPU EP is registered this phase.
-oar-ocr = "0.9.2"
+oar-ocr = "0.10.2"
 ndarray = "0.17"
 # Per-region dominant foreground/background colour estimation (FR-008a, research.md §13) — the
 # KMeans-over-sampled-pixels approach, rather than a plain histogram which can't separate glyph

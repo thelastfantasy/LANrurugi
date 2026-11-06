@@ -731,8 +731,16 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
     // its own knowledge of whether the request that landed on a page succeeded to infer the full
     // FR-005/FR-006 branch; this field alone answers "will an unauthenticated visitor see anything
     // other than the login page at all", which is what `RouteGuards.tsx`'s `AllowGuest` needs.
+    // How long an access token lives, so a signed-in tab can rotate it *before* it lapses instead
+    // of waiting for the first request the server has to treat as a guest's. The client refreshes
+    // at half this (capped), which is what keeps a token refresh invisible in the UI.
+    let access_token_lifetime_secs = crate::auth::load(&state)
+        .await
+        .map(|cfg| cfg.access_token_lifetime_secs)
+        .unwrap_or(lanrurugi_core::session::DEFAULT_ACCESS_TOKEN_LIFETIME_SECS);
     axum::Json(serde_json::json!({
         "logged_in": logged_in,
+        "access_token_lifetime_secs": access_token_lifetime_secs,
         "using_default_password": using_default_password,
         "guest_mode_enabled": auth.guest_mode_enabled,
         "first_run_wizard_available": wizard_available,

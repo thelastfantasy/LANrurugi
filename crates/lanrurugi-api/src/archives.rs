@@ -1723,11 +1723,13 @@ pub(crate) async fn get_archive_thumbnail(
     }
     let page = params.page.unwrap_or(0);
     let client_support = ClientImageSupport::from_request(&headers, params.format.as_deref());
-    // `no-cache`, not a positive max-age: the same thumbnail URL can now serve JXL to one
-    // browser and WebP/JPEG to another, and the selected format can change independently of the
-    // URL. A cached WebP must be revalidated/refetched rather than pinning the old format for an
-    // hour after the admin switches the library-wide thumbnail format.
-    const THUMB_CACHE: &str = "private, no-cache";
+    // A short `max-age` on top of the validator: the same URL can serve JXL to one browser and
+    // WebP/JPEG to another, so it must not be pinned for long after the administrator switches the
+    // library-wide thumbnail format — a minute of staleness is the compromise, and it is what makes
+    // a page of ~160 tiles re-render from cache instead of re-validating every one of them on each
+    // refresh (measured: the server answers a 304 in ~5 ms, but 160 of them still queue behind six
+    // connections per host, which is why the same cards kept appearing to lag behind).
+    const THUMB_CACHE: &str = "private, max-age=60, must-revalidate";
     // Naming a saved thumbnail needs the archive's own title — the URL carries only the opaque ID,
     // so a direct navigation would save as `thumbnail.jpg`. Best-effort: an orphaned thumbnail
     // whose archive row is already gone still serves, just named after its ID.

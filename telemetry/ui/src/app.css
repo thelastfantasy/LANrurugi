@@ -98,6 +98,81 @@ td { padding: 5px 0; vertical-align: middle; }
   font-variant-numeric: tabular-nums;
 }
 
+/* Install rows: denser than the breakdown tables, and each row opens its check-in times. */
+table.installs { font-size: 12px; }
+
+table.installs th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--muted);
+  padding: 0 10px 6px 0;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+table.installs td {
+  padding: 7px 10px 7px 0;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+table.installs tr.row { cursor: pointer; }
+
+table.installs tr.row:hover td,
+table.installs tr.row.open td { background: #f3ece0; }
+
+table.installs th.right,
+table.installs td.right { text-align: right; font-variant-numeric: tabular-nums; }
+
+table.installs tr.detail td { background: #f7f1e6; white-space: normal; }
+
+.mono { font-family: ui-monospace, SFMono-Regular, monospace; }
+
+.meta { color: var(--muted); font-size: 11px; margin-bottom: 6px; }
+
+ol.times {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  max-height: 220px;
+  overflow: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+ol.times li { padding: 1px 0; }
+
+.purge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.purge input {
+  width: 84px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+}
+
+.purge button {
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.purge button:disabled { opacity: 0.6; cursor: default; }
+
 .empty { color: var(--muted); font-size: 13px; margin: 0; }
 
 .chart { width: 100%; height: 120px; display: block; }

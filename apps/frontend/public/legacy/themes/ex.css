@@ -1558,3 +1558,82 @@ textarea {
   text-align: center;
   margin: 10px 0 0;
 }
+
+/* Search-result note: this Tankoubon matched through its members, not its own tags (see the
+   search engine's `fold_tanks`). Hover/focus shows which volumes. */
+.match-reason-icon {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 3px;
+    opacity: 0.75;
+    cursor: help;
+}
+
+.match-reason-icon:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 1px;
+    border-radius: 3px;
+}
+
+/* AI grouping drawer's compact pager (see `AiSmartTankoubonDrawer`): one pill whose outline uses
+   this theme's own accent (its `.msm-selected` hue), so it reads as part of the theme rather than a
+   neutral grey box. Only the outer corners are round; the pieces inside share the pill. */
+.ai-pager {
+    display: flex;
+    align-items: center;
+    flex-wrap: nowrap;
+    min-width: 0;
+    height: 28px; /* matches `.ai-pill-btn` */
+    border: 1px solid #3b97ea66;
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.ai-pager button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    flex-shrink: 0;
+    line-height: 1;
+}
+
+.ai-pager button:hover:not(:disabled) {
+    background: #3b97ea1f;
+}
+
+.ai-pager button:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+.ai-pager input[type="number"] {
+    width: 52px;
+    height: 100%;
+    padding: 0 2px;
+    box-sizing: border-box;
+    text-align: center;
+    appearance: none;
+    border: 0;
+    border-left: 1px solid #3b97ea33;
+    border-right: 1px solid #3b97ea33;
+    border-radius: 0;
+    box-shadow: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+}
+
+.ai-pager span {
+    padding: 0 8px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.75;
+    line-height: 28px;
+}

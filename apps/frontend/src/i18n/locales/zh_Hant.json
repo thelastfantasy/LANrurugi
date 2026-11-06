@@ -979,5 +979,21 @@
   "settings.logMaxFilesHelp": "含正在寫入的那一個（預設 3）。超出數量的最舊檔案會被刪除；滾動後的檔名為 general-20251105.log，同一天多次滾動再加 -2、-3。",
   "library.aiGroupingUnavailable": "本機模型無法使用",
   "library.aiGroupingUnavailableHint": "AI 分組需要本機的 embedding 模型（推薦功能用的那個）。它不在映像檔裡或還沒下載完成，所以無法比對標題。修好之後這項功能會自行恢復。",
-  "settings.libraryCounters": "已掃描到的檔案 {{files}} 個 · 已入庫 {{archives}} 個檔案 · 補丁 {{patches}} 個"
+  "settings.libraryCounters": "已掃描到的檔案 {{files}} 個 · 已入庫 {{archives}} 個檔案 · 補丁 {{patches}} 個",
+  "Batch Operations": "批次處理",
+  "Batch operations apply to the current filter": "未選取檔案——批次處理將作用於目前篩選結果",
+  "Batch process all {{n}} results": "批次處理全部 {{n}} 個結果",
+  "library.withSource": "有來源",
+  "library.withoutSource": "缺少來源",
+  "library.archivesWithASourceTag": "帶有 source: 標籤的檔案（has:source）",
+  "library.archivesWithoutASourceTag": "沒有任何 source: 標籤的檔案（-has:source）",
+  "library.tankMatchedThroughMembers": "這本單行本本身沒有命中，是其中這些卷命中了目前條件：{{members}}",
+  "library.aiGroupingEmptyTitle": "暫時沒有可合併的分組",
+  "library.aiGroupingEmptyHintSameSeries": "同一個系列至少要有兩本還沒併入單行本",
+  "library.aiGroupingEmptyHintTags": "標題或標籤裡能看出同系列（藝術家、系列名、卷號）",
+  "library.aiGroupingEmptyHintThreshold": "相似度閾值太高時，相近但不完全一致的標題不會被配對",
+  "library.aiGroupingRecheck": "重新檢查",
+  "library.groupSuggestionPage": "跳到第幾組",
+  "library.previousSuggestion": "上一組",
+  "library.nextSuggestion": "下一組"
 }

@@ -1650,9 +1650,9 @@ dependencies = [
 
 [[package]]
 name = "crc32fast"
-version = "1.5.3"
+version = "1.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ba106e844045ddc02c20768ac4b0b7cb45f2cc2ecbd833ac9f5dacb183c2055"
+checksum = "5f97d3416d5337d15c4b0d78c8c91df922ca143f57ec20e2d1c188333047ef04"
 dependencies = [
  "cfg-if",
 ]
@@ -2300,7 +2300,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3797,7 +3797,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4070,7 +4070,7 @@ checksum = "d4345964bb142484797b161f473a503a434de77149dd8c7427788c6e13379388"
 
 [[package]]
 name = "lanrurugi-api"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "axum",
  "bao-tree",
@@ -4144,12 +4144,12 @@ dependencies = [
  "url",
  "uuid",
  "woothee",
- "zip",
+ "zip 9.4.1",
 ]
 
 [[package]]
 name = "lanrurugi-api-docgen"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -4162,7 +4162,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-backup"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "deadpool-redis",
  "lanrurugi-core",
@@ -4180,7 +4180,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-bench"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -4201,12 +4201,12 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
- "zip",
+ "zip 9.4.1",
 ]
 
 [[package]]
 name = "lanrurugi-book"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -4217,7 +4217,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-book-worker"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "base64 0.23.1",
  "chardetng",
@@ -4235,12 +4235,12 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "webpx",
- "zip",
+ "zip 9.4.1",
 ]
 
 [[package]]
 name = "lanrurugi-core"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "base64 0.23.1",
  "bcrypt",
@@ -4259,7 +4259,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-embed-ipc"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "serde",
  "tarpc",
@@ -4268,7 +4268,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-embed-worker"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "futures",
  "lanrurugi-embed-ipc",
@@ -4282,7 +4282,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-equivalence"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "ferrous-opencc",
  "serde",
@@ -4294,7 +4294,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-fontcache"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "deadpool-redis",
  "image",
@@ -4309,7 +4309,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-gpu-ipc"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "bincode",
  "serde",
@@ -4319,7 +4319,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-gpu-worker"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "futures",
  "image",
@@ -4334,7 +4334,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-imgcompare"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "image",
  "image_hasher",
@@ -4346,12 +4346,12 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",
- "zip",
+ "zip 9.4.1",
 ]
 
 [[package]]
 name = "lanrurugi-inpaint"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "image",
  "imageproc",
@@ -4364,7 +4364,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-llm"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "axum",
  "chrono",
@@ -4382,7 +4382,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-ocr"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "image",
  "imageproc",
@@ -4403,7 +4403,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-plugin"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "lanrurugi-core",
  "reqwest",
@@ -4418,7 +4418,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-plugin-converter"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "anyhow",
  "axum",
@@ -4432,7 +4432,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-recommend"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "futures-util",
  "lanrurugi-core",
@@ -4451,7 +4451,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-scanner"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "avif-decode",
  "bytes",
@@ -4484,12 +4484,12 @@ dependencies = [
  "tracing",
  "uuid",
  "webpx",
- "zip",
+ "zip 9.4.1",
 ]
 
 [[package]]
 name = "lanrurugi-search"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -4507,7 +4507,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-server"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "anyhow",
  "axum",
@@ -4551,7 +4551,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-share-proto"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -4569,7 +4569,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-storage"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "deadpool-redis",
  "ipnet",
@@ -4590,7 +4590,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-translate"
-version = "1.0.0-beta.3"
+version = "1.0.0-beta.4"
 dependencies = [
  "ab_glyph",
  "chrono",
@@ -4805,9 +4805,9 @@ checksum = "e20f57f9918e5bd7bc58c22cdd70a6afc7375d4dd9683af5f2b34bd3d2bba619"
 
 [[package]]
 name = "lzma-rust2"
-version = "0.23.0"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1c46f3fcd2e888afdb01a07efc071cb21300e07c68d32c3e8b01b5c8cb1fcaa"
+checksum = "ef1d73c59a56771343712b22ea5615092c612c16ba291c0979e3105dfeec4890"
 dependencies = [
  "sha2",
 ]
@@ -5017,24 +5017,23 @@ dependencies = [
 
 [[package]]
 name = "multiversion"
-version = "0.8.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb8a68be21d0755f83bfe47e79b896cc732687cf1903f0e50585e8d6ecc53076"
+checksum = "18f07d0ab403c0c662001890da44da2500990d86e15788489cf9a94895f19e4e"
 dependencies = [
  "multiversion-macros",
- "target-features",
 ]
 
 [[package]]
 name = "multiversion-macros"
-version = "0.8.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a05e0c3c3e4edaa21d87c645852ed0b0c3663752bcc6ec43353bd6189dce35e1"
+checksum = "5e521b4032cf166c0d10a5d8598abd9858696612b9e2a4576ef97c7af4626bd6"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
- "target-features",
+ "rustversion",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -5710,25 +5709,31 @@ dependencies = [
 
 [[package]]
 name = "oar-ocr"
-version = "0.9.2"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ef9a9edb90f570b88c6ee00ac64f6e46efa7bd464459c06e23b00bb6612237e"
+checksum = "5efb1b5c83d5e18cf0082b4222b420b3c193694bbd2d27e78fbad5ee29ab517d"
 dependencies = [
  "image",
  "imageproc",
  "oar-ocr-core",
  "oar-ocr-derive",
+ "ort",
  "rayon",
+ "regex",
  "serde",
  "serde_json",
  "tracing",
+ "unicode-bidi",
+ "unicode-normalization",
+ "unicode-properties",
+ "zip 8.6.0",
 ]
 
 [[package]]
 name = "oar-ocr-core"
-version = "0.9.2"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92185edb59d3a8f92b5ba5ab4991ecdc8a2beffa028534e9c25601aa7fd2860a"
+checksum = "1814eaa88485c76f152d282415018949125b4c303b82e4a1960c1a68d63588a1"
 dependencies = [
  "clipper2-rust",
  "image",
@@ -5751,9 +5756,9 @@ dependencies = [
 
 [[package]]
 name = "oar-ocr-derive"
-version = "0.9.2"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1d868d12ee353e68e30d1edbf363f938a6f4e5195ddba43125acbe577971b3f"
+checksum = "ceafd62a41b4f895eb4917ea1530e29811f7a5e881545deb0bc163dc26fb2499"
 dependencies = [
  "darling 0.24.1",
  "proc-macro2",
@@ -6295,9 +6300,9 @@ dependencies = [
 
 [[package]]
 name = "pdfium-render"
-version = "0.9.4"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8948a803616a9e936b15a6637af2cd48c5fb8ae0fcdeb3c32eac3a540e255a19"
+checksum = "296b1146652b486ea6eea0d316e85ab6837ff69e8d2b1568e6fa7bc38bd4c00e"
 dependencies = [
  "bitflags",
  "bytemuck",
@@ -6952,7 +6957,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7563,7 +7568,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7656,7 +7661,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8590,12 +8595,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
-name = "target-features"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1bbb9f3c5c463a01705937a24fdabc5047929ac764b2d5b9cf681c1f5041ed5"
-
-[[package]]
 name = "tarpc"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8640,7 +8639,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9226,6 +9225,12 @@ dependencies = [
 
 [[package]]
 name = "typed-path"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54ec2755506471f54baf5e4bb5499d8e510cc1caf271270e778a736bd2d7336c"
+
+[[package]]
+name = "typed-path"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ce898823d8cd0f028662d2f349694b1af0a5cc9be83f1d213a00d3147445e1e"
@@ -9292,6 +9297,12 @@ checksum = "43f613e4fa046e69818dd287fdc4bc78175ff20331479dab6e1b0f98d57062de"
 dependencies = [
  "smallvec",
 ]
+
+[[package]]
+name = "unicode-properties"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "993ad287eb20e8ba755312801cfe1413e0f25d604075863acaddca10b04c1833"
 
 [[package]]
 name = "unicode-script"
@@ -9755,7 +9766,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10388,9 +10399,22 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.2.2"
+version = "8.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e408c6cc4699dd017d53dc080cd51c2cea2b5354af57a1479bd265ed42911487"
+checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "indexmap",
+ "memchr",
+ "typed-path 0.12.4",
+]
+
+[[package]]
+name = "zip"
+version = "9.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23f17fbc870bfac28c6228aed7d6e6df352e26bf7015c4313727e16a7a01ce5e"
 dependencies = [
  "aes 0.9.3",
  "bzip2",
@@ -10402,14 +10426,14 @@ dependencies = [
  "hmac",
  "indexmap",
  "libc",
- "lzma-rust2 0.23.0",
+ "lzma-rust2 0.25.0",
  "memchr",
  "nix",
  "pbkdf2",
  "ppmd-rust",
  "sha1",
  "time",
- "typed-path",
+ "typed-path 0.13.0",
  "windows-sys 0.61.2",
  "zeroize",
  "zopfli",

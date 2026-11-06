@@ -530,7 +530,71 @@ async fn search_archives_with_mode(
                 }
             }))
             .await;
-            let data: Vec<serde_json::Value> = entries.into_iter().flatten().collect();
+            let mut data: Vec<serde_json::Value> = entries.into_iter().flatten().collect();
+            // A Tankoubon folded in because of its members says so: `fold_tanks` already recorded
+            // which members matched, and the card shows it as an icon + tooltip ("第 N 卷 因为
+            // has:source 命中"). Titles are read here, one HMGET for the whole page.
+            if !result.member_matches.is_empty() {
+                let mut wanted: Vec<(String, String)> = Vec::new();
+                for entry in &data {
+                    let id = entry
+                        .get("arcid")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    if let Some(members) = result.member_matches.get(id) {
+                        for member in members {
+                            wanted.push((id.to_string(), member.clone()));
+                        }
+                    }
+                }
+                if !wanted.is_empty() {
+                    let ids: Vec<&str> = wanted.iter().map(|(_, m)| m.as_str()).collect();
+                    let rows: Vec<Vec<Option<String>>> = match state.redis.archive.get().await {
+                        Ok(mut conn) => {
+                            let mut pipe = deadpool_redis::redis::pipe();
+                            for id in &ids {
+                                pipe.hmget(*id, &["name", "title"]);
+                            }
+                            pipe.query_async(&mut conn).await.unwrap_or_default()
+                        }
+                        Err(_) => Vec::new(),
+                    };
+                    let mut titles: std::collections::HashMap<&str, String> =
+                        std::collections::HashMap::new();
+                    for (id, row) in ids.iter().zip(rows) {
+                        let name = row
+                            .first()
+                            .and_then(|v| v.as_deref())
+                            .filter(|v| !v.is_empty())
+                            .or_else(|| row.get(1).and_then(|v| v.as_deref()))
+                            .unwrap_or_default()
+                            .to_string();
+                        titles.insert(id, name);
+                    }
+                    let mut by_tank: std::collections::HashMap<String, Vec<serde_json::Value>> =
+                        std::collections::HashMap::new();
+                    for (tank, member) in &wanted {
+                        by_tank.entry(tank.clone()).or_default().push(json!({
+                            "arcid": member,
+                            "name": titles.get(member.as_str()).cloned().unwrap_or_default(),
+                        }));
+                    }
+                    for entry in data.iter_mut() {
+                        let id = entry
+                            .get("arcid")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default();
+                        if let Some(members) = by_tank.remove(id) {
+                            if let Some(object) = entry.as_object_mut() {
+                                object.insert(
+                                    "match_reason".into(),
+                                    json!({ "kind": "members", "members": members }),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
             axum::Json(json!({
                 "data": data,
                 "recordsFiltered": result.filtered_count,

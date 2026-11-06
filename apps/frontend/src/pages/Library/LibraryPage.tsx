@@ -135,9 +135,20 @@ export function Library() {
       </div>
 
       {lib.multiSelect && (
-        <div style={{ textAlign: "center", padding: "8px 0" }}>
-          <span style={{ marginRight: 12 }}>
-            {lib.t("{{n}} selected", { n: lib.selectedIds.length })}
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            padding: "8px 0",
+          }}
+        >
+          <span>
+            {lib.selectedIds.length === 0
+              ? lib.t("Batch operations apply to the current filter")
+              : lib.t("{{n}} selected", { n: lib.selectedIds.length })}
           </span>
           <button
             type="button"
@@ -149,12 +160,20 @@ export function Library() {
           <button type="button" className="stdbtn" onClick={lib.clearSelection}>
             {lib.t("Clear Selection")}
           </button>
+          {/* With nothing selected this runs over everything the filter matches — the point being
+              that "tag-scan every untagged archive" should not require ticking hundreds of boxes. */}
           <button
             type="button"
             className="stdbtn"
-            onClick={lib.runBatchOnSelection}
+            onClick={
+              lib.selectedIds.length === 0
+                ? () => void lib.runBatchOnFilter()
+                : lib.runBatchOnSelection
+            }
           >
-            {lib.t("Batch Operations")}
+            {lib.selectedIds.length === 0
+              ? lib.t("Batch process all {{n}} results", { n: lib.filteredCount })
+              : lib.t("Batch Operations")}
           </button>
           {lib.canMerge && (
             <button

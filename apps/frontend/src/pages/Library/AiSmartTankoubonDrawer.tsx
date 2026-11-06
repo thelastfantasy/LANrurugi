@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query"
-import { type CSSProperties, useEffect, useState } from "react"
+import { type CSSProperties, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { ApiError, sendJson } from "@/api/client"
@@ -22,7 +22,7 @@ import {
 import { Drawer, DrawerFooter, Tooltip } from "@/components/common-ui/Display"
 import { IconButton } from "@/components/common-ui/Form"
 import { AiSkeleton, ArchiveChecklistItem } from "@/components/Display"
-import { useHorizontalSwipe } from "@/hooks"
+import { useHorizontalSwipe, useIsNarrowViewport } from "@/hooks"
 import { routes } from "@/lib/routes"
 import { Z_OVERLAY_ABOVE_LEGACY_MODAL } from "@/theme"
 import { toast } from "@/toast"
@@ -207,6 +207,7 @@ function SuggestionCard({
   onJump: (page: number) => void
 }) {
   const { t } = useTranslation()
+  const narrow = useIsNarrowViewport()
   const createTankoubon = useCreateTankoubon()
   const ignoreGroupSuggestion = useIgnoreGroupSuggestion()
   const aiRenameTankoubon = useAiRenameTankoubon()
@@ -313,6 +314,7 @@ function SuggestionCard({
 
   async function handleIgnore() {
     try {
+      suggestionCache = null
       await ignoreGroupSuggestion.mutateAsync({
         archive_ids: suggestion.archive_ids,
         existing_tankoubon_id: suggestion.existing_tankoubon_id,
@@ -325,17 +327,35 @@ function SuggestionCard({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      {/* One row, always: with a few hundred suggestions the counter is long enough that
+          `space-between` wrapped it onto a second line ("1 /" above "1000"), which is what made the
+          drawer's top-left corner look broken. */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+          flexWrap: "nowrap",
+        }}
+      >
         <button
           type="button"
           className="stdbtn"
           disabled={page === 0}
           onClick={onPrev}
-          style={{ minWidth: 28, visibility: page === 0 ? "hidden" : undefined }}
+          style={{ minWidth: 28, flexShrink: 0, visibility: page === 0 ? "hidden" : undefined }}
         >
           <i className="fa fa-chevron-left" aria-hidden="true"></i>
         </button>
-        <span style={{ fontSize: 12, opacity: 0.6 }}>
+        <span
+          style={{
+            fontSize: 12,
+            opacity: 0.6,
+            whiteSpace: "nowrap",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
           {page + 1} / {total}
         </span>
         <button
@@ -343,7 +363,7 @@ function SuggestionCard({
           className="stdbtn"
           disabled={page === total - 1}
           onClick={onNext}
-          style={{ minWidth: 28, visibility: page === total - 1 ? "hidden" : undefined }}
+          style={{ minWidth: 28, flexShrink: 0, visibility: page === total - 1 ? "hidden" : undefined }}
         >
           <i className="fa fa-chevron-right" aria-hidden="true"></i>
         </button>
@@ -425,72 +445,243 @@ function SuggestionCard({
       </div>
 
       <DrawerFooter>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, maxWidth: "60%" }}>
-            {Array.from({ length: total }, (_, i) => (
-              <span
-                key={i}
-                onClick={() => onJump(i)}
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: "50%",
-                  background: i === page ? "rgba(128,128,128,0.7)" : "rgba(128,128,128,0.2)",
-                  cursor: "pointer",
-                  transition: "background 0.2s",
-                  flexShrink: 0,
+        <div
+          className="ai-grouping-footer"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
+          {total <= MAX_PAGE_DOTS ? (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4, maxWidth: "60%" }}>
+              {Array.from({ length: total }, (_, i) => (
+                <span
+                  key={i}
+                  onClick={() => onJump(i)}
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: "50%",
+                    background: i === page ? "rgba(128,128,128,0.7)" : "rgba(128,128,128,0.2)",
+                    cursor: "pointer",
+                    transition: "background 0.2s",
+                    flexShrink: 0,
+                  }}
+                />
+              ))}
+            </div>
+          ) : (
+            /* One joined segmented pager instead of a dot per card: a library with hundreds of
+               suggestions turned the dots into a wall that wrapped and pushed the buttons onto a
+               second row. Only the container's outer corners are round. */
+            <div className="ai-pager">
+              <button
+                type="button"
+                disabled={page === 0}
+                onClick={() => onJump(Math.max(0, page - 1))}
+                aria-label={t("library.previousSuggestion") ?? undefined}
+              >
+                <i className="fa fa-chevron-left" aria-hidden="true" />
+              </button>
+              <input
+                type="number"
+                min={1}
+                max={total}
+                value={page + 1}
+                onChange={(e) => {
+                  const next = Number(e.target.value)
+                  if (Number.isFinite(next) && next >= 1 && next <= total) onJump(next - 1)
                 }}
+                aria-label={t("library.groupSuggestionPage") ?? undefined}
               />
-            ))}
-          </div>
-          <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+              <span>/ {total}</span>
+              <button
+                type="button"
+                disabled={page >= total - 1}
+                onClick={() => onJump(Math.min(total - 1, page + 1))}
+                aria-label={t("library.nextSuggestion") ?? undefined}
+              >
+                <i className="fa fa-chevron-right" aria-hidden="true" />
+              </button>
+            </div>
+          )}
+          {/* The action group takes whatever the pager leaves, and the primary button inside it
+              grows into that space — otherwise the row ends in a band of empty footer on a phone. */}
+          <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
             <input
               type="button"
-              className="stdbtn ai-pill-btn"
               value={t("library.donTSuggestThisAgain") ?? undefined}
+              // Never wider than the primary action: a longer locale must not push the last
+              // button off the row or make "don't suggest this again" the widest thing in it.
+              // Same box as the primary action: 71px (its intrinsic width) was too tight for the
+              // four characters, and "must not be wider than the other two" is satisfied by
+              // matching the primary exactly.
+              className="stdbtn ai-pill-btn ai-ignore-action"
               disabled={ignoreGroupSuggestion.isPending}
               onClick={() => void handleIgnore()}
             />
-            {!isAddToExisting && llmKeyStatus.data?.configured ? (
-              <button
-                type="button"
-                className="stdbtn ai-checkable-btn"
-                disabled={!canConfirm}
-                onClick={() => void handleConfirm()}
-              >
-                <span style={{ flex: 1, textAlign: "center" }}>{t("library.createTankoubon")}</span>
-                <Tooltip
-                  label={t("library.autorenameAndReorderChaptersWith")}
-                  wrapperStyle={{ display: "inline-flex", flexShrink: 0 }}
-                  zIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL}
-                >
-                  <span className="ai-checkable-btn-toggle" onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      checked={autoRename}
-                      onChange={(e) => setAutoRename(e.target.checked)}
-                    />
-                    {/* Must follow the checkbox in DOM order for the `~` sibling selector. */}
-                    <i className="fa fa-robot" aria-hidden="true" />
-                    <span className="ai-checkable-btn-toggle-circle">
-                      <i className="fa fa-check" aria-hidden="true" />
-                    </span>
-                  </span>
-                </Tooltip>
-              </button>
+            {narrow ? (
+              isAddToExisting ? (
+                <MobileAddButton t={t} disabled={!canConfirm} onConfirm={() => void handleConfirm()} />
+              ) : (
+                <MobileCreateButton
+                  t={t}
+                  disabled={!canConfirm}
+                  onConfirm={() => void handleConfirm()}
+                  autoRename={autoRename}
+                  setAutoRename={setAutoRename}
+                  showToggle={llmKeyStatus.data?.configured === true}
+                />
+              )
+            ) : isAddToExisting ? (
+              <PcAddButton t={t} disabled={!canConfirm} onConfirm={() => void handleConfirm()} />
             ) : (
-              <input
-                type="button"
-                className="stdbtn ai-pill-btn"
-                value={(isAddToExisting ? t("library.addToTankoubon") : t("library.createTankoubon")) ?? undefined}
+              <PcCreateButton
+                t={t}
                 disabled={!canConfirm}
-                onClick={() => void handleConfirm()}
+                onConfirm={() => void handleConfirm()}
+                autoRename={autoRename}
+                setAutoRename={setAutoRename}
+                showToggle={llmKeyStatus.data?.configured === true}
               />
             )}
           </div>
         </div>
       </DrawerFooter>
     </div>
+  )
+}
+
+/** Suggestions cost the server real work — it has to embed every ungrouped archive before it can
+ *  score pairs (~20 s on a 6 000-archive library, measured on the NAS). The drawer body remounts on
+ *  every open, so without this each open paid that again. A short client-side cache makes reopening
+ *  instant; creating or ignoring a group drops it, and the explicit re-check button forces past it. */
+/** Above this many suggestions the footer shows one compact pager instead of one dot per card. */
+const MAX_PAGE_DOTS = 20
+
+const SUGGESTION_CACHE_TTL_MS = 10 * 60 * 1000
+let suggestionCache: { at: number; suggestions: AiGroupSuggestion[] } | null = null
+
+/** Fresh cached list for a mounting drawer body, or `null` when the server has to be asked. */
+function cachedSuggestions(): AiGroupSuggestion[] | null {
+  if (suggestionCache && Date.now() - suggestionCache.at < SUGGESTION_CACHE_TTL_MS) {
+    return suggestionCache.suggestions
+  }
+  return null
+}
+
+/** The ✅ auto-rename toggle that rides inside the "create" button. */
+function AutoRenameToggle({
+  t,
+  autoRename,
+  setAutoRename,
+}: {
+  t: (key: string) => string
+  autoRename: boolean
+  setAutoRename: (value: boolean) => void
+}) {
+  return (
+    <Tooltip
+      label={t("library.autorenameAndReorderChaptersWith")}
+      wrapperStyle={{ display: "inline-flex", flexShrink: 0 }}
+      zIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL}
+    >
+      <span className="ai-checkable-btn-toggle" onClick={(e) => e.stopPropagation()}>
+        <input type="checkbox" checked={autoRename} onChange={(e) => setAutoRename(e.target.checked)} />
+        <i className="fa fa-robot" aria-hidden="true" />
+        <span className="ai-checkable-btn-toggle-circle">
+          <i className="fa fa-check" aria-hidden="true" />
+        </span>
+      </span>
+    </Tooltip>
+  )
+}
+
+type ConfirmProps = { t: (key: string) => string; disabled: boolean; onConfirm: () => void }
+
+/** Desktop "create Tankoubon": legacy shape — the label takes the slack, the toggle trails it. */
+function PcCreateButton({
+  t,
+  disabled,
+  onConfirm,
+  autoRename,
+  setAutoRename,
+  showToggle,
+}: ConfirmProps & {
+  autoRename: boolean
+  setAutoRename: (value: boolean) => void
+  showToggle: boolean
+}) {
+  return (
+    <button type="button" className="stdbtn ai-checkable-btn" disabled={disabled} onClick={onConfirm}>
+      <span style={{ flex: 1, textAlign: "center" }}>{t("library.createTankoubon")}</span>
+      {showToggle && (
+        <AutoRenameToggle t={t} autoRename={autoRename} setAutoRename={setAutoRename} />
+      )}
+    </button>
+  )
+}
+
+/** Desktop "add to an existing Tankoubon": a plain legacy button, no toggle. */
+function PcAddButton({ t, disabled, onConfirm }: ConfirmProps) {
+  return (
+    <input
+      type="button"
+      className="stdbtn ai-pill-btn"
+      value={t("library.addToTankoubon") ?? undefined}
+      disabled={disabled}
+      onClick={onConfirm}
+    />
+  )
+}
+
+/** Phone "create Tankoubon": fixed box, label centred, toggle pinned to the right edge. */
+function MobileCreateButton({
+  t,
+  disabled,
+  onConfirm,
+  autoRename,
+  setAutoRename,
+  showToggle,
+}: ConfirmProps & {
+  autoRename: boolean
+  setAutoRename: (value: boolean) => void
+  showToggle: boolean
+}) {
+  return (
+    <button
+      type="button"
+      className="stdbtn ai-checkable-btn ai-primary-action"
+      disabled={disabled}
+      onClick={onConfirm}
+    >
+      <span style={{ flex: 1, textAlign: "center", whiteSpace: "nowrap" }}>
+        {t("library.createTankoubon")}
+      </span>
+      {showToggle && (
+        <AutoRenameToggle t={t} autoRename={autoRename} setAutoRename={setAutoRename} />
+      )}
+    </button>
+  )
+}
+
+/** Phone "add to an existing Tankoubon": the same box as the create button — and the same
+ *  element type, because an `<input type=button>` centres its own text on the input's line box and
+ *  sat visibly lower than the flex-centred `<button>` next to it. */
+function MobileAddButton({ t, disabled, onConfirm }: ConfirmProps) {
+  return (
+    <button
+      type="button"
+      className="stdbtn ai-pill-btn ai-primary-action"
+      disabled={disabled}
+      onClick={onConfirm}
+    >
+      <span style={{ flex: 1, textAlign: "center", whiteSpace: "nowrap" }}>
+        {t("library.addToTankoubon")}
+      </span>
+    </button>
   )
 }
 
@@ -511,7 +702,9 @@ function SuggestionsBody({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
   const archives = useArchives()
   const aiGroupSuggestions = useAiGroupSuggestions()
-  const [suggestions, setSuggestions] = useState<AiGroupSuggestion[] | null>(null)
+  const [suggestions, setSuggestions] = useState<AiGroupSuggestion[] | null>(() => cachedSuggestions())
+  // Read once: whether this mount already has a list from the cache (then it must not re-request).
+  const startedFromCache = useRef(suggestions !== null)
   const [page, setPage] = useState(0)
   const [showIgnored, setShowIgnored] = useState(false)
 
@@ -531,9 +724,11 @@ function SuggestionsBody({ onClose }: { onClose: () => void }) {
   // second, actually-mounted instance permanently stuck on the skeleton.
   const { mutate: requestSuggestions } = aiGroupSuggestions
   useEffect(() => {
+    if (startedFromCache.current) return
     let cancelled = false
     requestSuggestions(undefined, {
       onSuccess: (data) => {
+        suggestionCache = { at: Date.now(), suggestions: data.suggestions }
         if (!cancelled) setSuggestions(data.suggestions)
       },
       onError: (err) => {
@@ -595,9 +790,81 @@ function SuggestionsBody({ onClose }: { onClose: () => void }) {
             tankoubonNameById={tankoubonNameById}
           />
         ) : suggestions.length === 0 ? (
-          <div style={{ padding: "20px 0" }}>
-            <i className="fas fa-3x fa-check-circle" aria-hidden="true" style={{ opacity: 0.5 }} />
-            <div style={{ marginTop: 12 }}>{t("library.noGroupingSuggestionsNothing")}</div>
+          // An empty drawer is still a screen: give it a real layout (icon, headline, the three
+          // things that actually produce suggestions, and a way to re-check) instead of one
+          // floating line of text and a lone check mark.
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+              textAlign: "center",
+              padding: "32px 16px",
+              minHeight: 320,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 64,
+                height: 64,
+                borderRadius: "50%",
+                border: "1px solid currentColor",
+                opacity: 0.55,
+              }}
+            >
+              <i className="fas fa-2x fa-circle-check" aria-hidden="true" />
+            </div>
+            <strong style={{ fontSize: 15 }}>{t("library.aiGroupingEmptyTitle")}</strong>
+            <p style={{ margin: 0, opacity: 0.75, maxWidth: 380 }}>
+              {t("library.noGroupingSuggestionsNothing")}
+            </p>
+            <ul
+              style={{
+                margin: "4px 0 0",
+                padding: 0,
+                listStyle: "none",
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                opacity: 0.75,
+                fontSize: 12,
+                textAlign: "left",
+                maxWidth: 380,
+              }}
+            >
+              {[
+                t("library.aiGroupingEmptyHintSameSeries"),
+                t("library.aiGroupingEmptyHintTags"),
+                t("library.aiGroupingEmptyHintThreshold"),
+              ].map((hint, i) => (
+                <li key={i} style={{ display: "flex", gap: 8 }}>
+                  <i className="fas fa-angle-right" aria-hidden="true" style={{ opacity: 0.6, marginTop: 2 }} />
+                  <span>{hint}</span>
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              className="stdbtn"
+              style={{ marginTop: 6 }}
+              onClick={() => {
+                suggestionCache = null
+                requestSuggestions(undefined, {
+                  onSuccess: (data) => {
+                    suggestionCache = { at: Date.now(), suggestions: data.suggestions }
+                    setSuggestions(data.suggestions)
+                  },
+                })
+              }}
+              disabled={aiGroupSuggestions.isPending}
+            >
+              {t("library.aiGroupingRecheck")}
+            </button>
           </div>
         ) : current ? (
           <SuggestionCard

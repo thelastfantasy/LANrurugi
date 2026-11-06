@@ -105,6 +105,10 @@ async function tryRefreshOnce(): Promise<RefreshOutcome> {
 
 const REFRESH_NETWORK_RETRY_DELAYS_MS = [500, 1500, 3000]
 
+/** How old the last successful rotation may get before the signed-in poll tick rotates it again
+ *  ahead of expiry — see {@link fetchLoginStatusWithRefresh}. */
+const PROACTIVE_REFRESH_AFTER_MS = 30 * 60 * 1000
+
 /** How long to wait before double-checking a `"rejected"` refresh against `/login/status` — long
  * enough for another tab's own in-flight refresh (and its `Set-Cookie`) to land. */
 const REJECTED_REFRESH_RECHECK_DELAY_MS = 300
@@ -212,9 +216,33 @@ export async function fetchJson<T>(path: string, retried = false): Promise<T> {
  * never carries it and cannot ask the server to distinguish the two. Always make one refresh
  * attempt on `logged_in:false`; a genuinely logged-out visitor pays one extra 401 and a short
  * recheck, which is much better than logging out an admin whose refresh token is still good. */
-export async function fetchLoginStatusWithRefresh<T extends { logged_in: boolean; guest_mode_enabled: boolean }>(): Promise<T> {
+export async function fetchLoginStatusWithRefresh<
+  T extends { logged_in: boolean; guest_mode_enabled: boolean; access_token_lifetime_secs?: number },
+>(): Promise<T> {
   const status = await fetchJson<T>("/login/status")
-  if (status.logged_in) return status
+  if (status.logged_in) {
+    // Rotate before the access token lapses rather than after the first rejected request. Waiting
+    // for the 401 means the tab is classified as a guest for the whole refresh window: the server
+    // records a 访客访问 row, guest-scoped responses land under admin cache keys, and the UI can
+    // briefly repaint as a guest (reported 2026-11-06 as the background flipping to the guest
+    // theme and back). A refresh made while the current token is still valid is just a cookie
+    // rotation — no request ever goes out unauthenticated. 30 minutes is well inside the default
+    // 4-hour lifetime; `tryRefreshOnce` itself dedupes across tabs and skips when another tab has
+    // refreshed more recently.
+    const lastRefreshAt = Number(localStorage.getItem(LAST_REFRESH_AT_KEY) ?? 0)
+    // Half the token's actual lifetime, capped at 30 minutes — an operator who shortens
+    // `access_token_lifetime_secs` (say to 10 minutes) gets a 5-minute cadence instead of one that
+    // overshoots the lifetime, and the default 4 hours still refreshes on the 30-minute cap. The
+    // floor keeps a pathologically short lifetime from turning this into a refresh loop.
+    const lifetimeMs = (status.access_token_lifetime_secs ?? 4 * 60 * 60) * 1000
+    const thresholdMs = Math.max(60_000, Math.min(PROACTIVE_REFRESH_AFTER_MS, lifetimeMs / 2))
+    if (Date.now() - lastRefreshAt > thresholdMs) {
+      void tryRefreshWithRetry().catch(() => {
+        /* the session is still valid; a failed proactive rotation is retried on the next tick */
+      })
+    }
+    return status
+  }
   // A refresh failure must never make the login-status query itself reject. A rejected query turns
   // `RequireAuth` into an optimistic "keep showing admin UI" forever on browsers where the refresh
   // path can throw (e.g. a mobile WebView without `navigator.locks`). Returning the already-known

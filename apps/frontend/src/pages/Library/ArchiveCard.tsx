@@ -3,6 +3,7 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import type { ArchiveMetadata } from "@/api/types"
+import { Tooltip } from "@/components/common-ui/Display"
 import { FormatBadge, StatusIcon } from "@/components/Display"
 import { routes } from "@/lib/routes"
 import { isBookExtension } from "@/lib/utils/bookFormats"
@@ -56,6 +57,16 @@ function PageCountBadge({ archive }: { archive: ArchiveMetadata }) {
   )
 }
 
+/** Why a Tankoubon is in this result set: its own record did not match, these members did.
+ *  Naming them beats a generic "matched via members" — the whole point is which volumes. */
+function matchReasonText(
+  members: { name: string }[],
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  const names = members.map((m) => m.name || "?").join("、")
+  return t("library.tankMatchedThroughMembers", { members: names })
+}
+
 /** Thumbnail URLs that have loaded at least once this session. A remounted card (the carousel
  * collapsed and reopened, a page revisited) starts from these instead of flashing the "wait warmly"
  * placeholder over an image the browser already has. */
@@ -85,6 +96,7 @@ export function ArchiveCard({
   /** Space-separated keywords to `<mark>` inside the title, e.g. from a search box. */
   highlightQuery?: string
 }) {
+  const { t } = useTranslation()
   const id = archive.arcid
   const isTank = isTankoubonId(id)
   const thumbSrc = isTank
@@ -119,6 +131,20 @@ export function ArchiveCard({
           {highlightText(archive.title, highlightQuery)}
         </a>
         <StatusIcons archive={archive} />
+        {archive.match_reason?.kind === "members" && (
+          <Tooltip label={matchReasonText(archive.match_reason.members, t)}>
+            <span
+              className="match-reason-icon"
+              // Focusable so the tooltip is reachable without a mouse; the icon itself is
+              // decorative and the text lives in the tooltip.
+              tabIndex={0}
+              role="img"
+              aria-label={matchReasonText(archive.match_reason.members, t)}
+            >
+              <i className="fa fa-circle-info" aria-hidden="true"></i>
+            </span>
+          </Tooltip>
+        )}
       </div>
       <div className={cropThumbs ? "id3" : "id3 nocrop"} style={{ position: "relative" }}>
         {multiSelect && (
@@ -139,6 +165,11 @@ export function ArchiveCard({
           <img
             src={thumbFailed ? "/legacy/img/noThumb.png" : thumbSrc}
             alt={archive.title}
+            // `decoding="async"` only: decoding off the main thread keeps one large JPEG/WebP from
+            // stalling the images behind it. Deliberately *not* `loading="lazy"` — this element is
+            // `display: none` until it has loaded, and a hidden lazy image is exactly the case
+            // browsers defer indefinitely, which left cards spinning instead of loading.
+            decoding="async"
             style={thumbLoaded || thumbFailed ? undefined : { display: "none" }}
             onLoad={() => {
               loadedThumbs.add(thumbSrc)

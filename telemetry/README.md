@@ -1,4 +1,4 @@
-# telemetry — the anonymous heartbeat sink
+# telemetry — the heartbeat sink
 
 One instance of this serves **every** deployment of the project. It is not part of a normal
 LANrurugi installation: a normal install neither runs this nor needs it, and it works fine without
@@ -6,7 +6,9 @@ ever contacting one.
 
 ## What it stores
 
-Exactly three facts per installation per day, and nothing else:
+Two views over the same heartbeat.
+
+**Aggregates** — per day, no address, the numbers the dashboard charts:
 
 | Fact | Shape | Why |
 |---|---|---|
@@ -15,9 +17,21 @@ Exactly three facts per installation per day, and nothing else:
 | which version | `LANRURUGI_TELEMETRY:VER:<date>:<version>` — a Set | upgrade rate / version mix |
 | which artifact | `LANRURUGI_TELEMETRY:CHAN:<date>:<channel>` — a Set | GHCR vs Docker Hub vs native vs a local build |
 
-The install id is a random UUIDv4 created on first run. There is no library path, file name, user,
-comment or request body in any key — and **no IP address is ever read**: the country comes from
-Cloudflare's own `CF-IPCountry` header, so it is decided at the edge and never touches this process.
+**Installations** — one row per install, keyed by the random id the client generated:
+
+| Key | Shape | Contains |
+|---|---|---|
+| `LANRURUGI_TELEMETRY:INSTALLS` | Sorted set | every install id, scored by last check-in (newest first) |
+| `LANRURUGI_TELEMETRY:INSTALL:<id>` | Hash | `first_seen`, `last_seen`, `first_ip`, `last_ip`, `country`, `version`, `channel`, `arch`, `os`, `hits` |
+| `LANRURUGI_TELEMETRY:HITS:<id>` | Sorted set | the latest 500 check-ins as `<rfc3339>|<ip>`, scored by epoch second |
+
+The address is the client's, read from `CF-Connecting-IP` (which Cloudflare sets at the edge and
+rewrites on every request); it is never taken from the request body. There is still no library
+path, file name, user, comment or anything about the library — but the sink is **not anonymous any
+more**. `/api/installs` is a list of addresses and exact timestamps, which is why it needs
+`STATS_TOKEN` like `/stats` and why every response carrying an address is sent with
+`Cache-Control: no-store`. An installation row and its hit list expire with `RETENTION_DAYS`;
+`HITS:<id>` keeps only the newest 500 check-ins so a long-lived install does not grow without bound.
 
 A client sends at most one request per day, 3-second timeout, never retried, never blocking
 startup. Opting out is `LANRURUGI_NO_TELEMETRY=1` on the client side.
@@ -152,7 +166,21 @@ curl -s https://hb.example.com/stats -H "Authorization: Bearer $STATS_TOKEN" | j
 
 # daily distinct installations for the chart (1–90 days)
 curl -s "https://hb.example.com/api/series?days=30" -H "Authorization: Bearer $STATS_TOKEN"
+
+# installations, newest check-in first; `limit` ≤ 200, `offset` pages
+curl -s "https://hb.example.com/api/installs?limit=50" -H "Authorization: Bearer $STATS_TOKEN" | jq
+
+# one installation with the exact time of its recent check-ins
+curl -s "https://hb.example.com/api/installs/<id>" -H "Authorization: Bearer $STATS_TOKEN" | jq
+
+# delete everything older than N days — installation rows and per-day aggregates; N=0 empties it
+curl -s -X DELETE "https://hb.example.com/api/records?older_than_days=30" \
+  -H "Authorization: Bearer $STATS_TOKEN"
 ```
+
+The dashboard has the same purge as a button (设置「清理旧记录」): a number of days, then 删除. It is
+irreversible and needs the same token, so it is behind the login like every other read route.
+`/api/records` reports what it removed (`installs`, `keys`) and the first day it kept.
 
 The dashboard itself is `telemetry/ui` (Svelte + Vite). Build it with `npm ci && npm run build`
 there; the image copies `dist/` to `/usr/local/share/lanrurugi/telemetry`
@@ -168,8 +196,8 @@ there; the image copies `dist/` to `/usr/local/share/lanrurugi/telemetry`
 }
 ```
 
-Both routes **do not exist** when `STATS_TOKEN` is empty — the public surface is write-only, which
-is the safer default for something sitting on the internet.
+Every read route **does not exist** when `STATS_TOKEN` is empty — the public surface is write-only,
+which is the safer default for something sitting on the internet.
 
 The 30-day window is a deliberate cap: `SUNIONSTORE` costs O(total members), so aggregating the
 whole `RETENTION_DAYS` would get slower every month. For a longer trend, snapshot the JSON monthly.
@@ -186,7 +214,12 @@ redis-cli -a "$REDIS_PASSWORD" DEL tmp
 ## Things worth knowing
 
 - **Redis is never published.** If `ports:` ever appears on the `redis` service, an unauthenticated
-  Redis is on the internet — that finds a miner within hours.
+  Redis is on the internet — that finds a miner within hours. That matters more now: the keys hold
+  addresses.
+- **The install view holds addresses.** `INSTALL:<id>` / `HITS:<id>` keep the caller's IP and exact
+  check-in times. They exist because "which machine, from where, when" is not answerable from the
+  aggregates. Treat the Redis data and the bearer token accordingly, and delete the keys if that
+  trade stops being worth it.
 - **Keys expire.** `RETENTION_DAYS` (default 400) is about disk, not history: nothing here needs a
   migration to change, and the reporting above only ever looks at the last few days.
 - **This is not `diagnostics`.** `specs/018`'s error/feedback pipeline stays local and only leaves
