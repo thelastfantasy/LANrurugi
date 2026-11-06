@@ -467,23 +467,11 @@ function SuggestionCard({
             /* One joined segmented pager instead of a dot per card: a library with hundreds of
                suggestions turned the dots into a wall that wrapped and pushed the buttons onto a
                second row. Only the container's outer corners are round. */
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                flexWrap: "nowrap",
-                minWidth: 0,
-                height: PAGER_CONTROL_HEIGHT,
-                border: "1px solid rgba(128,128,128,0.35)",
-                borderRadius: 999,
-                overflow: "hidden",
-              }}
-            >
+            <div className="ai-pager">
               <button
                 type="button"
                 disabled={page === 0}
                 onClick={() => onJump(Math.max(0, page - 1))}
-                style={PAGER_SEGMENT}
                 aria-label={t("library.previousSuggestion") ?? undefined}
               >
                 <i className="fa fa-chevron-left" aria-hidden="true" />
@@ -498,34 +486,12 @@ function SuggestionCard({
                   if (Number.isFinite(next) && next >= 1 && next <= total) onJump(next - 1)
                 }}
                 aria-label={t("library.groupSuggestionPage") ?? undefined}
-                style={{
-                  width: 52,
-                  height: "100%",
-                  padding: "0 2px",
-                  boxSizing: "border-box",
-                  textAlign: "center",
-                  border: 0,
-                  background: "transparent",
-                  color: "inherit",
-                  font: "inherit",
-                }}
               />
-              <span
-                style={{
-                  padding: "0 8px",
-                  whiteSpace: "nowrap",
-                  fontVariantNumeric: "tabular-nums",
-                  opacity: 0.75,
-                  lineHeight: `${PAGER_CONTROL_HEIGHT}px`,
-                }}
-              >
-                / {total}
-              </span>
+              <span>/ {total}</span>
               <button
                 type="button"
                 disabled={page >= total - 1}
                 onClick={() => onJump(Math.min(total - 1, page + 1))}
-                style={PAGER_SEGMENT}
                 aria-label={t("library.nextSuggestion") ?? undefined}
               >
                 <i className="fa fa-chevron-right" aria-hidden="true" />
@@ -588,23 +554,6 @@ function SuggestionCard({
  *  instant; creating or ignoring a group drops it, and the explicit re-check button forces past it. */
 /** Above this many suggestions the footer shows one compact pager instead of one dot per card. */
 const MAX_PAGE_DOTS = 20
-/** Shared height for the compact pager's arrows, number box and "/ total" label. */
-const PAGER_CONTROL_HEIGHT = 26
-
-/** One segment of the joined pager. The outer corners come from the container's own radius. */
-const PAGER_SEGMENT = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: 26,
-  height: "100%",
-  padding: 0,
-  background: "transparent",
-  color: "inherit",
-  cursor: "pointer",
-  flexShrink: 0,
-  font: "inherit",
-} as const
 
 const SUGGESTION_CACHE_TTL_MS = 10 * 60 * 1000
 let suggestionCache: { at: number; suggestions: AiGroupSuggestion[] } | null = null
