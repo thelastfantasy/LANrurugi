@@ -1,9 +1,19 @@
 //! `lanrurugi-server telemetry-ingest`: the sink for `lanrurugi_api::heartbeat`'s startup ping.
 //!
 //! One instance of this serves the whole project (behind a Cloudflare Tunnel), not one per
-//! deployment. It stays deliberately small: validate four fields, take the country from
-//! `CF-IPCountry` (Cloudflare sets it at the edge, so no IP is ever read, logged or stored), and
-//! fold the id into per-day Redis sets.
+//! deployment. It validates the payload, takes the country from `CF-IPCountry`, records the
+//! caller's address from `CF-Connecting-IP` (never from the request body), and writes two views:
+//!
+//! - **aggregates** (`DAY` / `GEO` / `VER` / `CHAN`): per-day counts with no address, the
+//!   anonymous numbers the dashboard charts;
+//! - **installs** (`INSTALL:<id>` / `HITS:<id>` / `INSTALLS`): one row per installation with its
+//!   address, first/last seen, version, channel, arch and os, plus the exact time of every
+//!   heartbeat.
+//!
+//! The install view is deliberately *not* anonymous; it exists to answer "which machine, from
+//! where, and when". Both views require `STATS_TOKEN`; the write side stays open.
+//! `DELETE /api/records?older_than_days=N` trims either view, which is also the only way to take
+//! addresses back out before retention would.
 //!
 //! Run it against its own Redis, never the instance a library uses, and never publish 6379 — this
 //! process is the only thing that should reach it.
@@ -14,10 +24,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use axum::extract::{ConnectInfo, DefaultBodyLimit, Query, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::{Config, Pool, Runtime};
@@ -32,6 +42,17 @@ const MAX_BODY: usize = 1024;
 const MAX_PER_MINUTE: u32 = 10;
 /// Per-day keys live this long unless `--retention-days` says otherwise.
 const DEFAULT_RETENTION_DAYS: u64 = 400;
+
+/// Per-installation detail: a hash of fields, the exact heartbeat times, and the newest-first
+/// index the dashboard pages through.
+const INSTALL_PREFIX: &str = "LANRURUGI_TELEMETRY:INSTALL:";
+const HITS_PREFIX: &str = "LANRURUGI_TELEMETRY:HITS:";
+const INSTALL_INDEX: &str = "LANRURUGI_TELEMETRY:INSTALLS";
+/// Recent heartbeats kept per installation: "when did it check in" only needs the recent history,
+/// and an install that lives for months must not grow without bound.
+const MAX_HITS: isize = 500;
+/// Upper bound on one page of `/api/installs`.
+const MAX_INSTALLS: isize = 200;
 
 #[derive(clap::Args)]
 pub struct TelemetryIngestArgs {
@@ -56,9 +77,10 @@ pub struct TelemetryIngestArgs {
     )]
     pub retention_days: u64,
 
-    /// Enables the read side: the dashboard at `/`, `/stats` (JSON) and `/api/series`. Callers
-    /// either log in at `/` with this value as the password (which sets a session cookie) or send
-    /// `Authorization: Bearer <token>`. Unset — the default — means the read side does not exist.
+    /// Enables the read side: the dashboard at `/`, `/stats` (JSON), `/api/series` and the
+    /// per-installation `/api/installs`. Callers either log in at `/` with this value as the
+    /// password (which sets a session cookie) or send `Authorization: Bearer <token>`. Unset —
+    /// the default — means the read side does not exist.
     #[arg(long, env = "LANRURUGI_TELEMETRY_STATS_TOKEN")]
     pub stats_token: Option<String>,
 
@@ -191,7 +213,10 @@ async fn heartbeat(
     headers: HeaderMap,
     Json(body): Json<Heartbeat>,
 ) -> Response {
-    if !allowed(&app, client_ip(&headers, peer.ip())) {
+    // Resolved once: the rate limiter and the stored installation row must agree on who the
+    // caller is.
+    let ip = client_ip(&headers, peer.ip());
+    if !allowed(&app, ip) {
         return (StatusCode::TOO_MANY_REQUESTS, "slow down").into_response();
     }
     if let Err(reason) = body.validate() {
@@ -199,7 +224,7 @@ async fn heartbeat(
     }
     let country = country(&headers);
     let day = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    match record(&app, &body, &country, &day).await {
+    match record(&app, &body, &country, ip, &day).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => {
             tracing::warn!(%error, "telemetry-ingest: redis write failed");
@@ -208,13 +233,15 @@ async fn heartbeat(
     }
 }
 
-/// Three idempotent writes, so a retry from the same installation on the same day is free: the
+/// Idempotent aggregate writes, so a retry from the same installation on the same day is free: the
 /// day set answers "how many are there", the per-country HLL "where", the per-version set "on
-/// what". SADD/PFADD both ignore duplicates.
+/// what". SADD/PFADD both ignore duplicates. The per-installation row is the exception — it counts
+/// how many times that install actually checked in.
 async fn record(
     app: &Ingest,
     body: &Heartbeat,
     country: &str,
+    ip: IpAddr,
     day: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut conn = app
@@ -253,6 +280,60 @@ async fn record(
         .sadd("LANRURUGI_TELEMETRY:VALUES:VER", &body.version)
         .await?;
     let _: () = conn.sadd("LANRURUGI_TELEMETRY:VALUES:GEO", country).await?;
+
+    record_install(&mut conn, body, country, ip, ttl).await?;
+
+    Ok(())
+}
+
+/// One row per installation — address, first/last seen, what it runs, and the exact heartbeat
+/// times. Keyed by the random id the client generated, so it survives version and address changes
+/// instead of turning into a new installation every time.
+async fn record_install(
+    conn: &mut deadpool_redis::Connection,
+    body: &Heartbeat,
+    country: &str,
+    ip: IpAddr,
+    ttl: i64,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let now = chrono::Utc::now();
+    // Nanoseconds, not seconds: the member of `HITS:<id>` *is* the timestamp, so two check-ins
+    // within the same second have to stay distinct entries.
+    let at = now.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+    let epoch = now.timestamp();
+    let ip = ip.to_string();
+    let install = format!("{INSTALL_PREFIX}{}", body.id);
+
+    let _: () = conn.hset(&install, "last_seen", &at).await?;
+    let _: () = conn.hset(&install, "last_ip", &ip).await?;
+    let _: () = conn.hset(&install, "country", country).await?;
+    let _: () = conn.hset(&install, "version", &body.version).await?;
+    if let Some(channel) = &body.channel {
+        let _: () = conn.hset(&install, "channel", channel).await?;
+    }
+    if let Some(arch) = &body.arch {
+        let _: () = conn.hset(&install, "arch", arch).await?;
+    }
+    if let Some(os) = &body.os {
+        let _: () = conn.hset(&install, "os", os).await?;
+    }
+    // First-seen fields are write-once; HSETNX leaves them alone on every later check-in.
+    let _: bool = conn.hset_nx(&install, "first_seen", &at).await?;
+    let _: bool = conn.hset_nx(&install, "first_ip", &ip).await?;
+    let _: f64 = conn.hincr(&install, "hits", 1).await?;
+    let _: () = conn.expire(&install, ttl).await?;
+
+    // Newest-first index. Pruned on write because a sorted set cannot expire per member.
+    let _: usize = conn.zadd(INSTALL_INDEX, &body.id, epoch).await?;
+    let _: usize = conn.zrembyscore(INSTALL_INDEX, 0, epoch - ttl).await?;
+
+    let hits_key = format!("{HITS_PREFIX}{}", body.id);
+    // The member carries the address too, so a check-in does not lose which network it came from
+    // just because a later one overwrote `last_ip`.
+    let _: usize = conn.zadd(&hits_key, format!("{at}|{ip}"), epoch).await?;
+    // Keep the newest MAX_HITS. No-op while the set is still smaller (start > stop).
+    let _: usize = conn.zremrangebyrank(&hits_key, 0, -MAX_HITS - 1).await?;
+    let _: () = conn.expire(&hits_key, ttl).await?;
 
     Ok(())
 }
@@ -550,6 +631,249 @@ async fn series(
     axum::Json(serde_json::json!({ "days": points })).into_response()
 }
 
+/// These responses carry addresses, so nothing on the path may cache them.
+fn no_store(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
+/// One stored installation, or `None` when its key has already expired.
+async fn install_row(
+    conn: &mut deadpool_redis::Connection,
+    id: &str,
+) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
+    let fields: HashMap<String, String> = conn.hgetall(format!("{INSTALL_PREFIX}{id}")).await?;
+    if fields.is_empty() {
+        return Ok(None);
+    }
+    let get = |name: &str| fields.get(name).cloned().unwrap_or_default();
+    Ok(Some(serde_json::json!({
+        "id": id,
+        "first_seen": get("first_seen"),
+        "last_seen": get("last_seen"),
+        "ip": get("last_ip"),
+        "first_ip": get("first_ip"),
+        "country": get("country"),
+        "version": get("version"),
+        "channel": get("channel"),
+        "arch": get("arch"),
+        "os": get("os"),
+        "hits": get("hits").parse::<u64>().unwrap_or(0),
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct InstallsQuery {
+    limit: Option<isize>,
+    offset: Option<isize>,
+}
+
+/// `/api/installs` — one page of the per-installation rows, newest check-in first.
+async fn installs(
+    State(app): State<Arc<Ingest>>,
+    headers: HeaderMap,
+    Query(q): Query<InstallsQuery>,
+) -> Response {
+    if !read_authorized(&app, &headers) {
+        return unauthorized();
+    }
+    let limit = q.limit.unwrap_or(50).clamp(1, MAX_INSTALLS);
+    // Clamped as well as floored: `offset + limit - 1` must not overflow on a crafted query.
+    let offset = q.offset.unwrap_or(0).clamp(0, 1_000_000);
+    let mut conn = match app.pool.get().await {
+        Ok(conn) => conn,
+        Err(error) => {
+            tracing::warn!(%error, "telemetry-ingest: installs query failed");
+            return (StatusCode::SERVICE_UNAVAILABLE, "stats unavailable").into_response();
+        }
+    };
+    let ids: Vec<String> = match conn
+        .zrevrange(INSTALL_INDEX, offset, offset + limit - 1)
+        .await
+    {
+        Ok(ids) => ids,
+        Err(error) => {
+            tracing::warn!(%error, "telemetry-ingest: installs query failed");
+            return (StatusCode::SERVICE_UNAVAILABLE, "stats unavailable").into_response();
+        }
+    };
+    let total: usize = conn.zcard(INSTALL_INDEX).await.unwrap_or(0);
+    let mut rows = Vec::with_capacity(ids.len());
+    for id in ids {
+        match install_row(&mut conn, &id).await {
+            Ok(Some(row)) => rows.push(row),
+            // Expired between the index read and the row read: not an error, just gone.
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(%error, "telemetry-ingest: installs query failed");
+                return (StatusCode::SERVICE_UNAVAILABLE, "stats unavailable").into_response();
+            }
+        }
+    }
+    no_store(axum::Json(serde_json::json!({ "total": total, "installs": rows })).into_response())
+}
+
+/// `/api/installs/{id}` — one installation plus its recent heartbeat times, newest first.
+async fn install_detail(
+    Path(id): Path<String>,
+    State(app): State<Arc<Ingest>>,
+    headers: HeaderMap,
+) -> Response {
+    if !read_authorized(&app, &headers) {
+        return unauthorized();
+    }
+    // The path segment becomes part of a Redis key, so it only ever gets to be a UUID.
+    if uuid::Uuid::parse_str(&id).is_err() {
+        return (StatusCode::BAD_REQUEST, "id must be a UUID").into_response();
+    }
+    let mut conn = match app.pool.get().await {
+        Ok(conn) => conn,
+        Err(error) => {
+            tracing::warn!(%error, "telemetry-ingest: install query failed");
+            return (StatusCode::SERVICE_UNAVAILABLE, "stats unavailable").into_response();
+        }
+    };
+    match install_row(&mut conn, &id).await {
+        Ok(Some(mut row)) => {
+            let members: Vec<String> = conn
+                .zrevrange(format!("{HITS_PREFIX}{id}"), 0, MAX_HITS - 1)
+                .await
+                .unwrap_or_default();
+            // Members are `<rfc3339>|<address>`; split here so callers never parse a string.
+            let times: Vec<serde_json::Value> = members
+                .iter()
+                .map(|member| match member.split_once('|') {
+                    Some((at, ip)) => serde_json::json!({ "at": at, "ip": ip }),
+                    None => serde_json::json!({ "at": member, "ip": "" }),
+                })
+                .collect();
+            row["times"] = serde_json::json!(times);
+            no_store(axum::Json(row).into_response())
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "unknown installation").into_response(),
+        Err(error) => {
+            tracing::warn!(%error, "telemetry-ingest: install query failed");
+            (StatusCode::SERVICE_UNAVAILABLE, "stats unavailable").into_response()
+        }
+    }
+}
+
+/// Hard ceiling on `/api/records`, mirroring what retention will ever hold.
+const MAX_PURGE_DAYS: i64 = 36_500;
+
+#[derive(Debug, Deserialize)]
+struct PurgeQuery {
+    older_than_days: Option<i64>,
+}
+
+/// Drop everything older than N UTC days: the per-installation rows (addresses, first/last seen,
+/// check-in times) and the per-day aggregates. `N = 0` empties the sink. Not reversible.
+async fn records_purge(
+    State(app): State<Arc<Ingest>>,
+    headers: HeaderMap,
+    Query(q): Query<PurgeQuery>,
+) -> Response {
+    if !read_authorized(&app, &headers) {
+        return unauthorized();
+    }
+    let days = q.older_than_days.unwrap_or(30).clamp(0, MAX_PURGE_DAYS);
+    let now = chrono::Utc::now();
+    let cutoff_epoch = now.timestamp() - days * 86_400;
+    let keep_from = keeps_from(now, days);
+    let mut conn = match app.pool.get().await {
+        Ok(conn) => conn,
+        Err(error) => {
+            tracing::warn!(%error, "telemetry-ingest: purge failed");
+            return (StatusCode::SERVICE_UNAVAILABLE, "storage unavailable").into_response();
+        }
+    };
+    match purge(&mut conn, app.retention_secs, cutoff_epoch, keep_from).await {
+        Ok((installs, keys)) => no_store(
+            axum::Json(serde_json::json!({
+                "older_than_days": days,
+                "keeps_from": keep_from.format("%Y-%m-%d").to_string(),
+                "installs": installs,
+                "keys": keys,
+            }))
+            .into_response(),
+        ),
+        Err(error) => {
+            tracing::warn!(%error, "telemetry-ingest: purge failed");
+            (StatusCode::SERVICE_UNAVAILABLE, "storage unavailable").into_response()
+        }
+    }
+}
+
+/// First day that survives `days` of retention: `days = 0` keeps nothing, so the cutoff lands on
+/// tomorrow and every existing day key is older than it.
+fn keeps_from(now: chrono::DateTime<chrono::Utc>, days: i64) -> chrono::NaiveDate {
+    now.date_naive() - chrono::Duration::days(days - 1)
+}
+
+/// Every per-day key the sink could have written between `keeps_from` and the start of retention.
+fn stale_keys(
+    keeps_from: chrono::NaiveDate,
+    span: i64,
+    versions: &[String],
+    channels: &[String],
+    countries: &[String],
+) -> Vec<String> {
+    let mut keys = Vec::new();
+    for offset in 0..span {
+        let date = (keeps_from - chrono::Duration::days(offset))
+            .format("%Y-%m-%d")
+            .to_string();
+        keys.push(format!("LANRURUGI_TELEMETRY:DAY:{date}"));
+        for value in versions {
+            keys.push(format!("LANRURUGI_TELEMETRY:VER:{date}:{value}"));
+        }
+        for value in channels {
+            keys.push(format!("LANRURUGI_TELEMETRY:CHAN:{date}:{value}"));
+        }
+        for value in countries {
+            keys.push(format!("LANRURUGI_TELEMETRY:GEO:{date}:{value}"));
+        }
+    }
+    keys
+}
+
+/// The two halves of a purge. Day-granular for the aggregates, exact for `last_seen`.
+async fn purge(
+    conn: &mut deadpool_redis::Connection,
+    retention_secs: i64,
+    cutoff_epoch: i64,
+    keeps_from: chrono::NaiveDate,
+) -> Result<(usize, usize), Box<dyn std::error::Error + Send + Sync>> {
+    let ids: Vec<String> = conn
+        .zrangebyscore(INSTALL_INDEX, "-inf", cutoff_epoch)
+        .await?;
+    for id in &ids {
+        let _: usize = conn.del(format!("{INSTALL_PREFIX}{id}")).await?;
+        let _: usize = conn.del(format!("{HITS_PREFIX}{id}")).await?;
+    }
+    let _: usize = conn
+        .zrembyscore(INSTALL_INDEX, "-inf", cutoff_epoch)
+        .await?;
+
+    let versions: Vec<String> = conn.smembers("LANRURUGI_TELEMETRY:VALUES:VER").await?;
+    let channels: Vec<String> = conn.smembers("LANRURUGI_TELEMETRY:VALUES:CHAN").await?;
+    let countries: Vec<String> = conn.smembers("LANRURUGI_TELEMETRY:VALUES:GEO").await?;
+
+    // Rebuilt from the value registry over the retention window instead of scanning the keyspace —
+    // an admin action must not reintroduce the `SCAN` the read path deliberately avoids.
+    let span = (retention_secs / 86_400).clamp(1, MAX_PURGE_DAYS);
+    let stale = stale_keys(keeps_from, span, &versions, &channels, &countries);
+    let mut keys = 0usize;
+    for chunk in stale.chunks(500) {
+        let removed: usize = conn.del(chunk).await?;
+        keys += removed;
+    }
+    Ok((ids.len(), keys))
+}
+
 async fn healthz() -> &'static str {
     "ok"
 }
@@ -563,6 +887,9 @@ fn router(app: Arc<Ingest>) -> Router {
         .route("/healthz", get(healthz))
         .route("/stats", get(stats_json))
         .route("/api/series", get(series))
+        .route("/api/installs", get(installs))
+        .route("/api/installs/{id}", get(install_detail))
+        .route("/api/records", delete(records_purge))
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))
         .route("/api/session", get(session_info))
@@ -766,5 +1093,96 @@ mod tests {
                 .unwrap(),
         );
         assert!(!read_authorized(&app, &forged));
+    }
+
+    /// The per-installation row against a real Redis. Skipped — not failed — when none is
+    /// reachable, so `cargo test` on a laptop without one still works; the workspace runner and CI
+    /// both provide one at the default address.
+    #[tokio::test]
+    async fn an_installation_row_keeps_the_address_and_each_exact_time() {
+        let url = std::env::var("LANRURUGI_TEST_REDIS_URL")
+            .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+        let pool = match Config::from_url(&url).create_pool(Some(Runtime::Tokio1)) {
+            Ok(pool) => pool,
+            Err(_) => return,
+        };
+        let Ok(mut conn) = pool.get().await else {
+            return;
+        };
+
+        let mut body = hb();
+        body.id = uuid::Uuid::new_v4().to_string();
+        let first: IpAddr = "203.0.113.9".parse().unwrap();
+        let second: IpAddr = "198.51.100.7".parse().unwrap();
+
+        record_install(&mut conn, &body, "JP", first, 600)
+            .await
+            .unwrap();
+        record_install(&mut conn, &body, "JP", second, 600)
+            .await
+            .unwrap();
+
+        let install = format!("{INSTALL_PREFIX}{}", body.id);
+        let hits_key = format!("{HITS_PREFIX}{}", body.id);
+        let fields: HashMap<String, String> = conn.hgetall(&install).await.unwrap();
+
+        // The newest address wins; the first one is kept as what the row was created with.
+        assert_eq!(fields.get("first_ip").unwrap(), "203.0.113.9");
+        assert_eq!(fields.get("last_ip").unwrap(), "198.51.100.7");
+        assert_eq!(fields.get("hits").unwrap(), "2");
+        assert_eq!(fields.get("country").unwrap(), "JP");
+        assert_eq!(fields.get("version").unwrap(), "0.2.0");
+        assert_eq!(fields.get("channel").unwrap(), "ghcr");
+        assert_eq!(fields.get("arch").unwrap(), "x86_64");
+        assert_eq!(fields.get("os").unwrap(), "linux");
+
+        // Two check-ins, two distinct timestamps (nanosecond members), newest first, each keeping
+        // the address it arrived from.
+        let times: Vec<String> = conn.zrevrange(&hits_key, 0, -1).await.unwrap();
+        assert_eq!(times.len(), 2);
+        assert_ne!(times[0], times[1]);
+        assert!(times[0].ends_with("|198.51.100.7"), "{:?}", times[0]);
+        assert!(times[1].ends_with("|203.0.113.9"), "{:?}", times[1]);
+
+        // The index lists it, so the dashboard's page can find it.
+        let ids: Vec<String> = conn.zrevrange(INSTALL_INDEX, 0, -1).await.unwrap();
+        assert!(ids.contains(&body.id));
+
+        let _: usize = conn.del(&install).await.unwrap();
+        let _: usize = conn.del(&hits_key).await.unwrap();
+        let _: usize = conn.zrem(INSTALL_INDEX, &body.id).await.unwrap();
+    }
+
+    #[test]
+    fn retention_days_count_back_from_today_and_zero_keeps_nothing() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-06T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(keeps_from(now, 30).to_string(), "2026-10-08");
+        assert_eq!(keeps_from(now, 1).to_string(), "2026-11-06");
+        // `0` must not leave today behind: the cutoff is tomorrow, so every existing day is older.
+        assert_eq!(keeps_from(now, 0).to_string(), "2026-11-07");
+    }
+
+    #[test]
+    fn purge_keys_cover_each_day_and_each_value_of_the_window() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 11, 6).unwrap();
+        let versions = vec!["1.0.0".to_string()];
+        let channels = vec!["ghcr".to_string()];
+        let countries = vec!["JP".to_string()];
+        let keys = stale_keys(date, 2, &versions, &channels, &countries);
+        assert_eq!(keys.len(), 2 * 4);
+        for date in ["2026-11-06", "2026-11-05"] {
+            for key in [
+                format!("LANRURUGI_TELEMETRY:DAY:{date}"),
+                format!("LANRURUGI_TELEMETRY:VER:{date}:1.0.0"),
+                format!("LANRURUGI_TELEMETRY:CHAN:{date}:ghcr"),
+                format!("LANRURUGI_TELEMETRY:GEO:{date}:JP"),
+            ] {
+                assert!(keys.contains(&key), "{key} missing");
+            }
+        }
+        // One day further back is outside the window.
+        assert!(!keys.iter().any(|key| key.contains("2026-11-04")));
     }
 }
