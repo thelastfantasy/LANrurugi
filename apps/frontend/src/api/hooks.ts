@@ -58,6 +58,7 @@ import type {
   ImportSnapshotMetadata,
   JobRecord,
   JobsResponse,
+  LibraryStatus,
   LlmUsageResponse,
   LlmUsageWindow,
   LoginSession,
@@ -1950,6 +1951,15 @@ export function useDownloadQueue() {
   }, [queryClient])
 
   return query
+}
+
+/** Counters shown in Settings → background programs (files on record, archives, patches). */
+export function useLibraryStatus() {
+  return useQuery({
+    queryKey: ["library-status"],
+    queryFn: () => fetchJson<LibraryStatus>("/settings/library-status"),
+    staleTime: 30_000,
+  })
 }
 
 export function useAddToQueue() {

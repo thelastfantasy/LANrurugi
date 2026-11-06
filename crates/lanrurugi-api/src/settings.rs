@@ -63,6 +63,7 @@ pub fn router() -> Router<AppState> {
     // check instead.
     Router::new()
         .route("/settings", get(get_settings).put(put_settings))
+        .route("/settings/library-status", get(library_status))
         .route("/settings/password", post(change_password))
 }
 
@@ -673,6 +674,41 @@ fn expand_thumbnail_format(fields: &mut serde_json::Map<String, Value>) -> Resul
 /// absent here: a guest's `theme` value is `guest_theme`'s, substituted in below, not the literal
 /// `STRING_FIELDS` `theme` entry (that's the admin's own pick).
 const GUEST_VISIBLE_STRING_FIELDS: &[&str] = &["language", "htmltitle", "timezone"];
+
+/// `GET /settings/library-status` — the three numbers the settings page's background-program
+/// section shows next to the scan controls: how many files the scan has on record, how many of
+/// them became archives, and how many archives carry a page patch. `total_archives` already lives
+/// on `/api/info`, but that endpoint is public and hit on every page load — counting patches means
+/// one pipelined read per archive, which belongs on a page that asks for it once.
+async fn library_status(State(state): State<AppState>) -> Response {
+    let files_known: i64 = match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hlen(lanrurugi_storage::keys::FILEMAP_KEY)
+            .await
+            .unwrap_or(0),
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "library_status",
+                e.to_string(),
+            )
+        }
+    };
+    let archives = state
+        .repos
+        .archives
+        .list_ids()
+        .await
+        .unwrap_or_default()
+        .len();
+    let patches = state.repos.archives.count_patched().await.unwrap_or(0);
+    axum::Json(json!({
+        "files_known": files_known,
+        "archives": archives,
+        "patches": patches,
+    }))
+    .into_response()
+}
 
 async fn get_settings(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Response {
     let mut conn = match state.redis.config.get().await {
