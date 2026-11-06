@@ -558,37 +558,57 @@ h1#_top,
 }
 
 /*
- * Version picker on phones. Starlight hides the header's right group below 50rem, and the same
- * component is rendered again inside the mobile menu's footer (`MobileMenuFooter`) — where it sat
- * as an unlabelled `<select>` in a row with the GitHub icon. Give it a labelled full-width row so
- * "switch documentation version" is findable without a manual guess.
+ * The mobile menu's bottom row (`MobileMenuFooter`): GitHub link, version picker, theme switch and
+ * language select. Starlight renders it as one flex row, which stops fitting once a `select`
+ * joins it — measured at 390 px it became three ragged lines with the language select alone on
+ * its own (2026-11-06). Two deliberate rows instead: the version picker spans the first one
+ * (it is the only item that needs the width), theme and language share the second.
  */
 .nav-links__version-label {
 	display: none;
 }
 
 @media (max-width: 50rem) {
-	.mobile-preferences .nav-links {
+	.mobile-preferences {
+		display: grid;
+		grid-template-columns: auto auto;
+		gap: 0.5rem 0.75rem;
+		align-items: center;
+	}
+
+	.mobile-preferences > .social-icons {
+		grid-column: 1 / -1;
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: 0.5rem;
+		gap: 0.5rem 0.75rem;
+		margin-inline-end: 0;
+	}
+
+	.mobile-preferences .nav-links {
+		display: flex;
+		flex-wrap: nowrap;
+		align-items: center;
+		gap: 0.5rem 0.75rem;
+		width: 100%;
 	}
 
 	.mobile-preferences .nav-links__version {
-		flex: 1 1 100%;
-		display: flex;
-		flex-direction: column;
-		gap: 0.25rem;
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		flex: 1 1 auto;
 	}
 
 	.mobile-preferences .nav-links__version-label {
-		display: block;
+		display: inline;
 		font-size: var(--sl-text-sm);
 		color: var(--sl-color-gray-2);
+		white-space: nowrap;
 	}
 
 	.mobile-preferences .nav-links__version select {
-		width: 100%;
+		flex: 1 1 auto;
+		min-width: 0;
 	}
 }
