@@ -9,6 +9,7 @@ import type { PluginInfo } from "@/api/types"
 import { uploadResumable } from "@/api/uploadSession"
 import { Tooltip } from "@/components/common-ui/Display"
 import { formatBytes, STATE_COLOR } from "@/components/Display"
+import { reportWarning } from "@/diagnostics/sdk"
 import { newCategoryDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
@@ -94,6 +95,14 @@ export function Upload() {
 
   const addToQueue = useAddToQueue()
 
+  function hostnameOfUrl(url: string): string {
+    try {
+      return new URL(url).hostname
+    } catch {
+      return "(unparseable)"
+    }
+  }
+
   async function handleAddToQueue() {
     const list = Array.from(new Set(urls.split("\n").map((u) => u.trim()).filter(Boolean)))
     if (list.length === 0) return
@@ -106,6 +115,17 @@ export function Upload() {
       else unmatched.push(url)
     }
     setUnmatchedUrls(unmatched)
+    if (unmatched.length > 0) {
+      // The UI already tells the user; this makes the same fact visible in the report window, where
+      // "every URL says no plugin matched" plus the installed namespaces answers *why* in one look.
+      // Hosts only, never the paths: an unmatched URL is exactly the kind of thing whose path can
+      // be a private gallery link.
+      reportWarning("upload: no installed download plugin matched the URL", {
+        unmatched: unmatched.length,
+        hosts: [...new Set(unmatched.map((u) => hostnameOfUrl(u)))],
+        installed: (downloadPlugins.data ?? []).map((p) => p.namespace),
+      })
+    }
     if (matched.length === 0) return
 
     const items = matched.map(({ url, plugin }) => ({
