@@ -515,46 +515,48 @@ function SuggestionCard({
               disabled={ignoreGroupSuggestion.isPending}
               onClick={() => void handleIgnore()}
             />
-            {!isAddToExisting && llmKeyStatus.data?.configured ? (
-              <button
-                type="button"
-                className="stdbtn ai-checkable-btn"
-                disabled={!canConfirm}
-                onClick={() => void handleConfirm()}
-                // Same width as the plain "add to Tankoubon" button below: the two states of the
-                // same card must not resize the primary action (the ✅ toggle made this one
-                // wider, which shifted the whole footer row when a card switched between them).
-                style={{ width: PRIMARY_ACTION_WIDTH, minWidth: PRIMARY_ACTION_WIDTH }}
-              >
-                <span style={{ flex: "0 1 auto", textAlign: "center", whiteSpace: "nowrap" }}>{t("library.createTankoubon")}</span>
-                <Tooltip
-                  label={t("library.autorenameAndReorderChaptersWith")}
-                  wrapperStyle={{ display: "inline-flex", flexShrink: 0 }}
-                  zIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL}
+            {(() => {
+              // Always the same button, in both states. It used to be a checkable <span>-based
+              // button in one state and a plain <input type=button> in the other; no two
+              // independent boxes size themselves the same, so the footer shifted whenever a card
+              // switched between "create" and "add to an existing Tankoubon". Keeping one structure
+              // and hiding the toggle (`visibility`, so it still occupies its width) makes the two
+              // states identical by construction.
+              const showToggle = !isAddToExisting && llmKeyStatus.data?.configured === true
+              return (
+                <button
+                  type="button"
+                  className="stdbtn ai-checkable-btn"
+                  disabled={!canConfirm}
+                  onClick={() => void handleConfirm()}
                 >
-                  <span className="ai-checkable-btn-toggle" onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      checked={autoRename}
-                      onChange={(e) => setAutoRename(e.target.checked)}
-                    />
-                    <i className="fa fa-robot" aria-hidden="true" />
-                    <span className="ai-checkable-btn-toggle-circle">
-                      <i className="fa fa-check" aria-hidden="true" />
-                    </span>
+                  <span style={{ flex: "0 1 auto", textAlign: "center", whiteSpace: "nowrap" }}>
+                    {isAddToExisting ? t("library.addToTankoubon") : t("library.createTankoubon")}
                   </span>
-                </Tooltip>
-              </button>
-            ) : (
-              <input
-                type="button"
-                className="stdbtn ai-pill-btn"
-                value={(isAddToExisting ? t("library.addToTankoubon") : t("library.createTankoubon")) ?? undefined}
-                disabled={!canConfirm}
-                onClick={() => void handleConfirm()}
-                style={{ width: PRIMARY_ACTION_WIDTH, minWidth: PRIMARY_ACTION_WIDTH }}
-              />
-            )}
+                  <Tooltip
+                    label={t("library.autorenameAndReorderChaptersWith")}
+                    wrapperStyle={{
+                      display: "inline-flex",
+                      flexShrink: 0,
+                      visibility: showToggle ? "visible" : "hidden",
+                    }}
+                    zIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL}
+                  >
+                    <span className="ai-checkable-btn-toggle" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={autoRename}
+                        onChange={(e) => setAutoRename(e.target.checked)}
+                      />
+                      <i className="fa fa-robot" aria-hidden="true" />
+                      <span className="ai-checkable-btn-toggle-circle">
+                        <i className="fa fa-check" aria-hidden="true" />
+                      </span>
+                    </span>
+                  </Tooltip>
+                </button>
+              )
+            })()}
           </div>
         </div>
       </DrawerFooter>
@@ -566,10 +568,6 @@ function SuggestionCard({
  *  score pairs (~20 s on a 6 000-archive library, measured on the NAS). The drawer body remounts on
  *  every open, so without this each open paid that again. A short client-side cache makes reopening
  *  instant; creating or ignoring a group drops it, and the explicit re-check button forces past it. */
-/** Width shared by the primary footer action in both card states ("create" with its ✅ toggle,
- *  "add to an existing Tankoubon" without one) — see the call sites. */
-const PRIMARY_ACTION_WIDTH = 150
-
 /** Above this many suggestions the footer shows one compact pager instead of one dot per card. */
 const MAX_PAGE_DOTS = 20
 
