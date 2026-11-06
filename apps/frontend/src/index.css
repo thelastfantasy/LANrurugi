@@ -689,25 +689,10 @@ body:has([data-overlay="modal"]) {
 .ai-pill-btn {
   display: flex;
   align-items: center;
-  /* Centred, not left-packed: the checkable variant is a flex row (label + toggle), so its label
-     sat against the left edge with the toggle trailing it. */
-  justify-content: center;
-  text-align: center;
   gap: 8px;
   border-radius: 999px;
   padding: 5px 12px;
-  /* `.stdbtn` carries `min-width: 150px` for legacy's own table buttons; that floor silently
-     overrode every width set on these AI buttons (150px was the floor, not the width). */
-  min-width: 0;
-  /* The checkable variant's toggle is absolutely positioned (see its call site) so the label can
-     sit on the button's own centre instead of being pushed left by the toggle's width. */
-  position: relative;
-  /* One fixed height for both shapes. `height: auto` let the checkable one (a <span> plus the
-     robot/check toggle) settle a few pixels taller than the plain <input type=button>, which moved
-     everything else in the drawer's footer row — including the pager pill — whenever the card
-     switched between "create" and "add to an existing Tankoubon". */
-  height: 28px;
-  box-sizing: border-box;
+  height: auto;
   line-height: normal;
 }
 .ai-checkable-btn-toggle {
@@ -2361,9 +2346,21 @@ body div.ido {
 }
 
 
-/* Only on a phone: the drawer is full width there and the two actions sized themselves to their
-   own labels, which looked ragged next to the pager. Desktop keeps their natural width. */
+/* Phone only — desktop keeps every button exactly as it was (legacy `.stdbtn` sizing, its 150px
+   min-width, its own margins). On a phone the drawer is full width and the actions sized
+   themselves to their own labels, which looked ragged next to the pager. */
 @media (max-width: 40rem) {
+  .ai-grouping-footer .stdbtn {
+    /* `.stdbtn`'s own 150px floor and 4px top margin are what made these buttons uneven here. */
+    min-width: 0;
+    margin: 0;
+    height: 28px;
+    box-sizing: border-box;
+    justify-content: center;
+    text-align: center;
+    position: relative;
+  }
+
   .ai-primary-action {
     width: 118px;
     flex-shrink: 0;
@@ -2372,15 +2369,8 @@ body div.ido {
   .ai-ignore-action {
     width: 96px;
     flex-shrink: 0;
+    white-space: nowrap;
   }
-}
-
-/* The AI grouping drawer's footer mixes a custom pill with legacy `.stdbtn`s. `.stdbtn` carries
-   `margin: 4px 1px 0` (its own 1px side inset plus a top offset for legacy's table rows), which
-   pushed those buttons a couple of pixels below the `align-items: center` line and made the pager
-   look like it floated high. Zeroed here; the flex `gap` does the spacing. */
-.ai-grouping-footer .stdbtn {
-  margin: 0;
 }
 
 /* Thin scrollbar for a download-queue group's own scroll area. Native scrollbars are wide enough to
