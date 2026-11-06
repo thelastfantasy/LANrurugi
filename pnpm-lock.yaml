@@ -54,8 +54,8 @@ importers:
         specifier: ^5.3.0
         version: 5.3.0
       '@fortawesome/fontawesome-free':
-        specifier: ^6.7.2
-        version: 6.7.2
+        specifier: ^7.3.1
+        version: 7.3.1
       '@sentry/react':
         specifier: ^11.10.0
         version: 11.10.0(react-router@7.18.5(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1)
@@ -1011,8 +1011,8 @@ packages:
   '@fontsource/inter@5.3.0':
     resolution: {integrity: sha512-RofMylZmjlJEfELXeNHFWBRcSs75rGU/6bV2S2jfnvv/3rPXPGe0LgUJTklcHZ9lM4OZmAVFhcJPnACfb91A3g==}
 
-  '@fortawesome/fontawesome-free@6.7.2':
-    resolution: {integrity: sha512-JUOtgFW6k9u4Y+xeIaEiLr3+cjoUPiAuLXoyKOJSia6Duzb7pq+A76P9ZdPDoAoxHdHzq6gE9/jKBGXlZT8FbA==}
+  '@fortawesome/fontawesome-free@7.3.1':
+    resolution: {integrity: sha512-wmglKKPDIkgV3aWlZzWECCPoGIkYCulzBwxG9+w7rc5BGapZ6cPMpoPOT8k36J0Ni7PPX6c/rsoMWfS4d1MUMg==}
     engines: {node: '>=6'}
 
   '@headlessui/tailwindcss@0.2.2':
@@ -5507,7 +5507,7 @@ snapshots:
 
   '@fontsource/inter@5.3.0': {}
 
-  '@fortawesome/fontawesome-free@6.7.2': {}
+  '@fortawesome/fontawesome-free@7.3.1': {}
 
   '@headlessui/tailwindcss@0.2.2(tailwindcss@4.3.3)':
     dependencies:
