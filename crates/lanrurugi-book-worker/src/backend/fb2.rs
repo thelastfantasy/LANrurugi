@@ -9,6 +9,7 @@ use base64::Engine;
 use memmap2::Mmap;
 use quick_xml::events::Event;
 use quick_xml::Reader;
+use quick_xml::XmlVersion;
 
 use super::{Container, Failure, Pages, Result};
 use crate::flow::{Block, FlowBook, ImageRef, Lang};
@@ -97,7 +98,7 @@ impl Fb2 {
                 .map_err(|e| Failure::unreadable(format!("FB2: {e}")))?;
             match event {
                 Event::Start(e) => {
-                    let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
+                    let name = e.local_name().as_ref().to_owned();
                     saw_root |= name == "FictionBook";
                     match name.as_str() {
                         "binary" => {
@@ -127,7 +128,7 @@ impl Fb2 {
                 }
                 Event::Empty(e) => {
                     let name = e.local_name();
-                    if name.as_ref() == b"image" && in_any(&stack, "body") {
+                    if name.as_ref() == "image" && in_any(&stack, "body") {
                         if let Some(href) = attr(&e, "href") {
                             flush_para(&mut book, &mut text);
                             images.push(href.trim_start_matches('#').to_owned());
@@ -136,24 +137,20 @@ impl Fb2 {
                     }
                 }
                 Event::Text(t) => {
-                    let s = t
-                        .decode()
-                        .map_err(|e| Failure::unreadable(format!("FB2 text: {e}")))?;
-                    text.push_str(&s);
+                    // quick-xml 0.42 hands text out already decoded as `Cow<str>`; the explicit
+                    // encoding step `decode()` used to be is gone.
+                    text.push_str(&t.xml_content(XmlVersion::default()));
                 }
-                Event::CData(t) => text.push_str(&String::from_utf8_lossy(&t)),
+                Event::CData(t) => text.push_str(t.as_ref()),
                 Event::GeneralRef(r) => {
                     if let Ok(Some(c)) = r.resolve_char_ref() {
                         text.push(c);
                     } else {
-                        text.push_str(&decode_entities(&format!(
-                            "&{};",
-                            String::from_utf8_lossy(&r)
-                        )));
+                        text.push_str(&decode_entities(&format!("&{};", r.as_ref())));
                     }
                 }
                 Event::End(e) => {
-                    let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
+                    let name = e.local_name().as_ref().to_owned();
                     let inside = |n: &str| stack.iter().rev().skip(1).any(|s| s == n);
                     match name.as_str() {
                         "book-title" if inside("title-info") => book_title = Some(clean(&text)),
@@ -282,8 +279,12 @@ fn clean(text: &str) -> String {
 fn attr(e: &quick_xml::events::BytesStart, local: &str) -> Option<String> {
     e.attributes().flatten().find_map(|a| {
         let key = a.key.local_name();
-        (key.as_ref() == local.as_bytes())
-            .then(|| a.unescape_value().ok().map(|v| v.into_owned()))
+        (key.as_ref() == local)
+            .then(|| {
+                a.normalized_value(XmlVersion::default())
+                    .ok()
+                    .map(|v| v.into_owned())
+            })
             .flatten()
     })
 }
