@@ -689,9 +689,19 @@ body:has([data-overlay="modal"]) {
 .ai-pill-btn {
   display: flex;
   align-items: center;
+  /* Centred, not left-packed: the checkable variant is a flex row (label + toggle), so its label
+     sat against the left edge with the toggle trailing it. */
+  justify-content: center;
+  text-align: center;
   gap: 8px;
   border-radius: 999px;
   padding: 5px 12px;
+  /* `.stdbtn` carries `min-width: 150px` for legacy's own table buttons; that floor silently
+     overrode every width set on these AI buttons (150px was the floor, not the width). */
+  min-width: 0;
+  /* The checkable variant's toggle is absolutely positioned (see its call site) so the label can
+     sit on the button's own centre instead of being pushed left by the toggle's width. */
+  position: relative;
   /* One fixed height for both shapes. `height: auto` let the checkable one (a <span> plus the
      robot/check toggle) settle a few pixels taller than the plain <input type=button>, which moved
      everything else in the drawer's footer row — including the pager pill — whenever the card
