@@ -65,7 +65,7 @@ export function Logs() {
       <div style={{ marginRight: "5%", float: "right" }}>
         <a
           href="#"
-          title="Refresh"
+          title={t("common.refresh") ?? undefined}
           onClick={(e) => {
             e.preventDefault()
             void logLines.refetch()

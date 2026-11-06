@@ -112,7 +112,6 @@ const CAROUSEL_MODE_ICON: Record<CarouselMode, IconType> = {
 
 /** Height of the selection strip, and of the "nothing selected yet" hint that replaces it — equal
  *  so entering/leaving the first selection does not shift the grid below. */
-const SELECTION_STRIP_HEIGHT = 148
 
 export function RecentlyAddedCarousel({
   filter,
@@ -465,16 +464,16 @@ export function RecentlyAddedCarousel({
             className="collapsible-body"
             style={{ width: "100%", boxSizing: "border-box" }}
           >
+            <div className="selection-strip">
             {selectedIds.length === 0 ? (
-              // Same height as the strip below: this used to render legacy's thumbnail box
-              // (`div.id3` alone is 280px), so picking the *first* archive replaced a 330px block
-              // with a 140px strip and pushed the whole grid up — the "big repaint" reported when
-              // entering selection mode. A stable box means only its content changes.
+              // Fills whatever height the strip has (`.selection-strip`), rather than stating that
+              // height itself: the placeholder and the archive cards are both 100% of the strip, so
+              // they agree at every viewport and zoom without a second hardcoded number to drift.
               <div
                 style={{
                   padding: "8px 0",
-                  minHeight: SELECTION_STRIP_HEIGHT,
                   boxSizing: "border-box",
+                  height: "100%",
                   display: "flex",
                   flexDirection: "column",
                   alignItems: "center",
@@ -487,7 +486,7 @@ export function RecentlyAddedCarousel({
               </div>
             ) : (
               <div
-                style={{ padding: "8px 0", position: "relative", minHeight: SELECTION_STRIP_HEIGHT }}
+                style={{ padding: "8px 0", position: "relative" }}
                 ref={selectionListRef}
               >
                 <SortableList
@@ -566,6 +565,7 @@ export function RecentlyAddedCarousel({
                 )}
               </div>
             )}
+            </div>
           </div>
         )}
         {isOpen && !multiSelect && (

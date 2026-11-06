@@ -2909,5 +2909,8 @@
   "library.aiGroupingRecheck": "重新检查",
   "library.groupSuggestionPage": "跳到第几组",
   "library.previousSuggestion": "上一组",
-  "library.nextSuggestion": "下一组"
+  "library.nextSuggestion": "下一组",
+  "library.filteredFromTotalEntries": "(从 {{total}} 条中筛选)",
+  "common.refresh": "刷新",
+  "common.removeTag": "移除标签"
 }

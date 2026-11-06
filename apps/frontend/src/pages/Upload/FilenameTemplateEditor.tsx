@@ -191,6 +191,7 @@ function TemplateChip({
   value: string
   onRemove: (chipNode: HTMLElement) => void
 }) {
+  const { t } = useTranslation()
   const palette = useMenuPalette()
   const [hovered, setHovered] = useState(false)
   const removeColor = palette.border === "transparent" ? palette.text : palette.border
@@ -218,7 +219,7 @@ function TemplateChip({
       <span>{value}</span>
       <button
         type="button"
-        aria-label="Remove"
+        aria-label={t("common.remove") ?? undefined}
         onClick={(e) => {
           e.preventDefault()
           e.stopPropagation()

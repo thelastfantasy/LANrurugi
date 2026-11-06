@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
+import { useTranslation } from "react-i18next"
 
 /** Replicates legacy's `tagger` jQuery plugin markup (`<div class="tagger"><ul><li><a>`) so its
  * theme CSS applies unmodified. Controlled on the flat `"namespace:tag, namespace:tag"` string. */
@@ -25,6 +26,7 @@ export function TagInput({
   suggestions?: string[]
   disabled?: boolean
 }) {
+  const { t } = useTranslation()
   const [draft, setDraft] = useState("")
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -183,7 +185,7 @@ export function TagInput({
                   <button
                     type="button"
                     onClick={() => removeTag(tag)}
-                    aria-label="Remove tag"
+                    aria-label={t("common.removeTag") ?? undefined}
                     style={{
                       background: "none",
                       border: "none",
