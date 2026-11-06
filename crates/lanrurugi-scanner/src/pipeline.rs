@@ -321,6 +321,11 @@ pub async fn ingest_file_with_policy(
     }
 
     if archives.get(&id).await?.is_some() {
+        // The record for this exact id may exist while its filemap entry does not (the entry is
+        // written only after a successful catalogue, and a scan that lost its filemap — or one
+        // whose ingest was interrupted after the record landed — leaves exactly that). Restore the
+        // mapping before reporting, or this file would be re-hashed on every scan forever.
+        let _: Result<(), _> = config_conn.hset(FILEMAP_KEY, &path_str, id.as_str()).await;
         // Same content-hash ID already tracked under a different path. Under the size-aware
         // algorithm this can only happen for genuinely byte-identical content (Clarifications
         // Q2). Always rejected — unlike a `Filename` collision below, `DuplicatePolicy::Overwrite`

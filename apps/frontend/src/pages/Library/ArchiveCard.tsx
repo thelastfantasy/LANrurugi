@@ -165,6 +165,11 @@ export function ArchiveCard({
           <img
             src={thumbFailed ? "/legacy/img/noThumb.png" : thumbSrc}
             alt={archive.title}
+            // `decoding="async"` only: decoding off the main thread keeps one large JPEG/WebP from
+            // stalling the images behind it. Deliberately *not* `loading="lazy"` — this element is
+            // `display: none` until it has loaded, and a hidden lazy image is exactly the case
+            // browsers defer indefinitely, which left cards spinning instead of loading.
+            decoding="async"
             style={thumbLoaded || thumbFailed ? undefined : { display: "none" }}
             onLoad={() => {
               loadedThumbs.add(thumbSrc)

@@ -2901,5 +2901,10 @@
   "library.withoutSource": "Missing source",
   "library.archivesWithASourceTag": "Archives carrying a source: tag (has:source)",
   "library.archivesWithoutASourceTag": "Archives with no source: tag at all (-has:source)",
-  "library.tankMatchedThroughMembers": "This Tankoubon's own record does not match the current filter — these volumes do: {{members}}"
+  "library.tankMatchedThroughMembers": "This Tankoubon's own record does not match the current filter — these volumes do: {{members}}",
+  "library.aiGroupingEmptyTitle": "Nothing to group right now",
+  "library.aiGroupingEmptyHintSameSeries": "A series needs at least two volumes that are not already in a Tankoubon",
+  "library.aiGroupingEmptyHintTags": "The titles or tags have to show they belong together (artist, series name, volume)",
+  "library.aiGroupingEmptyHintThreshold": "A high similarity threshold skips titles that are close but not identical",
+  "library.aiGroupingRecheck": "Check again"
 }

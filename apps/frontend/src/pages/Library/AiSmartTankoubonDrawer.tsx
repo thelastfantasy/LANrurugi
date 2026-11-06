@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query"
-import { type CSSProperties, useEffect, useState } from "react"
+import { type CSSProperties, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { ApiError, sendJson } from "@/api/client"
@@ -313,6 +313,7 @@ function SuggestionCard({
 
   async function handleIgnore() {
     try {
+      suggestionCache = null
       await ignoreGroupSuggestion.mutateAsync({
         archive_ids: suggestion.archive_ids,
         existing_tankoubon_id: suggestion.existing_tankoubon_id,
@@ -325,17 +326,35 @@ function SuggestionCard({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      {/* One row, always: with a few hundred suggestions the counter is long enough that
+          `space-between` wrapped it onto a second line ("1 /" above "1000"), which is what made the
+          drawer's top-left corner look broken. */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+          flexWrap: "nowrap",
+        }}
+      >
         <button
           type="button"
           className="stdbtn"
           disabled={page === 0}
           onClick={onPrev}
-          style={{ minWidth: 28, visibility: page === 0 ? "hidden" : undefined }}
+          style={{ minWidth: 28, flexShrink: 0, visibility: page === 0 ? "hidden" : undefined }}
         >
           <i className="fa fa-chevron-left" aria-hidden="true"></i>
         </button>
-        <span style={{ fontSize: 12, opacity: 0.6 }}>
+        <span
+          style={{
+            fontSize: 12,
+            opacity: 0.6,
+            whiteSpace: "nowrap",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
           {page + 1} / {total}
         </span>
         <button
@@ -343,7 +362,7 @@ function SuggestionCard({
           className="stdbtn"
           disabled={page === total - 1}
           onClick={onNext}
-          style={{ minWidth: 28, visibility: page === total - 1 ? "hidden" : undefined }}
+          style={{ minWidth: 28, flexShrink: 0, visibility: page === total - 1 ? "hidden" : undefined }}
         >
           <i className="fa fa-chevron-right" aria-hidden="true"></i>
         </button>
@@ -494,6 +513,21 @@ function SuggestionCard({
   )
 }
 
+/** Suggestions cost the server real work — it has to embed every ungrouped archive before it can
+ *  score pairs (~20 s on a 6 000-archive library, measured on the NAS). The drawer body remounts on
+ *  every open, so without this each open paid that again. A short client-side cache makes reopening
+ *  instant; creating or ignoring a group drops it, and the explicit re-check button forces past it. */
+const SUGGESTION_CACHE_TTL_MS = 10 * 60 * 1000
+let suggestionCache: { at: number; suggestions: AiGroupSuggestion[] } | null = null
+
+/** Fresh cached list for a mounting drawer body, or `null` when the server has to be asked. */
+function cachedSuggestions(): AiGroupSuggestion[] | null {
+  if (suggestionCache && Date.now() - suggestionCache.at < SUGGESTION_CACHE_TTL_MS) {
+    return suggestionCache.suggestions
+  }
+  return null
+}
+
 /** AI-smart-create-Tankoubon, as a right-side drawer: top-aligned, so the pager stays put however
  * tall the current card is. Its body mounts on each open, which is what requests fresh suggestions. */
 export function AiSmartTankoubonDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -511,7 +545,9 @@ function SuggestionsBody({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
   const archives = useArchives()
   const aiGroupSuggestions = useAiGroupSuggestions()
-  const [suggestions, setSuggestions] = useState<AiGroupSuggestion[] | null>(null)
+  const [suggestions, setSuggestions] = useState<AiGroupSuggestion[] | null>(() => cachedSuggestions())
+  // Read once: whether this mount already has a list from the cache (then it must not re-request).
+  const startedFromCache = useRef(suggestions !== null)
   const [page, setPage] = useState(0)
   const [showIgnored, setShowIgnored] = useState(false)
 
@@ -531,9 +567,11 @@ function SuggestionsBody({ onClose }: { onClose: () => void }) {
   // second, actually-mounted instance permanently stuck on the skeleton.
   const { mutate: requestSuggestions } = aiGroupSuggestions
   useEffect(() => {
+    if (startedFromCache.current) return
     let cancelled = false
     requestSuggestions(undefined, {
       onSuccess: (data) => {
+        suggestionCache = { at: Date.now(), suggestions: data.suggestions }
         if (!cancelled) setSuggestions(data.suggestions)
       },
       onError: (err) => {
@@ -595,9 +633,81 @@ function SuggestionsBody({ onClose }: { onClose: () => void }) {
             tankoubonNameById={tankoubonNameById}
           />
         ) : suggestions.length === 0 ? (
-          <div style={{ padding: "20px 0" }}>
-            <i className="fas fa-3x fa-check-circle" aria-hidden="true" style={{ opacity: 0.5 }} />
-            <div style={{ marginTop: 12 }}>{t("library.noGroupingSuggestionsNothing")}</div>
+          // An empty drawer is still a screen: give it a real layout (icon, headline, the three
+          // things that actually produce suggestions, and a way to re-check) instead of one
+          // floating line of text and a lone check mark.
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+              textAlign: "center",
+              padding: "32px 16px",
+              minHeight: 320,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 64,
+                height: 64,
+                borderRadius: "50%",
+                border: "1px solid currentColor",
+                opacity: 0.55,
+              }}
+            >
+              <i className="fas fa-2x fa-circle-check" aria-hidden="true" />
+            </div>
+            <strong style={{ fontSize: 15 }}>{t("library.aiGroupingEmptyTitle")}</strong>
+            <p style={{ margin: 0, opacity: 0.75, maxWidth: 380 }}>
+              {t("library.noGroupingSuggestionsNothing")}
+            </p>
+            <ul
+              style={{
+                margin: "4px 0 0",
+                padding: 0,
+                listStyle: "none",
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                opacity: 0.75,
+                fontSize: 12,
+                textAlign: "left",
+                maxWidth: 380,
+              }}
+            >
+              {[
+                t("library.aiGroupingEmptyHintSameSeries"),
+                t("library.aiGroupingEmptyHintTags"),
+                t("library.aiGroupingEmptyHintThreshold"),
+              ].map((hint, i) => (
+                <li key={i} style={{ display: "flex", gap: 8 }}>
+                  <i className="fas fa-angle-right" aria-hidden="true" style={{ opacity: 0.6, marginTop: 2 }} />
+                  <span>{hint}</span>
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              className="stdbtn"
+              style={{ marginTop: 6 }}
+              onClick={() => {
+                suggestionCache = null
+                requestSuggestions(undefined, {
+                  onSuccess: (data) => {
+                    suggestionCache = { at: Date.now(), suggestions: data.suggestions }
+                    setSuggestions(data.suggestions)
+                  },
+                })
+              }}
+              disabled={aiGroupSuggestions.isPending}
+            >
+              {t("library.aiGroupingRecheck")}
+            </button>
           </div>
         ) : current ? (
           <SuggestionCard

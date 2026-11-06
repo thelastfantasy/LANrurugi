@@ -205,11 +205,20 @@ pub async fn full_scan(
         if !known_paths.is_empty() {
             let mapped: Vec<(String, String)> = conn.hgetall(FILEMAP_KEY).await.unwrap_or_default();
             let ids: Vec<&String> = mapped.iter().map(|(_, id)| id).collect();
+            // Archive records live in the *archive* database, not the config one this connection
+            // points at — asking the config DB for these ids returns false for every single one,
+            // which would wipe the whole filemap and re-hash the entire library on every scan.
+            // If the archive pool is unavailable, skip the verification entirely and trust the
+            // filemap — never destroy it on a guess.
             let mut pipe = redis::pipe();
             for id in &ids {
                 pipe.exists(id.as_str());
             }
-            if let Ok(alive) = pipe.query_async::<Vec<bool>>(&mut conn).await {
+            let alive: Option<Vec<bool>> = match pools.archive.get().await {
+                Ok(mut conn) => pipe.query_async::<Vec<bool>>(&mut conn).await.ok(),
+                Err(_) => None,
+            };
+            if let Some(alive) = alive {
                 let dead_paths: Vec<String> = mapped
                     .iter()
                     .zip(alive)

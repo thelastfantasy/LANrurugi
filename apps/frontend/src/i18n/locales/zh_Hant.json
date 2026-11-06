@@ -987,5 +987,10 @@
   "library.withoutSource": "缺少來源",
   "library.archivesWithASourceTag": "帶有 source: 標籤的檔案（has:source）",
   "library.archivesWithoutASourceTag": "沒有任何 source: 標籤的檔案（-has:source）",
-  "library.tankMatchedThroughMembers": "這本單行本本身沒有命中，是其中這些卷命中了目前條件：{{members}}"
+  "library.tankMatchedThroughMembers": "這本單行本本身沒有命中，是其中這些卷命中了目前條件：{{members}}",
+  "library.aiGroupingEmptyTitle": "暫時沒有可合併的分組",
+  "library.aiGroupingEmptyHintSameSeries": "同一個系列至少要有兩本還沒併入單行本",
+  "library.aiGroupingEmptyHintTags": "標題或標籤裡能看出同系列（藝術家、系列名、卷號）",
+  "library.aiGroupingEmptyHintThreshold": "相似度閾值太高時，相近但不完全一致的標題不會被配對",
+  "library.aiGroupingRecheck": "重新檢查"
 }

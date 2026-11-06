@@ -2901,5 +2901,10 @@
   "library.withoutSource": "缺少来源",
   "library.archivesWithASourceTag": "带有 source: 标签的档案（has:source）",
   "library.archivesWithoutASourceTag": "没有任何 source: 标签的档案（-has:source）",
-  "library.tankMatchedThroughMembers": "这本单行本本身没有命中，是其中这些卷命中了当前条件：{{members}}"
+  "library.tankMatchedThroughMembers": "这本单行本本身没有命中，是其中这些卷命中了当前条件：{{members}}",
+  "library.aiGroupingEmptyTitle": "暂时没有可合并的分组",
+  "library.aiGroupingEmptyHintSameSeries": "同一个系列至少要有两本还没并入单行本",
+  "library.aiGroupingEmptyHintTags": "标题或标签里能看出同系列（艺术家、系列名、卷号）",
+  "library.aiGroupingEmptyHintThreshold": "相似度阈值太高时，相近但不完全一致的标题不会被配对",
+  "library.aiGroupingRecheck": "重新检查"
 }

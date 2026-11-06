@@ -283,10 +283,10 @@ export function SearchBar({
                 // The panel is portaled to `document.body`, and the legacy index page centers its
                 // text — without this every row's content renders centered.
                 textAlign: "left",
-                  // Only what clearing the bar needs — the bar's own height plus the few px the panel
-                  // starts above it. The row/heading padding supplies the visible gap, so tightening
-                  // that gap is one edit there rather than two here.
-                  paddingTop: 26,
+                  // The gap that clears the search bar is *not* padding here: the popup is its own
+                  // scroll container, so padding at its top scrolls away with the content and rows
+                  // end up painted behind the bar (reported 2026-11-06). `SearchPanel` now starts
+                  // with a sticky strip of this height instead.
                   // 6px of panel on each side of the bar (Chrome's own inset is tighter than the
                   // 10px this started with).
                   width: "calc(var(--anchor-width) + 12px)",
