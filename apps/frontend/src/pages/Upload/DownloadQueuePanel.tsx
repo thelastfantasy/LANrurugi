@@ -370,6 +370,9 @@ export function DownloadQueuePanel({
                     make the panel thousands of pixels tall). `70vh` keeps it usable on a short
                     window, where 25 rows would not fit anyway. */}
                 <div
+                  // `queue-items-scroll` is the thin scrollbar (index.css) — a full-width native
+                  // one inside a grouped list is visually heavy next to the theme's own controls.
+                  className={shown.length > QUEUE_SCROLL_AFTER ? "queue-items-scroll" : undefined}
                   style={
                     shown.length > QUEUE_SCROLL_AFTER
                       ? { maxHeight: "min(1000px, 70vh)", overflowY: "auto" }
