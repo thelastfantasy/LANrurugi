@@ -522,63 +522,31 @@ function SuggestionCard({
               disabled={ignoreGroupSuggestion.isPending}
               onClick={() => void handleIgnore()}
             />
-            {(() => {
-              // Always the same button, in both states. It used to be a checkable <span>-based
-              // button in one state and a plain <input type=button> in the other; no two
-              // independent boxes size themselves the same, so the footer shifted whenever a card
-              // switched between "create" and "add to an existing Tankoubon". Keeping one structure
-              // and hiding the toggle (`visibility`, so it still occupies its width) makes the two
-              // states identical by construction.
-              const showToggle = !isAddToExisting && llmKeyStatus.data?.configured === true
-              return (
-                <button
-                  type="button"
+            {narrow ? (
+              isAddToExisting ? (
+                <MobileAddButton t={t} disabled={!canConfirm} onConfirm={() => void handleConfirm()} />
+              ) : (
+                <MobileCreateButton
+                  t={t}
                   disabled={!canConfirm}
-                  onClick={() => void handleConfirm()}
-                  className="stdbtn ai-checkable-btn ai-primary-action"
-                >
-                  {/* A spacer matching the toggle's width keeps the label on the button's own
-                      centre line — without it the label shifted left by half the toggle. */}
-                  {/* Equal spacers either side of the label: the label sits on the button's centre
-                      line in both card states, and both states occupy exactly the same width — the
-                      right slot holds the ✅ toggle when there is one and stays empty otherwise. */}
-                  {narrow && <span aria-hidden="true" style={{ width: 35, flexShrink: 0 }} />}
-                  {/* Mobile only: `6em` fits the longer of the two labels, so the two card states
-                      cannot differ by a character. Desktop keeps its natural sizing. */}
-                  <span
-                    className="ai-primary-label"
-                    style={{ flex: "0 1 auto", whiteSpace: "nowrap" }}
-                  >
-                    {isAddToExisting ? t("library.addToTankoubon") : t("library.createTankoubon")}
-                  </span>
-                  <span
-                    style={
-                      narrow
-                        ? { width: 35, flexShrink: 0, display: "inline-flex", justifyContent: "center" }
-                        : { display: "inline-flex", flexShrink: 0 }
-                    }
-                  >
-                  <Tooltip
-                    label={t("library.autorenameAndReorderChaptersWith")}
-                    wrapperStyle={showToggle ? { display: "inline-flex" } : { display: "none" }}
-                    zIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL}
-                  >
-                    <span className="ai-checkable-btn-toggle" onClick={(e) => e.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        checked={autoRename}
-                        onChange={(e) => setAutoRename(e.target.checked)}
-                      />
-                      <i className="fa fa-robot" aria-hidden="true" />
-                      <span className="ai-checkable-btn-toggle-circle">
-                        <i className="fa fa-check" aria-hidden="true" />
-                      </span>
-                    </span>
-                  </Tooltip>
-                  </span>
-                </button>
+                  onConfirm={() => void handleConfirm()}
+                  autoRename={autoRename}
+                  setAutoRename={setAutoRename}
+                  showToggle={llmKeyStatus.data?.configured === true}
+                />
               )
-            })()}
+            ) : isAddToExisting ? (
+              <PcAddButton t={t} disabled={!canConfirm} onConfirm={() => void handleConfirm()} />
+            ) : (
+              <PcCreateButton
+                t={t}
+                disabled={!canConfirm}
+                onConfirm={() => void handleConfirm()}
+                autoRename={autoRename}
+                setAutoRename={setAutoRename}
+                showToggle={llmKeyStatus.data?.configured === true}
+              />
+            )}
           </div>
         </div>
       </DrawerFooter>
@@ -602,6 +570,114 @@ function cachedSuggestions(): AiGroupSuggestion[] | null {
     return suggestionCache.suggestions
   }
   return null
+}
+
+/** The ✅ auto-rename toggle that rides inside the "create" button. */
+function AutoRenameToggle({
+  t,
+  autoRename,
+  setAutoRename,
+}: {
+  t: (key: string) => string
+  autoRename: boolean
+  setAutoRename: (value: boolean) => void
+}) {
+  return (
+    <Tooltip
+      label={t("library.autorenameAndReorderChaptersWith")}
+      wrapperStyle={{ display: "inline-flex", flexShrink: 0 }}
+      zIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL}
+    >
+      <span className="ai-checkable-btn-toggle" onClick={(e) => e.stopPropagation()}>
+        <input type="checkbox" checked={autoRename} onChange={(e) => setAutoRename(e.target.checked)} />
+        <i className="fa fa-robot" aria-hidden="true" />
+        <span className="ai-checkable-btn-toggle-circle">
+          <i className="fa fa-check" aria-hidden="true" />
+        </span>
+      </span>
+    </Tooltip>
+  )
+}
+
+type ConfirmProps = { t: (key: string) => string; disabled: boolean; onConfirm: () => void }
+
+/** Desktop "create Tankoubon": legacy shape — the label takes the slack, the toggle trails it. */
+function PcCreateButton({
+  t,
+  disabled,
+  onConfirm,
+  autoRename,
+  setAutoRename,
+  showToggle,
+}: ConfirmProps & {
+  autoRename: boolean
+  setAutoRename: (value: boolean) => void
+  showToggle: boolean
+}) {
+  return (
+    <button type="button" className="stdbtn ai-checkable-btn" disabled={disabled} onClick={onConfirm}>
+      <span style={{ flex: 1, textAlign: "center" }}>{t("library.createTankoubon")}</span>
+      {showToggle && (
+        <AutoRenameToggle t={t} autoRename={autoRename} setAutoRename={setAutoRename} />
+      )}
+    </button>
+  )
+}
+
+/** Desktop "add to an existing Tankoubon": a plain legacy button, no toggle. */
+function PcAddButton({ t, disabled, onConfirm }: ConfirmProps) {
+  return (
+    <input
+      type="button"
+      className="stdbtn ai-pill-btn"
+      value={t("library.addToTankoubon") ?? undefined}
+      disabled={disabled}
+      onClick={onConfirm}
+    />
+  )
+}
+
+/** Phone "create Tankoubon": fixed box, label centred, toggle pinned to the right edge. */
+function MobileCreateButton({
+  t,
+  disabled,
+  onConfirm,
+  autoRename,
+  setAutoRename,
+  showToggle,
+}: ConfirmProps & {
+  autoRename: boolean
+  setAutoRename: (value: boolean) => void
+  showToggle: boolean
+}) {
+  return (
+    <button
+      type="button"
+      className="stdbtn ai-checkable-btn ai-primary-action"
+      disabled={disabled}
+      onClick={onConfirm}
+    >
+      <span style={{ flex: 1, textAlign: "center", whiteSpace: "nowrap" }}>
+        {t("library.createTankoubon")}
+      </span>
+      {showToggle && (
+        <AutoRenameToggle t={t} autoRename={autoRename} setAutoRename={setAutoRename} />
+      )}
+    </button>
+  )
+}
+
+/** Phone "add to an existing Tankoubon": the same box width as the create button. */
+function MobileAddButton({ t, disabled, onConfirm }: ConfirmProps) {
+  return (
+    <input
+      type="button"
+      className="stdbtn ai-pill-btn ai-primary-action"
+      value={t("library.addToTankoubon") ?? undefined}
+      disabled={disabled}
+      onClick={onConfirm}
+    />
+  )
 }
 
 /** AI-smart-create-Tankoubon, as a right-side drawer: top-aligned, so the pager stays put however

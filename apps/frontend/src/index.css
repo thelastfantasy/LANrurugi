@@ -2353,7 +2353,8 @@ body div.ido {
 /* Phone only. Desktop keeps legacy `.stdbtn`'s own sizing, centring and margins; the only rule
    that applies everywhere is the shared height above. */
 @media (max-width: 40rem) {
-  /* `.stdbtn`'s own 4px top margin and 150px floor are what made these buttons uneven here. */
+  /* Phone-only: `.stdbtn`'s own 4px top margin and 150px floor are what made these buttons
+     uneven next to the pager. Desktop uses the `Pc*` components and keeps legacy sizing. */
   .ai-grouping-footer .stdbtn {
     margin: 0;
     min-width: 0;
@@ -2361,17 +2362,16 @@ body div.ido {
     text-align: center;
   }
 
-  .ai-primary-label {
-    min-width: 6em;
-    text-align: center;
-  }
-
   .ai-primary-action {
+    /* 125 = label (6em ceiling) + the ✅ toggle + padding: the exact content width, so the pager
+       on the left still fits on the row at 390px (140 pushed it into a squeeze). */
+    width: 125px;
     flex-shrink: 0;
   }
 
   .ai-ignore-action {
-    width: 96px;
+    /* Natural width plus a little padding: its four characters need ~52px of text. */
+    min-width: 76px;
     flex-shrink: 0;
     white-space: nowrap;
   }
