@@ -2402,6 +2402,32 @@ body div.ido {
 /* The AI grouping drawer's compact pager uses the shared `NumberInput`, whose own stepper is
    ../../components/common-ui/Form/NumberInput.tsx's absolutely-positioned pair; inside this pill it
    would overlay the "/ total" label, so it stays hidden and the pill's ← → do the stepping. */
+/* Both engines, from one place: `.stdinput`'s `margin: 4px 1px 0` and `width: 80%` are meant for
+   standalone form rows, and inside this 26px pill they made the number sit in a 12px box in Firefox
+   (Chrome tolerated it, Firefox did not). `inline-flex` + `stretch` tracks the pill's height without
+   a percentage height against an `inline-block` parent, which the two engines resolve differently. */
+.ai-pager .number-input-wrapper {
+  /* The component sets `display: inline-block` inline, which a plain stylesheet rule cannot beat. */
+  display: inline-flex !important;
+  align-items: stretch;
+  height: 100% !important;
+}
+
+.ai-pager input.ai-pager-number {
+  /* Width comes from the theme rule (52px); only stop flex from shrinking it below that. */
+  max-width: none !important;
+  flex: 0 0 auto;
+  height: 100% !important;
+  margin: 0 !important;
+  padding: 0 2px !important;
+  border-top: 0 !important;
+  border-bottom: 0 !important;
+  background: transparent !important;
+  text-align: center;
+  font: inherit;
+  box-sizing: border-box;
+}
+
 .ai-pager .number-input-stepper {
   display: none !important;
 }

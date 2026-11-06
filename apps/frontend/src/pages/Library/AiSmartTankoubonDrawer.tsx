@@ -487,7 +487,9 @@ function SuggestionCard({
               </button>
               <NumberInput
                 className="ai-pager-number"
-                inputStyle={{ height: "100%", border: 0, background: "transparent" }}
+                /* Wide enough for the current page's own digit count, so "1 / 26" and "1000 / 1200"
+                   share the same pill without a fixed box that either clips or wastes space. */
+                inputStyle={{ width: Math.max(52, String(total).length * 8 + 16) }}
                 min={1}
                 max={total}
                 value={page + 1}
