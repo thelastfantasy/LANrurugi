@@ -667,16 +667,21 @@ function MobileCreateButton({
   )
 }
 
-/** Phone "add to an existing Tankoubon": the same box width as the create button. */
+/** Phone "add to an existing Tankoubon": the same box as the create button — and the same
+ *  element type, because an `<input type=button>` centres its own text on the input's line box and
+ *  sat visibly lower than the flex-centred `<button>` next to it. */
 function MobileAddButton({ t, disabled, onConfirm }: ConfirmProps) {
   return (
-    <input
+    <button
       type="button"
       className="stdbtn ai-pill-btn ai-primary-action"
-      value={t("library.addToTankoubon") ?? undefined}
       disabled={disabled}
       onClick={onConfirm}
-    />
+    >
+      <span style={{ flex: 1, textAlign: "center", whiteSpace: "nowrap" }}>
+        {t("library.addToTankoubon")}
+      </span>
+    </button>
   )
 }
 
