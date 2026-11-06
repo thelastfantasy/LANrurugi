@@ -1613,6 +1613,7 @@ textarea {
     color: inherit;
     cursor: pointer;
     flex-shrink: 0;
+    line-height: 1;
 }
 
 .ai-pager button:hover:not(:disabled) {
@@ -1646,5 +1647,5 @@ textarea {
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
     opacity: 0.75;
-    line-height: 26px;
+    line-height: 28px;
 }
