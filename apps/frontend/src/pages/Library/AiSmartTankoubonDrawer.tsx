@@ -595,9 +595,77 @@ function SuggestionsBody({ onClose }: { onClose: () => void }) {
             tankoubonNameById={tankoubonNameById}
           />
         ) : suggestions.length === 0 ? (
-          <div style={{ padding: "20px 0" }}>
-            <i className="fas fa-3x fa-check-circle" aria-hidden="true" style={{ opacity: 0.5 }} />
-            <div style={{ marginTop: 12 }}>{t("library.noGroupingSuggestionsNothing")}</div>
+          // An empty drawer is still a screen: give it a real layout (icon, headline, the three
+          // things that actually produce suggestions, and a way to re-check) instead of one
+          // floating line of text and a lone check mark.
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+              textAlign: "center",
+              padding: "32px 16px",
+              minHeight: 320,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 64,
+                height: 64,
+                borderRadius: "50%",
+                border: "1px solid currentColor",
+                opacity: 0.55,
+              }}
+            >
+              <i className="fas fa-2x fa-circle-check" aria-hidden="true" />
+            </div>
+            <strong style={{ fontSize: 15 }}>{t("library.aiGroupingEmptyTitle")}</strong>
+            <p style={{ margin: 0, opacity: 0.75, maxWidth: 380 }}>
+              {t("library.noGroupingSuggestionsNothing")}
+            </p>
+            <ul
+              style={{
+                margin: "4px 0 0",
+                padding: 0,
+                listStyle: "none",
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                opacity: 0.75,
+                fontSize: 12,
+                textAlign: "left",
+                maxWidth: 380,
+              }}
+            >
+              {[
+                t("library.aiGroupingEmptyHintSameSeries"),
+                t("library.aiGroupingEmptyHintTags"),
+                t("library.aiGroupingEmptyHintThreshold"),
+              ].map((hint, i) => (
+                <li key={i} style={{ display: "flex", gap: 8 }}>
+                  <i className="fas fa-angle-right" aria-hidden="true" style={{ opacity: 0.6, marginTop: 2 }} />
+                  <span>{hint}</span>
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              className="stdbtn"
+              style={{ marginTop: 6 }}
+              onClick={() =>
+                requestSuggestions(undefined, {
+                  onSuccess: (data) => setSuggestions(data.suggestions),
+                })
+              }
+              disabled={aiGroupSuggestions.isPending}
+            >
+              {t("library.aiGroupingRecheck")}
+            </button>
           </div>
         ) : current ? (
           <SuggestionCard
