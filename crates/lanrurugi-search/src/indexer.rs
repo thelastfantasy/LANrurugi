@@ -16,8 +16,8 @@ use lanrurugi_equivalence::Equivalence;
 use lanrurugi_storage::repository::{ArchiveRepository, GroupingRepository};
 
 use crate::keys::{
-    FOLD_FINGERPRINT_KEY, NEW_KEY, SOURCE_TAGGED_KEY, TANKGROUPED_KEY, TITLES_FOLDED_KEY,
-    TITLES_KEY, UNTAGGED_KEY,
+    FOLD_FINGERPRINT_KEY, NEW_KEY, SOURCE_TAGGED_KEY, SOURCE_TAGGED_READY_KEY, TANKGROUPED_KEY,
+    TITLES_FOLDED_KEY, TITLES_KEY, UNTAGGED_KEY,
 };
 
 #[derive(Debug, Error)]
@@ -126,6 +126,7 @@ pub async fn rebuild_folded_indexes(
     let _: () = conn.del(TITLES_FOLDED_KEY).await?;
     let _: () = conn.del(UNTAGGED_KEY).await?;
     let _: () = conn.del(SOURCE_TAGGED_KEY).await?;
+    let _: () = conn.set(SOURCE_TAGGED_READY_KEY, 1).await?;
     let index_keys: Vec<String> = conn.keys("INDEX_*").await?;
     if !index_keys.is_empty() {
         let _: () = conn.del(index_keys).await?;
@@ -150,6 +151,37 @@ pub async fn rebuild_folded_indexes(
     }
 
     Ok(())
+}
+
+/// Fills `LRR_SOURCE_TAGGED` for a library that predates it — a no-op once the set exists.
+///
+/// Without this, `has:source` reads as "no archive has a source" and `-has:source` as "every
+/// archive is missing one" until each archive's tags happen to be edited. Runs once per boot (the
+/// existence check makes it cheap afterwards), the same self-healing shape
+/// `backfill_reverse_indexes` uses for the category/tankoubon reverse indexes.
+pub async fn backfill_source_tagged(
+    archives: &ArchiveRepository,
+    search_pool: &Pool,
+) -> Result<usize> {
+    let mut conn = search_pool.get().await?;
+    let ready: bool = conn.exists(SOURCE_TAGGED_READY_KEY).await?;
+    if ready {
+        return Ok(0);
+    }
+    let all = archives.list_all().await?;
+    let mut written = 0;
+    let mut pipe = deadpool_redis::redis::pipe();
+    for archive in &all {
+        if has_source_tag(&archive.tags) {
+            pipe.sadd(SOURCE_TAGGED_KEY, archive.id.as_str());
+            written += 1;
+        }
+    }
+    // Marks the set as computed even when the result is empty — "never built" and "built, nothing
+    // has a source" are different states and only this marker tells them apart.
+    pipe.set(SOURCE_TAGGED_READY_KEY, 1);
+    let _: () = pipe.query_async(&mut conn).await?;
+    Ok(written)
 }
 
 /// Registers a freshly-catalogued archive in every search-side set it should start in: title

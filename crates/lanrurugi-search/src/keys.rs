@@ -12,6 +12,10 @@ pub const UNTAGGED_KEY: &str = "LRR_UNTAGGED";
 /// keeps an archive out of the untagged set, and asking "which archives do have a source" by
 /// scanning every archive's `tags` field would be one round trip per archive on every search.
 pub const SOURCE_TAGGED_KEY: &str = "LRR_SOURCE_TAGGED";
+/// Set once [`SOURCE_TAGGED_KEY`] has been computed for this library (it may legitimately be
+/// empty). Without it, "the set is empty" and "the set was never built" are indistinguishable, and
+/// `backfill_source_tagged` would re-walk the whole library on every boot.
+pub const SOURCE_TAGGED_READY_KEY: &str = "LRR_SOURCE_TAGGED_READY";
 
 /// Sorted set of `"<folded lowercased title>\x00<archive id>"` members, score 0 — the canonical
 /// title index used for matching. `TITLES_KEY` stays the original (display/sort) index; this one
