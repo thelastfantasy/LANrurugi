@@ -444,10 +444,15 @@ body:has([data-overlay="modal"]) {
  * to match that breakpoint. */
 .carousel-slide {
   width: 228px;
+  /* A slide's card is 344px tall (`.id1` at this breakpoint), but the selection strip's slide
+     renders `null` until its metadata arrives — without this the strip collapsed for a frame when
+     the first archive was picked, which is the white flash that came with the height change. */
+  min-height: 344px;
 }
 @media all and (max-width: 560px) {
   .carousel-slide {
     width: 164px;
+    min-height: 256px;
   }
 }
 
