@@ -38,12 +38,17 @@ pub fn parse_node(entry: &str) -> Option<NodeRef> {
     if !addr.contains(':') {
         return None;
     }
-    let relay = query
+    let raw = query
         .split('&')
         .filter_map(|p| p.split_once('='))
         .find(|(k, _)| *k == "relay")
-        .map(|(_, v)| v.to_string())
-        .filter(|v| url::Url::parse(v).is_ok_and(|u| u.scheme() == "https"));
+        .map(|(_, v)| v.to_string());
+    let relay = match raw.as_deref() {
+        // See `node_string`: the shorthand for "the relay on the address's own host".
+        Some("auto") => Some(format!("https://{}/", addr.split(':').next()?)),
+        Some(v) if url::Url::parse(v).is_ok_and(|u| u.scheme() == "https") => Some(v.to_string()),
+        _ => None,
+    };
     Some(NodeRef {
         endpoint_id,
         addr: addr.to_string(),
@@ -73,11 +78,26 @@ pub fn node_string(endpoint_id: &iroh::EndpointId, settings: &ShareSettings) -> 
             let port = settings.number("share_udp_port").unwrap_or(11204);
             Some(format!("{}:{port}", url.host_str()?))
         })?;
+    let relay = settings
+        .flag("share_node_relay")
+        .then(|| own_relay_url(settings))
+        .flatten();
+    // The relay URL is only spelled out when the address above does not already imply it: a relay
+    // on the node's own host is `https://<that host>/`, which `parse_node` fills back in. That is
+    // ~40 characters off the common case (`lrrg-node:<id>@192.0.2.9:11204` instead of
+    // `…?relay=https://192.0.2.9/`), and older peers simply get no relay from it — their direct
+    // dial still works.
+    let host_part = host.split(':').next().unwrap_or(&host);
+    let implied = relay
+        .as_deref()
+        .is_some_and(|r| r.trim_end_matches('/') == format!("https://{host_part}"));
     let mut out = format!("lrrg-node:{}@{host}", endpoint_hex(endpoint_id));
-    if settings.flag("share_node_relay") {
-        if let Some(relay) = own_relay_url(settings) {
-            out.push_str(&format!("?relay={relay}"));
-        }
+    match relay {
+        // `auto` means "the relay on the same host as the address above" — 12 characters instead
+        // of the ~35 the full URL took, without guessing at a relay nobody advertised.
+        Some(_) if implied => out.push_str("?relay=auto"),
+        Some(relay) => out.push_str(&format!("?relay={relay}")),
+        None => {}
     }
     Some(out)
 }

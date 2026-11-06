@@ -265,7 +265,7 @@ export function Library() {
       </div>
 
       {lib.search.isLoading ? (
-        <p>{lib.t("Loading library…")}</p>
+        <p>{lib.t("common.loadingLibrary")}</p>
       ) : lib.shown.length === 0 ? (
         <div style={{ textAlign: "center", padding: 40 }}>
           <i className="fas fa-sad-cry fa-4x" aria-hidden="true"></i>

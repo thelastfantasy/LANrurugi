@@ -1,23 +1,37 @@
-import "@/share/share.css"
+import "@/share/share.css";
 
-import { type MouseEvent, useState } from "react"
-import { useTranslation } from "react-i18next"
+import { type MouseEvent, useState } from "react";
+import { useTranslation } from "react-i18next";
 
-import { Modal, Tooltip } from "@/components/common-ui/Display"
-import { CollapsibleSection, DateTimeStack } from "@/components/Display"
-import { useShares } from "@/share/api"
-import { copyWithToast } from "@/share/clipboard"
-import { type SettingField, ShareSettingsForm } from "@/share/ShareSettingsForm"
-import type { SharePermissions } from "@/share/types"
+import { Modal, Tooltip } from "@/components/common-ui/Display";
+import { Input, Switch } from "@/components/common-ui/Form";
+import { CollapsibleSection, DateTimeStack } from "@/components/Display";
+import { useSaveShareSettings, useShares, useShareSettings } from "@/share/api";
+import { copyWithToast } from "@/share/clipboard";
+import {
+  type SettingField,
+  ShareSettingsForm,
+} from "@/share/ShareSettingsForm";
+import type { SharePermissions } from "@/share/types";
 
-import { ShareDetailPanel } from "./ShareDetailPanel"
-import { SharingHelping } from "./SharingHelping"
-import { AltScheduleEditor, SharingEndpointStatus, SharingEndpointSummary, SharingNodeString } from "./SharingStatus"
+import { ShareDetailPanel } from "./ShareDetailPanel";
+import { SharingHelping } from "./SharingHelping";
+import {
+  AltScheduleEditor,
+  SharingEndpointStatus,
+  SharingEndpointSummary,
+} from "./SharingStatus";
 
 const DEFAULT_FIELDS: SettingField[] = [
   {
     key: "share_default_permissions",
-    kind: "text",
+    kind: "flags",
+    options: ["import", "read", "download"],
+    optionLabels: {
+      import: "share.permission.import",
+      read: "share.permission.read",
+      download: "share.permission.download",
+    },
     label: "share.settings.defaultPermissions",
     hint: true,
   },
@@ -43,7 +57,7 @@ const DEFAULT_FIELDS: SettingField[] = [
     kind: "bool",
     label: "share.form.allowHelpers",
   },
-]
+];
 
 const LIMIT_FIELDS: SettingField[] = [
   {
@@ -90,66 +104,7 @@ const LIMIT_FIELDS: SettingField[] = [
     kind: "number",
     label: "share.limits.importConcurrency",
   },
-]
-
-const NODE_FIELDS: SettingField[] = [
-  {
-    key: "share_nodes",
-    kind: "lines",
-    label: "share.nodes.list",
-    hint: true,
-    placeholder: "lrrg-node:…@host:443",
-  },
-  {
-    key: "share_node_rendezvous",
-    kind: "bool",
-    label: "share.nodes.offerRendezvous",
-  },
-  {
-    key: "share_node_relay",
-    kind: "bool",
-    label: "share.nodes.offerRelay",
-    hint: true,
-  },
-  {
-    key: "share_node_relay_tls",
-    kind: "choice",
-    label: "share.nodes.relayTls",
-    options: ["acme", "files", "proxy"],
-  },
-  {
-    key: "share_node_relay_port",
-    kind: "number",
-    label: "share.nodes.relayPort",
-    hint: true,
-  },
-  {
-    key: "share_node_relay_cert",
-    kind: "text",
-    label: "share.nodes.relayCert",
-  },
-  { key: "share_node_relay_key", kind: "text", label: "share.nodes.relayKey" },
-  {
-    key: "share_node_relay_rate",
-    kind: "number",
-    label: "share.nodes.relayRate",
-    hint: true,
-  },
-  {
-    key: "share_node_relay_allow",
-    kind: "lines",
-    label: "share.nodes.relayAllow",
-    hint: true,
-    placeholder: "lrrg-node:…@host:443",
-  },
-  {
-    key: "share_self_relay_url",
-    kind: "text",
-    label: "share.nodes.selfRelayUrl",
-    hint: true,
-    placeholder: "https://relay.example.org",
-  },
-]
+];
 
 const NETWORK_FIELDS: SettingField[] = [
   {
@@ -165,7 +120,7 @@ const NETWORK_FIELDS: SettingField[] = [
     label: "share.network.portmap",
     hint: true,
   },
-]
+];
 
 const CONNECTIVITY_FIELDS: SettingField[] = [
   {
@@ -199,17 +154,17 @@ const CONNECTIVITY_FIELDS: SettingField[] = [
     kind: "lines",
     label: "share.settings.pkarrRelays",
   },
-]
+];
 
 const PERMISSIONS = [
   { key: "read", letter: "R" },
   { key: "import", letter: "I" },
   { key: "download", letter: "D" },
-] as const
+] as const;
 
 /** R / I / D chips: the letter is the permission, the colour sets it apart, the tooltip names it. */
 function PermissionChips({ permissions }: { permissions: SharePermissions }) {
-  const { t } = useTranslation()
+  const { t } = useTranslation();
   return (
     <span className="share-perms">
       {PERMISSIONS.map(({ key, letter }) => (
@@ -223,7 +178,7 @@ function PermissionChips({ permissions }: { permissions: SharePermissions }) {
         </Tooltip>
       ))}
     </span>
-  )
+  );
 }
 
 const STATUS_ICONS: Record<string, string> = {
@@ -231,43 +186,81 @@ const STATUS_ICONS: Record<string, string> = {
   exhausted: "fa-gauge-high",
   expired: "fa-hourglass-end",
   revoked: "fa-ban",
-}
+};
 
 /** The state badge: same pill as before, with an icon so the three non-active states read at a
  *  glance instead of only by their (long) localized text. */
 function StatusBadge({ status }: { status: string }) {
-  const { t } = useTranslation()
+  const { t } = useTranslation();
   return (
     <Tooltip label={t(`share.status.${status}`)}>
       <span className={`share-badge share-status-${status}`}>
-        <i className={`fa ${STATUS_ICONS[status] ?? "fa-circle"}`} aria-hidden="true" />
-        {t(`share.statusShort.${status}`, { defaultValue: t(`share.status.${status}`) })}
+        <i
+          className={`fa ${STATUS_ICONS[status] ?? "fa-circle"}`}
+          aria-hidden="true"
+        />
+        {t(`share.statusShort.${status}`, {
+          defaultValue: t(`share.status.${status}`),
+        })}
       </span>
     </Tooltip>
-  )
+  );
 }
 
 /** A column header with an explanation behind its own info icon (the header text stays short). */
+/** The tooltip body takes nodes, not one long sentence: each status / permission gets its own
+ *  line with its own name in front, which is what makes the legend scannable. */
 function HeaderWithHint({ label, hint }: { label: string; hint: string }) {
+  const { t } = useTranslation();
+  const isStatus = hint === t("share.settings.statusHint");
+  const rows = isStatus
+    ? (["active", "exhausted", "expired", "revoked"] as const).map((k) => ({
+        name: t(`share.status.${k}`),
+        text: t(`share.settings.statusHint.${k}`),
+      }))
+    : hint === t("share.settings.permissionsHint")
+      ? (["import", "read", "download"] as const).map((k) => ({
+          name: t(`share.permission.${k}`),
+          text: t(`share.settings.permissionsHint.${k}`),
+        }))
+      : null;
   return (
     <>
       {label}
-      <Tooltip label={hint}>
+      <Tooltip
+        label={
+          rows ? (
+            <span style={{ display: "grid", gap: 4, textAlign: "left" }}>
+              {rows.map((r) => (
+                <span key={r.name} style={{ display: "block" }}>
+                  <strong>{r.name}</strong>：{r.text}
+                </span>
+              ))}
+            </span>
+          ) : (
+            hint
+          )
+        }
+      >
         <i className="fa fa-info-circle share-th-hint" aria-label={hint} />
       </Tooltip>
     </>
-  )
+  );
 }
 
 /** The code, plus the two things one wants from a code in a list: copy it in the form another
  *  instance accepts (`lrrg:…`, not the bare letters), and open its share page. */
 function ShareCodeCell({ code }: { code: string }) {
-  const { t } = useTranslation()
-  const textForm = `lrrg:${code}`
+  const { t } = useTranslation();
+  const textForm = `lrrg:${code}`;
   const copy = (e: MouseEvent) => {
-    e.stopPropagation()
-    void copyWithToast(textForm, t("share.settings.codeCopied"), t("share.settings.copyFailed"))
-  }
+    e.stopPropagation();
+    void copyWithToast(
+      textForm,
+      t("share.settings.codeCopied"),
+      t("share.settings.copyFailed"),
+    );
+  };
   return (
     <span className="share-code-cell">
       <Tooltip label={t("share.settings.copyCode")}>
@@ -298,16 +291,16 @@ function ShareCodeCell({ code }: { code: string }) {
         </a>
       </Tooltip>
     </span>
-  )
+  );
 }
 
-type Panel = "defaults" | "connectivity" | "network" | "nodes" | "limits"
+type Panel = "defaults" | "connectivity" | "network" | "limits";
 
 const PANELS: {
-  id: Panel
-  icon: string
-  title: string
-  description?: string
+  id: Panel;
+  icon: string;
+  title: string;
+  description?: string;
 }[] = [
   {
     id: "defaults",
@@ -327,24 +320,18 @@ const PANELS: {
     description: "share.panel.networkDesc",
   },
   {
-    id: "nodes",
-    icon: "fa-server",
-    title: "share.nodes.heading",
-    description: "share.panel.nodesDesc",
-  },
-  {
     id: "limits",
     icon: "fa-gauge",
     title: "share.limits.heading",
     description: "share.panel.limitsDesc",
   },
-]
+];
 
 function PanelBody({ panel }: { panel: Panel }) {
-  const { t } = useTranslation()
+  const { t } = useTranslation();
   switch (panel) {
     case "defaults":
-      return <ShareSettingsForm fields={DEFAULT_FIELDS} />
+      return <ShareSettingsForm fields={DEFAULT_FIELDS} />;
     case "connectivity":
       return (
         <>
@@ -353,18 +340,9 @@ function PanelBody({ panel }: { panel: Panel }) {
           <h3>{t("share.detail.settings")}</h3>
           <ShareSettingsForm fields={CONNECTIVITY_FIELDS} />
         </>
-      )
+      );
     case "network":
-      return <ShareSettingsForm fields={NETWORK_FIELDS} />
-    case "nodes":
-      return (
-        <>
-          <h3>{t("share.panel.ownNode")}</h3>
-          <SharingNodeString />
-          <h3>{t("share.detail.settings")}</h3>
-          <ShareSettingsForm fields={NODE_FIELDS} />
-        </>
-      )
+      return <ShareSettingsForm fields={NETWORK_FIELDS} />;
     case "limits":
       return (
         <>
@@ -372,26 +350,152 @@ function PanelBody({ panel }: { panel: Panel }) {
           <h3>{t("share.limits.schedule")}</h3>
           <AltScheduleEditor />
         </>
-      )
+      );
   }
+}
+
+/** Acting as a LANrurugi node, as one switch. The relay role and the rendezvous role only make
+ * sense together for this app's own use (a node string carries both), and every other knob — port,
+ * certificate mode, rate cap, allow-list, public URL — has a default that is right for that case, so
+ * they live behind "advanced" instead of in front of it. */
+/** The node list and the "add one" box are deliberately two separate pieces: the list is read-only
+ *  rows with their own copy/remove buttons, so editing it never means editing a long string by
+ *  hand, and the add box never shows text that could be mistaken for the current value. */
+function SharingNodeList() {
+  const { t } = useTranslation();
+  const settings = useShareSettings();
+  const save = useSaveShareSettings();
+  const [draft, setDraft] = useState("");
+  const own = (
+    settings.data?.endpoint as { node_string?: string | null } | undefined
+  )?.node_string;
+  const added = String(settings.data?.share_nodes ?? "");
+  const rows = added
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const write = (next: string[]) =>
+    save.mutate({ share_nodes: next.join("\n") });
+
+  return (
+    <>
+      <ul className="share-node-list">
+        {own && (
+          <li>
+            <span className="share-node-tag">{t("share.nodes.own")}</span>
+            <code className="share-result-value">{own}</code>
+            <button
+              type="button"
+              className="stdbtn"
+              onClick={() =>
+                void copyWithToast(
+                  own,
+                  t("share.result.copied"),
+                  t("share.result.copyFailed"),
+                )
+              }
+            >
+              {t("share.result.copy")}
+            </button>
+          </li>
+        )}
+        {rows.map((line) => (
+          <li key={line}>
+            <span className="share-node-tag">{t("share.nodes.added")}</span>
+            <code className="share-result-value">{line}</code>
+            <button
+              type="button"
+              className="stdbtn"
+              disabled={save.isPending}
+              onClick={() => write(rows.filter((r) => r !== line))}
+            >
+              {t("common.remove")}
+            </button>
+          </li>
+        ))}
+        {!own && rows.length === 0 && (
+          <li className="share-result-note">{t("share.nodes.none")}</li>
+        )}
+      </ul>
+      <div className="share-node-add">
+        <Input
+          rows={2}
+          value={draft}
+          onValueChange={setDraft}
+          placeholder={t("share.nodes.addPlaceholder")}
+        />
+        <button
+          type="button"
+          className="stdbtn"
+          disabled={!draft.trim().startsWith("lrrg-node:") || save.isPending}
+          onClick={() => {
+            const line = draft.trim();
+            if (!rows.includes(line)) write([...rows, line]);
+            setDraft("");
+          }}
+        >
+          {t("share.nodes.add")}
+        </button>
+      </div>
+    </>
+  );
+}
+
+function SharingNodeBlock() {
+  const { t } = useTranslation();
+  const settings = useShareSettings();
+  const save = useSaveShareSettings();
+  const on = settings.data?.share_node_relay === true;
+
+  return (
+    <div className="share-node-block">
+      <div className="share-panel-row">
+        <i className="fa fa-server fa-fw" aria-hidden="true"></i>
+        <div className="share-panel-text">
+          <div className="share-panel-title">{t("share.nodes.heading")}</div>
+          <div className="share-panel-desc">
+            {t("share.nodes.ownRelayHint")}
+          </div>
+        </div>
+        <Switch
+          checked={on}
+          disabled={save.isPending}
+          onCheckedChange={(next) =>
+            save.mutate({ share_node_relay: next, share_node_rendezvous: next })
+          }
+          aria-label={t("share.nodes.heading")}
+        />
+      </div>
+      <div className="share-node-body">
+        <SharingNodeList />
+      </div>
+    </div>
+  );
 }
 
 /** Settings → Sharing: every share, plus the instance-wide sharing settings (017 US2, FR-005,
  * FR-006, FR-006a). Each settings group and each share's detail open in a modal. */
 export function SharingSection() {
-  const { t } = useTranslation()
-  const shares = useShares("all")
-  const [openShareId, setOpenShareId] = useState<string | null>(null)
-  const [panel, setPanel] = useState<Panel | null>(null)
-  const openPanel = PANELS.find((p) => p.id === panel)
+  const { t } = useTranslation();
+  const shares = useShares("all");
+  const [openShareId, setOpenShareId] = useState<string | null>(null);
+  const [panel, setPanel] = useState<Panel | null>(null);
+  const openPanel = PANELS.find((p) => p.id === panel);
   // Looked up from the list so the badge follows a revoke made inside the modal.
-  const openShare = shares.data?.find((s) => s.id === openShareId)
+  const openShare = shares.data?.find((s) => s.id === openShareId);
 
   return (
-    <CollapsibleSection id="sharing" icon="fa-share-nodes" title={t("share.settings.section")}>
+    <CollapsibleSection
+      id="sharing"
+      icon="fa-share-nodes"
+      title={t("share.settings.section")}
+    >
       <div style={{ padding: "0 12px" }}>
         <h3>{t("share.settings.shares")}</h3>
-        {shares.data && shares.data.length === 0 && <p>{t("share.settings.noShares")}</p>}
+        {shares.data && shares.data.length === 0 && (
+          <p>{t("share.settings.noShares")}</p>
+        )}
         {shares.data && shares.data.length > 0 && (
           <div className="share-list-scroll">
             <table className="itg share-list">
@@ -410,7 +514,10 @@ export function SharingSection() {
                   <th>{t("share.form.title")}</th>
                   <th>{t("share.settings.codeColumn")}</th>
                   <th>
-                    <HeaderWithHint label={t("share.settings.status")} hint={t("share.settings.statusHint")} />
+                    <HeaderWithHint
+                      label={t("share.settings.status")}
+                      hint={t("share.settings.statusHint")}
+                    />
                   </th>
                   <th>
                     <HeaderWithHint
@@ -418,9 +525,14 @@ export function SharingSection() {
                       hint={t("share.settings.permissionsHint")}
                     />
                   </th>
-                  <th className="share-list-number">{t("share.settings.used")}</th>
                   <th className="share-list-number">
-                    <HeaderWithHint label={t("share.settings.itemsColumn")} hint={t("share.settings.itemsHint")} />
+                    {t("share.settings.used")}
+                  </th>
+                  <th className="share-list-number">
+                    <HeaderWithHint
+                      label={t("share.settings.itemsColumn")}
+                      hint={t("share.settings.itemsHint")}
+                    />
                   </th>
                   <th>{t("share.settings.created")}</th>
                   <th>{t("share.settings.expires")}</th>
@@ -428,12 +540,20 @@ export function SharingSection() {
               </thead>
               <tbody>
                 {shares.data.map((s) => (
-                  <tr key={s.id} style={{ cursor: "pointer" }} onClick={() => setOpenShareId(s.id)}>
+                  <tr
+                    key={s.id}
+                    style={{ cursor: "pointer" }}
+                    onClick={() => setOpenShareId(s.id)}
+                  >
                     <td className="share-list-title" title={s.title || s.id}>
                       {s.title || s.id}
                     </td>
                     <td className="share-list-code">
-                      {s.share_code ? <ShareCodeCell code={s.share_code} /> : "—"}
+                      {s.share_code ? (
+                        <ShareCodeCell code={s.share_code} />
+                      ) : (
+                        "—"
+                      )}
                     </td>
                     <td>
                       <StatusBadge status={s.status} />
@@ -449,7 +569,11 @@ export function SharingSection() {
                       <DateTimeStack epochSeconds={s.created_at} />
                     </td>
                     <td className="share-list-date">
-                      {s.expires_at ? <DateTimeStack epochSeconds={s.expires_at} /> : "—"}
+                      {s.expires_at ? (
+                        <DateTimeStack epochSeconds={s.expires_at} />
+                      ) : (
+                        "—"
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -462,6 +586,7 @@ export function SharingSection() {
         <SharingHelping />
 
         <h3>{t("share.detail.settings")}</h3>
+        <SharingNodeBlock />
         <div className="share-panels">
           {PANELS.map((p) => (
             <div key={p.id} className="share-panel-row">
@@ -469,10 +594,18 @@ export function SharingSection() {
               <div className="share-panel-text">
                 <div className="share-panel-title">{t(p.title)}</div>
                 <div className="share-panel-desc">
-                  {p.id === "connectivity" ? <SharingEndpointSummary /> : t(p.description ?? "")}
+                  {p.id === "connectivity" ? (
+                    <SharingEndpointSummary />
+                  ) : (
+                    t(p.description ?? "")
+                  )}
                 </div>
               </div>
-              <button type="button" className="stdbtn" onClick={() => setPanel(p.id)}>
+              <button
+                type="button"
+                className="stdbtn"
+                onClick={() => setPanel(p.id)}
+              >
                 {t("share.panel.edit")}
               </button>
             </div>
@@ -487,14 +620,20 @@ export function SharingSection() {
         </Modal>
       )}
       {openShare && (
-        <Modal onClose={() => setOpenShareId(null)} width={760} textAlign="left">
+        <Modal
+          onClose={() => setOpenShareId(null)}
+          width={760}
+          textAlign="left"
+        >
           <h2 className="share-modal-title">
             {openShare.title || openShare.id}{" "}
-            <span className={`share-badge share-status-${openShare.status}`}>{t(`share.status.${openShare.status}`)}</span>
+            <span className={`share-badge share-status-${openShare.status}`}>
+              {t(`share.status.${openShare.status}`)}
+            </span>
           </h2>
           <ShareDetailPanel shareId={openShare.id} />
         </Modal>
       )}
     </CollapsibleSection>
-  )
+  );
 }

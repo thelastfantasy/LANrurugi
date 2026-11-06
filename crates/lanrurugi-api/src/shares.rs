@@ -61,6 +61,7 @@ pub fn router() -> Router<AppState> {
             "/shares/settings",
             get(get_share_settings).put(put_share_settings),
         )
+        .route("/shares/node/rotate", post(rotate_node_secret))
         .route("/shares/by-item/{item_id}", get(shares_by_item))
         .route("/shares/{id}", get(get_share).patch(update_share))
         .route(
@@ -1097,6 +1098,32 @@ async fn settings_with_status(state: &AppState) -> Value {
         }),
     );
     value
+}
+
+/// Replaces this instance's sharing identity. Every `lrrg-node:` string handed out earlier stops
+/// working, which is the point: the string is permanent otherwise, exactly like a share code, and
+/// this is the only way to revoke it.
+async fn rotate_node_secret(State(state): State<AppState>) -> Response {
+    const OP: &str = "rotate_node_secret";
+    let mut conn = match state.redis.config.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            return error(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                OP,
+                e.to_string(),
+            )
+        }
+    };
+    let _: Result<i64, _> = conn.del(keys::SHARE_NODE_SECRET_KEY).await;
+    match crate::share_net::start(&state).await {
+        Ok(_) => axum::Json(json!({ "rotated": true })).into_response(),
+        Err(e) => error(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            OP,
+            e.to_string(),
+        ),
+    }
 }
 
 async fn put_share_settings(

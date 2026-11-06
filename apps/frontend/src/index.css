@@ -122,7 +122,6 @@ input[type="checkbox"]:disabled {
   cursor: not-allowed;
 }
 
-
 /* Additive: the reader overview overlay's page-grid briefly outlines whichever page it opened on
  * (`ArchiveOverviewOverlay.tsx`'s `PageGridCell`, `highlighted` prop) — a static outline alone is
  * easy to miss at a glance across a grid that can run into the hundreds of otherwise-identical
@@ -130,8 +129,13 @@ input[type="checkbox"]:disabled {
  * scrolled to the top, with nothing marking "here").
  */
 @keyframes lrr-overview-highlight-pulse {
-  0%, 100% { outline-color: #3b97ea; }
-  50% { outline-color: transparent; }
+  0%,
+  100% {
+    outline-color: #3b97ea;
+  }
+  50% {
+    outline-color: transparent;
+  }
 }
 
 /* Additive: infinite-scroll mode (`Reader.tsx`) renders one native `loading="lazy"` `<img>` per
@@ -148,14 +152,23 @@ input[type="checkbox"]:disabled {
 .reader-image.loading-placeholder {
   display: block;
   min-height: 40vh;
-  background: linear-gradient(90deg, rgba(127, 127, 127, 0.08) 25%, rgba(127, 127, 127, 0.15) 37%, rgba(127, 127, 127, 0.08) 63%);
+  background: linear-gradient(
+    90deg,
+    rgba(127, 127, 127, 0.08) 25%,
+    rgba(127, 127, 127, 0.15) 37%,
+    rgba(127, 127, 127, 0.08) 63%
+  );
   background-size: 400% 100%;
   animation: lrr-loading-placeholder-pulse 1.4s ease infinite;
 }
 
 @keyframes lrr-loading-placeholder-pulse {
-  0% { background-position: 100% 50%; }
-  100% { background-position: 0 50%; }
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
 }
 
 /* Reader page transitions: when the paginator has already moved to the next page but its image is
@@ -224,8 +237,12 @@ input[type="checkbox"]:disabled {
 /* components/Display/JobProgress.tsx's indeterminate download bar (total_bytes unknown) — a
  * fixed-width block sliding back and forth inside the track, standing in for a real ratio. */
 @keyframes lrr-indeterminate-bar {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(333%); }
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(333%);
+  }
 }
 
 /* A running determinate download's fill: a slow diagonal sheen over the solid state colour, so a
@@ -239,8 +256,12 @@ input[type="checkbox"]:disabled {
  * clipped by the fill's `overflow: hidden`.
  * Disabled under reduced-motion, where the bar simply stays solid. */
 @keyframes lrr-flowing-stripes {
-  from { transform: translateX(0); }
-  to { transform: translateX(-24px); }
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-24px);
+  }
 }
 
 .lrr-flowing-fill {
@@ -267,7 +288,9 @@ input[type="checkbox"]:disabled {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .lrr-flowing-fill { animation: none; }
+  .lrr-flowing-fill {
+    animation: none;
+  }
 }
 
 /* Shared scale-up entrance animation for every popup/modal-style dialog in this app
@@ -281,13 +304,25 @@ input[type="checkbox"]:disabled {
  * via `translate(-50%, -50%)` directly on the animated element, so their keyframes must preserve
  * that translate at every step or the box would jump to the top-left corner mid-animation). */
 @keyframes confirm-pop-in {
-  0% { transform: translate(-50%, -50%) scale(0.7); opacity: 0; }
-  100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  0% {
+    transform: translate(-50%, -50%) scale(0.7);
+    opacity: 0;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+  }
 }
 
 @keyframes modal-pop-in {
-  0% { transform: scale(0.7); opacity: 0; }
-  100% { transform: scale(1); opacity: 1; }
+  0% {
+    transform: scale(0.7);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 /* While a modal is open the page behind it must not scroll: not from a wheel or swipe over the
@@ -444,10 +479,15 @@ body:has([data-overlay="modal"]) {
  * to match that breakpoint. */
 .carousel-slide {
   width: 228px;
+  /* A slide's card is 344px tall (`.id1` at this breakpoint), but the selection strip's slide
+     renders `null` until its metadata arrives — without this the strip collapsed for a frame when
+     the first archive was picked, which is the white flash that came with the height change. */
+  min-height: 344px;
 }
 @media all and (max-width: 560px) {
   .carousel-slide {
     width: 164px;
+    min-height: 256px;
   }
 }
 
@@ -725,7 +765,9 @@ body:has([data-overlay="modal"]) {
   position: absolute;
   inset: 0 0 0 10px;
   border-radius: 50%;
-  transition: background-color 0.15s, border-color 0.15s;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
 }
 /* The AI robot icon, shown while unchecked — absolutely centered over the (currently unfilled)
  * circle, same positioning approach as `.fa-check` below so the two glyphs occupy the exact same
@@ -750,12 +792,17 @@ body:has([data-overlay="modal"]) {
   color: #fff;
   opacity: 0;
   transform: scale(0.5);
-  transition: opacity 0.15s, transform 0.15s;
+  transition:
+    opacity 0.15s,
+    transform 0.15s;
 }
 .ai-checkable-btn-toggle input[type="checkbox"]:checked ~ .fa-robot {
   opacity: 0;
 }
-.ai-checkable-btn-toggle input[type="checkbox"]:checked ~ .ai-checkable-btn-toggle-circle .fa-check {
+.ai-checkable-btn-toggle
+  input[type="checkbox"]:checked
+  ~ .ai-checkable-btn-toggle-circle
+  .fa-check {
   opacity: 1;
   transform: scale(1);
 }
@@ -1079,7 +1126,6 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 .mobile-reader-toolbar-icons button i {
   color: #fff;
 }
-
 
 /* Settings → Security → Active Devices: rename/cancel are inline text actions, not standalone
    buttons. `.ghost-btn`'s themed hover fill is right for square icon buttons inside a chrome
@@ -1476,7 +1522,8 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
      which is what actually supplies these tracks at runtime. */
   grid-template-columns: var(
     --preview-grid-columns,
-    2.5em minmax(45%, 1fr) minmax(0, 10%) minmax(0, 12%) minmax(0, 12%) minmax(0, 16%)
+    2.5em minmax(45%, 1fr) minmax(0, 10%) minmax(0, 12%) minmax(0, 12%)
+      minmax(0, 16%)
   );
   align-items: start;
   /* Rows size to their content and stack from the top. Without this, a grid whose height is
@@ -1810,14 +1857,14 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   }
 }
 
-
 /* Placeholder rows while the first listing is being fetched. Shaped like the real rows so the pane
    does not jump from one line of text to a full list once the answer arrives. */
 .preview-skeleton-row {
   display: grid;
   grid-template-columns: var(
     --preview-grid-columns,
-    2.5em minmax(45%, 1fr) minmax(0, 10%) minmax(0, 12%) minmax(0, 12%) minmax(0, 16%)
+    2.5em minmax(45%, 1fr) minmax(0, 10%) minmax(0, 12%) minmax(0, 12%)
+      minmax(0, 16%)
   );
   gap: 8px;
   padding: 9px 8px;
@@ -1845,8 +1892,13 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 }
 
 @keyframes preview-skeleton-pulse {
-  0%, 100% { opacity: 0.08; }
-  50% { opacity: 0.18; }
+  0%,
+  100% {
+    opacity: 0.08;
+  }
+  50% {
+    opacity: 0.18;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1984,7 +2036,6 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   text-align: center;
 }
 
-
 .queue-records-grid {
   grid-template-columns: minmax(0, 1fr) minmax(0, 10em) minmax(0, 14em);
   /* Its own scroll box rather than `.sub-modal-preview`'s fixed 65vh pane: that one is a twin of
@@ -2027,7 +2078,10 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 /* Cross-subscription history: work | which subscription | when | verdict. Its own columns because it
    answers a different question from the preview — which rule brought this in, and when. */
 .history-grid {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 10em) minmax(0, 11em) minmax(0, 11em);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 10em) minmax(0, 11em) minmax(
+      0,
+      11em
+    );
   max-height: 65vh;
 }
 
@@ -2218,7 +2272,6 @@ body div.ido {
   body h1 {
     flex-wrap: wrap;
   }
-
 }
 
 /*
@@ -2349,7 +2402,6 @@ body div.ido {
   overflow-wrap: anywhere;
 }
 
-
 /* Phone only. Desktop keeps legacy `.stdbtn`'s own sizing, centring and margins; the only rule
    that applies everywhere is the shared height above. */
 @media (max-width: 40rem) {
@@ -2397,4 +2449,57 @@ body div.ido {
 .queue-items-scroll::-webkit-scrollbar-thumb {
   background: rgba(128, 128, 128, 0.55);
   border-radius: 3px;
+}
+
+/* Library selection strip (`RecentlyAddedCarousel`): one archive card tall, and both the
+   "pick something" placeholder and the slides fill it (`height: 100%`), so entering selection mode
+   or picking the first archive never changes the strip's height at any viewport or zoom. */
+.selection-strip {
+  height: 360px;
+}
+
+@media all and (max-width: 560px) {
+  .selection-strip {
+    height: 272px;
+  }
+}
+
+.selection-strip .carousel-slide {
+  height: 100%;
+}
+
+/* The AI grouping drawer's compact pager uses the shared `NumberInput`, whose own stepper is
+   `../../components/common-ui/Form/NumberInput.tsx`'s absolutely-positioned pair; inside this pill
+   it would overlay the "/ total" label, so it stays hidden and the pill's ← → do the stepping.
+   The rest normalises `.stdinput`'s standalone-form sizing (`margin: 4px 1px 0`, `width: 80%`),
+   which made the number sit in a 12px box in Firefox inside this 26px pill. */
+.ai-pager .number-input-wrapper {
+  /* The component sets `display: inline-block` inline, which a plain stylesheet rule cannot beat. */
+  display: inline-flex !important;
+  align-items: stretch;
+  height: 100% !important;
+}
+
+.ai-pager input.ai-pager-number {
+  /* Sized by its own content rather than by a pixel guess: `field-sizing: content` tracks the
+     digits actually typed, so "1" and "1000" occupy exactly what they need. The `min-width` keeps
+     an emptied field from collapsing, and `ch` makes that minimum scale with the theme's font. */
+  field-sizing: content;
+  width: auto !important;
+  min-width: 2.5ch;
+  max-width: none !important;
+  flex: 0 0 auto;
+  height: 100% !important;
+  margin: 0 !important;
+  padding: 0 2px !important;
+  border-top: 0 !important;
+  border-bottom: 0 !important;
+  background: transparent !important;
+  text-align: center;
+  font: inherit;
+  box-sizing: border-box;
+}
+
+.ai-pager .number-input-stepper {
+  display: none !important;
 }
