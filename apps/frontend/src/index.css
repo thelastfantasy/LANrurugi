@@ -2404,16 +2404,19 @@ body div.ido {
   border-radius: 3px;
 }
 
-/* Library selection strip (`RecentlyAddedCarousel`) before anything is picked: one archive card
-   tall at both of `div.id1`'s breakpoints, so the strip's height does not change when the first
-   archive is selected. */
-.selection-strip-placeholder {
-  /* Card height (344) plus the strip's own 8px padding top and bottom. */
+/* Library selection strip (`RecentlyAddedCarousel`): one archive card tall, and both the
+   "pick something" placeholder and the slides fill it (`height: 100%`), so entering selection mode
+   or picking the first archive never changes the strip's height at any viewport or zoom. */
+.selection-strip {
   height: 360px;
 }
 
 @media all and (max-width: 560px) {
-  .selection-strip-placeholder {
+  .selection-strip {
     height: 272px;
   }
+}
+
+.selection-strip .carousel-slide {
+  height: 100%;
 }

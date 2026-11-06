@@ -464,15 +464,16 @@ export function RecentlyAddedCarousel({
             className="collapsible-body"
             style={{ width: "100%", boxSizing: "border-box" }}
           >
+            <div className="selection-strip">
             {selectedIds.length === 0 ? (
-              // Exactly one archive card tall, so entering selection mode and picking the first
-              // archive no longer changes the strip's height: the placeholder's height is the
-              // card height at both of `div.id1`'s breakpoints (`.selection-strip-placeholder`).
+              // Fills whatever height the strip has (`.selection-strip`), rather than stating that
+              // height itself: the placeholder and the archive cards are both 100% of the strip, so
+              // they agree at every viewport and zoom without a second hardcoded number to drift.
               <div
-                className="selection-strip-placeholder"
                 style={{
                   padding: "8px 0",
                   boxSizing: "border-box",
+                  height: "100%",
                   display: "flex",
                   flexDirection: "column",
                   alignItems: "center",
@@ -564,6 +565,7 @@ export function RecentlyAddedCarousel({
                 )}
               </div>
             )}
+            </div>
           </div>
         )}
         {isOpen && !multiSelect && (
