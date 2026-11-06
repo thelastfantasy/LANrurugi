@@ -69,7 +69,7 @@
     "@typescript-eslint/parser": "^8.72.1",
     "@vitejs/plugin-react": "^6.1.2",
     "cldr-annotations-derived-full": "49.0.0",
-    "cldr-annotations-full": "48.2.0",
+    "cldr-annotations-full": "49.0.0",
     "eslint": "^10.14.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-simple-import-sort": "^14.0.0",
