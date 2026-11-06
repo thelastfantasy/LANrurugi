@@ -184,8 +184,8 @@ importers:
         specifier: 49.0.0
         version: 49.0.0
       cldr-annotations-full:
-        specifier: 48.2.0
-        version: 48.2.0
+        specifier: 49.0.0
+        version: 49.0.0
       eslint:
         specifier: ^10.14.0
         version: 10.14.0(jiti@2.7.0)(supports-color@10.2.2)
@@ -2439,8 +2439,8 @@ packages:
   cldr-annotations-derived-full@49.0.0:
     resolution: {integrity: sha512-dao837mPbiEytwUeJSEBs6lE/83mWf6v5fE/9SUMLDttkHMr0M8TPjsixkTeKSHA0u5nDGeoHOBoGzlEHAG7Aw==}
 
-  cldr-annotations-full@48.2.0:
-    resolution: {integrity: sha512-DV7A+rEcgUSNTRsVGNGqBZRmAkGfwhGHO5Q1dRwzBoBnVrHWp804JP7/QJdEc66iHmx3+zLWVIMCFLm0lW7PUQ==}
+  cldr-annotations-full@49.0.0:
+    resolution: {integrity: sha512-AYFll+64o58nWlCq+EEmQE1G+zyw6avVdYlsr4edLEQ3tTb7tVldu2ICD4bbCyx62cchP4j5lUtXLbFqajqgbg==}
 
   client-only@0.0.1:
     resolution: {integrity: sha512-IV3Ou0jSMzZrd3pZ48nLkT9DA7Ag1pnPzaiQhpW7c3RbcqqzvzzVu+L8gfqMp/8IM2MQtSiqaCxrrcfu8I8rMA==}
@@ -7123,7 +7123,7 @@ snapshots:
 
   cldr-annotations-derived-full@49.0.0: {}
 
-  cldr-annotations-full@48.2.0: {}
+  cldr-annotations-full@49.0.0: {}
 
   client-only@0.0.1: {}
 
