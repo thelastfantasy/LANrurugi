@@ -2437,7 +2437,7 @@
   "share.settings.expires": "有効期限",
   "share.settings.defaults": "新しい共有の既定値",
   "share.settings.defaultPermissions": "既定の権限",
-  "share.settings.defaultPermissionsHint": "カンマ区切り：import、read、download。",
+  "share.settings.defaultPermissionsHint": "少なくとも 1 つ選択してください。新規共有はこの権限で始まります。",
   "share.settings.connectivity": "接続",
   "share.settings.publicUrl": "公開アドレス",
   "share.settings.publicUrlHint": "他の人がこのインスタンスを開くアドレス。ブラウザー用リンクと埋め込みに必要です。インポートには不要です。",

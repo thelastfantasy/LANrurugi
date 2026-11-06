@@ -26,7 +26,13 @@ import {
 const DEFAULT_FIELDS: SettingField[] = [
   {
     key: "share_default_permissions",
-    kind: "text",
+    kind: "flags",
+    options: ["import", "read", "download"],
+    optionLabels: {
+      import: "share.permission.import",
+      read: "share.permission.read",
+      download: "share.permission.download",
+    },
     label: "share.settings.defaultPermissions",
     hint: true,
   },

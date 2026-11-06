@@ -2570,7 +2570,7 @@
   "share.settings.expires": "过期时间",
   "share.settings.defaults": "新分享的默认设置",
   "share.settings.defaultPermissions": "默认权限",
-  "share.settings.defaultPermissionsHint": "以逗号分隔：import、read、download。",
+  "share.settings.defaultPermissionsHint": "至少选择一项；新建分享默认使用这些权限。",
   "share.settings.connectivity": "连接",
   "share.settings.publicUrl": "公开地址",
   "share.settings.publicUrlHint": "他人访问本实例使用的地址。浏览器链接和嵌入需要它；导入不需要。",

@@ -999,5 +999,6 @@
   "library.filteredFromTotalEntries": "(從 {{total}} 條中篩選)",
   "common.refresh": "重新整理",
   "common.removeTag": "移除標籤",
-  "share.settings.showAdvanced": "顯示進階選項"
+  "share.settings.showAdvanced": "顯示進階選項",
+  "share.settings.defaultPermissionsHint": "至少選擇一項；新建分享預設使用這些權限。"
 }

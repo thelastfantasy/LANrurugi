@@ -2570,7 +2570,7 @@
   "share.settings.expires": "Expires",
   "share.settings.defaults": "Defaults for new shares",
   "share.settings.defaultPermissions": "Default permissions",
-  "share.settings.defaultPermissionsHint": "Comma-separated: import, read, download.",
+  "share.settings.defaultPermissionsHint": "Pick at least one; new shares start with these permissions.",
   "share.settings.connectivity": "Connectivity",
   "share.settings.publicUrl": "Public address",
   "share.settings.publicUrlHint": "The address others open this instance at. Needed for browser links and embeds; importing works without it.",

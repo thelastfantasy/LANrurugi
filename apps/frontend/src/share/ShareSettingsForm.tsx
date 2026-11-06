@@ -16,9 +16,13 @@ import type { ShareSettings } from "./types";
 
 export interface SettingField {
   key: string;
-  kind: "bool" | "number" | "text" | "lines" | "choice";
-  /** For `choice`: the allowed values; each label is `${label}.${value}`. */
+  kind: "bool" | "number" | "text" | "lines" | "choice" | "flags";
+  /** For `choice`: the allowed values, labelled `${label}.${value}`. For `flags`: the individual
+   *  values, stored as a comma-joined list and rendered as one checkbox each. */
   options?: string[];
+  /** Per-value i18n keys for `flags`, when the block's own label prefix does not fit them (the
+   *  permission names are shared with the share dialog's own checkboxes). */
+  optionLabels?: Record<string, string>;
   /** i18n key of the label; the hint, when present, is `${label}Hint`. */
   label: string;
   hint?: boolean;
@@ -149,6 +153,48 @@ function FieldRow({
         />
       );
       break;
+    case "flags": {
+      // One checkbox per value, stored as the comma-joined list the server already parses —
+      // "import,read,download" typed by hand is exactly the kind of field people get wrong.
+      const picked = new Set(
+        String(value ?? "")
+          .split(",")
+          .map((v) => v.trim())
+          .filter(Boolean),
+      );
+      const options = field.options ?? [];
+      control = (
+        <span
+          style={{
+            display: "flex",
+            gap: 10,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          {options.map((o) => (
+            <label
+              key={o}
+              style={{ display: "flex", alignItems: "center", gap: 4 }}
+            >
+              <input
+                type="checkbox"
+                checked={picked.has(o)}
+                onChange={(e) => {
+                  const next = new Set(picked);
+                  if (e.target.checked) next.add(o);
+                  else next.delete(o);
+                  // Keep the server's own order rather than click order.
+                  onChange(options.filter((x) => next.has(x)).join(","));
+                }}
+              />
+              {t(field.optionLabels?.[o] ?? `${field.label}.${o}`)}
+            </label>
+          ))}
+        </span>
+      );
+      break;
+    }
     case "bool":
       control = <Switch checked={value === true} onCheckedChange={onChange} />;
       break;
