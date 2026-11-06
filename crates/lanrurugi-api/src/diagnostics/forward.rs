@@ -702,6 +702,25 @@ fn clip(text: &str, limit: usize) -> String {
     }
 }
 
+/// Last time a rejection was logged, plus how many were swallowed since — see the call site.
+static REJECTION_LOG: std::sync::Mutex<(i64, u64)> = std::sync::Mutex::new((0, 0));
+
+fn note_rejection(now: i64) -> Option<u64> {
+    const QUIET_MS: i64 = 60_000;
+    let mut guard = REJECTION_LOG
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (last, suppressed) = &mut *guard;
+    if now - *last < QUIET_MS {
+        *suppressed += 1;
+        return None;
+    }
+    let reported = *suppressed;
+    *last = now;
+    *suppressed = 0;
+    Some(reported)
+}
+
 /// Forwards one stored event if a window is open. Called from the writer, never from a request.
 pub async fn maybe_forward(state: &AppState, event: &DiagnosticEvent) {
     let deadline = read_deadline(state).await;
@@ -744,13 +763,19 @@ pub async fn maybe_forward(state: &AppState, event: &DiagnosticEvent) {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             let reason = rejection_reason(status, &body);
-            tracing::warn!(
-                event = %event.id,
-                source = event.source.as_str(),
-                message = %event.message,
-                reason = %reason,
-                "the tracker rejected a forwarded event"
-            );
+            // A rate-limiting tracker answers 429 for *every* event in the burst, so one real
+            // problem (or simply a low per-minute quota) turns into a wall of identical warnings.
+            // Log the first one per minute and count the rest.
+            if let Some(suppressed) = note_rejection(now_ms()) {
+                tracing::warn!(
+                    event = %event.id,
+                    source = event.source.as_str(),
+                    message = %event.message,
+                    reason = %reason,
+                    suppressed,
+                    "the tracker rejected a forwarded event"
+                );
+            }
             bump(state, "failed", Some(&reason)).await
         }
         Err(error) => bump(state, "failed", Some(&error.to_string())).await,

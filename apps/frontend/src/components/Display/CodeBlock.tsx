@@ -19,6 +19,9 @@ export function CodeBlock({
           style={{
             ...style,
             margin: 0,
+            // Legacy's `body { text-align: center }` (what its table-based forms expect) is
+            // inherited by every `<pre>`; code and stack traces read wrong centred.
+            textAlign: "left",
             padding: "8px 12px",
             fontSize: FONT_SIZE_SM,
             lineHeight: 1.4,

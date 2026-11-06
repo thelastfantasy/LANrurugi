@@ -70,8 +70,15 @@ export function JobRow({
       {open && (
         <tr>
           <td></td>
-          <td colSpan={4}>
-            <JobDetail job={job} />
+          {/* `maxWidth: 0` is the only thing that stops a table cell from growing to fit a long
+              result: without it the JSON block widens the whole table past the page (reported
+              from a phone 2026-11-06), because `max-width: 100%` on the inner `<pre>` resolves
+              against that same content-sized cell. `overflow: hidden` + the inner `overflowX:
+              auto` keeps the overflow inside the cell instead. */}
+          <td colSpan={4} style={{ maxWidth: 0 }}>
+            <div style={{ overflowX: "auto" }}>
+              <JobDetail job={job} />
+            </div>
           </td>
         </tr>
       )}
