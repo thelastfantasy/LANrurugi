@@ -242,7 +242,11 @@ jobs:
   macos:
     name: macos-arm64
     needs: assets
-    runs-on: macos-14
+    # `macos-14` was retired on 2026-10-01 (github.blog changelog "macOS 14 runner image
+    # retirement"): jobs targeting it are cancelled the moment they are created, with no runner
+    # ever assigned, which is exactly how the v1.0.0-beta.3 release died twice. `macos-15` is the
+    # current image and still ships an arm64 runner (`macos-15-arm64` is a separate, slower label).
+    runs-on: macos-15
     env:
       MACOSX_DEPLOYMENT_TARGET: '13.0'
       # libarchive2-sys names libb2/xml2 at link time even when libarchive does not use them; drop
