@@ -438,7 +438,7 @@ function SharingNodeBlock() {
           aria-label={t("share.nodes.heading")}
         />
       </div>
-      <div style={{ margin: "10px 0 0 22px" }}>
+      <div className="share-node-body">
         <SharingNodeList />
       </div>
     </div>

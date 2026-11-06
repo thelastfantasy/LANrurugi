@@ -1008,11 +1008,17 @@ div.ido.share-closed p:last-child {
   margin-left: auto;
 }
 
-/* Settings → Sharing → LANrurugi 节点: one row per node string, and a separate box to add one.
-   Reading and editing the same long string in one place is what made it easy to delete by accident. */
+/* Settings → Sharing → LANrurugi 节点. One grid for both the list and the add row, so the copy
+   button of a row and the "add" button line up in the same column, and the code column takes
+   whatever is left without pushing the button off. */
+/* Aligned with the title text of the panel row above (20px icon + 6px gap). */
+.share-node-body {
+  margin: 10px 0 0 26px;
+}
+
 .share-node-list {
   list-style: none;
-  margin: 0 0 10px;
+  margin: 0 0 8px;
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -1020,32 +1026,40 @@ div.ido.share-closed p:last-child {
 }
 
 .share-node-list li {
-  display: flex;
+  display: grid;
+  grid-template-columns: 4.5em minmax(0, 1fr) 6.5em;
   align-items: center;
   gap: 8px;
-  min-width: 0;
 }
 
 .share-node-list .share-result-value {
-  flex: 1 1 auto;
   min-width: 0;
   overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+.share-node-list .stdbtn,
+.share-node-add .stdbtn {
+  width: 100%;
+  margin: 0;
 }
 
 .share-node-tag {
-  flex: 0 0 auto;
   opacity: 0.7;
   font-size: 0.9em;
+  line-height: 1.4;
 }
 
 .share-node-add {
-  display: flex;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 6.5em;
+  align-items: start;
   gap: 8px;
 }
 
-.share-node-add .share-form-wide,
-.share-node-add > :first-child {
-  flex: 1 1 auto;
-  min-width: 0;
+.share-node-add .stdinput,
+.share-node-add textarea {
+  width: 100%;
+  max-width: none;
+  margin: 0;
 }
