@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next"
 
 import { CheckboxField, Input, NullableNumberInput, Switch } from "@/components/common-ui/Form"
+import { DateTimeField } from "@/components/common-ui/Form/DateTimeField"
 
 import type { ShareFields, SharePermissions } from "./types"
 
@@ -157,12 +158,11 @@ export function ShareFieldsForm({
           aria-label={t("share.form.expiryDays")}
         />
         <span>{t("share.form.daysOrUntil")}</span>
-        <Input
-          type="date"
+        <DateTimeField
+          mode="date"
+          label={t("share.form.expiryDate")}
           value={value.expiresAt === "" ? "" : localDateOf(value.expiresAt)}
-          min={localDateOf(nowSecs())}
-          onValueChange={(v) => set({ expiresAt: v ? endOfLocalDay(v) : "" })}
-          aria-label={t("share.form.expiryDate")}
+          onChange={(v) => set({ expiresAt: v ? endOfLocalDay(v) : "" })}
           style={{ width: "auto" }}
         />
       </div>
