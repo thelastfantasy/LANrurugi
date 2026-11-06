@@ -241,9 +241,15 @@ mod tests {
             height,
             mask: vec![false; pixels],
         };
-        bincode::serialize(&(page, mask.clone(), mask))
-            .expect("serializing erase_page's arguments")
-            .len() as u64
+        // bincode 2 splits the serde bridge out and makes the configuration explicit. Fixed-width
+        // integers are what bincode 1 did by default (and what `tarpc`'s transport still assumes),
+        // so the byte-count formula below keeps holding.
+        bincode::serde::encode_to_vec(
+            &(page, mask.clone(), mask),
+            bincode::config::standard().with_fixed_int_encoding(),
+        )
+        .expect("serializing erase_page's arguments")
+        .len() as u64
     }
 
     #[test]
