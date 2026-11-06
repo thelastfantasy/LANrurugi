@@ -112,7 +112,6 @@ const CAROUSEL_MODE_ICON: Record<CarouselMode, IconType> = {
 
 /** Height of the selection strip, and of the "nothing selected yet" hint that replaces it — equal
  *  so entering/leaving the first selection does not shift the grid below. */
-const SELECTION_STRIP_HEIGHT = 148
 
 export function RecentlyAddedCarousel({
   filter,
@@ -466,14 +465,13 @@ export function RecentlyAddedCarousel({
             style={{ width: "100%", boxSizing: "border-box" }}
           >
             {selectedIds.length === 0 ? (
-              // Same height as the strip below: this used to render legacy's thumbnail box
-              // (`div.id3` alone is 280px), so picking the *first* archive replaced a 330px block
-              // with a 140px strip and pushed the whole grid up — the "big repaint" reported when
-              // entering selection mode. A stable box means only its content changes.
+              // Exactly one archive card tall, so entering selection mode and picking the first
+              // archive no longer changes the strip's height: the placeholder's height is the
+              // card height at both of `div.id1`'s breakpoints (`.selection-strip-placeholder`).
               <div
+                className="selection-strip-placeholder"
                 style={{
                   padding: "8px 0",
-                  minHeight: SELECTION_STRIP_HEIGHT,
                   boxSizing: "border-box",
                   display: "flex",
                   flexDirection: "column",
@@ -487,7 +485,7 @@ export function RecentlyAddedCarousel({
               </div>
             ) : (
               <div
-                style={{ padding: "8px 0", position: "relative", minHeight: SELECTION_STRIP_HEIGHT }}
+                style={{ padding: "8px 0", position: "relative" }}
                 ref={selectionListRef}
               >
                 <SortableList

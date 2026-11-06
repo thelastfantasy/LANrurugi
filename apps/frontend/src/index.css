@@ -2398,3 +2398,17 @@ body div.ido {
   background: rgba(128, 128, 128, 0.55);
   border-radius: 3px;
 }
+
+/* Library selection strip (`RecentlyAddedCarousel`) before anything is picked: one archive card
+   tall at both of `div.id1`'s breakpoints, so the strip's height does not change when the first
+   archive is selected. */
+.selection-strip-placeholder {
+  /* Card height (344) plus the strip's own 8px padding top and bottom. */
+  height: 360px;
+}
+
+@media all and (max-width: 560px) {
+  .selection-strip-placeholder {
+    height: 272px;
+  }
+}
