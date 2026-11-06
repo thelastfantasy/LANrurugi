@@ -31,6 +31,12 @@ ok()   { printf '  \033[32mok\033[0m   %s\n' "$*"; }
 bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$*"; fail=1; }
 skip() { printf '  skip %s\n' "$*"; }
 
+# The published image tags come from Cargo.toml, not from the tag being verified, so a version
+# that was never bumped verifies as "clean" while the images actually landed on the previous
+# version (beta.5 shipped as 1.0.0-beta.4 that way). This is the cheapest possible place to notice.
+declared=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+if [ "$declared" = "$version" ]; then ok "Cargo.toml version is $version"; else bad "Cargo.toml version is $declared, verifying $version"; fi
+
 channel="latest"
 [[ "$version" == *-* ]] && channel="beta"
 prerelease="false"

@@ -33,7 +33,27 @@ env:
   STAGING: staging-${{ github.run_id }}
 
 jobs:
+  # Image tags come from Cargo.toml's version, the release name from the git tag. When the two
+  # disagree the whole run publishes under the *previous* version — beta.5 shipped its images as
+  # 1.0.0-beta.4 exactly this way, overwriting that release's. Fail in the first minute instead of
+  # the last: bumping the version is part of releasing, not an optional chore.
+  guard:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tag and Cargo.toml version must agree
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          tag="${GITHUB_REF_NAME#v}"
+          echo "tag=$tag cargo.toml=$version"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version — bump the version, merge to main, then tag that commit"
+            exit 1
+          fi
+
   docker:
+    needs: guard
     strategy:
       matrix:
         arch: [amd64, arm64]
@@ -149,6 +169,7 @@ jobs:
 
   assets:
     name: frontend, docs, plugins
+    needs: guard
     # 24.04, and a cache key of its own: this job shares nothing with the 22.04 packaging jobs, and
     # reusing the `docs` key mixed caches built against a newer glibc into a 22.04 runner — linking
     # failed with "version `GLIBC_2.39' not found" on the second release attempt (2026-11-04).
