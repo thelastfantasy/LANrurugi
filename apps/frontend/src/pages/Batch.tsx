@@ -36,16 +36,23 @@ function formatProgress(t: (key: string) => string, done: number, total: number)
 
 /** A premade selection handed off from the Library page's "Run Batch Operations" action — read
  * once as the initial `selected` set and immediately cleared. `TANK_` IDs are left unexpanded. */
+let premadeSelection: string[] | null = null
+
+/** Cached at module level, not just per mount: `main.tsx` wraps the app in `StrictMode`, which
+ *  mounts every component twice in development — the first mount consumed and cleared the key, so
+ *  the second one seeded an empty selection and the handoff looked like it had never happened. */
 function takePremadeSelection(): string[] {
+  if (premadeSelection) return premadeSelection
   const raw = localStorage.getItem(MSM_SELECTION_KEY)
   localStorage.removeItem(MSM_SELECTION_KEY)
-  if (!raw) return []
+  if (!raw) return (premadeSelection = [])
   try {
     const ids = JSON.parse(raw) as unknown
-    return Array.isArray(ids) ? ids.filter((id) => typeof id === "string") : []
+    premadeSelection = Array.isArray(ids) ? ids.filter((id) => typeof id === "string") : []
   } catch {
-    return []
+    premadeSelection = []
   }
+  return premadeSelection
 }
 
 /** Mirrors legacy's batch.html.tt2 — task select + one operation row / archive checklist; runs
