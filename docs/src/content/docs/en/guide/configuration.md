@@ -33,6 +33,7 @@ for how to change the port.
 | --- | --- | --- |
 | `LANRURUGI_LIBRARY_PATH`<br>`--library-path` | `./library` | The library; may point straight at LANraragi's `content` |
 | `LANRURUGI_THUMB_DIR`<br>`--thumb-dir` | `./thumb` | Thumbnail cache |
+| `LANRURUGI_DATA_DIR` | unset | Puts thumbnails, the Redis database, models and logs under one directory, so the container needs a single volume (see below) |
 | `LANRURUGI_TEMP_DIR`<br>`--temp-dir` | `./temp` | Upload staging, transcoding and render cache; bounded by `tempmaxsize` |
 | `LANRURUGI_LOG_DIRECTORY`<br>`--log-dir` | `./log` | The categorised logs behind Settings → Logs |
 | `LANRURUGI_PLUGINS_DIR`<br>`--plugins-dir` | `./plugins` | Plugin `.ts` files, namespaced by subdirectory |
@@ -41,6 +42,22 @@ for how to change the port.
 
 The native packages and the Docker image fill the last two themselves; set them only for your own
 packaging or to relocate the files.
+
+`LANRURUGI_DATA_DIR` is the container's "one directory for everything this instance keeps" switch:
+with `/data`, thumbnails live in `/data/thumb`, Redis data in `/data/database` (the entrypoint
+passes `--dir` to `redis-server`), models in `/data/models` and logs in `/data/log`, so the compose
+file only needs
+
+```yaml
+volumes:
+  - ./data/manga:/home/koyomi/lanrurugi/content
+  - ./data/lanrurugi:/data
+environment:
+  - LANRURUGI_DATA_DIR=/data
+```
+
+**Unset, every path keeps exactly its previous default**, so existing deployments need no change;
+mounting each path separately (thumbnails on the HDD, the database on an SSD) still works too.
 
 ### Logs
 
@@ -58,6 +75,14 @@ Files roll over, so they do not grow for the life of the instance:
 Both are also editable in **Settings → Background workers**; a saved change applies to the next
 rollover, with no restart. Precedence: Settings, then the environment variables, then the built-in
 defaults (the environment is a deploy-time default only).
+
+The log directory has to live inside **something that survives the container**. The image writes to
+`/log` by default (`LANRURUGI_LOG_DIRECTORY=/log` in the Dockerfile), so compose has to give it a
+volume — mounting `./data/log:/log` is the simplest option. Alternatively point
+`LANRURUGI_LOG_DIRECTORY` at a directory inside an existing mount (for example
+`/home/koyomi/lanrurugi/database/log`): no extra mount point, at the cost of mixing logs into the
+Redis data volume. Only logs left in the container's writable layer are lost on every
+upgrade/recreate — a plain stop/start keeps them.
 
 `general.log` is the active file; when the day changes (local time) or the size cap is crossed it is
 renamed to `general-20251105.log`, or `general-20251105-2.log` if the same day rolls twice, and the

@@ -2,7 +2,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { type CSSProperties, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { sendJson } from "@/api/client"
+import { ApiError, sendJson } from "@/api/client"
 import {
   type AiGroupSuggestion,
   type GroupReview,
@@ -539,7 +539,17 @@ function SuggestionsBody({ onClose }: { onClose: () => void }) {
       onError: (err) => {
         if (cancelled) return
         onClose()
-        toast({ heading: t("library.aiGroupingFailed") ?? undefined, text: String(err), icon: "error" })
+        // `embed_unavailable` means the local worker/model is missing — an environment problem the
+        // user can act on (install the model / fix the image), not a generic failure. Without this
+        // distinction the old behaviour was indistinguishable from "nothing to suggest".
+        const unavailable =
+          err instanceof ApiError &&
+          (err.body as { error?: string } | undefined)?.error === "embed_unavailable"
+        toast({
+          heading: t(unavailable ? "library.aiGroupingUnavailable" : "library.aiGroupingFailed") ?? undefined,
+          text: unavailable ? t("library.aiGroupingUnavailableHint") : String(err),
+          icon: "error",
+        })
       },
     })
     return () => {

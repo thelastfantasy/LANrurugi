@@ -31,6 +31,7 @@ Docker 用 `-e` 或 compose 的 `environment`。注意镜像的启动命令里�
 | --- | --- | --- |
 | `LANRURUGI_LIBRARY_PATH`<br>`--library-path` | `./library` | 书库目录，可以直接指向旧版 LANraragi 的 `content` |
 | `LANRURUGI_THUMB_DIR`<br>`--thumb-dir` | `./thumb` | 缩略图缓存 |
+| `LANRURUGI_DATA_DIR` | 未设置 | 设了就把缩略图、Redis 数据库、模型、日志都放到它下面的同名子目录，容器只需挂一个卷（见下方说明） |
 | `LANRURUGI_TEMP_DIR`<br>`--temp-dir` | `./temp` | 上传暂存、转码与渲染缓存，受 `tempmaxsize` 限制 |
 | `LANRURUGI_LOG_DIRECTORY`<br>`--log-dir` | `./log` | 设置 → 日志页面读的分类日志 |
 | `LANRURUGI_PLUGINS_DIR`<br>`--plugins-dir` | `./plugins` | 插件 `.ts` 所在目录，按子目录分命名空间 |
@@ -38,6 +39,21 @@ Docker 用 `-e` 或 compose 的 `environment`。注意镜像的启动命令里�
 | `LANRURUGI_DOCS_DIR`<br>`--docs-dir` | 未设置 | 文档站（含插件 SDK 参考），挂在 `/docs` 下 |
 
 原生安装包和 Docker 镜像会把最后两项自己填好，只有自己打包或想换位置时才需要设。
+
+`LANRURUGI_DATA_DIR` 是给容器用的「一个目录装下所有运行数据」开关：设成 `/data` 时，缩略图在
+`/data/thumb`、Redis 数据在 `/data/database`（入口脚本会给 `redis-server` 传 `--dir`）、模型在
+`/data/models`、日志在 `/data/log`，compose 里只需要
+
+```yaml
+volumes:
+  - ./data/manga:/home/koyomi/lanrurugi/content
+  - ./data/lanrurugi:/data
+environment:
+  - LANRURUGI_DATA_DIR=/data
+```
+
+**不设这个变量时，各路径的默认值与以前完全一致**，老部署不用改；想分层存放（缩略图在 HDD、数据库在
+SSD）也继续用逐条挂载的布局。
 
 ### 日志
 
@@ -53,6 +69,12 @@ Docker 用 `-e` 或 compose 的 `environment`。注意镜像的启动命令里�
 
 这两项也可以在 **设置 → 后台程序** 里改，改完下一次滚动就按新值来，不需要重启。优先级：
 设置页 > 环境变量 > 内置默认（环境变量只是部署时的默认值）。
+
+日志目录必须落在**某个持久化挂载**里。镜像默认写 `/log`（Dockerfile 里设了
+`LANRURUGI_LOG_DIRECTORY=/log`），所以 compose 要给它一个卷——单独挂 `./data/log:/log` 最简单；
+也可以把 `LANRURUGI_LOG_DIRECTORY` 指到已经挂好的目录下面（比如
+`/home/koyomi/lanrurugi/database/log`），这样不用多一个挂载点，代价是日志和 Redis 数据混在同一个
+卷里。**只有"写进容器可写层"的日志会在每次升级/重建容器时消失**——容器 stop/start 不会。
 
 `general.log` 是当前文件；跨天（本地时间）或超过大小上限时，它会被改名成
 `general-20251105.log`，同一天再滚一次就是 `general-20251105-2.log`，超出的最旧文件直接删除。

@@ -1584,6 +1584,13 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   body div.ido {
     padding: 3px;
     margin: 4px 2px;
+    /* `margin: … 2px` replaces the theme's `margin-left/right: auto`, and the modern themes cap
+       `.ido` at `max-width: 90%` — without these two the card is pinned to the left edge and the
+       whole 10% remainder becomes a gap on the *right* (reported from a phone 2026-11-06: "主页也
+       是内容整体偏左"). `auto` width + no cap is what this rule wanted anyway: the download page's
+       queue rows should get the full width, not 90% of it left-aligned. */
+    width: auto;
+    max-width: none;
   }
 
   /* Inline on the element (`padding-left: 24px`), left over from the desktop two-column layout —

@@ -65,6 +65,10 @@ const versionLabel = locale === 'zh' ? '文档版本' : 'Documentation version'
   }
   <label class="nav-links__version">
     <span class="sr-only">{versionLabel}</span>
+    {/* Shown only inside the mobile menu (`MobileMenuFooter` renders this same component), where
+        the header's right group is hidden — otherwise the only way to switch versions on a phone
+        was an unlabelled <select> sharing a row with the GitHub icon. */}
+    <span class="nav-links__version-label">{versionLabel}</span>
     <select data-lr-version-select data-root={ROOT} data-base={BASE}>
       {offered.map((entry) => (
         <option value={entry.version} selected={entry.version === currentVersion}>

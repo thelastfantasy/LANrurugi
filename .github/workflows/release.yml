@@ -109,6 +109,16 @@ jobs:
           tags: |
             ghcr.io/thelastfantasy/lanrurugi:${{ env.STAGING }}-${{ matrix.arch }}
 
+      # Before this run can move anything to a real tag, prove the image actually contains the
+      # binaries the server spawns. beta.1/beta.2 did not (`lanrurugi-embed-worker` and
+      # `lanrurugi-gpu-worker` were never built into the image) and nothing noticed, because every
+      # call site degrades to "no result" instead of failing loudly.
+      - name: Verify the image ships every worker binary
+        run: |
+          image="ghcr.io/thelastfantasy/lanrurugi:${{ env.STAGING }}-${{ matrix.arch }}"
+          docker pull -q "$image"
+          scripts/check-image-binaries.sh --image "$image"
+
       # Second build for Docker Hub, not a re-tag: `imagetools create` would copy GHCR's manifest
       # and Docker Hub pulls would then report `ghcr`. All Rust layers are cache hits.
       - uses: docker/login-action@v4
@@ -470,6 +480,23 @@ jobs:
               docker.io/$DOCKERHUB_IMAGE:${{ env.STAGING }}-arm64
           fi
 
+      # A manifest that lost a platform, or a `:<version>` tag pointing somewhere other than the
+      # channel tag, is invisible until someone pulls it — check both while this run can still fail.
+      - name: Verify the published tags
+        env:
+          VERSION: ${{ steps.channel.outputs.version }}
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+        run: |
+          set -euo pipefail
+          ref="ghcr.io/thelastfantasy/lanrurugi"
+          version_raw=$(docker buildx imagetools inspect "$ref:$VERSION" --raw)
+          channel_raw=$(docker buildx imagetools inspect "$ref:$CHANNEL" --raw)
+          if [ "$version_raw" != "$channel_raw" ]; then
+            echo "::error::$VERSION and $CHANNEL resolve to different manifests"
+            exit 1
+          fi
+          echo "$version_raw" | python3 -c 'import json,sys; d=json.load(sys.stdin); p=sorted(m["platform"]["os"]+"/"+m["platform"]["architecture"] for m in d.get("manifests",[])); print("platforms:", " ".join(p)); sys.exit(0 if {"linux/amd64","linux/arm64"} <= set(p) else "missing platform")'
+
       # The release body *is* the changelog: the app's own upgrade overlay renders it
       # (`GET /api/version?since=`), so it is generated here from the commits this tag contains.
       - name: Generate bilingual release notes
@@ -507,3 +534,31 @@ jobs:
             dist/*.tar.gz
             dist/SHA256SUMS
             docs-asset/docs-*.zip
+
+      # `softprops` treats a per-asset API failure as a warning: beta.2's first run created the
+      # release with 2 of 6 assets (GitHub 502'd mid-upload) and still reported the step as fine.
+      # Re-check the finished release instead of trusting the upload loop.
+      - name: Verify the release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.channel.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          names=$(gh release view "$tag" --json assets --jq '.assets[].name' | sort)
+          echo "$names"
+          for want in SHA256SUMS "docs-$VERSION.zip" \
+                      "lanrurugi-$VERSION-linux-x86_64.tar.gz" \
+                      "lanrurugi-$VERSION-linux-aarch64.tar.gz" \
+                      "lanrurugi-$VERSION-macos-arm64.tar.gz" \
+                      "lanrurugi-$VERSION-freebsd-x86_64.tar.gz"; do
+            if ! grep -qx "$want" <<<"$names"; then
+              echo "::error::release $tag is missing asset $want"
+              exit 1
+            fi
+          done
+          empty=$(gh release view "$tag" --json assets --jq '.assets[] | select(.size == 0) | .name')
+          if [ -n "$empty" ]; then
+            echo "::error::release $tag has empty asset(s): $empty"
+            exit 1
+          fi

@@ -31,23 +31,21 @@ services:
       # `/home/koyomi/lanraragi/...` convention (project name swapped, per redis.conf/Dockerfile's
       # own doc comments).
       - ./data/manga:/home/koyomi/lanrurugi/content
-      - ./data/thumb:/home/koyomi/lanrurugi/thumb
-      - ./data/database:/home/koyomi/lanrurugi/database
-      # ONNX embedding model + tokenizer for the reader recommender (lanrurugi-recommend,
-      # auto-downloaded on startup — see crates/lanrurugi-recommend/src/model_download.rs).
-      - ./data/models:/home/koyomi/lanrurugi/models
-      - lrr-try-log:/log
-      - lrr-try-temp:/temp
+      # Everything else the instance keeps — thumbnails, the bundled Redis database, the ONNX
+      # embedding model + tokenizer (auto-downloaded on first use), the categorized logs and the
+      # temp/render cache — under one directory, selected by `LANRURUGI_DATA_DIR` below. Mounting
+      # each path individually still works (the image's own defaults are unchanged); this file just
+      # demonstrates the one-volume layout the docs now recommend.
+      - ./data/lanrurugi:/data
       # MaxMind GeoLite2-City database — `docker-entrypoint.sh` runs `geoipupdate` into this path
       # on every container start (best-effort, skipped if LANRURUGI_GEOIP_ACCOUNT_ID/
       # LANRURUGI_GEOIP_LICENSE_KEY below aren't set). Persisting it means a restart doesn't force
       # a redundant re-download of the same day's database.
       - lrr-try-geoip:/var/lib/GeoIP
     environment:
-      # `lrr-try-temp:/temp` above is only useful if the server actually writes there: `--temp-dir`
-      # defaults to `./temp` in the image's working directory, i.e. the container's writable layer,
-      # which a container recreate discards — taking the resize/animation conversion cache with it.
-      - LANRURUGI_TEMP_DIR=/temp
+      # One directory for all instance state (see the volume comment above). Unset, every path
+      # keeps its old default — existing deployments do not need to migrate.
+      - LANRURUGI_DATA_DIR=/data
       # Optional — a free MaxMind account's own credentials
       # (https://www.maxmind.com/en/geolite2/signup), used only by `docker-entrypoint.sh`'s
       # `geoipupdate` call to fetch/refresh the GeoLite2-City database `lanrurugi_api::geoip` reads
@@ -64,6 +62,6 @@ services:
     restart: unless-stopped
 
 volumes:
-  lrr-try-log:
-  lrr-try-temp:
+  # `lrr-try-log` / `lrr-try-temp` used to hold the logs and the render cache separately; both now
+  # live inside `./data/lanrurugi` via `LANRURUGI_DATA_DIR`.
   lrr-try-geoip:

@@ -34,17 +34,11 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      # 书库，可以直接指向旧版 LANraragi 的 content 目录
       - ./data/manga:/home/koyomi/lanrurugi/content
-      # 缩略图缓存
-      - ./data/thumb:/home/koyomi/lanrurugi/thumb
-      # Redis 数据，LANrurugi 专用；LANraragi 的元数据通过备份 JSON 导入
-      - ./data/database:/home/koyomi/lanrurugi/database
-      # 推荐和单行本整理用的本地模型，首次用到时自动下载，非必需
-      - ./data/models:/home/koyomi/lanrurugi/models
-      # 日志：按天（或超过单文件上限）滚动，每个分类保留有限个文件
-      - ./data/log:/log
+      # 运行数据：缩略图 / Redis 数据库 / 模型 / 日志都在这个目录里
+      - ./data/lanrurugi:/data
     environment:
+      - LANRURUGI_DATA_DIR=/data
       # 经 HTTPS 反向代理访问时改为 true
       - LANRURUGI_FORCE_SECURE_COOKIES=false
     restart: unless-stopped
@@ -57,17 +51,11 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      # 书库，可以直接指向旧版 LANraragi 的 content 目录
       - ./data/manga:/home/koyomi/lanrurugi/content
-      # 缩略图缓存
-      - ./data/thumb:/home/koyomi/lanrurugi/thumb
-      # Redis 数据，LANrurugi 专用；LANraragi 的元数据通过备份 JSON 导入
-      - ./data/database:/home/koyomi/lanrurugi/database
-      # 推荐和单行本整理用的本地模型，首次用到时自动下载，非必需
-      - ./data/models:/home/koyomi/lanrurugi/models
-      # 日志：按天（或超过单文件上限）滚动，每个分类保留有限个文件
-      - ./data/log:/log
+      # 运行数据：缩略图 / Redis 数据库 / 模型 / 日志都在这个目录里
+      - ./data/lanrurugi:/data
     environment:
+      - LANRURUGI_DATA_DIR=/data
       # 经 HTTPS 反向代理访问时改为 true
       - LANRURUGI_FORCE_SECURE_COOKIES=false
     restart: unless-stopped
@@ -81,14 +69,16 @@ docker compose up -d      # 或 podman compose up -d
 
 在群晖 Container Manager、Portainer 等面板里新建一个 compose 项目，粘贴同一段文本即可。
 
-启动后在浏览器打开 `http://<服务器地址>:3000`。镜像自带 Redis，不需要额外的数据库容器。四个挂载目录：
+启动后在浏览器打开 `http://<服务器地址>:3000`。镜像自带 Redis，不需要额外的数据库容器。两个挂载点：
 
 | 宿主机路径 | 容器内路径 | 用途 |
 |---|---|---|
 | `./data/manga` | `/home/koyomi/lanrurugi/content` | 你的档案库 |
-| `./data/thumb` | `/home/koyomi/lanrurugi/thumb` | 缩略图缓存 |
-| `./data/database` | `/home/koyomi/lanrurugi/database` | Redis 数据（LANrurugi 专用） |
-| `./data/models` | `/home/koyomi/lanrurugi/models` | 推荐和单行本整理用的本地模型缓存 |
+| `./data/lanrurugi` | `/data` | 所有运行数据：缩略图、Redis 数据库、推荐模型、分类日志 |
+
+`LANRURUGI_DATA_DIR=/data` 让服务端把这些都放进同一个目录（Redis 的 `dir` 由容器入口脚本一并改掉），
+所以**升级/重建容器只要这个卷还在，数据就都在**。想分层存放（比如缩略图放 HDD、数据库放 SSD）不用这个
+变量，改回按路径单独挂载即可，两种布局都支持。
 
 要通过域名和 HTTPS 访问，见[反向代理](../reverse-proxy/)。
 

@@ -35,10 +35,14 @@
 ```sh
 docker run -d --name lanrurugi -p 3000:3000 \
   -v /path/to/manga:/home/koyomi/lanrurugi/content \
-  -v /path/to/thumb:/home/koyomi/lanrurugi/thumb \
-  -v /path/to/database:/home/koyomi/lanrurugi/database \
+  -v /path/to/lanrurugi-data:/data \
+  -e LANRURUGI_DATA_DIR=/data \
   ghcr.io/thelastfantasy/lanrurugi:latest
 ```
+
+两个挂载点：书库，和一个 `data` 目录（缩略图、Redis 数据库、模型、日志都在里面）。不设
+`LANRURUGI_DATA_DIR` 时仍然按原来的单条路径（`/home/koyomi/lanrurugi/{thumb,database}`、`/log`）走，
+老部署不用改。
 
 打开 `http://<服务器地址>:3000`。镜像自带 Redis，不需要额外的数据库容器；更完整的 compose（含 NAS 面板、
 反向代理、从 LANraragi 迁移的步骤）见[文档站「安装」](https://docs.lrrg.dev/guide/install/)。
