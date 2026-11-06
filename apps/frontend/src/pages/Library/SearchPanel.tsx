@@ -152,6 +152,20 @@ export function SearchPanel({
 
   return (
     <div style={{ padding: "2px 0 0" }}>
+      {/* Non-scrolling cover for the search bar's band. The popup is the scroll container, so
+          without this its content scrolls up behind the input and the first section label ends up
+          over the bar's bottom-left corner. Sticky + the panel's own opaque colour, so it also
+          hides rows sliding underneath it. */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: "sticky",
+          top: 0,
+          height: 26,
+          background: palette.bg,
+          zIndex: 1,
+        }}
+      />
       {/*
         One `Autocomplete.List`, with one `Autocomplete.Group` per section — the documented
         composition (a separate `List` per section would register several lists for one popup and
