@@ -2,7 +2,14 @@ import { useTranslation } from "react-i18next"
 
 import type { CategoryMetadata } from "@/api/types"
 import { StatusIcon } from "@/components/Display"
-import { CATEGORY_BUTTON_CAP, NEW_ONLY, TANKOUBON_ONLY, UNTAGGED_ONLY } from "@/lib/constants"
+import {
+  CATEGORY_BUTTON_CAP,
+  NEW_ONLY,
+  NO_SOURCE_ONLY,
+  SOURCE_ONLY,
+  TANKOUBON_ONLY,
+  UNTAGGED_ONLY,
+} from "@/lib/constants"
 
 export function CategoryBar({
   selectedCategory,
@@ -36,6 +43,22 @@ export function CategoryBar({
         onClick={() => onToggleCategory(UNTAGGED_ONLY)}
       >
         <StatusIcon kind="untagged" /> {t("library.untaggedArchives")}
+      </button>
+      <button
+        type="button"
+        className={`favtag-btn${selectedCategory === SOURCE_ONLY ? " toggled" : ""}`}
+        title={t("library.archivesWithASourceTag") ?? undefined}
+        onClick={() => onToggleCategory(SOURCE_ONLY)}
+      >
+        <i className="fas fa-link" aria-hidden="true" /> {t("library.withSource")}
+      </button>
+      <button
+        type="button"
+        className={`favtag-btn${selectedCategory === NO_SOURCE_ONLY ? " toggled" : ""}`}
+        title={t("library.archivesWithoutASourceTag") ?? undefined}
+        onClick={() => onToggleCategory(NO_SOURCE_ONLY)}
+      >
+        <i className="fas fa-link-slash" aria-hidden="true" /> {t("library.withoutSource")}
       </button>
       {hasTankoubons && (
         <button

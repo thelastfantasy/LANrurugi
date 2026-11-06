@@ -18,7 +18,9 @@ use lanrurugi_storage::bookmarks::BookmarksRepository;
 use thiserror::Error;
 
 use crate::grammar::{parse_query, Expr, Field, Token};
-use crate::keys::{NEW_KEY, TANKGROUPED_KEY, TITLES_FOLDED_KEY, TITLES_KEY, UNTAGGED_KEY};
+use crate::keys::{
+    NEW_KEY, SOURCE_TAGGED_KEY, TANKGROUPED_KEY, TITLES_FOLDED_KEY, TITLES_KEY, UNTAGGED_KEY,
+};
 
 #[derive(Debug, Error)]
 pub enum SearchError {
@@ -650,6 +652,7 @@ async fn attribute_filter(
             has_filter(
                 archive_pool,
                 archive_conn,
+                search_conn,
                 ctx.bookmarks,
                 ctx.split_suggestions,
                 &value,
@@ -753,6 +756,7 @@ async fn state_filter(
 async fn has_filter(
     archive_pool: &Pool,
     archive_conn: &mut deadpool_redis::Connection,
+    search_conn: &mut deadpool_redis::Connection,
     bookmarks: &BookmarksRepository,
     split_suggestions: Option<&HashSet<String>>,
     value: &str,
@@ -808,6 +812,11 @@ async fn has_filter(
                 .cloned()
                 .collect())
         }
+        // "This archive has at least one `source:` tag." A maintained set rather than a per-archive
+        // `HGET tags` walk: the point of `has:source` is sweeping a whole library for missing
+        // sources, which is exactly when a per-id round trip would hurt most. Negation composes
+        // like any other atom, so `-has:source` is "has no source at all".
+        "source" => intersect_members(search_conn, SOURCE_TAGGED_KEY, scope).await,
         "patch" => {
             let mut ids = HashSet::new();
             for id in scope {

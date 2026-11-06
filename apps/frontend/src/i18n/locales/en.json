@@ -2896,5 +2896,9 @@
   "settings.libraryCounters": "{{files}} files on record · {{archives}} archives catalogued · {{patches}} page patches",
   "Batch Operations": "Batch Operations",
   "Batch operations apply to the current filter": "Nothing selected — batch operations apply to the current filter",
-  "Batch process all {{n}} results": "Batch process all {{n}} results"
+  "Batch process all {{n}} results": "Batch process all {{n}} results",
+  "library.withSource": "With source",
+  "library.withoutSource": "Missing source",
+  "library.archivesWithASourceTag": "Archives carrying a source: tag (has:source)",
+  "library.archivesWithoutASourceTag": "Archives with no source: tag at all (-has:source)"
 }

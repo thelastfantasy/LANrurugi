@@ -2658,5 +2658,9 @@
   "settings.libraryCounters": "記録済みファイル {{files}} 件 · 登録済みアーカイブ {{archives}} 件 · パッチ {{patches}} 件",
   "Batch Operations": "バッチ処理",
   "Batch operations apply to the current filter": "未選択 — 現在の絞り込み結果にバッチ処理を適用します",
-  "Batch process all {{n}} results": "{{n}} 件すべてをバッチ処理"
+  "Batch process all {{n}} results": "{{n}} 件すべてをバッチ処理",
+  "library.withSource": "source あり",
+  "library.withoutSource": "source なし",
+  "library.archivesWithASourceTag": "source: タグを持つアーカイブ（has:source）",
+  "library.archivesWithoutASourceTag": "source: タグを一切持たないアーカイブ（-has:source）"
 }

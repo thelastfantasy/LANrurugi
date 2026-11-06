@@ -26,7 +26,9 @@ import type { ArchiveMetadata } from "@/api/types";
 import { confirmDialog, promptDialog } from "@/dialog";
 import {
   NEW_ONLY,
+  NO_SOURCE_ONLY,
   PAGE_SIZE,
+  SOURCE_ONLY,
   TANKOUBON_ONLY,
   UNTAGGED_ONLY,
 } from "@/lib/constants";
@@ -338,10 +340,21 @@ export function useLibrary() {
   const isBuiltinSelector =
     selectedCategory === NEW_ONLY ||
     selectedCategory === UNTAGGED_ONLY ||
-    selectedCategory === TANKOUBON_ONLY;
+    selectedCategory === TANKOUBON_ONLY ||
+    selectedCategory === SOURCE_ONLY ||
+    selectedCategory === NO_SOURCE_ONLY;
+  // The two source filters are search-syntax atoms rather than Redis-backed flags: `has:source`
+  // reads a maintained membership set, and `-has:source` is ordinary negation of the same atom.
+  const builtinFilter =
+    selectedCategory === SOURCE_ONLY
+      ? "has:source"
+      : selectedCategory === NO_SOURCE_ONLY
+        ? "-has:source"
+        : "";
   /** The filters every search-shaped request shares — the applied search *and* the autocomplete's
    *  own hit counts, so a candidate's stated count is the number the page will actually show. */
   const searchContext = {
+    filter: [appliedFilter, builtinFilter].filter(Boolean).join(" "),
     category:
       !isBuiltinSelector && selectedCategory ? selectedCategory : undefined,
     newonly: selectedCategory === NEW_ONLY,
@@ -351,7 +364,6 @@ export function useLibrary() {
     groupbyTanks,
   };
   const search = useSearch({
-    filter: appliedFilter,
     sortby,
     order: effectiveSortDir(sortby, order),
     start: page * PAGE_SIZE,
@@ -391,7 +403,10 @@ export function useLibrary() {
   const searchHistory = useSearchHistory(debouncedFilter, { enabled: loggedIn });
   const recentSearches = searchHistory.data?.history ?? [];
 
-  const titleSuggest = useSearchSuggest({ filter: debouncedFilter, ...searchContext }, 6);
+  const titleSuggest = useSearchSuggest(
+    { ...searchContext, filter: [debouncedFilter, builtinFilter].filter(Boolean).join(" ") },
+    6,
+  );
   const phraseRows = useMemo(
     () => phraseSuggestions(debouncedFilter),
     [debouncedFilter],
@@ -538,7 +553,6 @@ export function useLibrary() {
     const total = search.data?.recordsFiltered ?? 0;
     if (total === 0) return;
     const options = {
-      filter: appliedFilter,
       sortby,
       order: effectiveSortDir(sortby, order),
       ...searchContext,

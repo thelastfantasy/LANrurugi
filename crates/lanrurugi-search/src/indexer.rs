@@ -16,7 +16,8 @@ use lanrurugi_equivalence::Equivalence;
 use lanrurugi_storage::repository::{ArchiveRepository, GroupingRepository};
 
 use crate::keys::{
-    FOLD_FINGERPRINT_KEY, NEW_KEY, TANKGROUPED_KEY, TITLES_FOLDED_KEY, TITLES_KEY, UNTAGGED_KEY,
+    FOLD_FINGERPRINT_KEY, NEW_KEY, SOURCE_TAGGED_KEY, TANKGROUPED_KEY, TITLES_FOLDED_KEY,
+    TITLES_KEY, UNTAGGED_KEY,
 };
 
 #[derive(Debug, Error)]
@@ -42,6 +43,12 @@ const BASIC_NAMESPACES: &[&str] = &[
     "timestamp:",
     "source:",
 ];
+
+/// Any `source:` tag at all — the `has:source` membership test.
+fn has_source_tag(tags: &str) -> bool {
+    tags.split(',')
+        .any(|t| t.trim().to_ascii_lowercase().starts_with("source:"))
+}
 
 fn has_meaningful_tags(tags: &str) -> bool {
     tags.split(',').any(|t| {
@@ -117,6 +124,8 @@ pub async fn rebuild_folded_indexes(
     let mut conn = search_pool.get().await?;
 
     let _: () = conn.del(TITLES_FOLDED_KEY).await?;
+    let _: () = conn.del(UNTAGGED_KEY).await?;
+    let _: () = conn.del(SOURCE_TAGGED_KEY).await?;
     let index_keys: Vec<String> = conn.keys("INDEX_*").await?;
     if !index_keys.is_empty() {
         let _: () = conn.del(index_keys).await?;
@@ -125,6 +134,15 @@ pub async fn rebuild_folded_indexes(
     for archive in archives {
         write_title_indexes(&mut conn, eq, archive.id.as_str(), &archive.title).await?;
         write_tag_indexes(&mut conn, eq, archive.id.as_str(), &archive.tags).await?;
+        // The two derived membership sets are rebuilt here too rather than only on tag edits:
+        // otherwise a library that has never had a tag change since this key was introduced reads
+        // as "no archive has a source" (`has:source` empty) until every archive is edited by hand.
+        if has_source_tag(&archive.tags) {
+            let _: () = conn.sadd(SOURCE_TAGGED_KEY, archive.id.as_str()).await?;
+        }
+        if !has_meaningful_tags(&archive.tags) {
+            let _: () = conn.sadd(UNTAGGED_KEY, archive.id.as_str()).await?;
+        }
     }
     for grouping in groupings {
         write_title_indexes(&mut conn, eq, grouping.tankid.as_str(), &grouping.name).await?;
@@ -190,6 +208,7 @@ pub async fn remove_archive_index(
         .zrem(TITLES_KEY, title_key)
         .zrem(TITLES_FOLDED_KEY, folded_title_key)
         .srem(UNTAGGED_KEY, id)
+        .srem(SOURCE_TAGGED_KEY, id)
         .srem(TANKGROUPED_KEY, id)
         .srem(NEW_KEY, id);
     for tag in tags.split(',') {
@@ -269,6 +288,11 @@ pub async fn update_tag_indexes(
         let _: () = conn.srem(UNTAGGED_KEY, id).await?;
     } else {
         let _: () = conn.sadd(UNTAGGED_KEY, id).await?;
+    }
+    if has_source_tag(new_tags) {
+        let _: () = conn.sadd(SOURCE_TAGGED_KEY, id).await?;
+    } else {
+        let _: () = conn.srem(SOURCE_TAGGED_KEY, id).await?;
     }
     Ok(())
 }
