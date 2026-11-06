@@ -520,6 +520,10 @@ function SuggestionCard({
                 className="stdbtn ai-checkable-btn"
                 disabled={!canConfirm}
                 onClick={() => void handleConfirm()}
+                // Same width as the plain "add to Tankoubon" button below: the two states of the
+                // same card must not resize the primary action (the ✅ toggle made this one
+                // wider, which shifted the whole footer row when a card switched between them).
+                style={{ minWidth: PRIMARY_ACTION_MIN_WIDTH }}
               >
                 <span style={{ flex: "0 1 auto", textAlign: "center", whiteSpace: "nowrap" }}>{t("library.createTankoubon")}</span>
                 <Tooltip
@@ -547,6 +551,7 @@ function SuggestionCard({
                 value={(isAddToExisting ? t("library.addToTankoubon") : t("library.createTankoubon")) ?? undefined}
                 disabled={!canConfirm}
                 onClick={() => void handleConfirm()}
+                style={{ minWidth: PRIMARY_ACTION_MIN_WIDTH }}
               />
             )}
           </div>
@@ -560,6 +565,10 @@ function SuggestionCard({
  *  score pairs (~20 s on a 6 000-archive library, measured on the NAS). The drawer body remounts on
  *  every open, so without this each open paid that again. A short client-side cache makes reopening
  *  instant; creating or ignoring a group drops it, and the explicit re-check button forces past it. */
+/** Width shared by the primary footer action in both card states ("create" with its ✅ toggle,
+ *  "add to an existing Tankoubon" without one) — see the call sites. */
+const PRIMARY_ACTION_MIN_WIDTH = "9.5em"
+
 /** Above this many suggestions the footer shows one compact pager instead of one dot per card. */
 const MAX_PAGE_DOTS = 20
 
