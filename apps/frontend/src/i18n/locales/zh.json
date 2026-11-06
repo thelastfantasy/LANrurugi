@@ -2893,5 +2893,8 @@
   "settings.logMaxFilesHelp": "含正在写入的那一个（默认 3）。超出数量的最旧文件会被删除；滚动后的文件名为 general-20251105.log，同一天多次滚动再加 -2、-3。",
   "library.aiGroupingUnavailable": "本地模型不可用",
   "library.aiGroupingUnavailableHint": "AI 分组需要本地的 embedding 模型（推荐功能的那个）。它不在镜像里或还没下载完成，所以没法比较标题。修好之后这条功能会自己恢复。",
-  "settings.libraryCounters": "已扫描到的文件 {{files}} 个 · 已入库 {{archives}} 个档案 · 补丁 {{patches}} 个"
+  "settings.libraryCounters": "已扫描到的文件 {{files}} 个 · 已入库 {{archives}} 个档案 · 补丁 {{patches}} 个",
+  "Batch Operations": "批量处理",
+  "Batch operations apply to the current filter": "未选择档案——批量处理将作用于当前筛选结果",
+  "Batch process all {{n}} results": "批量处理全部 {{n}} 个结果"
 }

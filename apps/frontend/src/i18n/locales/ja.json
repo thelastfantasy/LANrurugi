@@ -2655,5 +2655,8 @@
   "settings.logMaxFilesHelp": "書き込み中のものを含みます（既定 3）。超えた分は古い順に削除されます。ローテーション後の名前は general-20251105.log、同日に複数回ローテーションすると -2、-3 が付きます。",
   "library.aiGroupingUnavailable": "ローカルモデルが利用できません",
   "library.aiGroupingUnavailableHint": "AI グループ化にはローカルの embedding モデル（推薦機能で使うもの）が必要です。イメージに含まれていないか、ダウンロードが完了していないため、タイトルを比較できません。利用可能になれば自動的に復旧します。",
-  "settings.libraryCounters": "記録済みファイル {{files}} 件 · 登録済みアーカイブ {{archives}} 件 · パッチ {{patches}} 件"
+  "settings.libraryCounters": "記録済みファイル {{files}} 件 · 登録済みアーカイブ {{archives}} 件 · パッチ {{patches}} 件",
+  "Batch Operations": "バッチ処理",
+  "Batch operations apply to the current filter": "未選択 — 現在の絞り込み結果にバッチ処理を適用します",
+  "Batch process all {{n}} results": "{{n}} 件すべてをバッチ処理"
 }

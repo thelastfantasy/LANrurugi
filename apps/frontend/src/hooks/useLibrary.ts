@@ -528,6 +528,47 @@ export function useLibrary() {
     window.open("/batch", "_blank");
   }
 
+  /** Batch operations over everything the current filter matches, with no manual selection —
+   *  "run a tag scan over every untagged archive" is the case this exists for.
+   *
+   *  `/search` pages by a fixed `pagesize` (100 by default) and returns no id-only projection, so
+   *  this walks the pages it already knows the count of rather than adding another endpoint for
+   *  one button. Ids are handed to `/batch` through the same `MSM_SELECTION_KEY` handoff. */
+  async function runBatchOnFilter() {
+    const total = search.data?.recordsFiltered ?? 0;
+    if (total === 0) return;
+    const options = {
+      filter: appliedFilter,
+      sortby,
+      order: effectiveSortDir(sortby, order),
+      ...searchContext,
+    };
+    const ids: string[] = [];
+    let start = 0;
+    while (ids.length < total) {
+      const params = new URLSearchParams();
+      if (options.filter) params.set("filter", options.filter)
+      if (options.category) params.set("category", options.category)
+      if (options.sortby) params.set("sortby", options.sortby)
+      if (options.order) params.set("order", options.order)
+      if (options.newonly) params.set("newonly", "true")
+      if (options.untaggedonly) params.set("untaggedonly", "true")
+      if (options.tankonly) params.set("tankonly", "true")
+      if (options.hidecompleted) params.set("hidecompleted", "true")
+      if (options.groupbyTanks === false) params.set("groupby_tanks", "false")
+      params.set("start", String(start))
+      const page = await fetchJson<{ data?: { arcid: string }[] }>(`/search?${params.toString()}`)
+        .catch(() => null)
+      const rows = page?.data ?? []
+      if (rows.length === 0) break
+      for (const row of rows) ids.push(row.arcid)
+      start += rows.length
+    }
+    if (ids.length === 0) return;
+    localStorage.setItem(MSM_SELECTION_KEY, JSON.stringify(ids));
+    window.open("/batch", "_blank");
+  }
+
   const selectedTankIds = selectedIds.filter(isTankoubonId);
   const canMerge = selectedTankIds.length < 2 && selectedIds.length > 0;
 
@@ -807,6 +848,8 @@ export function useLibrary() {
     selectedTankIds,
     canMerge,
     runBatchOnSelection,
+    runBatchOnFilter,
+    filteredCount: search.data?.recordsFiltered ?? 0,
     mergeSelectionIntoTankoubon,
     searchInputRef,
     setArchiveProgress,

@@ -5,6 +5,8 @@
 //! `pub(crate)` re-export, keeping this module's own responsibility to CRUD + orchestrating which
 //! items to start.
 
+use std::collections::HashMap;
+
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -264,9 +266,28 @@ async fn add_to_queue(
 ) -> Response {
     let mut added = Vec::new();
     let mut rejected = Vec::new();
+    // Per *plugin*, not per URL. `plugin_info` spawns a throwaway Deno subprocess every call, so a
+    // 310-URL paste used to start 310 of them (plus 310 Redis reads for the custom args) before the
+    // first item was even queued — the server half of why that paste took so long. The client used
+    // to amplify it further with three lookups per line; that half is fixed too.
+    let mut resolved: HashMap<
+        String,
+        Option<(lanrurugi_plugin::protocol::PluginInfo, Vec<Value>)>,
+    > = HashMap::new();
 
     for item in &body.items {
-        let Ok(info) = state.plugins.plugin_info(&item.plugin_namespace).await else {
+        let key = item.plugin_namespace.clone();
+        if !resolved.contains_key(&key) {
+            let entry = match state.plugins.plugin_info(&key).await {
+                Ok(info) => {
+                    let args = get_plugin_customargs(&state, &key, &info.parameters).await;
+                    Some((info, args))
+                }
+                Err(_) => None,
+            };
+            resolved.insert(key.clone(), entry);
+        }
+        let Some(Some((info, plugin_parameters))) = resolved.get(&key).cloned() else {
             rejected.push(json!({
                 "url": item.url,
                 "reason": format!("no installed plugin under namespace {:?}", item.plugin_namespace),
@@ -276,10 +297,7 @@ async fn add_to_queue(
         // Resolved once, up front, so both arms below record it: the plugin's declared parameter
         // names paired with the user's saved values are this download's real execution parameters,
         // and they're identical regardless of whether the Redis write that follows succeeds.
-        let plugin_parameters = named_plugin_parameters(
-            &info,
-            &get_plugin_customargs(&state, &item.plugin_namespace, &info.parameters).await,
-        );
+        let plugin_parameters = named_plugin_parameters(&info, &plugin_parameters);
         match state
             .download_queue
             .add(lanrurugi_storage::download_queue::NewQueueItem {
