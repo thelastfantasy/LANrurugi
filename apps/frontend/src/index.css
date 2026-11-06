@@ -2398,3 +2398,10 @@ body div.ido {
   background: rgba(128, 128, 128, 0.55);
   border-radius: 3px;
 }
+
+/* The AI grouping drawer's compact pager uses the shared `NumberInput`, whose own stepper is
+   ../../components/common-ui/Form/NumberInput.tsx's absolutely-positioned pair; inside this pill it
+   would overlay the "/ total" label, so it stays hidden and the pill's ← → do the stepping. */
+.ai-pager .number-input-stepper {
+  display: none !important;
+}
