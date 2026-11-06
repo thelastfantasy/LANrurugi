@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 
 import { THEME_STORAGE_KEY } from "@/lib/storageKeys"
 import { useSession } from "@/session/SessionProvider"
@@ -155,7 +155,12 @@ export function useLegacyConfigCss() {
  * admin-password screen always matches the administrator's own theme even when guest mode is on
  * and the guest theme is a different one. */
 export function useApplyTheme(opts?: { preferAdminTheme?: boolean }) {
-  const { isAuthenticated: isAdminSession, isSuccess: isSessionSuccess, isError: isSessionError } = useSession()
+  const {
+    isAuthenticated: isAdminSession,
+    isSuccess: isSessionSuccess,
+    isError: isSessionError,
+    isFetching: isSessionFetching,
+  } = useSession()
   const settings = useSettings({ enabled: isAdminSession })
   const publicTheme = usePublicSettings({ enabled: !isAdminSession })
 
@@ -182,9 +187,18 @@ export function useApplyTheme(opts?: { preferAdminTheme?: boolean }) {
   const resolvedTheme =
     settingsTheme ??
     (opts?.preferAdminTheme ? (publicTheme.data?.admin_theme ?? publicTheme.data?.theme) : publicTheme.data?.theme)
+  // What is currently painted, so a revalidation cannot repaint a *different* theme and then
+  // repaint it back. A token refresh re-reads `/login/status` (and rotates identity-scoped
+  // queries); for that moment `isAuthenticated` can read false, which resolved as the guest theme
+  // — the page went dark and then back to the admin theme on its own (reported 2026-11-06 as
+  // "背景突然变黑然后变黄", with no user action). First paint is `index.html`'s job, so holding here
+  // never leaves the page unstyled.
+  const lastAppliedTheme = useRef<string | null>(null)
   useEffect(() => {
+    if (isSessionFetching && lastAppliedTheme.current !== null) return
     if (!resolvedTheme && !(settingsSettled && publicThemeSettled)) return
     const theme = resolvedTheme ?? DEFAULT_THEME_ID
+    lastAppliedTheme.current = theme
     document.documentElement.dataset.theme = theme
     ensureLink(LEGACY_THEME_CSS_ID, `/legacy/themes/${theme}`)
     // Only a real admin session's own theme belongs in `lrrTheme` — it's `index.html`'s
@@ -209,5 +223,12 @@ export function useApplyTheme(opts?: { preferAdminTheme?: boolean }) {
         /* empty */
       }
     }
-  }, [resolvedTheme, settingsSettled, publicThemeSettled, settingsTheme, isAdminSession])
+  }, [
+    resolvedTheme,
+    settingsSettled,
+    publicThemeSettled,
+    settingsTheme,
+    isAdminSession,
+    isSessionFetching,
+  ])
 }
