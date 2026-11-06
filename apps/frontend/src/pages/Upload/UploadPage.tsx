@@ -118,7 +118,10 @@ export function Upload() {
     setUrls("")
   }
 
-  // Hooks can't be called conditionally/in a loop, so defaults are resolved via one-off fetches.
+  // Hooks can't be called conditionally/in a loop, so the per-plugin defaults are fetched here —
+  // but once per *namespace*, not once per URL: a 310-URL paste used to issue ~3 requests per line
+  // (settings/options/plugin-settings) before the single queue POST, which is why a ten-line paste
+  // took seconds to render and a few hundred would take minutes.
   async function resolveDefaultsAndAdd(
     items: Array<{
       url: string
@@ -127,34 +130,43 @@ export function Upload() {
       metadataNamespace?: string
     }>,
   ) {
-    const resolved = await Promise.all(
-      items.map(async (item) => {
-        let autoFetch = false
-        if (item.metadataNamespace) {
-          const settings = await fetchJson<{ enabled: boolean }>(
-            `/plugins/settings?namespace=${encodeURIComponent(item.metadataNamespace)}`,
-          ).catch(() => null)
-          autoFetch = settings?.enabled ?? false
-        }
-        const options = await fetchJson<{ overwrite_on_duplicate?: { value: boolean } }>(
-          `/plugins/options?namespace=${encodeURIComponent(item.plugin_namespace)}`,
-        ).catch(() => null)
-        let overwrite: boolean
-        if (options?.overwrite_on_duplicate) {
-          overwrite = options.overwrite_on_duplicate.value
-        } else {
-          const settings = await fetchJson<{ replacedupe: boolean }>("/settings").catch(() => null)
-          overwrite = settings?.replacedupe ?? false
-        }
-        return {
-          url: item.url,
-          plugin_namespace: item.plugin_namespace,
-          category: item.category,
-          auto_fetch_metadata: autoFetch,
-          overwrite_on_duplicate: overwrite,
-        }
-      }),
-    )
+    const downloadNamespaces = [...new Set(items.map((item) => item.plugin_namespace))]
+    const metadataNamespaces = [
+      ...new Set(items.map((item) => item.metadataNamespace).filter((ns): ns is string => !!ns)),
+    ]
+
+    const [settings, options, metadataSettings] = await Promise.all([
+      fetchJson<{ replacedupe: boolean }>("/settings").catch(() => null),
+      Promise.all(
+        downloadNamespaces.map((ns) =>
+          fetchJson<{ overwrite_on_duplicate?: { value: boolean } }>(
+            `/plugins/options?namespace=${encodeURIComponent(ns)}`,
+          ).catch(() => null),
+        ),
+      ),
+      Promise.all(
+        metadataNamespaces.map((ns) =>
+          fetchJson<{ enabled: boolean }>(
+            `/plugins/settings?namespace=${encodeURIComponent(ns)}`,
+          ).catch(() => null),
+        ),
+      ),
+    ])
+    const optionsByNamespace = new Map(downloadNamespaces.map((ns, i) => [ns, options[i]]))
+    const metadataEnabled = new Map(metadataNamespaces.map((ns, i) => [ns, metadataSettings[i]?.enabled ?? false]))
+    const defaultOverwrite = settings?.replacedupe ?? false
+
+    const resolved = items.map((item) => ({
+      url: item.url,
+      plugin_namespace: item.plugin_namespace,
+      category: item.category,
+      auto_fetch_metadata: item.metadataNamespace
+        ? (metadataEnabled.get(item.metadataNamespace) ?? false)
+        : false,
+      overwrite_on_duplicate:
+        optionsByNamespace.get(item.plugin_namespace)?.overwrite_on_duplicate?.value ??
+        defaultOverwrite,
+    }))
     await addToQueue.mutateAsync(resolved)
   }
 
