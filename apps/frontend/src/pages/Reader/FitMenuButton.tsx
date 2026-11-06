@@ -66,6 +66,7 @@ export function FitMenuButton({
   primary,
   onPrimaryChange,
   compact,
+  fullscreenHost,
 }: {
   isFullscreen: boolean
   onToggleFullscreen: () => void
@@ -76,6 +77,10 @@ export function FitMenuButton({
   /** Below the mobile toolbar breakpoint the plain fullscreen button stays: a split control with a
    *  menu is a desktop affordance and only costs a tap target on a phone. */
   compact: boolean
+  /** While the reader is fullscreen, a portal on `document.body` is outside the fullscreen element
+   *  and therefore never painted — the menu opened onto nothing (reported from a phone 2026-11-06).
+   *  Render it inside the reader container instead. */
+  fullscreenHost?: HTMLElement | null
 }) {
   const { t } = useTranslation()
   const palette = useMenuPalette()
@@ -141,7 +146,7 @@ export function FitMenuButton({
             />
           }
         />
-        <Popover.Portal>
+        <Popover.Portal container={fullscreenHost ?? undefined}>
           <Popover.Positioner sideOffset={8} collisionPadding={8} className="outline-none" style={{ zIndex: Z_OVERLAY_TOOLTIP }}>
             <Popover.Popup
               className={`rounded-[.3em] ${FLOATING_POPUP_TRANSITION_CLASSES}`}

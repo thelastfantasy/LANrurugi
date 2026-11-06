@@ -31,6 +31,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use deadpool_redis::redis;
 use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
 use lanrurugi_core::jobs::JobRegistry;
@@ -184,7 +185,7 @@ pub async fn full_scan(
         .map(|p| p.to_string_lossy().to_string())
         .collect();
     if let Ok(mut conn) = config_pool.get().await {
-        let known_paths: HashSet<String> = conn.hkeys(FILEMAP_KEY).await.unwrap_or_default();
+        let mut known_paths: HashSet<String> = conn.hkeys(FILEMAP_KEY).await.unwrap_or_default();
 
         // Prune filemap entries for paths no longer on disk — matches legacy's own
         // `update_filemap` (`@deletedfiles = grep { !$fshash{$_} } @filemapfiles`). Only touches
@@ -193,6 +194,39 @@ pub async fn full_scan(
         let stale: Vec<&String> = known_paths.difference(&on_disk).collect();
         if !stale.is_empty() {
             let _: Result<(), _> = conn.hdel(FILEMAP_KEY, stale).await;
+        }
+
+        // A filemap entry whose archive no longer exists is *not* "already known": it is the
+        // debris of an ingest that wrote the mapping and then failed (or was killed) before the
+        // record landed, and honouring it would skip that file on every future scan forever. One
+        // library here had 89 such files — invisible in the UI, and the reason its archive count
+        // sat 89 short of the file count. Verify cheaply with a pipelined `EXISTS`; on any Redis
+        // error the set is left alone and every path simply falls through to `ingest_file`.
+        if !known_paths.is_empty() {
+            let mapped: Vec<(String, String)> = conn.hgetall(FILEMAP_KEY).await.unwrap_or_default();
+            let ids: Vec<&String> = mapped.iter().map(|(_, id)| id).collect();
+            let mut pipe = redis::pipe();
+            for id in &ids {
+                pipe.exists(id.as_str());
+            }
+            if let Ok(alive) = pipe.query_async::<Vec<bool>>(&mut conn).await {
+                let dead_paths: Vec<String> = mapped
+                    .iter()
+                    .zip(alive)
+                    .filter(|(_, exists)| !exists)
+                    .map(|((path, _), _)| path.clone())
+                    .collect();
+                if !dead_paths.is_empty() {
+                    tracing::warn!(
+                        count = dead_paths.len(),
+                        "library scan: filemap entries whose archive is gone; re-cataloguing them"
+                    );
+                    let _: Result<(), _> = conn.hdel(FILEMAP_KEY, &dead_paths).await;
+                    for path in dead_paths {
+                        known_paths.remove(&path);
+                    }
+                }
+            }
         }
 
         let before = paths.len();
