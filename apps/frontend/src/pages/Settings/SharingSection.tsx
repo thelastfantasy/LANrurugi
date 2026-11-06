@@ -6,7 +6,12 @@ import { useTranslation } from "react-i18next";
 import { Modal, Tooltip } from "@/components/common-ui/Display";
 import { Input, Switch } from "@/components/common-ui/Form";
 import { CollapsibleSection, DateTimeStack } from "@/components/Display";
-import { useSaveShareSettings, useShares, useShareSettings } from "@/share/api";
+import {
+  useRotateNode,
+  useSaveShareSettings,
+  useShares,
+  useShareSettings,
+} from "@/share/api";
 import { copyWithToast } from "@/share/clipboard";
 import {
   type SettingField,
@@ -365,10 +370,12 @@ function SharingNodeList() {
   const { t } = useTranslation();
   const settings = useShareSettings();
   const save = useSaveShareSettings();
+  const rotate = useRotateNode();
   const [draft, setDraft] = useState("");
-  const own = (
-    settings.data?.endpoint as { node_string?: string | null } | undefined
-  )?.node_string;
+  const endpoint = settings.data?.endpoint as
+    { node_string?: string | null; node_code?: string | null } | undefined;
+  const own = endpoint?.node_string;
+  const code = endpoint?.node_code;
   const added = String(settings.data?.share_nodes ?? "");
   const rows = added
     .split("\n")
@@ -381,6 +388,25 @@ function SharingNodeList() {
   return (
     <>
       <ul className="share-node-list">
+        {code && (
+          <li>
+            <span className="share-node-tag">{t("share.nodes.code")}</span>
+            <code className="share-result-value share-node-code">{code}</code>
+            <button
+              type="button"
+              className="stdbtn"
+              onClick={() =>
+                void copyWithToast(
+                  code,
+                  t("share.result.copied"),
+                  t("share.result.copyFailed"),
+                )
+              }
+            >
+              {t("share.result.copy")}
+            </button>
+          </li>
+        )}
         {own && (
           <li>
             <span className="share-node-tag">{t("share.nodes.own")}</span>
@@ -418,6 +444,17 @@ function SharingNodeList() {
           <li className="share-result-note">{t("share.nodes.none")}</li>
         )}
       </ul>
+      <button
+        type="button"
+        className="stdbtn share-node-rotate"
+        disabled={rotate.isPending}
+        onClick={() => {
+          if (window.confirm(t("share.nodes.rotateConfirm")))
+            rotate.mutate(undefined);
+        }}
+      >
+        {t("share.nodes.rotate")}
+      </button>
       <div className="share-node-add">
         <Input
           rows={2}

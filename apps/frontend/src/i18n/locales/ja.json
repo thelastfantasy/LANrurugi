@@ -2689,5 +2689,8 @@
   "share.settings.statusHint.revoked": "共有者が取り消したため、リンクは無効です。",
   "share.settings.permissionsHint.import": "受け取り側は共有内容を自分のライブラリに取り込めます。",
   "share.settings.permissionsHint.read": "受け取り側はオンラインで閲覧できます。",
-  "share.settings.permissionsHint.download": "受け取り側はファイルをダウンロードできます。"
+  "share.settings.permissionsHint.download": "受け取り側はファイルをダウンロードできます。",
+  "share.nodes.code": "ノードコード",
+  "share.nodes.rotate": "破棄して作り直す",
+  "share.nodes.rotateConfirm": "現在のノード識別子を破棄して新しいノードコードを作成しますか？以前に配布したコードとノード文字列は無効になります。"
 }
