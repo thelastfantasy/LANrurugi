@@ -506,6 +506,8 @@ function SuggestionCard({
               </button>
             </div>
           )}
+          {/* The action group takes whatever the pager leaves, and the primary button inside it
+              grows into that space — otherwise the row ends in a band of empty footer on a phone. */}
           <div style={{ display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
             <input
               type="button"
@@ -529,6 +531,7 @@ function SuggestionCard({
                   className="stdbtn ai-checkable-btn"
                   disabled={!canConfirm}
                   onClick={() => void handleConfirm()}
+                  style={{ width: PRIMARY_ACTION_WIDTH, flexShrink: 0 }}
                 >
                   <span style={{ flex: "0 1 auto", textAlign: "center", whiteSpace: "nowrap" }}>
                     {isAddToExisting ? t("library.addToTankoubon") : t("library.createTankoubon")}
@@ -570,6 +573,11 @@ function SuggestionCard({
  *  instant; creating or ignoring a group drops it, and the explicit re-check button forces past it. */
 /** Above this many suggestions the footer shows one compact pager instead of one dot per card. */
 const MAX_PAGE_DOTS = 20
+
+/** Natural width of the primary action with its ✅ toggle present — the same box is rendered in
+ *  both card states (toggle hidden, not removed), so this only has to be wide enough for the
+ *  toggle case; the plain "add to Tankoubon" label then occupies exactly the same width. */
+const PRIMARY_ACTION_WIDTH = 150
 
 const SUGGESTION_CACHE_TTL_MS = 10 * 60 * 1000
 let suggestionCache: { at: number; suggestions: AiGroupSuggestion[] } | null = null
