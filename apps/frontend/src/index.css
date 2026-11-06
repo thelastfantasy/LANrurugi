@@ -2414,7 +2414,12 @@ body div.ido {
 }
 
 .ai-pager input.ai-pager-number {
-  /* Width comes from the theme rule (52px); only stop flex from shrinking it below that. */
+  /* Sized by its own content rather than by a pixel guess: `field-sizing: content` tracks the
+     digits actually typed, so "1" and "1000" occupy exactly what they need. The `min-width` keeps
+     an emptied field from collapsing, and `ch` makes that minimum scale with the theme's font. */
+  field-sizing: content;
+  width: auto !important;
+  min-width: 2.5ch;
   max-width: none !important;
   flex: 0 0 auto;
   height: 100% !important;
