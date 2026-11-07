@@ -373,8 +373,7 @@ function SharingNodeList() {
   const rotate = useRotateNode();
   const [draft, setDraft] = useState("");
   const endpoint = settings.data?.endpoint as
-    { node_string?: string | null; node_code?: string | null } | undefined;
-  const own = endpoint?.node_string;
+    { node_code?: string | null } | undefined;
   const code = endpoint?.node_code;
   const added = String(settings.data?.share_nodes ?? "");
   const rows = added
@@ -407,25 +406,6 @@ function SharingNodeList() {
             </button>
           </li>
         )}
-        {own && (
-          <li>
-            <span className="share-node-tag">{t("share.nodes.own")}</span>
-            <code className="share-result-value">{own}</code>
-            <button
-              type="button"
-              className="stdbtn"
-              onClick={() =>
-                void copyWithToast(
-                  own,
-                  t("share.result.copied"),
-                  t("share.result.copyFailed"),
-                )
-              }
-            >
-              {t("share.result.copy")}
-            </button>
-          </li>
-        )}
         {rows.map((line) => (
           <li key={line}>
             <span className="share-node-tag">{t("share.nodes.added")}</span>
@@ -440,7 +420,7 @@ function SharingNodeList() {
             </button>
           </li>
         ))}
-        {!own && rows.length === 0 && (
+        {!code && rows.length === 0 && (
           <li className="share-result-note">{t("share.nodes.none")}</li>
         )}
       </ul>
@@ -465,10 +445,10 @@ function SharingNodeList() {
         <button
           type="button"
           className="stdbtn"
-          disabled={!draft.trim().startsWith("lrrg-node:") || save.isPending}
+          disabled={!draft.trim() || save.isPending}
           onClick={() => {
             const line = draft.trim();
-            if (!rows.includes(line)) write([...rows, line]);
+            if (line && !rows.includes(line)) write([...rows, line]);
             setDraft("");
           }}
         >
