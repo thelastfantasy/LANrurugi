@@ -1081,7 +1081,7 @@ async fn settings_with_status(state: &AppState) -> Value {
     // The node code is the only identity anyone else needs: it is minted whether or not the
     // endpoint is running, and it never contains an address (the record published under it does,
     // and that record is what changes when the address does).
-    let mine = node_code(state).await.ok().map(|c| c.display());
+    let mine = node_code(state).await.ok().map(|c| c.prefixed());
     let endpoint = match crate::share_net::handle().await {
         Some(net) => {
             let addr = net.endpoint().addr();

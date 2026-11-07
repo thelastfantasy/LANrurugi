@@ -303,7 +303,7 @@ fn validate_text(key: &str, text: String) -> Result<String, String> {
                 // `lrrg-node:` string still parses, so an existing configuration keeps working.
                 if let Ok(code) = lanrurugi_share_proto::node_code::NodeCode::parse_prefixed(&entry)
                 {
-                    out.push(code.display());
+                    out.push(code.prefixed());
                     continue;
                 }
                 let entry = if entry.starts_with("lrrg-node:") {

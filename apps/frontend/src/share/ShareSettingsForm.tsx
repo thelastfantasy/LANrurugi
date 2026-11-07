@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { ApiError } from "@/api/client";
 import {
+  Checkbox,
   Input,
   NullableNumberInput,
   Select,
@@ -204,12 +205,11 @@ function FieldRow({
               key={o}
               style={{ display: "flex", alignItems: "center", gap: 4 }}
             >
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={picked.has(o)}
-                onChange={(e) => {
+                onCheckedChange={(checked) => {
                   const next = new Set(picked);
-                  if (e.target.checked) next.add(o);
+                  if (checked) next.add(o);
                   else next.delete(o);
                   // Keep the server's own order rather than click order.
                   onChange(options.filter((x) => next.has(x)).join(","));
