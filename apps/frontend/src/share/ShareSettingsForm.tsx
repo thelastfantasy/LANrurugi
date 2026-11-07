@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { ApiError } from "@/api/client";
 import {
+  Checkbox,
   Input,
   NullableNumberInput,
   Select,
@@ -20,9 +21,13 @@ export interface SettingField {
   /** For `choice`: the allowed values, labelled `${label}.${value}`. For `flags`: the individual
    *  values, stored as a comma-joined list and rendered as one checkbox each. */
   options?: string[];
-  /** Per-value i18n keys for `flags`, when the block's own label prefix does not fit them (the
-   *  permission names are shared with the share dialog's own checkboxes). */
+  /** Per-value i18n keys, when the block's own label prefix does not fit them (the permission
+   *  names are shared with the share dialog's own checkboxes). A key with no translation is
+   *  rendered as-is, which is what per-interface labels want. */
   optionLabels?: Record<string, string>;
+  /** `"interfaces"`: the options are the host's network interfaces, filled in from the settings
+   *  payload at render time — they change while the app runs (a VPN tunnel appears). */
+  dynamic?: "interfaces";
   /** i18n key of the label; the hint, when present, is `${label}Hint`. */
   label: string;
   hint?: boolean;
@@ -47,10 +52,33 @@ export function ShareSettingsForm({ fields }: { fields: SettingField[] }) {
   return (
     <SettingsDraft
       key={settings.dataUpdatedAt}
-      fields={fields}
+      fields={fillDynamicOptions(fields, settings.data)}
       saved={settings.data}
     />
   );
+}
+
+/** Turns `dynamic: "interfaces"` fields into real choices: "any" first, then each interface with
+ *  the addresses it currently holds, so a wrong pick is visible before it is saved. */
+function fillDynamicOptions(
+  fields: SettingField[],
+  settings: Record<string, unknown>,
+): SettingField[] {
+  return fields.map((field) => {
+    if (field.dynamic !== "interfaces") return field;
+    const interfaces = (
+      Array.isArray(settings.interfaces) ? settings.interfaces : []
+    ) as { name: string; addrs: string[] }[];
+    const optionLabels: Record<string, string> = {
+      "": "share.network.interfaceAny",
+    };
+    for (const iface of interfaces) {
+      optionLabels[iface.name] = iface.addrs.length
+        ? `${iface.name} (${iface.addrs.join(", ")})`
+        : iface.name;
+    }
+    return { ...field, options: ["", ...interfaces.map((i) => i.name)], optionLabels };
+  });
 }
 
 function SettingsDraft({
@@ -148,7 +176,7 @@ function FieldRow({
           align="start"
           items={(field.options ?? []).map((o) => ({
             value: o,
-            label: t(`${field.label}.${o}`),
+            label: t(field.optionLabels?.[o] ?? `${field.label}.${o}`),
           }))}
         />
       );
@@ -177,12 +205,11 @@ function FieldRow({
               key={o}
               style={{ display: "flex", alignItems: "center", gap: 4 }}
             >
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={picked.has(o)}
-                onChange={(e) => {
+                onCheckedChange={(checked) => {
                   const next = new Set(picked);
-                  if (e.target.checked) next.add(o);
+                  if (checked) next.add(o);
                   else next.delete(o);
                   // Keep the server's own order rather than click order.
                   onChange(options.filter((x) => next.has(x)).join(","));

@@ -23,6 +23,10 @@ pub const RECORD_TTL_SECS: u32 = 3600;
 pub struct KnockV1 {
     pub endpoint_id: EndpointKey,
     pub relay_urls: Vec<String>,
+    /// Where the node can be dialled directly, as it knows itself right now: empty when it only
+    /// has the relay. Always serialised — the record is postcard, which has no field names to fall
+    /// back on, so a `skip_serializing_if` here would write a packet its own reader cannot parse.
+    pub direct_addrs: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -130,6 +134,7 @@ mod tests {
                 "https://relay-two.example.org/".into(),
                 "https://a-much-longer-relay-hostname.example.net:8443/".into(),
             ],
+            direct_addrs: vec![],
         }
     }
 

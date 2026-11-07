@@ -1003,11 +1003,13 @@
   "share.settings.defaultPermissionsHint": "至少選擇一項；新建分享預設使用這些權限。",
   "share.nodes.relayTlsHint": "隧道/反向代理模式無需公網位址：把 <網域> 指向本機 http://localhost:<連接埠> 即可。",
   "share.nodes.ownRelayHint": "實例之間本來就用自己的節點密鑰加密（和 BT 一樣：自簽、依公鑰校驗、不需要任何憑證），這裡只需要填你想借助的節點。",
+  "share.nodes.listHint": "每行一個節點碼（XXXX-XXXX-XXXX-XXXX），來自信任的實例。可與公開服務併用或代替公開服務。",
+  "share.nodes.noString": "節點碼讓別人找到本實例；位址由實例自己發布，換 IP、換埠都不影響它。",
   "share.nodes.own": "本實例",
   "share.nodes.added": "已加入",
   "share.nodes.none": "尚未加入任何節點。",
   "share.nodes.add": "加入",
-  "share.nodes.addPlaceholder": "lrrg-node:…@host:443",
+  "share.nodes.addPlaceholder": "節點碼，例如 3F2K-9Q4M-7XTD-08RC",
   "share.settings.statusHint.active": "可以瀏覽、閱讀、下載。",
   "share.settings.statusHint.exhausted": "下載次數已用盡，仍可瀏覽與線上閱讀，新下載會被拒絕。",
   "share.settings.statusHint.expired": "超過有效期限，連結失效。",
@@ -1017,5 +1019,8 @@
   "share.settings.permissionsHint.download": "對方可以把檔案下載到本機。",
   "share.nodes.code": "節點碼",
   "share.nodes.rotate": "銷毀重建",
-  "share.nodes.rotateConfirm": "銷毀目前的節點識別並產生新的節點碼？先前發出的節點碼與節點字串都會失效。"
+  "share.nodes.rotateConfirm": "銷毀目前的節點識別並產生新的節點碼？先前發出的節點碼與節點字串都會失效。",
+  "share.network.bindInterface": "網路介面",
+  "share.network.bindInterfaceHint": "選擇共享傳輸走哪個網路介面。選了 tun0 這類 VPN 介面後，共享流量只從它出去，庫本身仍然留在區域網路裡。改完要重啟共享端點才會生效。",
+  "share.network.interfaceAny": "全部介面"
 }

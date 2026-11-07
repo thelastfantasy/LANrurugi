@@ -94,11 +94,11 @@ export function SharingEndpointSummary() {
   )
 }
 
-/** This instance's `lrrg-node:` string, for friends to add, when it offers a node role. */
+/** This instance's node code, for friends to add: short, permanent, and free of any address. */
 export function SharingNodeString() {
   const { t } = useTranslation()
   const settings = useShareSettings()
-  const node = (settings.data?.endpoint as ShareEndpointStatus & { node_string?: string | null } | undefined)?.node_string
+  const node = (settings.data?.endpoint as ShareEndpointStatus & { node_code?: string | null } | undefined)?.node_code
   if (!node) return <p className="share-result-note">{t("share.nodes.noString")}</p>
   return (
     <div className="share-result-row">

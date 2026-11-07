@@ -41,6 +41,7 @@ const ENDPOINT_FIELDS: &[&str] = &[
     "share_nodes",
     "share_udp_port",
     "share_portmap",
+    "share_bind_interface",
     "share_external_addrs",
     "share_self_relay_url",
     "share_node_relay",
@@ -1077,6 +1078,10 @@ async fn settings_with_status(state: &AppState) -> Value {
         &mut value,
         serde_json::to_value(mode).unwrap_or(Value::Null),
     );
+    // The node code is the only identity anyone else needs: it is minted whether or not the
+    // endpoint is running, and it never contains an address (the record published under it does,
+    // and that record is what changes when the address does).
+    let mine = node_code(state).await.ok().map(|c| c.prefixed());
     let endpoint = match crate::share_net::handle().await {
         Some(net) => {
             let addr = net.endpoint().addr();
@@ -1086,11 +1091,10 @@ async fn settings_with_status(state: &AppState) -> Value {
                 "relays": addr.relay_urls().map(|u| u.to_string()).collect::<Vec<_>>(),
                 "direct_addresses": addr.ip_addrs().map(|a| a.to_string()).collect::<Vec<_>>(),
                 "proxy": crate::share_net::followed_proxy(),
-                "node_string": crate::share_net::nodes::node_string(&net.id(), &settings),
-                "node_code": node_code(state).await.ok().map(|c| c.display()),
+                "node_code": mine,
             })
         }
-        None => json!({ "running": false }),
+        None => json!({ "running": false, "node_code": mine }),
     };
     // Relays: the endpoint keeps a connection to its home relay only, so that one is known
     // reachable and the others are unknown rather than failed (FR-049).
@@ -1122,6 +1126,9 @@ async fn settings_with_status(state: &AppState) -> Value {
         json!({
             "endpoint": endpoint,
             "services": services,
+            // What the "network interface" picker offers; the setting itself is a plain name, so a
+            // tunnel that only exists after the VPN connects can still be typed in.
+            "interfaces": crate::share_net::interfaces::list(),
             "helpers_supported": true,
             // What an admin compares between two instances before an import works: the engine
             // object (protocol epoch + transport), not a single number.

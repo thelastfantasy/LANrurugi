@@ -2682,7 +2682,7 @@
   "share.network.portmapHint": "如果不希望向路由器请求开放端口，请关闭。",
   "share.nodes.heading": "LANrurugi 节点",
   "share.nodes.list": "使用的节点",
-  "share.nodes.listHint": "每行一个 lrrg-node: 字符串，来自你信任的实例。可与公共服务并用或代替公共服务。",
+  "share.nodes.listHint": "每行一个节点码（XXXX-XXXX-XXXX-XXXX），来自你信任的实例。可与公共服务并用或代替公共服务。",
   "share.nodes.offerRendezvous": "为其他实例提供会合服务",
   "share.nodes.offerRelay": "为其他实例提供中继",
   "share.nodes.offerRelayHint": "中继的数据保持端到端加密，本实例只负责转发。",
@@ -2700,7 +2700,7 @@
   "share.nodes.relayAllowHint": "每行一个节点 ID 或 lrrg-node: 字符串。留空表示任何实例都能使用；填写后，名单外的实例无法经本中继连接，包括导入你分享的人。",
   "share.nodes.selfRelayUrl": "本中继的公开地址",
   "share.nodes.selfRelayUrlHint": "隧道（如 Cloudflare Tunnel）分配给本中继的 https:// 地址，会告知导入方。",
-  "share.nodes.noString": "开启某个节点角色，并设置公开地址或外部地址后，才会生成本实例的节点字符串。",
+  "share.nodes.noString": "节点码用于让别人找到本实例；地址由实例自己发布，所以换 IP、换端口都不影响它。",
   "share.import.helpDeliver": "帮助向其他人分发此分享",
   "share.import.helpDeliverHint": "分享方允许时，其他导入者可以从本实例获取经过校验的分片。可随时在「设置」→「分享」中关闭。",
   "share.detail.helpers": "协助分发的实例",
@@ -2920,7 +2920,7 @@
   "share.nodes.added": "已添加",
   "share.nodes.none": "还没有添加任何节点。",
   "share.nodes.add": "添加",
-  "share.nodes.addPlaceholder": "lrrg-node:…@host:443",
+  "share.nodes.addPlaceholder": "节点码，例如 3F2K-9Q4M-7XTD-08RC",
   "share.settings.statusHint.active": "可以浏览、阅读、下载。",
   "share.settings.statusHint.exhausted": "下载次数已用尽，仍可浏览和在线阅读，新下载会被拒绝。",
   "share.settings.statusHint.expired": "超过有效期，链接失效。",
@@ -2930,5 +2930,8 @@
   "share.settings.permissionsHint.download": "对方可以把文件下载到本地。",
   "share.nodes.code": "节点码",
   "share.nodes.rotate": "销毁重建",
-  "share.nodes.rotateConfirm": "销毁当前节点标识并生成新的节点码？此前发出的节点码和节点字符串都会失效。"
+  "share.nodes.rotateConfirm": "销毁当前节点标识并生成新的节点码？此前发出的节点码和节点字符串都会失效。",
+  "share.network.bindInterface": "网络接口",
+  "share.network.bindInterfaceHint": "选择共享传输走哪个网络接口。选了 tun0 这类 VPN 接口后，共享流量只从它出去，库本身仍然留在局域网里。改完要重启共享端点才会生效。",
+  "share.network.interfaceAny": "全部接口"
 }

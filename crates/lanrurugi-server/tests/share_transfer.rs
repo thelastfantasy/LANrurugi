@@ -753,6 +753,7 @@ async fn a_rendezvous_node_stores_and_returns_knock_records() {
     let knock = KnockV1 {
         endpoint_id: [7; 32],
         relay_urls: vec!["https://relay.example.org/".into()],
+        direct_addrs: vec![],
     };
     let packet = record::seal(&keys, &knock).unwrap().as_bytes().to_vec();
 

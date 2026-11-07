@@ -75,6 +75,8 @@ sha2.workspace = true
 maxminddb.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
+# Listing the host's network interfaces, so sharing can be pinned to one (a VPN tunnel, say).
+if-addrs = "0.13"
 
 [dev-dependencies]
 # Test-only. The `tests/gpu_worker_*.rs` integration tests drive a real `lanrurugi-gpu-worker`
