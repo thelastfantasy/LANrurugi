@@ -191,6 +191,7 @@ pub async fn start(state: &AppState) -> Result<Arc<ShareNet>, String> {
     // it always carries the addresses the endpoint actually has right now.
     if settings.flag("share_node_relay") || settings.flag("share_node_rendezvous") {
         nodes::publish_node_record(state, &net, &settings).await;
+        nodes::spawn_record_refresh(state.clone(), net.clone());
     }
     tracing::info!(endpoint = %net.id(), "sharing endpoint started");
     Ok(net)

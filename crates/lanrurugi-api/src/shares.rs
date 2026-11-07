@@ -1077,6 +1077,10 @@ async fn settings_with_status(state: &AppState) -> Value {
         &mut value,
         serde_json::to_value(mode).unwrap_or(Value::Null),
     );
+    // The node code is the only identity anyone else needs: it is minted whether or not the
+    // endpoint is running, and it never contains an address (the record published under it does,
+    // and that record is what changes when the address does).
+    let mine = node_code(state).await.ok().map(|c| c.display());
     let endpoint = match crate::share_net::handle().await {
         Some(net) => {
             let addr = net.endpoint().addr();
@@ -1086,11 +1090,10 @@ async fn settings_with_status(state: &AppState) -> Value {
                 "relays": addr.relay_urls().map(|u| u.to_string()).collect::<Vec<_>>(),
                 "direct_addresses": addr.ip_addrs().map(|a| a.to_string()).collect::<Vec<_>>(),
                 "proxy": crate::share_net::followed_proxy(),
-                "node_string": crate::share_net::nodes::node_string(&net.id(), &settings),
-                "node_code": node_code(state).await.ok().map(|c| c.display()),
+                "node_code": mine,
             })
         }
-        None => json!({ "running": false }),
+        None => json!({ "running": false, "node_code": mine }),
     };
     // Relays: the endpoint keeps a connection to its home relay only, so that one is known
     // reachable and the others are unknown rather than failed (FR-049).

@@ -145,7 +145,35 @@ pub(super) fn advertised_relays(net: &ShareNet, settings: &ShareSettings) -> Vec
     }
     let mut seen = std::collections::HashSet::new();
     relays.retain(|r| seen.insert(r.clone()));
+    // Publicly reachable relays first: a peer that is not on this LAN cannot use
+    // `https://192.168.x.y/`, and iroh only gives up on an unreachable relay after a timeout. The
+    // private ones stay in the list for the same-NAT case, where they are the cheap path.
+    relays.sort_by_key(|r| !relay_is_public(r));
     relays
+}
+
+/// Whether a relay URL names a host the public internet can reach. Only the obvious private
+/// shapes are detected — a public hostname that resolves to a private address is not.
+fn relay_is_public(relay: &str) -> bool {
+    let Ok(url) = url::Url::parse(relay) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".local") {
+        return false;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => {
+            !(v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified())
+        }
+        Ok(std::net::IpAddr::V6(v6)) => {
+            !(v6.is_loopback() || v6.is_unspecified() || v6.is_unique_local())
+        }
+        // A name: assume it is routable, which is what a relay hostname normally is.
+        Err(_) => true,
+    }
 }
 
 /// Publishes one share's knock record to every configured rendezvous.
@@ -162,6 +190,7 @@ pub async fn publish_share(state: &AppState, net: &ShareNet, share: &Share) {
     let knock = KnockV1 {
         endpoint_id: *net.id().as_bytes(),
         relay_urls: advertised_relays(net, &settings),
+        direct_addrs: Vec::new(),
     };
     let packet = match record::seal(&keys, &knock) {
         Ok(p) => p,

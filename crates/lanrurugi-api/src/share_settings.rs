@@ -296,7 +296,13 @@ fn validate_text(key: &str, text: String) -> Result<String, String> {
         "share_nodes" => {
             let mut out = Vec::new();
             for entry in split_list(&text) {
-                // The prefix is optional when typing; stored strings always carry it.
+                // A node code is the preferred form and carries no address at all; a full
+                // `lrrg-node:` string still parses, so an existing configuration keeps working.
+                if let Ok(code) = lanrurugi_share_proto::node_code::NodeCode::parse_prefixed(&entry)
+                {
+                    out.push(code.display());
+                    continue;
+                }
                 let entry = if entry.starts_with("lrrg-node:") {
                     entry
                 } else {
@@ -304,7 +310,7 @@ fn validate_text(key: &str, text: String) -> Result<String, String> {
                 };
                 if parse_node_string(&entry).is_none() {
                     return bad(&format!(
-                        "{entry:?} is not an lrrg-node:<id>@<host:port> string"
+                        "{entry:?} is neither a node code nor an lrrg-node:<id>@<host:port> string"
                     ));
                 }
                 out.push(entry);

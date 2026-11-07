@@ -79,46 +79,6 @@ pub fn configured_nodes(settings: &ShareSettings) -> Vec<NodeRef> {
         .collect()
 }
 
-/// This instance's node string, when it offers a role and has a public address to give.
-pub fn node_string(endpoint_id: &iroh::EndpointId, settings: &ShareSettings) -> Option<String> {
-    if !settings.flag("share_node_rendezvous") && !settings.flag("share_node_relay") {
-        return None;
-    }
-    let host = settings
-        .external_addrs()
-        .first()
-        .map(|a| a.to_string())
-        .or_else(|| {
-            let url = url::Url::parse(&settings.public_url()?).ok()?;
-            let port = settings.number("share_udp_port").unwrap_or(11204);
-            Some(format!("{}:{port}", url.host_str()?))
-        })?;
-    let relay = settings
-        .flag("share_node_relay")
-        .then(|| own_relay_url(settings))
-        .flatten();
-    // The relay URL is only spelled out when the address above does not already imply it: a relay
-    // on the node's own host is `https://<that host>/`, which `parse_node` fills back in. That is
-    // ~40 characters off the common case (`lrrg-node:<id>@192.0.2.9:11204` instead of
-    // `…?relay=https://192.0.2.9/`), and older peers simply get no relay from it — their direct
-    // dial still works.
-    let host_part = host.split(':').next().unwrap_or(&host);
-    let implied = relay
-        .as_deref()
-        .is_some_and(|r| r.trim_end_matches('/') == format!("https://{host_part}"));
-    let mut out = format!("lrrg-node:{}@{host}", endpoint_hex(endpoint_id));
-    match relay {
-        // `auto` means "the relay on the same host as the address above" — 12 characters instead
-        // of the ~35 the full URL took, without guessing at a relay nobody advertised.
-        Some(_) if implied => out.push_str("?relay=auto"),
-        Some(relay) => out.push_str(&format!("?relay={relay}")),
-        None => {}
-    }
-    Some(out)
-}
-
-/// The public address of this instance's relay role: the tunnel address when set, else the
-/// public URL's host on 443.
 pub fn own_relay_url(settings: &ShareSettings) -> Option<String> {
     let explicit = settings.text("share_self_relay_url");
     if !explicit.is_empty() {
@@ -155,6 +115,16 @@ pub async fn publish_node_record(
     let knock = lanrurugi_share_proto::record::KnockV1 {
         endpoint_id: *net.id().as_bytes(),
         relay_urls: super::publish::advertised_relays(net, settings),
+        // Whatever this endpoint can be dialled at right now. A LAN address in here is not
+        // useless — it is the fastest path between two peers behind the same NAT — but the
+        // internet-reachable one only exists when the portmapper mapped a port or the node has a
+        // public address, which is why the relay list still comes first as the fallback.
+        direct_addrs: net
+            .endpoint()
+            .addr()
+            .ip_addrs()
+            .map(|a| a.to_string())
+            .collect(),
     };
     let keys = lanrurugi_share_proto::derive::DerivedKeys {
         lookup_key: code.lookup_keypair(),
@@ -176,6 +146,33 @@ pub async fn publish_node_record(
             .is_ok_and(|r| r.status().is_success());
         crate::share_net::status::record_rendezvous(&relay, ok);
     }
+}
+
+/// How often the record behind a node code is refreshed. Well inside `RECORD_TTL_SECS` (3600) so
+/// a peer that looks the code up never lands on an expired copy.
+const NODE_RECORD_REFRESH_SECS: u64 = 600;
+
+/// Keeps the record behind this node's code current for as long as this endpoint is the running
+/// one. Addresses move — a DHCP lease, a renewed NAT mapping, a different relay — while the code
+/// never changes, so republishing is the only thing that has to happen on a schedule.
+pub fn spawn_record_refresh(state: crate::AppState, net: std::sync::Arc<super::ShareNet>) {
+    let id = net.id();
+    tokio::spawn(async move {
+        let mut tick =
+            tokio::time::interval(std::time::Duration::from_secs(NODE_RECORD_REFRESH_SECS));
+        tick.tick().await; // the first tick is immediate; the caller already published
+        loop {
+            tick.tick().await;
+            let Some(current) = super::handle().await else {
+                break;
+            };
+            if current.id() != id {
+                break;
+            }
+            let settings = crate::share_settings::load(&state).await;
+            publish_node_record(&state, &current, &settings).await;
+        }
+    });
 }
 
 /// Reads a node record back. `None` means "this code is not published anywhere I can see", which
@@ -206,7 +203,13 @@ pub async fn resolve_node_code(state: &crate::AppState, code: &str) -> Option<En
         let Ok(knock) = lanrurugi_share_proto::record::open(&keys, &packet) else {
             continue;
         };
-        return super::endpoint_addr(&knock.endpoint_id, &knock.relay_urls, None);
+        let mut addr = super::endpoint_addr(&knock.endpoint_id, &knock.relay_urls, None)?;
+        for direct in &knock.direct_addrs {
+            if let Ok(socket) = direct.parse::<std::net::SocketAddr>() {
+                addr = addr.with_ip_addr(socket);
+            }
+        }
+        return Some(addr);
     }
     None
 }
@@ -780,6 +783,7 @@ mod tests {
             &KnockV1 {
                 endpoint_id: [1; 32],
                 relay_urls: vec![],
+                direct_addrs: vec![],
             },
         )
         .unwrap();
