@@ -1019,5 +1019,8 @@
   "share.settings.permissionsHint.download": "對方可以把檔案下載到本機。",
   "share.nodes.code": "節點碼",
   "share.nodes.rotate": "銷毀重建",
-  "share.nodes.rotateConfirm": "銷毀目前的節點識別並產生新的節點碼？先前發出的節點碼與節點字串都會失效。"
+  "share.nodes.rotateConfirm": "銷毀目前的節點識別並產生新的節點碼？先前發出的節點碼與節點字串都會失效。",
+  "share.network.bindInterface": "網路介面",
+  "share.network.bindInterfaceHint": "選擇共享傳輸走哪個網路介面。選了 tun0 這類 VPN 介面後，共享流量只從它出去，庫本身仍然留在區域網路裡。改完要重啟共享端點才會生效。",
+  "share.network.interfaceAny": "全部介面"
 }

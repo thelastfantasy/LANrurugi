@@ -9,6 +9,7 @@
 pub mod blobs;
 pub mod helper;
 pub mod import;
+pub mod interfaces;
 pub mod limits;
 pub mod nodes;
 pub mod proxy;
@@ -212,15 +213,33 @@ pub async fn bind(
         .secret_key(secret_key)
         .alpns(vec![ALPN.to_vec()])
         .relay_mode(relay_mode);
-    // IPv6 too where the host has it (FR-050 item 7), without failing on IPv4-only hosts.
-    builder = builder
-        .bind_addr(SocketAddr::from(([0, 0, 0, 0], port)))
-        .map_err(|e| e.to_string())?
-        .bind_addr_with_opts(
-            SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port)),
-            iroh::endpoint::BindOpts::default().set_is_required(false),
-        )
-        .map_err(|e| e.to_string())?;
+    // A named interface (a VPN tunnel, say) binds only its own addresses: that is the whole
+    // point — traffic must not fall back to the physical link. IPv6 is bound as well where the
+    // host has it (FR-050 item 7), without failing on IPv4-only hosts.
+    let pinned = settings.text("share_bind_interface");
+    match interfaces::bind_addrs(pinned, port) {
+        Some(addrs) => {
+            for addr in addrs {
+                builder = builder.bind_addr(addr).map_err(|e| e.to_string())?;
+            }
+        }
+        None => {
+            if !pinned.trim().is_empty() {
+                tracing::warn!(
+                    interface = pinned,
+                    "the chosen network interface is gone; binding every interface instead"
+                );
+            }
+            builder = builder
+                .bind_addr(SocketAddr::from(([0, 0, 0, 0], port)))
+                .map_err(|e| e.to_string())?
+                .bind_addr_with_opts(
+                    SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port)),
+                    iroh::endpoint::BindOpts::default().set_is_required(false),
+                )
+                .map_err(|e| e.to_string())?;
+        }
+    }
     // The user's own proxy (FR-051): iroh only takes an HTTP proxy, so SOCKS goes through a
     // local bridge. Only relay connections use it; direct UDP and the LAN never do.
     match proxy::choose() {

@@ -2930,5 +2930,8 @@
   "share.settings.permissionsHint.download": "The recipient can download the files.",
   "share.nodes.code": "node code",
   "share.nodes.rotate": "Destroy and rebuild",
-  "share.nodes.rotateConfirm": "Destroy this node's identity and mint a new node code? Codes and node strings handed out before will stop working."
+  "share.nodes.rotateConfirm": "Destroy this node's identity and mint a new node code? Codes and node strings handed out before will stop working.",
+  "share.network.bindInterface": "Network interface",
+  "share.network.bindInterfaceHint": "Which interface share traffic leaves through. Picking a VPN tunnel such as tun0 keeps shares inside it while the library itself stays reachable on the LAN. Restart the sharing endpoint after changing it.",
+  "share.network.interfaceAny": "Any interface"
 }

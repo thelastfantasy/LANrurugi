@@ -2930,5 +2930,8 @@
   "share.settings.permissionsHint.download": "对方可以把文件下载到本地。",
   "share.nodes.code": "节点码",
   "share.nodes.rotate": "销毁重建",
-  "share.nodes.rotateConfirm": "销毁当前节点标识并生成新的节点码？此前发出的节点码和节点字符串都会失效。"
+  "share.nodes.rotateConfirm": "销毁当前节点标识并生成新的节点码？此前发出的节点码和节点字符串都会失效。",
+  "share.network.bindInterface": "网络接口",
+  "share.network.bindInterfaceHint": "选择共享传输走哪个网络接口。选了 tun0 这类 VPN 接口后，共享流量只从它出去，库本身仍然留在局域网里。改完要重启共享端点才会生效。",
+  "share.network.interfaceAny": "全部接口"
 }

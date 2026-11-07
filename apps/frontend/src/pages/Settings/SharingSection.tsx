@@ -113,6 +113,16 @@ const LIMIT_FIELDS: SettingField[] = [
 
 const NETWORK_FIELDS: SettingField[] = [
   {
+    // The qBittorrent setting, for the same reason: send share traffic out of a VPN tunnel while
+    // the library itself stays on the LAN. Written as a name so a tunnel that is not up yet can
+    // still be chosen; the server refuses a name the host does not have.
+    key: "share_bind_interface",
+    kind: "choice",
+    dynamic: "interfaces",
+    label: "share.network.bindInterface",
+    hint: true,
+  },
+  {
     key: "share_external_addrs",
     kind: "lines",
     label: "share.network.externalAddrs",

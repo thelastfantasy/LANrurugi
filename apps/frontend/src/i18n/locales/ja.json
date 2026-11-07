@@ -2692,5 +2692,8 @@
   "share.settings.permissionsHint.download": "受け取り側はファイルをダウンロードできます。",
   "share.nodes.code": "ノードコード",
   "share.nodes.rotate": "破棄して作り直す",
-  "share.nodes.rotateConfirm": "現在のノード識別子を破棄して新しいノードコードを作成しますか？以前に配布したコードとノード文字列は無効になります。"
+  "share.nodes.rotateConfirm": "現在のノード識別子を破棄して新しいノードコードを作成しますか？以前に配布したコードとノード文字列は無効になります。",
+  "share.network.bindInterface": "ネットワークインターフェース",
+  "share.network.bindInterfaceHint": "共有トラフィックをどのインターフェースから出すか。tun0 のような VPN を選ぶと共有はその中だけを通り、ライブラリ自体は LAN に残ります。変更後は共有エンドポイントの再起動が必要です。",
+  "share.network.interfaceAny": "すべてのインターフェース"
 }

@@ -45,6 +45,9 @@ const FIELDS: &[(&str, Kind, &str)] = &[
     ("share_portmap", Kind::Bool, "1"),
     ("share_external_addrs", Kind::Text, ""),
     ("share_udp_port", Kind::Port, "11204"),
+    // Empty binds every interface; a name (`tun0`) pins the endpoint to it, so sharing can be
+    // kept inside a VPN tunnel while the rest of the app still serves the LAN.
+    ("share_bind_interface", Kind::Text, ""),
     ("share_public_url", Kind::Text, ""),
     // Peers whose `X-Forwarded-For` is believed. Loopback only by default: a private-range peer is
     // just as able to write that header itself, so a LAN client could otherwise pose as any address
@@ -329,6 +332,13 @@ fn validate_text(key: &str, text: String) -> Result<String, String> {
             "acme" | "files" | "proxy" => Ok(text),
             _ => bad("must be acme, files or proxy"),
         },
+        "share_bind_interface" if !text.is_empty() => {
+            if crate::share_net::interfaces::exists(&text) {
+                Ok(text)
+            } else {
+                bad("is not a network interface this host has")
+            }
+        }
         "share_external_addrs" => {
             for entry in split_list(&text) {
                 if entry.parse::<SocketAddr>().is_err() {

@@ -41,6 +41,7 @@ const ENDPOINT_FIELDS: &[&str] = &[
     "share_nodes",
     "share_udp_port",
     "share_portmap",
+    "share_bind_interface",
     "share_external_addrs",
     "share_self_relay_url",
     "share_node_relay",
@@ -1125,6 +1126,9 @@ async fn settings_with_status(state: &AppState) -> Value {
         json!({
             "endpoint": endpoint,
             "services": services,
+            // What the "network interface" picker offers; the setting itself is a plain name, so a
+            // tunnel that only exists after the VPN connects can still be typed in.
+            "interfaces": crate::share_net::interfaces::list(),
             "helpers_supported": true,
             // What an admin compares between two instances before an import works: the engine
             // object (protocol epoch + transport), not a single number.
