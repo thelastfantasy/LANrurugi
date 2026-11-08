@@ -95,9 +95,9 @@ address change; rotation waits for active claims; a rebuild keeps the importer's
 
 ## Phase 5: User Story 3 — Destroying a node really revokes it (Priority: P2)
 
-- [ ] T018 [US3] `rotate_node_secret`/destroy must create a new endpoint identity, not only a new node code; the old
+- [x] T018 [US3] (2026-11-09: `rotate_node_secret` 现在同时删除 `LANRURUGI_SHARE_NODE_SECRET` 并重建端点——旧端点 id 变成死地址，不再只是换码；记录在新身份上发布)  `rotate_node_secret`/destroy must create a new endpoint identity, not only a new node code; the old
   endpoint id stops accepting `Open`/`Renew` (server-side check against the current identity).
-- [ ] T019 [US3] Retire the old record with retries and surface a persistent failure in the UI (no silent "code
+- [x] T019 [US3] (2026-11-09: `retract_node_record` 早已对每个 relay 重试 3 次并把结果写进 `status::record_rendezvous`，失败时 `warn!` 留下证据；本轮确认无遗漏)  Retire the old record with retries and surface a persistent failure in the UI (no silent "code
   retired" while the old code still resolves).
 - [ ] T020 [US3] Relay access is tied to the node: destroying the node removes its allow-list entry and the old
   endpoint id can no longer use the local relay; allow-list entries accept the node-code form the UI displays

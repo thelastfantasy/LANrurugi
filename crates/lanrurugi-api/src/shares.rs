@@ -1324,16 +1324,24 @@ async fn rotate_node_secret(State(state): State<AppState>) -> Response {
         crate::share_net::nodes::retract_node_record(&state, &old).await;
     }
     let _: Result<i64, _> = conn.del(&[keys::SHARE_NODE_CODE_KEY]).await;
+    // 022 US3: a new code alone is not a revocation. The endpoint keeps the identity it was bound
+    // with, so anyone who learned its endpoint id (from an older `via` hint, a relay log, a peer's
+    // dial history) can still dial it directly and Open whatever is still shared. Replacing the
+    // secret is what makes the old identity a dead address; the code is minted fresh right after.
+    let _: Result<i64, _> = conn.del(&[keys::SHARE_NODE_SECRET_KEY]).await;
+    let settings = crate::share_settings::load(&state).await;
+    // Rebuild the endpoint before publishing: the record must carry the new identity, not the old
+    // one, or peers that resolve the fresh code reach the endpoint we just retired.
+    let net = match crate::share_net::start(&state).await {
+        Ok(net) => net,
+        Err(e) => return error(axum::http::StatusCode::INTERNAL_SERVER_ERROR, OP, e),
+    };
     let fresh = match node_code(&state).await {
         Ok(code) => code.prefixed(),
         Err(e) => return error(axum::http::StatusCode::INTERNAL_SERVER_ERROR, OP, e),
     };
-    // Publish the record under the new code, and drop whatever the relay role was forwarding.
-    if let Some(net) = crate::share_net::handle().await {
-        let settings = crate::share_settings::load(&state).await;
-        crate::share_net::nodes::publish_node_record(&state, &net, &settings).await;
-        crate::share_net::nodes::restart_relay(&state, &settings, &net).await;
-    }
+    crate::share_net::nodes::publish_node_record(&state, &net, &settings).await;
+    crate::share_net::nodes::restart_relay(&state, &settings, &net).await;
     axum::Json(json!({ "rotated": true, "node_code": fresh })).into_response()
 }
 
