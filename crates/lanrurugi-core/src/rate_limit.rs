@@ -121,7 +121,7 @@ impl RateLimiterMap {
         self.limiters.lock().await.remove(key);
     }
 
-    #[cfg(test)]
+    /// Test/diagnostic helper: how many keys currently hold a bucket.
     pub async fn tracked_entry_count(&self) -> usize {
         self.limiters.lock().await.len()
     }

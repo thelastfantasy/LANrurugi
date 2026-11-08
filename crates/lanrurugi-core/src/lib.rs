@@ -9,5 +9,6 @@ pub mod jobs;
 pub mod logging;
 pub mod password;
 pub mod queue_error;
+pub mod rate_limit;
 pub mod session;
 pub mod singleflight;

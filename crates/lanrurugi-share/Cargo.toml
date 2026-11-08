@@ -23,3 +23,5 @@ if-addrs.workspace = true
 reqwest.workspace = true
 url.workspace = true
 tokio-socks.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
