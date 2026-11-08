@@ -61,7 +61,7 @@ mounting each path separately (thumbnails on the HDD, the database on an SSD) st
 
 ### Filenames inside the library
 
-Since 1.0.0-beta.6 every archive LANrurugi writes is named after its content:
+Every archive LANrurugi writes is named after its content:
 `<library>/<first two id chars>/<id>.<ext>`, with a `<id>.json` sidecar recording the original
 filename, title and size (used to rebuild after a lost database). A download, upload or share
 import therefore succeeds regardless of how long its filename is; the title comes from the original

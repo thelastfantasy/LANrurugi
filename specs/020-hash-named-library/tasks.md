@@ -182,12 +182,12 @@ filenames, and reports disagreements instead of duplicating.
 
 ## Phase 8: Polish & Cross-Cutting Concerns
 
-- [ ] T026 [P] Document the layout: a new section in `docs/src/content/docs/guide/` (and its `en/` twin) covering
+- [x] T026 (2026-11-09: `configuration.md` zh/en 的「书库里的文件名」小节复核过，删掉了未证实的「自 1.0.0-beta.6 起」版本声明) [P] Document the layout: a new section in `docs/src/content/docs/guide/` (and its `en/` twin) covering
   `{id}.{ext}` buckets, `_byname/`'s role, the automatic relocation on scan, why the root is reserved, and the
   sidecar's rebuild role. Update `docs/comparison-with-lanraragi.md` if the rename endpoint's removal belongs there.
-- [ ] T027 Run `specs/020-hash-named-library/quickstart.md` S1–S10 against a dev instance and record the result in
+- [~] T027 (2026-11-09 部分：dev 容器重建后实测「丢入 → 命名保持 → 搬进 `_byname/<相对路径>`」、记录 `name` 保留 `[DL版]` 而 `title` 已清理、`_byname` 档案不写旁车、`PUT /archives/{id}/rename` 返回 404；带 300 字节标题的真实下载与 hash 布局旁车仍需一次真实下载才能覆盖) Run `specs/020-hash-named-library/quickstart.md` S1–S10 against a dev instance and record the result in
   this file's implementation record.
-- [ ] T028 Gates: `mise run fmt-check`, `mise run clippy`, `mise run check-crate -- lanrurugi-storage
+- [x] T028 (2026-11-09: clippy、fmt-check、tsc、eslint、docs-build 与 CI 全绿) Gates: `mise run fmt-check`, `mise run clippy`, `mise run check-crate -- lanrurugi-storage
   lanrurugi-scanner lanrurugi-api`, `mise run test-crate -- lanrurugi-api lanrurugi-scanner`, and the frontend's
   `tsc --noEmit` + `eslint src`. `mise run docs-build` if the docs changed.
 
