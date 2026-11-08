@@ -80,7 +80,7 @@ filename. Re-ingest the same bytes: rejected with the existing id.
   stores the verbatim filename and its relative path.
 - [x] T011 [US1] Make duplicate content a first-class outcome: `IngestOutcome`/the queue error names the existing
   archive id, and `QueueErrorText` renders it without a conflict-action link.
-- [ ] T012 [US1] Delete the conflict machinery end to end: `stage_pending_rename`, `sweep_stale_pending_renames`,
+- [ ] T012 [US1] (2026-11-09 partial: the staging/creation half is gone — `stage_pending_rename`, `check_already_patched`, `sweep_stale_pending_renames`, `PENDING_RENAME_MAX_AGE`, `hex_crc32_of_file` and the unreachable branch in `ingest_downloaded_file` are deleted; the resolve/compare/UI half is T024's job) Delete the conflict machinery end to end: `stage_pending_rename`, `sweep_stale_pending_renames`,
   `PENDING_RENAME_MAX_AGE`, `IngestDownloadError::PendingRename`/`NoOverwriteTarget`/`NameTooLong` and their
   `QueueError` mapping in `crates/lanrurugi-api/src/download_manager/ingest.rs`; `PendingFilenameConflict`,
   `ConflictPolicy` and the `temp_*` sweeps in `crates/lanrurugi-storage/src/download_queue.rs`; the overwrite/

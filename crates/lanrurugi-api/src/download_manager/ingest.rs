@@ -16,7 +16,6 @@ use lanrurugi_storage::download_queue::PendingFilenameConflict;
 use lanrurugi_storage::keys::CONFIG_KEY;
 use serde_json::{json, Value};
 use thiserror::Error;
-use tokio::io::AsyncReadExt;
 
 use crate::auth_context::AuthContext;
 use crate::AppState;
@@ -167,32 +166,27 @@ pub(crate) async fn record_ingest_result(
 
 /// `overwrite: false` preserves this function's original behavior for a `ContentHash` collision
 /// (always rejected, `IngestDownloadError::Duplicate` — see `pipeline.rs`'s own docs on why that
-/// case never respects `DuplicatePolicy::Overwrite` at all) — but a `Filename` collision (content
-/// is genuinely new, only the resolved filename collides) is now staged to `temp_dir` instead of
-/// being silently discarded, returning `IngestDownloadError::PendingRename` so the caller can
-/// persist it onto the queue item for the user to resolve later via `.../overwrite`/`.../rename`.
-/// `overwrite: true` (the download-queue's opt-in overwrite checkbox) instead passes
-/// `DuplicatePolicy::Overwrite`, which still only actually applies to a `Filename` collision (a
-/// real collision by that filename deletes the old archive first rather than being staged/
-/// rejected) — a `ContentHash` collision is rejected either way.
+/// case never respects `DuplicatePolicy::Overwrite` at all). Downloaded archives are named by
+/// their content (`<library>/<bucket>/{id}.{ext}`), so a filename collision cannot occur at all
+/// any more; `overwrite: true` therefore only controls whether an already-catalogued archive with
+/// the same content is replaced (`DuplicatePolicy::Overwrite`) or reported
+/// (`DuplicatePolicy::Reject`).
 ///
-/// `queue_item_id`, when given, is the download-queue item this download is running for — used
-/// only to persist a `PendingFilenameConflict` directly onto that item at staging time (the
-/// caller's own generic `QueueError`-recording error handling still runs afterward and doesn't
-/// need to know about this extra field).
+/// `_queue_item_id` is kept for the call sites that still carry the queue item id; ingestion no
+/// longer needs it now that nothing stages a filename conflict.
 pub async fn ingest_downloaded_file(
     state: &AppState,
     downloaded: &DownloadedFile,
     overwrite: bool,
     source_url: Option<&str>,
-    queue_item_id: Option<&str>,
+    _queue_item_id: Option<&str>,
 ) -> Result<IngestedDownload, IngestDownloadError> {
     let duplicate_policy = if overwrite {
         DuplicatePolicy::Overwrite
     } else {
         DuplicatePolicy::Reject
     };
-    match catalogue_staged_file(
+    catalogue_staged_file(
         state,
         &downloaded.path,
         &downloaded.filename,
@@ -200,46 +194,6 @@ pub async fn ingest_downloaded_file(
         duplicate_policy,
     )
     .await
-    {
-        Err(IngestDownloadError::Duplicate {
-            existing_id,
-            reason: DuplicateReason::Filename,
-        }) if !overwrite => {
-            // Before staging a full rename conflict, check whether this exact source was already
-            // patched into the colliding target in a prior session — if so, the work is already
-            // done, and we can discard the staged file immediately rather than re-offering the same
-            // compare-and-resolve menu.
-            if let Some(already) =
-                check_already_patched(state, &downloaded.path, &downloaded.filename, &existing_id)
-                    .await
-            {
-                let _ = tokio::fs::remove_file(&downloaded.path).await;
-                return Err(already);
-            }
-            let staged = stage_pending_rename(
-                state,
-                &downloaded.path,
-                &downloaded.filename,
-                existing_id,
-                queue_item_id,
-            )
-            .await;
-            // A subscription that pre-answered this question (its own `ConflictPolicy`) resolves it
-            // right here, through the very same code the two resolve endpoints drive — see
-            // `download_queue::apply_staged_conflict_policy`.
-            if let (Some(item_id), Err(IngestDownloadError::PendingRename(_))) =
-                (queue_item_id, &staged)
-            {
-                if let Some(ingested) =
-                    crate::download_queue::apply_staged_conflict_policy(state, item_id).await
-                {
-                    return Ok(ingested);
-                }
-            }
-            staged
-        }
-        other => other,
-    }
 }
 
 /// Marks `archive_id` unpublished, so `lanrurugi_search` skips it until
@@ -489,193 +443,6 @@ pub(crate) async fn catalogue_staged_file(
     })
 }
 
-/// Moves `staging_path` to `temp_dir/temp_{crc32}_{filename}` (never deleting the already-
-/// downloaded bytes just because the destination filename collided) and, when `queue_item_id` is
-/// given, persists a [`PendingFilenameConflict`] directly onto that queue item so the frontend can
-/// offer the user a real resolve action instead of just a generic error. Returns
-/// [`IngestDownloadError::PendingRename`] either way (the caller's own generic `QueueError`-
-/// recording error handling — see `plugins.rs::start_download`'s `Err` branch — runs afterward
-/// regardless of whether the direct persist here succeeded, matching every other best-effort
-/// side-channel write in this module).
-async fn stage_pending_rename(
-    state: &AppState,
-    staging_path: &Path,
-    filename: &str,
-    existing_id: String,
-    queue_item_id: Option<&str>,
-) -> Result<IngestedDownload, IngestDownloadError> {
-    let crc32 = hex_crc32_of_file(staging_path)
-        .await
-        .map_err(IngestDownloadError::Io)?;
-    let temp_name = format!("temp_{crc32}_{filename}");
-    let temp_path = state.library.temp_dir.join(&temp_name);
-
-    crate::download_manager::rename_or_copy(staging_path, &temp_path)
-        .await
-        .map_err(IngestDownloadError::Io)?;
-
-    let conflict = PendingFilenameConflict {
-        temp_path: temp_path.to_string_lossy().to_string(),
-        original_filename: filename.to_string(),
-        existing_id,
-        crc32,
-        staged_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0),
-    };
-
-    if let Some(item_id) = queue_item_id {
-        if let Ok(Some(mut item)) = state.download_queue.get(item_id).await {
-            item.pending_filename_conflict = Some(conflict.clone());
-            if let Err(e) = state.download_queue.update(&item).await {
-                tracing::warn!(%item_id, error = %e, "failed to persist pending filename conflict");
-            }
-        }
-    }
-
-    Err(IngestDownloadError::PendingRename(conflict))
-}
-
-/// Checks whether `staging_path`'s content was already patched into the archive identified by
-/// `existing_id` — reads the colliding archive's `.patch.zip` (if one exists) and compares its
-/// `source_crc32` against the staged file's own CRC32. Returns `Some(AlreadyPatched)` on a match
-/// (the caller should discard the staged file and record the info), or `None` if no patch exists
-/// / the source doesn't match / the archive can't be looked up (all degrade to the normal
-/// filename-conflict flow — the patch check is a pure optimization, never a correctness gate).
-async fn check_already_patched(
-    state: &AppState,
-    staging_path: &std::path::Path,
-    filename: &str,
-    existing_id: &str,
-) -> Option<IngestDownloadError> {
-    let existing_archive = state
-        .repos
-        .archives
-        .get(&ArchiveId(existing_id.to_string()))
-        .await
-        .ok()??;
-    let archive_path = std::path::PathBuf::from(&existing_archive.file);
-    let patch_path = lanrurugi_scanner::patch::patch_path_for(&archive_path);
-    if !patch_path.exists() {
-        return None;
-    }
-    let staged_crc32 = hex_crc32_of_file(staging_path).await.ok()?;
-    let metadata = lanrurugi_scanner::patch::load(&patch_path, &archive_path).ok()?;
-    if metadata.source_crc32.as_deref() == Some(&staged_crc32) {
-        return Some(IngestDownloadError::AlreadyPatched {
-            existing_id: existing_id.to_string(),
-            filename: filename.to_string(),
-        });
-    }
-    None
-}
-
-/// How long an unresolved `PendingFilenameConflict`'s staged bytes are kept around before the
-/// periodic sweep (`sweep_stale_pending_renames`, spawned from `main.rs`) reclaims them.
-pub const PENDING_RENAME_MAX_AGE: std::time::Duration =
-    std::time::Duration::from_secs(24 * 60 * 60);
-
-/// Deletes any `temp_dir/temp_*` file (this module's own `stage_pending_rename` naming
-/// convention) whose last-modified time is older than [`PENDING_RENAME_MAX_AGE`], and downgrades
-/// the `pending_filename_conflict` of any queue item that referenced it to a plain
-/// `QueueError::DuplicateFilenameCleaned` — so a stale, abandoned filename conflict doesn't keep
-/// offering "overwrite"/"rename and catalog" for bytes that no longer exist (neither action is
-/// possible anymore), and doesn't accumulate disk usage forever if the user never comes back to
-/// it. Called on a periodic timer (see `main.rs`), not in response to any single request.
-pub async fn sweep_stale_pending_renames(state: &AppState) {
-    sweep_stale_pending_renames_with_max_age(state, PENDING_RENAME_MAX_AGE).await
-}
-
-/// [`sweep_stale_pending_renames`] with an injectable `max_age` — split out purely so a test can
-/// pass a millisecond-scale age instead of the real 24-hour constant, without needing to actually
-/// wait 24 hours or fake a file's mtime.
-async fn sweep_stale_pending_renames_with_max_age(state: &AppState, max_age: std::time::Duration) {
-    let stale_paths = find_stale_temp_files(&state.library.temp_dir, max_age).await;
-    if stale_paths.is_empty() {
-        return;
-    }
-
-    // Downgrade any queue item pointing at one of these paths *before* deleting the files
-    // themselves, so a resolve request racing this sweep can never observe "conflict cleared but
-    // temp file still exists" — only "both still there" or "both gone".
-    if let Ok(items) = state.download_queue.list_all().await {
-        for mut item in items {
-            let Some(conflict) = item.pending_filename_conflict.clone() else {
-                continue;
-            };
-            let conflict_path = Path::new(&conflict.temp_path);
-            if stale_paths.iter().any(|p| p == conflict_path) {
-                tracing::info!(
-                    item_id = %item.id,
-                    temp_path = %conflict.temp_path,
-                    "clearing stale unresolved filename conflict"
-                );
-                item.pending_filename_conflict = None;
-                item.state = lanrurugi_storage::download_queue::DownloadQueueState::Error;
-                item.error = Some(
-                    lanrurugi_core::queue_error::QueueError::DuplicateFilenameCleaned {
-                        existing_id: conflict.existing_id,
-                        filename: conflict.original_filename,
-                    },
-                );
-                let _ = state.download_queue.update(&item).await;
-            }
-        }
-    }
-
-    for path in stale_paths {
-        match tokio::fs::remove_file(&path).await {
-            Ok(()) => tracing::info!(?path, "removed stale pending-rename temp file"),
-            Err(e) => {
-                tracing::warn!(?path, error = %e, "failed to remove stale pending-rename temp file")
-            }
-        }
-    }
-}
-
-/// Lists every `temp_*`-named entry directly inside `dir` whose last-modified time is at least
-/// `max_age` old — the pure file-scanning half of [`sweep_stale_pending_renames`], split out so
-/// it's testable against a real scratch directory without needing a full `AppState`/Redis.
-/// Non-`temp_*` entries (anything else that happens to live in the same `temp_dir`, e.g. a
-/// download currently mid-transfer) are always ignored, regardless of age.
-async fn find_stale_temp_files(dir: &Path, max_age: std::time::Duration) -> Vec<PathBuf> {
-    let mut entries = match tokio::fs::read_dir(dir).await {
-        Ok(entries) => entries,
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to read temp_dir for stale pending-rename sweep");
-            return Vec::new();
-        }
-    };
-
-    let mut stale_paths = Vec::new();
-    loop {
-        let entry = match entries.next_entry().await {
-            Ok(Some(entry)) => entry,
-            Ok(None) => break,
-            Err(e) => {
-                tracing::warn!(error = %e, "error while scanning temp_dir for stale pending renames");
-                break;
-            }
-        };
-        let is_own_temp_file = entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| name.starts_with("temp_"));
-        if !is_own_temp_file {
-            continue;
-        }
-        let is_stale = match entry.metadata().await.and_then(|m| m.modified()) {
-            Ok(modified) => modified.elapsed().is_ok_and(|age| age >= max_age),
-            Err(_) => false,
-        };
-        if is_stale {
-            stale_paths.push(entry.path());
-        }
-    }
-    stale_paths
-}
-
 /// Default `tempmaxsize` (MB) — matches `NUMBER_FIELDS`' default in `settings.rs`, used when the
 /// field is missing from Redis entirely.
 pub(crate) const DEFAULT_TEMP_MAX_SIZE_MB: i64 = 500;
@@ -685,9 +452,9 @@ pub(crate) const DEFAULT_TEMP_MAX_SIZE_MB: i64 = 500;
 /// `resize_page/`, the reader's WebP/JXL resize cache (`archives.rs::resize_cache_path`), and the
 /// rendered e-book pages under `book/` (`lanrurugi_book`'s page cache; its small `info.json` files
 /// are left alone). Deliberately does not touch anything else in `temp_dir`:
-/// `temp_*`-prefixed pending-rename staging files are unresolved user decisions, not a cache, and
-/// already have their own age-based sweep (`sweep_stale_pending_renames`) with different
-/// eligibility rules. Called on a periodic timer (see `main.rs`), not in response to any request.
+/// Anything else in `temp_dir` (a download's in-flight staging file, for instance) is not a
+/// cache and is left alone. Called on a periodic timer (see `main.rs`), not in response to any
+/// request.
 pub async fn sweep_resize_cache_size(state: &AppState) {
     let max_bytes = match state.redis.config.get().await {
         Ok(mut conn) => {
@@ -823,22 +590,6 @@ async fn list_resize_cache_entries(cache_dir: &Path) -> Option<Vec<ResizeCacheEn
     Some(out)
 }
 
-/// Streams `path` in fixed-size chunks (never loading the whole file into memory — a real archive
-/// can be hundreds of MB) through `crc32fast::Hasher`, returning its lowercase hex CRC32.
-async fn hex_crc32_of_file(path: &Path) -> std::io::Result<String> {
-    let mut file = tokio::fs::File::open(path).await?;
-    let mut hasher = crc32fast::Hasher::new();
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        let n = file.read(&mut buf).await?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(format!("{:08x}", hasher.finalize()))
-}
-
 /// Resolves a `PendingFilenameConflict` by deleting the colliding archive and cataloguing the
 /// staged file under its originally-intended filename — `download_queue.rs::overwrite_queue_item`'s
 /// own implementation, kept here alongside `catalogue_staged_file` since it's the only other
@@ -869,9 +620,9 @@ pub async fn resolve_rename(
     conflict: &PendingFilenameConflict,
     new_filename: &str,
     source_url: Option<&str>,
-    queue_item_id: Option<&str>,
+    _queue_item_id: Option<&str>,
 ) -> Result<IngestedDownload, IngestDownloadError> {
-    match catalogue_staged_file(
+    catalogue_staged_file(
         state,
         Path::new(&conflict.temp_path),
         new_filename,
@@ -879,22 +630,6 @@ pub async fn resolve_rename(
         DuplicatePolicy::Reject,
     )
     .await
-    {
-        Err(IngestDownloadError::Duplicate {
-            existing_id,
-            reason: DuplicateReason::Filename,
-        }) => {
-            stage_pending_rename(
-                state,
-                Path::new(&conflict.temp_path),
-                new_filename,
-                existing_id,
-                queue_item_id,
-            )
-            .await
-        }
-        other => other,
-    }
 }
 
 /// The extension to keep on the hash-layout file, lowercased. The name carries no meaning any
@@ -905,101 +640,4 @@ fn filename_extension(filename: &str) -> String {
         .and_then(|e| e.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A fresh, uniquely-named path under the shared OS temp dir — same convention
-    /// `download_manager::stream`'s own tests already use (this crate has no `tempfile` dev-
-    /// dependency), just with a per-test-unique filename so concurrent test runs don't collide.
-    fn scratch_path(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("lrr-ingest-test-{}-{name}", uuid::Uuid::new_v4()))
-    }
-
-    #[tokio::test]
-    async fn hex_crc32_of_file_matches_a_known_value() {
-        let path = scratch_path("sample.txt");
-        // A well-known CRC32 test vector: CRC32("123456789") = 0xCBF43926.
-        tokio::fs::write(&path, b"123456789").await.unwrap();
-        assert_eq!(hex_crc32_of_file(&path).await.unwrap(), "cbf43926");
-        tokio::fs::remove_file(&path).await.ok();
-    }
-
-    #[tokio::test]
-    async fn hex_crc32_of_file_handles_content_larger_than_one_read_buffer() {
-        let path = scratch_path("large.bin");
-        // Larger than the function's own 64KB read buffer, to exercise the multi-chunk loop.
-        let content = vec![0x42u8; 200 * 1024];
-        tokio::fs::write(&path, &content).await.unwrap();
-        let expected = format!("{:08x}", crc32fast::hash(&content));
-        assert_eq!(hex_crc32_of_file(&path).await.unwrap(), expected);
-        tokio::fs::remove_file(&path).await.ok();
-    }
-
-    #[tokio::test]
-    async fn hex_crc32_of_file_is_deterministic_and_content_sensitive() {
-        let a = scratch_path("a.bin");
-        let b = scratch_path("b.bin");
-        tokio::fs::write(&a, b"hello world").await.unwrap();
-        tokio::fs::write(&b, b"hello worlD").await.unwrap();
-        let crc_a = hex_crc32_of_file(&a).await.unwrap();
-        let crc_b = hex_crc32_of_file(&b).await.unwrap();
-        assert_ne!(crc_a, crc_b);
-        assert_eq!(crc_a, hex_crc32_of_file(&a).await.unwrap());
-        tokio::fs::remove_file(&a).await.ok();
-        tokio::fs::remove_file(&b).await.ok();
-    }
-
-    /// A fresh, uniquely-named scratch *directory* under the shared OS temp dir — isolates each
-    /// `find_stale_temp_files` test's own entries from whatever else (including other tests'
-    /// `temp_*`-prefixed scratch files) might transiently exist in the shared OS temp dir itself.
-    async fn scratch_dir() -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("lrr-ingest-sweep-test-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-        dir
-    }
-
-    #[tokio::test]
-    async fn finds_a_temp_prefixed_file_older_than_max_age() {
-        let dir = scratch_dir().await;
-        let path = dir.join("temp_deadbeef_archive.zip");
-        tokio::fs::write(&path, b"x").await.unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-
-        let stale = find_stale_temp_files(&dir, std::time::Duration::from_millis(10)).await;
-        assert_eq!(stale, vec![path]);
-
-        tokio::fs::remove_dir_all(&dir).await.ok();
-    }
-
-    #[tokio::test]
-    async fn ignores_a_temp_prefixed_file_younger_than_max_age() {
-        let dir = scratch_dir().await;
-        let path = dir.join("temp_deadbeef_archive.zip");
-        tokio::fs::write(&path, b"x").await.unwrap();
-
-        let stale = find_stale_temp_files(&dir, std::time::Duration::from_secs(3600)).await;
-        assert!(stale.is_empty());
-
-        tokio::fs::remove_dir_all(&dir).await.ok();
-    }
-
-    #[tokio::test]
-    async fn ignores_old_files_that_do_not_have_the_temp_prefix() {
-        let dir = scratch_dir().await;
-        // A download's own in-flight staging file (`download-<uuid>.zip`, per `stream.rs`'s own
-        // naming) sitting in the very same `temp_dir` — must never be swept just for being old;
-        // only this module's own `temp_*`-prefixed pending-rename files are this sweep's concern.
-        let path = dir.join("download-not-a-pending-rename.zip");
-        tokio::fs::write(&path, b"x").await.unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-
-        let stale = find_stale_temp_files(&dir, std::time::Duration::from_millis(10)).await;
-        assert!(stale.is_empty());
-
-        tokio::fs::remove_dir_all(&dir).await.ok();
-    }
 }

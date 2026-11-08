@@ -979,27 +979,6 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         });
     }
 
-    // Hourly, not once every `PENDING_RENAME_MAX_AGE` itself — a coarser interval would let a
-    // conflict sit stale for up to another full 24h past its actual cutoff, depending on how the
-    // sweep's own schedule happens to line up against when it was staged.
-    {
-        let state = state.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
-            loop {
-                interval.tick().await;
-                let started = std::time::Instant::now();
-                lanrurugi_api::download_manager::ingest::sweep_stale_pending_renames(&state).await;
-                lanrurugi_api::diagnostics::cron::check_in(
-                    "lanrurugi-pending-rename-sweep",
-                    "ok",
-                    started.elapsed(),
-                    60,
-                );
-            }
-        });
-    }
-
     // Every 15 minutes — enforce the `tempmaxsize` setting against the reader's WebP resize cache
     // (`temp_dir/resize_page/`) and rendered e-book pages (`temp_dir/book/`), the unbounded
     // self-regenerating content under `temp_dir`. A

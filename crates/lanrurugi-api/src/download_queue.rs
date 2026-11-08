@@ -2979,95 +2979,6 @@ enum ResolveConflictError {
     Ingest(String),
 }
 
-/// The filename `ConflictPolicy::AutoRename` catalogues a collision under — `{name}_{crc}.{ext}`,
-/// the same derived name the rename popover's own default template produces (see
-/// `FilenameTemplateEditor.tsx`), so an automatic and a manual resolution of one collision land on
-/// one filename rather than two subtly different ones. The crc is already computed at staging time
-/// and makes a second collision astronomically unlikely.
-fn auto_renamed_filename(
-    conflict: &lanrurugi_storage::download_queue::PendingFilenameConflict,
-) -> String {
-    let original = conflict.original_filename.as_str();
-    // `rsplit_once` rather than `file_stem`/`extension`: a name with no dot keeps its whole self as
-    // the stem (and gains none), and a leading-dot name like `.hidden` is not an extension either.
-    match original.rsplit_once('.') {
-        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => {
-            format!("{stem}_{}.{ext}", conflict.crc32)
-        }
-        _ => format!("{original}_{}", conflict.crc32),
-    }
-}
-
-/// Applies the subscription's own pre-answered conflict policy to a filename conflict that was just
-/// staged. `Some` when the policy resolved it into a catalogue-able archive; `None` when it is
-/// still the user's question to answer — the policy is `Ask`, the item belongs to nothing with an
-/// opinion, or the automatic resolution collided a second time (left staged, exactly as a manual
-/// rename that collides again is).
-///
-/// Runs *after* staging rather than instead of it, so the automatic path is literally the same code
-/// the two resolve endpoints drive. A second "resolve it automatically" implementation is how the
-/// two would eventually disagree about what an overwrite or a rename means.
-pub(crate) async fn apply_staged_conflict_policy(
-    state: &AppState,
-    item_id: &str,
-) -> Option<crate::download_manager::ingest::IngestedDownload> {
-    use lanrurugi_storage::subscriptions::ConflictPolicy;
-
-    let item = state.download_queue.get(item_id).await.ok().flatten()?;
-    let conflict = item.pending_filename_conflict.clone()?;
-    match item.conflict_policy {
-        ConflictPolicy::AutoRename => {
-            let filename = auto_renamed_filename(&conflict);
-            match resolve_conflict(state, item_id, ResolveAction::Rename(filename.clone())).await {
-                Ok(ingested) => {
-                    tracing::info!(
-                        item = %item_id,
-                        %filename,
-                        "subscription conflict policy renamed a colliding download"
-                    );
-                    Some(ingested)
-                }
-                Err(e) => {
-                    // The re-attempt staged its own fresh conflict (or failed otherwise) and is
-                    // already reflected on the item — nothing further to do here.
-                    tracing::warn!(item = %item_id, error = %e, "automatic conflict rename did not resolve the collision");
-                    None
-                }
-            }
-        }
-        ConflictPolicy::Discard => {
-            if let Err(e) = tokio::fs::remove_file(&conflict.temp_path).await {
-                tracing::warn!(item = %item_id, path = %conflict.temp_path, error = %e, "failed to delete a discarded staged download");
-            }
-            // Cleared, so the row stops offering overwrite/rename for bytes that are gone. The item
-            // itself stays in `Error`, marked by the caller's own error record — the download
-            // genuinely produced nothing, and a retry is still the right offer.
-            if let Ok(Some(mut fresh)) = state.download_queue.get(item_id).await {
-                fresh.pending_filename_conflict = None;
-                if let Err(e) = state.download_queue.update(&fresh).await {
-                    tracing::warn!(item = %item_id, error = %e, "failed to clear a discarded conflict");
-                } else if let Some(tx) = &state.download_queue_tx {
-                    let _ = tx.send(serde_json::json!({
-                        "kind": "update",
-                        "id": item_id,
-                        "pending_filename_conflict": null,
-                    }));
-                }
-            }
-            tracing::info!(
-                item = %item_id,
-                filename = %conflict.original_filename,
-                "subscription conflict policy discarded a colliding download"
-            );
-            None
-        }
-        // `Overwrite` never reaches here: it is applied at enqueue time as the item's own
-        // `overwrite_on_duplicate`, so the collision is overwritten during ingest and no conflict is
-        // ever staged to resolve.
-        ConflictPolicy::Ask | ConflictPolicy::Overwrite => None,
-    }
-}
-
 /// Shared by both resolve endpoints — looks up the item, requires a live
 /// `pending_filename_conflict`, delegates the actual (re-)cataloguing to `ingest::resolve_overwrite`/
 /// `ingest::resolve_rename`, then updates the item to reflect the outcome: `Done` + cleared
@@ -3313,7 +3224,7 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use lanrurugi_storage::download_queue::{DownloadQueueItem, PendingFilenameConflict};
+    use lanrurugi_storage::download_queue::DownloadQueueItem;
 
     use super::*;
 
@@ -3403,42 +3314,6 @@ mod tests {
             revision_confirmed: false,
             created_at: 0,
         }
-    }
-
-    /// The automatic rename must land on the same filename the rename popover's own default
-    /// template (`{filename}_{crc}.{ext}`) produces — an automatic and a manual resolution of one
-    /// collision should not leave two subtly different names behind.
-    #[test]
-    fn an_auto_renamed_conflict_matches_the_rename_popover_default() {
-        let conflict = PendingFilenameConflict {
-            temp_path: "/tmp/temp_abc_x.zip".to_string(),
-            original_filename: "x.zip".to_string(),
-            existing_id: "id".to_string(),
-            crc32: "abc".to_string(),
-            staged_at: 0,
-        };
-        assert_eq!(auto_renamed_filename(&conflict), "x_abc.zip");
-
-        // No extension: nothing to put after the dot.
-        let dotless = PendingFilenameConflict {
-            original_filename: "x".to_string(),
-            ..conflict.clone()
-        };
-        assert_eq!(auto_renamed_filename(&dotless), "x_abc");
-
-        // A leading dot is part of the name, not an extension.
-        let hidden = PendingFilenameConflict {
-            original_filename: ".hidden".to_string(),
-            ..conflict.clone()
-        };
-        assert_eq!(auto_renamed_filename(&hidden), ".hidden_abc");
-
-        // Dots inside the stem stay put.
-        let dotted = PendingFilenameConflict {
-            original_filename: "a.b.c.zip".to_string(),
-            ..conflict
-        };
-        assert_eq!(auto_renamed_filename(&dotted), "a.b.c_abc.zip");
     }
 
     #[test]
