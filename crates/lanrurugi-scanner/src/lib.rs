@@ -11,6 +11,7 @@ pub mod pipeline;
 pub mod release_markers;
 pub mod relocate;
 pub mod resize;
+pub mod sidecar_audit;
 pub mod thumbnail;
 pub mod verify;
 pub mod watcher;

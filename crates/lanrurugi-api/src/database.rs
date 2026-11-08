@@ -696,6 +696,24 @@ async fn run_rebuild_sequence(
 
     let heal_summary = lanrurugi_scanner::full_scan::heal_pagecounts(&repos.archives).await;
 
+    // 020 T021: sidecars are a derived snapshot, so a disagreement cannot fail the rebuild — it is
+    // reported, because "how much of this library could be rebuilt from disk alone" is exactly what
+    // an operator runs a rebuild to find out.
+    let sidecar_audit = lanrurugi_scanner::sidecar_audit::audit_sidecars(
+        &repos.archives,
+        &state.library.archive_dir,
+    )
+    .await
+    .unwrap_or_default();
+    if !sidecar_audit.is_clean() {
+        tracing::warn!(
+            missing = sidecar_audit.missing,
+            unreadable = sidecar_audit.unreadable,
+            mismatched = sidecar_audit.mismatched,
+            "some hash-named archives cannot be recovered from their sidecar"
+        );
+    }
+
     // Issue #67: unconditional, not gated behind `rekey_summary.rekeyed` being non-empty — a
     // Category/Grouping saved before the `archive_id -> [category_id]`/`[tankoubon_id]`
     // reverse index existed has never had its membership written into it at all, regardless of
@@ -735,6 +753,19 @@ async fn run_rebuild_sequence(
         "relocated": scan_summary.relocated,
         "relocation_skipped": scan_summary.relocation_skipped,
         "relocation_failed": scan_summary.relocation_failed,
+        // 020 T021: which hash-layout records could not be rebuilt from disk alone.
+        "sidecars": {
+            "checked": sidecar_audit.checked,
+            "missing": sidecar_audit.missing,
+            "unreadable": sidecar_audit.unreadable,
+            "mismatched": sidecar_audit.mismatched,
+            "details": sidecar_audit.details.iter().map(|issue| json!({
+                "id": issue.id,
+                "file": issue.file,
+                "reason": issue.reason,
+                "found": issue.found,
+            })).collect::<Vec<_>>(),
+        },
         "pagecount_heal": {
             "checked": heal_summary.checked,
             "healed": heal_summary.healed,

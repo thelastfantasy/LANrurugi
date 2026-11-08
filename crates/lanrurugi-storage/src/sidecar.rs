@@ -102,6 +102,15 @@ pub fn write(library: &Path, sidecar: &Sidecar) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Reads and parses the sidecar without insisting that the `id` inside matches `id`. The rebuild
+/// audit uses this to tell "a sidecar for a different archive is sitting here" apart from "there is
+/// no readable sidecar at all"; nothing else should.
+pub fn read_raw(library: &Path, id: &str) -> Option<Sidecar> {
+    let raw = std::fs::read(paths::sidecar_path(library, id)).ok()?;
+    let parsed: Sidecar = serde_json::from_slice(&raw).ok()?;
+    (parsed.version <= SIDECAR_VERSION).then_some(parsed)
+}
+
 /// Reads the sidecar for `id`. Any failure (missing, unparsable, newer version, a different id
 /// inside) is `None`: the caller treats it as "no snapshot", never as an error worth stopping a
 /// rebuild for.

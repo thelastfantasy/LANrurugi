@@ -1011,6 +1011,110 @@ mod tests {
         let _: () = conn.hdel("LRR_FILEMAP", &expected).await.unwrap();
     }
 
+    /// 020 T022: after the records are gone, a scan rebuilds titles for both layouts from what is
+    /// on disk — the sidecar for a hash-named archive, the filename for one under `_byname/`.
+    #[tokio::test]
+    async fn a_scan_recovers_titles_for_both_layouts_after_the_records_are_lost() {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(39).await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let archives = ArchiveRepository::new(archive_pool.clone());
+        let pools = scanner_pools(&archive_pool, &config_pool, &search_pool);
+        let dir = tempfile::tempdir().unwrap();
+        let thumb_dir = tempfile::tempdir().unwrap();
+
+        // This database slice is this test's own (offset 39), but a previous run that failed
+        // before its cleanup would leave records behind and make the next one see `unchanged`
+        // instead of a fresh catalogue.
+        for stale in archives.list_all().await.unwrap() {
+            archives.delete(&stale.id).await.unwrap();
+        }
+        let mut scratch = config_pool.get().await.unwrap();
+        use deadpool_redis::redis::AsyncCommands;
+        let _: () = scratch.del("LRR_FILEMAP").await.unwrap();
+
+        // Hash layout: the disk name is opaque, so the title can only come from the sidecar. The
+        // id is the content id, so the bytes are written first and moved into their bucket after.
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let staging = dir.path().join("incoming");
+        std::fs::write(&staging, format!("hash-layout bytes {nonce}")).unwrap();
+        let id = lanrurugi_storage::id::size_aware_id(&staging).unwrap();
+        let hashed = lanrurugi_storage::paths::hash_layout_path(dir.path(), &id, "zip");
+        std::fs::create_dir_all(hashed.parent().unwrap()).unwrap();
+        std::fs::rename(&staging, &hashed).unwrap();
+        let sidecar = lanrurugi_storage::sidecar::Sidecar::for_archive(
+            &id,
+            &hashed,
+            "[Group] The Book [DL版].zip",
+            "The Book",
+        )
+        .unwrap();
+        lanrurugi_storage::sidecar::write(dir.path(), &sidecar).unwrap();
+
+        // By-name layout: the filename already says everything, and it gets no sidecar.
+        let byname_dir = lanrurugi_storage::paths::byname_dir(dir.path()).join("Series");
+        std::fs::create_dir_all(&byname_dir).unwrap();
+        std::fs::write(
+            byname_dir.join("Old Book.zip"),
+            format!("by-name bytes {nonce}"),
+        )
+        .unwrap();
+
+        let jobs = lanrurugi_core::jobs::JobRegistry::new();
+        let job_id = jobs.create("scan").await;
+        let summary = full_scan(
+            dir.path(),
+            &pools,
+            std::sync::Arc::new(Equivalence::default()),
+            thumb_dir.path(),
+            &jobs,
+            &job_id,
+            None,
+        )
+        .await;
+        assert_eq!(summary.catalogued, 2, "{summary:?}");
+        assert_eq!(summary.relocated, 0, "both files are already in a layout");
+
+        let records = archives.list_all().await.unwrap();
+        assert_eq!(records.len(), 2);
+        let hashed_record = records.iter().find(|a| a.id.as_str() == id).unwrap();
+        assert_eq!(hashed_record.title, "The Book");
+        assert_eq!(hashed_record.name, "[Group] The Book [DL版]");
+        let byname_record = records
+            .iter()
+            .find(|a| a.file.contains("_byname"))
+            .expect("the by-name file is catalogued where it lives");
+        assert_eq!(byname_record.title, "Old Book");
+        assert_eq!(byname_record.name, "Old Book");
+        assert!(
+            !lanrurugi_storage::paths::sidecar_path(dir.path(), byname_record.id.as_str()).exists(),
+            "by-name archives get no sidecar"
+        );
+
+        for record in &records {
+            archives.delete(&record.id).await.unwrap();
+        }
+        let mut conn = config_pool.get().await.unwrap();
+        let _: () = conn
+            .hdel("LRR_FILEMAP", hashed.to_string_lossy().to_string())
+            .await
+            .unwrap();
+        let _: () = conn
+            .hdel(
+                "LRR_FILEMAP",
+                byname_dir
+                    .join("Old Book.zip")
+                    .to_string_lossy()
+                    .to_string(),
+            )
+            .await
+            .unwrap();
+    }
+
     fn make_zip_with_pages(dir: &std::path::Path, name: &str, n_pages: usize) -> PathBuf {
         let path = dir.join(name);
         let file = std::fs::File::create(&path).unwrap();

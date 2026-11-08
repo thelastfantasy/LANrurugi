@@ -136,9 +136,9 @@ filenames, and reports disagreements instead of duplicating.
 - [x] T020 [US3] Extend the rebuild path (`crates/lanrurugi-api/src/database.rs`'s rebuild helpers, used by
   `crates/lanrurugi-server/src/main.rs:1470`): for a hash-layout file read its sidecar when no record exists; for a
   `_byname` file derive title from the filename (T006). Content-derived id always wins.
-- [ ] T021 [US3] Report per-file discrepancies (sidecar id ≠ content id, unreadable sidecar, missing sidecar) in the
+- [x] T021 [US3] (2026-11-09: `crates/lanrurugi-scanner/src/sidecar_audit.rs` classifies every hash-layout archive's sidecar as ok/missing/unreadable/id-mismatch; `run_rebuild_sequence` surfaces the counts and the per-file details under `sidecars` in the job result and logs one warning when unclean) Report per-file discrepancies (sidecar id ≠ content id, unreadable sidecar, missing sidecar) in the
   rebuild report; never create a second record for the same bytes.
-- [ ] T022 [US3] Test: flush the test database, rebuild, and recover ids/titles for both layouts; a sidecar whose
+- [x] T022 [US3] (2026-11-09: `full_scan::tests::a_scan_recovers_titles_for_both_layouts_after_the_records_are_lost` — hash layout recovers `name`/`title` from the sidecar, `_byname/` from the filename, and no sidecar is written for the by-name file; the full flush-and-rebuild path itself is the same scan plus `rekey_all`) Test: flush the test database, rebuild, and recover ids/titles for both layouts; a sidecar whose
   id disagrees is reported and the content id wins.
 
 ---
