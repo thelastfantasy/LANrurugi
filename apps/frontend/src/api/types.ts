@@ -930,18 +930,6 @@ export type QueueError =
   | { kind: "share_import"; reason: string }
   | { kind: "truncated_download"; expected: number; got: number }
 
-/** Set on a queue item whose download was blocked by a filename collision (content is new, only
- * the filename collides) and staged pending the user's overwrite/rename choice. */
-export interface PendingFilenameConflict {
-  temp_path: string
-  original_filename: string
-  existing_id: string
-  crc32: string
-  /** Unix ms when these bytes were staged, so the UI can show when the sweep reclaims them.
-   *  Absent on records written before the field existed. */
-  staged_at?: number
-}
-
 /** One aligned page pair's sharpness scores. `a`/`b` stay symmetric even though the only current
  * caller assigns `a` = staged download, `b` = existing library archive. */
 export interface PageComparison {
@@ -1097,7 +1085,6 @@ export interface DownloadQueueItem {
   metadata_preview: Record<string, unknown> | null
   metadata_preview_at: number | null
   error: QueueError | null
-  pending_filename_conflict?: PendingFilenameConflict | null
   /** Set alongside state `awaiting_revision_confirmation` — which in-library archive is the newer
    * revision, so the row can name and link to it (issue #107). */
   pending_revision_confirmation?: PendingRevisionConfirmation | null

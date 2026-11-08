@@ -165,10 +165,16 @@ filenames, and reports disagreements instead of duplicating.
 
 **Goal**: no filename template, no conflict menu, no rename popover, no filename field; title editing remains.
 
-- [ ] T024 [US5] Delete `apps/frontend/src/pages/Upload/FilenameTemplateEditor.tsx` and its imports; strip the
-  conflict affordances from `apps/frontend/src/pages/Upload/QueueItemRow.tsx` and the duplicate-filename branch of
-  `apps/frontend/src/components/Layout/QueueErrorText.tsx`.
-- [ ] T025 [US5] Remove the filename/rename field from the archive edit page and the `renameArchive`/conflict calls
+- [x] T024 [US5] (2026-11-09: `FilenameTemplateEditor.tsx`, `ComparisonResultModal.tsx` and `useCompareStream.ts`
+  are deleted, together with the conflict branch in `QueueItemRow.tsx`, the `useOverwriteQueueItem`/
+  `useRenameQueueItem`/`useCompareQueueItem` hooks and `PendingFilenameConflict` in `types.ts`. Deviation:
+  `QueueErrorText.tsx` keeps rendering the `duplicate_filename`/`duplicate_filename_cleaned` kinds — the server
+  still stores `duplicate_filename_cleaned` on rows whose staged file vanished across a restart, so dropping the
+  renderer would turn those into blank errors.) Delete `apps/frontend/src/pages/Upload/FilenameTemplateEditor.tsx`
+  and its imports; strip the conflict affordances from `apps/frontend/src/pages/Upload/QueueItemRow.tsx` and the
+  duplicate-filename branch of `apps/frontend/src/components/Layout/QueueErrorText.tsx`.
+- [x] T025 [US5] (the edit-page field and `useRenameArchive` were removed with the endpoint; the 21 now-unreferenced
+  `upload.*` conflict/compare strings are gone from `en/zh/ja` — `zh_Hant` only carries overrides and had none) Remove the filename/rename field from the archive edit page and the `renameArchive`/conflict calls
   from `apps/frontend/src/api/` (and their `types.ts` entries), then delete the now-unused i18n keys from
   `apps/frontend/src/i18n/locales/{en,zh,ja}.json`. `tsc --noEmit` and `eslint src` must pass.
 

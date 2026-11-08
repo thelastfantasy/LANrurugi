@@ -173,14 +173,13 @@ export function partitionByOrigin(items: DownloadQueueItem[]) {
   return { manual, fromSubscriptions }
 }
 
-/** Whether an item is stopped waiting on the user — a filename or revision decision, or a failure.
+/** Whether an item is stopped waiting on the user — a revision decision, or a failure.
  * Flags the tab that would otherwise hide it: splitting a list must not bury the rows that need an
  * answer. */
 export function needsDecision(item: DownloadQueueItem): boolean {
   return (
     item.state === "error" ||
     item.state === "awaiting_revision_confirmation" ||
-    !!item.pending_filename_conflict ||
     !!item.pending_revision_confirmation
   )
 }

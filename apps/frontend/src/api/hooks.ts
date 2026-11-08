@@ -46,7 +46,6 @@ import type {
   CategoryMetadata,
   ChangelogRelease,
   CheckCycle,
-  ComparisonResult,
   Condition,
   DownloadQueueItem,
   DownloadQueueListResponse,
@@ -2075,43 +2074,6 @@ export function usePauseQueueItem() {
       queryClient.invalidateQueries({ queryKey: ["download-queue"] })
       queryClient.invalidateQueries({ queryKey: ["jobs"] })
     },
-  })
-}
-
-/** Overwrite B with the new download; `insertions` optionally packages B's unique pages into a
- * `.patch.zip` first. */
-export function useOverwriteQueueItem() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: ({ id, insertions }: { id: string; insertions?: ExportPatchInsertion[] }) =>
-      sendJson<{ archive_id: string }>("POST", `/download_queue/${encodeURIComponent(id)}/overwrite`, {
-        insertions: insertions ?? [],
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
-      queryClient.invalidateQueries({ queryKey: ["jobs"] })
-    },
-  })
-}
-
-export function useRenameQueueItem() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: ({ id, filename }: { id: string; filename: string }) =>
-      sendJson<{ archive_id: string }>("POST", `/download_queue/${encodeURIComponent(id)}/rename`, {
-        filename,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
-      queryClient.invalidateQueries({ queryKey: ["jobs"] })
-    },
-  })
-}
-
-/** Read-only comparison — resolves nothing, so no invalidation. */
-export function useCompareQueueItem() {
-  return useMutation({
-    mutationFn: (id: string) => sendJson<{ result: ComparisonResult }>("POST", `/download_queue/${encodeURIComponent(id)}/compare`),
   })
 }
 

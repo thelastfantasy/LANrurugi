@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -7,9 +7,7 @@ import {
   useDeleteQueueItem,
   useFetchQueueItemMetadata,
   useJobProgressOverride,
-  useOverwriteQueueItem,
   usePauseQueueItem,
-  useRenameQueueItem,
   useStartQueueItem,
   useStopQueueItem,
   useSubscriptions,
@@ -33,18 +31,14 @@ import {
 } from "@/components/Display";
 import { QueueErrorText } from "@/components/Layout";
 import { routes } from "@/lib/routes";
-import { FONT_SIZE_SM, FONT_SIZE_XS, Z_OVERLAY_BACKDROP, Z_OVERLAY_TOOLTIP } from "@/theme";
-import { dismissToast, toast } from "@/toast";
+import { FONT_SIZE_SM, FONT_SIZE_XS, Z_OVERLAY_TOOLTIP } from "@/theme";
 
-import { ComparisonResultModal } from "./ComparisonResultModal";
-import { ConflictMenu, RenamePopover } from "./FilenameTemplateEditor";
 import {
   ICON_BUTTON_STYLE,
   LOCAL_UPLOAD_NAMESPACE,
   TooltipIfPresent,
   TruncatedFilename,
 } from "./shared";
-import { useCompareStream } from "./useCompareStream";
 
 /** Whether `ms` falls on today's own calendar day. */
 function isToday(ms: number): boolean {
@@ -295,25 +289,12 @@ export function QueueItemRow({
   const pause = usePauseQueueItem();
   const confirmOlder = useConfirmOlderRevision();
   const del = useDeleteQueueItem();
-  const overwriteConflict = useOverwriteQueueItem();
-  const renameConflict = useRenameQueueItem();
-  const compareStream = useCompareStream();
   // Shared with the subscriptions page's own list (same query key), so a queue of a dozen rows
   // still costs one request.
   const subscriptions = useSubscriptions();
   const subscriptionName = item.subscription_id
     ? subscriptions.data?.find((s) => s.id === item.subscription_id)?.name
     : undefined;
-  const [conflictMenuOpen, setConflictMenuOpen] = useState(false);
-  const conflictButtonRef = useRef<HTMLButtonElement | null>(null);
-  const [renamePopover, setRenamePopover] = useState<{
-    x: number;
-    y: number;
-  } | null>(null);
-  // Real state (not a ref) — showModal reads it during render, so closing must re-render.
-  const [started, setStarted] = useState(false);
-  const startedRef = useRef(false);
-  const pendingCompareToastRef = useRef<ReturnType<typeof toast> | null>(null);
   const archiveId =
     item.archive_ids?.[0] ??
     (job?.result as { archive_ids?: string[] } | null)?.archive_ids?.[0];
@@ -326,47 +307,6 @@ export function QueueItemRow({
     if (!metadataPlugin) return;
     fetchMetadata.mutate(item.id);
   }
-
-  function handleCompare() {
-    setConflictMenuOpen(false);
-    const pendingToastId = toast({
-      heading: t("upload.analyzing") ?? "Analyzing…",
-      icon: "info",
-      hideAfter: false,
-      closeOnClick: false,
-    });
-    pendingCompareToastRef.current = pendingToastId;
-    startedRef.current = true;
-    setStarted(true);
-    compareStream.start(item.id);
-  }
-
-  const hasFirstSample = compareStream.state.samples.some((s) => s !== undefined);
-  const streamDone = compareStream.finished || compareStream.state.summary !== null;
-  const noMatch = streamDone && !hasFirstSample;
-  const showModal = started && hasFirstSample && !compareStream.error;
-
-  useEffect(() => {
-    if (!startedRef.current) return;
-    if ((hasFirstSample || streamDone || compareStream.error) && pendingCompareToastRef.current !== null) {
-      dismissToast(pendingCompareToastRef.current);
-      pendingCompareToastRef.current = null;
-    }
-    if (noMatch) {
-      toast({ heading: t("upload.noReliableComparisonResult"), icon: "info", hideAfter: false });
-      startedRef.current = false;
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setStarted(false);
-    }
-    if (compareStream.error) {
-      if (pendingCompareToastRef.current !== null) {
-        dismissToast(pendingCompareToastRef.current);
-        pendingCompareToastRef.current = null;
-      }
-      toast({ heading: compareStream.error, icon: "error" });
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasFirstSample, streamDone, noMatch, compareStream.error]);
 
   return (
     <>
@@ -694,65 +634,7 @@ export function QueueItemRow({
             flex: "0 0 56px",
           }}
         >
-        {item.pending_filename_conflict ? (
-          <>
-            <div style={{ position: "relative" }}>
-              <Tooltip label={t("upload.resolveConflict") ?? ""}>
-                <button
-                  ref={conflictButtonRef}
-                  type="button"
-                  className="stdbtn"
-                  style={ICON_BUTTON_STYLE}
-                  disabled={
-                    overwriteConflict.isPending || renameConflict.isPending
-                  }
-                  onClick={() => setConflictMenuOpen((open) => !open)}
-                >
-                  <i className="fa fa-clone" aria-hidden="true"></i>
-                </button>
-              </Tooltip>
-              {conflictMenuOpen && (
-                <>
-                  <div
-                    style={{
-                      position: "fixed",
-                      inset: 0,
-                      zIndex: Z_OVERLAY_BACKDROP,
-                    }}
-                    onClick={() => setConflictMenuOpen(false)}
-                  />
-                  <ConflictMenu
-                    onOverwrite={() => {
-                      setConflictMenuOpen(false);
-                      void overwriteConflict.mutateAsync({ id: item.id });
-                    }}
-                    onRename={() => {
-                      const rect = conflictButtonRef.current?.getBoundingClientRect();
-                      if (rect) setRenamePopover({ x: rect.left, y: rect.bottom });
-                      setConflictMenuOpen(false);
-                    }}
-                    onCompare={() => void handleCompare()}
-                    stagedAt={item.pending_filename_conflict.staged_at}
-                  />
-                </>
-              )}
-            </div>
-            {renamePopover && (
-              <RenamePopover
-                anchor={renamePopover}
-                conflict={item.pending_filename_conflict}
-                itemTitle={item.title}
-                itemNamespace={item.plugin_namespace}
-                pending={renameConflict.isPending}
-                onCancel={() => setRenamePopover(null)}
-                onConfirm={(filename) => {
-                  setRenamePopover(null);
-                  void renameConflict.mutateAsync({ id: item.id, filename });
-                }}
-              />
-            )}
-          </>
-        ) : item.state === "awaiting_revision_confirmation" ? (
+        {item.state === "awaiting_revision_confirmation" ? (
           <>
             <Tooltip label={t("upload.downloadAnyway") ?? ""}>
               <button
@@ -893,17 +775,6 @@ export function QueueItemRow({
           </button>
         </Tooltip>
       </div>
-      {showModal && (
-        <ComparisonResultModal
-          queueItemId={item.id}
-          state={compareStream.state}
-          onClose={() => {
-            compareStream.close();
-            startedRef.current = false;
-            setStarted(false);
-          }}
-        />
-      )}
     </>
   );
 }
