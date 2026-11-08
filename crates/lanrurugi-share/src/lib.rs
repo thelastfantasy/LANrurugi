@@ -8,4 +8,5 @@ pub mod host;
 pub mod interfaces;
 pub mod link;
 pub mod proxy;
+pub mod settings;
 pub mod status;
