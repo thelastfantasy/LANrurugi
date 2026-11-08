@@ -4602,12 +4602,15 @@ dependencies = [
  "lanrurugi-share-proto",
  "pkarr",
  "rand 0.10.3",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-socks",
  "tokio-util",
  "tracing",
+ "url",
 ]
 
 [[package]]

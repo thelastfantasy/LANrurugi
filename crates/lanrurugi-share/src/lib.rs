@@ -7,4 +7,5 @@
 pub mod host;
 pub mod interfaces;
 pub mod link;
+pub mod proxy;
 pub mod status;

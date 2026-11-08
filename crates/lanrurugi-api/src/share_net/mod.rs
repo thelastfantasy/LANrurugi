@@ -13,7 +13,7 @@ pub use lanrurugi_share::interfaces;
 pub mod limits;
 pub use lanrurugi_share::link;
 pub mod nodes;
-pub mod proxy;
+pub use lanrurugi_share::proxy;
 pub mod publish;
 pub mod server;
 pub use lanrurugi_share::status;
