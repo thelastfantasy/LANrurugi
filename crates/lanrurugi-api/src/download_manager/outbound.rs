@@ -47,7 +47,12 @@ pub fn outbound_client() -> reqwest::Client {
         }
     }
     let built = lanrurugi_core::http_client::build(lanrurugi_core::http_client::bind_outbound(
-        reqwest::Client::builder(),
+        reqwest::Client::builder()
+            // A download is a long-lived stream: a dead peer otherwise keeps the socket half-open
+            // indefinitely (the idle timeout in `stream.rs` covers the body, this covers the
+            // handshake and the OS-level keepalive).
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .tcp_keepalive(Some(std::time::Duration::from_secs(60))),
     ));
     let client = match built {
         Ok(client) => client,

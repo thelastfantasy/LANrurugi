@@ -115,6 +115,11 @@ pub enum DownloadError {
     /// declared a length (see the completion check's own note on `chunked`).
     #[error("download truncated: expected {expected} bytes, got {got}")]
     Truncated { expected: u64, got: u64 },
+    /// No chunk arrived within the idle window. Without this, a connection that died without an
+    /// RST/FIN (a NAT rebind, a suspended laptop) leaves `stream.next()` pending forever and the
+    /// queue row sits at "downloading" with no error at all.
+    #[error("no data for {seconds} seconds")]
+    Stalled { seconds: u64 },
     /// The caller's `CancellationToken` fired (a user pressed Stop) — deliberately not converted
     /// to a `QueueError` variant the way every other member of this enum is: a user-requested stop
     /// isn't a failure to surface as an error state, it's handled by the caller reverting the
@@ -149,6 +154,7 @@ impl From<&DownloadError> for lanrurugi_core::queue_error::QueueError {
             // queue item to `Queued` instead of recording an error) — this arm only exists so the
             // match stays exhaustive; `Internal` is a harmless placeholder that should never
             // actually surface.
+            DownloadError::Stalled { .. } => QueueError::HttpRequestFailed { url: String::new() },
             DownloadError::Truncated { expected, got } => QueueError::TruncatedDownload {
                 expected: *expected,
                 got: *got,
@@ -552,6 +558,10 @@ async fn download_one_inner(
     // anything but a near-instantaneous download).
     let mut last_reported = std::time::Instant::now();
     const PROGRESS_REPORT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+    /// How long a single chunk read may stay pending before the transfer counts as stalled. The
+    /// slowest legitimate gap is a server that is still archiving on its side, which is exactly what
+    /// the 503 + `Retry-After` contract above is for on LANrurugi's own repacks.
+    const READ_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
     loop {
         // Raced against the stream on every iteration (rather than checked once before the loop)
@@ -576,9 +586,18 @@ async fn download_one_inner(
                 }
                 return Err(DownloadError::Cancelled);
             }
-            chunk = stream.next() => match chunk {
-                Some(chunk) => chunk,
-                None => break,
+            chunk = tokio::time::timeout(READ_IDLE_TIMEOUT, stream.next()) => match chunk {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(_) => {
+                    drop(file);
+                    if resume_paths.is_none() {
+                        let _ = tokio::fs::remove_file(&staging_path).await;
+                    }
+                    return Err(DownloadError::Stalled {
+                        seconds: READ_IDLE_TIMEOUT.as_secs(),
+                    });
+                }
             },
         };
         let chunk = match chunk {

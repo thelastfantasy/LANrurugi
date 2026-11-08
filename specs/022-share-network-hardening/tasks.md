@@ -140,7 +140,7 @@ address change; rotation waits for active claims; a rebuild keeps the importer's
 
 ## Phase 8: User Story 6 — Downloads and repacks recover (Priority: P3)
 
-- [ ] T031 [US6] Give `default_client()`/the download stream connect, read and idle timeouts plus TCP keepalive;
+- [x] T031 [US6] (2026-11-09: connect timeout + TCP keepalive on the bound download client; 180s idle window around the stream read, mapped to `HttpRequestFailed`) Give `default_client()`/the download stream connect, read and idle timeouts plus TCP keepalive;
   a stalled stream fails into the retry path instead of hanging forever.
 - [ ] T032 [US6] Retry retryable download errors without user action, resuming from `.part` + `If-Range`; only an
   explicit 4xx/5xx refusal is terminal.
