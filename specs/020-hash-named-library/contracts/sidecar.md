@@ -3,12 +3,12 @@
 ## Name and location
 
 ```
-<library>/<ab>/<id>.json          # live archive
-<library>/.classic/<ab>/<id>.json # migrated archive
+<library>/<ab>/<id>.json          # hash-layout archive
 ```
 
-`ab` is the first two characters of the id. There is exactly one sidecar per archive; no sidecar exists without a
-matching archive, and a sidecar left without one is reported and removed by the rebuild/sweep (never silently kept).
+`ab` is the first two characters of the id. There is exactly one sidecar per hash-layout archive and none for an
+archive under `_byname`, whose filename is already its name; no sidecar exists without a matching archive, and a
+sidecar left without one is reported and removed by the rebuild/sweep (never silently kept).
 
 ## Format
 
@@ -41,7 +41,7 @@ sidecar is better than none).
 3. `version` greater than the supported one: read the known fields, log once, rewrite at the supported version on the
    next write.
 4. `id` that disagrees with the filename stem: the filename (and the content) win; the disagreement is reported.
-5. `original_path` is advisory for humans and rollback; it is never used to build a live path.
+5. `original_path` is advisory for humans and for moving a file back by hand; it is never used to build a live path.
 
 ## Enumeration rules
 
@@ -50,7 +50,7 @@ The following must ignore `*.json` files inside the library:
 - the full scan's `walk()`;
 - the watcher (`is_watched_archive_path`);
 - the stale/orphan sweep;
-- the migration's plan (it enumerates records, but its file discovery must not pick up sidecars);
+- the scanner's walk, which must not pick up sidecars as archives;
 - the duplicate scanner.
 
 A `.json` file that is *not* named like a sidecar (`<id>.json` with a 40-hex stem) is still ignored — the rule is

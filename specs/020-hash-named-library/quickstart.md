@@ -42,53 +42,52 @@ Upload the same fixture twice under different filenames.
 
 Expected: the second upload is rejected as a duplicate naming the first archive's id; no second record; no overwrite.
 
-## S4 — Hand-dropped file
+## S4 — A dropped file is relocated into `_byname`
 
 ```sh
+mkdir -p "$LIB/series"
 cp /tmp/fixture.zip "$LIB/series/new one.zip"
 curl -sS -X POST "$LRR/api/scan"     # or wait for the watcher
 ```
 
-Expected: catalogued; `file` still `$LIB/series/new one.zip`; `original_filename` = `new one.zip`; a sidecar is written
-next to it; the file is not renamed.
+Expected: catalogued; `file` becomes `$LIB/_byname/series/new one.zip`; `original_path` = `series/new one.zip`;
+`original_filename` = `new one.zip`; no sidecar is written (it is not in the hash layout); the filename is unchanged.
+The scan response reports `moved_to_byname: 1`.
 
-## S5 — Migration on a scratch library
+## S5 — An existing library moves on its first scan
 
 ```sh
 # 1. Put three archives in subdirectories, scan, note their ids.
 curl -sS "$LRR/api/archives" | jq -r '.archives[] | [.id, .file] | @tsv' > /tmp/before.tsv
 
-# 2. Preview.
-curl -sS "$LRR/api/migration/preview" | jq .
+# 2. Trigger a scan; there is no preview or confirm step.
+curl -sS -X POST "$LRR/api/scan" | jq .
 
-# 3. Run.
-curl -sS -X POST "$LRR/api/migration" -H 'content-type: application/json' \
-  -d '{"confirm":true}' | jq .
-
-# 4. After completion, the ids are unchanged and paths are under .classic/.
+# 3. Ids are unchanged and paths are under _byname/.
 curl -sS "$LRR/api/archives" | jq -r '.archives[] | [.id, .file] | @tsv' > /tmp/after.tsv
 diff <(cut -f1 /tmp/before.tsv) <(cut -f1 /tmp/after.tsv)   # empty
-grep -v '/.classic/' /tmp/after.tsv                          # empty
+grep -v '/_byname/' /tmp/after.tsv                          # empty
 ```
 
-Expected: preview counts add up to the archive count; `diff` empty; every path starts with `.classic/<ab>/`; each
-archive has a sidecar; category and tankoubon counts (from `/api/categories`) are unchanged.
+Expected: `diff` empty; every path is `<LIB>/_byname/<original relative path>` with its filename unchanged; no sidecar
+was added under `_byname`; category and tankoubon counts (from `/api/categories`) are unchanged; a second scan reports
+`moved_to_byname: 0`.
 
 ## S6 — Interrupt and resume
 
-Start S5 with a larger library (say 1,000 files), `kill -9` the server mid-run, restart, then start the migration
-again.
+Start S5 with a larger library (say 1,000 files), `kill -9` the server mid-scan, restart, scan again.
 
-Expected: it resumes (no file moved twice, none lost), and the journal has one line per completed move.
+Expected: files already under `_byname/` are untouched, the rest move, no file is moved twice and none is lost.
 
-## S7 — Rollback
+## S7 — Move one file back by hand
 
 ```sh
-curl -sS -X POST "$LRR/api/migration/rollback" | jq .
+mv "$LIB/_byname/series/vol1.zip" "$LIB/series/vol1.zip"
+curl -sS -X POST "$LRR/api/scan" | jq .
 ```
 
-Expected: every file returns to its pre-migration path; `diff` against `/tmp/before.tsv` is empty; the library still
-resolves.
+Expected: the file is catalogued at its new path with the same id (no duplicate), then relocated into `_byname/`
+again, because the rule is continuous.
 
 ## S8 — Database loss
 
@@ -99,8 +98,8 @@ mise run rebuild-index           # or POST /api/rebuild
 curl -sS "$LRR/api/archives" | jq '.archives | length'
 ```
 
-Expected: the count matches the pre-flush snapshot; ids and titles are restored from the files and sidecars; the report
-shows zero unreadable sidecars.
+Expected: the count matches the pre-flush snapshot; hash-layout ids and titles are restored from the files and their
+sidecars, `_byname` titles from the filenames; the report shows zero unreadable sidecars.
 
 ## S9 — The conflict UI is gone
 
@@ -111,6 +110,6 @@ shows zero unreadable sidecars.
 
 ## S10 — Downloads keep the title
 
-Download an archive after migration and inspect the response headers.
+Download an archive after relocation and inspect the response headers.
 
 Expected: `Content-Disposition` carries the title, not the id; the bytes match.

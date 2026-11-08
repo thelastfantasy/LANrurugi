@@ -6,7 +6,7 @@
 
 **Status**: Draft
 
-**Input**: User description — "放弃现在的档案命名方式，统一改成 hash.ext：直接上传的文件入库后自动改名 hash.ext，原文件名作为档案标题（现有的插件功能改为 Rust 原生，插件删除）；档案编辑页面的「显示/编辑档案名」功能去掉。所有新档案用新形式，老档案全都移动到 `.classic` 目录。"
+**Input**: User description — "放弃现在的档案命名方式，统一改成 hash.ext：直接上传的文件入库后自动改名 hash.ext，原文件名作为档案标题（现有的插件功能改为 Rust 原生，插件删除）；档案编辑页面的「显示/编辑档案名」功能去掉。所有新档案用新形式，老档案全都移动到 `_byname` 目录。"
 
 ## Context
 
@@ -24,10 +24,11 @@ This feature makes the on-disk name a function of content and nothing else:
 
 1. **Every ingested archive is stored as `{id}.{ext}`**, bucketed by the first two characters of the id under the library root.
 2. **The human name becomes metadata.** The original filename is recorded verbatim at ingest, the title is derived from it (release markers stripped) by the server itself rather than by a plugin, and it can be as long or as unusual as the source allows.
-3. **The existing library moves into `.classic`.** Old archives are relocated (and renamed to `{id}.ext`) by an explicit, previewable, reversible migration. Because the id is unchanged by a rename, categories, tankoubons, reading progress, bookmarks and stamps are untouched — this is a move, not a re-import.
-4. **A sidecar per archive keeps identity recoverable.** `{id}.json` next to the file records the original filename, original relative path, title and extension, so a lost database does not lose the library's names.
+3. **Everything outside the hash layout moves into `_byname` unchanged.** Archives already in the library — and anything the user adds later — are relocated by the scanner itself, keeping their names and relative paths exactly as they are; `_byname` is catalogued the old way, by filename. Because nothing is renamed and the id is unchanged, categories, tankoubons, reading progress, bookmarks and stamps are untouched — this is a move, not a re-import.
+4. **A sidecar per hash-named archive keeps identity recoverable.** `{id}.json` next to a new-layout file records the original filename, original relative path, title and extension, so a lost database does not lose that archive's name. `_byname` needs no sidecar: its filename is its name.
 
-On the user's decision, the interim fix (store an over-long title under a short placeholder name and keep the real title as metadata) is a separate, small change; this specification describes the end state that makes the placeholder unnecessary.
+On the user's decision, no interim UI fix ships: the naming change alone removes the class of failure, and the abandoned
+255-byte work is not a prerequisite.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -47,29 +48,39 @@ A user pastes a gallery whose title is a 300-character CJK string, or a title co
 
 ---
 
-### User Story 2 - The existing library is moved to `.classic` without losing anything (Priority: P2)
+### User Story 2 - Everything that is not hash-named ends up under `_byname` (Priority: P2)
 
-An administrator with an existing library starts the migration from the settings page. The preview reports how many archives will move, how many would collide by content and be skipped, and how many are already in the target shape. They confirm, and the job moves every pre-existing archive (and its `.patch.zip`) into `.classic/<bucket>/{id}.ext`. When it finishes, the library looks the same: same titles, same categories, same tankoubons, same reading progress. If something goes wrong, a rollback puts every file back where it was.
+The first scan after upgrading finds a library whose archives are still named and organised by the user. The scanner
+moves each one into `_byname/`, keeping its filename and its path relative to the library root, and updates the record;
+nothing asks for confirmation, because keeping the root for machine-named files is the point of the feature. Files the
+user drops in afterwards follow the same rule on the next scan. When it finishes, the library looks the same in the UI:
+same titles, same categories, same tankoubons, same reading progress, and the user's folder structure is still visible
+under `_byname/`. A file moved by mistake can be moved back, because its original path is recorded.
 
-**Why this priority**: without this, the feature would only apply to future archives and the user would be left with a permanently split library. It is second only because it must not run before the new layout is proven on new ingests.
+**Why this priority**: without this the library would keep two layouts forever and the root would stay mixed; it is
+second only because it must not run before the new layout is proven on new ingests.
 
-**Independent Test**: on a copy of a real library, run the preview, run the migration, compare archive ids, category membership, tankoubon membership and progress counts before and after, then roll back and compare paths.
+**Independent Test**: on a copy of a real library, scan once, compare archive ids, category membership, tankoubon
+membership and progress counts before and after, then verify every path is `_byname/<original relative path>`, then
+move one file back and scan again.
 
 **Acceptance Scenarios**:
 
-1. **Given** a library of 100,000 archives in arbitrary subdirectories, **When** the migration completes, **Then** every archive id is unchanged and every category/tankoubon/progress reference still resolves.
-2. **Given** an archive with a `.patch.zip` beside it, **When** the archive moves, **Then** the patch moves with it and remains attached.
-3. **Given** a migration interrupted halfway, **When** it is restarted, **Then** it resumes without moving an already-moved archive twice and without losing a partially moved one.
-4. **Given** a completed migration, **When** the administrator rolls it back, **Then** every file returns to its recorded original path and the library still resolves.
-5. **Given** two files with identical content under different names, **When** the migration runs, **Then** it reports the collision and keeps one, rather than silently overwriting the other.
-
----
+1. **Given** a library of 100,000 archives in arbitrary subdirectories, **When** the scan completes, **Then** every
+   archive id is unchanged, every category/tankoubon/progress reference still resolves, and every file is under
+   `_byname/` with its original filename and relative path.
+2. **Given** an archive with a `.patch.zip` beside it, **When** the archive moves, **Then** the patch moves with it and
+   remains attached.
+3. **Given** a scan interrupted halfway, **When** it runs again, **Then** archives already under `_byname/` are
+   untouched, the rest move, and no record is duplicated or lost.
+4. **Given** a file dropped into the library root after the upgrade, **When** the next scan runs, **Then** it is
+   catalogued and moved under `_byname/`.
 
 ### User Story 3 - A lost database does not lose the library's names (Priority: P3)
 
 The Redis instance is lost or deliberately flushed. Rebuilding the index walks the library, reads each archive's sidecar, and restores every archive's id, title, original filename and path. The user reattaches categories and tankoubons from the last export, but does not have to re-name or re-identify a single archive.
 
-**Why this priority**: hash naming removes the last human-readable trace from the disk, so the sidecar is what keeps a database loss from being a library loss. It is lower than the migration because it only matters after the layout exists.
+**Why this priority**: hash naming removes the last human-readable trace from the disk, so the sidecar is what keeps a database loss from being a library loss. It is lower than the relocation because it only matters after the layout exists.
 
 **Independent Test**: flush the database on a test instance, run rebuild-index, and compare the recovered archive count, ids and titles against a snapshot taken before the flush.
 
@@ -82,7 +93,7 @@ The Redis instance is lost or deliberately flushed. Rebuilding the index walks t
 
 ### User Story 4 - Dropping files into the library still works (Priority: P3)
 
-A user copies a batch of archives into the library directory over SMB. The scanner picks them up on its next pass exactly as it does today, and the original filename becomes the title.
+A user copies a batch of archives into the library directory over SMB. The scanner picks them up on its next pass exactly as it does today, the original filename becomes the title, and the files then move under `_byname/` with their relative paths and names intact — so the folder structure the user copied in survives.
 
 **Why this priority**: this is the workflow the browsable directory exists for; breaking it would make the feature user-hostile even though it is not the reported bug.
 
@@ -91,7 +102,7 @@ A user copies a batch of archives into the library directory over SMB. The scann
 **Acceptance Scenarios**:
 
 1. **Given** a new file placed anywhere in the library directory, **When** a scan runs, **Then** it is catalogued and appears in the library.
-2. **Given** such a file, **When** it is catalogued, **Then** the application does not rename or move it on its own.
+2. **Given** such a file, **When** it is catalogued, **Then** it is relocated under `_byname/` without being renamed, and its path relative to the library root is preserved.
 
 ---
 
@@ -117,7 +128,9 @@ A user opens the upload queue and the archive edit page. There is no "overwrite 
 - A file whose name is not valid UTF-8 must not abort a scan; it is skipped with a log entry.
 - A user or SMB client renames or moves an archive behind the application's back: the next scan must recognise the content-derived id and update the record rather than create a duplicate.
 - A `.patch.zip` whose archive was moved manually must not be silently attached to a different archive.
-- `.classic` on a different filesystem from the library root: the migration must fall back to copy-then-delete and must not lose the file if it is interrupted mid-copy.
+- `_byname` on a different filesystem from the library root: the move must fall back to copy-then-delete and must not lose the file if it is interrupted mid-copy.
+- Two archives in different subdirectories that share a filename: both keep their relative path, so `_byname` never has to resolve a name collision.
+- A drop whose relative path already exists under `_byname/` with different content: the move is skipped and reported, never overwritten.
 - A sidecar that is corrupt or unparsable must not prevent the archive from being catalogued; it is reported and regenerated.
 - Case-insensitive filesystems: ids are lowercase hex, so no two ids collide by case; the bucket names must not assume case sensitivity.
 - An archive already named `{id}.ext` whose bytes no longer match the id (edited in place) is a rekey case and must be handled explicitly, not silently.
@@ -134,24 +147,24 @@ A user opens the upload queue and the archive edit page. There is no "overwrite 
 - **FR-006**: Re-ingesting content that is already in the library MUST be rejected as a duplicate that names the existing archive; it MUST NOT overwrite, merge, or create a second record.
 - **FR-007**: The filename-conflict workflow MUST be removed end to end: no pending-conflict queue state, no overwrite/rename/compare actions, no rename popover, no filename template.
 - **FR-008**: The archive filename rename capability MUST be removed from the API and from the edit page; title editing MUST remain.
-- **FR-009**: Each archive MUST have a sidecar record next to it, written atomically, holding at least the id, original filename, original relative path, title and extension.
+- **FR-009**: Each archive stored in the hash layout MUST have a sidecar record next to it, written atomically, holding at least the id, original filename, original relative path, title and extension. Archives under `_byname` MUST NOT need one: their filename stays their name.
 - **FR-010**: Sidecars MUST NOT be catalogued as archives by scanning, watching, or sweeping.
-- **FR-011**: Index rebuild MUST be able to reconstruct an archive's id, title and path from the file and its sidecar alone, with the database as the authority when both exist and every disagreement reported.
-- **FR-012**: An explicit migration MUST move every pre-existing catalogued archive, and its `.patch.zip`, from its current path into the `.classic` directory under the new layout, preserving the id.
-- **FR-013**: The migration MUST be previewable before it changes anything, reporting at least how many archives move, how many are merged as duplicate content, how many are skipped and why.
-- **FR-014**: The migration MUST be resumable after interruption and MUST record enough information to be reversible.
-- **FR-015**: The `.classic` directory MUST be a normal part of the library for scanning and serving; it MUST NOT be a hidden area the application refuses to index.
-- **FR-016**: Files a user places in the library directory themselves MUST be catalogued in place without the application renaming them; adoption into the hash layout happens only when the user explicitly selects those files for it. (Resolved 2026-11-08: automatic adoption on scan was rejected — the library directory is the user's, and renaming files a user just copied in is the behaviour that made the old naming scheme surprising.)
+- **FR-011**: Index rebuild MUST be able to reconstruct a hash-layout archive's id, title and path from the file and its sidecar alone, and a `_byname` archive's title from its filename, with the database as the authority when both exist and every disagreement reported.
+- **FR-012**: Any catalogued archive whose stored path is neither the hash layout nor under `_byname/` MUST be relocated into `_byname` during scanning, keeping its filename and its path relative to the library root, without asking the user; the archive id MUST NOT change.
+- **FR-013**: Relocation MUST be idempotent and safe to interrupt: a file already in the hash layout or under `_byname/` MUST NOT be moved, and a target path already occupied by different content MUST be reported and skipped rather than overwritten.
+- **FR-014**: Relocation MUST be observable and reversible by hand: each move is logged with its source and destination and counted in the scan report, and `original_path` records where the file came from.
+- **FR-015**: The `_byname` directory MUST be a normal part of the library for scanning and serving; it MUST NOT be a hidden area the application refuses to index.
+- **FR-016**: Files a user places in the library directory themselves MUST be catalogued and then relocated into `_byname` by the same rule as FR-012, keeping their names; the library root MUST end up holding only hash-named archives. (Resolved 2026-11-08: automatic relocation was chosen — the root is for machine-named files, and `_byname` preserves the user's own organisation.)
 - **FR-017**: Legacy backup import MUST match archives by the recorded original filename, not by the on-disk name.
-- **FR-018**: The path-to-id mapping used to detect files still being written MUST stay consistent across migration and rekey operations.
+- **FR-018**: The path-to-id mapping used to detect files still being written MUST stay consistent across relocation and rekey operations.
 - **FR-019**: Downloads MUST continue to offer the archive's title as the downloaded filename, never the id.
 - **FR-020**: The application MUST NOT require a filesystem-specific name limit anywhere in the ingest path; the only name the application constructs is bounded by construction.
 
 ### Key Entities
 
 - **Archive**: the catalogued unit; its id is derived from its content, its stored path is a function of the id, and its title and original filename are metadata.
-- **Sidecar record**: a per-archive document next to the stored bytes, recording what the database knows so the library can be rebuilt without it.
-- **Migration job**: a resumable, previewable operation that relocates pre-existing archives into `.classic` and records the original paths for rollback.
+- **Sidecar record**: a per-archive document next to a hash-layout archive's bytes, recording what the database knows so the library can be rebuilt without it. `_byname` archives have none.
+- **Relocation rule**: the scanner's continuous rule that moves any archive outside the hash layout and outside `_byname/` into `_byname/<relative path>`, keeping its name and id.
 - **Bucket directory**: one of 256 two-character directories under the library root; holds archives and sidecars, never other structure.
 
 ## Success Criteria *(mandatory)*
@@ -160,19 +173,19 @@ A user opens the upload queue and the archive edit page. There is no "overwrite 
 
 - **SC-001**: An archive whose title is 300 UTF-8 bytes is ingested, listed, opened and downloaded with no error, on the first attempt.
 - **SC-002**: After release, "file name too long" errors attributable to archive ingest are zero over a 30-day window.
-- **SC-003**: A 100,000-archive migration changes zero archive ids and leaves category, tankoubon and reading-progress counts identical before and after.
-- **SC-004**: With the database flushed, an index rebuild recovers 100% of archives' ids and titles from the on-disk layout.
-- **SC-005**: At 100,000 archives, no single directory holds more than 2,000 entries (archives plus sidecars).
+- **SC-003**: A 100,000-archive relocation changes zero archive ids, leaves category, tankoubon and reading-progress counts identical before and after, and leaves no archive outside `_byname/` and the buckets.
+- **SC-004**: With the database flushed, an index rebuild recovers 100% of archives' ids and titles from the on-disk layout — hash-layout archives from their sidecar, `_byname` archives from their filenames.
+- **SC-005**: At 100,000 archives, no bucket directory holds more than 2,000 entries (archives plus sidecars); `_byname` mirrors the user's own structure and is not subject to the fanout.
 - **SC-006**: The upload queue can finish two downloads with identical titles without asking the user anything, and no UI path offers overwrite/rename/compare.
 
 ## Assumptions
 
-- The archive id algorithm stays as it is (a sample hash over the first 512,000 bytes plus length). This keeps existing ids and therefore avoids a rekey during migration; the consequence — two files can share an id while differing later in the file — is handled by rejecting the duplicate rather than by changing the algorithm.
+- The archive id algorithm stays as it is (a sample hash over the first 512,000 bytes plus length). This keeps existing ids and therefore avoids a rekey during relocation; the consequence — two files can share an id while differing later in the file — is handled by rejecting the duplicate rather than by changing the algorithm.
 - At 100,000 archives the two-character fanout keeps buckets around 400 entries; four-character fanout was considered and rejected because it makes the library root unlistable for humans, backup tools and SMB clients.
-- The `.classic` directory lives inside the library directory (the user's decision) and is therefore scanned like any other subdirectory; the name is a convention for humans, not a reserved mount.
-- Existing archives moved into `.classic` are also renamed to `{id}.ext`, so the whole library has one shape and sidecars can be paired by filename.
+- The `_byname` directory lives inside the library directory (the user's decision) and is therefore scanned like any other subdirectory; the name is a convention for humans, not a reserved mount.
+- Existing archives in `_byname` keep their filenames and layout exactly as before (user's decision, 2026-11-08): the directory stays browsable and nothing needs a sidecar to pair with.
 - Sidecars are enabled by default; they add roughly one small file per archive and are ignored by every enumerator.
-- Files a user drops into the library are catalogued in place and never silently renamed.
-- External tools or scripts that reference archives by their old filenames will stop working; this is documented, and the sidecar's original path is the recovery path.
-- An interim fix that stores over-long titles under a short placeholder name ships before this feature, so the production error stops immediately; this specification describes the state in which the placeholder is no longer needed.
+- Files a user drops into the library are catalogued and then moved under `_byname/` on the next scan, keeping their names; nothing is renamed.
+- External tools or scripts that reference archives outside `_byname` by their old paths will need the `_byname/` prefix; this is documented, and `original_path` is the recovery path.
+- The production error stops as soon as this feature lands: the stored name no longer depends on the title, so no interim UI fix is shipped first (the abandoned 255-byte work is not a prerequisite).
 - Share import keeps its own formats and permissions; only its filename policy changes, because there is no filename policy left to apply.

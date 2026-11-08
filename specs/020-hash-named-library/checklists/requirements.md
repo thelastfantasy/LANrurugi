@@ -13,7 +13,7 @@
 
 ## Requirement Completeness
 
-- [x] No [NEEDS CLARIFICATION] markers remain — FR-016 resolved 2026-11-08: hand-dropped files are catalogued in place, adoption only on explicit selection
+- [x] No [NEEDS CLARIFICATION] markers remain — FR-016 resolved 2026-11-08: hand-dropped files are catalogued, then relocated into `_byname/` keeping their names
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
@@ -31,4 +31,6 @@
 
 ## Notes
 
-- FR-016 is the only marker. Recommended default: catalogue hand-dropped files in place without renaming (today's behaviour), and let the explicit migration/adoption job handle conversion — never rename a user's file behind their back.
+- FR-016 is resolved (2026-11-08): a dropped file is catalogued, then relocated into `_byname/` by the same rule as the
+  rest of the library, keeping its filename and relative path. The user chose automatic relocation so the library root
+  holds only hash-named archives.
