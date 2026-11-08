@@ -310,6 +310,12 @@ export function ArchiveContextMenu({
               style={{ position: "relative" }}
               onMouseEnter={() => openSubmenu("category")}
               onMouseLeave={scheduleCloseSubmenus}
+              // Hover is the only way this opened before, so on a touch screen (no hover) the
+              // submenu could never appear at all. A tap toggles it instead.
+              onClick={() => {
+                if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+                setCategoryMenuOpen((open) => !open);
+              }}
             >
               <i className="fa fa-search-plus" style={{ width: 18 }}></i>{" "}
               {t("library.addToCategory")}
