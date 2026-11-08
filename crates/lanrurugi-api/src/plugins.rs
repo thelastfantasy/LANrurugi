@@ -2700,21 +2700,49 @@ pub(crate) async fn start_download(
             }
 
             if let Some(downloads) = parsed.downloads.filter(|d| !d.is_empty()) {
-                match run_managed_downloads(
-                    state_for_task.clone(),
-                    plugin_namespace_for_task.clone(),
-                    downloads,
-                    job_id_for_task.clone(),
-                    category.clone(),
-                    overwrite,
-                    &source_url,
-                    &cancel_for_task,
-                    queue_item_id_for_task.as_deref(),
-                    queue_link.clone(),
-                    auth,
-                )
-                .await
-                {
+                // A download that ends on a network error is not necessarily a failed download:
+                // the bytes already on disk are kept in a `.part` file and the next attempt
+                // resumes from them (issue #88). Retrying here is what turns "the VPN reconnected
+                // for two seconds" into a slightly slower download instead of a red row. Only
+                // transport failures retry — a 404 or a rejected page is the upstream's answer,
+                // and repeating it changes nothing.
+                const MAX_DOWNLOAD_RETRIES: u32 = 4;
+                let mut attempt = 0u32;
+                let outcome = loop {
+                    match run_managed_downloads(
+                        state_for_task.clone(),
+                        plugin_namespace_for_task.clone(),
+                        downloads.clone(),
+                        job_id_for_task.clone(),
+                        category.clone(),
+                        overwrite,
+                        &source_url,
+                        &cancel_for_task,
+                        queue_item_id_for_task.as_deref(),
+                        queue_link.clone(),
+                        auth.clone(),
+                    )
+                    .await
+                    {
+                        Err(
+                            error @ lanrurugi_core::queue_error::QueueError::HttpRequestFailed { .. },
+                        ) if attempt < MAX_DOWNLOAD_RETRIES
+                            && !cancel_for_task.is_cancelled() =>
+                        {
+                            attempt += 1;
+                            let wait = std::time::Duration::from_secs(2u64.pow(attempt).min(60));
+                            tracing::warn!(
+                                attempt,
+                                wait = ?wait,
+                                error = ?error,
+                                "download ended on a network error; retrying"
+                            );
+                            tokio::time::sleep(wait).await;
+                        }
+                        other => break other,
+                    }
+                };
+                match outcome {
                     Ok(ids) => {
                         // The new revision is catalogued now, so retiring the one it supersedes is
                         // finally safe (issue #107's `always_overwrite`). Skipped when ingestion

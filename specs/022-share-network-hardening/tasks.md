@@ -142,7 +142,7 @@ address change; rotation waits for active claims; a rebuild keeps the importer's
 
 - [x] T031 [US6] (2026-11-09: connect timeout + TCP keepalive on the bound download client; 180s idle window around the stream read, mapped to `HttpRequestFailed`) Give `default_client()`/the download stream connect, read and idle timeouts plus TCP keepalive;
   a stalled stream fails into the retry path instead of hanging forever.
-- [ ] T032 [US6] Retry retryable download errors without user action, resuming from `.part` + `If-Range`; only an
+- [x] T032 (2026-11-09: transport failures now retry up to 4 times with 2/4/8/16s backoff, resuming from the existing `.part`; a 4xx/5xx or a plugin error stays terminal. Deviation: bounded retries, not the contract's indefinite wait-with-network loop — a queue row has no `waiting_for_network` state to show, so an unbounded retry would look like a hung download) [US6] Retry retryable download errors without user action, resuming from `.part` + `If-Range`; only an
   explicit 4xx/5xx refusal is terminal.
 - [x] T033 (2026-11-09: the key, `.part`+rename publish, singleflight, `503`+`Retry-After` and 24h age pruning were already in place; added the missing size budget — oldest-first eviction above 4 GiB. Cache lives at `<temp>/download-cache/`, not `<temp>/repack/`) [US6] Rebuild the repack cache per `contracts/repack.md`: content+members key, `<temp>/repack/<key>.zip.tmp`
   → fsync → rename, singleflight, 503 + `Retry-After` while building, TTL/LRU under `tempmaxsize`, and a sweep on
