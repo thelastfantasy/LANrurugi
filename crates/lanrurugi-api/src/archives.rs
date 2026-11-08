@@ -276,6 +276,7 @@ pub fn router() -> Router<AppState> {
             put(add_toc_entry).delete(remove_toc_entry),
         )
         .route("/archives/{id}/download", get(download_archive))
+        .route("/archives/{id}/download-link", get(download_link))
         .route("/archives/{id}/patch", delete(delete_patch))
         .route("/archives/{id}/rename", put(rename_archive))
         .route(
@@ -951,6 +952,22 @@ pub struct DownloadParams {
     inline: bool,
 }
 
+/// `GET /archives/{id}/download-link` — where the browser should go to fetch the bytes: the
+/// configured direct host (signed) when the site is behind a proxy, this origin otherwise.
+async fn download_link(
+    State(state): State<AppState>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+) -> Response {
+    let url = crate::direct_download::link(
+        &state,
+        &format!("archives:{id}"),
+        &format!("/api/dl/archives/{id}"),
+        &format!("/api/archives/{id}/download"),
+    )
+    .await;
+    axum::Json(serde_json::json!({ "url": url })).into_response()
+}
+
 async fn download_archive(
     State(state): State<AppState>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
@@ -973,61 +990,75 @@ async fn download_archive(
     {
         return inline_pdf(&archive).await;
     }
-    serve_archive_download(&archive, byte_range(&headers)).await
+    serve_archive_download(&archive, byte_range(&headers), if_range(&headers)).await
 }
 
 /// The bytes `/archives/{id}/download` serves, shared with the share recipient route (017).
-pub(crate) async fn serve_archive_download(archive: &Archive, range: Option<&str>) -> Response {
+pub(crate) async fn serve_archive_download(
+    archive: &Archive,
+    range: Option<&str>,
+    if_range: Option<&str>,
+) -> Response {
     // A sidecar `.patch.zip` (issue #77's own follow-on design) means the reader is showing pages
     // that don't exist in the archive file itself — downloading the raw file as-is would silently
-    // drop them. The repackaged archive is streamed through a temp file: it used to be built as
-    // one `Vec<u8>` holding the whole member, which for a large patched archive is the entire
-    // file in memory before the first byte goes out. `Ok(false)` (nothing to merge) falls through
-    // to plain file streaming below, exactly as before.
+    // drop them. The repackaged archive is cached under a fingerprint of the archive and its
+    // patch, so a resumed download can be answered with a range instead of a fresh body.
     let archive_file = archive.file.clone();
     let disposition = content_disposition_for(archive);
-    let merged = lanrurugi_core::concurrency::run_blocking(move || {
-        let path = std::path::Path::new(&archive_file);
-        let tmp =
-            std::env::temp_dir().join(format!("lrr-merged-{}.zip", uuid::Uuid::new_v4().simple()));
-        let file = std::fs::File::create(&tmp).ok()?;
-        match lanrurugi_scanner::patch::write_merged_zip(path, std::io::BufWriter::new(file)) {
-            Ok(true) => Some(tmp),
-            _ => {
-                let _ = std::fs::remove_file(&tmp);
-                None
+    let patch = lanrurugi_scanner::patch::patch_path_for(std::path::Path::new(&archive_file));
+    if !patch.is_file() {
+        // The common case: no sidecar, the file on disk is the download.
+        return serve_download_file(
+            std::path::Path::new(&archive.file),
+            disposition,
+            "application/octet-stream",
+            range,
+            if_range,
+        )
+        .await;
+    }
+    let job = Repack::Merged {
+        archive: std::path::PathBuf::from(&archive_file),
+        patch,
+    };
+    let cache = repack_cache_path("merged", &job.cache_key());
+    if !cache.is_file() {
+        // A range needs the length up front, so a file still being built cannot answer it: the
+        // build is started and the request waits for it, which a download manager sees as a slow
+        // first response rather than an error it has to retry blindly.
+        if range.is_some() {
+            begin_repack(cache.clone(), job);
+            if !wait_repack(&cache, REPACK_WAIT).await {
+                return repack_pending();
             }
-        }
-    })
-    .await;
-    if let Ok(Some(tmp)) = merged {
-        match crate::common::stream_temp_file(tmp.clone()) {
-            Ok(body) => {
-                let mut response = (
-                    [
-                        (header::CONTENT_TYPE, "application/octet-stream".to_string()),
-                        (header::CONTENT_DISPOSITION, disposition),
-                    ],
-                    body,
-                )
-                    .into_response();
-                if let Ok(meta) = std::fs::metadata(&tmp) {
-                    response
-                        .headers_mut()
-                        .insert(header::CONTENT_LENGTH, meta.len().into());
-                }
-                return response;
-            }
-            Err(e) => {
-                let _ = std::fs::remove_file(&tmp);
-                tracing::warn!(error = %e, "could not stream the merged archive; falling back");
-            }
+        } else {
+            // No range: answer from the file while it is being written. Waiting for the whole
+            // archive first is what turned a large tankoubon or patch merge into a gateway
+            // timeout — nginx gives up at 60 s, a CDN at 100 s, and nothing had been sent yet.
+            return follow_repack(cache, job, disposition, "application/octet-stream");
         }
     }
-    // Streamed rather than `tokio::fs::read`: a multi-gigabyte archive was previously loaded
-    // whole into the process before the first byte went out (the same reason `inline_pdf` below
-    // streams).
-    let file = match tokio::fs::File::open(&archive.file).await {
+    serve_download_file(
+        &cache,
+        disposition,
+        "application/octet-stream",
+        range,
+        if_range,
+    )
+    .await
+}
+
+/// Serves `path` as an attachment, honouring a single-range `Range` request. Shared by the plain
+/// archive file and by every repackaged download (a merged patch, a tankoubon zip), which used to
+/// answer ranges only when the bytes happened to be a plain file.
+pub(crate) async fn serve_download_file(
+    path: &std::path::Path,
+    disposition: String,
+    content_type: &str,
+    range: Option<&str>,
+    if_range: Option<&str>,
+) -> Response {
+    let mut file = match tokio::fs::File::open(path).await {
         Ok(file) => file,
         Err(e) => {
             return error(
@@ -1037,11 +1068,25 @@ pub(crate) async fn serve_archive_download(archive: &Archive, range: Option<&str
             )
         }
     };
-    let length = file.metadata().await.map(|m| m.len()).ok();
-    let mut file = file;
-    // A resumed download (a share whose endpoint was rebuilt mid-transfer, or any interrupted
-    // browser download) asks for the rest of the file; the merged-patch branch above cannot
-    // answer a range because it serves a different representation, so only this branch does.
+    let metadata = file.metadata().await.ok();
+    let length = metadata.as_ref().map(|m| m.len());
+    // A strong validator: browsers only resume a download that carries one, and `If-Range` is
+    // what keeps a resume from splicing a replaced file onto the old bytes.
+    let etag = metadata.as_ref().map(|m| {
+        let modified = m
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        format!("\"{:x}-{modified:x}\"", m.len())
+    });
+    let range_still_valid = match (if_range, etag.as_deref()) {
+        (Some(value), Some(etag)) => value.trim() == etag,
+        (Some(_), None) => false,
+        (None, _) => true,
+    };
+    let range = range.filter(|_| range_still_valid);
     if let (Some(spec), Some(total)) = (range, length) {
         if let Some((start, end)) = parse_byte_range(spec, total) {
             if tokio::io::AsyncSeekExt::seek(&mut file, std::io::SeekFrom::Start(start))
@@ -1051,8 +1096,8 @@ pub(crate) async fn serve_archive_download(archive: &Archive, range: Option<&str
                 let mut response = (
                     StatusCode::PARTIAL_CONTENT,
                     [
-                        (header::CONTENT_TYPE, "application/octet-stream".to_string()),
-                        (header::CONTENT_DISPOSITION, disposition),
+                        (header::CONTENT_TYPE, content_type.to_string()),
+                        (header::CONTENT_DISPOSITION, disposition.clone()),
                         (
                             header::CONTENT_RANGE,
                             format!("bytes {start}-{end}/{total}"),
@@ -1067,24 +1112,22 @@ pub(crate) async fn serve_archive_download(archive: &Archive, range: Option<&str
                 response
                     .headers_mut()
                     .insert(header::CONTENT_LENGTH, (end - start + 1).into());
+                if let Some(etag) = etag.as_deref() {
+                    if let Ok(value) = header::HeaderValue::from_str(etag) {
+                        response.headers_mut().insert(header::ETAG, value);
+                    }
+                }
                 return response;
             }
             // Seeking failed: start the body over rather than fail the download.
-            match tokio::fs::File::open(&archive.file).await {
-                Ok(fresh) => file = fresh,
-                Err(e) => {
-                    return error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "download_archive",
-                        e.to_string(),
-                    )
-                }
+            if let Ok(fresh) = tokio::fs::File::open(path).await {
+                file = fresh;
             }
         }
     }
     let mut response = (
         [
-            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (header::CONTENT_TYPE, content_type.to_string()),
             (header::CONTENT_DISPOSITION, disposition),
             (header::ACCEPT_RANGES, "bytes".to_string()),
         ],
@@ -1096,11 +1139,333 @@ pub(crate) async fn serve_archive_download(archive: &Archive, range: Option<&str
             .headers_mut()
             .insert(header::CONTENT_LENGTH, length.into());
     }
+    if let Some(etag) = etag.as_deref() {
+        if let Ok(value) = header::HeaderValue::from_str(etag) {
+            response.headers_mut().insert(header::ETAG, value);
+        }
+    }
     response
 }
 
+/// A download that has to be repackaged before it can be served. The bytes depend only on the
+/// inputs listed here, which is also what names the cache file.
+pub(crate) enum Repack {
+    /// A patched archive, rebuilt as one zip.
+    Merged {
+        archive: std::path::PathBuf,
+        patch: std::path::PathBuf,
+    },
+    /// A tankoubon, zipped from its members in reading order.
+    Tankoubon {
+        tank: String,
+        members: Vec<crate::tankoubon_zip::MemberSource>,
+    },
+}
+
+impl Repack {
+    /// Everything the produced bytes depend on — including the member order, their names inside
+    /// the zip and the members that are missing — so any change lands on a new cache file.
+    pub(crate) fn cache_key(&self) -> String {
+        let mut key = String::new();
+        let files: Vec<(&str, &std::path::Path)> = match self {
+            Self::Merged { archive, patch } => vec![("archive", archive), ("patch", patch)],
+            Self::Tankoubon { members, .. } => members
+                .iter()
+                .enumerate()
+                .filter_map(|(index, member)| match member {
+                    crate::tankoubon_zip::MemberSource::File { title, path } => {
+                        key.push_str(&format!("{index}\u{1f}{title}\u{1f}"));
+                        Some(("member", path.as_path()))
+                    }
+                    crate::tankoubon_zip::MemberSource::Missing { title } => {
+                        key.push_str(&format!("{index}\u{1f}missing\u{1f}{title}\u{1f}"));
+                        None
+                    }
+                })
+                .collect(),
+        };
+        for (tag, path) in files {
+            key.push_str(&format!("{tag}\u{1f}{}\u{1f}", path.to_string_lossy()));
+            if let Ok(meta) = std::fs::metadata(path) {
+                key.push_str(&format!("{}\u{1f}", meta.len()));
+                if let Ok(modified) = meta.modified() {
+                    if let Ok(since) = modified.duration_since(std::time::UNIX_EPOCH) {
+                        key.push_str(&format!("{}\u{1f}", since.as_nanos()));
+                    }
+                }
+            }
+            key.push('\u{1e}');
+        }
+        if let Self::Tankoubon { tank, .. } = self {
+            key.insert_str(0, &format!("{tank}\u{1e}"));
+        }
+        let digest = blake3::hash(key.as_bytes());
+        digest.to_hex().to_string()
+    }
+}
+
+/// One lock per cache file, so the many connections a download manager opens at once produce a
+/// single build instead of one per connection.
+fn repack_lock(cache: &std::path::Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<std::path::PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>,
+        >,
+    > = std::sync::OnceLock::new();
+    let locks = LOCKS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut locks = locks.lock().expect("repack locks");
+    locks
+        .entry(cache.to_path_buf())
+        .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
+
+/// Builds the cache file unless it is already there. Writes under a temporary name and renames, so
+/// a crash never leaves a half-written file that looks complete.
+pub(crate) async fn ensure_repack(cache: &std::path::Path, job: Repack) -> bool {
+    if cache.is_file() {
+        return true;
+    }
+    let lock = repack_lock(cache);
+    let _guard = lock.lock().await;
+    if cache.is_file() {
+        return true;
+    }
+    prune_repack_cache();
+    let target = cache.to_path_buf();
+    let staging = target.with_extension("part");
+    lanrurugi_core::concurrency::run_blocking(move || {
+        let Ok(file) = std::fs::File::create(&staging) else {
+            return false;
+        };
+        let writer = std::io::BufWriter::new(file);
+        let built = match &job {
+            Repack::Merged { archive, .. } => {
+                matches!(
+                    lanrurugi_scanner::patch::write_merged_zip(archive, writer),
+                    Ok(true)
+                )
+            }
+            Repack::Tankoubon { members, .. } => {
+                crate::tankoubon_zip::write_tankoubon_zip(writer, members).is_ok()
+            }
+        };
+        if built && std::fs::rename(&staging, &target).is_ok() {
+            true
+        } else {
+            let _ = std::fs::remove_file(&staging);
+            false
+        }
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// How long a range request waits for a repackaged file to be built before giving up with a
+/// `Retry-After`. Long enough for a few gigabytes read off spinning disks, short enough that a
+/// client is not left hanging on a build that died.
+const REPACK_WAIT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Polls until the repackaged file exists. The build itself is a background task, so this only
+/// watches the file system — two requests racing here share one build through `repack_lock`.
+pub(crate) async fn wait_repack(cache: &std::path::Path, limit: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        if cache.is_file() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
+/// Answers with the staging file as it grows, so the first byte leaves before the archive is done.
+/// The staging file is renamed on completion, which is the signal that nothing more is coming.
+pub(crate) fn follow_repack(
+    cache: std::path::PathBuf,
+    job: Repack,
+    disposition: String,
+    content_type: &'static str,
+) -> Response {
+    let staging = cache.with_extension("part");
+    begin_repack(cache.clone(), job);
+    struct Follow {
+        staging: std::path::PathBuf,
+        target: std::path::PathBuf,
+        file: Option<tokio::fs::File>,
+        /// Bytes already handed to the client; the final file is read from here once the build
+        /// finishes, so bytes written between the last read and the rename are not lost.
+        pos: u64,
+        idle: u32,
+    }
+    let state = Follow {
+        staging,
+        target: cache,
+        file: None,
+        pos: 0,
+        idle: 0,
+    };
+    let stream = futures_util::stream::unfold(state, |mut state| async move {
+        use tokio::io::AsyncReadExt;
+        loop {
+            if state.file.is_none() {
+                match tokio::fs::File::open(&state.staging).await {
+                    Ok(file) => state.file = Some(file),
+                    Err(_) => {
+                        // Not created yet, or already renamed: both are "ask again shortly".
+                        if state.target.is_file() {
+                            return None;
+                        }
+                        state.idle += 1;
+                        if state.idle > 600 {
+                            return None;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        continue;
+                    }
+                }
+            }
+            let mut buffer = vec![0u8; 64 * 1024];
+            match state
+                .file
+                .as_mut()
+                .expect("opened above")
+                .read(&mut buffer)
+                .await
+            {
+                Ok(0) => {
+                    if state.target.is_file() {
+                        use tokio::io::AsyncSeekExt;
+                        let mut file = tokio::fs::File::open(&state.target).await.ok()?;
+                        file.seek(std::io::SeekFrom::Start(state.pos)).await.ok()?;
+                        match file.read(&mut buffer).await {
+                            Ok(0) => return None,
+                            Ok(read) => {
+                                buffer.truncate(read);
+                                state.pos += read as u64;
+                                state.file = Some(file);
+                                return Some((
+                                    Ok::<_, std::io::Error>(axum::body::Bytes::from(buffer)),
+                                    state,
+                                ));
+                            }
+                            Err(_) => return None,
+                        }
+                    }
+                    state.idle += 1;
+                    if state.idle > 600 {
+                        return None;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                Ok(read) => {
+                    buffer.truncate(read);
+                    state.pos += read as u64;
+                    state.idle = 0;
+                    return Some((
+                        Ok::<_, std::io::Error>(axum::body::Bytes::from(buffer)),
+                        state,
+                    ));
+                }
+                Err(_) => return None,
+            }
+        }
+    });
+    (
+        [
+            (header::CONTENT_TYPE, content_type.to_string()),
+            (header::CONTENT_DISPOSITION, disposition),
+            (header::ACCEPT_RANGES, "bytes".to_string()),
+        ],
+        axum::body::Body::from_stream(stream),
+    )
+        .into_response()
+}
+
+/// Starts the build in the background, for a range request that cannot wait for it.
+pub(crate) fn begin_repack(cache: std::path::PathBuf, job: Repack) {
+    tokio::spawn(async move {
+        if !ensure_repack(&cache, job).await {
+            tracing::warn!(cache = %cache.display(), "a repackaged download could not be built");
+        }
+    });
+}
+
+/// The answer for a range request that arrived while its file is still being built. Download
+/// managers retry on this, which is why it says when.
+pub(crate) fn repack_pending() -> Response {
+    let mut response = error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "download_archive",
+        "the archive is being prepared; retry shortly".to_string(),
+    );
+    response.headers_mut().insert(
+        header::RETRY_AFTER,
+        axum::http::HeaderValue::from_static("5"),
+    );
+    response
+}
+
+/// The cache file a repackaged download is served from. The fingerprint covers every input, so an
+/// edited archive or patch produces a new file instead of a stale body behind a fresh Range.
+pub(crate) fn repack_cache_path(tag: &str, key: &str) -> std::path::PathBuf {
+    repack_dir().join(format!("{tag}-{key}.zip"))
+}
+
+/// Where repackaged downloads are cached: inside the instance's own temp directory, so it is
+/// visible to `tempmaxsize` accounting and to the operators who already clean that up.
+static REPACK_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+fn repack_dir() -> std::path::PathBuf {
+    REPACK_DIR.get_or_init(std::env::temp_dir).clone()
+}
+
+pub fn set_repack_dir(dir: std::path::PathBuf) {
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = REPACK_DIR.set(dir);
+}
+
+/// Drops cache files nobody has touched for a day. Called when a build starts, which is the only
+/// moment a new file appears and so the only moment the set can grow.
+fn prune_repack_cache() {
+    const KEEP: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+    let Ok(entries) = std::fs::read_dir(repack_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("merged-") && !name.starts_with("tankoubon-") {
+            continue;
+        }
+        let stale = meta
+            .modified()
+            .ok()
+            .and_then(|m| m.elapsed().ok())
+            .is_some_and(|age| age > KEEP);
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// The `Range` header of a download request, when it asks for a single byte span.
-fn byte_range(headers: &HeaderMap) -> Option<&str> {
+/// `If-Range`, so a range request only applies to the file it was started from.
+pub(crate) fn if_range(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::IF_RANGE)
+        .and_then(|value| value.to_str().ok())
+}
+
+pub(crate) fn byte_range(headers: &HeaderMap) -> Option<&str> {
     headers.get(header::RANGE).and_then(|v| v.to_str().ok())
 }
 
@@ -3003,11 +3368,27 @@ fn visible_conversions() -> usize {
 }
 
 /// Workers for the one page a reader is waiting on. JXL encoding is the slow half of a cold page
-/// and scales across cores; everything speculative stays single-threaded.
+/// and scales across cores; everything speculative stays single-threaded. Capped at 30% of the
+/// cores, like every other CPU-bound parallel path in this workspace: the reader must not be able
+/// to make the server unusable for itself.
 fn page_encode_threads() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get().min(4))
-        .unwrap_or(1)
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    (cores * 3 / 10).clamp(1, 4)
+}
+
+/// How many pages may be converted at once. Flipping quickly used to start one conversion per
+/// page, each holding a decoded frame of a few hundred megabytes; a quarter of the cores keeps a
+/// burst from turning into an out-of-memory kill.
+fn conversion_slots() -> &'static tokio::sync::Semaphore {
+    static SLOTS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    SLOTS.get_or_init(|| {
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        tokio::sync::Semaphore::new((cores / 4).max(1))
+    })
 }
 
 /// Converts the pages on either side of `path` in the background, so the next turn finds its page
@@ -3017,6 +3398,11 @@ fn page_encode_threads() -> usize {
 /// every turn paid that in full and a reader flipping quickly kept cancelling requests it had just
 /// started — the page area stayed empty for as long as the flipping lasted. The result of the warm
 /// request itself is dropped; the point is the cache file it leaves behind.
+/// Bumped on every page actually served. A warm task that started before the reader moved on is
+/// warming pages nobody will look at, so it drops its work instead of competing with the page the
+/// reader is waiting for now.
+static WARM_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 #[allow(clippy::too_many_arguments)]
 fn warm_neighbours(
     state: AppState,
@@ -3028,8 +3414,12 @@ fn warm_neighbours(
     requested_short_edge: Option<u32>,
     client_support: ClientImageSupport,
 ) {
+    let generation = WARM_GENERATION.load(std::sync::atomic::Ordering::SeqCst);
     tokio::spawn(async move {
         tokio::time::sleep(WARM_DELAY).await;
+        if WARM_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != generation {
+            return;
+        }
         // Do not start while the reader is still waiting for a page of its own: sharing the CPU
         // made that page slower and the warmed ones finish alongside it.
         let waited = std::time::Instant::now();
@@ -3232,6 +3622,18 @@ pub(crate) async fn serve_page(
         }
     };
 
+    // A download or upload is catalogued before its bytes reach the library (the record is
+    // written with an empty `file` and filled in after the move). Until that fixup lands there is
+    // nothing to read, and the archive reader used to answer with a confusing "unsupported
+    // archive extension: \"\"" because the path was empty — say what is actually happening.
+    if archive.file.trim().is_empty() {
+        return error(
+            StatusCode::CONFLICT,
+            "serve_page",
+            "this archive is still being ingested; try again in a moment".to_string(),
+        );
+    }
+
     let is_patch = params.source.as_deref() == Some("patch");
     let optimize = matches!(params.optimize.as_deref(), Some("1" | "true"));
     let client_support = ClientImageSupport::from_request(headers, params.format.as_deref());
@@ -3366,6 +3768,7 @@ pub(crate) async fn serve_page(
     // for patch pages (read from a separate zip with its own path space) and for requests that
     // were themselves speculative.
     if result.is_ok() && !head_only && optimize && !preview_variant && !prefetch && !is_patch {
+        WARM_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         warm_neighbours(
             state.clone(),
             id.to_string(),
@@ -4065,6 +4468,8 @@ async fn fetch_page(
             true,
         ));
     }
+    // Held only around the conversion, never around a cache hit.
+    let _slot = conversion_slots().acquire().await;
     let converted = if force_convert {
         lanrurugi_scanner::resize::convert_to_format_with_jxl_threads(
             raw.clone(),
@@ -4306,6 +4711,16 @@ pub(crate) async fn get_files(
             )
         }
     };
+    // Same window as `serve_page`: a download/upload is catalogued with an empty `file` and only
+    // gets its real path after the move. Answering "still being ingested" beats a 500 whose
+    // message ("unsupported archive extension") describes an implementation detail.
+    if archive.file.trim().is_empty() {
+        return error(
+            StatusCode::CONFLICT,
+            "get_file_list",
+            "this archive is still being ingested; try again in a moment".to_string(),
+        );
+    }
     let archive_path = std::path::Path::new(&archive.file);
     // `optimize=1` is stamped on every generated URL — the reader then gets whatever
     // `fetch_page` decides is best for its advertised capabilities (JXL-native passthrough,

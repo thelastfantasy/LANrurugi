@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
+import { startDownload } from "@/api/download";
 import type { ArchiveMetadata } from "@/api/types";
 import {
   PopupMenu,
@@ -245,10 +246,10 @@ export function ArchiveContextMenu({
           <PopupMenuItem
             onClick={() => {
               onClose();
-              window.location.assign(
+              void startDownload(
                 isTank
-                  ? `/api/tankoubons/${archive.arcid}/download`
-                  : `/api/archives/${archive.arcid}/download`,
+                  ? `/api/tankoubons/${archive.arcid}`
+                  : `/api/archives/${archive.arcid}`,
               );
             }}
           >

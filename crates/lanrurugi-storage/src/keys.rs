@@ -27,6 +27,22 @@ pub const TOTAL_PAGES_STAT_KEY: &str = "LRR_TOTALPAGESTAT";
 /// (which is itself part of what may not have been saved yet).
 pub const PENDING_RENAME_KEY: &str = "LANRURUGI_PENDING_RENAME";
 
+/// Prefix of the per-archive "catalogued but not published yet" marker — one key per archive
+/// (with a TTL, see [`PENDING_VISIBILITY_TTL_SECS`]), not a set, because a process that dies
+/// mid-ingest would otherwise leave an archive invisible until someone cleaned the set by hand.
+/// `lanrurugi_search` filters these out of every result; `download_manager::ingest` clears the
+/// key once the auto-metadata run is done.
+pub const PENDING_VISIBILITY_PREFIX: &str = "LANRURUGI_PENDING_VISIBILITY:";
+
+/// Long enough for the largest real ingest (copy + metadata plugins), short enough that a crashed
+/// process self-heals well before a user would notice a missing archive.
+pub const PENDING_VISIBILITY_TTL_SECS: u64 = 3600;
+
+/// The marker key for one archive id.
+pub fn pending_visibility_key(archive_id: &str) -> String {
+    format!("{PENDING_VISIBILITY_PREFIX}{archive_id}")
+}
+
 /// Additive, LANrurugi-only. Reverse index (a Redis Set) from one archive ID to every static
 /// category it's currently a member of — `SET_<id>` members are the *forward* direction (a
 /// category's own `archives` field), and until this index existed, answering "which categories is

@@ -852,13 +852,116 @@ function relayFetch(input: string | URL | Request, init?: RequestInit): Promise<
 // Without that proof (non-Linux host, or the library was not shipped) the relay is the only path
 // that honours the interface, so install it and surrender the raw-socket grant the CLI handed us —
 // otherwise `Deno.connect`/`WebSocket` would bypass both the relay and the interface.
+/** A counting semaphore, so the plugin corpus cannot open more sockets than the host allows. */
+class Semaphore {
+  private free: number;
+  private readonly queue: (() => void)[] = [];
+
+  constructor(permits: number) {
+    this.free = permits;
+  }
+
+  async acquire(): Promise<() => void> {
+    if (this.free > 0) {
+      this.free -= 1;
+    } else {
+      await new Promise<void>((resolve) => this.queue.push(resolve));
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = this.queue.shift();
+      if (next) next();
+      else this.free += 1;
+    };
+  }
+}
+
+// The limits the host relay used to enforce on its own. Native fetch bypassed all of them, so a
+// plugin could open a hundred sockets at once, hang forever on a stalled server, or pull a
+// gigabyte into memory — the same corpus, the same defaults, whichever transport carries it.
+const MAX_BODY_BYTES = 32 * 1024 * 1024;
+const REQUEST_TIMEOUT_MS = 20_000;
+const PER_HOST = 6;
+const GLOBAL_LIMIT = 16;
+
+const globalSlots = new Semaphore(GLOBAL_LIMIT);
+const hostSlots = new Map<string, Semaphore>();
+const identical = new Map<string, Promise<Response>>();
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+function slotsFor(host: string): Semaphore {
+  let slots = hostSlots.get(host);
+  if (!slots) {
+    slots = new Semaphore(PER_HOST);
+    hostSlots.set(host, slots);
+  }
+  return slots;
+}
+
+/** What a plugin may do on the network, whoever carries the bytes. */
+function guardedFetch(base: typeof fetch): typeof fetch {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+    const host = hostOf(url);
+    // Two pages asking for the same gallery at once is one request, not two: the corpus does this
+    // whenever a listing primes several archives.
+    const key = method === "GET" ? `${method} ${url}` : "";
+    if (key) {
+      const inflight = identical.get(key);
+      if (inflight) return await inflight.then((response) => response.clone());
+    }
+    const releaseHost = await slotsFor(host).acquire();
+    const releaseGlobal = await globalSlots.acquire();
+    const run = async (): Promise<Response> => {
+      const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+      const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+      const response = await base(input as string | URL, { ...init, signal });
+      const declared = Number(response.headers.get("content-length") ?? "NaN");
+      if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+        throw new Error(`response is ${declared} bytes; the plugin limit is ${MAX_BODY_BYTES}`);
+      }
+      return response;
+    };
+    const promise = (async () => {
+      try {
+        return await run();
+      } finally {
+        releaseGlobal();
+        releaseHost();
+        if (key) identical.delete(key);
+      }
+    })();
+    if (key) identical.set(key, promise);
+    return await promise;
+  }) as typeof fetch;
+}
+
+// The egress shim (`crates/lanrurugi-egress`, loaded with LD_PRELOAD by the host) binds every
+// outbound socket to the configured interface, so Deno's own fetch can stay: full Fetch API,
+// streams, binary bodies, redirects. Its constructor exports LANRURUGI_EGRESS_ACTIVE as proof it
+// actually loaded — a missing `.so` must never leave traffic unconstrained.
+//
+// Without that proof (non-Linux host, or the library was not shipped) the relay is the only path
+// that honours the interface, so install it and surrender the raw-socket grant the CLI handed us —
+// otherwise `Deno.connect`/`WebSocket` would bypass both the relay and the interface.
 if (Deno.env.get("LANRURUGI_EGRESS_ACTIVE") === "1") {
   console.error(
     `plugin network: native fetch, egress interface ${Deno.env.get("LANRURUGI_EGRESS_IF") ?? "(none)"}`,
   );
+  globalThis.fetch = guardedFetch(globalThis.fetch);
 } else {
   console.error("plugin network: host relay (egress shim not loaded)");
-  globalThis.fetch = relayFetch as unknown as typeof fetch;
+  globalThis.fetch = guardedFetch(relayFetch as unknown as typeof fetch);
   try {
     await Deno.permissions.revoke({ name: "net" });
   } catch {

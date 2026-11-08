@@ -15,6 +15,7 @@ use lanrurugi_core::entities::Category;
 use lanrurugi_core::ids::ArchiveId;
 use lanrurugi_equivalence::Equivalence;
 use lanrurugi_storage::bookmarks::BookmarksRepository;
+use lanrurugi_storage::keys::PENDING_VISIBILITY_PREFIX;
 use thiserror::Error;
 
 use crate::grammar::{parse_query, Expr, Field, Token};
@@ -166,6 +167,20 @@ impl SearchEngine {
 
 const ARCHIVE_KEY_GLOB: &str = "????????????????????????????????????????";
 
+/// Archives that are catalogued but not published yet — see
+/// `lanrurugi_api::download_manager::ingest`. Excluded from every result so a download can't show
+/// up in the library (with no tags, half-copied) before its metadata run has finished.
+async fn pending_visibility(conn: &mut deadpool_redis::Connection) -> Result<HashSet<String>> {
+    let keys: Vec<String> = conn.keys(format!("{PENDING_VISIBILITY_PREFIX}*")).await?;
+    Ok(keys
+        .into_iter()
+        .filter_map(|key| {
+            key.strip_prefix(PENDING_VISIBILITY_PREFIX)
+                .map(str::to_string)
+        })
+        .collect())
+}
+
 /// `hidecompleted`'s own "counts as finished" threshold — matches legacy's
 /// `Model/Search.pm::search_uncached` (`$progress / $pagecount > 0.85`), not a Phase-1 invention.
 const HIDE_COMPLETED_THRESHOLD: f64 = 0.85;
@@ -204,14 +219,19 @@ pub async fn search_exists(
         // library non-empty at all", the one case this function doesn't otherwise have a fast path
         // for.
         let any: Vec<String> = archive_conn.keys(ARCHIVE_KEY_GLOB).await?;
-        return Ok(!any.is_empty());
+        let unpublished = pending_visibility(&mut archive_conn).await?;
+        return Ok(any.iter().any(|id| !unpublished.contains(id)));
     }
 
-    let candidates: HashSet<String> = archive_conn
+    let mut candidates: HashSet<String> = archive_conn
         .keys::<_, Vec<String>>(ARCHIVE_KEY_GLOB)
         .await?
         .into_iter()
         .collect();
+    let unpublished = pending_visibility(&mut archive_conn).await?;
+    if !unpublished.is_empty() {
+        candidates.retain(|id| !unpublished.contains(id));
+    }
 
     let mut ctx = EvalCtx {
         archive_pool,
@@ -425,6 +445,14 @@ pub async fn search(
             .into_iter()
             .collect()
     };
+
+    // An archive is catalogued before its metadata run finishes (see
+    // `lanrurugi_api::download_manager::ingest`), and must stay out of search results until that
+    // run publishes it — otherwise it shows up in the library with no tags at all.
+    let unpublished = pending_visibility(&mut archive_conn).await?;
+    if !unpublished.is_empty() {
+        filtered.retain(|id| !unpublished.contains(id));
+    }
 
     let mut expr = parse_query(&params.filter);
 

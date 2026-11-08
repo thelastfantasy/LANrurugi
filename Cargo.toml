@@ -37,6 +37,7 @@ license = "MIT"
 repository = "https://github.com/thelastfantasy/LANrurugi"
 
 [workspace.dependencies]
+if-addrs = "0.13"
 lanrurugi-core = { path = "crates/lanrurugi-core" }
 lanrurugi-storage = { path = "crates/lanrurugi-storage" }
 lanrurugi-scanner = { path = "crates/lanrurugi-scanner" }

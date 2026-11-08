@@ -142,6 +142,14 @@ pub async fn fetch_theme_for_html_injection(
 /// Raw `language` field lookup, same shape as [`fetch_theme`] — `None` only on an actual Redis
 /// failure, defaulting to `"auto"` (matching `STRING_FIELDS`'s own default) whenever the field
 /// itself was never set.
+/// The configured direct download host, if any — see [`crate::direct_download`].
+pub async fn direct_download_url(state: &AppState) -> Option<String> {
+    let mut conn = state.redis.config.get().await.ok()?;
+    let value: Option<String> = conn.hget(CONFIG_KEY, "direct_download_url").await.ok()?;
+    let value = value?.trim().trim_end_matches('/').to_string();
+    (!value.is_empty()).then_some(value)
+}
+
 async fn fetch_language(state: &AppState) -> Option<String> {
     let mut conn = state.redis.config.get().await.ok()?;
     let language: Option<String> = conn.hget(CONFIG_KEY, "language").await.ok()?;
@@ -348,6 +356,10 @@ pub(crate) async fn read_stamp_autounbookmark(state: &AppState) -> bool {
 /// calls. Excludes `password` (see module docs) and `theme` (already had its own default before
 /// this table existed, kept as a named constant below for that reason).
 const STRING_FIELDS: &[(&str, &str)] = &[
+    // Where browser downloads (archive zips, tankoubon zips) should be fetched from when the
+    // site itself sits behind a proxy: a host name that does not go through it. Empty keeps them
+    // on the site's own origin. See `direct_download`.
+    ("direct_download_url", ""),
     ("theme", "modern.css"),
     // 007-guest-restricted-access follow-up: the theme an unauthenticated `guest_visitor` sees,
     // independent of whatever theme the admin has picked for their own session — `get_theme`
@@ -495,6 +507,10 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     ("enablecors", false),
     ("localprogress", false),
     ("authprogress", false),
+    // Deliberate deviation from legacy, which stored "0": a fresh install converts pages for the
+    // reader (`readerquality`, the client's preferred codec) instead of serving multi-megabyte
+    // originals. An upgraded library therefore starts converting on demand — cached and capped by
+    // `conversion_slots`, so it shows up as the first page turn being slower, not as a load spike.
     ("enableresize", true),
     ("enablewebp", true),
     // Use JPEG XL as the generated thumbnail format. JXL > WebP > JPEG for clients that advertise
@@ -597,6 +613,14 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
         if !is_valid_theme {
             return Err(format!(
                 "Invalid theme: {value}. Must be one of {KNOWN_THEME_FILES:?}."
+            ));
+        }
+    }
+    if key == "direct_download_url" {
+        let text = value.as_str().unwrap_or("");
+        if !text.is_empty() && !(text.starts_with("http://") || text.starts_with("https://")) {
+            return Err(format!(
+                "Field \"direct_download_url\" must be an http(s) URL: {text}."
             ));
         }
     }

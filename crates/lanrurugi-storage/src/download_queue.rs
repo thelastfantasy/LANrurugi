@@ -266,6 +266,13 @@ pub struct DownloadQueueItem {
     pub started_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<i64>,
+    /// True exactly while this item's bytes are moving: set when its transfer permit is acquired,
+    /// cleared when the transfer loop hands the file to ingest. [`DownloadQueueState::Downloading`]
+    /// covers more than that (bundling and cataloguing a finished file can take minutes), so a
+    /// count of "transferring now" has to read this rather than the state — counting `Downloading`
+    /// alone showed more items than the configured per-domain limit even while that limit held.
+    #[serde(default)]
+    pub transferring: bool,
     pub created_at: i64,
 }
 
@@ -365,6 +372,7 @@ impl DownloadQueueRepository {
             version_history: None,
             started_at: None,
             finished_at: None,
+            transferring: false,
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as i64)
@@ -533,6 +541,7 @@ mod tests {
             version_history: None,
             started_at: Some(created_at),
             finished_at: Some(created_at),
+            transferring: false,
         };
 
         let finished = |id: &str, at: i64| item(id, at);

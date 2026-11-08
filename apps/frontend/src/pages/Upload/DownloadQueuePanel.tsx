@@ -14,6 +14,7 @@ import type { ArchiveMetadata, DownloadQueueItem, JobRecord, PluginInfo } from "
 import { Tooltip } from "@/components/common-ui/Display"
 import { CollapsibleSection } from "@/components/Display"
 import { useIsNarrowViewport } from "@/hooks"
+import { FONT_SIZE_XS } from "@/theme"
 
 import { QueueItemRow } from "./QueueItemRow"
 import { ShareImportRow } from "./ShareImportRow"
@@ -304,6 +305,10 @@ export function DownloadQueuePanel({
                 ? t("share.importRow.group")
                 : (plugin?.name ?? namespace)
             const { manual, fromSubscriptions, tabs } = tabsFor(groupItems)
+            // `downloading` also covers the cataloguing/writing phase that follows the transfer,
+            // so a raw count of those rows overstates how many are actually pulling bytes — this
+            // is the number the concurrency limit applies to.
+            const transferringCount = groupItems.filter((it) => it.transferring === true).length
             const tab: QueueTab = tabByGroup[namespace] ?? "manual"
             const shown = tabs ? (tab === "manual" ? manual : fromSubscriptions) : groupItems
             // Splitting a list must not bury the rows that need an answer, so whichever tab holds
@@ -319,6 +324,14 @@ export function DownloadQueuePanel({
                 title={
                   <span className="queue-group-title">
                     {`${groupTitle} (${groupItems.length})`}
+                    {transferringCount > 0 && (
+                      <span
+                        style={{ fontSize: FONT_SIZE_XS, opacity: 0.75, marginLeft: 8 }}
+                        title={t("upload.transferringCountHint")}
+                      >
+                        {t("upload.transferringCount", { n: transferringCount })}
+                      </span>
+                    )}
                     {tabs && (
                       // The heading itself toggles the section; a tab click must not also do that.
                       <span className="queue-group-tabs" onClick={(e) => e.stopPropagation()}>

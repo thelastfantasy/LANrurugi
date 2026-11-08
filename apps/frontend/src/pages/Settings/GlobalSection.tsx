@@ -51,6 +51,8 @@ export function GlobalSection({
   setRecommendprecision,
   pluginBindInterface,
   setPluginBindInterface,
+  directDownloadUrl,
+  onDirectDownloadUrlChange,
   interfaces,
   defaultInterface,
   onStatus,
@@ -92,6 +94,8 @@ export function GlobalSection({
   setRecommendprecision: (v: string) => void
   pluginBindInterface: string
   setPluginBindInterface: (v: string) => void
+  directDownloadUrl: string
+  onDirectDownloadUrlChange: (v: string) => void
   interfaces: string[]
   /** The interface the kernel routes internet traffic through right now, when it can be told. */
   defaultInterface: string | null
@@ -224,6 +228,18 @@ export function GlobalSection({
             </div>
             <br />
             {t("settings.pluginInterfaceHint")}
+          </Row>
+          <Row label={t("settings.directDownloadUrl")}>
+            <input
+              className="stdinput"
+              style={{ width: "100%" }}
+              value={directDownloadUrl}
+              onChange={(e) => onDirectDownloadUrlChange(e.target.value)}
+              placeholder="https://dl.example.org"
+              spellCheck={false}
+            />
+            <br />
+            {t("settings.directDownloadUrlHint")}
           </Row>
           <Row label={t("settings.recommendationPrecision")}>
             <select

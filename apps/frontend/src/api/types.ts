@@ -106,6 +106,7 @@ export interface Settings {
   recommendprecision: string
   /** Empty = the kernel's own routing; otherwise the interface plugin downloads are bound to. */
   plugin_bind_interface: string
+  direct_download_url: string
   /** Interface names this host exposes, for the picker above. */
   interfaces: string[]
   /** Interface the kernel currently routes internet traffic through, when it reports one. */
@@ -1104,6 +1105,11 @@ export interface DownloadQueueItem {
    * scoped to that single run; the UI has no reason to act on it, but the field is serialized so
    * the type reflects what the API actually sends. */
   revision_confirmed?: boolean
+  /** True only while this item's bytes are moving — cleared once the file is fully downloaded and
+   *  the backend moves on to bundling/cataloguing it. `downloading` covers both, so anything that
+   *  needs "actually transferring right now" (the per-group count in the queue header) reads this,
+   *  not the state alone. */
+  transferring?: boolean
   created_at: number
 }
 

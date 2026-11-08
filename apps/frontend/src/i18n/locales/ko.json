@@ -871,5 +871,9 @@
   "pluginParameters.importCookiesPlaceholder": "Paste the document.cookie string you copied manually from the site (name=value; name2=value2)",
   "pluginParameters.importCookiesApply": "Fill",
   "pluginParameters.importCookiesHint": "Only cookies that match a field below are filled; the rest are discarded. Remember to save afterwards.",
-  "pluginParameters.importCookiesResult": "Filled {{filled}} field(s); ignored {{ignored}} cookie(s)."
+  "pluginParameters.importCookiesResult": "Filled {{filled}} field(s); ignored {{ignored}} cookie(s).",
+  "upload.ingesting": "라이브러리에 저장 중…",
+  "upload.ingestingHint": "다운로드는 끝났고, 보관함에 기록하고 썸네일을 만드는 중입니다.",
+  "upload.transferringCount": "{{n}}개 전송 중",
+  "upload.transferringCountHint": "현재 바이트를 전송 중인 작업 수(저장 단계 제외)."
 }

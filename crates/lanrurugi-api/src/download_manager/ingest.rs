@@ -242,6 +242,34 @@ pub async fn ingest_downloaded_file(
     }
 }
 
+/// Marks `archive_id` unpublished, so `lanrurugi_search` skips it until
+/// [`clear_pending_visibility`] runs. Best-effort: if Redis is unreachable the archive is simply
+/// visible a little early with partial metadata, which is the old behaviour — not worth failing an
+/// otherwise successful ingest over.
+async fn mark_pending_visibility(state: &AppState, archive_id: &str) {
+    use deadpool_redis::redis::AsyncCommands;
+    let Ok(mut conn) = state.redis.config.get().await else {
+        return;
+    };
+    let key = lanrurugi_storage::keys::pending_visibility_key(archive_id);
+    let _: Result<(), _> = conn
+        .set_ex(
+            &key,
+            "1",
+            lanrurugi_storage::keys::PENDING_VISIBILITY_TTL_SECS,
+        )
+        .await;
+}
+
+async fn clear_pending_visibility(state: &AppState, archive_id: &str) {
+    use deadpool_redis::redis::AsyncCommands;
+    let Ok(mut conn) = state.redis.config.get().await else {
+        return;
+    };
+    let key = lanrurugi_storage::keys::pending_visibility_key(archive_id);
+    let _: Result<(), _> = conn.del(&key).await;
+}
+
 /// Runs `ingest_file_with_policy` against `staging_path` with the given `intended_filename`/
 /// `duplicate_policy`, then (on a successful `Catalogued`/`Rekeyed`/`Unchanged`) finishes
 /// cataloguing exactly like this module's own original single-path logic always did — move into
@@ -271,26 +299,60 @@ pub(crate) async fn catalogue_staged_file(
     // filename-collision check. Without this, a `Reject`-policy download (the common case) had no
     // real name to fall back on at all and got titled after its staging path's own UUID — see
     // `catalogue_new_archive`'s own docs for the full bug this fixes.
+    // The bytes reach the library *before* the record exists. A record is visible to
+    // `/api/search` the moment it is stored (search enumerates the 40-hex archive keys directly),
+    // and the copy below is the longest part of ingesting a large download — so cataloguing first
+    // is exactly what let a half-moved archive show up in the library while
+    // `/api/archives/{id}/files` answered 500 on the partial zip.
+    //
+    // The copy goes to a dot-prefixed temp name inside `archive_dir` first: `rename` is atomic
+    // only within one filesystem, and the staging file normally lives on another one (`/temp` on
+    // the container's own volume), so the move has to copy bytes regardless. Copying under the
+    // final name would expose the same half-written file to readers; copying under
+    // `.ingest-<uuid>` and renaming afterwards makes the archive appear complete, or not at all.
+    // The dot prefix also keeps a concurrent full scan from cataloguing the temp file.
+    let dest = unique_dest_path(&state.library.archive_dir, filename).await;
+    let incoming = state
+        .library
+        .archive_dir
+        .join(format!(".ingest-{}", uuid::Uuid::new_v4().simple()));
+    crate::download_manager::rename_or_copy(staging_path, &incoming)
+        .await
+        .map_err(IngestDownloadError::Io)?;
+    if let Err(e) = tokio::fs::rename(&incoming, &dest).await {
+        let _ = tokio::fs::remove_file(&incoming).await;
+        return Err(IngestDownloadError::Io(e));
+    }
+
     let options = IngestOptions {
         duplicate_policy,
         intended_filename: Some(filename),
         title_filename: Some(filename),
-        defer_file_path: true,
+        defer_file_path: false,
     };
-    let outcome = ingest_file_with_policy(
+    let outcome = match ingest_file_with_policy(
         &state.repos.archives,
         &state.redis.config,
         &state.redis.search,
         &state.equivalence,
         &state.library.thumb_dir,
-        staging_path,
+        &dest,
         options,
     )
-    .await?;
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&dest).await;
+            return Err(e.into());
+        }
+    };
 
     let (archive_id, is_new) = match outcome {
         IngestOutcome::Unchanged { id } => {
-            let _ = tokio::fs::remove_file(staging_path).await;
+            // The library already holds these exact bytes under another name — drop the copy just
+            // made instead of leaving a stray duplicate behind.
+            let _ = tokio::fs::remove_file(&dest).await;
             return Ok(IngestedDownload {
                 archive_id: id.into_string(),
                 is_new: false,
@@ -302,6 +364,7 @@ pub(crate) async fn catalogue_staged_file(
             existing_id,
             reason,
         } => {
+            let _ = tokio::fs::remove_file(&dest).await;
             return Err(IngestDownloadError::Duplicate {
                 existing_id: existing_id.into_string(),
                 reason,
@@ -309,23 +372,16 @@ pub(crate) async fn catalogue_staged_file(
         }
     };
 
-    let dest = unique_dest_path(&state.library.archive_dir, filename).await;
+    // The record exists and its bytes are complete, but its tags are not: the auto-metadata run
+    // below is what fills them in. Hide it from search until then, so a download never shows up in
+    // the library as an untagged, unrelated-looking card (the previous order made that window as
+    // long as the whole cross-filesystem copy).
+    mark_pending_visibility(state, archive_id.as_str()).await;
 
-    // Same rename-with-copy-fallback portability handling as `upload.rs::upload_archive` (a
-    // cross-filesystem `EXDEV` on `rename` is the most common real cause, e.g. `temp_dir`/
-    // `archive_dir` mounted as separate volumes).
-    if tokio::fs::rename(staging_path, &dest).await.is_err() {
-        tokio::fs::copy(staging_path, &dest)
-            .await
-            .map_err(IngestDownloadError::Io)?;
-        let _ = tokio::fs::remove_file(staging_path).await;
-    }
-
-    // Fix up the record's `file` (born empty under `defer_file_path`) to the real final path.
-    // Retried — a Redis blip here would otherwise leave the record pointing at nothing forever
-    // (the old "file = temp path" variant of this bug created a live zombie archive: dedup kept
-    // matching a record whose file had been swept away). If every retry fails, the startup
-    // zombie-repair sweep (`main.rs`) still converges it later; this just shrinks the window.
+    // The record's `file` is already correct (catalogued from its final path), so what remains is
+    // the `source:` tag. Written into the same save, retried — a Redis blip here would otherwise
+    // leave a live record with no source, which dedup and the startup zombie-repair sweep both
+    // look at. If every retry fails, that sweep still converges it later.
     const RETRIES: u32 = 3;
     const BACKOFF_MS: [u64; RETRIES as usize] = [200, 500, 1000];
     for (i, &delay) in BACKOFF_MS.iter().enumerate() {
@@ -377,14 +433,8 @@ pub(crate) async fn catalogue_staged_file(
             }
         }
     }
-    if let Ok(mut conn) = state.redis.config.get().await {
-        use deadpool_redis::redis::AsyncCommands;
-        use lanrurugi_storage::keys::FILEMAP_KEY;
-        let staging_str = staging_path.to_string_lossy().to_string();
-        let dest_str = dest.to_string_lossy().to_string();
-        let _: Result<(), _> = conn.hdel(FILEMAP_KEY, &staging_str).await;
-        let _: Result<(), _> = conn.hset(FILEMAP_KEY, &dest_str, archive_id.as_str()).await;
-    }
+    // No `LRR_FILEMAP` fixup is needed any more: the pipeline mapped the final path directly,
+    // because the bytes were already there when the record was catalogued.
 
     // Legacy's real "自动运行"/`exec_enabled_plugins_on_file` mechanism (`Model::Upload.pm`) runs
     // on every newly added archive, downloads included — this code path is only ever reached for
@@ -393,6 +443,10 @@ pub(crate) async fn catalogue_staged_file(
     // tag above is saved, so a plugin like `mems.ts`/`ehentai.ts` that falls back to parsing
     // `existing_tags` for a `source:` tag actually finds the one just added.
     crate::plugins::run_enabled_metadata_plugins_on_archive(state, archive_id.as_str()).await;
+
+    // Published: the archive now carries whatever the plugins found (a failure inside the run is
+    // already non-fatal and logged there), so make it visible in the library.
+    clear_pending_visibility(state, archive_id.as_str()).await;
 
     Ok(IngestedDownload {
         archive_id: archive_id.into_string(),
@@ -421,12 +475,9 @@ async fn stage_pending_rename(
     let temp_name = format!("temp_{crc32}_{filename}");
     let temp_path = state.library.temp_dir.join(&temp_name);
 
-    if tokio::fs::rename(staging_path, &temp_path).await.is_err() {
-        tokio::fs::copy(staging_path, &temp_path)
-            .await
-            .map_err(IngestDownloadError::Io)?;
-        let _ = tokio::fs::remove_file(staging_path).await;
-    }
+    crate::download_manager::rename_or_copy(staging_path, &temp_path)
+        .await
+        .map_err(IngestDownloadError::Io)?;
 
     let conflict = PendingFilenameConflict {
         temp_path: temp_path.to_string_lossy().to_string(),

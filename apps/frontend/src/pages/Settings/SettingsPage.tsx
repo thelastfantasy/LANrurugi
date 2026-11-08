@@ -104,6 +104,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [pluginBindInterface, setPluginBindInterface] = useState(
     settings.plugin_bind_interface ?? "",
   )
+  const [directDownloadUrl, setDirectDownloadUrl] = useState(settings.direct_download_url ?? "")
   const [keyInput, setKeyInput] = useState("")
 
   const [newPassword, setNewPassword] = useState("")
@@ -221,6 +222,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       // `?? ""`: a backend that predates this field returns nothing, and `"" !== undefined` would
       // mark the form dirty on load — the save bar then appears before anything was touched.
       pluginBindInterface !== (settings.plugin_bind_interface ?? "") ||
+      directDownloadUrl !== (settings.direct_download_url ?? "") ||
       translationIsDirty,
     [
       htmltitle, language, pagesize, enableresize, sizethreshold, readerquality,
@@ -234,6 +236,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       replacedupe, savedThumbnailFormat, thumbnailFormat, webpquality, excludednamespaces, tagruleson,
       tagrules, usedateadded, usedatemodified, timezone, newbadgemode, recommendprecision,
       pluginBindInterface,
+      directDownloadUrl,
       settings, translationIsDirty,
     ],
   )
@@ -289,6 +292,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       newbadgemode,
       recommendprecision,
       plugin_bind_interface: pluginBindInterface,
+      direct_download_url: directDownloadUrl.trim(),
       ...(keyInput.trim() && { llm_api_key: keyInput.trim() }),
     })
     setKeyInput("")
@@ -453,6 +457,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             setKeyInput={setKeyInput}
             recommendprecision={recommendprecision}
             pluginBindInterface={pluginBindInterface}
+            directDownloadUrl={directDownloadUrl}
+            onDirectDownloadUrlChange={setDirectDownloadUrl}
             setPluginBindInterface={setPluginBindInterface}
             interfaces={settings.interfaces ?? []}
             defaultInterface={settings.default_interface ?? null}

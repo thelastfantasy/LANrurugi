@@ -55,7 +55,11 @@ pub fn no_proxy() -> Option<reqwest::NoProxy> {
 
 /// A reqwest client for rendezvous relays that follows the same proxy.
 pub fn http_client(timeout: std::time::Duration) -> reqwest::Client {
-    let mut builder = reqwest::Client::builder().timeout(timeout);
+    // Same egress interface as the endpoint: pkarr publication and relay signalling are part of
+    // the peer-to-peer path, and leaving them on the default route would tie the real address to
+    // the node code.
+    let mut builder =
+        lanrurugi_core::http_client::bind_outbound(reqwest::Client::builder().timeout(timeout));
     match choose() {
         Choice::Http(url) | Choice::Socks(url) => {
             if let Ok(proxy) = reqwest::Proxy::all(url.as_str()) {

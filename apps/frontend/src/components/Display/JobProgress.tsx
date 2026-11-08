@@ -361,6 +361,7 @@ export function JobProgressBar({
   speedTooltip,
   pendingLabel,
   inlineLabel,
+  readingLabel,
 }: {
   job: JobRecord
   color?: string
@@ -373,6 +374,10 @@ export function JobProgressBar({
   /** Renders the reading inside a full-width bar instead of in a fixed-width column beside a thin
    *  track (only meaningful for the plain, tooltip-free readings). */
   inlineLabel?: boolean
+  /** Replaces the byte reading with a phase description. Used once the transfer itself is done but
+   *  the job is still busy (cataloguing/writing the archive), where "1.4 GB / 1.4 GB (100%)" is
+   *  technically true and completely uninformative. */
+  readingLabel?: string
 }) {
   const { t } = useTranslation()
   // Below `useIsNarrowViewport`'s 640px the label goes *under* the track instead of beside it: 224px
@@ -442,7 +447,7 @@ export function JobProgressBar({
       return (
         <InlineBar
           ratio={ratio}
-          label={speedLabel ? `${reading} · ${speedLabel}` : reading}
+          label={readingLabel ?? (speedLabel ? `${reading} · ${speedLabel}` : reading)}
           color={barColor}
           flowing={job.state === "active"}
         />
@@ -454,7 +459,11 @@ export function JobProgressBar({
           <div style={{ width: `${ratio * 100}%`, height: "100%", background: barColor }} />
         </div>
         <span style={labelStyle}>
-          {formatBytes(job.downloaded_bytes)} / {formatBytes(job.total_bytes)} ({pctLabel}%)
+          {readingLabel ?? (
+            <>
+              {formatBytes(job.downloaded_bytes)} / {formatBytes(job.total_bytes)} ({pctLabel}%)
+            </>
+          )}
           {speedLabel && (
             <>
               {" · "}
@@ -480,7 +489,7 @@ export function JobProgressBar({
       return (
         <InlineBar
           ratio={null}
-          label={speedLabel ? `${reading} · ${speedLabel}` : reading}
+          label={readingLabel ?? (speedLabel ? `${reading} · ${speedLabel}` : reading)}
           color={barColor}
         />
       )

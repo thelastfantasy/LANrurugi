@@ -733,5 +733,9 @@
   "pluginParameters.importCookiesPlaceholder": "Paste the document.cookie string you copied manually from the site (name=value; name2=value2)",
   "pluginParameters.importCookiesApply": "Fill",
   "pluginParameters.importCookiesHint": "Only cookies that match a field below are filled; the rest are discarded. Remember to save afterwards.",
-  "pluginParameters.importCookiesResult": "Filled {{filled}} field(s); ignored {{ignored}} cookie(s)."
+  "pluginParameters.importCookiesResult": "Filled {{filled}} field(s); ignored {{ignored}} cookie(s).",
+  "upload.ingesting": "Đang lưu vào thư viện…",
+  "upload.ingestingHint": "Tải xuống đã xong — đang ghi tệp vào thư viện và tạo ảnh thu nhỏ.",
+  "upload.transferringCount": "{{n}} đang truyền",
+  "upload.transferringCountHint": "Số tác vụ đang truyền byte (không tính giai đoạn ghi vào thư viện)."
 }

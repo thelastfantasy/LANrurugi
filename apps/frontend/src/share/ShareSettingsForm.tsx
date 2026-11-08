@@ -272,11 +272,43 @@ function FieldRow({
         />
       );
   }
+  const warning =
+    field.key === "share_public_url" ? publicUrlWarning(String(value ?? "")) : null;
   return (
     <>
       <label htmlFor={id}>{label}</label>
       {control}
       {children}
+      {warning ? (
+        <span className="share-settings-warning">
+          <i className="fa fa-triangle-exclamation" aria-hidden="true" /> {t(warning)}
+        </span>
+      ) : null}
     </>
   );
+}
+
+/** A public address that cannot be reached from outside: a private or loopback host, a `.local`
+ *  name, a bare address, or plain http. Saving one is allowed (a LAN-only instance is a real
+ *  setup) but it breaks share links, the advertised relay address and ACME, so it is said out
+ *  loud rather than discovered later. */
+function publicUrlWarning(text: string): string | null {
+  if (!text.trim()) return null;
+  let url: URL;
+  try {
+    url = new URL(text.trim());
+  } catch {
+    return "share.settings.publicUrlInvalid";
+  }
+  const host = url.hostname.toLowerCase();
+  const privateV4 =
+    /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.)/.test(host);
+  const ipv6Literal = host.includes(":");
+  if (url.protocol !== "https:" || privateV4 || ipv6Literal || host === "localhost" || host.endsWith(".local")) {
+    return "share.settings.publicUrlNotReachable";
+  }
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    return "share.settings.publicUrlBareAddress";
+  }
+  return null;
 }

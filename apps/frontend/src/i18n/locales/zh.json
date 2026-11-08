@@ -2980,5 +2980,17 @@
   "share.detail.ratioLine": "已流出 {{served}} / 共 {{total}}（分享率 {{ratio}}，目标 {{target}}）",
   "share.settings.portRotate": "端口自动轮换（分钟，6–12 小时）",
   "share.settings.portRotateHint": "填 360–720（6–12 小时）之间的分钟数，按该间隔±25% 随机换一次传输端口；填 0 关闭。正在传输时会等它结束再换。",
-  "share.helping.code": "分享码"
+  "share.helping.code": "分享码",
+  "share.helping.stop": "停止中继",
+  "share.helping.stopConfirm": "停止为「{{title}}」中继数据？本机将立即退出这条分享的协助分发，正在进行的上传也会结束。",
+  "share.helping.stopped": "已停止为「{{title}}」中继",
+  "settings.directDownloadUrl": "档案下载地址",
+  "settings.directDownloadUrlHint": "浏览器或下载器下载档案时使用的地址。页面走 CDN（例如 Cloudflare 橙云）、下载要绕开它时填写，例如 https://fs.example.com；留空则和页面同域。看图和缩略图仍走页面域名。",
+  "share.settings.publicUrlInvalid": "这不是一个有效的地址。",
+  "share.settings.publicUrlNotReachable": "外人打不开这个地址：它是私网地址、本机地址或 http。分享链接、会合与中继地址、证书申请都会受影响。",
+  "share.settings.publicUrlBareAddress": "这里填的是 IP 地址；运营商换 IP 后分享链接会失效。",
+  "upload.ingesting": "入库中…",
+  "upload.ingestingHint": "下载已完成，正在写入书库并生成缩略图。",
+  "upload.transferringCount": "{{n}} 个传输中",
+  "upload.transferringCountHint": "当前正在传输字节的任务数（不含入库阶段）。"
 }

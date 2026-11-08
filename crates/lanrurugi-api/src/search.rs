@@ -96,6 +96,13 @@ pub(crate) async fn resolve_search_entry_with_mode(
         .get(&lanrurugi_core::ids::ArchiveId(id.to_string()))
         .await
         .ok()??;
+    // A download or upload is catalogued before its bytes arrive (an empty `file` until the move
+    // finishes). Such a record has nothing to open, so it must not appear as a card: the reader
+    // would 409 and the thumbnail would fail. `download_manager::ingest` clears this by writing the
+    // real path, which makes the card appear on the next query.
+    if a.file.trim().is_empty() {
+        return None;
+    }
     search_entry_json(state, a, id, mode).await
 }
 

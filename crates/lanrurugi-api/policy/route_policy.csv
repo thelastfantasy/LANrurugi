@@ -186,6 +186,12 @@ p, token_guest, /api/shares/*, GET, deny
 p, anonymous, /api/share/r/*, *, allow
 p, guest_visitor, /api/share/r/*, *, allow
 p, token_guest, /api/share/r/*, *, allow
+# Signed download links (`direct_download`): the URL itself carries an HMAC over the resource and
+# an expiry, checked in the handler, so no other credential is involved.
+p, anonymous, /api/dl/*, *, allow
+p, guest_visitor, /api/dl/*, *, allow
+p, token_guest, /api/dl/*, *, allow
+
 # The one recipient write: a read-only token never opens a share; recipients need no token at all.
 p, token_guest, /api/share/r/open, POST, deny
 

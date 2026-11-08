@@ -715,5 +715,9 @@
   "pluginParameters.importCookiesPlaceholder": "Paste the document.cookie string you copied manually from the site (name=value; name2=value2)",
   "pluginParameters.importCookiesApply": "Fill",
   "pluginParameters.importCookiesHint": "Only cookies that match a field below are filled; the rest are discarded. Remember to save afterwards.",
-  "pluginParameters.importCookiesResult": "Filled {{filled}} field(s); ignored {{ignored}} cookie(s)."
+  "pluginParameters.importCookiesResult": "Filled {{filled}} field(s); ignored {{ignored}} cookie(s).",
+  "upload.ingesting": "Guardando en la biblioteca…",
+  "upload.ingestingHint": "La descarga terminó: se está escribiendo el archivo en la biblioteca y generando la miniatura.",
+  "upload.transferringCount": "{{n}} en transferencia",
+  "upload.transferringCountHint": "Tareas que están moviendo bytes (sin contar la escritura en la biblioteca)."
 }

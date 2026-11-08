@@ -126,6 +126,9 @@ impl Shared {
 
 pub struct ShareNet {
     router: Router,
+    /// Sessions, blob map and unflushed ratio counters. Kept here so a rebuild can write the
+    /// counters back before the endpoint (and this map) goes away.
+    shared: Arc<Shared>,
     /// The embedded relay of the relay role, when offered.
     relay: tokio::sync::Mutex<Option<iroh_relay::server::Server>>,
     /// Endpoints mDNS has seen on the local network, asked by `ResolveLocal`.
@@ -133,11 +136,41 @@ pub struct ShareNet {
     /// The UDP port the endpoint actually bound. With an automatic port this is only known after
     /// binding, and it changes on every rotation, so it is reported rather than inferred.
     udp_port: u16,
+    /// The addresses this endpoint bound, kept so the watcher can notice the interface changed
+    /// under it (a VPN reconnect hands out a new address while sharing is still "running").
+    bound_addrs: Vec<std::net::IpAddr>,
     /// The TCP port the embedded relay actually listens on, when the relay role is on.
     relay_port: tokio::sync::Mutex<Option<u16>>,
 }
 
 impl ShareNet {
+    /// Writes back served bytes still counted only in memory. A rebuild replaces the endpoint and
+    /// this map with it, so without this every rotation silently loses a few megabytes of ratio.
+    pub(crate) async fn flush_ratios(&self, state: &AppState) {
+        let pending: Vec<(lanrurugi_core::ids::ShareId, u64)> = {
+            let mut ratios = self.shared.ratios.lock().expect("ratios lock");
+            ratios
+                .iter_mut()
+                .filter_map(|(id, ratio)| {
+                    let pending = ratio.imported.saturating_sub(ratio.flushed);
+                    if pending == 0 {
+                        return None;
+                    }
+                    ratio.flushed = ratio.imported;
+                    Some((id.clone(), pending))
+                })
+                .collect()
+        };
+        for (id, delta) in pending {
+            if let Err(error) = crate::shares::repo(state)
+                .add_import_bytes(&id, delta)
+                .await
+            {
+                tracing::warn!(share = %id, error = %error, "could not flush served import bytes");
+            }
+        }
+    }
+
     pub fn endpoint(&self) -> &Endpoint {
         self.router.endpoint()
     }
@@ -189,6 +222,22 @@ fn free_port() -> Result<u16, String> {
         .local_addr()
         .map(|a| a.port())
         .map_err(|e| e.to_string())
+}
+
+/// `share_external_addrs`: addresses to advertise as direct addresses. A bare address takes the
+/// endpoint's own port.
+fn external_addrs(settings: &ShareSettings, port: u16) -> Vec<SocketAddr> {
+    settings
+        .list("share_external_addrs")
+        .iter()
+        .filter_map(|entry| match entry.parse::<SocketAddr>() {
+            Ok(addr) => Some(addr),
+            Err(_) => entry
+                .parse::<std::net::IpAddr>()
+                .ok()
+                .map(|ip| SocketAddr::new(ip, port)),
+        })
+        .collect()
 }
 
 /// The port to bind this time: the pinned one, or a fresh random one per start when unset.
@@ -260,22 +309,52 @@ pub async fn start(state: &AppState) -> Result<Arc<ShareNet>, String> {
     // binding again, or every rebuild after a settings change fails to bind.
     let mut running = RUNNING.write().await;
     if let Some(previous) = running.take() {
+        previous.flush_ratios(state).await;
+        // Closing the endpoint is what actually releases the UDP socket: dropping our `Arc` is not
+        // enough while a spawned task (a republisher, an importer) still holds one, and a fixed
+        // port that never comes free would make every settings change pick a new port — and so a
+        // new address in every published record and share code.
+        previous.endpoint().close().await;
         let _ = previous.router.shutdown().await;
         if let Some(relay) = previous.relay.lock().await.take() {
             let _ = relay.shutdown().await;
         }
     }
-    // An empty port setting means "random every time": retry the draw instead of failing, since a
-    // free port found a moment ago can be taken by the time QUIC binds it.
-    let automatic = settings.text("share_udp_port").trim().is_empty();
+    // A fixed port keeps a forwarded port working across restarts; if something else already
+    // holds it (a second instance, say), fall back to a free one instead of leaving sharing off.
+    // An empty setting means "random every time", which still retries the draw: a free port found
+    // a moment ago can be taken by the time QUIC binds it.
+    let mut fallback = settings.text("share_udp_port").trim().is_empty();
     let mut attempt = 0u32;
     let net = loop {
-        let port = port_for(&settings, "share_udp_port")?;
+        let port = if fallback {
+            free_port()?
+        } else {
+            port_for(&settings, "share_udp_port")?
+        };
         match bind(state, &settings, secret, port).await {
             Ok(net) => break Arc::new(net),
-            Err(e) if automatic && attempt < 8 => {
+            Err(e) if attempt < 24 => {
                 attempt += 1;
-                tracing::debug!(error = %e, attempt, "retrying a random sharing port");
+                if !fallback {
+                    // The endpoint this one replaces still holds the socket until the tasks that
+                    // borrowed it (republisher, in-flight imports) let go, which takes a few
+                    // seconds. Waiting is what keeps the configured port — and with it every
+                    // published address — stable across a settings change.
+                    if attempt < 20 {
+                        tracing::debug!(port, error = %e, attempt, "the sharing port is not free yet");
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    } else {
+                        fallback = true;
+                        tracing::warn!(
+                            port,
+                            error = %e,
+                            "the configured sharing port is unavailable; picking a free one"
+                        );
+                    }
+                } else {
+                    tracing::debug!(error = %e, attempt, "retrying a random sharing port");
+                }
             }
             Err(e) => return Err(e),
         }
@@ -306,6 +385,105 @@ pub async fn start(state: &AppState) -> Result<Arc<ShareNet>, String> {
 /// and clamped to 6–12 hours so the interval itself is not a schedule a scanner can rely on. Never
 /// cuts a live transfer: it waits for the in-flight count to reach zero first, and skips the round
 /// if a transfer is still running after half an hour.
+/// The background loops that ride on a running endpoint. Spawned once per process, however many
+/// times the endpoint itself is rebuilt.
+static SERVICES: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+/// Starts the endpoint and, the first time only, the loops that ride on it.
+pub async fn start_services(state: &AppState) -> Result<(), String> {
+    start(state).await?;
+    if SERVICES.set(()).is_ok() {
+        blobs::spawn_prepare_worker(state.clone());
+        helper::spawn(state.clone());
+        publish::spawn_republisher(state.clone());
+        spawn_port_rotation(state.clone());
+    }
+    Ok(())
+}
+
+/// Brings sharing back when the interface it is pinned to appears. A share bound to a VPN tunnel
+/// must not serve from the physical link while that tunnel is down, so the endpoint waits instead
+/// of falling back, and this retries until it can start.
+/// Rate limit for moving back to the configured port, so a port held by something else does not
+/// turn into an endpoint rebuild every fifteen seconds.
+fn port_retry_due() -> bool {
+    use std::sync::Mutex;
+    use std::time::Instant;
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    let Ok(mut last) = LAST.lock() else {
+        return false;
+    };
+    let now = Instant::now();
+    match *last {
+        Some(previous) if now.duration_since(previous) < Duration::from_secs(60) => false,
+        _ => {
+            *last = Some(now);
+            true
+        }
+    }
+}
+
+pub fn spawn_interface_watch(state: AppState) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(15)).await;
+            if let Some(running) = handle().await {
+                // Still running, but a VPN reconnect may have moved the address it is bound to:
+                // rebind when the interface no longer offers what this endpoint listens on.
+                let settings = crate::share_settings::load(&state).await;
+                // A rebuild that had to fall back to a random port (the socket was still held by
+                // the endpoint it replaced) would otherwise keep that port until the next restart,
+                // silently invalidating the user's port forward. Come back to the configured port
+                // once it is free again, at most once a minute.
+                if let Some(wanted) = settings.number("share_udp_port") {
+                    let wanted = wanted as u16;
+                    if wanted != 0 && wanted != running.udp_port && port_retry_due() {
+                        tracing::info!(
+                            port = wanted,
+                            current = running.udp_port,
+                            "the configured sharing port is free again; moving back to it"
+                        );
+                        let _ = start_services(&state).await;
+                        continue;
+                    }
+                }
+                let pinned = settings.text("share_bind_interface");
+                if pinned.trim().is_empty() || running.bound_addrs.is_empty() {
+                    continue;
+                }
+                let now: Vec<std::net::IpAddr> =
+                    match interfaces::bind_addrs(pinned, running.udp_port) {
+                        Some(addrs) => addrs.into_iter().map(|a| a.ip()).collect(),
+                        None => Vec::new(),
+                    };
+                if now == running.bound_addrs {
+                    continue;
+                }
+                tracing::info!(
+                    interface = pinned,
+                    "the sharing interface changed address; rebuilding the endpoint"
+                );
+                match start_services(&state).await {
+                    Ok(()) => continue,
+                    Err(error) => {
+                        tracing::warn!(error = %error, "sharing endpoint could not be rebound");
+                        continue;
+                    }
+                }
+            }
+            let settings = crate::share_settings::load(&state).await;
+            let pinned = settings.text("share_bind_interface").to_string();
+            if !pinned.trim().is_empty() && !interfaces::exists(&pinned) {
+                continue;
+            }
+            match start_services(&state).await {
+                Ok(()) => tracing::info!(interface = pinned, "sharing endpoint is back"),
+                Err(error) => tracing::warn!(error = %error, "sharing endpoint could not start"),
+            }
+        }
+    });
+}
+
 pub fn spawn_port_rotation(state: AppState) {
     tokio::spawn(async move {
         loop {
@@ -416,18 +594,35 @@ pub async fn bind(
     // point — traffic must not fall back to the physical link. IPv6 is bound as well where the
     // host has it (FR-050 item 7), without failing on IPv4-only hosts.
     let pinned = settings.text("share_bind_interface");
+    let mut bound_addrs: Vec<std::net::IpAddr> = Vec::new();
+    if !pinned.trim().is_empty() {
+        // The builder starts with a wildcard IPv4 and IPv6 transport. Binding the tunnel's own
+        // address only replaces the transport of that address family, so on an IPv4-only tunnel
+        // iroh would still listen on `[::]` everywhere, send IPv6 over the physical link and then
+        // publish that real address as a direct address. Drop them first.
+        builder = builder.clear_ip_transports();
+    }
     match interfaces::bind_addrs(pinned, port) {
         Some(addrs) => {
             for addr in addrs {
+                if addr.ip().is_unspecified() {
+                    // A wildcard bind takes whatever the host has; there is nothing stable to
+                    // compare later, so the watcher leaves those endpoints alone.
+                    bound_addrs.clear();
+                } else {
+                    bound_addrs.push(addr.ip());
+                }
                 builder = builder.bind_addr(addr).map_err(|e| e.to_string())?;
             }
         }
         None => {
+            // Pinned to an interface that is not there: binding everything would serve from the
+            // physical link, which is exactly what pinning exists to prevent. Refuse to start
+            // instead; the interface watcher brings the endpoint back when the tunnel is up.
             if !pinned.trim().is_empty() {
-                tracing::warn!(
-                    interface = pinned,
-                    "the chosen network interface is gone; binding every interface instead"
-                );
+                return Err(format!(
+                    "the chosen network interface {pinned} is not present; sharing stays off until it is"
+                ));
             }
             builder = builder
                 .bind_addr(SocketAddr::from(([0, 0, 0, 0], port)))
@@ -458,6 +653,11 @@ pub async fn bind(
         builder = builder.portmapper_config(iroh::endpoint::PortmapperConfig::Disabled);
     }
     let endpoint = builder.bind().await.map_err(|e| e.to_string())?;
+    // A manual port forward: these are the addresses the router sends to this host, which iroh
+    // cannot discover on its own when the router speaks neither UPnP nor PCP.
+    for addr in external_addrs(settings, port) {
+        endpoint.add_external_addr(addr).await;
+    }
     // mDNS under a neutral label (the library default names the transport), kept so `ResolveLocal`
     // can ask the peers it found (FR-024).
     let lan_peers = Arc::new(Mutex::new(std::collections::HashSet::new()));
@@ -509,6 +709,8 @@ pub async fn bind(
         .spawn();
     Ok(ShareNet {
         router,
+        bound_addrs,
+        shared,
         relay: tokio::sync::Mutex::new(None),
         lan_peers,
         udp_port: port,

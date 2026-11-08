@@ -21,8 +21,9 @@ once you swap gluetun's environment variables.
 Approach B needs no extra container: connect the VPN on the host (or on the host of an ordinary
 container), then pick `tun0` under **Settings → Sharing → Network → Network interface**. The sharing
 endpoint binds to that interface only — imports, helping to deliver and relayed forwarding all use the
-tunnel, while the site keeps listening on the LAN. If the chosen interface disappears (the VPN drops,
-the name changes) the endpoint falls back to all interfaces and logs a warning.
+tunnel, while the site keeps listening on the LAN. If the chosen interface disappears (the VPN drops, the
+name changes) **sharing turns off** and the log says why, rather than falling back to all interfaces
+and leaking share traffic onto the physical link; the endpoint is rebuilt once the interface returns.
 
 The compose file below is approach A.
 

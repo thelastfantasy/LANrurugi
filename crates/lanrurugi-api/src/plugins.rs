@@ -3112,6 +3112,10 @@ pub(crate) async fn update_queue_item_state(
                                 // never keep showing a stale older-revision banner after the item
                                 // has moved on to some other state.
                                 "pending_revision_confirmation": &item.pending_revision_confirmation,
+                                // Same delta-merge reason: an item that reaches a terminal state
+                                // must not keep a stale "transferring" flag in a client that
+                                // never refetched the whole list.
+                                "transferring": &item.transferring,
                             }));
                         }
                         return;
@@ -3138,6 +3142,44 @@ pub(crate) async fn update_queue_item_state(
                 return;
             }
         }
+    }
+}
+
+/// Sets [`DownloadQueueItem::transferring`] — true while this item holds a transfer permit, false
+/// once the transfer loop is done with it and ingest takes over.
+///
+/// A separate write from [`update_queue_item_state`] because the flag changes on two boundaries
+/// that are not state transitions (permit acquired, ingest begun), and it is deliberately
+/// best-effort with no retry: it only feeds a live "how many are transferring right now" count,
+/// which the frontend's next whole-list poll corrects anyway.
+async fn set_queue_item_transferring(
+    repo: &lanrurugi_storage::download_queue::DownloadQueueRepository,
+    tx: Option<&tokio::sync::broadcast::Sender<serde_json::Value>>,
+    item_id: &str,
+    transferring: bool,
+) {
+    let mut item = match repo.get(item_id).await {
+        Ok(Some(item)) => item,
+        Ok(None) => return,
+        Err(e) => {
+            tracing::warn!(%item_id, error = %e, "could not load download-queue item to set transferring");
+            return;
+        }
+    };
+    if item.transferring == transferring {
+        return;
+    }
+    item.transferring = transferring;
+    if let Err(e) = repo.update(&item).await {
+        tracing::warn!(%item_id, error = %e, "could not persist download-queue item's transferring flag");
+        return;
+    }
+    if let Some(tx) = tx {
+        let _ = tx.send(serde_json::json!({
+            "kind": "update",
+            "id": item_id,
+            "transferring": transferring,
+        }));
     }
 }
 
@@ -3830,6 +3872,13 @@ async fn run_managed_downloads(
                         None,
                     )
                     .await;
+                    set_queue_item_transferring(
+                        &repo,
+                        state.download_queue_tx.as_ref(),
+                        &item_id,
+                        true,
+                    )
+                    .await;
                 });
             }
         };
@@ -3886,6 +3935,14 @@ async fn run_managed_downloads(
 
         base_downloaded += downloaded_result.bytes_downloaded;
         downloaded_files.push(downloaded_result);
+    }
+
+    // Every resource's bytes have landed; from here until the item reaches a terminal state it is
+    // bundling/cataloguing, not transferring. Kept `Downloading` rather than a state of its own so
+    // Stop/Pause/Delete keep behaving exactly as they did while the transfer permit was held — only
+    // the "transferring now" count (and the row's own label) reads the difference.
+    if let Some((repo, item_id)) = &queue_link {
+        set_queue_item_transferring(repo, state.download_queue_tx.as_ref(), item_id, false).await;
     }
 
     let mut archive_ids = Vec::new();

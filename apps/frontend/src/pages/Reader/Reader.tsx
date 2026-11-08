@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { ApiError } from "@/api/client";
+import { startDownload } from "@/api/download";
 import {
   fetchRandomArchiveId,
   useAddBookmark,
@@ -528,6 +529,9 @@ export function Reader() {
   const warmImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
   /** Per page: the in-flight/resolved metadata HEAD (box + will-the-server-convert). */
   const pageMetaRef = useRef<Map<number, Promise<PageMeta | null>>>(new Map());
+  // Whether this archive hands pages back as-is. Once known, a preview would only cost a
+  // conversion the reader never needs — the page paints from its own bytes anyway.
+  const servedOriginalRef = useRef<boolean | null>(null);
   /** Pages whose served-size HEAD has already been re-asked after their bitmap painted. */
   const servedInfoReverifiedRef = useRef<Set<number>>(new Set());
   const pageTinyBlobsRef = useRef<Map<number, string>>(new Map());
@@ -704,6 +708,9 @@ export function Reader() {
       const url = pageStreamUrl(page);
       const promise = url
         ? fetchPageMeta(url).then((meta) => {
+            if (meta && meta.servedOriginal !== null) {
+              servedOriginalRef.current = meta.servedOriginal;
+            }
             if (meta && meta.width > 0 && meta.height > 0) {
               // The same box the preview reports, but without decoding the page.
               setPageTinyDims((prev) =>
@@ -899,9 +906,9 @@ export function Reader() {
       if (page < 1) continue;
       // Requested straight away rather than after the HEAD: the preview is the underlay the reveal
       // sweeps over, so it has to be *earlier* than the full page, and waiting for `ensurePageMeta`
-      // handed the full request a head start it never needed. A wasted preview on a page that ends
-      // up served as-is costs one small cached image; a missing one costs the whole transition.
-      if (!cancelled) fetchTinyPreview(page);
+      // handed the full request a head start it never needed. Skipped once an earlier page has told
+      // us this archive serves pages as-is — then there is no conversion to hide.
+      if (!cancelled && servedOriginalRef.current !== true) fetchTinyPreview(page);
     }
     for (const [page, controller] of [...pageTinyFetchesRef.current]) {
       if (!pageNumbers.includes(page)) {
@@ -1205,7 +1212,18 @@ export function Reader() {
     // A failed JXL load means the capability probe lied (Firefox Android decodes some samples but
     // not every page). Downgrade this tab to WebP and retry the same URL once, so the reader never
     // leaves a page blank just because the better codec was chosen for it.
-    if (img.src.includes("optimize=1") && decodeURIComponent(img.src).includes("jxl")) {
+    // Only a page this reader explicitly asked for as JXL can be a codec failure: the archive's
+    // own file name is nowhere in the URL, so matching on a name would downgrade the whole tab
+    // because some page happened to be called something-jxl.jpg.
+    const requestedFormat = (() => {
+      if (!img.src.includes("optimize=1")) return null;
+      try {
+        return new URL(img.src).searchParams.get("format");
+      } catch {
+        return null;
+      }
+    })();
+    if (requestedFormat === "jxl") {
       markJxlUndecodable();
       const retry = new URL(img.src);
       retry.searchParams.set("format", getImageCapabilityHeader());
@@ -2231,7 +2249,7 @@ export function Reader() {
         {autoNextActive ? ` (${autoNextCountdown})` : ""}
       </MenuItem>
       {loggedIn && downloadArchiveId && (
-        <MenuItem onClick={() => window.location.assign(`/api/archives/${downloadArchiveId}/download`)}>
+        <MenuItem onClick={() => void startDownload(`/api/archives/${downloadArchiveId}`)}>
           <i className="fas fa-download" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
           {t("reader.downloadThisArchive")}
         </MenuItem>
@@ -2243,7 +2261,7 @@ export function Reader() {
         </MenuItem>
       )}
       {loggedIn && isTank && archiveId && (
-        <MenuItem onClick={() => window.location.assign(`/api/tankoubons/${archiveId}/download`)}>
+        <MenuItem onClick={() => void startDownload(`/api/tankoubons/${archiveId}`)}>
           <i className="fas fa-file-zipper" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
           {t("reader.downloadWholeTankoubon")}
         </MenuItem>
@@ -2585,6 +2603,9 @@ export function Reader() {
                   const isLeftHalf = x < window.innerWidth / 2;
                   e.preventDefault();
                   e.currentTarget.blur();
+                  // The stamp layer now lives inside this page link, so its own clicks would
+                  // otherwise bubble up here and turn the page.
+                  if ((e.target as HTMLElement).closest?.("[data-marker-layer]")) return;
                   goTo(isLeftHalf ? "prev" : "next");
                 }}
                 className="reader-page-frame"
@@ -2682,6 +2703,20 @@ export function Reader() {
                       refreshToken={translationRefreshToken}
                     />
                   )}
+                  {/* The stamp layer is positioned against this span (`inset: 0`), not against a
+                      JS-measured copy of the image's box: a stale measurement of that box used to
+                      sit far below the page and stretch the document into a huge blank area. */}
+                  {markerTarget && (
+                    <MarkerLayer
+                      archiveId={markerTarget.arcId}
+                      page={markerTarget.localPage}
+                      imageRef={leftImgRef}
+                      visible={readerSettings.markersVisible}
+                      placementMode={markerPlacementMode}
+                      onPlaced={() => setMarkerPlacementMode(false)}
+                      loggedIn={loggedIn}
+                    />
+                  )}
                 </span>
                 {rightUrl && (
                   <span style={{ position: "relative", display: "inline-flex" }}>
@@ -2748,17 +2783,6 @@ export function Reader() {
                   </span>
                 )}
               </a>
-              {markerTarget && (
-                <MarkerLayer
-                  archiveId={markerTarget.arcId}
-                  page={markerTarget.localPage}
-                  imageRef={leftImgRef}
-                  visible={readerSettings.markersVisible}
-                  placementMode={markerPlacementMode}
-                  onPlaced={() => setMarkerPlacementMode(false)}
-                  loggedIn={loggedIn}
-                />
-              )}
             </div>
           )}
         </div>

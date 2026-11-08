@@ -565,7 +565,13 @@ async fn list_imports(State(state): State<AppState>, Query(q): Query<ListQuery>)
                 .filter(|i| {
                     !helping
                         || (!i.help_hidden
-                            && (i.help_deliver || i.help_state != HelpState::Inactive))
+                            && i.help_deliver
+                            // Only what is relaying right now: a row that stopped serving has no
+                            // place in a table of current helpers.
+                            && !matches!(
+                                i.help_state,
+                                HelpState::Inactive | HelpState::Ended
+                            ))
                 })
                 .map(summary)
                 .collect::<Vec<_>>(),

@@ -80,12 +80,12 @@ pub fn configured_nodes(settings: &ShareSettings) -> Vec<NodeRef> {
 }
 
 pub fn own_relay_url(settings: &ShareSettings) -> Option<String> {
+    // Only what an administrator typed, never a guess derived from the public address: that
+    // address is the web page's host, and when it sits behind a CDN the guessed relay would send
+    // the relay's own traffic through the same proxy — or name a private address nothing outside
+    // this LAN can reach.
     let explicit = settings.text("share_self_relay_url");
-    if !explicit.is_empty() {
-        return Some(explicit.to_string());
-    }
-    let url = url::Url::parse(&settings.public_url()?).ok()?;
-    Some(format!("https://{}/", url.host_str()?))
+    (!explicit.is_empty()).then(|| explicit.to_string())
 }
 
 /// The pkarr records a node code resolves to live beside the share records, same relay, same
@@ -134,7 +134,7 @@ pub async fn publish_node_record(
         return;
     };
     let payload = packet.to_relay_payload();
-    let client = reqwest::Client::new();
+    let client = super::proxy::http_client(std::time::Duration::from_secs(20));
     for relay in relays {
         let url = node_relay_url(&relay, &code);
         let ok = client
@@ -201,16 +201,28 @@ pub async fn retract_node_record(
         return;
     };
     let payload = packet.to_relay_payload();
-    let client = reqwest::Client::new();
+    let client = super::proxy::http_client(std::time::Duration::from_secs(20));
     for relay in relays {
         let url = node_relay_url(&relay, code);
-        let ok = client
-            .put(&url)
-            .header("content-type", "application/pkarr.org/relays#payload")
-            .body(payload.clone())
-            .send()
-            .await
-            .is_ok_and(|r| r.status().is_success());
+        // A retraction that does not land leaves the code pointing at this instance for the whole
+        // record TTL, so retry a couple of times before giving up loudly.
+        let mut ok = false;
+        for attempt in 0..3u32 {
+            ok = client
+                .put(&url)
+                .header("content-type", "application/pkarr.org/relays#payload")
+                .body(payload.clone())
+                .send()
+                .await
+                .is_ok_and(|r| r.status().is_success());
+            if ok {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500 << attempt)).await;
+        }
+        if !ok {
+            tracing::warn!(relay = %relay, "the node record could not be retracted; it stays published until it expires");
+        }
         crate::share_net::status::record_rendezvous(&relay, ok);
     }
 }
@@ -223,7 +235,10 @@ const NODE_RECORD_REFRESH_SECS: u64 = 600;
 /// one. Addresses move — a DHCP lease, a renewed NAT mapping, a different relay — while the code
 /// never changes, so republishing is the only thing that has to happen on a schedule.
 pub fn spawn_record_refresh(state: crate::AppState, net: std::sync::Arc<super::ShareNet>) {
-    let id = net.id();
+    // Identity is stable across endpoint rebuilds (same node secret), so comparing ids would leave
+    // one refresh loop running per rebuild forever. The pointer tells them apart, and a weak one
+    // does it without keeping the retired endpoint's memory alive.
+    let mine = std::sync::Arc::downgrade(&net);
     tokio::spawn(async move {
         let mut tick =
             tokio::time::interval(std::time::Duration::from_secs(NODE_RECORD_REFRESH_SECS));
@@ -233,7 +248,10 @@ pub fn spawn_record_refresh(state: crate::AppState, net: std::sync::Arc<super::S
             let Some(current) = super::handle().await else {
                 break;
             };
-            if current.id() != id {
+            let still_mine = mine
+                .upgrade()
+                .is_some_and(|net| std::sync::Arc::ptr_eq(&net, &current));
+            if !still_mine {
                 break;
             }
             let settings = crate::share_settings::load(&state).await;
@@ -253,7 +271,7 @@ pub async fn resolve_node_code(state: &crate::AppState, code: &str) -> Option<En
         lookup_key: code.lookup_keypair(),
         record_key: code.record_key(),
     };
-    let client = reqwest::Client::new();
+    let client = super::proxy::http_client(std::time::Duration::from_secs(20));
     for relay in relays {
         let url = node_relay_url(&relay, &code);
         let Ok(response) = client.get(&url).send().await else {
@@ -484,18 +502,22 @@ pub async fn start_relay(
     own: iroh::EndpointId,
 ) -> Result<(iroh_relay::server::Server, u16), String> {
     use iroh_relay::server::{AcmeConfig, CertConfig, RelayConfig, ServerConfig, TlsConfig};
-    // Empty means "whatever is free": the port is local plumbing (the advertised URL comes from
-    // the public address), so an automatic one costs nothing and defeats a fixed-port scan.
-    let port = match settings.text("share_node_relay_port").trim() {
-        "" => {
-            let listener =
-                std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|e| e.to_string())?;
-            listener.local_addr().map_err(|e| e.to_string())?.port()
-        }
-        raw => raw
+    // A fixed port by default, because the `proxy` mode expects a reverse proxy to point at it.
+    // Empty still means "whatever is free". A fixed port already taken falls back to a free one
+    // (and says so), which keeps the endpoint up; a proxy pointing at the old number would stop
+    // working, and the warning is what says why.
+    let configured = settings.text("share_node_relay_port").trim();
+    let mut port = if configured.is_empty() {
+        free_tcp_port()?
+    } else {
+        configured
             .parse::<u16>()
-            .map_err(|_| format!("\"share_node_relay_port\" is not a port: {raw}"))?,
+            .map_err(|_| format!("\"share_node_relay_port\" is not a port: {configured}"))?
     };
+    if !configured.is_empty() && std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+        tracing::warn!(port, "the relay port is taken; picking a free one instead");
+        port = free_tcp_port()?;
+    }
     let mut relay = match settings.text("share_node_relay_tls") {
         "proxy" => RelayConfig::new(SocketAddr::from(([127, 0, 0, 1], port))),
         mode => {
@@ -552,6 +574,14 @@ pub async fn start_relay(
         .await
         .map_err(|e| e.to_string())?;
     Ok((server, port))
+}
+
+fn free_tcp_port() -> Result<u16, String> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|e| e.to_string())?;
+    listener
+        .local_addr()
+        .map_err(|e| e.to_string())
+        .map(|a| a.port())
 }
 
 /// Per-client rate limit from `share_node_relay_rate` (bytes per second, empty for none). Every

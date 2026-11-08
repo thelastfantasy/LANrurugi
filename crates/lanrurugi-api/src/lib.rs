@@ -16,6 +16,8 @@ pub mod database;
 pub mod device_info;
 pub mod diagnostics;
 pub mod diagnostics_settings;
+pub mod direct_download;
+pub mod download_host;
 pub mod download_manager;
 pub mod download_queue;
 pub mod duplicates;
@@ -93,6 +95,7 @@ pub fn router() -> Router<AppState> {
         .merge(api_tokens::router())
         .merge(archive_split::router())
         .merge(archives::router())
+        .merge(direct_download::router())
         .merge(bench::router())
         .merge(bookmarks::router())
         .merge(categories::router())

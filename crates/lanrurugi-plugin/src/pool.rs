@@ -170,12 +170,18 @@ impl Worker {
         // The dispatcher decides between Deno's native fetch and the host relay by reading
         // `LANRURUGI_EGRESS_ACTIVE`, which only this shim sets — hence the two-name env grant.
         cmd.arg("--allow-env=LANRURUGI_EGRESS_ACTIVE,LANRURUGI_EGRESS_IF");
-        if let Some(library) = crate::egress::library() {
-            cmd.env(
-                "LD_PRELOAD",
-                crate::egress::preload_value(&library, std::env::var_os("LD_PRELOAD").as_deref()),
-            );
-            if let Some(interface) = lanrurugi_core::http_client::outbound_interface() {
+        // Only when an egress interface is chosen: the shim switches the dispatcher to Deno's own
+        // fetch, which drops the host relay's per-host concurrency caps, request merging and
+        // timeouts. With no interface chosen those protections stay on.
+        if let Some(interface) = lanrurugi_core::http_client::outbound_interface() {
+            if let Some(library) = crate::egress::library() {
+                cmd.env(
+                    "LD_PRELOAD",
+                    crate::egress::preload_value(
+                        &library,
+                        std::env::var_os("LD_PRELOAD").as_deref(),
+                    ),
+                );
                 cmd.env("LANRURUGI_EGRESS_IF", interface);
             }
         }

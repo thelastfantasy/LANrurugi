@@ -473,5 +473,9 @@
   "pluginParameters.importCookiesPlaceholder": "Paste the document.cookie string you copied manually from the site (name=value; name2=value2)",
   "pluginParameters.importCookiesApply": "Fill",
   "pluginParameters.importCookiesHint": "Only cookies that match a field below are filled; the rest are discarded. Remember to save afterwards.",
-  "pluginParameters.importCookiesResult": "Filled {{filled}} field(s); ignored {{ignored}} cookie(s)."
+  "pluginParameters.importCookiesResult": "Filled {{filled}} field(s); ignored {{ignored}} cookie(s).",
+  "upload.ingesting": "Salvataggio nella libreria…",
+  "upload.ingestingHint": "Download completato: scrittura dell'archivio nella libreria e generazione dell'anteprima.",
+  "upload.transferringCount": "{{n}} in trasferimento",
+  "upload.transferringCountHint": "Attività che stanno trasferendo byte (esclusa la scrittura nella libreria)."
 }

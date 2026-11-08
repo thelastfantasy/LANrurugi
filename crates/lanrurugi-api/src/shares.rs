@@ -37,6 +37,9 @@ const CODE_ENC_AAD: &[u8] = b"lrrg-code-enc-v1";
 /// Settings that the running endpoint is built from.
 const ENDPOINT_FIELDS: &[&str] = &[
     "share_public_services",
+    // Publishing an address the portmapper cannot know (a router doing plain port forwarding) only
+    // takes effect on a rebuilt endpoint.
+    "share_external_addrs",
     "share_relay_urls",
     "share_nodes",
     "share_udp_port",
@@ -218,20 +221,85 @@ pub(crate) async fn recipient_address(
     forwarded_address(headers, peer.ip(), &trusted_proxies(state).await)
 }
 
+/// The edge ranges Cloudflare publishes at <https://www.cloudflare.com/ips-v4> and
+/// `ips-v6`. A peer inside them is a Cloudflare edge and nothing else: spoofing the source
+/// address of a TCP connection is not possible without completing its handshake, so trusting
+/// `CF-Connecting-IP` from these peers needs no configuration. Every other proxy still has to be
+/// named in `share_trusted_proxies`.
+const CLOUDFLARE_RANGES: &[&str] = &[
+    "173.245.48.0/20",
+    "103.21.244.0/22",
+    "103.22.200.0/22",
+    "103.31.4.0/22",
+    "141.101.64.0/18",
+    "108.162.192.0/18",
+    "190.93.240.0/20",
+    "188.114.96.0/20",
+    "197.234.240.0/22",
+    "198.41.128.0/17",
+    "162.158.0.0/15",
+    "104.16.0.0/13",
+    "104.24.0.0/14",
+    "172.64.0.0/13",
+    "131.0.72.0/22",
+    "2400:cb00::/32",
+    "2606:4700::/32",
+    "2803:f800::/32",
+    "2405:b500::/32",
+    "2405:8100::/32",
+    "2a06:98c0::/29",
+    "2c0f:f248::/32",
+];
+
+fn is_cloudflare_edge(ip: &IpAddr) -> bool {
+    CLOUDFLARE_RANGES.iter().any(|range| {
+        range
+            .parse::<ipnet::IpNet>()
+            .map(|net| net.contains(ip))
+            .unwrap_or(false)
+    })
+}
+
 /// The pure half of `recipient_address`, so the trust rule is unit-testable.
 fn forwarded_address(headers: &HeaderMap, peer: IpAddr, trusted: &[ipnet::IpNet]) -> IpAddr {
     let peer_ip = lanrurugi_storage::shares::canonical_ip(peer);
-    if !trusted.iter().any(|net| net.contains(&peer_ip)) {
+    // Cloudflare's edges count as trusted on their own: a share page in front of Cloudflare then
+    // works out of the box, and the address recorded for a visitor is the visitor, not an edge.
+    let is_trusted =
+        |ip: &IpAddr| trusted.iter().any(|net| net.contains(ip)) || is_cloudflare_edge(ip);
+    if !is_trusted(&peer_ip) {
         return peer_ip;
     }
-    headers
+    // Walk from the right, past every proxy this instance trusts: the first address that is not
+    // one of them is the client. Taking only the last hop would report the CDN edge (or the load
+    // balancer in front of it) as every visitor's address.
+    let hops: Vec<IpAddr> = headers
         .get_all("X-Forwarded-For")
         .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(','))
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
         .filter_map(|hop| hop.trim().parse::<IpAddr>().ok())
-        .next_back()
         .map(lanrurugi_storage::shares::canonical_ip)
+        .collect();
+    // `CF-Connecting-IP` is evidence only when Cloudflare is actually in this request's path. On a
+    // second, grey-cloud host name the direct peer is a local reverse proxy that counts as
+    // trusted, so a visitor could otherwise send this header themselves and pick their own
+    // address (dodging an IP allowlist, the first-N limit and the failure limiter). Requiring an
+    // edge in the chain keeps the orange path working — there the peer or the last hop is one.
+    let cloudflare_in_path = is_cloudflare_edge(&peer_ip) || hops.iter().any(is_cloudflare_edge);
+    if cloudflare_in_path {
+        if let Some(client) = headers
+            .get("CF-Connecting-IP")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<IpAddr>().ok())
+        {
+            return lanrurugi_storage::shares::canonical_ip(client);
+        }
+    }
+    hops.iter()
+        .rev()
+        .find(|ip| !is_trusted(ip))
+        .copied()
         .unwrap_or(peer_ip)
 }
 
@@ -1431,6 +1499,55 @@ mod tests {
         assert_eq!(
             forwarded_address(&headers, loopback, &[]).to_string(),
             "127.0.0.1"
+        );
+    }
+
+    #[test]
+    fn a_chain_of_trusted_proxies_reports_the_client_not_the_cdn_edge() {
+        let mut headers = HeaderMap::new();
+        // Cloudflare appends its edge to what the client sent; nginx appends nothing else.
+        headers.insert(
+            "X-Forwarded-For",
+            "203.0.113.9, 172.71.0.5".parse().unwrap(),
+        );
+        let cloudflare_and_loopback = parse_trusted_proxies("127.0.0.1/32, ::1/128, 172.71.0.0/16");
+        let loopback: IpAddr = "127.0.0.1".parse().unwrap();
+        assert_eq!(
+            forwarded_address(&headers, loopback, &cloudflare_and_loopback).to_string(),
+            "203.0.113.9"
+        );
+
+        // Cloudflare's own header wins where a proxy passes it on.
+        let mut cf = headers.clone();
+        cf.insert("CF-Connecting-IP", "198.51.100.7".parse().unwrap());
+        assert_eq!(
+            forwarded_address(&cf, loopback, &cloudflare_and_loopback).to_string(),
+            "198.51.100.7"
+        );
+        // ...but a peer nobody listed cannot use it.
+        let public: IpAddr = "198.51.100.4".parse().unwrap();
+        assert_eq!(
+            forwarded_address(&cf, public, &cloudflare_and_loopback).to_string(),
+            "198.51.100.4"
+        );
+    }
+
+    #[test]
+    fn a_cloudflare_edge_is_trusted_without_being_configured() {
+        let mut headers = HeaderMap::new();
+        headers.insert("CF-Connecting-IP", "198.51.100.7".parse().unwrap());
+        headers.insert("X-Forwarded-For", "198.51.100.7".parse().unwrap());
+        // A Cloudflare edge, with nothing listed in `share_trusted_proxies`.
+        let edge: IpAddr = "172.71.0.5".parse().unwrap();
+        assert_eq!(
+            forwarded_address(&headers, edge, &[]).to_string(),
+            "198.51.100.7"
+        );
+        // The same header from a peer outside those ranges is meaningless.
+        let stranger: IpAddr = "203.0.113.4".parse().unwrap();
+        assert_eq!(
+            forwarded_address(&headers, stranger, &[]).to_string(),
+            "203.0.113.4"
         );
     }
 

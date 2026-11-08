@@ -665,15 +665,9 @@ async fn download_one_inner(
                 }
                 None => staging_dir.join(format!("download-{}", uuid::Uuid::new_v4().simple())),
             };
-            if tokio::fs::rename(&staging_path, &extensioned)
+            crate::download_manager::rename_or_copy(&staging_path, &extensioned)
                 .await
-                .is_err()
-            {
-                tokio::fs::copy(&staging_path, &extensioned)
-                    .await
-                    .map_err(|e| DownloadError::Io(extensioned.clone(), e))?;
-                let _ = tokio::fs::remove_file(&staging_path).await;
-            }
+                .map_err(|e| DownloadError::Io(extensioned.clone(), e))?;
             let _ = tokio::fs::remove_file(&paths.meta_path).await;
             extensioned
         }

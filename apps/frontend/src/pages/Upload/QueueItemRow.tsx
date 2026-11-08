@@ -114,6 +114,11 @@ export function RowStats({
   const startedMs = job?.started_at ?? item.started_at ?? null
   const endedMs = job?.finished_at ?? item.finished_at ?? (running && now > 0 ? now : null)
   const durationMs = startedMs && endedMs && endedMs >= startedMs ? endedMs - startedMs : null
+  // The bytes are all in, but the item is still `downloading`: the server is cataloguing the
+  // archive and writing it into the library, which for a 1.4 GB file is minutes of disk work with
+  // no byte counter of its own. Only an explicit `false` counts — a server that predates the field
+  // omits it, and must keep showing the plain reading.
+  const ingesting = item.state === "downloading" && item.transferring === false
   // Prefer the two *measured* rates: the job's transfer-window average while the job is still in
   // memory, then the value persisted onto the item when it completed. Deriving a rate here from
   // the whole job duration included every minute spent waiting for the server's first byte (a
@@ -177,7 +182,9 @@ export function RowStats({
         : t("upload.statStarted", { time: new Date(startedMs).toLocaleString() })),
     durationMs != null && t("upload.statElapsed", { duration: formatDuration(durationMs) }),
     average != null && t("upload.statAverage", { rate: formatBytes(average) }),
-    remainingMs != null && t("upload.statRemaining", { duration: formatDuration(remainingMs) }),
+    !ingesting &&
+      remainingMs != null &&
+      t("upload.statRemaining", { duration: formatDuration(remainingMs) }),
     bytes != null && formatBytes(bytes),
   ].filter(Boolean) as string[]
 
@@ -278,6 +285,9 @@ export function QueueItemRow({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  // See `RowStats`: the transfer is over but the item stays `downloading` while the server writes
+  // the archive into the library. Only an explicit `false` counts (older servers omit the field).
+  const ingesting = item.state === "downloading" && item.transferring === false;
   const update = useUpdateQueueItem();
   const fetchMetadata = useFetchQueueItemMetadata();
   const start = useStartQueueItem();
@@ -416,6 +426,11 @@ export function QueueItemRow({
                 >
                   {item.title ?? item.url}
                 </span>
+                {ingesting ? (
+                  <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.85 }}>
+                    {t("upload.ingestingHint")}
+                  </div>
+                ) : null}
                 {item.state === "waiting" ? (
                   <div style={{ fontSize: FONT_SIZE_XS, color: "#c79121" }}>
                     {t("upload.waiting")}
@@ -443,7 +458,11 @@ export function QueueItemRow({
                       pluginNamespace={item.plugin_namespace}
                     />
                   ) : (
-                    <JobProgressBar job={job} inlineLabel />
+                    <JobProgressBar
+                      job={job}
+                      inlineLabel
+                      readingLabel={ingesting ? t("upload.ingesting") : undefined}
+                    />
                   )
                 ) : (
                   <span style={{ fontSize: FONT_SIZE_SM }}>

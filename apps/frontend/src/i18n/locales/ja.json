@@ -2742,5 +2742,17 @@
   "share.detail.ratioLine": "送信済み {{served}} / 合計 {{total}}（共有率 {{ratio}}、目標 {{target}}）",
   "share.settings.portRotate": "ポート自動ローテーション（分）",
   "share.settings.portRotateHint": "360〜720（6〜12 時間）の分単位で指定し、その間隔±25% で転送ポートを切り替えます。0 で無効。転送中は終わるまで待ってから切り替えます。",
-  "share.helping.code": "共有コード"
+  "share.helping.code": "共有コード",
+  "share.helping.stop": "中継を停止",
+  "share.helping.stopConfirm": "「{{title}}」の中継を停止しますか？この端末はすぐにこの共有の協力配信から離脱し、進行中のアップロードも終了します。",
+  "share.helping.stopped": "「{{title}}」の中継を停止しました",
+  "settings.directDownloadUrl": "アーカイブのダウンロード先",
+  "settings.directDownloadUrlHint": "ブラウザやダウンローダーがアーカイブを取得するアドレス。ページが CDN（Cloudflare のオレンジクラウドなど）経由で、ダウンロードだけ迂回させたい場合に指定します（例 https://fs.example.com）。空ならページと同じドメイン。ページ画像とサムネイルはページのドメインのままです。",
+  "share.settings.publicUrlInvalid": "有効なアドレスではありません。",
+  "share.settings.publicUrlNotReachable": "外部からこのアドレスには届きません（プライベート／ループバック／http）。共有リンク・中継アドレス・証明書取得に影響します。",
+  "share.settings.publicUrlBareAddress": "IP アドレスを指定しています。回線の IP が変わると共有リンクが切れます。",
+  "upload.ingesting": "ライブラリに保存中…",
+  "upload.ingestingHint": "ダウンロードは完了済みで、書庫への書き込みとサムネイル生成を行っています。",
+  "upload.transferringCount": "{{n}} 件転送中",
+  "upload.transferringCountHint": "現在バイト転送中のタスク数（保存処理は含みません）。"
 }

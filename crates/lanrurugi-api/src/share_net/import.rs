@@ -15,7 +15,7 @@ use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
 
@@ -62,6 +62,12 @@ fn storage_error(e: &std::io::Error) -> String {
 /// One piece: the 1 MiB the protocol's contract names, in those chunks.
 const PIECE_CHUNKS: u64 = (1024 * 1024) / CHUNK_BYTES;
 const MAX_PIECE_ATTEMPTS: u32 = 3;
+/// How long an import keeps trying to reach a sharer whose endpoint is being rebuilt.
+/// How long a transfer keeps trying to re-open its sharer. A switched VPN or a re-created endpoint
+/// takes far longer than a few seconds to come back, and a transfer that gives up mid-file has to
+/// start over, so this waits minutes rather than seconds — long enough to ride out a reconnect,
+/// short enough that a sharer that is simply gone does not leave an import running forever.
+const RECONNECT_WINDOW: Duration = Duration::from_secs(600);
 /// One piece plus its bao path, generously bounded — the peer's announced length is not trusted.
 const MAX_PIECE_BODY_BYTES: u64 = 4 * 1024 * 1024;
 /// A card thumbnail is a few hundred KiB at worst.
@@ -224,14 +230,15 @@ type PushedStates = (ImportState, Option<i64>, Vec<ImportArchiveState>);
 struct Run {
     state: AppState,
     import_id: ShareImportId,
-    net: Arc<ShareNet>,
     /// Swapped when the sharer restarts: a rebind or crash leaves every old connection dead, and
     /// an import must survive that rather than stall until its per-piece retries run out.
     conn: tokio::sync::RwLock<Connection>,
     helper_list: Arc<RwLock<Vec<Arc<HelperSource>>>>,
     /// Helpers dialled already (live or dropped), so none is dialled twice.
     tried_helpers: std::sync::Mutex<HashSet<[u8; 32]>>,
-    session: String,
+    /// The sharer mints a new session on every Open, and `Prepare` only answers for a live one, so
+    /// a reconnect must replace it rather than keep the session the import started with.
+    session: RwLock<String>,
     claim_id: String,
     ticket: RwLock<SignedTicket>,
     /// Set when the sharer refuses a renewal; every transfer stops with this reason.
@@ -254,6 +261,12 @@ struct Run {
     /// many had to be asked for again, and which ones never did.
     pieces: PieceStats,
     started: std::time::Instant,
+    /// One reconnect at a time: when the sharer rebuilds its endpoint every piece in flight fails
+    /// at once, and each of them dialling would turn one reconnect into a storm of them.
+    reconnect: tokio::sync::Mutex<()>,
+    /// Counts completed reconnects, so a piece that waited on `reconnect` can tell whether the
+    /// connection it is about to use was already refreshed by the one that held the lock.
+    reconnects: AtomicU64,
     /// When progress was last pushed to the Upload page, and the states it showed.
     pushed: std::sync::Mutex<(Option<std::time::Instant>, PushedStates)>,
     dir: PathBuf,
@@ -352,17 +365,68 @@ impl Run {
         self.save().await;
     }
 
+    /// The endpoint to dial through right now. A settings change or a port rotation replaces the
+    /// running endpoint, and the handle captured when the import started then points at a closed
+    /// router: every reconnect through it fails even though sharing is healthy again.
+    async fn live_net(&self) -> Result<Arc<ShareNet>, ShareNetError> {
+        super::handle().await.ok_or(ShareNetError::NotRunning)
+    }
+
     /// Re-dials the sharer after its endpoint went away, keeping the claim and re-renewing.
+    ///
+    /// A sharer that rebuilds its endpoint (a network-interface change, a VPN rekey, a port
+    /// rotation) is unreachable for as long as that takes, which is tens of seconds, not the
+    /// couple of seconds a single retry covers. So the dial keeps retrying for
+    /// `RECONNECT_WINDOW` while the failure stays "could not reach it"; a sharer that actually
+    /// refuses is reported at once.
     async fn reopen_sharer(&self) -> Result<(), ShareNetError> {
+        let seen = self.reconnects.load(Ordering::Relaxed);
+        let _one_at_a_time = self.reconnect.lock().await;
+        if self.reconnects.load(Ordering::Relaxed) != seen {
+            // Someone else re-dialled while this piece waited: the connection it holds is the new
+            // one, so there is nothing left to do.
+            return Ok(());
+        }
         let code = self.record.lock().await.code.clone().ok_or_else(|| {
             ShareNetError::Protocol("this import has no code to reconnect".into())
         })?;
-        let opened = open(&self.state, &self.net, &code).await?;
-        if let Ok(mut link) = self.link.lock() {
-            *link = super::link::of(&opened.conn);
+        let deadline = Instant::now() + RECONNECT_WINDOW;
+        let mut attempt: u32 = 0;
+        loop {
+            let net = self.live_net().await?;
+            match open(&self.state, &net, &code).await {
+                Ok(opened) => {
+                    if let Ok(mut link) = self.link.lock() {
+                        *link = super::link::of(&opened.conn);
+                    }
+                    *self.session.write().await = opened.session.clone();
+                    *self.conn.write().await = opened.conn;
+                    // Connections to helpers died with the sharer's endpoint too; dropping what was
+                    // tried lets the fresh Renew hand them out again.
+                    self.tried_helpers.lock().expect("helpers lock").clear();
+                    self.reconnects.fetch_add(1, Ordering::Relaxed);
+                    return self.renew().await;
+                }
+                // `Protocol` is in here on purpose: the peer that answered is most likely a
+                // half-rebuilt endpoint on the sharer's side, which the next dial replaces.
+                Err(
+                    error @ (ShareNetError::Unreachable(_)
+                    | ShareNetError::NotRunning
+                    | ShareNetError::Protocol(_)),
+                ) if Instant::now() < deadline => {
+                    attempt += 1;
+                    let backoff = Duration::from_millis(500u64.saturating_mul(1 << attempt.min(6)));
+                    tracing::info!(
+                        import = self.import_id.as_str(),
+                        attempt,
+                        error = %error,
+                        "sharer unreachable; waiting for its endpoint to come back"
+                    );
+                    tokio::time::sleep(backoff.min(Duration::from_secs(30))).await;
+                }
+                Err(error) => return Err(error),
+            }
         }
-        *self.conn.write().await = opened.conn;
-        self.renew().await
     }
 
     async fn renew(&self) -> Result<(), ShareNetError> {
@@ -405,9 +469,13 @@ impl Run {
             let Some(addr) = super::helper::helper_endpoint_addr(&helper) else {
                 continue;
             };
-            let net = self.net.clone();
             let list = self.helpers_handle();
             tokio::spawn(async move {
+                // The endpoint may have been rebuilt since this import started, so take it at dial
+                // time rather than holding the one captured back then.
+                let Some(net) = super::handle().await else {
+                    return;
+                };
                 let dialled = tokio::time::timeout(HELPER_DIAL_TIMEOUT, connect(&net, addr)).await;
                 if let Ok(Ok(conn)) = dialled {
                     list.write().await.push(Arc::new(HelperSource {
@@ -517,7 +585,7 @@ impl Run {
         let (response, _) = call(
             &conn,
             Request::Prepare {
-                session: self.session.clone(),
+                session: self.session.read().await.clone(),
                 claim_id: self.claim_id.clone(),
                 archive_id: sharer_archive_id.to_string(),
             },
@@ -1444,18 +1512,14 @@ async fn run_import(
         Some(quota) => quota.saturating_sub(elsewhere),
         None => u64::MAX,
     };
-    let net = super::handle()
-        .await
-        .ok_or("sharing is not running on this instance")?;
     let filename_policy = record.filename_policy;
     let run = Arc::new(Run {
         state: state.clone(),
         import_id: import_id.clone(),
-        net,
         conn: tokio::sync::RwLock::new(opened.conn.clone()),
         helper_list: Arc::new(RwLock::new(Vec::new())),
         tried_helpers: std::sync::Mutex::new(HashSet::new()),
-        session: opened.session.clone(),
+        session: RwLock::new(opened.session.clone()),
         claim_id: record.claim_id.clone(),
         ticket: RwLock::new(ticket),
         stopped: RwLock::new(None),
@@ -1469,6 +1533,8 @@ async fn run_import(
         link: std::sync::Mutex::new(super::link::of(&opened.conn)),
         pieces: PieceStats::default(),
         started: std::time::Instant::now(),
+        reconnect: tokio::sync::Mutex::new(()),
+        reconnects: AtomicU64::new(0),
         pushed: std::sync::Mutex::new((None, (ImportState::Transferring, None, Vec::new()))),
         dir,
     });

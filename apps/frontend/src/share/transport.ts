@@ -38,6 +38,13 @@ async function readError(response: Response): Promise<ShareRequestError> {
 /** Keeps the token in memory only; media URLs carry it as `?rt=` since `<img>` cannot send headers. */
 export class HttpTransport implements ShareTransport {
   private token: string | null = null
+  /**
+   * Where archive downloads are served from, when the site sits behind a CDN proxy: a host that
+   * does not go through it. Only downloads take this path — page images and thumbnails are small,
+   * stay on the page's own origin, and leaving them there keeps the proxy in front of them (and
+   * the origin's address out of sight). Empty means "same origin".
+   */
+  private downloadBase = ""
 
   private withToken(path: string): string {
     const separator = path.includes("?") ? "&" : "?"
@@ -52,8 +59,12 @@ export class HttpTransport implements ShareTransport {
       credentials: "omit",
     })
     if (!response.ok) throw await readError(response)
-    const body = (await response.json()) as RecipientView & { token: string }
+    const body = (await response.json()) as RecipientView & {
+      token: string
+      download_base?: string
+    }
     this.token = body.token
+    this.downloadBase = (body.download_base ?? "").replace(/\/+$/, "")
     return body
   }
 
@@ -81,10 +92,14 @@ export class HttpTransport implements ShareTransport {
   }
 
   downloadUrl(archiveId: string): string {
-    return this.withToken(`/api/share/r/archives/${encodeURIComponent(archiveId)}/download`)
+    return this.withToken(
+      `${this.downloadBase}/api/share/r/archives/${encodeURIComponent(archiveId)}/download`,
+    )
   }
 
   tankoubonDownloadUrl(tankId: string): string {
-    return this.withToken(`/api/share/r/tankoubons/${encodeURIComponent(tankId)}/download`)
+    return this.withToken(
+      `${this.downloadBase}/api/share/r/tankoubons/${encodeURIComponent(tankId)}/download`,
+    )
   }
 }

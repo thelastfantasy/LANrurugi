@@ -2980,5 +2980,17 @@
   "share.detail.ratioLine": "{{served}} of {{total}} served (ratio {{ratio}}, target {{target}})",
   "share.settings.portRotate": "Rotate ports every (minutes)",
   "share.settings.portRotateHint": "A whole number between 360 and 720 (6–12 hours), jittered ±25%; 0 turns it off. A live transfer is never cut: the rotation waits for it to finish.",
-  "share.helping.code": "Code"
+  "share.helping.code": "Code",
+  "share.helping.stop": "Stop relaying",
+  "share.helping.stopConfirm": "Stop relaying 「{{title}}」? This instance leaves the share's helper pool at once and its uploads end.",
+  "share.helping.stopped": "Stopped relaying 「{{title}}」",
+  "settings.directDownloadUrl": "Archive download address",
+  "settings.directDownloadUrlHint": "Where browsers and download managers fetch archives from. Set it when the pages go through a CDN (Cloudflare's orange cloud) and downloads must bypass it, e.g. https://fs.example.com; empty keeps them on the page's own origin. Page images and thumbnails always stay on the page's domain.",
+  "share.settings.publicUrlInvalid": "This is not a valid address.",
+  "share.settings.publicUrlNotReachable": "Nobody outside can reach this address: it is private, loopback, or plain http. Share links, the advertised relay address and certificate issuance all suffer.",
+  "share.settings.publicUrlBareAddress": "This is a bare IP address; it breaks when the ISP changes it.",
+  "upload.ingesting": "Saving to library…",
+  "upload.ingestingHint": "Download finished — writing the archive into the library and generating its thumbnail.",
+  "upload.transferringCount": "{{n}} transferring",
+  "upload.transferringCountHint": "Tasks currently moving bytes (the library-writing phase is not counted)."
 }

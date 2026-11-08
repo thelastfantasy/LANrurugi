@@ -151,6 +151,9 @@ impl ShareProtocol {
         };
         if write_frame(&mut send, &header).await.is_ok() {
             if let Some(body) = body {
+                // Held while the bytes are on the wire, not just while they are encoded: a port
+                // rotation that tore the connection down here would cut a live transfer.
+                let _transfer = super::TransferGuard::begin();
                 let _ = send.write_all(&body).await;
             }
         }
@@ -853,7 +856,6 @@ impl ShareProtocol {
             .ok_or(RefusalReason::NotFound)?;
         // Held for the duration of the send: port rotation waits for this to clear rather than
         // tearing down a live transfer.
-        let _transfer = super::TransferGuard::begin();
         let body = encode_range(info, spans).await?;
         super::limits::throttle(super::limits::Group::Own, caps, body.len() as u64).await;
         Ok(bytes(body))
@@ -889,7 +891,6 @@ impl ShareProtocol {
             .await
             .filter(|i| i.blake3 == blake3)
             .ok_or(RefusalReason::NotFound)?;
-        let _transfer = super::TransferGuard::begin();
         let body = encode_range(info, spans).await?;
         super::limits::throttle(super::limits::Group::Helping, caps, body.len() as u64).await;
         super::helper::count_served(&record.id, body.len() as u64);

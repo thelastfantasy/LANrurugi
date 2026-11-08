@@ -1147,6 +1147,7 @@ async fn start_one(
             .clone()
             .ok_or_else(|| StartError::Storage("share import id missing".to_string()))?;
         item.state = DownloadQueueState::Starting;
+        item.transferring = false;
         item.started_at = Some(now_ms());
         item.finished_at = None;
         item.error = None;
@@ -1212,6 +1213,9 @@ async fn start_one(
     item.resume_support = None;
 
     item.state = DownloadQueueState::Starting;
+    // A previous attempt's transfer never survived its own end, so a retry starts out having no
+    // bytes in flight — the "transferring now" count must not inherit the old attempt's flag.
+    item.transferring = false;
     // Stamped here rather than read off the job: this is the moment the item actually left the
     // queue, and the row needs it even after the job that ran it is gone. A restart clears the
     // previous attempt's end stamp so a retry reports its own duration, not both runs'.
@@ -3384,6 +3388,7 @@ mod tests {
             overwrite_on_duplicate: false,
             conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
             state,
+            transferring: false,
             version_history: None,
             started_at: None,
             finished_at: None,

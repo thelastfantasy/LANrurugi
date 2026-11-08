@@ -879,7 +879,10 @@ div.ido.share-closed p:last-child {
   width: 84px;
 }
 .share-helping-col-action {
-  width: 64px;
+  width: 96px;
+}
+.share-helping-stop {
+  white-space: nowrap;
 }
 .share-helping-title {
   overflow: hidden;
@@ -1202,4 +1205,13 @@ div.ido.share-closed p:last-child {
   align-items: center;
   justify-content: center;
   line-height: 1;
+}
+
+/* A saved value that cannot work from outside (private address, plain http) is stated where it
+   was typed rather than discovered later through a broken share link. */
+.share-settings-warning {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.9em;
+  color: var(--theme-secondary-text, #b45309);
 }

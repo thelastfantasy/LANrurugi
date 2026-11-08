@@ -34,8 +34,8 @@ const FIELDS: &[(&str, Kind, &str)] = &[
     ("share_node_rendezvous", Kind::Bool, "0"),
     ("share_node_relay", Kind::Bool, "0"),
     ("share_node_relay_tls", Kind::Text, "proxy"),
-    // Empty means "pick a free one at random each time the endpoint starts".
-    ("share_node_relay_port", Kind::Port, ""),
+    // Fixed by default so a reverse proxy can point at it; empty picks a free one per start.
+    ("share_node_relay_port", Kind::Port, "11205"),
     ("share_node_relay_cert", Kind::Text, ""),
     ("share_node_relay_key", Kind::Text, ""),
     // Bytes per second per relayed client: 10 MiB/s, empty for no limit.
@@ -43,14 +43,22 @@ const FIELDS: &[(&str, Kind, &str)] = &[
     ("share_node_relay_allow", Kind::Text, ""),
     ("share_self_relay_url", Kind::Text, ""),
     ("share_portmap", Kind::Bool, "1"),
-    ("share_udp_port", Kind::Port, ""),
+    // Fixed by default so a forwarded port keeps working across restarts; empty picks a free one
+    // per start. A fixed port that is already taken falls back to a free one, with a warning.
+    ("share_udp_port", Kind::Port, "11205"),
+    // Addresses this host is reachable at from outside, `host:port` each, for a router that
+    // forwards ports but has no UPnP/PCP. Empty lets iroh work them out.
+    ("share_external_addrs", Kind::Text, ""),
     // Minutes between automatic port rotations, jittered ±25%; 0 pins the ports.
     // 0 turns rotation off; anything else is clamped by validation to 6–12 hours.
-    ("share_port_rotate", Kind::Int(0), "360"),
+    ("share_port_rotate", Kind::Int(0), "0"),
     // Empty binds every interface; a name (`tun0`) pins the endpoint to it, so sharing can be
     // kept inside a VPN tunnel while the rest of the app still serves the LAN.
     ("share_bind_interface", Kind::Text, ""),
     ("share_public_url", Kind::Text, ""),
+    // Where the download endpoints are reached: a share page behind a CDN proxy (Cloudflare, a
+    // load balancer) sets this to a direct origin, because a multi-gigabyte response through the
+    // proxy times out. Empty keeps every link on the page's own origin.
     // Peers whose `X-Forwarded-For` is believed. Loopback only by default: a private-range peer is
     // just as able to write that header itself, so a LAN client could otherwise pose as any address
     // the share's `ip_allow` / first-N rule admits.
@@ -362,12 +370,31 @@ fn validate_text(key: &str, text: String) -> Result<String, String> {
             "acme" | "files" | "proxy" => Ok(text),
             _ => bad("must be acme, files or proxy"),
         },
+        // A name that does not exist yet is accepted: a tunnel often comes up after the server,
+        // and pinning the share to it now is the point. The endpoint stays off until it appears
+        // (and comes back by itself then), so this can never fall back to the physical link.
         "share_bind_interface" if !text.is_empty() => {
-            if crate::share_net::interfaces::exists(&text) {
+            let valid =
+                text.len() <= 15 && !text.contains(['/', ' ', ':']) && !text.starts_with('-');
+            if valid {
                 Ok(text)
             } else {
-                bad("is not a network interface this host has")
+                bad("is not a valid network interface name")
             }
+        }
+        "share_external_addrs" => {
+            for entry in split_list(&text) {
+                // Only literal addresses: this is what gets published as a direct address, and a
+                // hostname here would be resolved once and published as whatever it pointed at.
+                let ok = entry.parse::<std::net::SocketAddr>().is_ok()
+                    || entry.parse::<std::net::IpAddr>().is_ok();
+                if !ok {
+                    return bad(&format!(
+                        "{entry:?} is not an address such as 203.0.113.5:11205"
+                    ));
+                }
+            }
+            Ok(text)
         }
         "share_default_permissions" => match parse_permissions(&text) {
             Some(p) if !p.is_empty() => Ok(text),
@@ -505,10 +532,11 @@ mod tests {
     fn defaults_fill_unset_fields() {
         let s = settings(&[]);
         assert!(s.flag("share_public_services"));
-        // Empty means "draw a free port at start", so there is no numeric default to read back.
-        assert_eq!(s.number("share_udp_port"), None);
-        assert_eq!(s.text("share_udp_port"), "");
-        assert_eq!(s.number("share_port_rotate"), Some(360));
+        // A fixed port by default, so a forwarded port keeps working across restarts.
+        assert_eq!(s.number("share_udp_port"), Some(11205));
+        assert_eq!(s.text("share_udp_port"), "11205");
+        // Rotation is off unless the user asks for it: it changes the share code and the port.
+        assert_eq!(s.number("share_port_rotate"), Some(0));
         assert_eq!(s.number("share_import_concurrency"), Some(3));
         assert_eq!(s.default_permissions(), Permissions::ALL);
         assert_eq!(s.public_url(), None);
@@ -518,6 +546,15 @@ mod tests {
     fn validation_accepts_good_values_and_rejects_bad_ones() {
         let ok = |k: &str, v: Value| validate_field(k, &v);
         assert_eq!(ok("share_udp_port", Value::from(443)).unwrap(), "443");
+        assert_eq!(
+            ok(
+                "share_external_addrs",
+                Value::from("203.0.113.5:11205\n[2001:db8::1]:11205")
+            )
+            .unwrap(),
+            "203.0.113.5:11205\n[2001:db8::1]:11205"
+        );
+        assert!(ok("share_external_addrs", Value::from("not an address")).is_err());
         assert!(ok("share_udp_port", Value::from(0)).is_err());
         assert!(ok("share_import_concurrency", Value::from(17)).is_err());
         assert_eq!(ok("share_upload_limit", Value::from("")).unwrap(), "");

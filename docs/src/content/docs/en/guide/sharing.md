@@ -198,22 +198,38 @@ it.
 ## Connectivity
 
 Shares travel directly between instances, and instances without a public address can still import
-from each other. **The UDP port is random by default**: each start takes a free port from the system
-(the port actually in use is shown under **Settings → Sharing → Connectivity**, where you can also pin
-a fixed one). With **map the port on my router automatically (UPnP / NAT-PMP / PCP)** on, the instance
-asks the router to open it; turn that off if you would rather not have it touch the router, and forward
-the UDP port yourself.
+from each other. **The UDP port defaults to `11205`**, so a port forward set up once survives a
+restart (the port actually in use is shown under **Settings → Sharing → Connectivity**, where you can
+also change it). If something else already holds that port the instance falls back to a random one and
+logs a warning — keep the port to yourself if you want it to stay put. With **map the port on my router
+automatically (UPnP / NAT-PMP / PCP)** on, the instance asks the router to open it; turn that off if you
+would rather not have it touch the router, forward the UDP port yourself, and put the forwarded
+`IP:port` under **External addresses** (the only way to tell peers where you are when the router does
+plain port forwarding and speaks neither UPnP nor PCP).
 
-**Port rotation** (`share_port_rotate`, minutes, `0` disables, 360–720 — six to twelve hours) rebinds a fresh port on that interval,
+**Port rotation** (`share_port_rotate`, minutes, **`0` — off — by default**, 360–720 — six to twelve hours) rebinds a fresh port on that interval,
 jittered ±25% so the period itself is not fixed and the change never lands at the same time of day. Rotation **never cuts a live transfer**: it waits for
 in-flight work to finish (up to 30 minutes, then skips the round). The node record and the addresses in
 a share code pick up the new port on their next renewal; established direct connections are unaffected.
 
 The address an instance reports comes from iroh's address discovery (QUIC address discovery through a
-relay, plus the port mapping above), and mDNS on a LAN. There is deliberately **no "type in my public
-address" option** — if one were ever needed to connect, the discovery logic would be what needs fixing,
-not the user's knowledge of their own NAT. If you want sharing traffic to leave through a VPN, see
-**[Sharing over a VPN](/en/guide/sharing-vpn/)**.
+relay, plus the port mapping above), and mDNS on a LAN. **External addresses** is the manual escape
+hatch for a router doing static port forwarding only: type literal addresses such as
+`203.0.113.5:11205` (IPv6 as `[2001:db8::1]:11205`) and they are published alongside the discovered
+ones; leave it empty to rely on discovery alone. If you want sharing traffic to leave through a VPN,
+see **[Sharing over a VPN](/en/guide/sharing-vpn/)**.
+
+**Archive download address** lives in the general settings (key `direct_download_url`) and is shared by the share pages and the library. It matters in exactly one deployment: the site sits behind a CDN or reverse proxy (Cloudflare's orange cloud, say) and downloads must bypass it. Pages keep going through the CDN; downloads go to the host you name (e.g. `https://fs.example.org`) through a signed, expiring link (`/api/dl/…?exp=&sig=`, 15 minutes by default) — no cookie, no cross-subdomain session sharing. Page images and thumbnails always stay on the page's own host: small requests, cacheable, and they do not advertise the origin's address.
+
+What a two-domain deployment needs:
+
+1. Give the download host **A / AAAA records** pointing at the home address; never a CNAME to the orange-clouded name (it resolves back to Cloudflare).
+2. If you have IPv6, give the download host an AAAA too, or the same person shows up under two addresses and `ip_first_n` treats the second one as a new visitor.
+3. The download host needs its own certificate (Let's Encrypt via Cloudflare DNS validation works on a grey-cloud record).
+4. `share_public_url` is the page host; `direct_download_url` is the download host. The app also treats the latter as "downloads only": on that Host, everything except `/api/share/r/` and `/api/dl/` is a 404, so a proxy misconfiguration still cannot expose the admin API.
+5. CGNAT makes this impossible — only a public relay node can forward.
+
+On the nginx side: the page host should accept only Cloudflare's ranges (or use Authenticated Origin Pulls) and hand `CF-Connecting-IP` to the app; the download host should allow only the download paths and clear any `CF-Connecting-IP` a visitor sent, so a forged address cannot dodge the allowlist or the rate limiter.
 
 A system proxy needs no setup: imports and exports follow the proxy environment variables
 (`HTTPS_PROXY`, `ALL_PROXY` and so on) or the macOS system proxy on their own, and a TUN-mode proxy

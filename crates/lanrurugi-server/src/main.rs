@@ -302,6 +302,10 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     std::fs::create_dir_all(&args.library_path)?;
     std::fs::create_dir_all(&args.thumb_dir)?;
     std::fs::create_dir_all(&args.temp_dir)?;
+    // Repackaged downloads (patched archives, tankoubon zips) are cached here so a resumed
+    // download can be answered with a range; keeping them under the instance's own temp directory
+    // keeps them inside `tempmaxsize` accounting and the usual cleanup.
+    lanrurugi_api::archives::set_repack_dir(args.temp_dir.join("download-cache"));
     // Rendered e-book pages and inspection results live with the other conversion caches.
     lanrurugi_book::configure(lanrurugi_book::BookConfig {
         cache_dir: args.temp_dir.join("book"),
@@ -962,18 +966,16 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     {
         let state = state.clone();
         tokio::spawn(async move {
-            match lanrurugi_api::share_net::start(&state).await {
-                Ok(_) => {
-                    lanrurugi_api::share_net::blobs::spawn_prepare_worker(state.clone());
-                    lanrurugi_api::share_net::helper::spawn(state.clone());
-                    lanrurugi_api::share_net::publish::spawn_republisher(state.clone());
-                    lanrurugi_api::share_net::spawn_port_rotation(state.clone());
-                    // Only now: an import needs the endpoint this block just created, and
-                    // resuming before it exists fails with "sharing is not running".
+            match lanrurugi_api::share_net::start_services(&state).await {
+                Ok(()) => {
+                    // Once per process: the endpoint this call just created is what a resumed
+                    // import dials through.
                     lanrurugi_api::share_imports::resume_interrupted_imports(&state).await;
                 }
                 Err(e) => tracing::warn!(error = %e, "sharing endpoint could not start"),
             }
+            // A share pinned to a tunnel interface starts as soon as that interface exists.
+            lanrurugi_api::share_net::spawn_interface_watch(state.clone());
         });
     }
 

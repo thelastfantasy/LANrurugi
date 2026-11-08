@@ -1039,5 +1039,9 @@
   "share.settings.udpPort": "UDP 埠（留空=隨機）",
   "share.settings.portRotate": "埠自動輪換（分鐘，6–12 小時）",
   "share.settings.portRotateHint": "填 360–720（6–12 小時）之間的分鐘數，依該間隔±25% 隨機更換一次傳輸埠；填 0 關閉。正在傳輸時會等它結束再換。",
-  "share.helping.code": "分享碼"
+  "share.helping.code": "分享碼",
+  "upload.ingesting": "入庫中…",
+  "upload.ingestingHint": "下載已完成，正在寫入書庫並產生縮圖。",
+  "upload.transferringCount": "{{n}} 個傳輸中",
+  "upload.transferringCountHint": "目前正在傳輸位元組的任務數（不含入庫階段）。"
 }
