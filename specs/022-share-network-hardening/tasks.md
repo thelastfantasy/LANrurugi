@@ -168,7 +168,7 @@ address change; rotation waits for active claims; a rebuild keeps the importer's
 
 - [ ] T038 [P] Remove `[profile.dev.package."*"] opt-level = 2` from the workspace `Cargo.toml` (dev/test build time),
   and document `enableresize`'s deliberate default in the docs.
-- [ ] T039 [P] `KnockV1`'s new fields are optional and the parser reports `EngineIncompatible` for a record it cannot
+- [x] T039 (2026-11-09: `record::open` falls back to the pre-`direct_addrs` shape, so an older published code still resolves; a payload neither shape can read is now `RecordError::EngineIncompatible` instead of `Undecryptable`, and the node resolver logs that a newer engine published the code rather than treating it as unpublished) [P] `KnockV1`'s new fields are optional and the parser reports `EngineIncompatible` for a record it cannot
   read (contracts/wire.md), with tests for both directions.
 - [ ] T040 Gates: `mise run fmt-check`, `mise run clippy`, `mise run check-crate -- lanrurugi-share-proto
   lanrurugi-egress lanrurugi-plugin lanrurugi-api`, `mise run test-crate -- lanrurugi-api lanrurugi-plugin`, and the

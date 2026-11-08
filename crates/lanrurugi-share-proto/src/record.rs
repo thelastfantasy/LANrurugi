@@ -37,6 +37,16 @@ pub enum RecordError {
     Missing,
     #[error("knock record does not decrypt with this code")]
     Undecryptable,
+    #[error("knock record was written by a sharing engine this build cannot read")]
+    EngineIncompatible,
+}
+
+/// The record shape written before `direct_addrs` existed. Kept so a code published by an older
+/// build still resolves to an address instead of looking like it was never published.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct KnockV0 {
+    endpoint_id: EndpointKey,
+    relay_urls: Vec<String>,
 }
 
 /// XChaCha20-Poly1305 with a random nonce, returned as `nonce ‖ ciphertext`. Also used for the
@@ -82,7 +92,13 @@ pub fn open_bytes(key: &[u8; 32], sealed: &[u8], aad: &[u8]) -> Option<Vec<u8>> 
 /// Builds and signs the pkarr packet for `knock`.
 pub fn seal(keys: &DerivedKeys, knock: &KnockV1) -> Result<SignedPacket, RecordError> {
     let plaintext = postcard::to_allocvec(knock).map_err(|e| RecordError::Build(e.to_string()))?;
-    let sealed = seal_bytes(&keys.record_key, &plaintext, RECORD_AAD);
+    seal_plaintext(keys, &plaintext)
+}
+
+/// Signs an already-encoded payload. Split out so the tests can publish the previous record shape
+/// through the same path a real publisher uses.
+fn seal_plaintext(keys: &DerivedKeys, plaintext: &[u8]) -> Result<SignedPacket, RecordError> {
+    let sealed = seal_bytes(&keys.record_key, plaintext, RECORD_AAD);
     let mut txt = TXT::new();
     for chunk in sealed.chunks(CHUNK) {
         let string = CharacterString::new(chunk).map_err(|e| RecordError::Build(e.to_string()))?;
@@ -118,7 +134,18 @@ pub fn open(keys: &DerivedKeys, packet: &SignedPacket) -> Result<KnockV1, Record
     }
     let plaintext =
         open_bytes(&keys.record_key, &sealed, RECORD_AAD).ok_or(RecordError::Undecryptable)?;
-    postcard::from_bytes(&plaintext).map_err(|_| RecordError::Undecryptable)
+    match postcard::from_bytes::<KnockV1>(&plaintext) {
+        Ok(knock) => Ok(knock),
+        // A record without `direct_addrs` predates it: postcard is positional, so the old shape
+        // simply runs out of fields and parses on the second attempt.
+        Err(_) => postcard::from_bytes::<KnockV0>(&plaintext)
+            .map(|old| KnockV1 {
+                endpoint_id: old.endpoint_id,
+                relay_urls: old.relay_urls,
+                direct_addrs: Vec::new(),
+            })
+            .map_err(|_| RecordError::EngineIncompatible),
+    }
 }
 
 #[cfg(test)]
@@ -158,6 +185,34 @@ mod tests {
         for needle in [&b"relay-one"[..], b"lrrg", b"lanrurugi", b"iroh"] {
             assert!(!wire.windows(needle.len()).any(|w| w == needle));
         }
+    }
+
+    #[test]
+    fn a_record_from_before_direct_addrs_still_resolves() {
+        let keys = DerivedKeys::derive(&ShareCode::parse("K7QM9XRT2H").unwrap());
+        let plaintext = postcard::to_allocvec(&KnockV0 {
+            endpoint_id: [9; 32],
+            relay_urls: vec!["https://relay.example.org/".into()],
+        })
+        .unwrap();
+        let packet = seal_plaintext(&keys, &plaintext).unwrap();
+        let knock = open(&keys, &packet).unwrap();
+        assert_eq!(knock.endpoint_id, [9; 32]);
+        assert_eq!(
+            knock.relay_urls,
+            vec!["https://relay.example.org/".to_string()]
+        );
+        assert!(knock.direct_addrs.is_empty());
+    }
+
+    #[test]
+    fn an_unreadable_record_says_the_engine_is_incompatible() {
+        let keys = DerivedKeys::derive(&ShareCode::parse("K7QM9XRT2H").unwrap());
+        let packet = seal_plaintext(&keys, &[0xff, 0x00, 0x7f]).unwrap();
+        assert!(matches!(
+            open(&keys, &packet),
+            Err(RecordError::EngineIncompatible)
+        ));
     }
 
     #[test]

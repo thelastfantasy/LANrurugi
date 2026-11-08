@@ -272,6 +272,7 @@ pub async fn resolve_node_code(state: &crate::AppState, code: &str) -> Option<En
         record_key: code.record_key(),
     };
     let client = super::proxy::http_client(std::time::Duration::from_secs(20));
+    let mut incompatible = false;
     for relay in relays {
         let url = node_relay_url(&relay, &code);
         let Ok(response) = client.get(&url).send().await else {
@@ -285,8 +286,13 @@ pub async fn resolve_node_code(state: &crate::AppState, code: &str) -> Option<En
         else {
             continue;
         };
-        let Ok(knock) = lanrurugi_share_proto::record::open(&keys, &packet) else {
-            continue;
+        let knock = match lanrurugi_share_proto::record::open(&keys, &packet) {
+            Ok(knock) => knock,
+            Err(lanrurugi_share_proto::record::RecordError::EngineIncompatible) => {
+                incompatible = true;
+                continue;
+            }
+            Err(_) => continue,
         };
         // A retracted identity: the code was destroyed and this record is all that is left.
         if knock.endpoint_id == RETRACTED_ENDPOINT_ID {
@@ -299,6 +305,11 @@ pub async fn resolve_node_code(state: &crate::AppState, code: &str) -> Option<En
             }
         }
         return Some(addr);
+    }
+    if incompatible {
+        // Distinguishing this from "never published" matters: one is fixed by upgrading, the
+        // other by asking the sharer to publish the code again.
+        tracing::warn!(code = %code, "the share code was published by a newer sharing engine");
     }
     None
 }
