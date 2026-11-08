@@ -118,3 +118,24 @@
 
 1. 本备忘随 020–023 的 spec 落地逐条消化。
 2. 022 先把 99% 与中继加入/退出写成可验收条目，再谈实现。
+
+## G. 进度快照（2026-11-09 01:10，收工）
+
+分支 `feat/share-bind-interface`（PR #258），工作区干净，已推送至 `3cf14c2`。
+
+**已提交**
+- `6a7bb7e` 020 文档定稿为 `_byname` 布局。
+- `3211b5f` CI 修复：`.cargo/config.toml` 的 `CFLAGS` 让 GCC 15 能编 libarchive2-sys 自带的 libarchive。
+- `4afbca0` 020–023 的 `tasks.md`。
+- `9116e91` 021：`direct_download_url` 校验（scheme/凭据/query）、保存时告警、双域名 nginx 参考配置、中英文档。
+- `51998a6` 020 Phase A：新入库落 `<ab>/{id}.{ext}` + `{id}.json` sidecar、标题由文件名清洗、扫描末尾把其余档案搬进 `_byname/`、删 `PUT /api/archives/{id}/rename` 与编辑页重命名。
+- `3cf14c2` 022 的一部分：下载流的 180 秒空闲超时、连接超时与 TCP keepalive。
+
+**已知未做（下次接着来）**
+1. 020：冲突机制仍休眠未删（`stage_pending_rename`/resolve/compare 端点、队列里的冲突菜单、`FilenameTemplateEditor.tsx`）；rebuild 的差异报告与清库重建测试；`POST /api/scan` 暴露 `relocated`/`skipped`/`failed` 计数；quickstart S1–S10 实测。
+2. 022：除 `T031` 外全部未做——尤其是 fork `netwatch`/`iroh-relay` 打 `SO_BINDTODEVICE`（US1 的核心，工作量大、要在真实 VPN 环境验证）、`waiting_for_network` 替代终态、轮换按 claim 推迟、销毁即撤销、中继与端点解耦、`HelperLeave`、repack 缓存重写、99% 测量。
+3. 023：只有 spec/plan/research/data-model/contracts/quickstart/tasks，一行代码未动；它必须排在 022 之后。
+4. 021 剩余：quickstart A/B（真实 5 GB 下载、无 cookie 分享下载）需要在重建后的 dev 容器里实测。
+5. 备忘 F 节的 UI 清单仍未逐条核实。
+
+**下次开工建议顺序**：020 的休眠冲突代码清理（机械、可单测）→ 022 US6 的 repack 缓存与下载自动重试 → 022 US1 的 fork（单独一个 PR，需真机 VPN）→ 023。
