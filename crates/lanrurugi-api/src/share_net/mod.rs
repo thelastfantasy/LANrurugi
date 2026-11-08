@@ -141,6 +141,9 @@ pub struct ShareNet {
     bound_addrs: Vec<std::net::IpAddr>,
     /// The TCP port the embedded relay actually listens on, when the relay role is on.
     relay_port: tokio::sync::Mutex<Option<u16>>,
+    /// The relay-relevant settings the running relay was started from. A rebuild that leaves them
+    /// untouched keeps the relay instead of dropping every peer connected through it.
+    relay_key: tokio::sync::Mutex<Option<String>>,
 }
 
 impl ShareNet {
@@ -302,11 +305,31 @@ pub fn relay_urls(settings: &ShareSettings) -> Vec<RelayUrl> {
 }
 
 /// Starts (or restarts, after a settings change) this instance's endpoint.
+/// The settings the embedded relay is built from. Unchanged across a rebuild, the relay is kept
+/// running: restarting it drops every peer currently connected through it for no benefit.
+fn relay_settings_key(settings: &ShareSettings) -> String {
+    [
+        "share_node_relay",
+        "share_node_relay_port",
+        "share_node_relay_tls",
+        "share_node_relay_cert",
+        "share_node_relay_key",
+        "share_node_relay_allow",
+        "share_self_relay_url",
+    ]
+    .iter()
+    .map(|field| format!("{field}={}", settings.text(field)))
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
 pub async fn start(state: &AppState) -> Result<Arc<ShareNet>, String> {
     let settings = crate::share_settings::load(state).await;
     let secret = crate::shares::node_secret(state).await?;
     // The old endpoint holds the UDP port (and the relay role its TCP port): release them before
     // binding again, or every rebuild after a settings change fails to bind.
+    let relay_key = relay_settings_key(&settings);
+    let mut kept_relay: Option<(iroh_relay::server::Server, u16, EndpointId)> = None;
     let mut running = RUNNING.write().await;
     if let Some(previous) = running.take() {
         previous.flush_ratios(state).await;
@@ -315,8 +338,17 @@ pub async fn start(state: &AppState) -> Result<Arc<ShareNet>, String> {
         // port that never comes free would make every settings change pick a new port — and so a
         // new address in every published record and share code.
         previous.endpoint().close().await;
+        let previous_id = previous.endpoint().id();
         let _ = previous.router.shutdown().await;
-        if let Some(relay) = previous.relay.lock().await.take() {
+        let previous_port = *previous.relay_port.lock().await;
+        let unchanged = previous.relay_key.lock().await.as_deref() == Some(relay_key.as_str());
+        let mut relay_slot = previous.relay.lock().await;
+        if settings.flag("share_node_relay") && unchanged {
+            if let (Some(server), Some(port)) = (relay_slot.take(), previous_port) {
+                kept_relay = Some((server, port, previous_id));
+            }
+        }
+        if let Some(relay) = relay_slot.take() {
             let _ = relay.shutdown().await;
         }
     }
@@ -362,13 +394,29 @@ pub async fn start(state: &AppState) -> Result<Arc<ShareNet>, String> {
     *running = Some(net.clone());
     drop(running);
     if settings.flag("share_node_relay") {
-        let dir = state.library.temp_dir.join("share");
-        match nodes::start_relay(&settings, &dir, net.id()).await {
-            Ok((server, port)) => {
+        // A kept relay is bound to the endpoint identity it was started for; that identity only
+        // changes when the node secret does, and then the relay has to be rebuilt.
+        match kept_relay.take() {
+            Some((server, port, previous_id)) if previous_id == net.id() => {
                 *net.relay.lock().await = Some(server);
                 *net.relay_port.lock().await = Some(port);
+                *net.relay_key.lock().await = Some(relay_key.clone());
+                tracing::info!(port, "kept the running relay across the endpoint rebuild");
             }
-            Err(e) => tracing::warn!(error = %e, "relay role could not start"),
+            other => {
+                if let Some((server, _, _)) = other {
+                    let _ = server.shutdown().await;
+                }
+                let dir = state.library.temp_dir.join("share");
+                match nodes::start_relay(&settings, &dir, net.id()).await {
+                    Ok((server, port)) => {
+                        *net.relay.lock().await = Some(server);
+                        *net.relay_port.lock().await = Some(port);
+                        *net.relay_key.lock().await = Some(relay_key.clone());
+                    }
+                    Err(e) => tracing::warn!(error = %e, "relay role could not start"),
+                }
+            }
         }
     }
     // The node record a peer's 16-character code resolves to: republished on every (re)start, so
@@ -715,6 +763,7 @@ pub async fn bind(
         lan_peers,
         udp_port: port,
         relay_port: tokio::sync::Mutex::new(None),
+        relay_key: tokio::sync::Mutex::new(None),
     })
 }
 

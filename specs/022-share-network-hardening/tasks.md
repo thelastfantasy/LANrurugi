@@ -127,7 +127,7 @@ address change; rotation waits for active claims; a rebuild keeps the importer's
 
 ## Phase 7: User Story 5 — Relay and helpers are dependable (Priority: P2)
 
-- [ ] T028 [US5] Relay listens on `share_node_relay_port` (default 11205) and restarts only when relay settings
+- [x] T028 (2026-11-09: the port was already fixed; `ShareNet` now records the relay-relevant settings key and a rebuild with an unchanged key hands the running relay to the new endpoint instead of shutting it down, unless the endpoint identity changed) [US5] Relay listens on `share_node_relay_port` (default 11205) and restarts only when relay settings
   change, not with every endpoint rebuild; the three TLS modes (`proxy`/`acme`/`files`) all advertise the port they
   actually listen on.
 - [ ] T029 [US5] (2026-11-09 partial: `share_net::helper::leave` now retries 3× with a 1s gap instead of giving up on one failed dial; import-delete and process-exit triggers still missing — there is no import-delete endpoint to hook yet) `HelperLeave` on import delete, process exit and endpoint stop, with retries; a helper that drops is
