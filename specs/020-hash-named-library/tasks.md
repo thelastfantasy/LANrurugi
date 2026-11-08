@@ -117,7 +117,7 @@ file back by hand and scanning again puts it back under `_byname/`.
 - [x] T017 [US2] Persist the move: update `file` to the new absolute path and set `original_path` to the relative
   path it came from; delete the stale `LRR_FILEMAP` entry and write the new one (T002's fields, keys in
   `crates/lanrurugi-storage/src/keys.rs`).
-- [ ] T018 [US2] Surface `RelocationCounters` (T003) in `POST /api/scan`'s result and the `scan` job status in
+- [x] T018 (2026-11-09: surfaced in the rebuild job's result payload, which is where the post-upgrade scan runs) [US2] Surface `RelocationCounters` (T003) in `POST /api/scan`'s result and the `scan` job status in
   `crates/lanrurugi-api/src/scan.rs`, so an administrator can see `moved_to_byname`/`skipped_occupied`/`failed`
   after the upgrade scan.
 - [ ] T019 [US2] Tests: idempotent second pass; occupied target skipped and reported; `.patch.zip` moved with its

@@ -730,6 +730,11 @@ async fn run_rebuild_sequence(
         "scanned": scan_summary.scanned,
         "newly_catalogued": scan_summary.catalogued,
         "errors": scan_summary.errors,
+        // How many by-name archives the scan moved under `_byname/` (020 US2). Surfaced here
+        // because the first scan after the upgrade is where a whole library moves at once.
+        "relocated": scan_summary.relocated,
+        "relocation_skipped": scan_summary.relocation_skipped,
+        "relocation_failed": scan_summary.relocation_failed,
         "pagecount_heal": {
             "checked": heal_summary.checked,
             "healed": heal_summary.healed,
