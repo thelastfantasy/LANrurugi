@@ -339,7 +339,39 @@ impl PluginPool {
     /// the switch would keep the old binding forever. Dropping a [`Worker`] kills its child
     /// (`kill_on_drop`), which is all a fresh spawn needs.
     pub async fn restart_workers(&self) {
-        self.workers.lock().await.clear();
+        // 022 US4: clearing the map drops each worker, and `kill_on_drop` then kills a subprocess
+        // that may be in the middle of a login, a metadata fetch or `execDownload`. New calls
+        // already go to a freshly spawned worker; the old ones only have to be stopped once their
+        // current call answers, so an interface change no longer fails work in flight.
+        let drained: Vec<Worker> = {
+            let mut map = self.workers.lock().await;
+            map.drain().map(|(_, worker)| worker).collect()
+        };
+        if drained.is_empty() {
+            return;
+        }
+        tokio::spawn(async move {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+            let mut left = drained;
+            while !left.is_empty() && std::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                // `pending` is only held while the worker has requests in flight, so an unlockable
+                // or empty map means the call it was serving has finished.
+                left.retain(|worker| {
+                    !worker
+                        .pending
+                        .try_lock()
+                        .map(|pending| pending.is_empty())
+                        .unwrap_or(false)
+                });
+            }
+            if !left.is_empty() {
+                tracing::warn!(
+                    workers = left.len(),
+                    "plugin workers still busy after ten minutes; stopping them anyway"
+                );
+            }
+        });
     }
 
     /// The configured `deno` binary path/name (whatever was passed to `new` — a bare `"deno"`

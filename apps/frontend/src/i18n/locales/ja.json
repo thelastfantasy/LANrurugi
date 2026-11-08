@@ -2736,5 +2736,6 @@
   "upload.ingestingHint": "ダウンロードは完了済みで、書庫への書き込みとサムネイル生成を行っています。",
   "upload.transferringCount": "{{n}} 件転送中",
   "upload.transferringCountHint": "現在バイト転送中のタスク数（保存処理は含みません）。",
-  "share.status.bindingMissing": "{iface} に固定されていますが、現在このネットワークインターフェースが存在しません — 復帰するまで共有は停止します。"
+  "share.status.bindingMissing": "{iface} に固定されていますが、現在このネットワークインターフェースが存在しません — 復帰するまで共有は停止します。",
+  "components.layout.egressInterfaceUnavailable": "このダウンロードはネットワークインターフェース {interface} に固定されましたが、利用できませんでした。インターフェースを確認するか、設定を空にしてください。"
 }

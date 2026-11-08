@@ -27,8 +27,13 @@ type SendToFn = unsafe extern "C" fn(
     libc::socklen_t,
 ) -> isize;
 
+type SendMsgFn = unsafe extern "C" fn(c_int, *const libc::msghdr, c_int) -> isize;
+type SendMMsgFn = unsafe extern "C" fn(c_int, *mut libc::mmsghdr, libc::c_uint, c_int) -> c_int;
+
 static REAL_CONNECT: OnceLock<Option<ConnectFn>> = OnceLock::new();
 static REAL_SENDTO: OnceLock<Option<SendToFn>> = OnceLock::new();
+static REAL_SENDMSG: OnceLock<Option<SendMsgFn>> = OnceLock::new();
+static REAL_SENDMMSG: OnceLock<Option<SendMMsgFn>> = OnceLock::new();
 static IFACE: OnceLock<Option<CString>> = OnceLock::new();
 
 fn real_connect() -> Option<ConnectFn> {
@@ -42,6 +47,20 @@ fn real_sendto() -> Option<SendToFn> {
     *REAL_SENDTO.get_or_init(|| unsafe {
         let sym = libc::dlsym(libc::RTLD_NEXT, c"sendto".as_ptr());
         (!sym.is_null()).then(|| std::mem::transmute::<*mut c_void, SendToFn>(sym))
+    })
+}
+
+fn real_sendmsg() -> Option<SendMsgFn> {
+    *REAL_SENDMSG.get_or_init(|| unsafe {
+        let sym = libc::dlsym(libc::RTLD_NEXT, c"sendmsg".as_ptr());
+        (!sym.is_null()).then(|| std::mem::transmute::<*mut c_void, SendMsgFn>(sym))
+    })
+}
+
+fn real_sendmmsg() -> Option<SendMMsgFn> {
+    *REAL_SENDMMSG.get_or_init(|| unsafe {
+        let sym = libc::dlsym(libc::RTLD_NEXT, c"sendmmsg".as_ptr());
+        (!sym.is_null()).then(|| std::mem::transmute::<*mut c_void, SendMMsgFn>(sym))
     })
 }
 
@@ -74,8 +93,12 @@ unsafe fn is_loopback(addr: *const libc::sockaddr) -> bool {
             let sin = &*(addr as *const libc::sockaddr_in);
             // `s_addr` holds the address in network order; read back through the host's own byte
             // order to recover the octets as they sit in memory.
-            let first = sin.sin_addr.s_addr.to_ne_bytes()[0];
-            first == 127 || first == 0
+            let octets = sin.sin_addr.s_addr.to_ne_bytes();
+            // Loopback/unspecified are not egress; 169.254/16 is link-local (a camera, a printer,
+            // a container's own discovery) and binding it to the tunnel turns a working local call
+            // into a timeout, the same reason the IPv6 branch skips `fe80::/10`.
+            let first = octets[0];
+            first == 127 || first == 0 || (first == 169 && octets[1] == 254)
         }
         libc::AF_INET6 => {
             let sin6 = &*(addr as *const libc::sockaddr_in6);
@@ -185,3 +208,62 @@ extern "C" fn mark_active() {
 #[used]
 #[link_section = ".init_array"]
 static INIT: extern "C" fn() = mark_active;
+
+/// libc's `sendmsg`, the third way a datagram leaves without `connect`/`sendto` (a connected UDP
+/// socket, some resolver implementations). 022 US4: QUIC and glibc's own resolver reach for it, and
+/// an unhooked path is an unconstrained one.
+///
+/// # Safety
+///
+/// `msg` must be a valid `msghdr` for `fd`; `msg_name` (when set) must describe `msg_namelen` bytes
+/// of a `sockaddr`.
+#[no_mangle]
+pub unsafe extern "C" fn sendmsg(fd: c_int, msg: *const libc::msghdr, flags: c_int) -> isize {
+    let addr = if msg.is_null() {
+        std::ptr::null()
+    } else {
+        (*msg).msg_name as *const libc::sockaddr
+    };
+    // A null name is a connected socket: `connect` already pinned it, and there is nothing new to
+    // vindicate here.
+    if !addr.is_null() && !is_loopback(addr) && !bind_device(fd) {
+        return -1;
+    }
+    match real_sendmsg() {
+        Some(f) => f(fd, msg, flags),
+        None => {
+            *libc::__errno_location() = libc::ENOSYS;
+            -1
+        }
+    }
+}
+
+/// libc's `sendmmsg`: the same story for a batch, where every entry may carry its own destination.
+///
+/// # Safety
+///
+/// `vec` must be readable for `vlen` `mmsghdr`s, each with a valid `msg_name` when set.
+#[no_mangle]
+pub unsafe extern "C" fn sendmmsg(
+    fd: c_int,
+    vec: *mut libc::mmsghdr,
+    vlen: libc::c_uint,
+    flags: c_int,
+) -> c_int {
+    if !vec.is_null() {
+        for index in 0..vlen as usize {
+            let msg = &*vec.add(index);
+            let addr = msg.msg_hdr.msg_name as *const libc::sockaddr;
+            if !addr.is_null() && !is_loopback(addr) && !bind_device(fd) {
+                return -1;
+            }
+        }
+    }
+    match real_sendmmsg() {
+        Some(f) => f(fd, vec, vlen, flags),
+        None => {
+            *libc::__errno_location() = libc::ENOSYS;
+            -1
+        }
+    }
+}

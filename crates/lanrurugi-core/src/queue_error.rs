@@ -131,6 +131,12 @@ pub enum QueueError {
         expected: u64,
         got: u64,
     },
+    /// 022 US4: the download was pinned to a network interface that could not be used. Reported
+    /// instead of quietly downloading over the physical link, which is exactly what the pin was
+    /// meant to prevent; the interface is named so the message points at the setting.
+    EgressUnavailable {
+        interface: String,
+    },
     /// Every other internal fault (Redis/DB/filesystem/timeout/task-panic) — deliberately not
     /// broken out into more specific kinds, since none of these are actionable by the user beyond
     /// "something went wrong, check the server logs".
@@ -182,6 +188,7 @@ impl QueueError {
             QueueError::SupersededByNewerRevision { .. } => 1007,
             QueueError::ShareImport { .. } => 1008,
             QueueError::TruncatedDownload { .. } => 1009,
+            QueueError::EgressUnavailable { .. } => 1010,
         }
     }
 }

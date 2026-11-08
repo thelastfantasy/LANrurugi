@@ -120,6 +120,10 @@ pub enum DownloadError {
     /// queue row sits at "downloading" with no error at all.
     #[error("no data for {seconds} seconds")]
     Stalled { seconds: u64 },
+    /// 022 US4: the interface a download was pinned to could not be used. Deliberately an error
+    /// rather than a fallback to the default route — that fallback is the leak pinning prevents.
+    #[error("could not bind the download to interface {0}: {1}")]
+    Egress(String, String),
     /// The caller's `CancellationToken` fired (a user pressed Stop) — deliberately not converted
     /// to a `QueueError` variant the way every other member of this enum is: a user-requested stop
     /// isn't a failure to surface as an error state, it's handled by the caller reverting the
@@ -159,6 +163,18 @@ impl From<&DownloadError> for lanrurugi_core::queue_error::QueueError {
                 expected: *expected,
                 got: *got,
             },
+            // 022 US4: the interface was set but unusable. The queue row's error text names the
+            // interface, which is the actionable half — a retry without fixing it is pointless.
+            DownloadError::Egress(interface, reason) => {
+                tracing::warn!(
+                    interface,
+                    reason,
+                    "the download interface could not be bound"
+                );
+                QueueError::EgressUnavailable {
+                    interface: interface.clone(),
+                }
+            }
             DownloadError::Cancelled => QueueError::Internal,
         }
     }
@@ -375,7 +391,7 @@ async fn download_one_inner(
 
     // Bound to whatever interface the settings chose (empty = kernel routing), so a download
     // actually leaves through the VPN when the operator asked for that.
-    let client = super::outbound::outbound_client();
+    let client = super::outbound::outbound_client()?;
     let mut request = client.request(method, parsed_url.clone());
     for (name, value) in &req.headers {
         request = request.header(name, value);

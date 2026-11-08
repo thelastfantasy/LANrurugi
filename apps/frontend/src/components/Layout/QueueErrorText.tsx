@@ -38,6 +38,10 @@ export function QueueErrorText({ error }: { error: QueueError }) {
           })}
         </span>
       )
+    case "egress_unavailable":
+      return (
+        <span>{t("components.layout.egressInterfaceUnavailable", { interface: error.interface })}</span>
+      )
     case "write_failed":
       return <span>{t("components.layout.failedToWriteTheDownloaded")}</span>
     case "bundle_failed":

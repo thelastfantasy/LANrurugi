@@ -9,6 +9,8 @@
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
+use super::stream::DownloadError;
+
 /// The client built for the current interface. Rebound whenever the interface changes: reqwest
 /// bakes the binding into each socket it creates, so a cached client would keep the old one.
 static CLIENT: OnceLock<Mutex<Option<(String, reqwest::Client)>>> = OnceLock::new();
@@ -36,14 +38,14 @@ pub fn outbound_interface() -> Option<String> {
 
 /// The client downloads should use. Bound to `SO_BINDTODEVICE`-equivalent behaviour via reqwest's
 /// `interface`, which is what makes "download through the VPN" real rather than advisory.
-pub fn outbound_client() -> reqwest::Client {
+pub fn outbound_client() -> Result<reqwest::Client, DownloadError> {
     let Some(name) = outbound_interface() else {
-        return lanrurugi_core::http_client::default_client();
+        return Ok(lanrurugi_core::http_client::default_client());
     };
     let mut slot = client_slot().lock().expect("outbound client lock");
     if let Some((cached, client)) = slot.as_ref() {
         if cached == &name {
-            return client.clone();
+            return Ok(client.clone());
         }
     }
     let built = lanrurugi_core::http_client::build(lanrurugi_core::http_client::bind_outbound(
@@ -54,15 +56,10 @@ pub fn outbound_client() -> reqwest::Client {
             .connect_timeout(std::time::Duration::from_secs(30))
             .tcp_keepalive(Some(std::time::Duration::from_secs(60))),
     ));
-    let client = match built {
-        Ok(client) => client,
-        Err(e) => {
-            // Binding is a routing preference, not a reason to refuse the download: fall back to
-            // the unbound client and say so once, rather than failing every plugin call.
-            tracing::warn!(error = %e, interface = %name, "could not bind downloads to the interface");
-            lanrurugi_core::http_client::default_client()
-        }
-    };
+    // 022 US4: pinning is a promise, not a preference. Falling back to the unbound client here
+    // would send a "download through the VPN" through the physical link — silently, and exactly
+    // when the interface is misconfigured. Fail the download instead; the message names the field.
+    let client = built.map_err(|e| DownloadError::Egress(name.clone(), e.to_string()))?;
     *slot = Some((name, client.clone()));
-    client
+    Ok(client)
 }

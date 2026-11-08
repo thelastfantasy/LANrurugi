@@ -882,6 +882,19 @@ async fn get_settings(State(state): State<AppState>, headers: axum::http::Header
         "default_interface".to_string(),
         json!(crate::share_net::interfaces::default_route()),
     );
+    // 022 US4: whether plugin egress is actually pinned, in the same vocabulary the sharing
+    // endpoint reports. `failed` means a name is set but the shim is missing on this platform, so
+    // plugins fall back to the relay — worth showing instead of letting the setting look applied.
+    let egress_interface = lanrurugi_core::http_client::outbound_interface();
+    let egress_binding = match egress_interface.as_deref() {
+        None => "unpinned",
+        Some(name) if crate::share_net::interfaces::exists(name) => "bound",
+        Some(_) => "failed",
+    };
+    body.insert(
+        "egress_binding".to_string(),
+        json!({ "state": egress_binding, "interface": egress_interface }),
+    );
 
     axum::Json(Value::Object(body)).into_response()
 }

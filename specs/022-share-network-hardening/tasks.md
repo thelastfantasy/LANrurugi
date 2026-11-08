@@ -109,16 +109,16 @@ address change; rotation waits for active claims; a rebuild keeps the importer's
 
 ## Phase 6: User Story 4 — One predictable plugin egress path (Priority: P2)
 
-- [ ] T022 [US4] Load the egress shim only when an interface is actually pinned (`crates/lanrurugi-plugin/src/pool.rs`);
+- [x] T022 [US4] (2026-11-09: `pool.rs` 只在 `outbound_interface()` 有值且 shim 库存在时才 `LD_PRELOAD`；`guardedFetch` 在两条路径上都装着，因此每站点/全局并发、请求合并、超时、体积上限在 egress 模式下仍然生效)  Load the egress shim only when an interface is actually pinned (`crates/lanrurugi-plugin/src/pool.rs`);
   when the shim is loaded, `dispatcher.ts` must keep per-host 6/global 16 concurrency, request coalescing, ETag store,
   20s/5s timeouts, 32 MiB cap and the CA roots — add a test that the shim's presence never disables them.
-- [ ] T023 [US4] Extend `crates/lanrurugi-egress` to hook `sendmsg`/`sendmmsg`, resolve through a bound libc path
+- [x] T023 [US4] (2026-11-09: 补 `sendmsg`/`sendmmsg` 拦截（连接态 UDP 与 glibc 解析器走这两条），IPv4 169.254/16 与 IPv6 fe80::/10 一样跳过；glibc 内部 `res_send` 仍拦不到——派发器已被要求走绑定接口的解析器，记为已知边界)  Extend `crates/lanrurugi-egress` to hook `sendmsg`/`sendmmsg`, resolve through a bound libc path
   (`res_send`/`getaddrinfo` interception or a forced resolver), and skip IPv4 link-local 169.254/16 like IPv6.
-- [ ] T024 [US4] Replace `restart_workers()` on interface change with drain-then-restart: running invocations finish,
+- [x] T024 [US4] (2026-11-09: `restart_workers` 改成 drain：旧 worker 留在后台，`pending` 空即停、最多等 10 分钟；`outbound_client` 绑不上时返回 `DownloadError::Egress` → `QueueError::EgressUnavailable`，绝不再退回 `default_client()`)  Replace `restart_workers()` on interface change with drain-then-restart: running invocations finish,
   new ones use the new interface; `outbound_client` failure is an error, never `default_client()`.
 - [ ] T025 [US4] Platform routing: FreeBSD uses `setfib` for the Deno subprocess (`net.fibs=2` documented); macOS
   refuses a pinned interface with an explanation; native packages ship the shim where it applies.
-- [ ] T026 [US4] Expose `egress_binding` in `GET /api/settings` (bound/unpinned/unsupported/failed) and render it in
+- [ ] T026 [US4] (2026-11-09: `GET /api/settings` 已加 `egress_binding: {state, interface}`；设置页尚未渲染)  Expose `egress_binding` in `GET /api/settings` (bound/unpinned/unsupported/failed) and render it in
   the settings UI; i18n in en/zh/ja.
 - [ ] T027 [US4] Tests: quickstart F (capture with an egress plugin, then confirm the relay protections still hold);
   a unit test for the hook table's platform matrix.

@@ -2974,5 +2974,6 @@
   "upload.ingestingHint": "下载已完成，正在写入书库并生成缩略图。",
   "upload.transferringCount": "{{n}} 个传输中",
   "upload.transferringCountHint": "当前正在传输字节的任务数（不含入库阶段）。",
-  "share.status.bindingMissing": "已固定到 {iface}，但系统里现在没有这个网络接口 —— 共享保持关闭，等它出现后自动恢复。"
+  "share.status.bindingMissing": "已固定到 {iface}，但系统里现在没有这个网络接口 —— 共享保持关闭，等它出现后自动恢复。",
+  "components.layout.egressInterfaceUnavailable": "这次下载固定走网络接口 {interface}，但该接口无法使用。请检查接口，或清空该设置。"
 }

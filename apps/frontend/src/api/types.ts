@@ -929,6 +929,7 @@ export type QueueError =
   | { kind: "superseded_by_newer_revision"; archive_id: string }
   | { kind: "share_import"; reason: string }
   | { kind: "truncated_download"; expected: number; got: number }
+  | { kind: "egress_unavailable"; interface: string }
 
 /** One raw archive entry (file or directory) from a header-only walk — powers the tree-structure
  * popover in the comparison modal. */
