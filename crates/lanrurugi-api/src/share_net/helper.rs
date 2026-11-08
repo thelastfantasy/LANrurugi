@@ -217,33 +217,55 @@ async fn contact(state: &AppState, net: &ShareNet, record: &ShareImport) {
 
 /// Tells the sharer this instance stopped helping, so it is dropped from the helper set at once
 /// rather than being offered to importers for the fifteen minutes an unreported helper survives.
+///
+/// One failed dial is the common case (the sharer may be mid-reconnect when helping was turned
+/// off), so the leave is attempted a few times before giving up: a helper the sharer still
+/// advertises is handed to importers, which then fail to reach it.
 pub async fn leave(state: &AppState, record: &ShareImport) {
+    const ATTEMPTS: usize = 3;
+    for attempt in 0..ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+        if leave_once(state, record).await {
+            registered()
+                .lock()
+                .expect("registered lock")
+                .remove(&record.id.to_string());
+            return;
+        }
+    }
+    tracing::warn!(
+        record = %record.id,
+        "could not tell the sharer we stopped helping; it will time the helper out"
+    );
+}
+
+/// One attempt at [`leave`]; `true` when the sharer acknowledged (or there is nothing to tell).
+async fn leave_once(state: &AppState, record: &ShareImport) -> bool {
     let Some(code) = record.code.as_deref() else {
-        return;
+        return true;
     };
     let Ok(reference) = ShareRef::parse(code) else {
-        return;
+        return true;
     };
     let Some(net) = super::handle().await else {
-        return;
+        return false;
     };
     let Ok((id, conn)) = publish::dial(state, &net, &reference).await else {
-        return;
+        return false;
     };
     if endpoint_hex(&id) != record.sharer_endpoint_id {
-        return;
+        return true;
     }
-    let _ = call(
+    call(
         &conn,
         Request::HelperLeave {
             share_id: record.share_id.clone(),
         },
     )
-    .await;
-    registered()
-        .lock()
-        .expect("registered lock")
-        .remove(&record.id.to_string());
+    .await
+    .is_ok()
 }
 
 pub fn reason_code(reason: HelpReason) -> &'static str {

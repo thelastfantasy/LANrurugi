@@ -130,7 +130,7 @@ address change; rotation waits for active claims; a rebuild keeps the importer's
 - [ ] T028 [US5] Relay listens on `share_node_relay_port` (default 11205) and restarts only when relay settings
   change, not with every endpoint rebuild; the three TLS modes (`proxy`/`acme`/`files`) all advertise the port they
   actually listen on.
-- [ ] T029 [US5] `HelperLeave` on import delete, process exit and endpoint stop, with retries; a helper that drops is
+- [ ] T029 [US5] (2026-11-09 partial: `share_net::helper::leave` now retries 3× with a 1s gap instead of giving up on one failed dial; import-delete and process-exit triggers still missing — there is no import-delete endpoint to hook yet) `HelperLeave` on import delete, process exit and endpoint stop, with retries; a helper that drops is
   re-dialable instead of being permanently discarded; the `contact()` helper list contains only verified completed
   help.
 - [ ] T030 [US5] Tests: quickstart E (rotation with an active claim) plus a relay-restart log assertion (rebuild the
