@@ -156,7 +156,7 @@ address change; rotation waits for active claims; a rebuild keeps the importer's
 
 ## Phase 9: User Story 7 — Penetration is measured, not asserted (Priority: P3)
 
-- [ ] T036 [US7] Document the measurement procedure (topologies, attempts, success definition) in
+- [x] T036 (2026-11-09: added "穿透率是怎么测的" / "How penetration is measured" to the zh+en VPN guide — 15 topologies, three attempts each, "catalogued completely" as the only success criterion — and the matrix script now writes `summary.jsonl` plus an `N/15` line) [US7] Document the measurement procedure (topologies, attempts, success definition) in
   `docs/src/content/docs/guide/sharing-vpn.md` (zh + en) and extend `scripts/share-network-matrix.sh` to emit a
   machine-readable summary.
 - [ ] T037 [US7] Record a baseline run with real numbers and the environment; state the measured rate rather than a

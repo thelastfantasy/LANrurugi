@@ -130,6 +130,24 @@ is up. Seeing the VPN exit address there, or only relays, is normal.
   exit's `https://…` into **Relay → this relay's public address**, otherwise importers never learn the
   right entry point.
 
+## How penetration is measured
+
+"At least 99% of NAT topologies" is a **measured** number, not an inference from "everything is
+configured". The procedure is fixed so runs stay comparable across versions:
+
+- **Topologies**: `scripts/share-network-matrix.sh` starts two instances, two router containers and a
+  virtual WAN with podman on one host, then walks 15 network environments (same LAN, behind NAT,
+  double NAT, symmetric NAT, relay-only, IPv6-only, WAN down, HTTP proxy, packet loss, ...). Each
+  environment shares one archive from A and imports it on B.
+- **Success**: the importing side **catalogues the archive completely** (all pages present and
+  readable) — not "connected" and not "handshake succeeded". Every environment runs three times;
+  all three have to land for it to count.
+- **Record**: the script ends with `N/15` and a `summary.jsonl` (one line per environment: case,
+  environment name, result, route taken, time to first byte). The reported rate is the `landed`
+  count in that file divided by the total.
+- **Baseline**: this repository has no recorded baseline yet. Run it on real hardware once, write
+  down the date, machine and container versions, and that rate is what may be quoted.
+
 ## Bonus: use the same setup to test relaying
 
 One machine can run a "LAN instance" and a "VPN instance" at once and import between them to exercise
