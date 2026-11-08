@@ -83,7 +83,17 @@ export function SharingEndpointSummary() {
   const settings = useShareSettings()
   const endpoint = settings.data?.endpoint as ShareEndpointStatus | undefined
   if (!endpoint) return null
-  if (!endpoint.running) return <>{t("share.status.notRunning")}</>
+  if (!endpoint.running) {
+    // A pinned interface that is not present is the one "not running" case with an actionable
+    // reason, and the endpoint deliberately refuses to fall back to the physical link.
+    return (
+      <>
+        {endpoint.binding === "missing"
+          ? t("share.status.bindingMissing", { iface: endpoint.bound_interface ?? "" })
+          : t("share.status.notRunning")}
+      </>
+    )
+  }
   return (
     <>
       {t("share.panel.connectivitySummary", {

@@ -491,9 +491,15 @@ async fn resolve_local(
 /// external ones, then public, then private) and the relays it is connected to.
 pub fn via_hint(net: &ShareNet) -> Option<Via> {
     let endpoint = net.endpoint().addr();
+    let bound = net.bound_addrs();
     let mut found: Vec<SocketAddr> = endpoint
         .ip_addrs()
         .copied()
+        // 022 US1: with an interface pinned, only that interface's own addresses are dialable
+        // through it. iroh can still see the host's other addresses (a public IPv6 on the physical
+        // link was the historical leak), and publishing one sends peers to an address this
+        // endpoint does not serve.
+        .filter(|a| address_allowed(bound, a.ip()))
         .filter(|a| dialable(a.ip()))
         .collect();
     found.sort_by_key(|a| address_rank(a.ip()));
@@ -513,6 +519,13 @@ pub fn via_hint(net: &ShareNet) -> Option<Via> {
         addrs,
         relays,
     })
+}
+
+/// 022 US1: whether `ip` may be published when the endpoint is bound to `bound`. An empty `bound`
+/// means the endpoint follows the host, so anything dialable it listens on may be published; a
+/// pinned endpoint may only advertise the addresses of the interface it is pinned to.
+fn address_allowed(bound: &[IpAddr], ip: IpAddr) -> bool {
+    bound.is_empty() || bound.contains(&ip)
 }
 
 /// Whether another machine could ever reach `ip`: not loopback, unspecified or link-local.
@@ -581,5 +594,21 @@ mod tests {
         assert_eq!(nodes[0].relay.as_deref(), Some("https://node.example.org/"));
         reference.via = None;
         assert_eq!(nodes_in_code(&reference)[0].relay, None);
+    }
+
+    #[test]
+    fn a_pinned_endpoint_publishes_only_its_interface_addresses() {
+        let tunnel: IpAddr = "10.8.0.2".parse().unwrap();
+        let public_v6: IpAddr = "2001:db8::1".parse::<std::net::Ipv6Addr>().unwrap().into();
+        let bound = vec![tunnel];
+        assert!(address_allowed(&bound, tunnel));
+        assert!(!address_allowed(&bound, public_v6));
+    }
+
+    #[test]
+    fn an_unpinned_endpoint_publishes_whatever_it_listens_on() {
+        let bound: Vec<IpAddr> = Vec::new();
+        assert!(address_allowed(&bound, "192.168.3.20".parse().unwrap()));
+        assert!(address_allowed(&bound, "2001:db8::1".parse().unwrap()));
     }
 }

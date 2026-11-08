@@ -153,6 +153,10 @@ export type ShareSettings = Record<string, unknown> & { share_engine?: ShareEngi
 
 export interface ShareEndpointStatus {
   running: boolean
+  /** 022: `pinned` when the endpoint is bound to an interface, `auto` when it follows the host,
+   * `missing` when a pinned interface is set but not present right now. */
+  binding?: "pinned" | "auto" | "missing"
+  bound_interface?: string | null
   endpoint_id?: string
   relays?: string[]
   direct_addresses?: string[]

@@ -39,7 +39,7 @@ implemented.
 - [ ] T005 [P] Add `EgressError::UnsupportedPlatform` and `EgressError::BindFailed` to
   `crates/lanrurugi-egress` and a decision table test: pinned+Linux → shim, pinned+FreeBSD → `setfib`, pinned+macOS →
   refuse, unpinned → no shim.
-- [ ] T006 [P] Add the endpoint-state fields from data-model.md (`bound_interface`, `binding`, `relay`, `rotation`)
+- [x] T006 [P] (2026-11-09: `GET /api/shares/settings` 的 `endpoint` 增加 `binding`（`pinned|auto|missing`）与 `bound_interface`，运行与否都带；前端类型 + 未运行且接口缺失时的说明文案) Add the endpoint-state fields from data-model.md (`bound_interface`, `binding`, `relay`, `rotation`)
   to `GET /api/share/status` in `crates/lanrurugi-api/src/share_settings.rs`, with serialization tests.
 
 ---
@@ -53,19 +53,19 @@ that interface's addresses, and a socket that cannot be bound fails loudly.
 physical interface for zero packets; restart the interface on a new address and confirm no drop and no leaked
 address in `direct_addrs`.
 
-- [ ] T007 [US1] Wire `DeviceBinding` into `crates/lanrurugi-api/src/share_net/mod.rs`'s endpoint construction: after
+- [x] T007 [US1] (2026-11-09: 固定接口取不到地址时直接拒绝启动（`share_net::bind` 的 `None` 分支），不退回 `0.0.0.0`/`::`，由接口 watcher 等隧道回来再起) Wire `DeviceBinding` into `crates/lanrurugi-api/src/share_net/mod.rs`'s endpoint construction: after
   `clear_ip_transports()`, bind the QUIC/IP transports and every locally supplied address to the interface. Keep the
   existing `bind_addrs` call for the address set, but reject endpoint start when a pinned interface yields no address
   (replace the current `0.0.0.0`/`::` fallback).
-- [ ] T008 [US1] Patch `vendor/netwatch`'s UDP socket creation to call `bind_device` from a new optional field, and
+- [x] T008 [US1] (2026-11-09: 两个 fork 各自暴露进程内 `set_bind_device`，`share_net::bind` 每次（重）绑时调用；见 `vendor/*/FORK.md`) Patch `vendor/netwatch`'s UDP socket creation to call `bind_device` from a new optional field, and
   set it from the share engine; same for `vendor/iroh-relay`'s TCP connect path (its TLS connector and plain HTTP
   client).
 - [ ] T009 [US1] Bind the sharing DNS resolver and the pkarr client to the interface (`reqwest`'s `.interface()` or a
   `Resolve` implementation over a bound socket); a resolver that cannot be bound is an error, not a silent default.
-- [ ] T010 [US1] Ensure the addresses published in node records come only from the pinned interface: filter
+- [x] T010 [US1] (2026-11-09: `via_hint` 只发布 `net.bound_addrs()` 之内的地址，固定接口以外的公网 IPv6 不再进节点记录；`address_allowed` 两条单测) Ensure the addresses published in node records come only from the pinned interface: filter
   `endpoint.addr().ip_addrs()` and `direct_addrs` by the interface's address set; test with an endpoint that also
   sees a public IPv6 (the historical leak).
-- [ ] T011 [US1] Address-change handling on top of `spawn_interface_watch`: when the pinned interface's addresses
+- [x] T011 [US1] (2026-11-09: `start_services` 起完端点立刻 `publish_all`，因此地址变化/端口轮换/改设置触发的重建都会当场重发记录，不再等每小时那一轮) Address-change handling on top of `spawn_interface_watch`: when the pinned interface's addresses
   change, rebuild the endpoint **and** republish the node record immediately, reusing
   `retract_node_record`/`publish_share` (FR-004).
 - [ ] T012 [US1] Tests: unit test for the address filter; quickstart A recorded with interface name, `ip addr`

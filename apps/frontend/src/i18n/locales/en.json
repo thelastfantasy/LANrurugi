@@ -2973,5 +2973,6 @@
   "upload.ingesting": "Saving to library…",
   "upload.ingestingHint": "Download finished — writing the archive into the library and generating its thumbnail.",
   "upload.transferringCount": "{{n}} transferring",
-  "upload.transferringCountHint": "Tasks currently moving bytes (the library-writing phase is not counted)."
+  "upload.transferringCountHint": "Tasks currently moving bytes (the library-writing phase is not counted).",
+  "share.status.bindingMissing": "Pinned to {iface}, which is not present right now — sharing stays off until it appears."
 }

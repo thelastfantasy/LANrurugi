@@ -1216,11 +1216,28 @@ async fn settings_with_status(state: &AppState) -> Value {
     // endpoint is running, and it never contains an address (the record published under it does,
     // and that record is what changes when the address does).
     let mine = node_code(state).await.ok().map(|c| c.prefixed());
+    // 022 US1: whether the endpoint is actually pinned, and to what. A name that is set but not
+    // currently present on the host is `missing` — the same state the endpoint refuses to start in,
+    // reported here so the settings page can explain why sharing is off instead of just showing a
+    // stopped endpoint.
+    let pinned = settings.text("share_bind_interface").trim().to_string();
+    let binding = if pinned.is_empty() {
+        "auto"
+    } else if crate::share_net::interfaces::list()
+        .iter()
+        .any(|i| i.name == pinned)
+    {
+        "pinned"
+    } else {
+        "missing"
+    };
     let endpoint = match crate::share_net::handle().await {
         Some(net) => {
             let addr = net.endpoint().addr();
             json!({
                 "running": true,
+                "bound_interface": if pinned.is_empty() { serde_json::Value::Null } else { json!(pinned) },
+                "binding": binding,
                 "endpoint_id": crate::share_net::endpoint_hex(&net.id()),
                 "relays": addr.relay_urls().map(|u| u.to_string()).collect::<Vec<_>>(),
                 "direct_addresses": addr.ip_addrs().map(|a| a.to_string()).collect::<Vec<_>>(),
@@ -1232,7 +1249,12 @@ async fn settings_with_status(state: &AppState) -> Value {
                 "relay_port": net.relay_port().await,
             })
         }
-        None => json!({ "running": false, "node_code": mine }),
+        None => json!({
+            "running": false,
+            "node_code": mine,
+            "bound_interface": if pinned.is_empty() { serde_json::Value::Null } else { json!(pinned) },
+            "binding": binding,
+        }),
     };
     // Relays: the endpoint keeps a connection to its home relay only, so that one is known
     // reachable and the others are unknown rather than failed (FR-049).

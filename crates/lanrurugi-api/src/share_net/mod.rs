@@ -187,6 +187,12 @@ impl ShareNet {
         self.udp_port
     }
 
+    /// The addresses the endpoint was actually bound to (empty when it follows the host). 022 US1:
+    /// a pinned endpoint must never publish an address it is not listening on.
+    pub fn bound_addrs(&self) -> &[std::net::IpAddr] {
+        &self.bound_addrs
+    }
+
     /// The relay role's TCP port, when it is running.
     pub async fn relay_port(&self) -> Option<u16> {
         *self.relay_port.lock().await
@@ -440,6 +446,13 @@ static SERVICES: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 /// Starts the endpoint and, the first time only, the loops that ride on it.
 pub async fn start_services(state: &AppState) -> Result<(), String> {
     start(state).await?;
+    // 022 US1/T011: a rebuild is how an interface's new address takes effect, and the record
+    // published under the node code still names the old one until something republishes it. Do it
+    // here, so every rebuild (address change, port rotation, settings save) republishes at once
+    // instead of waiting for the hourly pass.
+    if let Some(net) = handle().await {
+        publish::publish_all(state, &net).await;
+    }
     if SERVICES.set(()).is_ok() {
         blobs::spawn_prepare_worker(state.clone());
         helper::spawn(state.clone());
