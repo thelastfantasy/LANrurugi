@@ -59,6 +59,7 @@ lanrurugi-gpu-ipc = { path = "crates/lanrurugi-gpu-ipc" }
 lanrurugi-embed-ipc = { path = "crates/lanrurugi-embed-ipc" }
 lanrurugi-book = { path = "crates/lanrurugi-book" }
 lanrurugi-share-proto = { path = "crates/lanrurugi-share-proto" }
+lanrurugi-share = { path = "crates/lanrurugi-share" }
 
 tarpc = { version = "0.38.0", features = ["serde-transport", "serde-transport-bincode", "unix", "tokio1"] }
 futures = "0.3.34"

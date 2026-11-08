@@ -8,20 +8,20 @@ use iroh::endpoint::{Connection, LocalTransportAddr};
 
 /// The selected path of one live connection.
 #[derive(Debug, Clone)]
-pub(crate) struct Link {
-    pub(crate) local: String,
-    pub(crate) remote: String,
-    pub(crate) route: &'static str,
+pub struct Link {
+    pub local: String,
+    pub remote: String,
+    pub route: &'static str,
     /// The local interface carrying it, when the kernel reports one.
-    pub(crate) interface: Option<String>,
+    pub interface: Option<String>,
     /// True when that interface is a tunnel (`tun0`, `wg0`, `utun3`, …).
-    pub(crate) tunnel: bool,
+    pub tunnel: bool,
 }
 
 impl Link {
     /// The traversal technique in words, for the activity entry: how the two endpoints reached
     /// each other, and whether that path was itself inside a tunnel.
-    pub(crate) fn technique(&self) -> String {
+    pub fn technique(&self) -> String {
         let base = if self.route == "relay" {
             "QUIC relay"
         } else if self.remote == "-" {
@@ -43,7 +43,7 @@ impl Link {
 
 /// A link nobody could describe — the connection closed before it could be read, or the peer
 /// vanished first. Recording it still beats dropping the entry that says how much moved.
-pub(crate) fn unknown() -> Link {
+pub fn unknown() -> Link {
     Link {
         local: "-".to_string(),
         remote: "-".to_string(),
@@ -55,7 +55,7 @@ pub(crate) fn unknown() -> Link {
 
 /// Reads the connection's current path. Cheap enough for once per connection, wrong to call per
 /// piece — the path can change mid-transfer, but a per-piece answer would say nothing new.
-pub(crate) fn of(conn: &Connection) -> Link {
+pub fn of(conn: &Connection) -> Link {
     let paths = conn.paths();
     let path = paths
         .iter()

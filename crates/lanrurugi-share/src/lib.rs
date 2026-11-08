@@ -5,3 +5,6 @@
 //! transport can be tested (and later reused) without a web server.
 
 pub mod host;
+pub mod interfaces;
+pub mod link;
+pub mod status;

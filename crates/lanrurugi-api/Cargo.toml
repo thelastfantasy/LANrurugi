@@ -45,6 +45,7 @@ flate2.workspace = true
 governor.workspace = true
 futures-util.workspace = true
 url.workspace = true
+lanrurugi-share.workspace = true
 lanrurugi-share-proto.workspace = true
 hkdf.workspace = true
 ipnet.workspace = true

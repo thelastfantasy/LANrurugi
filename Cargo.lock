@@ -4136,6 +4136,7 @@ dependencies = [
  "lanrurugi-recommend",
  "lanrurugi-scanner",
  "lanrurugi-search",
+ "lanrurugi-share",
  "lanrurugi-share-proto",
  "lanrurugi-storage",
  "lanrurugi-translate",
@@ -4594,6 +4595,7 @@ name = "lanrurugi-share"
 version = "1.0.0-beta.5"
 dependencies = [
  "futures-util",
+ "if-addrs",
  "iroh",
  "iroh-relay",
  "lanrurugi-core",

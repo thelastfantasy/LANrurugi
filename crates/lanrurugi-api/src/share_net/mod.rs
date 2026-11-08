@@ -9,14 +9,14 @@
 pub mod blobs;
 pub mod helper;
 pub mod import;
-pub mod interfaces;
+pub use lanrurugi_share::interfaces;
 pub mod limits;
-pub(crate) mod link;
+pub use lanrurugi_share::link;
 pub mod nodes;
 pub mod proxy;
 pub mod publish;
 pub mod server;
-pub mod status;
+pub use lanrurugi_share::status;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
