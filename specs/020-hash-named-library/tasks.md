@@ -246,6 +246,13 @@ the writer keeps appending to the old path while `_byname/` holds a truncated fi
 scan would then catalogue. The next pass moves it once it has settled; the test suite ages its
 fixtures accordingly.
 
+**2026-11-09 (adoption pass)** — rows that a pre-020 build parked with `pending_filename_conflict`
+are no longer left asking a question that has no answer. At `serve` startup, a row whose staged
+file still exists is ingested under its own id (`adopt_pending_conflict`) and marked `Done`; a
+duplicate of bytes already in the library is dropped and the row points at the existing archive. A
+row whose staged file vanished is still marked `StaleAfterRestart`, as before. The frontend conflict
+menu (T024/T025/T026) can therefore be deleted without stranding anything.
+
 - **No new `Archive` fields (T002).** `Archive.name` has always been the source filename minus its
   extension, so it is kept verbatim and only `title` is cleaned. This is what
   `find_all_by_filename` (`crates/lanrurugi-storage/src/repository.rs:181`) already matches, which

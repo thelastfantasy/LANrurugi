@@ -653,38 +653,87 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     }
                     continue;
                 }
-                if let Some(conflict) = &item.pending_filename_conflict {
+                if let Some(conflict) = item.pending_filename_conflict.clone() {
                     let temp_path_exists = tokio::fs::try_exists(&conflict.temp_path)
                         .await
                         .unwrap_or(false);
-                    if !temp_path_exists {
-                        tracing::info!(
-                            item_id = %item.id,
-                            temp_path = %conflict.temp_path,
-                            "clearing pending filename conflict whose staged file vanished across a restart"
-                        );
+                    if temp_path_exists {
+                        // The bytes are still here, and since 020 the destination no longer
+                        // depends on the name: ingest them under their own id instead of leaving
+                        // the row asking the user a question whose answer stopped mattering.
+                        let item_id = item.id.clone();
+                        let outcome =
+                            lanrurugi_api::download_manager::ingest::adopt_pending_conflict(
+                                &state, &conflict,
+                            )
+                            .await;
                         item.pending_filename_conflict = None;
-                        item.state = lanrurugi_storage::download_queue::DownloadQueueState::Error;
-                        item.error =
-                            Some(lanrurugi_core::queue_error::QueueError::StaleAfterRestart);
+                        match outcome {
+                            Ok(archive_id) => {
+                                tracing::info!(
+                                    item_id = %item_id,
+                                    archive_id = %archive_id,
+                                    "catalogued a pre-hash-layout download that was waiting for a filename decision"
+                                );
+                                item.state =
+                                    lanrurugi_storage::download_queue::DownloadQueueState::Done;
+                                item.archive_ids = Some(vec![archive_id]);
+                                item.error = None;
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    item_id = %item_id,
+                                    "could not catalogue a pre-hash-layout download that was waiting for a filename decision"
+                                );
+                                item.state =
+                                    lanrurugi_storage::download_queue::DownloadQueueState::Error;
+                                item.error = Some(error);
+                            }
+                        }
                         if let Err(e) = state.download_queue.update(&item).await {
                             tracing::warn!(
-                                item_id = %item.id,
+                                item_id = %item_id,
                                 error = %e,
-                                "failed to clear a restart-orphaned pending filename conflict"
+                                "failed to save a catalogued pre-hash-layout download"
                             );
                         }
-                        // Redis (unlike `temp_dir`) survives a container recreate, so a cached AI
-                        // comparison result for this same item — its sample-page images read live
-                        // from the very `temp_path` that just vanished — would otherwise keep
-                        // being served as a "successful" cached comparison whose images 404.
-                        if let Err(e) = state.compare_cache.delete(&item.id).await {
+                        // Its cached AI comparison read sample pages out of the staged file, which
+                        // has just been ingested elsewhere; the cache would serve dead images.
+                        if let Err(e) = state.compare_cache.delete(&item_id).await {
                             tracing::warn!(
-                                item_id = %item.id,
+                                item_id = %item_id,
                                 error = %e,
-                                "failed to clear compare_cache for a restart-orphaned pending filename conflict"
+                                "failed to clear compare_cache after cataloguing a pre-hash-layout download"
                             );
                         }
+                        continue;
+                    }
+
+                    tracing::info!(
+                        item_id = %item.id,
+                        temp_path = %conflict.temp_path,
+                        "clearing pending filename conflict whose staged file vanished across a restart"
+                    );
+                    item.pending_filename_conflict = None;
+                    item.state = lanrurugi_storage::download_queue::DownloadQueueState::Error;
+                    item.error = Some(lanrurugi_core::queue_error::QueueError::StaleAfterRestart);
+                    if let Err(e) = state.download_queue.update(&item).await {
+                        tracing::warn!(
+                            item_id = %item.id,
+                            error = %e,
+                            "failed to clear a restart-orphaned pending filename conflict"
+                        );
+                    }
+                    // Redis (unlike `temp_dir`) survives a container recreate, so a cached AI
+                    // comparison result for this same item — its sample-page images read live
+                    // from the very `temp_path` that just vanished — would otherwise keep
+                    // being served as a "successful" cached comparison whose images 404.
+                    if let Err(e) = state.compare_cache.delete(&item.id).await {
+                        tracing::warn!(
+                            item_id = %item.id,
+                            error = %e,
+                            "failed to clear compare_cache for a restart-orphaned pending filename conflict"
+                        );
                     }
                 }
             }

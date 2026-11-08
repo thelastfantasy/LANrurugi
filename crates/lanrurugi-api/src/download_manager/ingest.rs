@@ -105,6 +105,43 @@ pub struct IngestedDownload {
     pub is_new: bool,
 }
 
+/// Catalogues a download that a pre-020 build parked waiting for a filename decision: the
+/// destination is derived from the bytes now (`<bucket>/<id>.<ext>`), so the question the user was
+/// asked has no wrong answer and the staged file is simply ingested under its own id.
+///
+/// Returns the archive id the bytes ended up under. The error type is `QueueError` because the only
+/// caller is the startup repair pass, which stores it on the queue row as-is.
+pub async fn adopt_pending_conflict(
+    state: &AppState,
+    conflict: &PendingFilenameConflict,
+) -> Result<String, lanrurugi_core::queue_error::QueueError> {
+    let staging = Path::new(&conflict.temp_path);
+    match catalogue_staged_file(
+        state,
+        staging,
+        &conflict.original_filename,
+        None,
+        DuplicatePolicy::Reject,
+    )
+    .await
+    {
+        Ok(done) => Ok(done.archive_id),
+        // The same bytes are already in the library: this staged copy is a redundant second copy
+        // with nothing pointing at it, so it is dropped rather than left in `temp_dir` forever.
+        Err(IngestDownloadError::Duplicate { existing_id, .. }) => {
+            if let Err(e) = tokio::fs::remove_file(staging).await {
+                tracing::warn!(
+                    path = %staging.display(),
+                    error = %e,
+                    "could not drop a duplicate staged download"
+                );
+            }
+            Ok(existing_id)
+        }
+        Err(e) => Err(lanrurugi_core::queue_error::QueueError::from(&e)),
+    }
+}
+
 /// Wraps one `ingest_downloaded_file` result with the unified `archive.ingest` activity record —
 /// shared by the download pipeline (`plugins::run_managed_downloads`) and the web UI's user upload
 /// (`upload.rs::upload_archive`), both of which funnel through `ingest_downloaded_file` but carry
