@@ -3763,8 +3763,6 @@ dependencies = [
 [[package]]
 name = "iroh-relay"
 version = "1.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e5589e7c1475700686603a970275687f760df853bc6525c7eb1347aa31d7230"
 dependencies = [
  "blake3",
  "bytes",
@@ -3804,6 +3802,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "simdutf8",
+ "socket2",
  "strum 0.28.0",
  "time",
  "tokio",
@@ -4142,6 +4141,7 @@ dependencies = [
  "lanrurugi-translate",
  "libc",
  "maxminddb",
+ "netwatch",
  "percent-encoding",
  "pkarr",
  "rand 0.10.3",
@@ -5393,8 +5393,6 @@ dependencies = [
 [[package]]
 name = "netwatch"
 version = "0.19.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39da9cad5f23aa43401f09497d3b280e51b5feba115d9ffbf38ca35d6ff95e96"
 dependencies = [
  "atomic-waker",
  "bytes",

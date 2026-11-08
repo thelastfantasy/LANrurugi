@@ -22,11 +22,11 @@ US6 (downloads/repack) and US7 (measurement) are P3 but independent of the P2 on
 **Purpose**: the two upstream crates that own the sockets must gain a `bind_device` knob before any of US1 can be
 implemented.
 
-- [ ] T001 Vendor `netwatch` 0.19.3 into `vendor/netwatch/` (keep its `Cargo.toml` name/version; add only
+- [x] T001 (2026-11-09: `vendor/netwatch/`, patch in workspace `Cargo.toml`; `cargo metadata` resolves netwatch from the vendored path) Vendor `netwatch` 0.19.3 into `vendor/netwatch/` (keep its `Cargo.toml` name/version; add only
   `license`/`repository` metadata if the workspace requires it) and add `[patch.crates-io] netwatch = { path =
   "vendor/netwatch" }` in the workspace `Cargo.toml`. Verify `cargo tree -i netwatch` shows the vendored copy.
-- [ ] T002 Vendor `iroh-relay` 1.4.1 into `vendor/iroh-relay/` the same way and patch it.
-- [ ] T003 [P] Record the fork policy in `docs/` (or a `vendor/README.md`): one option each, rebase on every iroh
+- [x] T002 (2026-11-09: `vendor/iroh-relay/`, patched the same way) Vendor `iroh-relay` 1.4.1 into `vendor/iroh-relay/` the same way and patch it.
+- [x] T003 [P] (2026-11-09: `vendor/netwatch/FORK.md` and `vendor/iroh-relay/FORK.md` record the exact hunks and why) Record the fork policy in `docs/` (or a `vendor/README.md`): one option each, rebase on every iroh
   bump, no other edits; the diff must stay reviewable in one screen.
 
 ---

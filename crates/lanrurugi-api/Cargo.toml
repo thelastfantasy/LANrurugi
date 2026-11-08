@@ -55,6 +55,9 @@ bao-tree.workspace = true
 blake3.workspace = true
 ed25519-dalek.workspace = true
 iroh-relay.workspace = true
+# LANrurugi fork (022): pins the UDP sockets iroh's QUIC transport creates to the sharing
+# interface; see vendor/netwatch/FORK.md.
+netwatch = "0.19.3"
 sentry.workspace = true
 sentry-tower.workspace = true
 sentry-tracing.workspace = true

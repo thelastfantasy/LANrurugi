@@ -241,3 +241,10 @@ codegen-units = 16
 # debug info and incremental rebuild speed, while the image codecs run at release speed.
 [profile.dev.package."*"]
 opt-level = 2
+
+# LANrurugi forks pinned to the exact upstream versions this build already uses (022): both carry a
+# single added `SO_BINDTODEVICE` call so a pinned sharing node cannot fall back to the physical link.
+# The diff against the published crates stays one hunk each; `vendor/*/FORK.md` records it.
+[patch.crates-io]
+netwatch = { path = "vendor/netwatch" }
+iroh-relay = { path = "vendor/iroh-relay" }
