@@ -284,34 +284,16 @@ pub(crate) async fn catalogue_staged_file(
     source_url: Option<&str>,
     duplicate_policy: DuplicatePolicy,
 ) -> Result<IngestedDownload, IngestDownloadError> {
-    // Serializes this whole function's filename-collision-check-through-catalog-write sequence
-    // against any other concurrent download racing to catalogue the *same* destination filename
-    // (e.g. two different batch-started downloads that happen to resolve to an identical name) —
-    // without this, both could pass `find_by_filename`'s check before either finished writing,
-    // silently clobbering one archive's on-disk bytes with the other's while leaving two dangling
-    // catalog records. Held for this entire function's body (guard drops at every return point,
-    // including the early returns below), not just around `ingest_file_with_policy`'s own check.
-    let _filename_lock = state.lock_filename(filename).await;
-
-    // `title_filename` is always `filename` (the real, resolved name — from `Content-Disposition`,
-    // a plugin-supplied hint, or the URL path — never the disposable staging name `staging_path`
-    // sits under), independent of whether `duplicate_policy` also wants it used for the
-    // filename-collision check. Without this, a `Reject`-policy download (the common case) had no
-    // real name to fall back on at all and got titled after its staging path's own UUID — see
-    // `catalogue_new_archive`'s own docs for the full bug this fixes.
-    // The bytes reach the library *before* the record exists. A record is visible to
-    // `/api/search` the moment it is stored (search enumerates the 40-hex archive keys directly),
-    // and the copy below is the longest part of ingesting a large download — so cataloguing first
-    // is exactly what let a half-moved archive show up in the library while
-    // `/api/archives/{id}/files` answered 500 on the partial zip.
+    // The destination is derived from the bytes, not from the name: the id is the content hash and
+    // the file is `<bucket>/<id>.<ext>`, so two downloads can never want the same path for
+    // different bytes (020). That removes the filename lock, the collision policy and the
     //
-    // The copy goes to a dot-prefixed temp name inside `archive_dir` first: `rename` is atomic
-    // only within one filesystem, and the staging file normally lives on another one (`/temp` on
-    // the container's own volume), so the move has to copy bytes regardless. Copying under the
-    // final name would expose the same half-written file to readers; copying under
-    // `.ingest-<uuid>` and renaming afterwards makes the archive appear complete, or not at all.
-    // The dot prefix also keeps a concurrent full scan from cataloguing the temp file.
-    let dest = unique_dest_path(&state.library.archive_dir, filename).await;
+    // The bytes still reach the library *before* the record exists (a record is visible to
+    // `/api/search` the moment it is stored), and the cross-filesystem move is the longest part of
+    // ingesting a large download. The copy goes to a dot-prefixed name inside `archive_dir` first
+    // so a concurrent scan cannot catalogue a half-written file, then is renamed into its bucket.
+    // The id is computed from that same copy, before the rename.
+    let extension = filename_extension(filename);
     let incoming = state
         .library
         .archive_dir
@@ -319,14 +301,68 @@ pub(crate) async fn catalogue_staged_file(
     crate::download_manager::rename_or_copy(staging_path, &incoming)
         .await
         .map_err(IngestDownloadError::Io)?;
+    let id = match lanrurugi_storage::id::size_aware_id(&incoming) {
+        Ok(id) => ArchiveId(id),
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&incoming).await;
+            return Err(IngestDownloadError::Io(std::io::Error::other(e)));
+        }
+    };
+    let dest = lanrurugi_storage::paths::hash_layout_path(
+        &state.library.archive_dir,
+        id.as_str(),
+        &extension,
+    );
+
+    // These exact bytes are already catalogued and on disk: nothing to move, nothing to update.
+    if let Ok(Some(existing)) = state.repos.archives.get(&id).await {
+        if Path::new(&existing.file).is_file() {
+            let _ = tokio::fs::remove_file(&incoming).await;
+            return Ok(IngestedDownload {
+                archive_id: id.into_string(),
+                is_new: false,
+            });
+        }
+        // A record without bytes (an interrupted overwrite, or a restored dump): adopt the copy
+        // just made instead of leaving a record pointing at nothing.
+        if let Some(parent) = dest.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(IngestDownloadError::Io)?;
+        }
+        tokio::fs::rename(&incoming, &dest)
+            .await
+            .map_err(IngestDownloadError::Io)?;
+        let mut repaired = existing;
+        repaired.file = dest.to_string_lossy().to_string();
+        state
+            .repos
+            .archives
+            .save(&repaired)
+            .await
+            .map_err(|e| IngestDownloadError::Io(std::io::Error::other(e)))?;
+        return Ok(IngestedDownload {
+            archive_id: id.into_string(),
+            is_new: false,
+        });
+    }
+
+    if let Some(parent) = dest.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(IngestDownloadError::Io)?;
+    }
     if let Err(e) = tokio::fs::rename(&incoming, &dest).await {
         let _ = tokio::fs::remove_file(&incoming).await;
         return Err(IngestDownloadError::Io(e));
     }
 
+    // `intended_filename: None` — the on-disk name is the id now, so the legacy "reject a second
+    // archive with the same filename" rule has nothing to compare. Titles still come from the real
+    // name via `title_filename`.
     let options = IngestOptions {
         duplicate_policy,
-        intended_filename: Some(filename),
+        intended_filename: None,
         title_filename: Some(filename),
         defer_file_path: false,
     };
@@ -350,9 +386,8 @@ pub(crate) async fn catalogue_staged_file(
 
     let (archive_id, is_new) = match outcome {
         IngestOutcome::Unchanged { id } => {
-            // The library already holds these exact bytes under another name — drop the copy just
-            // made instead of leaving a stray duplicate behind.
-            let _ = tokio::fs::remove_file(&dest).await;
+            // The file at `dest` *is* this archive's bytes now (it was renamed into its canonical
+            // path above) — removing it here would delete the only copy.
             return Ok(IngestedDownload {
                 archive_id: id.into_string(),
                 is_new: false,
@@ -804,50 +839,6 @@ async fn hex_crc32_of_file(path: &Path) -> std::io::Result<String> {
     Ok(format!("{:08x}", hasher.finalize()))
 }
 
-/// Appends a numeric suffix (`name (1).ext`, `name (2).ext`, ...) if `archive_dir/filename`
-/// already exists — a real download's suggested filename (from `Content-Disposition`/
-/// `filename_hint`/URL path) has no uniqueness guarantee the way a fresh UUID-derived staging
-/// name does, unlike `upload.rs::upload_archive`'s destination (which trusts the client-supplied
-/// name as-is and lets a same-name second upload overwrite, since that's an explicit user action
-/// naming their own file — a downloaded file's name is comparatively more likely to collide
-/// incidentally, e.g. two different artworks both named `archive.zip` by their respective source
-/// sites). Purely a disk-basename check (any file occupying that exact path, cataloged or not) —
-/// entirely independent of, and unaffected by, the `find_by_filename` *archive-record* collision
-/// check `catalogue_staged_file` already resolved before ever reaching this point.
-async fn unique_dest_path(archive_dir: &Path, filename: &str) -> std::path::PathBuf {
-    // The name can come from outside this process (a share manifest's `filename`, a
-    // `Content-Disposition`), and `join` replaces the whole path on an absolute name while keeping
-    // `..` on a relative one — so only the last component of it is ever used.
-    let filename = Path::new(filename)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .filter(|n| !n.is_empty())
-        .unwrap_or("download");
-    let candidate = archive_dir.join(filename);
-    if tokio::fs::metadata(&candidate).await.is_err() {
-        return candidate;
-    }
-    let path = Path::new(filename);
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("download");
-    let ext = path.extension().and_then(|s| s.to_str());
-    for n in 1..10_000 {
-        let name = match ext {
-            Some(ext) => format!("{stem} ({n}).{ext}"),
-            None => format!("{stem} ({n})"),
-        };
-        let candidate = archive_dir.join(&name);
-        if tokio::fs::metadata(&candidate).await.is_err() {
-            return candidate;
-        }
-    }
-    // Practically unreachable (10,000 same-stem collisions), but a deterministic fallback is
-    // still preferable to an infinite loop.
-    archive_dir.join(format!("{stem}-{}", uuid::Uuid::new_v4().simple()))
-}
-
 /// Resolves a `PendingFilenameConflict` by deleting the colliding archive and cataloguing the
 /// staged file under its originally-intended filename — `download_queue.rs::overwrite_queue_item`'s
 /// own implementation, kept here alongside `catalogue_staged_file` since it's the only other
@@ -906,6 +897,16 @@ pub async fn resolve_rename(
     }
 }
 
+/// The extension to keep on the hash-layout file, lowercased. The name carries no meaning any
+/// more, but the extension still selects a container format when the archive is opened.
+fn filename_extension(filename: &str) -> String {
+    Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -915,24 +916,6 @@ mod tests {
     /// dependency), just with a per-test-unique filename so concurrent test runs don't collide.
     fn scratch_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("lrr-ingest-test-{}-{name}", uuid::Uuid::new_v4()))
-    }
-
-    #[tokio::test]
-    async fn a_destination_never_escapes_the_archive_dir() {
-        let dir = scratch_path("dest");
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-        for name in [
-            "../../etc/passwd",
-            "/etc/passwd",
-            "..",
-            ".",
-            "sub/dir/book.zip",
-            "",
-        ] {
-            let path = unique_dest_path(&dir, name).await;
-            assert_eq!(path.parent(), Some(dir.as_path()), "{name:?} -> {path:?}");
-        }
-        tokio::fs::remove_dir_all(&dir).await.ok();
     }
 
     #[tokio::test]

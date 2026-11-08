@@ -115,6 +115,12 @@ pub struct ScanSummary {
     pub rekeyed: usize,
     pub unchanged: usize,
     pub errors: usize,
+    /// Archives moved under `_byname/` by the relocation pass at the end of this scan (020).
+    pub relocated: usize,
+    /// Relocation candidates whose `_byname/` destination already held a different file — left
+    /// where they were and reported, never overwritten.
+    pub relocation_skipped: usize,
+    pub relocation_failed: usize,
 }
 
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -372,6 +378,28 @@ pub async fn full_scan(
                     });
                 }
             }
+        }
+    }
+
+    // Everything catalogued by filename — pre-020 records and files dropped into the mount since the
+    // last scan — belongs under `_byname/`. One pass at the end covers both; a failure is counted,
+    // never fatal: a file left in place is still readable, it just sits outside the convention.
+    match crate::relocate::relocate_library(&archives, config_pool, library_path).await {
+        Ok(report) => {
+            summary.relocated = report.moved as usize;
+            summary.relocation_skipped = report.skipped_occupied as usize;
+            summary.relocation_failed = report.failed as usize;
+            if !report.is_empty() {
+                tracing::info!(
+                    moved = report.moved,
+                    skipped_occupied = report.skipped_occupied,
+                    failed = report.failed,
+                    "_byname relocation pass"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot list archives for the _byname relocation pass");
         }
     }
 
@@ -827,8 +855,18 @@ mod tests {
             .expect("the placeholder record is kept");
         assert_eq!(untouched.title, "Known");
 
-        let real_id =
-            lanrurugi_core::ids::ArchiveId(lanrurugi_storage::id::size_aware_id(&path).unwrap());
+        // The relocation pass moves every by-name archive under `_byname/`, known or not, so the
+        // file the test placed at the root is gone from there and lives one directory deeper.
+        assert_eq!(
+            untouched.file,
+            lanrurugi_storage::paths::byname_dir(dir.path())
+                .join(path.file_name().unwrap())
+                .to_string_lossy()
+        );
+        let moved_path = std::path::PathBuf::from(&untouched.file);
+        let real_id = lanrurugi_core::ids::ArchiveId(
+            lanrurugi_storage::id::size_aware_id(&moved_path).unwrap(),
+        );
         // Hermetic: an earlier run of this same test (before the filemap-pruning behaviour existed)
         // could have left a record under the size-aware id, and `size_aware_id` depends only on the
         // file's own size and mtime, not on the temp path.
@@ -838,7 +876,10 @@ mod tests {
             "the real content hash must never have been computed or catalogued either"
         );
 
-        let _: () = config_conn.hdel("LRR_FILEMAP", &path_str).await.unwrap();
+        let _: () = config_conn
+            .hdel("LRR_FILEMAP", untouched.file)
+            .await
+            .unwrap();
     }
 
     /// The other half of `update_filemap` parity: a filemap entry whose path no longer exists on

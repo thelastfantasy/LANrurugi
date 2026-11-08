@@ -9,7 +9,7 @@ The existing archive hash keeps every field it has today. One field is added:
 | `id` | `ArchiveId` (newtype over the content-derived hex) | unchanged; also the stored file's stem |
 | `file` | string | `<library>/<ab>/<id>.<ext>` for archives ingested after this feature, or the unchanged path under `_byname/`; still an openable absolute path |
 | `title` | string | defaults to `title_from_filename(original_filename)`; editable; plugins may override |
-| `original_filename` | string, **new** | verbatim filename as the source gave it, including extension; empty only for records created before this feature and not yet seen by a scan |
+| `name` | string | **already existed**; kept verbatim as the source filename minus extension — this is the original filename of record. The sidecar adds the extension and full path for records created before this feature and not yet seen by a scan |
 | `extension` | string | derived at ingest, lowercase, no dot |
 | `pagecount`, `size`, timestamps, tags, etc. | unchanged | |
 

@@ -1,4 +1,5 @@
-//! Release markers (FR-002): title tokens that describe how a work was released — translation,
+//! Release markers (FR-002), shared by the tankoubon grouping reviewer and by catalogue-time
+//! title derivation (`pipeline::catalogue_new_archive`): title tokens that describe how a work was released — translation,
 //! edition, censorship, format, page count — rather than what it is. Unrelated works share them
 //! constantly, so they never count as shared title words. The vocabulary is shared with the
 //! recommendation embedding's title normalizer; extend it in `lanrurugi_recommend::title`.
@@ -9,18 +10,18 @@ use std::collections::HashSet;
 /// normalizer that also consumes it (`lanrurugi_recommend::title`) — one list, so a word added for
 /// the recommendation path (an edition note, a translation group) is immediately a non-signal for
 /// grouping too, instead of the two drifting apart.
-pub(crate) fn is_marker(token: &str) -> bool {
+pub fn is_marker(token: &str) -> bool {
     lanrurugi_recommend::title::is_release_token(token)
 }
 
 /// The token set with every release marker removed.
-pub(crate) fn strip(tokens: HashSet<&str>) -> HashSet<&str> {
+pub fn strip(tokens: HashSet<&str>) -> HashSet<&str> {
     tokens.into_iter().filter(|t| !is_marker(t)).collect()
 }
 
 /// The title with marker tokens (as split by the grouping's own tokenizer) dropped, for what the
 /// reviewer sees. Keeps the original order and spacing of what remains.
-pub(crate) fn clean_title(title: &str) -> String {
+pub fn clean_title(title: &str) -> String {
     let mut out = String::new();
     let mut token = String::new();
     let flush = |token: &mut String, out: &mut String| {

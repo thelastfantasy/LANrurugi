@@ -191,11 +191,6 @@ export function newCategoryDialog(): Promise<NewCategoryResult | null> {
 
 /** Filename-rename dialog — the extension is a fixed non-editable suffix. Resolves the new stem
  * only, or null if cancelled. */
-export function renameArchiveDialog(currentStem: string, extension: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    setRequest({ kind: "renameArchive", currentStem, extension, resolve })
-  })
-}
 
 /** Stamp name field + emoji/icon grid, plus anchor/color pickers for a rect placement. */
 export function stampEditorDialog(

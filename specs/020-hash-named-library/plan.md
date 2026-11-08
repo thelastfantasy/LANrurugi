@@ -8,7 +8,7 @@
 
 An archive's bytes stop being stored under a name derived from its title. Ingest computes the content-derived id first
 and stores the file at `<library>/<ab>/<id>.<ext>`, where `ab` is the first two characters of the id; the human name
-becomes the `original_filename` metadata field, and the title defaults to that filename with release markers stripped by
+stays as the record's verbatim `name` (with the full filename, extension included, recorded in the sidecar), and the title defaults to that filename with release markers stripped by
 the server itself (`lanrurugi-scanner`'s existing `release_markers` module) rather than by a plugin. The whole
 filename-conflict state machine — `PendingFilenameConflict`, `stage_pending_rename`,
 `sweep_stale_pending_renames`, `unique_dest_path`, `ConflictPolicy::AutoRename`, the rename popover, the conflict menu
@@ -30,7 +30,7 @@ re-import, and no confirmation dialog stands between the user and the layout the
 `lanrurugi-scanner::release_markers`, `lanrurugi_core::jobs` (the existing in-process job registry); frontend:
 TanStack Query, Zustand, i18next, Vite, Tailwind (all present)
 
-**Storage**: Redis for archive records (one new optional field on each archive hash: `original_filename`; no new key
+**Storage**: Redis for archive records (`name` keeps the verbatim original stem — no new archive field; no new key
 namespace) and the library filesystem for bytes and sidecars. No second datastore.
 
 **Testing**: `mise run test-crate -- lanrurugi-api` / `-- lanrurugi-scanner` / `-- lanrurugi-storage` while iterating,
@@ -94,7 +94,7 @@ specs/020-hash-named-library/
 ```text
 crates/lanrurugi-storage/src/
 ├── id.rs                    # unchanged algorithm; add bucket/relative-path helpers
-├── repository.rs            # archive record: original_filename field; retire filename-based lookups used by import
+├── repository.rs            # `name` stays the verbatim original stem; filename lookups retained for backup import
 ├── sidecar.rs               # NEW — sidecar read/write (atomic), schema version, ignore rules
 └── keys.rs                  # LRR_FILEMAP semantics unchanged; documented
 
@@ -139,7 +139,7 @@ job.
 
 ## Phase 1 — Design (see [data-model.md](./data-model.md), [contracts/](./contracts/), [quickstart.md](./quickstart.md))
 
-Entities: `Archive` (id, `original_filename`, `original_path`, title, extension, path), `Sidecar` (versioned document
+Entities: `Archive` (id, `name` = verbatim original stem, title, extension, path), `Sidecar` (versioned document
 beside hash-layout bytes).
 Contracts: the removed rename endpoint; the sidecar format and its forward-compatibility rule; the scanner's
 relocation rule (`_byname/<relative path>`, never overwrite, never move what is already in place).

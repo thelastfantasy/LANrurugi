@@ -74,7 +74,6 @@
 
 mod eval;
 mod labels;
-mod release_markers;
 pub mod review;
 
 pub use eval::{evaluate, EvalReview, EvaluationReport};
@@ -396,7 +395,7 @@ pub(crate) fn title_tokens_for<'a>(
 ) -> HashSet<&'a str> {
     let tokens = title_tokens(title);
     if settings.strip_release_markers {
-        release_markers::strip(tokens)
+        lanrurugi_scanner::release_markers::strip(tokens)
     } else {
         tokens
     }

@@ -515,16 +515,42 @@ async fn catalogue_new_archive(
     // Under the Sun" produced `download-9602cda7e6d0...`). The watcher/full-scan callers correctly
     // pass `None` here, since a file discovered already sitting in the watched archive directory
     // already has its own real name as its `path`.
-    let name = title_filename
-        .and_then(|f| Path::new(f).file_stem())
+    // A sidecar is only consulted when this archive is being catalogued *fresh* (a rebuild after
+    // the records were lost): a live record would have been reused instead of reaching here. It is
+    // the one place the original filename survives once the file is hash-named.
+    let sidecar = path
+        .parent()
+        .and_then(Path::parent)
+        .filter(|library| lanrurugi_storage::paths::is_hash_layout_path(library, path, id.as_str()))
+        .and_then(|library| lanrurugi_storage::sidecar::read(library, id.as_str()));
+    let name = sidecar
+        .as_ref()
+        .and_then(|s| Path::new(&s.original_filename).file_stem())
         .and_then(|s| s.to_str())
         .map(str::to_string)
+        .or_else(|| {
+            title_filename
+                .and_then(|f| Path::new(f).file_stem())
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| {
             path.file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or_default()
                 .to_string()
         });
+    // The title is the filename with release markers stripped; `name` stays the verbatim original
+    // (minus extension), which is what legacy backups are matched by and what a user recognises.
+    // An empty result (a name made only of markers) falls back to the name rather than nothing.
+    let title = sidecar.map(|s| s.title).unwrap_or_else(|| {
+        let cleaned = crate::release_markers::clean_title(&name);
+        if cleaned.trim().is_empty() {
+            name.clone()
+        } else {
+            cleaned
+        }
+    });
     let arcsize = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let pagecount = match archive_format::list_pages(path) {
         Ok(pages) => pages.len() as u32,
@@ -570,7 +596,7 @@ async fn catalogue_new_archive(
     let mut archive = Archive {
         id: id.clone(),
         name: name.clone(),
-        title: name,
+        title,
         // `defer_file_path` callers (download/upload ingest of a *staged* file) get an empty
         // `file` here and fill it in after the move to `archive_dir` — never the staging path
         // itself, whose bytes get swept and would leave a dangling record (see
@@ -595,6 +621,35 @@ async fn catalogue_new_archive(
         has_patch,
     };
     archives.save(&archive).await?;
+    // The sidecar is written after the record exists and the bytes are final, never before: a
+    // snapshot of an archive nobody can open would be worse than no snapshot. Only hash-layout
+    // archives get one (020) — by-name archives carry their original name in the name itself.
+    if let Some(library) = path.parent().and_then(Path::parent) {
+        if lanrurugi_storage::paths::is_hash_layout_path(library, path, id.as_str()) {
+            let original_filename = title_filename
+                .map(str::to_string)
+                .or_else(|| {
+                    path.file_name()
+                        .and_then(|f| f.to_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+            match lanrurugi_storage::sidecar::Sidecar::for_archive(
+                id.as_str(),
+                path,
+                &original_filename,
+                &archive.title,
+            ) {
+                Ok(sidecar) => {
+                    if let Err(e) = lanrurugi_storage::sidecar::write(library, &sidecar) {
+                        tracing::warn!(%id, error = %e, "failed to write the archive sidecar");
+                    }
+                }
+                Err(e) => tracing::warn!(%id, error = %e, "failed to build the archive sidecar"),
+            }
+        }
+    }
+
     if let Err(e) = lanrurugi_search::indexer::index_new_archive(
         search_pool,
         equivalence,
@@ -785,7 +840,9 @@ mod tests {
         };
 
         let archive = archives.get(&id).await.unwrap().unwrap();
-        assert_eq!(archive.title, "[King Angel] Maiden Under the Sun");
+        // The title is derived from the real name with release markers stripped; `name` itself
+        // stays verbatim (it is what a legacy backup is matched by).
+        assert_eq!(archive.title, "King Angel Maiden Under the Sun");
         assert_eq!(archive.name, "[King Angel] Maiden Under the Sun");
         // The on-disk `file` path is untouched by `title_filename` — still the real staging path
         // at this point (a caller's own separate rename-into-place step, already covered by

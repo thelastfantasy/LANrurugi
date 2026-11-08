@@ -522,18 +522,6 @@ export function useUpdateArchiveMetadata(id: string) {
 }
 
 /** Renames the archive file; `stem` is the basename without extension (extension is kept). */
-export function useRenameArchive(id: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (stem: string) =>
-      sendJson<{ filename: string }>("PUT", `/archives/${id}/rename`, { stem }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["archive", id] })
-      queryClient.invalidateQueries({ queryKey: ["archives"] })
-      queryClient.invalidateQueries({ queryKey: ["search"] })
-    },
-  })
-}
 
 /** Regenerates the archive's cover thumbnail from the given page. */
 export function useSetArchiveThumbnail(id: string) {

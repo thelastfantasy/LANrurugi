@@ -15,9 +15,10 @@ use lanrurugi_llm::{CallSpec, FeatureId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::{release_markers, GroupingSettings, NOISE_NAMESPACES};
+use super::{GroupingSettings, NOISE_NAMESPACES};
 use crate::llm_prompts::{grouping_review_system, GROUPING_REVIEW_PROMPT_VERSION};
 use crate::AppState;
+use lanrurugi_scanner::release_markers;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

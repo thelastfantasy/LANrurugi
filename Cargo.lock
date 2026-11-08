@@ -4506,6 +4506,7 @@ dependencies = [
  "jxl-image-rs-integration",
  "lanrurugi-book",
  "lanrurugi-core",
+ "lanrurugi-recommend",
  "lanrurugi-search",
  "lanrurugi-storage",
  "libarchive2-sys",

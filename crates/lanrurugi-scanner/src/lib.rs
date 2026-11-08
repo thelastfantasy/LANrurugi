@@ -8,6 +8,8 @@ pub mod image_decode;
 pub mod jxl;
 pub mod patch;
 pub mod pipeline;
+pub mod release_markers;
+pub mod relocate;
 pub mod resize;
 pub mod thumbnail;
 pub mod verify;

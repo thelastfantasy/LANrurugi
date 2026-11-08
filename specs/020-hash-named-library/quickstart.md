@@ -23,7 +23,7 @@ PY
 curl -sS -F 'file=@/tmp/big-title.zip;filename=テスト…zip' "$LRR/api/upload"
 ```
 
-Expected: `200`; the archive exists; `redis-cli HGETALL archive:<id>` shows `title` and `original_filename` with the
+Expected: `200`; the archive exists; `redis-cli HGETALL archive:<id>` shows `name` (verbatim) and `title` (cleaned) with the
 long name; `file` is `<LIB>/<ab>/<id>.zip`; `ls "$LIB"/<ab>/` shows the zip and its `.json`.
 
 Failure modes to check: no `File name too long` anywhere in the server log; the queue never shows a conflict.
@@ -51,7 +51,7 @@ curl -sS -X POST "$LRR/api/scan"     # or wait for the watcher
 ```
 
 Expected: catalogued; `file` becomes `$LIB/_byname/series/new one.zip`; `original_path` = `series/new one.zip`;
-`original_filename` = `new one.zip`; no sidecar is written (it is not in the hash layout); the filename is unchanged.
+the sidecar records `original_filename` = `new one.zip`; no sidecar is written for the by-name layout (it is not in the hash layout); the filename is unchanged.
 The scan response reports `moved_to_byname: 1`.
 
 ## S5 — An existing library moves on its first scan

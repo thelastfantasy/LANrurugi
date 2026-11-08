@@ -117,9 +117,11 @@ never existed.
 **Rationale**: it is additive API this project introduced; legacy never served it (`crates/lanrurugi-api/src/archives.rs:1837`
 says so). No upstream client uses it. The spec records the removal; the documentation sidecar entry is deleted with it.
 
-## R11. `original_filename` is backfilled from the on-disk name during relocation
+## R11. The original filename is already in `name`; only the sidecar adds the extension and full path
 
-**Decision**: for records created before this feature, set `original_filename` and `original_path` from the path the
+**Decision**: `Archive.name` has always been the source filename minus its extension, so no new record field is needed — it is
+left verbatim and the title is what gets cleaned. For records created before this feature, the sidecar (written the next time
+the archive is catalogued) fills `original_filename`/`original_path` from the path the archive had at that point; the old name is still available.e
 file has when the scanner first sees it under this version.
 
 **Rationale**: it is the only name that exists for those records, and relocation is the last moment the old
