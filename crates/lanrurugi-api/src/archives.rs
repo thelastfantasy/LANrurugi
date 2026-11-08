@@ -1611,8 +1611,21 @@ fn content_disposition_for(archive: &Archive) -> String {
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("zip");
-    let real_name = format!("{}.{extension}", archive.name);
+    let real_name = format!("{}.{extension}", download_filename_stem(archive));
     format!("attachment; {}", disposition_filename(&real_name))
+}
+
+/// The stem a downloaded file gets. 020 keeps the original filename in `name` and the cleaned
+/// title in `title`, and the title is what the user sees — so the download is named after the
+/// title, with the filename as the fallback for a record that never got one. Path separators are
+/// folded to `_`: a metadata title like `Fate/stay night` must not create a directory on save.
+fn download_filename_stem(archive: &Archive) -> String {
+    let raw = if archive.title.trim().is_empty() {
+        &archive.name
+    } else {
+        &archive.title
+    };
+    raw.replace(['/', '\\'], "_")
 }
 
 /// Canonical extension for a served image `Content-Type`, or `None` for anything this module can't
@@ -4910,6 +4923,54 @@ mod tests {
     #[test]
     fn served_page_filename_falls_back_to_the_verbatim_basename_for_unknown_formats() {
         assert_eq!(served_page_filename("dir/000.tif", "image/tiff"), "000.tif");
+    }
+
+    fn archive_named(file: &str, name: &str, title: &str) -> Archive {
+        Archive {
+            id: lanrurugi_core::ids::ArchiveId("a".repeat(40)),
+            name: name.to_string(),
+            title: title.to_string(),
+            file: file.to_string(),
+            tags: String::new(),
+            summary: String::new(),
+            arcsize: 0,
+            pagecount: 0,
+            isnew: false,
+            lastreadpage: 0,
+            lastreadtime: 0,
+            thumbhash: None,
+            toc: vec![],
+            stamp_ids: vec![],
+            heal_failed_at: None,
+            corrupted_pages: vec![],
+            has_patch: false,
+        }
+    }
+
+    #[test]
+    fn a_hash_named_archive_downloads_under_its_title() {
+        // 020 FR-019: the on-disk name is `<id>.<ext>`, and the download is still named after
+        // what the user sees — the title, not the (possibly marked-up) original filename.
+        let archive = archive_named(
+            "/library/ab/aaaa.zip",
+            "[Group] The Book [DL版]",
+            "The Book",
+        );
+        let disposition = content_disposition_for(&archive);
+        assert!(disposition.contains("filename=\"The Book.zip\""));
+        assert!(disposition.contains("filename*=UTF-8''The%20Book.zip"));
+    }
+
+    #[test]
+    fn a_title_with_a_path_separator_does_not_become_a_directory() {
+        let archive = archive_named("/library/ab/aaaa.zip", "Fate stay night", "Fate/stay night");
+        assert!(content_disposition_for(&archive).contains("filename=\"Fate_stay night.zip\""));
+    }
+
+    #[test]
+    fn an_archive_without_a_title_falls_back_to_its_filename() {
+        let archive = archive_named("/library/Series/Book.zip", "Book", "");
+        assert!(content_disposition_for(&archive).contains("filename=\"Book.zip\""));
     }
 
     #[test]

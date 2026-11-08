@@ -256,4 +256,43 @@ mod tests {
         assert!(original.exists(), "an unfinished copy must not move");
         assert!(!library.join("_byname").exists());
     }
+
+    #[tokio::test]
+    async fn the_patch_moves_with_its_archive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library = tmp.path();
+        let original = library.join("Series/Book.zip");
+        tokio::fs::create_dir_all(original.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&original, b"archive").await.unwrap();
+        let patch = crate::patch::patch_path_for(&original);
+        tokio::fs::write(&patch, b"patch").await.unwrap();
+        settle(&original).await;
+        settle(&patch).await;
+
+        let moved = relocate_file(library, &original).await.unwrap().unwrap();
+        assert_eq!(moved, library.join("_byname/Series/Book.zip"));
+        let moved_patch = crate::patch::patch_path_for(&moved);
+        assert!(
+            moved_patch.exists(),
+            "the patch moved alongside its archive"
+        );
+        assert_eq!(tokio::fs::read(&moved_patch).await.unwrap(), b"patch");
+        assert!(!patch.exists());
+    }
+
+    #[tokio::test]
+    async fn a_second_pass_is_a_no_op() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library = tmp.path();
+        let original = library.join("Book.zip");
+        tokio::fs::write(&original, b"bytes").await.unwrap();
+        settle(&original).await;
+
+        let moved = relocate_file(library, &original).await.unwrap().unwrap();
+        settle(&moved).await;
+        assert_eq!(relocate_file(library, &moved).await.unwrap(), None);
+        assert!(moved.exists());
+    }
 }

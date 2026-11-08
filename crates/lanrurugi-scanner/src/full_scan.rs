@@ -935,6 +935,82 @@ mod tests {
         );
     }
 
+    /// 020 T023/T019: a file that arrives behind the scanner's back (SMB, rsync, `cp`) is
+    /// catalogued under its own name first and then relocated into `_byname/` by the same pass —
+    /// once, not twice, and with its title still derived from the filename.
+    #[tokio::test]
+    async fn a_dropped_file_is_catalogued_then_relocated_into_byname() {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(36).await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let archives = ArchiveRepository::new(archive_pool.clone());
+        let pools = scanner_pools(&archive_pool, &config_pool, &search_pool);
+        let dir = tempfile::tempdir().unwrap();
+        let thumb_dir = tempfile::tempdir().unwrap();
+
+        let path = dir.path().join("Series/Dropped Book.zip");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"dropped over smb").unwrap();
+        let aged = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(aged)
+            .unwrap();
+
+        let jobs = lanrurugi_core::jobs::JobRegistry::new();
+        let job_id = jobs.create("scan").await;
+        let first = full_scan(
+            dir.path(),
+            &pools,
+            std::sync::Arc::new(Equivalence::default()),
+            thumb_dir.path(),
+            &jobs,
+            &job_id,
+            None,
+        )
+        .await;
+
+        assert_eq!(first.catalogued, 1, "the dropped file is catalogued once");
+        assert_eq!(first.relocated, 1, "and relocated in the same pass");
+
+        let records = archives.list_all().await.unwrap();
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        let expected = dir
+            .path()
+            .join("_byname/Series/Dropped Book.zip")
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(record.file, expected);
+        assert_eq!(record.name, "Dropped Book");
+        assert_eq!(record.title, "Dropped Book");
+        assert!(!path.exists(), "the original path no longer holds the file");
+
+        // The next scan sees it where it now lives and leaves it alone.
+        let job_id = jobs.create("scan").await;
+        let second = full_scan(
+            dir.path(),
+            &pools,
+            std::sync::Arc::new(Equivalence::default()),
+            thumb_dir.path(),
+            &jobs,
+            &job_id,
+            None,
+        )
+        .await;
+        assert_eq!(second.catalogued, 0);
+        assert_eq!(second.relocated, 0);
+        assert_eq!(archives.list_all().await.unwrap().len(), 1);
+
+        archives.delete(&record.id).await.unwrap();
+        let mut conn = config_pool.get().await.unwrap();
+        use deadpool_redis::redis::AsyncCommands;
+        let _: () = conn.hdel("LRR_FILEMAP", &expected).await.unwrap();
+    }
+
     fn make_zip_with_pages(dir: &std::path::Path, name: &str, n_pages: usize) -> PathBuf {
         let path = dir.join(name);
         let file = std::fs::File::create(&path).unwrap();

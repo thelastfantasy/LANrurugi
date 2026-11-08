@@ -120,7 +120,7 @@ file back by hand and scanning again puts it back under `_byname/`.
 - [x] T018 (2026-11-09: surfaced in the rebuild job's result payload, which is where the post-upgrade scan runs) [US2] Surface `RelocationCounters` (T003) in `POST /api/scan`'s result and the `scan` job status in
   `crates/lanrurugi-api/src/scan.rs`, so an administrator can see `moved_to_byname`/`skipped_occupied`/`failed`
   after the upgrade scan.
-- [ ] T019 [US2] Tests: idempotent second pass; occupied target skipped and reported; `.patch.zip` moved with its
+- [x] T019 [US2] (2026-11-09: `relocate.rs` gained patch-travel and second-pass-is-a-no-op tests; the occupied-target and inside-`_byname` cases already had one each) Tests: idempotent second pass; occupied target skipped and reported; `.patch.zip` moved with its
   archive; an interrupted run resumes without duplicating or losing a record; a file already under `_byname/` is
   untouched.
 
@@ -152,10 +152,10 @@ filenames, and reports disagreements instead of duplicating.
   archive's recorded `original_filename`, not by the on-disk name; a legacy backup whose files were renamed by this
   feature still imports with its metadata intact. Unit test with a fixture whose filenames differ from the hashed
   paths.
-- [ ] T023b [US1] Verify the download side did not move to ids: `GET /api/archives/{id}/download-link` and the
+- [x] T023b [US1] (2026-11-09: `content_disposition_for` now names the file after the title, falling back to `name`, with path separators folded; three unit tests) Verify the download side did not move to ids: `GET /api/archives/{id}/download-link` and the
   signed `/api/dl/` handler still send `Content-Disposition` with the archive title (FR-019), and a tankoubon zip
   still uses its tankoubon title. Add a test that asserts the header for a hash-named archive.
-- [ ] T023 [US4] Cover the drop flow with an integration test that writes a file into a subdirectory behind the
+- [x] T023 [US4] (2026-11-09: `full_scan::tests::a_dropped_file_is_catalogued_then_relocated_into_byname` writes behind the scanner's back, scans twice) Cover the drop flow with an integration test that writes a file into a subdirectory behind the
   scanner's back (as SMB would), runs a scan, and asserts: catalogued once, title from the filename, path
   `_byname/<relative path>`, no duplicate on the next scan. Fix whatever T016 missed.
 
