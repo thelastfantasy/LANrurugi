@@ -186,8 +186,11 @@ export function ArchiveContextMenu({
           // at the overflowing position first.
           visibility: position ? "visible" : "hidden",
           // Dynamic viewport height so a browser toolbar showing/hiding never re-creates overflow.
-          maxHeight: "calc(100dvh - 24px)",
-          overflowY: "auto",
+          // While the category submenu is open both are dropped: an `overflow` other than visible
+          // clips the absolutely-positioned submenu, which is what made it look like the entry
+          // simply refused to expand (and the scrollbar the user saw was this same box).
+          maxHeight: categoryMenuOpen ? undefined : "calc(100dvh - 24px)",
+          overflowY: categoryMenuOpen ? "visible" : "auto",
           zIndex: Z_OVERLAY_CONTENT,
         }}
       >
