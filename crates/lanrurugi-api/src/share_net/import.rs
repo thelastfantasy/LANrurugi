@@ -61,7 +61,6 @@ fn storage_error(e: &std::io::Error) -> String {
 
 /// One piece: the 1 MiB the protocol's contract names, in those chunks.
 const PIECE_CHUNKS: u64 = (1024 * 1024) / CHUNK_BYTES;
-const MAX_PIECE_ATTEMPTS: u32 = 3;
 /// How long an import keeps trying to reach a sharer whose endpoint is being rebuilt.
 /// How long a transfer keeps trying to re-open its sharer. A switched VPN or a re-created endpoint
 /// takes far longer than a few seconds to come back, and a transfer that gives up mid-file has to
@@ -277,6 +276,9 @@ struct Run {
 struct PieceStats {
     verified: AtomicU64,
     retried: AtomicU64,
+    /// 022 US2: pieces currently parked because the network failed. Exposed in the import detail so
+    /// a stuck import reads "waiting for the sharer" instead of looking dead.
+    waiting: AtomicU64,
     failed: std::sync::Mutex<Vec<u32>>,
 }
 
@@ -935,7 +937,9 @@ async fn fetch_pieces(
                     Ok(Err(bao_tree::io::DecodeError::Io(e))) => {
                         return Some(ArchiveOutcome::Failed(storage_error(&e)))
                     }
-                    Ok(Err(e)) => Err(e.to_string()),
+                    // The bytes arrived and failed their hash check: the source is bad, not the
+                    // network, so this is terminal for the sharer.
+                    Ok(Err(e)) => Err((true, e.to_string())),
                     Err(e) => return Some(ArchiveOutcome::Failed(format!("storage_error: {e}"))),
                 }
             }
@@ -946,7 +950,9 @@ async fn fetch_pieces(
                 queue.push_front((piece, attempts));
                 continue;
             }
-            Err(e) => Err(e.to_string()),
+            // 022 US2: keep the class of failure across stringification, so the retry decision
+            // below can tell the sharer's answer from the network's silence.
+            Err(e) => Err((terminal_import_error(&e), e.to_string())),
         };
         match (verified, &source) {
             (Ok(()), _) => {
@@ -968,19 +974,51 @@ async fn fetch_pieces(
                 run.drop_helper(h.id).await;
                 queue.push_front((piece, attempts));
             }
-            (Err(e), Source::Sharer) if attempts + 1 >= MAX_PIECE_ATTEMPTS => {
+            // 022 US2: a piece that failed on the network is not a failed archive. The sharer may
+            // be rebooting, rebinding its endpoint, or between VPN addresses; the right answer is to
+            // keep waiting (with a bounded backoff) until it comes back, exactly as a browser would.
+            // Only answers the sharer actually gave are terminal: a refusal, a deleted share, a
+            // piece that failed its hash check.
+            (Err((true, e)), Source::Sharer) => {
                 if let Ok(mut failed) = run.pieces.failed.lock() {
                     failed.push(piece.start as u32);
                 }
                 return Some(ArchiveOutcome::Failed(e));
             }
-            (Err(_), Source::Sharer) => {
+            (Err((false, e)), Source::Sharer) => {
                 run.pieces.retried.fetch_add(1, Ordering::Relaxed);
-                tokio::time::sleep(Duration::from_secs(u64::from(attempts) + 1)).await;
-                queue.push_back((piece, attempts + 1));
+                run.pieces.waiting.fetch_add(1, Ordering::Relaxed);
+                let backoff =
+                    Duration::from_secs(1u64 << attempts.min(6)).min(Duration::from_secs(60));
+                tracing::info!(
+                    import = run.import_id.as_str(),
+                    attempt = attempts + 1,
+                    error = %e,
+                    "piece failed on the network; waiting for the sharer to come back"
+                );
+                tokio::time::sleep(backoff).await;
+                queue.push_back((piece, attempts.saturating_add(1)));
             }
         }
     }
+}
+
+/// Whether an import error is the sharer's answer (terminal) rather than the network's failure
+/// (worth waiting out). 022 US2/FR-012: only an explicit refusal or a share that no longer exists
+/// ends an import; everything else is "the network is down, keep trying".
+fn terminal_import_error(error: &ShareNetError) -> bool {
+    matches!(
+        error,
+        ShareNetError::Refused(
+            RefusalReason::PermissionDenied
+                | RefusalReason::NotFound
+                | RefusalReason::Exhausted
+                | RefusalReason::Revoked
+                | RefusalReason::Expired
+                | RefusalReason::AddressUnverifiable
+                | RefusalReason::UnsupportedVersion { .. },
+        )
+    )
 }
 
 /// Catalogues a completed archive and applies the shared title, tags and summary.
@@ -1698,6 +1736,9 @@ async fn run_import(
                 "chunk_bytes": CHUNK_BYTES,
                 "verified": run.pieces.verified.load(Ordering::Relaxed),
                 "retried": run.pieces.retried.load(Ordering::Relaxed),
+                // 022 US2: pieces parked because the network went away. Non-zero with no growth in
+                // `verified` means "waiting for the sharer", not "hung".
+                "waiting_for_network": run.pieces.waiting.load(Ordering::Relaxed),
                 "failed": failed.len(),
                 // Offsets, not the bytes: a handful of failed offsets names the hole, a list of
                 // thousands of verified chunks does not.
@@ -1819,5 +1860,43 @@ mod tests {
         );
         assert_eq!(with_date_added("artist:a", 9), None);
         assert_eq!(date_added_of("artist:a, date_added: 42"), Some(42));
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+
+    /// 022 US2: only the sharer's own answers end an import. Everything the network did is worth
+    /// waiting out, which is what makes an unplug-and-replug recover without user action.
+    #[test]
+    fn only_the_sharers_answers_are_terminal() {
+        for refused in [
+            RefusalReason::PermissionDenied,
+            RefusalReason::NotFound,
+            RefusalReason::Revoked,
+            RefusalReason::Expired,
+            RefusalReason::Exhausted,
+            RefusalReason::AddressUnverifiable,
+        ] {
+            assert!(
+                terminal_import_error(&ShareNetError::Refused(refused.clone())),
+                "{refused:?} is the sharer's answer"
+            );
+        }
+        for network in [
+            ShareNetError::NotRunning,
+            ShareNetError::Unreachable("connection reset by peer".into()),
+            ShareNetError::Protocol("unexpected answer".into()),
+        ] {
+            assert!(
+                !terminal_import_error(&network),
+                "{network:?} is the network's silence"
+            );
+        }
+        // Rate limiting is temporary by definition: the same claim succeeds later.
+        assert!(!terminal_import_error(&ShareNetError::Refused(
+            RefusalReason::RateLimited
+        )));
     }
 }

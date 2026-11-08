@@ -586,7 +586,14 @@ pub fn spawn_port_rotation(state: AppState) {
             // response being written but for any import this instance is running: those hold a
             // live connection to a sharer and would have to start over.
             let mut waited = 0u32;
+            let mut announced = false;
             while (active_transfers() > 0 || importing(&state).await) && waited < 30 * 60 {
+                if !announced {
+                    tracing::info!(
+                        "port rotation deferred: a transfer or an active claim is still running"
+                    );
+                    announced = true;
+                }
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 waited += 10;
             }

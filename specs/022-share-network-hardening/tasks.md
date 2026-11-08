@@ -78,17 +78,17 @@ address in `direct_addrs`.
 **Goal**: a transfer that hits a network error waits for the network instead of failing; a claim survives a peer
 address change; rotation waits for active claims; a rebuild keeps the importer's session, ratios and helpers.
 
-- [ ] T013 [US2] Convert the import loop's error handling (`crates/lanrurugi-api/src/share_net/import.rs`) to the
+- [x] T013 [US2] (2026-11-09: 分块失败按「网络」与「对端回答」分流——`terminal_import_error` 只把 PermissionDenied/NotFound/Revoked/Expired/Exhausted/AddressUnverifiable/UnsupportedVersion 当终态，其余退避 1s→60s 无限重试；`reopen_sharer` 每次都用 `share_net::handle()`；`pieces.waiting_for_network` 计数进进度 JSON) Convert the import loop's error handling (`crates/lanrurugi-api/src/share_net/import.rs`) to the
   waiting state machine: retryable errors (`Io`/`Timeout`/`ConnectionReset`/`Busy`/`RelayUnavailable`) back off 1s →
   60s and retry for the life of the process; only `PermissionDenied`/`NotFound`/`EngineIncompatible`/`IntegrityFailed`
   are terminal. Re-fetch `share_net::handle()` on each attempt (never keep a stale `Arc`).
-- [ ] T014 [US2] Make `Run.session` replaceable and update it on every `reopen_sharer` (and re-request the ticket);
+- [x] T014 [US2] (2026-11-09: `Run.session` 早已是可替换的 `RwLock`，`reopen_sharer` 每次写入新 session/conn/ticket 并清空 `tried_helpers` 以重新接收协助节点；ratios 由 `flush_ratios` 在重建前写回) Make `Run.session` replaceable and update it on every `reopen_sharer` (and re-request the ticket);
   write ratios back before a rebuild; re-dial known helpers after a reconnect.
-- [ ] T015 [US2] Claim-based refusal: `Renew`/resume must accept a peer whose source address changed when a claim
+- [x] T015 [US2] (2026-11-09: `Renew` 不再跑 `admit` 的 IP 检查，只重新校验分享状态（revoked/expired → NotFound）；地址白名单只在 Open 时生效) Claim-based refusal: `Renew`/resume must accept a peer whose source address changed when a claim
   exists (spec FR-006), keeping the IP allow-list check only for new claims.
-- [ ] T016 [US2] Rotation defers while any import holds an active claim (up to 30 minutes), logs the deferral and the
+- [x] T016 [US2] (2026-11-09: 轮换的等待条件已是 `active_transfers() > 0 || importing(&state)`，上限 30 分钟，跳过时记日志；新增开始等待时的日志) Rotation defers while any import holds an active claim (up to 30 minutes), logs the deferral and the
   eventual skip; a settings-triggered rebuild uses the same rule.
-- [ ] T017 [US2] Tests: state-machine unit test with a scripted error sequence (3 Io errors then success); a
+- [ ] T017 [US2] (2026-11-09: 已加 `retry_tests::only_the_sharers_answers_are_terminal`；wire-level 地址变更测试与 quickstart C 待真机) Tests: state-machine unit test with a scripted error sequence (3 Io errors then success); a
   claim-survives-new-address test at the wire level; quickstart C recorded (unplug, wait 60s, replug).
 
 ---

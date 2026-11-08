@@ -589,7 +589,13 @@ impl ShareProtocol {
         if !share.permissions.import {
             return Err(RefusalReason::PermissionDenied);
         }
-        self.admit(conn, &share).await?;
+        // 022 US2/FR-013: the address gate ran when the claim was opened. Re-checking it here would
+        // kill a healthy import the moment the importer's address changes (a phone moving from
+        // Wi-Fi to cellular, a VPN rekey) and force a restart from the first missing piece.
+        match share.status(now_secs()) {
+            ShareStatus::Revoked | ShareStatus::Expired => return Err(RefusalReason::NotFound),
+            _ => {}
+        }
         // Only bytes the importer has decoded and hash-verified count toward the ratio; a dropped
         // response or a re-fetched piece must not inflate it, or a 1.0 target could stall.
         if verified_bytes > 0 {
