@@ -102,7 +102,10 @@ async fn server_info(State(state): State<AppState>) -> Response {
         // which had zero server-side behavior of its own — see that field's own docs.
         "debug_mode": state.disable_update_check,
         "archives_per_page": field("pagesize", "100").parse::<u32>().unwrap_or(100),
-        "server_resizes_images": flag("enableresize", "0"),
+        "server_resizes_images": crate::settings::stored_bool(
+            "enableresize",
+            fields.get("enableresize").map(String::as_str),
+        ),
         // Legacy inverts this one: `server_tracks_progress => enable_localprogress ? \0 : \1`.
         "server_tracks_progress": !flag("localprogress", "0"),
         "authenticated_progress": flag("authprogress", "0"),

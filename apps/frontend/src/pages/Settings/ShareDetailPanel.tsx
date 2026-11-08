@@ -6,6 +6,7 @@ import { type DragHandleProps,Modal, SortableList } from "@/components/common-ui
 import { IconButton } from "@/components/common-ui/Form"
 import { DateTimeStack, IpGeoLink } from "@/components/Display"
 import { confirmDialog } from "@/dialog"
+import { formatBytes } from "@/lib/formatBytes"
 import { useRemoveShareItems, useReorderShareItems, useRevokeShare, useShare, useShareSettings, useUpdateShare } from "@/share/api"
 import { fieldsFromForm, formFromShare, permissionsChosen, ShareFieldsForm, type ShareFormState } from "@/share/ShareFieldsForm"
 import { ShareResult } from "@/share/ShareResult"
@@ -179,6 +180,17 @@ function ShareDetailBody({ share }: { share: ShareDetail }) {
           }}
         />
       </div>
+
+      {share.target_ratio !== null && share.total_bytes > 0 && (
+        <p className="share-detail-ratio">
+          {t("share.detail.ratioLine", {
+            served: formatBytes(share.import_bytes),
+            total: formatBytes(share.total_bytes),
+            ratio: (share.import_bytes / share.total_bytes).toFixed(2),
+            target: share.target_ratio ?? "∞",
+          })}
+        </p>
+      )}
 
       <h3>{t("share.detail.claims", { used: share.downloads_used, limit: share.download_limit ?? "∞" })}</h3>
       {share.claims.length === 0 ? (

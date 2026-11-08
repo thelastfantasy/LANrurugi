@@ -73,11 +73,12 @@ ARG LANRURUGI_GIT_SHA=unknown
 ENV LANRURUGI_GIT_SHA=${LANRURUGI_GIT_SHA}
 RUN --mount=type=cache,id=lrr-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=lrr-cargo-target,target=/build/target \
-    CARGO_BUILD_JOBS="$CARGO_BUILD_JOBS" cargo build -p lanrurugi-server -p lanrurugi-gpu-worker -p lanrurugi-embed-worker -p lanrurugi-book-worker && \
+    CARGO_BUILD_JOBS="$CARGO_BUILD_JOBS" cargo build -p lanrurugi-server -p lanrurugi-gpu-worker -p lanrurugi-embed-worker -p lanrurugi-book-worker -p lanrurugi-egress && \
     cp /build/target/debug/lanrurugi-server /build/lanrurugi-server && \
     cp /build/target/debug/lanrurugi-gpu-worker /build/lanrurugi-gpu-worker && \
     cp /build/target/debug/lanrurugi-embed-worker /build/lanrurugi-embed-worker && \
-    cp /build/target/debug/lanrurugi-book-worker /build/lanrurugi-book-worker
+    cp /build/target/debug/lanrurugi-book-worker /build/lanrurugi-book-worker && \
+    cp /build/target/debug/liblanrurugi_egress.so /build/liblanrurugi_egress.so
 
 # Frontend *dependencies* only — not a build. `pnpm install` alone (no `pnpm run build`) gives
 # this stage's `node_modules` (root workspace + `apps/frontend`'s own) to copy into `runtime`;
@@ -153,6 +154,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=redis-bin /usr/local/bin/redis-server /usr/local/bin/redis-cli /usr/local/bin/
 COPY --from=deno-bin /deno /usr/local/bin/deno
 COPY --from=rust-builder /build/lanrurugi-server /usr/local/bin/lanrurugi-server
+# LD_PRELOAD shim: sits next to the server binary, which is where the plugin pool looks for it.
+COPY --from=rust-builder /build/liblanrurugi_egress.so /usr/local/bin/liblanrurugi_egress.so
 # GPU EP integration plan v9 (issue #103): `lanrurugi-gpu-worker` is a separate subprocess binary
 # `lanrurugi-server` spawns next to itself (`gpu_worker_client::GpuWorkerClient::worker_binary_path`
 # looks for it in the same directory as `std::env::current_exe()`) — same `/usr/local/bin` this

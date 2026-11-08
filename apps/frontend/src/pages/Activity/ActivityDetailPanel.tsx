@@ -20,6 +20,7 @@ import { DownloadActivityDetails } from "./DownloadActivityDetails"
 import { LlmCallActivityDetails } from "./LlmCallActivityDetails"
 import { MetadataDiff, type MetadataUpdateAfter, type MetadataUpdateBefore } from "./MetadataDiff"
 import { OperationDescription } from "./OperationDescription"
+import { ShareTransferDetails } from "./ShareTransferDetails"
 
 /** `archive.metadata_update` gets the GitHub-commit-style word/tag diff (`MetadataDiff`) instead
  * of the generic raw-JSON `before`/`after` code blocks every other action type falls back to. */
@@ -38,6 +39,10 @@ const DOWNLOAD_DETAIL_ACTION_TYPES = new Set([
 /** `translation.llm_call` gets a labeled provider/model/token/cost summary (`LlmCallActivityDetails`)
  * instead of the generic raw-JSON `after` code block. */
 const LLM_CALL_DETAIL_ACTION_TYPES = new Set(["translation.llm_call"])
+
+/** `share.send`/`share.receive` get a byte count, route, local interface and a VPN yes/no — the
+ * one row an import writes, detailed where it is read. */
+const SHARE_DETAIL_ACTION_TYPES = new Set(["share.send", "share.receive"])
 
 /** "smartphone · iOS 17.0 · Safari 17.0" — `woothee`'s own `"UNKNOWN"` placeholder (whichever
  * field it couldn't classify) is dropped rather than shown verbatim, since a literal "UNKNOWN"
@@ -145,6 +150,7 @@ export function ActivityDetailPanel({
   const showMetadataDiff = METADATA_DIFF_ACTION_TYPES.has(entry.action_type) && entry.after != null
   const showDownloadDetails = DOWNLOAD_DETAIL_ACTION_TYPES.has(entry.action_type) && entry.after != null
   const showLlmCallDetails = LLM_CALL_DETAIL_ACTION_TYPES.has(entry.action_type) && entry.after != null
+  const showShareDetails = SHARE_DETAIL_ACTION_TYPES.has(entry.action_type) && entry.after != null
 
   return (
     <Modal onClose={onClose} width={640} textAlign="left">
@@ -246,6 +252,8 @@ export function ActivityDetailPanel({
 
       {showDownloadDetails ? (
         <DownloadActivityDetails entry={entry} />
+      ) : showShareDetails ? (
+        <ShareTransferDetails entry={entry} />
       ) : showLlmCallDetails ? (
         <LlmCallActivityDetails entry={entry} />
       ) : showMetadataDiff ? (

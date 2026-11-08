@@ -21,7 +21,7 @@ use lanrurugi_share_proto::record::{open_bytes, seal_bytes};
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 use lanrurugi_storage::keys;
 use lanrurugi_storage::shares::{
-    Share, ShareItem, ShareRepository, ShareStatus, SHORT_CODE_MAX_LIFETIME_SECS,
+    RatioAction, Share, ShareItem, ShareRepository, ShareStatus, SHORT_CODE_MAX_LIFETIME_SECS,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -42,7 +42,6 @@ const ENDPOINT_FIELDS: &[&str] = &[
     "share_udp_port",
     "share_portmap",
     "share_bind_interface",
-    "share_external_addrs",
     "share_self_relay_url",
     "share_node_relay",
     "share_node_relay_tls",
@@ -379,6 +378,12 @@ pub(crate) struct ShareSummary {
     permissions: Permissions,
     downloads_used: u32,
     download_limit: Option<u32>,
+    /// Served import bytes and the share's own size; their quotient is the ratio.
+    import_bytes: u64,
+    total_bytes: u64,
+    target_ratio: Option<f32>,
+    ratio_action: RatioAction,
+    ratio_rate: Option<u64>,
     item_count: usize,
     created_at: i64,
     expires_at: Option<i64>,
@@ -400,6 +405,11 @@ fn summary(share: &Share, now: i64) -> ShareSummary {
         permissions: share.permissions,
         downloads_used: share.downloads_used,
         download_limit: share.download_limit,
+        import_bytes: share.import_bytes,
+        total_bytes: share.total_bytes,
+        target_ratio: share.target_ratio,
+        ratio_action: share.ratio_action,
+        ratio_rate: share.ratio_rate,
         item_count: share.items.len(),
         created_at: share.created_at,
         expires_at: share.expires_at,
@@ -485,7 +495,7 @@ async fn code_json(state: &AppState, share: &Share, settings: &ShareSettings) ->
     // The code carries its own routes (addresses, relays, nodes), so it works with no rendezvous
     // or relay reachable, as long as one of them still leads to this instance.
     if let Some(net) = crate::share_net::handle().await {
-        reference.via = crate::share_net::publish::via_hint(&net, settings).map(|mut via| {
+        reference.via = crate::share_net::publish::via_hint(&net).map(|mut via| {
             // An own relay (a tunnel, or the relay role) reaches importers whose UDP cannot
             // reach any address.
             if let Some(own) = own_relay_hint(settings).filter(|r| !via.relays.contains(r)) {
@@ -558,6 +568,17 @@ fn apply_update(share: &mut Share, body: &Map<String, Value>, now: i64) -> Resul
                     .map_err(|_| "\"permissions\" must be {import, read, download}".to_string())?
             }
             "download_limit" => share.download_limit = optional_count(key, value)?,
+            "target_ratio" => share.target_ratio = optional_ratio(key, value)?,
+            "ratio_action" => {
+                share.ratio_action = match value {
+                    Value::Null => RatioAction::default(),
+                    v => v
+                        .as_str()
+                        .and_then(RatioAction::parse)
+                        .ok_or("\"ratio_action\" must be \"stop\" or \"throttle\"")?,
+                }
+            }
+            "ratio_rate" => share.ratio_rate = optional_bytes(key, value)?,
             "ip_first_n" => share.ip_first_n = optional_count(key, value)?,
             "ip_allow" => {
                 share.ip_allow = match value {
@@ -602,6 +623,34 @@ fn optional_count(key: &str, value: &Value) -> Result<Option<u32>, String> {
     }
 }
 
+/// A ratio such as `1.5`; `null`, an empty string or zero all mean "no target".
+fn optional_ratio(key: &str, value: &Value) -> Result<Option<f32>, String> {
+    let ratio = match value {
+        Value::Null => return Ok(None),
+        Value::String(s) if s.trim().is_empty() => return Ok(None),
+        v => v
+            .as_f64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+            .ok_or_else(|| format!("\"{key}\" must be a number"))?,
+    };
+    if !ratio.is_finite() || ratio < 0.0 {
+        return Err(format!("\"{key}\" must be a number"));
+    }
+    Ok((ratio > 0.0).then_some(ratio as f32))
+}
+
+fn optional_bytes(key: &str, value: &Value) -> Result<Option<u64>, String> {
+    match value {
+        Value::Null => Ok(None),
+        Value::String(s) if s.trim().is_empty() => Ok(None),
+        v => v
+            .as_u64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+            .map(Some)
+            .ok_or_else(|| format!("\"{key}\" must be a whole number")),
+    }
+}
+
 fn defaults_from(settings: &ShareSettings, now: i64) -> Map<String, Value> {
     let mut defaults = Map::new();
     defaults.insert(
@@ -620,6 +669,18 @@ fn defaults_from(settings: &ShareSettings, now: i64) -> Map<String, Value> {
     }
     if let Some(days) = settings.number("share_default_expiry_days") {
         defaults.insert("expires_at".into(), json!(now + days as i64 * 86_400));
+    }
+    if let Ok(ratio) = settings.text("share_default_target_ratio").parse::<f32>() {
+        if ratio > 0.0 && ratio.is_finite() {
+            defaults.insert("target_ratio".into(), json!(ratio));
+        }
+    }
+    let action = settings.text("share_default_ratio_action");
+    if !action.is_empty() {
+        defaults.insert("ratio_action".into(), json!(action));
+    }
+    if let Some(rate) = settings.number("share_default_ratio_rate") {
+        defaults.insert("ratio_rate".into(), json!(rate));
     }
     defaults.insert("embed".into(), json!(settings.flag("share_default_embed")));
     defaults.insert(
@@ -754,6 +815,11 @@ async fn create_share(
         permissions: Permissions::ALL,
         download_limit: None,
         downloads_used: 0,
+        import_bytes: 0,
+        total_bytes: 0,
+        target_ratio: None,
+        ratio_action: RatioAction::default(),
+        ratio_rate: None,
         ip_allow: Vec::new(),
         ip_first_n: None,
         expires_at: None,
@@ -1092,6 +1158,10 @@ async fn settings_with_status(state: &AppState) -> Value {
                 "direct_addresses": addr.ip_addrs().map(|a| a.to_string()).collect::<Vec<_>>(),
                 "proxy": crate::share_net::followed_proxy(),
                 "node_code": mine,
+                // The ports in force right now: with an automatic setting these are drawn on every
+                // start (and rotation), so the configured value cannot answer this.
+                "udp_port": net.udp_port(),
+                "relay_port": net.relay_port().await,
             })
         }
         None => json!({ "running": false, "node_code": mine }),
@@ -1138,9 +1208,13 @@ async fn settings_with_status(state: &AppState) -> Value {
     value
 }
 
-/// Replaces this instance's sharing identity. Every `lrrg-node:` string handed out earlier stops
-/// working, which is the point: the string is permanent otherwise, exactly like a share code, and
-/// this is the only way to revoke it.
+/// Replaces the published node code. Every `lrrg-node:` string handed out earlier stops working,
+/// which is the point: the string is permanent otherwise, exactly like a share code, and this is
+/// the only way to revoke it.
+///
+/// The endpoint identity (and so the QUIC keypair) stays: a rotation invalidates the *code*, the
+/// record behind it, and everything being forwarded through this instance's relay role, while
+/// direct sessions and shares that are already open keep running.
 async fn rotate_node_secret(State(state): State<AppState>) -> Response {
     const OP: &str = "rotate_node_secret";
     let mut conn = match state.redis.config.get().await {
@@ -1153,18 +1227,24 @@ async fn rotate_node_secret(State(state): State<AppState>) -> Response {
             )
         }
     };
-    // The code is derived from the identity being replaced, so both go together.
-    let _: Result<i64, _> = conn
-        .del(&[keys::SHARE_NODE_SECRET_KEY, keys::SHARE_NODE_CODE_KEY])
-        .await;
-    match crate::share_net::start(&state).await {
-        Ok(_) => axum::Json(json!({ "rotated": true })).into_response(),
-        Err(e) => error(
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            OP,
-            e.to_string(),
-        ),
+    // Retire the record behind the old code first: it is signed by that code, so once the code is
+    // gone nobody can overwrite it, and every peer still holding it would keep resolving the old
+    // address until the relay's own TTL expired.
+    if let Ok(old) = node_code(&state).await {
+        crate::share_net::nodes::retract_node_record(&state, &old).await;
     }
+    let _: Result<i64, _> = conn.del(&[keys::SHARE_NODE_CODE_KEY]).await;
+    let fresh = match node_code(&state).await {
+        Ok(code) => code.prefixed(),
+        Err(e) => return error(axum::http::StatusCode::INTERNAL_SERVER_ERROR, OP, e),
+    };
+    // Publish the record under the new code, and drop whatever the relay role was forwarding.
+    if let Some(net) = crate::share_net::handle().await {
+        let settings = crate::share_settings::load(&state).await;
+        crate::share_net::nodes::publish_node_record(&state, &net, &settings).await;
+        crate::share_net::nodes::restart_relay(&state, &settings, &net).await;
+    }
+    axum::Json(json!({ "rotated": true, "node_code": fresh })).into_response()
 }
 
 async fn put_share_settings(
@@ -1248,6 +1328,11 @@ mod tests {
             permissions: Permissions::ALL,
             download_limit: None,
             downloads_used: 0,
+            import_bytes: 0,
+            total_bytes: 0,
+            target_ratio: None,
+            ratio_action: RatioAction::default(),
+            ratio_rate: None,
             ip_allow: vec![],
             ip_first_n: None,
             expires_at: None,
@@ -1350,6 +1435,28 @@ mod tests {
     }
 
     #[test]
+    fn ratio_fields_round_trip_through_an_edit() {
+        let mut s = share();
+        apply_update(
+            &mut s,
+            &body(json!({"target_ratio": 1.5, "ratio_action": "throttle", "ratio_rate": 1048576})),
+            1,
+        )
+        .unwrap();
+        assert_eq!(s.target_ratio, Some(1.5));
+        assert_eq!(s.ratio_action, RatioAction::Throttle);
+        assert_eq!(s.ratio_rate, Some(1_048_576));
+
+        // Zero means "no target"; the action and rate stay as they were set.
+        apply_update(&mut s, &body(json!({"target_ratio": 0})), 1).unwrap();
+        assert_eq!(s.target_ratio, None);
+        apply_update(&mut s, &body(json!({"ratio_action": "stop"})), 1).unwrap();
+        assert_eq!(s.ratio_action, RatioAction::Stop);
+        assert!(apply_update(&mut s, &body(json!({"ratio_action": "later"})), 1).is_err());
+        assert!(apply_update(&mut s, &body(json!({"target_ratio": -1})), 1).is_err());
+    }
+
+    #[test]
     fn the_list_summary_carries_the_share_code() {
         let summary = ShareSummary {
             id: "s".into(),
@@ -1358,6 +1465,11 @@ mod tests {
             permissions: lanrurugi_share_proto::messages::Permissions::ALL,
             downloads_used: 0,
             download_limit: None,
+            import_bytes: 0,
+            total_bytes: 0,
+            target_ratio: None,
+            ratio_action: RatioAction::default(),
+            ratio_rate: None,
             item_count: 1,
             created_at: 0,
             expires_at: None,

@@ -545,7 +545,13 @@ async fn download_archive(
     };
     match state.repos.archives.get(&id).await {
         Ok(Some(archive)) => throttled(
-            crate::archives::serve_archive_download(&archive).await,
+            crate::archives::serve_archive_download(
+                &archive,
+                headers
+                    .get(axum::http::header::RANGE)
+                    .and_then(|v| v.to_str().ok()),
+            )
+            .await,
             caps,
         ),
         _ => not_found(),

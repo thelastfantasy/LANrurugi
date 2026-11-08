@@ -8,6 +8,8 @@ import { useHelpingImports, useUpdateHelping } from "@/share/api"
 import type { HelpingImport, HelpState } from "@/share/types"
 import { toast } from "@/toast"
 
+import { ShareCodeText } from "./shared"
+
 /** The share status class each help state borrows for its badge. */
 const BADGE: Record<HelpState, string> = {
   active: "share-status-active",
@@ -24,11 +26,20 @@ export function SharingHelping() {
   if (!helping.data) return null
   if (helping.data.length === 0) return <p>{t("share.helping.none")}</p>
   return (
-    <div style={{ overflowX: "auto" }}>
-      <table className="itg" style={{ width: "100%" }}>
+    <div className="share-list-scroll">
+      <table className="itg share-table share-helping">
+        <colgroup>
+          <col className="share-helping-col-title" />
+          <col className="share-helping-col-code" />
+          <col className="share-helping-col-deliver" />
+          <col className="share-helping-col-status" />
+          <col className="share-helping-col-uploaded" />
+          <col className="share-helping-col-action" />
+        </colgroup>
         <thead>
           <tr>
             <th>{t("share.form.title")}</th>
+            <th>{t("share.helping.code")}</th>
             <th>{t("share.helping.deliver")}</th>
             <th>{t("share.settings.status")}</th>
             <th>{t("share.helping.uploaded")}</th>
@@ -56,7 +67,12 @@ function HelpingRow({ row }: { row: HelpingImport }) {
 
   return (
     <tr>
-      <td>{row.title}</td>
+      <td className="share-helping-title" title={row.title}>
+        {row.title}
+      </td>
+      <td className="share-list-code">
+        {row.code ? <ShareCodeText code={row.code} /> : "—"}
+      </td>
       <td>
         <Switch
           checked={row.help_deliver}

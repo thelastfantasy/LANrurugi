@@ -27,6 +27,7 @@ members = [
     "crates/lanrurugi-book",
     "crates/lanrurugi-book-worker",
     "crates/lanrurugi-share-proto",
+    "crates/lanrurugi-egress",
 ]
 
 [workspace.package]
@@ -232,3 +233,10 @@ lto = "thin"
 # trading that away either.
 [profile.dev]
 codegen-units = 16
+
+# The dev image runs debug builds, and reader-page conversion is dominated by dependency code:
+# decoding a 2121x3000 JPEG, Lanczos-resizing it and encoding WebP/JXL measured 5.6 s (WebP) and
+# 14.3 s (JXL) per cold page there. Optimising only the dependencies keeps this workspace's own
+# debug info and incremental rebuild speed, while the image codecs run at release speed.
+[profile.dev.package."*"]
+opt-level = 2

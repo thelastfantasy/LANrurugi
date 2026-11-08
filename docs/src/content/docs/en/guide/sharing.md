@@ -43,16 +43,38 @@ An import-only share shows just the code and QR on its page and card, with no br
 
 ### Limits
 
-- **Download limit**: every import and every browser download counts once. Resuming or retrying the
-  same import never counts again. When it is used up, only downloading stops: the share page and the
-  embedded card still show their content and reading online still works, the Download action is
-  simply gone, and new downloads and imports are refused (an import gets 409). An import already
-  under way carries on.
+- **Download limit**: covers **browser downloads only** — one per download. Imports and helping to
+  deliver never consume it. When it is used up, the share page and the embedded card still show their
+  content and reading online still works, the Download action is simply gone and new downloads are
+  refused. Resuming or retrying the same download never counts again.
+- **Target ratio**: counts what imports have pulled out, see below.
 - **IP rules**: only the listed addresses or ranges, or "only the first N distinct addresses". A share
   with IP rules needs the recipient to be reachable directly; a relayed connection cannot prove its
   address and is refused.
 - **Expiry**: the share stops working at that time.
 - **Short code**: 8 characters, easier to read out, but it needs an expiry within 7 days.
+
+### Target ratio
+
+A BitTorrent-style "how much is enough" for a share: **ratio = bytes served to imports ÷ the share's
+own total size**. `1.0` means one full copy has gone out, `1.5` one and a half, `10` ten copies. Leave
+it empty for no target.
+
+Once the target is reached, pick one of two behaviours:
+
+| Behaviour | Effect |
+|---|---|
+| Stop sharing | Further imports are refused; an import already under way still finishes from its checkpoint |
+| Share slowly | Caps import upload at the speed you enter (bytes per second); `0` pauses — received data is kept and transfers resume when you raise it again |
+
+The ratio covers **imports only**: browser reading and browser downloads are neither counted nor
+stopped. How much has gone out, the share's total size and the current ratio are shown when you
+expand a row under **Settings → Sharing**. The values a new share starts from live under
+**Settings → Sharing → Defaults for new shares**.
+
+Browser downloads support resuming (`Range`): after a network drop, clicking download again carries on
+from where it stopped. Archives with a `.patch.zip` are the exception — the sharer sends the *merged*
+bytes, generated per request, so those download as one piece.
 
 ### Managing and revoking
 
@@ -125,13 +147,16 @@ same members is left alone and the import row says so.
 
 ### Helping deliver
 
-Tick **Help deliver this share to others** when importing. If the sharer allows helpers, your
-instance offers its verified copy to other importers once your import is done, taking load off the
-sharer. Everything other importers receive is still checked against the sharer's fingerprints, so a
-helper cannot alter the content.
+If the sharer allows helpers, your instance **becomes a relay for the share as soon as you import
+it** — no extra checkbox. Even a partial import already holds verified pieces, and those are offered
+to other importers, taking load off the sharer. Registration only advertises archives this instance
+actually finished, so nobody is routed to a machine that cannot answer. Everything other importers
+receive is still checked against the sharer's fingerprints, so a helper cannot alter the content.
 
-Turn it off any time under **Settings → Sharing → Helping deliver**, which also shows each share's
-state: active, paused (for example, downloads used up), sharer offline, or ended (revoked, expired,
+Turn it off any time under **Settings → Sharing → Helping deliver**. Switching a row off leaves that
+share's relay at once: no new piece requests, uploads already under way finish, and the sharer is told
+to drop this instance immediately so new importers are not handed its address. The list also shows each
+share's state: active, paused (for example, downloads used up), sharer offline, or ended (revoked, expired,
 or the sharer no longer accepts helpers). Ended rows can be removed from the list; imported archives
 stay in your library.
 
@@ -173,8 +198,22 @@ it.
 ## Connectivity
 
 Shares travel directly between instances, and instances without a public address can still import
-from each other. For the best speed, make the instance's **UDP port** (11204 by default, changeable
-under **Settings → Sharing → Connectivity**) reachable from outside.
+from each other. **The UDP port is random by default**: each start takes a free port from the system
+(the port actually in use is shown under **Settings → Sharing → Connectivity**, where you can also pin
+a fixed one). With **map the port on my router automatically (UPnP / NAT-PMP / PCP)** on, the instance
+asks the router to open it; turn that off if you would rather not have it touch the router, and forward
+the UDP port yourself.
+
+**Port rotation** (`share_port_rotate`, minutes, `0` disables, 360–720 — six to twelve hours) rebinds a fresh port on that interval,
+jittered ±25% so the period itself is not fixed and the change never lands at the same time of day. Rotation **never cuts a live transfer**: it waits for
+in-flight work to finish (up to 30 minutes, then skips the round). The node record and the addresses in
+a share code pick up the new port on their next renewal; established direct connections are unaffected.
+
+The address an instance reports comes from iroh's address discovery (QUIC address discovery through a
+relay, plus the port mapping above), and mDNS on a LAN. There is deliberately **no "type in my public
+address" option** — if one were ever needed to connect, the discovery logic would be what needs fixing,
+not the user's knowledge of their own NAT. If you want sharing traffic to leave through a VPN, see
+**[Sharing over a VPN](/en/guide/sharing-vpn/)**.
 
 A system proxy needs no setup: imports and exports follow the proxy environment variables
 (`HTTPS_PROXY`, `ALL_PROXY` and so on) or the macOS system proxy on their own, and a TUN-mode proxy
@@ -187,12 +226,26 @@ proxies** (loopback only by default); requests from those addresses may then set
 with `X-Forwarded-For`. Private ranges are not trusted by default: anyone on the same network can
 write that header.
 
-To avoid public services, list your own or a friend's nodes under **Settings → Sharing → LANrurugi
-nodes**; they then handle lookup and relaying. That is the only field to fill in: connections
-between instances are already encrypted with each instance's own node key (self-signed, verified by
-public key — no certificate to obtain, like BitTorrent), and need no public address. When this
-instance relays for others, you can cap
-each connection's speed or admit only listed instances.
+### LANrurugi relay nodes
+
+To avoid public services, turn on this instance's relay role and list your own or a friend's nodes
+under **Settings → Sharing → LANrurugi relay nodes**; they then handle lookup and relaying.
+Connections between instances are already encrypted with each instance's own node key (self-signed,
+verified by public key — no certificate to obtain, like BitTorrent), and need no public address. When
+this instance relays for others, you can cap each connection's speed or admit only listed instances.
+
+A node is named by a **node code** such as `lrrg-node:3F2K-9Q4M-7XTD-08RC` — an identifier only; those
+19 characters hold no address. The addresses are kept in a record the node publishes itself, so a
+recipient resolves the current one, and moving to another network or public IP never means re-sending
+the code. The copy button copies the code; the add box accepts it with or without the `lrrg-node:`
+prefix, ignoring case and hyphens, and refuses duplicates.
+
+**Rotate** mints a new code and invalidates the old one at once: the instance first publishes a
+"retired" record under the old code, so a peer resolves it as gone on its next attempt instead of
+waiting for a cache to expire. The same action restarts this instance's relay role — anything being
+relayed through it drops on the spot, while **established direct sessions and open share pages keep
+running** (their keys do not come from the node code). Peers have to add the new code before they can
+borrow this node again.
 
 ## Version compatibility
 

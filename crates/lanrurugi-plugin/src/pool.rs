@@ -167,6 +167,18 @@ impl Worker {
         for flag in extra_flags {
             cmd.arg(flag);
         }
+        // The dispatcher decides between Deno's native fetch and the host relay by reading
+        // `LANRURUGI_EGRESS_ACTIVE`, which only this shim sets — hence the two-name env grant.
+        cmd.arg("--allow-env=LANRURUGI_EGRESS_ACTIVE,LANRURUGI_EGRESS_IF");
+        if let Some(library) = crate::egress::library() {
+            cmd.env(
+                "LD_PRELOAD",
+                crate::egress::preload_value(&library, std::env::var_os("LD_PRELOAD").as_deref()),
+            );
+            if let Some(interface) = lanrurugi_core::http_client::outbound_interface() {
+                cmd.env("LANRURUGI_EGRESS_IF", interface);
+            }
+        }
         cmd.arg(dispatcher_path)
             .arg(plugins_dir)
             .arg(namespace)
@@ -312,6 +324,16 @@ impl PluginPool {
             workers: Arc::new(Mutex::new(HashMap::new())),
             http: Arc::new(HostHttp::new()),
         }
+    }
+
+    /// Drops every persistent dispatcher, so the next call spawns fresh ones.
+    ///
+    /// Needed when something the *spawn* reads changes — the plugin egress interface travels as an
+    /// environment variable (and the preloaded shim reads it once), so a dispatcher started before
+    /// the switch would keep the old binding forever. Dropping a [`Worker`] kills its child
+    /// (`kill_on_drop`), which is all a fresh spawn needs.
+    pub async fn restart_workers(&self) {
+        self.workers.lock().await.clear();
     }
 
     /// The configured `deno` binary path/name (whatever was passed to `new` — a bare `"deno"`

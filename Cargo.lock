@@ -4289,6 +4289,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lanrurugi-egress"
+version = "1.0.0-beta.5"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "lanrurugi-embed-ipc"
 version = "1.0.0-beta.5"
 dependencies = [

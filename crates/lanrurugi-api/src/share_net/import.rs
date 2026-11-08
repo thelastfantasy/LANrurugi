@@ -13,6 +13,7 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -224,7 +225,9 @@ struct Run {
     state: AppState,
     import_id: ShareImportId,
     net: Arc<ShareNet>,
-    conn: Connection,
+    /// Swapped when the sharer restarts: a rebind or crash leaves every old connection dead, and
+    /// an import must survive that rather than stall until its per-piece retries run out.
+    conn: tokio::sync::RwLock<Connection>,
     helper_list: Arc<RwLock<Vec<Arc<HelperSource>>>>,
     /// Helpers dialled already (live or dropped), so none is dialled twice.
     tried_helpers: std::sync::Mutex<HashSet<[u8; 32]>>,
@@ -241,12 +244,38 @@ struct Run {
     budget: u64,
     /// What to do when an archive's filename belongs to a different local archive.
     filename_policy: FilenamePolicy,
+    /// Bytes decoded and hash-verified so far, cumulative for the claim. Reported to the sharer so
+    /// its ratio counts data that actually arrived, not data it tried to send.
+    verified: AtomicU64,
+    /// The link the first connection used, refreshed whenever the sharer is re-dialled: the
+    /// activity entry reports what actually carried the bytes, not what the settings intended.
+    link: std::sync::Mutex<super::link::Link>,
+    /// Piece accounting for the one activity row this import writes: how many pieces arrived, how
+    /// many had to be asked for again, and which ones never did.
+    pieces: PieceStats,
+    started: std::time::Instant,
     /// When progress was last pushed to the Upload page, and the states it showed.
     pushed: std::sync::Mutex<(Option<std::time::Instant>, PushedStates)>,
     dir: PathBuf,
 }
 
+/// Counted per piece (1 MiB), not per chunk: a piece is what fails as a unit.
+#[derive(Default)]
+struct PieceStats {
+    verified: AtomicU64,
+    retried: AtomicU64,
+    failed: std::sync::Mutex<Vec<u32>>,
+}
+
 impl Run {
+    fn note_verified(&self, bytes: u64) {
+        self.verified.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    fn verified_bytes(&self) -> u64 {
+        self.verified.load(Ordering::Relaxed)
+    }
+
     async fn save(&self) {
         let record = self.record.lock().await.clone();
         let _ = repo(&self.state).save(&record).await;
@@ -323,11 +352,33 @@ impl Run {
         self.save().await;
     }
 
+    /// Re-dials the sharer after its endpoint went away, keeping the claim and re-renewing.
+    async fn reopen_sharer(&self) -> Result<(), ShareNetError> {
+        let code = self.record.lock().await.code.clone().ok_or_else(|| {
+            ShareNetError::Protocol("this import has no code to reconnect".into())
+        })?;
+        let opened = open(&self.state, &self.net, &code).await?;
+        if let Ok(mut link) = self.link.lock() {
+            *link = super::link::of(&opened.conn);
+        }
+        *self.conn.write().await = opened.conn;
+        self.renew().await
+    }
+
     async fn renew(&self) -> Result<(), ShareNetError> {
+        self.renew_with(false).await
+    }
+
+    /// `finished` marks the import's closing report, which makes the sharer flush the ratio
+    /// immediately instead of leaving the last few megabytes in its in-memory buffer.
+    async fn renew_with(&self, finished: bool) -> Result<(), ShareNetError> {
+        let conn = self.conn.read().await;
         let (response, _) = call(
-            &self.conn,
+            &conn,
             Request::Renew {
                 claim_id: self.claim_id.clone(),
+                verified_bytes: self.verified_bytes(),
+                finished,
             },
         )
         .await?;
@@ -407,19 +458,30 @@ impl Run {
         span: ChunkSpan,
     ) -> Result<Vec<u8>, ShareNetError> {
         let ticket = self.ticket.read().await.clone();
-        let conn = match source {
-            Source::Sharer => &self.conn,
-            Source::Helper(h) => &h.conn,
+        let range = || Request::Range {
+            ticket: ticket.clone(),
+            blake3,
+            spans: vec![span],
         };
-        let (response, mut recv) = call(
-            conn,
-            Request::Range {
-                ticket,
-                blake3,
-                spans: vec![span],
-            },
-        )
-        .await?;
+        let (response, mut recv) = match source {
+            Source::Sharer => {
+                let first = {
+                    let conn = self.conn.read().await;
+                    call(&conn, range()).await
+                };
+                match first {
+                    Ok(answer) => answer,
+                    Err(_) => {
+                        // The sharer's endpoint is gone (rebind, restart, VPN rekey). Re-open and
+                        // try the same piece on the new connection once.
+                        self.reopen_sharer().await?;
+                        let conn = self.conn.read().await;
+                        call(&conn, range()).await?
+                    }
+                }
+            }
+            Source::Helper(h) => call(&h.conn, range()).await?,
+        };
         match response {
             Response::Bytes { len, .. } => read_body(&mut recv, len, MAX_PIECE_BODY_BYTES).await,
             _ => Err(ShareNetError::Protocol("unexpected answer to Range".into())),
@@ -451,8 +513,9 @@ impl Run {
 
     /// Fingerprint of an archive the manifest listed as not yet prepared (research §13).
     async fn prepare(&self, sharer_archive_id: &str) -> Result<([u8; 32], u64), ShareNetError> {
+        let conn = self.conn.read().await;
         let (response, _) = call(
-            &self.conn,
+            &conn,
             Request::Prepare {
                 session: self.session.clone(),
                 claim_id: self.claim_id.clone(),
@@ -520,6 +583,13 @@ fn verified_ranges(
 }
 
 /// Spans of `PIECE_CHUNKS` chunks that are not yet verified.
+/// Bytes a piece actually carries: the final piece is short of a full one, and counting it as
+/// full used to overshoot the archive (and so the share's ratio) by the difference.
+fn piece_bytes(piece: &ChunkSpan, size: u64) -> u64 {
+    let wanted = (piece.end - piece.start) * CHUNK_BYTES;
+    wanted.min(size.saturating_sub(piece.start * CHUNK_BYTES))
+}
+
 fn missing_pieces(total_chunks: u64, valid: &ChunkRanges) -> Vec<ChunkSpan> {
     let mut pieces = Vec::new();
     let mut start = 0;
@@ -561,6 +631,24 @@ async fn share_temp_bytes(state: &AppState) -> u64 {
     tokio::task::spawn_blocking(move || walk(&dir))
         .await
         .unwrap_or(0)
+}
+
+/// Apparent size of one directory tree — the same accounting `share_temp_bytes` uses.
+fn dir_bytes(dir: &Path) -> u64 {
+    fn walk(dir: &Path) -> u64 {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return 0;
+        };
+        entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| match entry.file_type() {
+                Ok(kind) if kind.is_dir() => walk(&entry.path()),
+                Ok(_) => entry.metadata().map(|m| m.len()).unwrap_or(0),
+                Err(_) => 0,
+            })
+            .sum()
+    }
+    walk(dir)
 }
 
 /// `tempmaxsize` in bytes (the setting is in MB): the ceiling for the whole temp tree.
@@ -651,13 +739,20 @@ async fn transfer_archive(run: Arc<Run>, entry: ImportArchive) -> ArchiveOutcome
     };
     let total_chunks = outboard.tree.chunks().0;
     let pieces = missing_pieces(total_chunks, &valid);
-    let already = size.saturating_sub(
-        pieces
-            .iter()
-            .map(|p| (p.end - p.start) * CHUNK_BYTES)
-            .sum::<u64>(),
-    );
+    let already = size.saturating_sub(pieces.iter().map(|p| piece_bytes(p, size)).sum::<u64>());
+    // A resume only needs room for what is still missing; the pieces already on disk are in the
+    // temp tree already.
+    let missing = size.saturating_sub(already);
+    if missing > run.budget {
+        return ArchiveOutcome::Failed(format!(
+            "not enough temp space: {missing} more bytes needed, {} available",
+            run.budget
+        ));
+    }
     run.update(&id, |a| a.bytes_done = already.min(size)).await;
+    // Pieces verified in an earlier run were counted then; resume from that high-water mark so a
+    // re-report cannot double count and a lost report is made up on the next renewal.
+    run.note_verified(already);
 
     let shared = Arc::new(std::sync::Mutex::new((data, outboard)));
     if let Some(outcome) = fetch_pieces(&run, &id, root, size, pieces, shared.clone()).await {
@@ -787,11 +882,11 @@ async fn fetch_pieces(
         };
         match (verified, &source) {
             (Ok(()), _) => {
-                let piece_bytes = ((piece.end - piece.start) * CHUNK_BYTES).min(size);
-                run.update(id, |a| {
-                    a.bytes_done = (a.bytes_done + piece_bytes).min(size)
-                })
-                .await;
+                let bytes = piece_bytes(&piece, size);
+                run.pieces.verified.fetch_add(1, Ordering::Relaxed);
+                run.note_verified(bytes);
+                run.update(id, |a| a.bytes_done = (a.bytes_done + bytes).min(size))
+                    .await;
                 if run.over_budget().await {
                     return Some(ArchiveOutcome::Failed(
                         "temp space ran out: the import reached tempmaxsize".into(),
@@ -801,13 +896,18 @@ async fn fetch_pieces(
             (Err(_), _) if run.cancel.is_cancelled() => return Some(ArchiveOutcome::Interrupted),
             // A helper that fails once is not asked again; the piece goes to another source.
             (Err(_), Source::Helper(h)) => {
+                run.pieces.retried.fetch_add(1, Ordering::Relaxed);
                 run.drop_helper(h.id).await;
                 queue.push_front((piece, attempts));
             }
             (Err(e), Source::Sharer) if attempts + 1 >= MAX_PIECE_ATTEMPTS => {
-                return Some(ArchiveOutcome::Failed(e))
+                if let Ok(mut failed) = run.pieces.failed.lock() {
+                    failed.push(piece.start as u32);
+                }
+                return Some(ArchiveOutcome::Failed(e));
             }
             (Err(_), Source::Sharer) => {
+                run.pieces.retried.fetch_add(1, Ordering::Relaxed);
                 tokio::time::sleep(Duration::from_secs(u64::from(attempts) + 1)).await;
                 queue.push_back((piece, attempts + 1));
             }
@@ -836,7 +936,16 @@ async fn ingest(run: &Run, sharer_archive_id: &str, part: &Path, root: [u8; 32])
     } else {
         entry.filename.clone()
     };
-    let staging = run.dir.join(format!("{}.staged", hex(&root)));
+    // The staging name keeps the archive's own extension: the scanner decides how to read a file
+    // from its path, so a `.staged` suffix catalogued every imported archive with zero pages
+    // ("unsupported archive extension"). The real name still titles and identifies it, through
+    // `catalogue_staged_file`'s `intended_filename`.
+    let extension = std::path::Path::new(&filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .filter(|e| !e.is_empty())
+        .unwrap_or("zip");
+    let staging = run.dir.join(format!("{}.{extension}", hex(&root)));
     if let Err(e) = tokio::fs::rename(part, &staging).await {
         return ArchiveOutcome::Failed(storage_error(&e));
     }
@@ -1216,6 +1325,22 @@ pub async fn start(state: &AppState, queue_item_id: &str, import_id: ShareImport
                     Some(message.clone()),
                 )
                 .await;
+                // The record is what the settings page lists. A runner that gave up before it
+                // could build its own state left the row "transferring" forever.
+                if let Ok(Some(mut record)) = repo(&state).get(&import_id).await {
+                    if record.error.is_none()
+                        && matches!(
+                            record.state,
+                            ImportState::Transferring
+                                | ImportState::Rebuilding
+                                | ImportState::Failed
+                        )
+                    {
+                        record.state = ImportState::Failed;
+                        record.error = Some(message.clone());
+                        let _ = repo(&state).save(&record).await;
+                    }
+                }
                 state.jobs.fail(&job, message).await;
             }
         }
@@ -1267,10 +1392,14 @@ async fn run_import(
     let opened = reconnect(state, &code, &cancel).await?;
 
     // A claim lives 24 h after its last use; an import resumed later claims again.
+    // Resuming a claim made in an earlier run: the verified total lives on the claim itself, so
+    // this renewal carries nothing and only refreshes the ticket.
     let ticket = match call(
         &opened.conn,
         Request::Renew {
             claim_id: record.claim_id.clone(),
+            verified_bytes: 0,
+            finished: false,
         },
     )
     .await
@@ -1299,14 +1428,20 @@ async fn run_import(
     // share that obviously cannot fit is refused before it touches the disk), then the bytes
     // actually written, below.
     let used = share_temp_bytes(state).await;
+    // This import's own directory counts toward `used`, but its `.part` is pre-sized to the whole
+    // archive, so leaving it in double-counts a resume: an interrupted import then looks like it
+    // needs twice its size and is refused for want of room it already occupies.
+    let own = dir_bytes(&dir);
+    let elsewhere = used.saturating_sub(own);
     let announced = record.archives.iter().map(|a| a.size).sum::<u64>();
-    let budget = match temp_quota_bytes(state).await {
-        Some(quota) if used.saturating_add(announced) > quota => {
+    let quota = temp_quota_bytes(state).await;
+    let budget = match quota {
+        Some(quota) if own == 0 && elsewhere.saturating_add(announced) > quota => {
             return Err(format!(
-                "not enough temp space: {used} bytes in use, {announced} more announced, tempmaxsize {quota}"
+                "not enough temp space: {elsewhere} bytes in use, {announced} more announced, tempmaxsize {quota}"
             ))
         }
-        Some(quota) => quota.saturating_sub(used),
+        Some(quota) => quota.saturating_sub(elsewhere),
         None => u64::MAX,
     };
     let net = super::handle()
@@ -1317,7 +1452,7 @@ async fn run_import(
         state: state.clone(),
         import_id: import_id.clone(),
         net,
-        conn: opened.conn.clone(),
+        conn: tokio::sync::RwLock::new(opened.conn.clone()),
         helper_list: Arc::new(RwLock::new(Vec::new())),
         tried_helpers: std::sync::Mutex::new(HashSet::new()),
         session: opened.session.clone(),
@@ -1330,6 +1465,10 @@ async fn run_import(
         queue_item_id: queue_item_id.to_string(),
         budget,
         filename_policy,
+        verified: AtomicU64::new(0),
+        link: std::sync::Mutex::new(super::link::of(&opened.conn)),
+        pieces: PieceStats::default(),
+        started: std::time::Instant::now(),
         pushed: std::sync::Mutex::new((None, (ImportState::Transferring, None, Vec::new()))),
         dir,
     });
@@ -1384,6 +1523,19 @@ async fn run_import(
     });
     futures_util::future::join_all(tasks).await;
     renewer.abort();
+    // The renewal loop is gone: send the closing total, marked finished so the sharer flushes it,
+    // and retry — a lost final report leaves the ratio permanently short of the bytes delivered.
+    let mut delay = Duration::from_millis(200);
+    for attempt in 0..5 {
+        match run.renew_with(true).await {
+            Ok(()) => break,
+            Err(e) => {
+                tracing::info!(error = %e, attempt, "closing ratio report failed; retrying");
+                tokio::time::sleep(delay).await;
+                delay *= 2;
+            }
+        }
+    }
 
     if let Some(reason) = run.stopped.read().await.clone() {
         let mut record = run.record.lock().await;
@@ -1413,11 +1565,100 @@ async fn run_import(
         record.state = if failed == 0 {
             ImportState::Done
         } else {
+            // The row is only useful if it says why: the first archive's own error is the reason
+            // the user is looking at, and it stays None otherwise.
+            record.error = record
+                .archives
+                .iter()
+                .find(|a| a.state == ImportArchiveState::Failed)
+                .and_then(|a| a.error.clone());
             ImportState::Failed
         };
         failed
     };
     run.save().await;
+    let (share_id, title, bytes, files, total) = {
+        let record = run.record.lock().await;
+        let files: Vec<serde_json::Value> = record
+            .archives
+            .iter()
+            .map(|a| {
+                serde_json::json!({
+                    "title": a.title,
+                    "size": a.size,
+                    "bytes": a.bytes_done,
+                    "state": a.state,
+                    "ratio": if a.size > 0 {
+                        a.bytes_done as f64 / a.size as f64
+                    } else {
+                        0.0
+                    },
+                })
+            })
+            .collect();
+        let bytes: u64 = record.archives.iter().map(|a| a.bytes_done).sum();
+        let total: u64 = record.archives.iter().map(|a| a.size).sum();
+        (
+            record.share_id.clone(),
+            record.title.clone(),
+            bytes,
+            files,
+            total,
+        )
+    };
+    // One row per import, with the route and interface in its detail panel — not one per piece.
+    if bytes > 0 {
+        let link = run
+            .link
+            .lock()
+            .map(|l| l.clone())
+            .unwrap_or_else(|_| super::link::unknown());
+        let failed = run
+            .pieces
+            .failed
+            .lock()
+            .map(|f| f.clone())
+            .unwrap_or_default();
+        let detail = serde_json::json!({
+            "duration_ms": run.started.elapsed().as_millis() as u64,
+            "files": files,
+            "import_ratio": {
+                "bytes": bytes,
+                "total": total,
+                "ratio": if total > 0 { bytes as f64 / total as f64 } else { 0.0 },
+            },
+            "pieces": {
+                "piece_bytes": PIECE_CHUNKS * CHUNK_BYTES,
+                "chunk_bytes": CHUNK_BYTES,
+                "verified": run.pieces.verified.load(Ordering::Relaxed),
+                "retried": run.pieces.retried.load(Ordering::Relaxed),
+                "failed": failed.len(),
+                // Offsets, not the bytes: a handful of failed offsets names the hole, a list of
+                // thousands of verified chunks does not.
+                "failed_offsets": failed,
+            },
+        });
+        tracing::info!(
+            import = %run.import_id,
+            bytes,
+            route = link.route,
+            local = %link.local,
+            remote = %link.remote,
+            interface = ?link.interface,
+            vpn = link.tunnel,
+            "shared bytes received"
+        );
+        super::note_transfer(
+            &run.state,
+            false,
+            share_id.as_str(),
+            &title,
+            bytes,
+            &link,
+            detail,
+        )
+        .await;
+    }
     let _ = tokio::fs::remove_dir_all(&run.dir).await;
     let _ = &run.import_id;
     if failed == 0 {
@@ -1435,6 +1676,32 @@ mod tests {
     use super::*;
 
     use std::io::{Error, ErrorKind};
+
+    /// A full piece is a mebibyte, but the last one is short: counting it as full overshot the
+    /// archive, and with it the share's ratio.
+    #[test]
+    fn the_last_piece_counts_only_the_bytes_it_carries() {
+        let size = 162_574_853;
+        let middle = ChunkSpan {
+            start: 1024,
+            end: 2048,
+        };
+        assert_eq!(piece_bytes(&middle, size), 1024 * 1024);
+        let last = ChunkSpan {
+            start: 158_764,
+            end: 158_765,
+        };
+        assert_eq!(piece_bytes(&last, size), 517);
+        // Every piece of a full pass adds up to the archive, never past it.
+        let mut total = 0;
+        let mut start = 0;
+        while start < 158_765 {
+            let end = (start + PIECE_CHUNKS).min(158_765);
+            total += piece_bytes(&ChunkSpan { start, end }, size);
+            start = end;
+        }
+        assert_eq!(total, size);
+    }
 
     #[test]
     fn local_write_failures_carry_a_stable_code() {

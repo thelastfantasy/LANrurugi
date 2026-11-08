@@ -28,10 +28,22 @@ function defaultsFrom(settings: ShareSettings | undefined): ShareFormState {
   // A setting written as "import, read, download" still ticks all three (spaces are ignored).
   const permissions = parseSharePermissions(settings?.share_default_permissions, "import,read,download")
   const num = (v: unknown) => (typeof v === "number" ? v : "")
+  // The ratio default is stored as text ("1.5"), the way a decimal setting has to be.
+  const decimal = (v: unknown) => {
+    if (typeof v === "number") return v
+    if (typeof v === "string" && v.trim()) {
+      const parsed = Number(v)
+      if (Number.isFinite(parsed) && parsed > 0) return parsed
+    }
+    return ""
+  }
   return {
     title: "",
     permissions,
     downloadLimit: num(settings?.share_default_download_limit),
+    targetRatio: decimal(settings?.share_default_target_ratio),
+    ratioAction: settings?.share_default_ratio_action === "throttle" ? "throttle" : "stop",
+    ratioRate: num(settings?.share_default_ratio_rate),
     ipAllow: String(settings?.share_default_ip_allow ?? "")
       .split(",")
       .map((s) => s.trim())

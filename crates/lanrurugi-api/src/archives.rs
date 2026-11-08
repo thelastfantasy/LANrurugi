@@ -955,6 +955,7 @@ async fn download_archive(
     State(state): State<AppState>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<DownloadParams>,
+    headers: HeaderMap,
 ) -> Response {
     let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
@@ -972,11 +973,11 @@ async fn download_archive(
     {
         return inline_pdf(&archive).await;
     }
-    serve_archive_download(&archive).await
+    serve_archive_download(&archive, byte_range(&headers)).await
 }
 
 /// The bytes `/archives/{id}/download` serves, shared with the share recipient route (017).
-pub(crate) async fn serve_archive_download(archive: &Archive) -> Response {
+pub(crate) async fn serve_archive_download(archive: &Archive, range: Option<&str>) -> Response {
     // A sidecar `.patch.zip` (issue #77's own follow-on design) means the reader is showing pages
     // that don't exist in the archive file itself — downloading the raw file as-is would silently
     // drop them. The repackaged archive is streamed through a temp file: it used to be built as
@@ -1037,10 +1038,55 @@ pub(crate) async fn serve_archive_download(archive: &Archive) -> Response {
         }
     };
     let length = file.metadata().await.map(|m| m.len()).ok();
+    let mut file = file;
+    // A resumed download (a share whose endpoint was rebuilt mid-transfer, or any interrupted
+    // browser download) asks for the rest of the file; the merged-patch branch above cannot
+    // answer a range because it serves a different representation, so only this branch does.
+    if let (Some(spec), Some(total)) = (range, length) {
+        if let Some((start, end)) = parse_byte_range(spec, total) {
+            if tokio::io::AsyncSeekExt::seek(&mut file, std::io::SeekFrom::Start(start))
+                .await
+                .is_ok()
+            {
+                let mut response = (
+                    StatusCode::PARTIAL_CONTENT,
+                    [
+                        (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+                        (header::CONTENT_DISPOSITION, disposition),
+                        (
+                            header::CONTENT_RANGE,
+                            format!("bytes {start}-{end}/{total}"),
+                        ),
+                        (header::ACCEPT_RANGES, "bytes".to_string()),
+                    ],
+                    axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(
+                        tokio::io::AsyncReadExt::take(file, end - start + 1),
+                    )),
+                )
+                    .into_response();
+                response
+                    .headers_mut()
+                    .insert(header::CONTENT_LENGTH, (end - start + 1).into());
+                return response;
+            }
+            // Seeking failed: start the body over rather than fail the download.
+            match tokio::fs::File::open(&archive.file).await {
+                Ok(fresh) => file = fresh,
+                Err(e) => {
+                    return error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "download_archive",
+                        e.to_string(),
+                    )
+                }
+            }
+        }
+    }
     let mut response = (
         [
             (header::CONTENT_TYPE, "application/octet-stream".to_string()),
             (header::CONTENT_DISPOSITION, disposition),
+            (header::ACCEPT_RANGES, "bytes".to_string()),
         ],
         axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file)),
     )
@@ -1051,6 +1097,41 @@ pub(crate) async fn serve_archive_download(archive: &Archive) -> Response {
             .insert(header::CONTENT_LENGTH, length.into());
     }
     response
+}
+
+/// The `Range` header of a download request, when it asks for a single byte span.
+fn byte_range(headers: &HeaderMap) -> Option<&str> {
+    headers.get(header::RANGE).and_then(|v| v.to_str().ok())
+}
+
+/// `bytes=start-end`, `bytes=start-` and `bytes=-suffix`, clamped to `total`.
+fn parse_byte_range(value: &str, total: u64) -> Option<(u64, u64)> {
+    let spec = value.trim().strip_prefix("bytes=")?;
+    if spec.contains(',') || total == 0 {
+        return None;
+    }
+    let (start, end) = spec.split_once('-')?;
+    match (start.trim(), end.trim()) {
+        ("", "") => None,
+        // A suffix range asks for the last N bytes.
+        ("", suffix) => {
+            let suffix: u64 = suffix.parse().ok()?;
+            let len = suffix.min(total);
+            (len > 0).then(|| (total - len, total - 1))
+        }
+        (start, "") => {
+            let start: u64 = start.parse().ok()?;
+            (start < total).then(|| (start, total - 1))
+        }
+        (start, end) => {
+            let start: u64 = start.parse().ok()?;
+            let end: u64 = end.parse().ok()?;
+            if start > end || start >= total {
+                return None;
+            }
+            Some((start, end.min(total - 1)))
+        }
+    }
 }
 
 /// Streams the PDF rather than reading it into memory: a PDF can be hundreds of megabytes.
@@ -2853,6 +2934,227 @@ fn resize_cache_path(
     ))
 }
 
+/// The identity of one page request for the singleflight map. Every flag that changes the bytes or
+/// the encoding parameters has to be in here, or two different requests would collapse into one.
+// Same eight facts `fetch_page` takes: anything that changes the bytes belongs in the key.
+#[allow(clippy::too_many_arguments)]
+fn page_flight_key(
+    path: &str,
+    is_patch: bool,
+    optimize: bool,
+    mobile: bool,
+    preview: bool,
+    requested_short_edge: Option<u32>,
+    client_support: ClientImageSupport,
+    head_only: bool,
+) -> String {
+    let short_edge_key = requested_short_edge
+        .map(|n| format!(":short{n}"))
+        .unwrap_or_default();
+    format!(
+        "{}:{}{}{}{}{}:{}{}",
+        if is_patch { "patch" } else { "orig" },
+        path,
+        if optimize { ":opt" } else { "" },
+        if mobile { ":mob" } else { "" },
+        if preview { ":preview" } else { "" },
+        short_edge_key,
+        client_support.key(),
+        // A HEAD's flight returns metadata only (empty body). Sharing it with a concurrent GET for
+        // the same page handed that GET zero bytes — a broken image in the reader.
+        if head_only { ":head" } else { "" },
+    )
+}
+
+/// How long a warming request waits before it starts: the visible page must win the CPU first.
+const WARM_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// One warm at a time. Warming is a bet on where the reader goes next; it must never compete with
+/// the page the user is actually waiting for.
+fn warm_page_semaphore() -> &'static tokio::sync::Semaphore {
+    static WARM: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    // Serial: two neighbours converting side by side share the CPU with the page being turned to,
+    // so all three land at once after a longer wait than one would have taken alone (reported as
+    // "three images appear together instead of the page I asked for").
+    WARM.get_or_init(|| tokio::sync::Semaphore::new(1))
+}
+
+/// Conversions the reader is currently blocked on. Warming waits for this to drop to zero.
+static VISIBLE_CONVERSIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Marks one visible conversion for as long as it runs.
+struct VisibleConversion;
+
+impl VisibleConversion {
+    fn begin() -> Self {
+        VISIBLE_CONVERSIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for VisibleConversion {
+    fn drop(&mut self) {
+        VISIBLE_CONVERSIONS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn visible_conversions() -> usize {
+    VISIBLE_CONVERSIONS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Workers for the one page a reader is waiting on. JXL encoding is the slow half of a cold page
+/// and scales across cores; everything speculative stays single-threaded.
+fn page_encode_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().min(4))
+        .unwrap_or(1)
+}
+
+/// Converts the pages on either side of `path` in the background, so the next turn finds its page
+/// already in the resize cache.
+///
+/// A cold page costs about 4.5 s (decode a 3000×4200 JPEG, downscale, encode WebP). Without this,
+/// every turn paid that in full and a reader flipping quickly kept cancelling requests it had just
+/// started — the page area stayed empty for as long as the flipping lasted. The result of the warm
+/// request itself is dropped; the point is the cache file it leaves behind.
+#[allow(clippy::too_many_arguments)]
+fn warm_neighbours(
+    state: AppState,
+    id: String,
+    path: String,
+    archive_file: String,
+    corrupted_pages: Vec<String>,
+    mobile: bool,
+    requested_short_edge: Option<u32>,
+    client_support: ClientImageSupport,
+) {
+    tokio::spawn(async move {
+        tokio::time::sleep(WARM_DELAY).await;
+        // Do not start while the reader is still waiting for a page of its own: sharing the CPU
+        // made that page slower and the warmed ones finish alongside it.
+        let waited = std::time::Instant::now();
+        while visible_conversions() > 0 {
+            if waited.elapsed() > std::time::Duration::from_secs(60) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        let Ok(_permit) = warm_page_semaphore().acquire().await else {
+            return;
+        };
+        let listing = archive_file.clone();
+        let pages = lanrurugi_core::concurrency::run_blocking(move || {
+            lanrurugi_scanner::archive_format::list_pages(std::path::Path::new(&listing))
+        })
+        .await
+        .ok()
+        .and_then(Result::ok);
+        let Some(pages) = pages else {
+            return;
+        };
+        let names: Vec<String> = pages;
+        let Some(index) = names.iter().position(|name| name == &path) else {
+            return;
+        };
+        for offset in [1isize, -1] {
+            let Some(target) = index
+                .checked_add_signed(offset)
+                .and_then(|next| names.get(next))
+            else {
+                continue;
+            };
+            // Through the same singleflight as a real request: if the reader turns onto this page
+            // while it is being warmed, it joins that conversion instead of starting a second one.
+            // The result is dropped on purpose — a warming request only cares that the cache entry
+            // now exists.
+            let key = page_flight_key(
+                target,
+                false,
+                true,
+                mobile,
+                false,
+                requested_short_edge,
+                client_support,
+                false,
+            );
+            let flight = state
+                .page_singleflight
+                .run((id.clone(), key), {
+                    let state = state.clone();
+                    let id = id.clone();
+                    let target = target.clone();
+                    let archive_file = archive_file.clone();
+                    let corrupted_pages = corrupted_pages.clone();
+                    move || async move {
+                        fetch_page(
+                            &state,
+                            &id,
+                            &target,
+                            &archive_file,
+                            &corrupted_pages,
+                            false,
+                            true,
+                            mobile,
+                            false,
+                            requested_short_edge,
+                            client_support,
+                            false,
+                            1,
+                        )
+                        .await
+                    }
+                })
+                .await;
+            drop(flight);
+
+            // The reader paints this preview underneath the page and sweeps the page over it, so a
+            // cold preview arriving *after* the page turns that transition into a flash. Warming it
+            // here costs one small encode and makes the next page turn reveal instead of blink.
+            if let Some(target_index) = index.checked_add_signed(offset) {
+                let target = names[target_index].clone();
+                let key = page_flight_key(
+                    &target,
+                    false,
+                    true,
+                    mobile,
+                    true,
+                    requested_short_edge,
+                    client_support,
+                    false,
+                );
+                let preview = state
+                    .page_singleflight
+                    .run((id.clone(), key), {
+                        let state = state.clone();
+                        let id = id.clone();
+                        let archive_file = archive_file.clone();
+                        let corrupted_pages = corrupted_pages.clone();
+                        move || async move {
+                            fetch_page(
+                                &state,
+                                &id,
+                                &target,
+                                &archive_file,
+                                &corrupted_pages,
+                                false,
+                                true,
+                                mobile,
+                                true,
+                                requested_short_edge,
+                                client_support,
+                                false,
+                                1,
+                            )
+                            .await
+                        }
+                    })
+                    .await;
+                drop(preview);
+            }
+        }
+    });
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     use std::fmt::Write;
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -3003,50 +3305,78 @@ pub(crate) async fn serve_page(
     // `client_support.key()` is part of the key for the same reason: whether a JXL source page is
     // served as-is or converted to WebP changes the bytes/Content-Type entirely, so a JXL-capable
     // request and a WebP-only request for the same entry must not collapse onto each other.
-    let short_edge_key = requested_short_edge
-        .map(|n| format!(":short{n}"))
-        .unwrap_or_default();
-    let cache_key_path = format!(
-        "{}:{}{}{}{}{}:{}{}",
-        if is_patch { "patch" } else { "orig" },
-        params.path,
-        if optimize { ":opt" } else { "" },
-        if mobile { ":mob" } else { "" },
-        if preview_variant { ":preview" } else { "" },
-        short_edge_key,
-        client_support.key(),
-        // A HEAD's flight returns metadata only (empty body). Sharing it with a concurrent GET for
-        // the same page handed that GET zero bytes — a broken image in the reader.
-        if head_only { ":head" } else { "" },
+    let cache_key_path = page_flight_key(
+        &params.path,
+        is_patch,
+        optimize,
+        mobile,
+        preview_variant,
+        requested_short_edge,
+        client_support,
+        head_only,
     );
-    let result = state
-        .page_singleflight
-        .run((id.to_string(), cache_key_path), {
-            let state = state.clone();
-            let id = id.clone();
-            let path = params.path.clone();
-            let archive_file = archive.file.clone();
-            let corrupted_pages = archive.corrupted_pages.clone();
-            move || async move {
-                fetch_page(
-                    &state,
-                    id.as_str(),
-                    &path,
-                    &archive_file,
-                    &corrupted_pages,
-                    is_patch,
-                    optimize,
-                    mobile,
-                    preview_variant,
-                    requested_short_edge,
-                    client_support,
-                    head_only,
-                )
+    // The flight runs in its own task. A reader who flips past a page before it finishes drops
+    // this handler, and a dropped handler cancelled the conversion with it — the cache entry was
+    // never written, so every revisit (and every flip back) paid the full conversion again.
+    // Dropping the JoinHandle below does not abort the task, so the work always lands in the cache.
+    let flight = tokio::spawn({
+        let flight = state.page_singleflight.clone();
+        let state = state.clone();
+        let id = id.clone();
+        let path = params.path.clone();
+        let archive_file = archive.file.clone();
+        let corrupted_pages = archive.corrupted_pages.clone();
+        async move {
+            flight
+                .run((id.to_string(), cache_key_path), move || async move {
+                    fetch_page(
+                        &state,
+                        id.as_str(),
+                        &path,
+                        &archive_file,
+                        &corrupted_pages,
+                        is_patch,
+                        optimize,
+                        mobile,
+                        preview_variant,
+                        requested_short_edge,
+                        client_support,
+                        head_only,
+                        if prefetch || head_only || preview_variant {
+                            1
+                        } else {
+                            page_encode_threads()
+                        },
+                    )
+                    .await
+                })
                 .await
-            }
-        })
-        .await;
+        }
+    });
+    // Only a page someone is actually waiting on counts as visible; a prefetch or a HEAD must not
+    // hold warming back.
+    let _visible = (!prefetch && !head_only).then(VisibleConversion::begin);
+    let result = flight
+        .await
+        .unwrap_or_else(|error| Err(format!("page worker stopped: {error}")));
     drop(low_priority_permit);
+
+    // Warm the neighbours of a page the reader is actually looking at, so turning a page finds it
+    // already converted. Skipped for HEAD (a question, not a page), for the tiny preview variant,
+    // for patch pages (read from a separate zip with its own path space) and for requests that
+    // were themselves speculative.
+    if result.is_ok() && !head_only && optimize && !preview_variant && !prefetch && !is_patch {
+        warm_neighbours(
+            state.clone(),
+            id.to_string(),
+            params.path.clone(),
+            archive.file.clone(),
+            archive.corrupted_pages.clone(),
+            mobile,
+            requested_short_edge,
+            client_support,
+        );
+    }
 
     match result {
         Ok(page) => {
@@ -3295,6 +3625,7 @@ async fn fetch_page(
     requested_short_edge: Option<u32>,
     client_support: ClientImageSupport,
     head_only: bool,
+    jxl_threads: usize,
 ) -> Result<FetchedPage, String> {
     if is_patch {
         let archive_file_owned = archive_file.to_string();
@@ -3369,7 +3700,7 @@ async fn fetch_page(
         )
         .await
         .unwrap_or((None, None, None));
-    let enable_resize = enable_resize.map(|v| v != "0").unwrap_or(false);
+    let enable_resize = crate::settings::stored_bool("enableresize", enable_resize.as_deref());
     let threshold: i64 = threshold
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_SIZE_THRESHOLD);
@@ -3735,18 +4066,19 @@ async fn fetch_page(
         ));
     }
     let converted = if force_convert {
-        lanrurugi_scanner::resize::convert_to_format(
+        lanrurugi_scanner::resize::convert_to_format_with_jxl_threads(
             raw.clone(),
             effective_quality as u8,
             effective_max_short_edge,
             max_long_edge,
             preview_full_short_edge,
             output_format,
+            jxl_threads,
         )
         .await
         .map(Some)
     } else {
-        lanrurugi_scanner::resize::resize_if_over_threshold(
+        lanrurugi_scanner::resize::resize_if_over_threshold_with_jxl_threads(
             raw.clone(),
             effective_quality as u8,
             effective_threshold_for_output,
@@ -3754,6 +4086,7 @@ async fn fetch_page(
             max_long_edge,
             preview_full_short_edge,
             output_format,
+            jxl_threads,
         )
         .await
     };
@@ -4754,5 +5087,19 @@ mod tests {
     #[test]
     fn image_content_type_falls_back_for_too_short_input() {
         assert_eq!(image_content_type(b"\xFF"), "application/octet-stream");
+    }
+
+    #[test]
+    fn a_byte_range_is_clamped_to_the_file() {
+        assert_eq!(parse_byte_range("bytes=0-9", 100), Some((0, 9)));
+        assert_eq!(parse_byte_range("bytes=90-", 100), Some((90, 99)));
+        assert_eq!(parse_byte_range("bytes=-10", 100), Some((90, 99)));
+        assert_eq!(parse_byte_range("bytes=-500", 100), Some((0, 99)));
+        assert_eq!(parse_byte_range("bytes=95-500", 100), Some((95, 99)));
+        assert_eq!(parse_byte_range("bytes=100-", 100), None);
+        assert_eq!(parse_byte_range("bytes=5-1", 100), None);
+        assert_eq!(parse_byte_range("bytes=0-1,4-5", 100), None);
+        assert_eq!(parse_byte_range("seconds=0-1", 100), None);
+        assert_eq!(parse_byte_range("bytes=0-", 0), None);
     }
 }

@@ -148,6 +148,73 @@ pub async fn publish_node_record(
     }
 }
 
+/// Restarts this instance's relay role on the same endpoint: every connection being forwarded
+/// through it drops at once, while the endpoint itself (and therefore every direct session) keeps
+/// running. That is the split "destroy the node" needs — the relay is what a rotation invalidates.
+pub async fn restart_relay(
+    state: &crate::AppState,
+    settings: &ShareSettings,
+    net: &super::ShareNet,
+) {
+    if let Some(previous) = net.relay.lock().await.take() {
+        let _ = previous.shutdown().await;
+    }
+    if !settings.flag("share_node_relay") {
+        return;
+    }
+    let dir = state.library.temp_dir.join("share");
+    match start_relay(settings, &dir, net.id()).await {
+        Ok((server, port)) => {
+            *net.relay.lock().await = Some(server);
+            *net.relay_port.lock().await = Some(port);
+        }
+        Err(e) => tracing::warn!(error = %e, "relay role could not restart after a code rotation"),
+    }
+}
+
+/// The `endpoint_id` a retracted record carries. Nothing can ever own it, so a peer that resolves
+/// a retired code learns "this node is gone" instead of dialling an address that no longer answers.
+pub const RETRACTED_ENDPOINT_ID: [u8; 32] = [0u8; 32];
+
+/// Overwrites the record behind a retired code, so every peer still holding that code stops
+/// resolving it at once rather than at the end of the relay's TTL (two hours). Called before the
+/// identity is replaced, while its code can still be read.
+pub async fn retract_node_record(
+    state: &crate::AppState,
+    code: &lanrurugi_share_proto::node_code::NodeCode,
+) {
+    let settings = crate::share_settings::load(state).await;
+    let relays = super::publish::pkarr_relays(&settings);
+    if relays.is_empty() {
+        return;
+    }
+    let keys = lanrurugi_share_proto::derive::DerivedKeys {
+        lookup_key: code.lookup_keypair(),
+        record_key: code.record_key(),
+    };
+    let knock = lanrurugi_share_proto::record::KnockV1 {
+        endpoint_id: RETRACTED_ENDPOINT_ID,
+        relay_urls: Vec::new(),
+        direct_addrs: Vec::new(),
+    };
+    let Ok(packet) = lanrurugi_share_proto::record::seal(&keys, &knock) else {
+        return;
+    };
+    let payload = packet.to_relay_payload();
+    let client = reqwest::Client::new();
+    for relay in relays {
+        let url = node_relay_url(&relay, code);
+        let ok = client
+            .put(&url)
+            .header("content-type", "application/pkarr.org/relays#payload")
+            .body(payload.clone())
+            .send()
+            .await
+            .is_ok_and(|r| r.status().is_success());
+        crate::share_net::status::record_rendezvous(&relay, ok);
+    }
+}
+
 /// How often the record behind a node code is refreshed. Well inside `RECORD_TTL_SECS` (3600) so
 /// a peer that looks the code up never lands on an expired copy.
 const NODE_RECORD_REFRESH_SECS: u64 = 600;
@@ -203,6 +270,10 @@ pub async fn resolve_node_code(state: &crate::AppState, code: &str) -> Option<En
         let Ok(knock) = lanrurugi_share_proto::record::open(&keys, &packet) else {
             continue;
         };
+        // A retracted identity: the code was destroyed and this record is all that is left.
+        if knock.endpoint_id == RETRACTED_ENDPOINT_ID {
+            return None;
+        }
         let mut addr = super::endpoint_addr(&knock.endpoint_id, &knock.relay_urls, None)?;
         for direct in &knock.direct_addrs {
             if let Ok(socket) = direct.parse::<std::net::SocketAddr>() {
@@ -411,9 +482,20 @@ pub async fn start_relay(
     settings: &ShareSettings,
     data_dir: &Path,
     own: iroh::EndpointId,
-) -> Result<iroh_relay::server::Server, String> {
+) -> Result<(iroh_relay::server::Server, u16), String> {
     use iroh_relay::server::{AcmeConfig, CertConfig, RelayConfig, ServerConfig, TlsConfig};
-    let port = settings.number("share_node_relay_port").unwrap_or(11205) as u16;
+    // Empty means "whatever is free": the port is local plumbing (the advertised URL comes from
+    // the public address), so an automatic one costs nothing and defeats a fixed-port scan.
+    let port = match settings.text("share_node_relay_port").trim() {
+        "" => {
+            let listener =
+                std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|e| e.to_string())?;
+            listener.local_addr().map_err(|e| e.to_string())?.port()
+        }
+        raw => raw
+            .parse::<u16>()
+            .map_err(|_| format!("\"share_node_relay_port\" is not a port: {raw}"))?,
+    };
     let mut relay = match settings.text("share_node_relay_tls") {
         "proxy" => RelayConfig::new(SocketAddr::from(([127, 0, 0, 1], port))),
         mode => {
@@ -466,9 +548,10 @@ pub async fn start_relay(
         )));
     }
     config.relay = Some(relay);
-    iroh_relay::server::Server::spawn(config)
+    let server = iroh_relay::server::Server::spawn(config)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    Ok((server, port))
 }
 
 /// Per-client rate limit from `share_node_relay_rate` (bytes per second, empty for none). Every
@@ -744,7 +827,7 @@ pub async fn run_standalone(options: NodeOptions) -> Result<(), String> {
     let _ = tokio::signal::ctrl_c().await;
     store.save(&packets_path);
     let _ = router.shutdown().await;
-    if let Some(server) = relay_server {
+    if let Some((server, _port)) = relay_server {
         let _ = server.shutdown().await;
     }
     Ok(())

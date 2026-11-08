@@ -58,6 +58,7 @@ import { fileInfoText } from "@/lib/utils/fileInfoText";
 import {
   getImageCapabilityHeader,
   IMAGE_FORMAT_SUPPORT_HEADER,
+  markJxlUndecodable,
 } from "@/lib/utils/imageFormatSupport";
 import type { PageMeta } from "@/lib/utils/imageMeta";
 import {
@@ -128,6 +129,15 @@ function servedInfoKb(info: ResizedPageInfo | null | undefined): number | undefi
 const PAGINATOR_PAGECOUNT_FONT_SIZE = "1.25rem";
 /** Matches `toast.tsx`'s own `AUTO_CLOSE_TIME.info` default. */
 const TOAST_DURATION_MS = 5000;
+/** The preview sweep moves at a constant speed; the clamp keeps tiny and poster-sized pages sane. */
+const WIPE_SPEED_PX_PER_MS = 1.6;
+const WIPE_MIN_MS = 200;
+const WIPE_MAX_MS = 760;
+
+function wipeDuration(renderedHeight: number): number {
+  if (!Number.isFinite(renderedHeight) || renderedHeight <= 0) return WIPE_MIN_MS;
+  return Math.min(WIPE_MAX_MS, Math.max(WIPE_MIN_MS, Math.round(renderedHeight / WIPE_SPEED_PX_PER_MS)));
+}
 
 type OverlayKind = "archive" | "settings" | "help" | null;
 
@@ -485,12 +495,29 @@ export function Reader() {
   // page appear only after the whole large image had finished downloading).
   const prefetchedPageSizesRef = useRef<Set<number>>(new Set());
   const [pageTinyBlobs, setPageTinyBlobs] = useState<Record<number, string>>({});
+  // Pages whose preview is currently being erased to reveal the page underneath. Kept separate from
+  // `mainReady` because the sweep must start only once the full bitmap is *paintable* (after
+  // `decode()` and a paint), not the moment `onLoad` reports its dimensions.
+  const [wipeOn, setWipeOn] = useState<Record<number, boolean>>({});
+  // The sweep runs at a constant speed, so its duration follows the rendered page height: a fixed
+  // 260 ms is a lazy blur on a phone-sized page and a whip-fast snap on a tall one.
+  const [wipeMs, setWipeMs] = useState<Record<number, number>>({});
   // Per page: whether the visible `<img>` has decoded pixels yet. Until it has, the streaming
   // element keeps showing the *previous* page (or nothing, if its box is still unknown) — which on
   // a slow link looked like paging had stopped working. The tiny preview is stacked on top until
   // this flips, so the reader always sees the right page, just at preview resolution first.
   const [mainReady, setMainReady] = useState<Record<number, boolean>>({});
+  // Mirror of `mainReady` for code that runs outside render (the preview fetch): a blob that lands
+  // after the page is already painted must not be shown on top of it.
+  const mainReadyRef = useRef<Record<number, boolean>>({});
   const lastDimsRef = useRef<{ width: number; height: number } | null>(null);
+  /**
+   * Stand-in box for a page whose dimensions are not known yet. Without one, the wrapper shrinks to
+   * its 2px content (the `<img>` has neither a bitmap nor width/height attributes) and the reader
+   * paints as a dot at the edge of the screen — reported on mobile, on the first pages of a cold
+   * archive. A4-ish, portrait, because that is what a scan almost always is.
+   */
+  const UNKNOWN_PAGE_DIMS = { width: 1414, height: 2000 };
   const [pageTinyDims, setPageTinyDims] = useState<
     Record<number, { width: number; height: number }>
   >({});
@@ -577,16 +604,16 @@ export function Reader() {
   const [renderedSpreadKey, setRenderedSpreadKey] = useState(spreadKey);
   if (spreadKey !== renderedSpreadKey) {
     setRenderedSpreadKey(spreadKey);
+    mainReadyRef.current = {};
     setMainReady({});
   }
 
   /** The incoming page's known box (preview/full-size dimensions), used to size the placeholder. */
   const placeholderDims =
-    pageTinyDims[spread.left] ?? pageDimensions[spread.left] ?? lastDimsRef.current ?? null;
+    pageTinyDims[spread.left] ?? pageDimensions[spread.left] ?? lastDimsRef.current ?? UNKNOWN_PAGE_DIMS;
   /** Sizing for that placeholder, in the fit mode currently selected. */
-  const placeholderStyle: React.CSSProperties | null =
-    !placeholderDims || mainReady[spread.left]
-      ? null
+  const placeholderStyle: React.CSSProperties | null = mainReady[spread.left]
+    ? null
       : readerSettings.fitMode === FIT_MODE.FIT_HEIGHT && !isFullscreen
         ? {
             height: fitHeightPx !== null ? `${fitHeightPx}px` : "90vh",
@@ -629,6 +656,10 @@ export function Reader() {
       if (!url) return undefined;
       const parsed = new URL(url, window.location.origin);
       parsed.searchParams.set("max_short_edge", String(readerFullShortEdge()));
+      // Pin the codec list into the URL itself: an `<img>` can only carry it in the cookie, while
+      // the reader's HEADs used to send it as a header, so a tab whose probe disagreed with the
+      // cookie could show a converted page while its own info bar reported the other format.
+      parsed.searchParams.set("format", getImageCapabilityHeader());
       // Deliberately no `priority` parameter: the prefetch and the visible `<img>` have to request
       // the *same* URL or the browser cannot reuse the warmed cache entry. Speculative requests are
       // marked with the `X-LRR-Priority` header instead, which the server reads too.
@@ -730,6 +761,13 @@ export function Reader() {
           if (pageTinyFetchesRef.current.get(page) !== controller) return;
           pageTinyFetchesRef.current.delete(page);
           const blobUrl = URL.createObjectURL(blob);
+          // The page painted first. Its preview arriving now has nothing to reveal and, stacked
+          // above the page, would leave the reader looking at the blurry copy for good — the wipe
+          // only ever starts from the page's own load event.
+          if (mainReadyRef.current[page]) {
+            URL.revokeObjectURL(blobUrl);
+            return;
+          }
           pageTinyBlobsRef.current.set(page, blobUrl);
           setPageTinyBlobs(Object.fromEntries(pageTinyBlobsRef.current));
         })
@@ -740,6 +778,31 @@ export function Reader() {
     },
     [pages.data, setPageTinyBlobs, setPageTinyDims],
   );
+
+  // Releases the preview blob. Called from the wipe's `animationend`, with a timer as the fallback
+  // for the paths where no animation runs at all.
+  const releaseTiny = useCallback((page: number) => {
+    const tinyUrl = pageTinyBlobsRef.current.get(page);
+    if (!tinyUrl) return;
+    URL.revokeObjectURL(tinyUrl);
+    pageTinyBlobsRef.current.delete(page);
+    setPageTinyBlobs(Object.fromEntries(pageTinyBlobsRef.current));
+  }, [setPageTinyBlobs]);
+
+  useEffect(() => {
+    const timers: number[] = [];
+    for (const key of Object.keys(pageTinyBlobs)) {
+      const page = Number(key);
+      if (!wipeOn[page]) continue;
+      // Generous margin over the animation itself, so a page whose `animationend` never arrives
+      // (a dropped frame, a backgrounded tab) still releases its preview.
+      const wait = (wipeMs[page] ?? WIPE_MAX_MS) + 400;
+      timers.push(window.setTimeout(() => releaseTiny(page), wait));
+    }
+    return () => {
+      for (const timer of timers) window.clearTimeout(timer);
+    };
+  }, [pageTinyBlobs, wipeOn, wipeMs, releaseTiny]);
 
   useEffect(() => {
     document.body.classList.toggle(
@@ -779,8 +842,10 @@ export function Reader() {
     if (readerSettings.infiniteScroll) return;
     const shown = spread.right === null ? [spread.left] : [spread.left, spread.right];
     let cancelled = false;
-    const markReady = (page: number) =>
+    const markReady = (page: number) => {
+      mainReadyRef.current[page] = true;
       setMainReady((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
+    };
     const elements = [leftImgRef.current, rightImgRef.current].filter(
       (el): el is HTMLImageElement => !!el,
     );
@@ -832,11 +897,11 @@ export function Reader() {
     let cancelled = false;
     for (const page of pageNumbers) {
       if (page < 1) continue;
-      void ensurePageMeta(page).then((meta) => {
-        // `meta === null` (the HEAD failed) keeps the previous behaviour: a placeholder is cheap
-        // insurance when we cannot tell.
-        if (!cancelled && meta?.servedOriginal !== true) fetchTinyPreview(page);
-      });
+      // Requested straight away rather than after the HEAD: the preview is the underlay the reveal
+      // sweeps over, so it has to be *earlier* than the full page, and waiting for `ensurePageMeta`
+      // handed the full request a head start it never needed. A wasted preview on a page that ends
+      // up served as-is costs one small cached image; a missing one costs the whole transition.
+      if (!cancelled) fetchTinyPreview(page);
     }
     for (const [page, controller] of [...pageTinyFetchesRef.current]) {
       if (!pageNumbers.includes(page)) {
@@ -1133,7 +1198,20 @@ export function Reader() {
     // Do not leave the preview covering an image that failed: show the (browser-default) broken
     // state instead of pretending the page is still loading.
     const page = Number(img.dataset.page ?? "0");
-    if (page > 0) setMainReady((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
+    if (page > 0) {
+      mainReadyRef.current[page] = true;
+      setMainReady((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
+    }
+    // A failed JXL load means the capability probe lied (Firefox Android decodes some samples but
+    // not every page). Downgrade this tab to WebP and retry the same URL once, so the reader never
+    // leaves a page blank just because the better codec was chosen for it.
+    if (img.src.includes("optimize=1") && decodeURIComponent(img.src).includes("jxl")) {
+      markJxlUndecodable();
+      const retry = new URL(img.src);
+      retry.searchParams.set("format", getImageCapabilityHeader());
+      img.src = retry.toString();
+      return;
+    }
     if (img.src.includes("optimize=1")) return;
     const parsed = new URL(img.src);
     if (!parsed.searchParams.has("path")) return;
@@ -1155,6 +1233,7 @@ export function Reader() {
       prev[page] === isWide ? prev : { ...prev, [page]: isWide },
     );
     if (isPreview) return;
+    mainReadyRef.current[page] = true;
     setMainReady((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
     if (readerSettings.fitMode === FIT_MODE.FIT_HEIGHT && !isFullscreen) {
       setMeasureTick((tick) => tick + 1);
@@ -1162,14 +1241,22 @@ export function Reader() {
     if (img.naturalWidth > 0 && img.naturalHeight > 0) {
       lastDimsRef.current = { width: img.naturalWidth, height: img.naturalHeight };
     }
-    // The tiny preview has done its job once the real page is painted. Its Blob used to be released
-    // when the full Blob arrived, but the visible page now streams instead of being fetched, so
-    // release it here.
-    const tinyUrl = pageTinyBlobsRef.current.get(page);
-    if (tinyUrl) {
-      URL.revokeObjectURL(tinyUrl);
-      pageTinyBlobsRef.current.delete(page);
-      setPageTinyBlobs(Object.fromEntries(pageTinyBlobsRef.current));
+    // Start the sweep only once the page is genuinely paintable: `onLoad` reports dimensions while
+    // the decoder is still producing the bitmap, and erasing the preview over a half-decoded page
+    // was exactly the "flash" this animation exists to prevent. `decode()` resolves when the image
+    // is ready to paint; the double rAF then waits for the frame that actually contains it.
+    if (pageTinyBlobsRef.current.has(page)) {
+      const renderedHeight = img.getBoundingClientRect().height || img.naturalHeight;
+      const duration = wipeDuration(renderedHeight);
+      const beginWipe = () => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            setWipeMs((prev) => (prev[page] ? prev : { ...prev, [page]: duration }));
+            setWipeOn((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
+          });
+        });
+      };
+      void Promise.resolve(img.decode()).then(beginWipe, beginWipe);
     }
     setPageDimensions((prev) => ({
       ...prev,
@@ -1799,6 +1886,30 @@ export function Reader() {
     objectFit: "contain",
     pointerEvents: "none",
   };
+
+  /**
+   * The preview fills the page's box, so it can only be absolutely positioned once that box exists.
+   * With no known dimensions the absolutely positioned preview contributes nothing to layout, the
+   * wrapper collapses to 0x0, and the image paints as a dot at the edge of the reader (reported on
+   * mobile, where the first page arrives before any dimensions are known). In that case let the
+   * preview take part in layout: it has its own aspect ratio, so it holds the reader's height open
+   * until the full page lands and the underlay goes back to absolute.
+   */
+  const tinyUnderlayFor = (page: number): React.CSSProperties =>
+    pageTinyDims[page] || pageDimensions[page]
+      ? tinyUnderlayStyle
+      : {
+          ...tinyUnderlayStyle,
+          position: "relative",
+          // `width: 100%` would resolve against the wrapper that is itself sized by this image —
+          // a circular dependency that collapses to 0 (the "dot at the edge of the screen" report).
+          // Fall back to the preview's own size, capped to the viewport.
+          width: "auto",
+          height: "auto",
+          maxWidth: "92vw",
+          maxHeight: "90vh",
+          margin: "0 auto",
+        };
 
   const placementImageStyle: React.CSSProperties = markerPlacementMode
     ? { ...imageStyle, zIndex: 22, cursor: "cell", touchAction: "none" }
@@ -2476,22 +2587,34 @@ export function Reader() {
                   e.currentTarget.blur();
                   goTo(isLeftHalf ? "prev" : "next");
                 }}
+                className="reader-page-frame"
                 style={{ position: "relative", display: "inline-flex" }}
               >
-                <span style={{ position: "relative", display: "inline-flex" }}>
-                  {pageTinyBlobs[spread.left] && !mainReady[spread.left] ? (
+                <span
+                  className="reader-page-frame-inner"
+                  style={{ position: "relative", display: "inline-flex" }}
+                >
+                  {pageTinyBlobs[spread.left] ? (
                     <img
-                      className="reader-image"
+                      className={
+                        wipeOn[spread.left]
+                          ? "reader-image reader-page-wipe"
+                          : "reader-image"
+                      }
                       key={`tiny-left-${spread.left}`}
                       src={pageTinyBlobs[spread.left]}
                       alt=""
                       aria-hidden="true"
                       draggable={false}
+                      onAnimationEnd={() => releaseTiny(spread.left)}
                       style={{
-                        ...tinyUnderlayStyle,
-                        // Above the page while it has nothing to draw (so the preview is what you
-                        // see), below it once the real bitmap is paintable.
-                        zIndex: mainReady[spread.left] ? 0 : 2,
+                        ...tinyUnderlayFor(spread.left),
+                        animationDuration: wipeMs[spread.left]
+                          ? `${wipeMs[spread.left]}ms`
+                          : undefined,
+                        // Always above the page: it is the layer being erased, so the page below it
+                        // is what the sweep uncovers.
+                        zIndex: 2,
                       }}
                     />
                   ) : null}
@@ -2517,12 +2640,14 @@ export function Reader() {
                     width={
                       pageTinyDims[spread.left]?.width ??
                       pageDimensions[spread.left]?.width ??
-                      lastDimsRef.current?.width
+                      lastDimsRef.current?.width ??
+                      UNKNOWN_PAGE_DIMS.width
                     }
                     height={
                       pageTinyDims[spread.left]?.height ??
                       pageDimensions[spread.left]?.height ??
-                      lastDimsRef.current?.height
+                      lastDimsRef.current?.height ??
+                      UNKNOWN_PAGE_DIMS.height
                     }
                     alt={`${t("reader.page")} ${spread.left}`}
                     fetchPriority="high"
@@ -2533,7 +2658,14 @@ export function Reader() {
                     onLoad={(e) => onImageLoad(spread.left, e)}
                     onError={onImageError}
                     draggable={false}
-                    style={placementImageStyle}
+                    // No bitmap yet: the element is still 2x2 (its box comes from the width/height
+                    // attributes only once the image decodes), and whatever it paints at that size
+                    // reads as a stray dot in the middle of the placeholder. The placeholder is the
+                    // honest picture of this state, so keep the image invisible until it has pixels.
+                    style={{
+                      ...placementImageStyle,
+                      visibility: mainReady[spread.left] ? undefined : "hidden",
+                    }}
                   />
                   {/* Phase 2 on-page translation. Absolutely positioned over the page above (the
                       wrapper is `position: relative`), so the original image's own load/error
@@ -2553,19 +2685,25 @@ export function Reader() {
                 </span>
                 {rightUrl && (
                   <span style={{ position: "relative", display: "inline-flex" }}>
-                    {spread.right !== null &&
-                    pageTinyBlobs[spread.right] &&
-                    !mainReady[spread.right] ? (
+                    {spread.right !== null && pageTinyBlobs[spread.right] ? (
                       <img
-                        className="reader-image"
+                        className={
+                          wipeOn[spread.right]
+                            ? "reader-image reader-page-wipe"
+                            : "reader-image"
+                        }
                         key={`tiny-right-${spread.right}`}
                         src={pageTinyBlobs[spread.right]}
                         alt=""
                         aria-hidden="true"
                         draggable={false}
+                        onAnimationEnd={() => releaseTiny(spread.right as number)}
                         style={{
-                          ...tinyUnderlayStyle,
-                          zIndex: mainReady[spread.right] ? 0 : 2,
+                          ...tinyUnderlayFor(spread.right),
+                          animationDuration: wipeMs[spread.right]
+                            ? `${wipeMs[spread.right]}ms`
+                            : undefined,
+                          zIndex: 2,
                         }}
                       />
                     ) : null}

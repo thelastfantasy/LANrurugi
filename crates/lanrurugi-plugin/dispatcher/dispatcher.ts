@@ -844,7 +844,27 @@ function relayFetch(input: string | URL | Request, init?: RequestInit): Promise<
   });
 }
 
-globalThis.fetch = relayFetch as unknown as typeof fetch;
+// The egress shim (`crates/lanrurugi-egress`, loaded with LD_PRELOAD by the host) binds every
+// outbound socket to the configured interface, so Deno's own fetch can stay: full Fetch API,
+// streams, binary bodies, redirects. Its constructor exports LANRURUGI_EGRESS_ACTIVE as proof it
+// actually loaded — a missing `.so` must never leave traffic unconstrained.
+//
+// Without that proof (non-Linux host, or the library was not shipped) the relay is the only path
+// that honours the interface, so install it and surrender the raw-socket grant the CLI handed us —
+// otherwise `Deno.connect`/`WebSocket` would bypass both the relay and the interface.
+if (Deno.env.get("LANRURUGI_EGRESS_ACTIVE") === "1") {
+  console.error(
+    `plugin network: native fetch, egress interface ${Deno.env.get("LANRURUGI_EGRESS_IF") ?? "(none)"}`,
+  );
+} else {
+  console.error("plugin network: host relay (egress shim not loaded)");
+  globalThis.fetch = relayFetch as unknown as typeof fetch;
+  try {
+    await Deno.permissions.revoke({ name: "net" });
+  } catch {
+    // Nothing was granted; the relay still enforces the declared hosts.
+  }
+}
 
 const modulePromise = import(`file://${pluginsDir}/${namespace}.ts`);
 

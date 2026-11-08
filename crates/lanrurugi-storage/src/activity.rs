@@ -91,6 +91,12 @@ pub mod action_types {
     pub const SHARE_ITEMS: &str = "share.items";
     pub const SHARE_REVOKE: &str = "share.revoke";
     pub const SHARE_SETTINGS_UPDATE: &str = "share.settings_update";
+    /// 017 sharing: one import finished, here (receive) or on a peer (send). Written once per
+    /// import, never per connection or piece — `after` carries the byte count, the route, the
+    /// local interface and whether it is a tunnel, so "did it go through the VPN" is a recorded
+    /// fact rather than an inference.
+    pub const SHARE_SEND: &str = "share.send";
+    pub const SHARE_RECEIVE: &str = "share.receive";
     pub const DOWNLOAD_QUEUE_ADD: &str = "download_queue.add";
     pub const DOWNLOAD_QUEUE_START: &str = "download_queue.start";
     /// One archive genuinely entering the library — the single, unified "入库" action every

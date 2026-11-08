@@ -4,6 +4,8 @@
  * interface rather than on URLs, so they never see the token handling.
  */
 
+import { withImageCapabilities } from "@/lib/utils/imageFormatSupport"
+
 import { formatShareCode } from "./code"
 import type { RecipientView } from "./types"
 
@@ -63,7 +65,10 @@ export class HttpTransport implements ShareTransport {
 
   thumbnailUrl(archiveId: string, page?: number): string {
     const base = `/api/share/r/archives/${encodeURIComponent(archiveId)}/thumbnail`
-    return this.withToken(page ? `${base}?page=${page}` : base)
+    // The capability list rides in the query, exactly like the reader's page URLs: a share page
+    // is often the first thing a visitor opens, so it must not depend on a cookie it may not have
+    // yet, and the backend already prefers `format` over both header and cookie.
+    return withImageCapabilities(this.withToken(page ? `${base}?page=${page}` : base))
   }
 
   async pages(archiveId: string): Promise<string[]> {

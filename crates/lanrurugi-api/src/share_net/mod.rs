@@ -11,6 +11,7 @@ pub mod helper;
 pub mod import;
 pub mod interfaces;
 pub mod limits;
+pub(crate) mod link;
 pub mod nodes;
 pub mod proxy;
 pub mod publish;
@@ -47,6 +48,9 @@ pub const DEFAULT_PKARR_RELAYS: [&str; 2] = ["https://pkarr.pubky.app", "https:/
 const SESSION_TTL: Duration = Duration::from_secs(12 * 60 * 60);
 /// How long a claim on an IP-restricted share waits for a direct path (research §4).
 pub const DIRECT_PATH_WAIT: Duration = Duration::from_secs(15);
+/// How long one request waits for its answer. A peer that accepts the connection and then says
+/// nothing would otherwise hold the caller open indefinitely.
+const ANSWER_TIMEOUT_SECS: u64 = 60;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ShareNetError {
@@ -85,6 +89,31 @@ pub(crate) struct Shared {
     pub sessions: Mutex<HashMap<String, Session>>,
     /// blake3 → archive, for answering `Range` without a library scan.
     pub blobs: Mutex<HashMap<[u8; 32], ArchiveId>>,
+    /// Served import bytes per share. A `Range` answers one 1 MiB piece, so the ratio is kept in
+    /// memory and only written back to Redis every few megabytes.
+    pub ratios: Mutex<HashMap<ShareId, RatioState>>,
+}
+
+/// How much of a share has gone out to importers, and what to do once its target is reached.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RatioState {
+    /// Bytes served to importers so far, including those not yet written back to Redis.
+    pub imported: u64,
+    /// Size of everything the share offers; zero until the first claim measured it.
+    pub total: u64,
+    pub target: Option<f32>,
+    pub action: lanrurugi_storage::shares::RatioAction,
+    pub rate: Option<u64>,
+    /// The value `imported` had when it was last written to Redis.
+    pub flushed: u64,
+}
+
+impl RatioState {
+    /// The byte count the target ratio names, if there is one to enforce.
+    pub fn limit(&self) -> Option<u64> {
+        let target = self.target?;
+        (self.total > 0).then_some((target as f64 * self.total as f64) as u64)
+    }
 }
 
 impl Shared {
@@ -101,6 +130,11 @@ pub struct ShareNet {
     relay: tokio::sync::Mutex<Option<iroh_relay::server::Server>>,
     /// Endpoints mDNS has seen on the local network, asked by `ResolveLocal`.
     pub(crate) lan_peers: Arc<Mutex<std::collections::HashSet<EndpointId>>>,
+    /// The UDP port the endpoint actually bound. With an automatic port this is only known after
+    /// binding, and it changes on every rotation, so it is reported rather than inferred.
+    udp_port: u16,
+    /// The TCP port the embedded relay actually listens on, when the relay role is on.
+    relay_port: tokio::sync::Mutex<Option<u16>>,
 }
 
 impl ShareNet {
@@ -110,6 +144,60 @@ impl ShareNet {
 
     pub fn id(&self) -> EndpointId {
         self.endpoint().id()
+    }
+
+    /// The UDP port this endpoint bound, for the settings page.
+    pub fn udp_port(&self) -> u16 {
+        self.udp_port
+    }
+
+    /// The relay role's TCP port, when it is running.
+    pub async fn relay_port(&self) -> Option<u16> {
+        *self.relay_port.lock().await
+    }
+}
+
+/// Transfers currently moving bytes. Port rotation waits for this to reach zero: rebinding the
+/// endpoint tears down every connection on it, and a rotation in the middle of a transfer would be
+/// indistinguishable from a network failure to both sides.
+static ACTIVE_TRANSFERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Marks a transfer as in flight until dropped, so rotation can wait for it.
+pub(crate) struct TransferGuard;
+
+impl TransferGuard {
+    pub(crate) fn begin() -> Self {
+        ACTIVE_TRANSFERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self
+    }
+}
+
+impl Drop for TransferGuard {
+    fn drop(&mut self) {
+        ACTIVE_TRANSFERS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+pub(crate) fn active_transfers() -> usize {
+    ACTIVE_TRANSFERS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A free port the OS hands out; used when a port setting is empty ("automatic").
+fn free_port() -> Result<u16, String> {
+    let socket = std::net::UdpSocket::bind(("0.0.0.0", 0)).map_err(|e| e.to_string())?;
+    socket
+        .local_addr()
+        .map(|a| a.port())
+        .map_err(|e| e.to_string())
+}
+
+/// The port to bind this time: the pinned one, or a fresh random one per start when unset.
+fn port_for(settings: &ShareSettings, key: &str) -> Result<u16, String> {
+    match settings.text(key).trim() {
+        "" => free_port(),
+        raw => raw
+            .parse::<u16>()
+            .map_err(|_| format!("\"{key}\" is not a port: {raw}")),
     }
 }
 
@@ -168,7 +256,6 @@ pub fn relay_urls(settings: &ShareSettings) -> Vec<RelayUrl> {
 pub async fn start(state: &AppState) -> Result<Arc<ShareNet>, String> {
     let settings = crate::share_settings::load(state).await;
     let secret = crate::shares::node_secret(state).await?;
-    let port = settings.number("share_udp_port").unwrap_or(11204) as u16;
     // The old endpoint holds the UDP port (and the relay role its TCP port): release them before
     // binding again, or every rebuild after a settings change fails to bind.
     let mut running = RUNNING.write().await;
@@ -178,13 +265,30 @@ pub async fn start(state: &AppState) -> Result<Arc<ShareNet>, String> {
             let _ = relay.shutdown().await;
         }
     }
-    let net = Arc::new(bind(state, &settings, secret, port).await?);
+    // An empty port setting means "random every time": retry the draw instead of failing, since a
+    // free port found a moment ago can be taken by the time QUIC binds it.
+    let automatic = settings.text("share_udp_port").trim().is_empty();
+    let mut attempt = 0u32;
+    let net = loop {
+        let port = port_for(&settings, "share_udp_port")?;
+        match bind(state, &settings, secret, port).await {
+            Ok(net) => break Arc::new(net),
+            Err(e) if automatic && attempt < 8 => {
+                attempt += 1;
+                tracing::debug!(error = %e, attempt, "retrying a random sharing port");
+            }
+            Err(e) => return Err(e),
+        }
+    };
     *running = Some(net.clone());
     drop(running);
     if settings.flag("share_node_relay") {
         let dir = state.library.temp_dir.join("share");
         match nodes::start_relay(&settings, &dir, net.id()).await {
-            Ok(server) => *net.relay.lock().await = Some(server),
+            Ok((server, port)) => {
+                *net.relay.lock().await = Some(server);
+                *net.relay_port.lock().await = Some(port);
+            }
             Err(e) => tracing::warn!(error = %e, "relay role could not start"),
         }
     }
@@ -196,6 +300,101 @@ pub async fn start(state: &AppState) -> Result<Arc<ShareNet>, String> {
     }
     tracing::info!(endpoint = %net.id(), "sharing endpoint started");
     Ok(net)
+}
+
+/// Re-binds the endpoint on a fresh random port every `share_port_rotate` minutes, jittered ±25%
+/// and clamped to 6–12 hours so the interval itself is not a schedule a scanner can rely on. Never
+/// cuts a live transfer: it waits for the in-flight count to reach zero first, and skips the round
+/// if a transfer is still running after half an hour.
+pub fn spawn_port_rotation(state: AppState) {
+    tokio::spawn(async move {
+        loop {
+            let minutes = crate::share_settings::load(&state)
+                .await
+                .number("share_port_rotate")
+                .unwrap_or(0);
+            if minutes == 0 {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                continue;
+            }
+            let base = minutes * 60;
+            let mut target = jittered(base);
+            // Re-read the interval every few seconds instead of sleeping the whole wait: changing
+            // the setting must take effect now, not after the round the old value already planned.
+            loop {
+                tokio::time::sleep(Duration::from_secs(15)).await;
+                let now = crate::share_settings::load(&state)
+                    .await
+                    .number("share_port_rotate")
+                    .unwrap_or(0);
+                if now != minutes {
+                    break;
+                }
+                target = target.saturating_sub(15);
+                if target == 0 {
+                    break;
+                }
+            }
+            if crate::share_settings::load(&state)
+                .await
+                .number("share_port_rotate")
+                .unwrap_or(0)
+                == 0
+            {
+                continue;
+            }
+            // A rebind drops every connection to this endpoint, so it waits not just for a
+            // response being written but for any import this instance is running: those hold a
+            // live connection to a sharer and would have to start over.
+            let mut waited = 0u32;
+            while (active_transfers() > 0 || importing(&state).await) && waited < 30 * 60 {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                waited += 10;
+            }
+            if active_transfers() > 0 || importing(&state).await {
+                tracing::info!("port rotation skipped: a transfer is still running");
+                continue;
+            }
+            match start(&state).await {
+                Ok(net) => {
+                    tracing::info!(udp = net.udp_port(), "sharing ports rotated");
+                    // Publish the new addresses now: the periodic refresher is up to ten minutes
+                    // away, and until it runs peers dial the port that just went away.
+                    let settings = crate::share_settings::load(&state).await;
+                    nodes::publish_node_record(&state, &net, &settings).await;
+                }
+                Err(e) => tracing::warn!(error = %e, "port rotation failed"),
+            }
+        }
+    });
+}
+
+/// Whether this instance is in the middle of importing a share right now.
+async fn importing(state: &AppState) -> bool {
+    use lanrurugi_storage::shares::ImportState;
+    import::repo(state)
+        .list()
+        .await
+        .map(|all| {
+            all.iter()
+                .any(|r| matches!(r.state, ImportState::Transferring | ImportState::Rebuilding))
+        })
+        .unwrap_or(false)
+}
+
+/// A rotation interval in seconds, jittered ±25% with the clock's own sub-second noise as the
+/// entropy, so the schedule is never a fixed period a scanner could wait out.
+const ROTATE_MIN_SECS: u64 = 6 * 60 * 60;
+const ROTATE_MAX_SECS: u64 = 12 * 60 * 60;
+
+fn jittered(base: u64) -> u64 {
+    let jitter = (base / 4).max(1);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| u64::from(d.subsec_nanos()))
+        .unwrap_or(0);
+    let drawn = base.saturating_sub(jitter) + nanos % (2 * jitter + 1);
+    drawn.clamp(ROTATE_MIN_SECS, ROTATE_MAX_SECS)
 }
 
 /// Binds an endpoint serving the share protocol for `state`. Tests bind several in one process.
@@ -255,9 +454,6 @@ pub async fn bind(
         proxy::Choice::None => {}
     }
     builder = builder.ca_tls_config(relay_tls());
-    for addr in settings.external_addrs() {
-        builder = builder.external_addr(addr);
-    }
     if !settings.flag("share_portmap") {
         builder = builder.portmapper_config(iroh::endpoint::PortmapperConfig::Disabled);
     }
@@ -297,6 +493,7 @@ pub async fn bind(
         Err(e) => tracing::warn!(error = %e, "mDNS discovery unavailable"),
     }
     let shared = Arc::new(Shared {
+        ratios: Mutex::new(HashMap::new()),
         signing: ed25519_dalek::SigningKey::from_bytes(&secret),
         sessions: Mutex::new(HashMap::new()),
         blobs: Mutex::new(HashMap::new()),
@@ -314,6 +511,8 @@ pub async fn bind(
         router,
         relay: tokio::sync::Mutex::new(None),
         lan_peers,
+        udp_port: port,
+        relay_port: tokio::sync::Mutex::new(None),
     })
 }
 
@@ -367,6 +566,56 @@ pub async fn wait_for_direct_address(conn: &Connection, limit: Duration) -> Opti
     }
 }
 
+/// Records the one activity entry an import gets, on whichever side the bytes moved.
+///
+/// The detail (bytes, route, interface, tunnel, addresses) lives in `after`, which the activity
+/// detail panel shows — deliberately one entry per import rather than one per connection or
+/// piece, so the list stays readable and the noise stays where it belongs: the log.
+pub(crate) async fn note_transfer(
+    state: &AppState,
+    sent: bool,
+    share_id: &str,
+    title: &str,
+    bytes: u64,
+    link: &link::Link,
+    extra: serde_json::Value,
+) {
+    use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
+    let mut after = serde_json::json!({
+        "bytes": bytes,
+        "route": link.route,
+        "local": link.local,
+        "remote": link.remote,
+        "interface": link.interface,
+        "vpn": link.tunnel,
+        "technique": link.technique(),
+    });
+    if let (Some(map), Some(extra)) = (after.as_object_mut(), extra.as_object()) {
+        for (k, v) in extra {
+            map.insert(k.clone(), v.clone());
+        }
+    }
+    let target = ActivityTarget {
+        id: Some(share_id.to_string()),
+        label: Some(title.to_string()),
+        kind: Some("share".to_string()),
+    };
+    crate::activity::record_automatic(
+        state,
+        "share",
+        if sent {
+            action_types::SHARE_SEND
+        } else {
+            action_types::SHARE_RECEIVE
+        },
+        target,
+        Outcome::Success,
+        Some(after),
+        None,
+    )
+    .await;
+}
+
 /// Reads one frame: the sender's engine and the message. The engine is read before the payload is
 /// allocated, so a version check never depends on decoding a message this build may not know.
 pub async fn read_frame<T: serde::de::DeserializeOwned>(
@@ -418,7 +667,12 @@ pub async fn call(
     write_frame(&mut send, &request).await?;
     send.finish()
         .map_err(|e| ShareNetError::Protocol(e.to_string()))?;
-    let (engine, response) = read_frame::<Response>(&mut recv).await?;
+    let (engine, response) = tokio::time::timeout(
+        Duration::from_secs(ANSWER_TIMEOUT_SECS),
+        read_frame::<Response>(&mut recv),
+    )
+    .await
+    .map_err(|_| ShareNetError::Unreachable("the sharer did not answer in time".into()))??;
     // The responder's own version, checked on every answer: a peer that answers at all still has to
     // be speaking this engine, or the message it just sent is not one this build understands.
     if !engine.is_compatible_with(&ShareEngine::current()) {

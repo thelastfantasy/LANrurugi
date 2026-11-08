@@ -358,7 +358,7 @@ pub(super) async fn fetch_with_policy(
             .map_err(|r| refused(r, trail.clone()))?;
 
         let client = lanrurugi_core::http_client::build(
-            reqwest::Client::builder()
+            lanrurugi_core::http_client::bind_outbound(reqwest::Client::builder())
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(FETCH_TIMEOUT)
                 .user_agent(BROWSER_USER_AGENT)

@@ -4,7 +4,6 @@
 //! carry credentials.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 
 use deadpool_redis::redis::AsyncCommands;
 use lanrurugi_share_proto::messages::Permissions;
@@ -35,7 +34,8 @@ const FIELDS: &[(&str, Kind, &str)] = &[
     ("share_node_rendezvous", Kind::Bool, "0"),
     ("share_node_relay", Kind::Bool, "0"),
     ("share_node_relay_tls", Kind::Text, "proxy"),
-    ("share_node_relay_port", Kind::Port, "11205"),
+    // Empty means "pick a free one at random each time the endpoint starts".
+    ("share_node_relay_port", Kind::Port, ""),
     ("share_node_relay_cert", Kind::Text, ""),
     ("share_node_relay_key", Kind::Text, ""),
     // Bytes per second per relayed client: 10 MiB/s, empty for no limit.
@@ -43,8 +43,10 @@ const FIELDS: &[(&str, Kind, &str)] = &[
     ("share_node_relay_allow", Kind::Text, ""),
     ("share_self_relay_url", Kind::Text, ""),
     ("share_portmap", Kind::Bool, "1"),
-    ("share_external_addrs", Kind::Text, ""),
-    ("share_udp_port", Kind::Port, "11204"),
+    ("share_udp_port", Kind::Port, ""),
+    // Minutes between automatic port rotations, jittered ±25%; 0 pins the ports.
+    // 0 turns rotation off; anything else is clamped by validation to 6–12 hours.
+    ("share_port_rotate", Kind::Int(0), "360"),
     // Empty binds every interface; a name (`tun0`) pins the endpoint to it, so sharing can be
     // kept inside a VPN tunnel while the rest of the app still serves the LAN.
     ("share_bind_interface", Kind::Text, ""),
@@ -59,6 +61,12 @@ const FIELDS: &[(&str, Kind, &str)] = &[
         "import,read,download",
     ),
     ("share_default_download_limit", Kind::OptInt(1), ""),
+    // Ratio of served import bytes to the share's own size; "0" or empty disables the target.
+    ("share_default_target_ratio", Kind::Text, ""),
+    // "stop" or "throttle" once the target is reached.
+    ("share_default_ratio_action", Kind::Text, "stop"),
+    // Bytes per second once throttled; 0 pauses instead of stopping.
+    ("share_default_ratio_rate", Kind::OptInt(0), ""),
     ("share_default_ip_allow", Kind::Text, ""),
     ("share_default_ip_first_n", Kind::OptInt(1), ""),
     ("share_default_expiry_days", Kind::OptInt(1), ""),
@@ -160,13 +168,6 @@ impl ShareSettings {
         serde_json::from_str(self.text("share_alt_schedule")).unwrap_or_default()
     }
 
-    pub fn external_addrs(&self) -> Vec<SocketAddr> {
-        self.list("share_external_addrs")
-            .iter()
-            .filter_map(|a| a.parse().ok())
-            .collect()
-    }
-
     /// The JSON shape `GET /api/shares/settings` returns: typed values.
     pub fn to_json(&self) -> serde_json::Map<String, Value> {
         FIELDS
@@ -245,9 +246,22 @@ fn validate_field(key: &str, value: &Value) -> Result<String, String> {
             "0" | "false" => Ok("0".into()),
             _ => Err(format!("\"{key}\" must be true or false.")),
         },
+        // Empty asks for a random free port on every start (and every rotation); a number pins it.
+        Kind::Port if text.trim().is_empty() => Ok(String::new()),
         Kind::Port => match text.parse::<u32>() {
             Ok(p) if (1..=65535).contains(&p) => Ok(p.to_string()),
-            _ => Err(format!("\"{key}\" must be a port number (1–65535).")),
+            _ => Err(format!(
+                "\"{key}\" must be a port number (1–65535), or empty for a random port."
+            )),
+        },
+        // A rotation sooner than six hours is a schedule a scanner can sit on, and one further
+        // out than twelve barely rotates at all; 0 still means off.
+        Kind::Int(_) if key == "share_port_rotate" => match text.parse::<i64>() {
+            Ok(0) => Ok("0".into()),
+            Ok(n) if (360..=720).contains(&n) => Ok(n.to_string()),
+            _ => Err(format!(
+                "\"{key}\" must be 0 (off) or between 360 and 720 minutes (6 to 12 hours)."
+            )),
         },
         Kind::Int(min) => match text.parse::<i64>() {
             Ok(n) if n >= *min && (key != "share_import_concurrency" || n <= 16) => {
@@ -296,6 +310,18 @@ fn validate_text(key: &str, text: String) -> Result<String, String> {
             }
             Ok(out.join("\n"))
         }
+        "share_default_target_ratio" if !text.is_empty() => match text.trim().parse::<f32>() {
+            Ok(ratio) if ratio.is_finite() && ratio >= 0.0 => Ok(if ratio == 0.0 {
+                String::new()
+            } else {
+                format!("{ratio:.2}")
+            }),
+            _ => bad("must be a number such as 1.5"),
+        },
+        "share_default_ratio_action" => match text.trim() {
+            "stop" | "throttle" => Ok(text.trim().to_string()),
+            _ => bad("must be \"stop\" or \"throttle\""),
+        },
         "share_nodes" => {
             let mut out = Vec::new();
             for entry in split_list(&text) {
@@ -318,6 +344,10 @@ fn validate_text(key: &str, text: String) -> Result<String, String> {
                 }
                 out.push(entry);
             }
+            // The same node written two ways (with and without the prefix, any case) is one
+            // node; a list that names it twice only ever produces duplicate dials.
+            let mut seen = std::collections::HashSet::new();
+            out.retain(|entry| seen.insert(entry.to_ascii_lowercase()));
             Ok(out.join("\n"))
         }
         "share_node_relay_allow" => {
@@ -338,14 +368,6 @@ fn validate_text(key: &str, text: String) -> Result<String, String> {
             } else {
                 bad("is not a network interface this host has")
             }
-        }
-        "share_external_addrs" => {
-            for entry in split_list(&text) {
-                if entry.parse::<SocketAddr>().is_err() {
-                    return bad(&format!("{entry:?} is not an ip:port address"));
-                }
-            }
-            Ok(text)
         }
         "share_default_permissions" => match parse_permissions(&text) {
             Some(p) if !p.is_empty() => Ok(text),
@@ -483,7 +505,10 @@ mod tests {
     fn defaults_fill_unset_fields() {
         let s = settings(&[]);
         assert!(s.flag("share_public_services"));
-        assert_eq!(s.number("share_udp_port"), Some(11204));
+        // Empty means "draw a free port at start", so there is no numeric default to read back.
+        assert_eq!(s.number("share_udp_port"), None);
+        assert_eq!(s.text("share_udp_port"), "");
+        assert_eq!(s.number("share_port_rotate"), Some(360));
         assert_eq!(s.number("share_import_concurrency"), Some(3));
         assert_eq!(s.default_permissions(), Permissions::ALL);
         assert_eq!(s.public_url(), None);
@@ -514,6 +539,16 @@ mod tests {
             "lrrg-node:abc@1.2.3.4:5"
         );
         assert!(ok("share_nodes", Value::from("abc")).is_err());
+        // The same node written three ways is still one node: a list that names it twice only
+        // produces duplicate dials, and the code form means the spelling can differ.
+        assert_eq!(
+            ok(
+                "share_nodes",
+                Value::from("3F2K-9Q4M-7XTD-08RC\nlrrg-node:3f2k9q4m7xtd08rc\n3F2K 9Q4M 7XTD 08RC")
+            )
+            .unwrap(),
+            "lrrg-node:3F2K-9Q4M-7XTD-08RC"
+        );
         assert_eq!(
             ok(
                 "share_relay_urls",
@@ -522,12 +557,6 @@ mod tests {
             .unwrap(),
             "https://relay.example.org/"
         );
-        assert!(ok(
-            "share_external_addrs",
-            Value::from("203.0.113.7:443, [2001:db8::1]:443")
-        )
-        .is_ok());
-        assert!(ok("share_external_addrs", Value::from("203.0.113.7")).is_err());
         assert!(ok("share_default_permissions", Value::from("read,download")).is_ok());
         assert!(ok("share_default_permissions", Value::from("")).is_err());
         assert!(ok("share_default_permissions", Value::from("write")).is_err());

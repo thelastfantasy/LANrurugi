@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
@@ -49,6 +49,10 @@ export function GlobalSection({
   setKeyInput,
   recommendprecision,
   setRecommendprecision,
+  pluginBindInterface,
+  setPluginBindInterface,
+  interfaces,
+  defaultInterface,
   onStatus,
 }: {
   htmltitle: string
@@ -86,12 +90,25 @@ export function GlobalSection({
   setKeyInput: (v: string) => void
   recommendprecision: string
   setRecommendprecision: (v: string) => void
+  pluginBindInterface: string
+  setPluginBindInterface: (v: string) => void
+  interfaces: string[]
+  /** The interface the kernel routes internet traffic through right now, when it can be told. */
+  defaultInterface: string | null
   onStatus: (status: string) => void
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const browserSupport = getImageFormatSupport()
   const [editingKey, setEditingKey] = useState(false)
+  // Default route first, then the rest in name order: the list comes from readdir, which has no
+  // meaning to a user looking for "the one I am already on".
+  const orderedInterfaces = useMemo(() => {
+    const rest = interfaces.filter((name) => name !== defaultInterface).sort()
+    return defaultInterface && interfaces.includes(defaultInterface)
+      ? [defaultInterface, ...rest]
+      : rest
+  }, [interfaces, defaultInterface])
   const cleanDatabase = useCleanDatabase()
   const dropDatabase = useDropDatabase()
 
@@ -167,6 +184,46 @@ export function GlobalSection({
             )}
             <br />
             {t("settings.enteringADeepseekApiKey")}
+          </Row>
+          <Row label={t("settings.pluginInterface")}>
+            {/* The kernel's own default route leads the list and is labelled both on the
+                "unbound" entry (what the user is actually getting right now) and on that
+                interface's own entry (what pinning it would reproduce). */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <select
+                className="stdinput"
+                style={{ flex: "1 1 auto", minWidth: 0 }}
+                value={pluginBindInterface}
+                onChange={(e) => setPluginBindInterface(e.target.value)}
+              >
+                <option value="">
+                  {t("settings.pluginInterfaceDefault")}
+                  {defaultInterface
+                    ? ` · ${t("settings.pluginInterfaceFollowing", { iface: defaultInterface })}`
+                    : ""}
+                </option>
+                {orderedInterfaces.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                    {name === defaultInterface
+                      ? ` · ${t("settings.pluginInterfaceSystemRoute")}`
+                      : ""}
+                  </option>
+                ))}
+              </select>
+              {pluginBindInterface ? (
+                <button
+                  type="button"
+                  className="stdbtn"
+                  style={{ minWidth: "auto", whiteSpace: "nowrap" }}
+                  onClick={() => setPluginBindInterface("")}
+                >
+                  {t("settings.pluginInterfaceReset")}
+                </button>
+              ) : null}
+            </div>
+            <br />
+            {t("settings.pluginInterfaceHint")}
           </Row>
           <Row label={t("settings.recommendationPrecision")}>
             <select

@@ -55,6 +55,57 @@ pub fn with_roots(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
     }
 }
 
+/// The network interface outbound plugin traffic must leave through, if one was chosen.
+///
+/// Process-wide rather than threaded through every call site: plugin requests are relayed from a
+/// Deno subprocess through several layers, and a request has to leave the same interface whether it
+/// is fetching a gallery page, logging in, or downloading the file itself — a site that refuses the
+/// host's own address refuses the login too, not just the final download.
+static OUTBOUND_INTERFACE: OnceLock<std::sync::Mutex<Option<String>>> = OnceLock::new();
+
+fn outbound_slot() -> &'static std::sync::Mutex<Option<String>> {
+    OUTBOUND_INTERFACE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Sets (or clears, with `None`/an empty name) the interface outbound plugin traffic is bound to.
+/// Clients already built keep the interface they were built with; the call sites that care rebuild
+/// against [`outbound_interface`].
+pub fn set_outbound_interface(name: Option<String>) {
+    let name = name.filter(|n| !n.trim().is_empty());
+    *outbound_slot().lock().expect("outbound interface lock") = name;
+}
+
+pub fn outbound_interface() -> Option<String> {
+    outbound_slot()
+        .lock()
+        .expect("outbound interface lock")
+        .clone()
+}
+
+/// `builder` bound to the configured interface, when there is one. Binding is what makes an
+/// interface choice a hard constraint rather than a preference: `SO_BINDTODEVICE` makes the kernel
+/// pick this device's route (and fail when there is none) instead of silently falling back.
+pub fn bind_outbound(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    #[cfg(any(
+        target_os = "android",
+        target_os = "fuchsia",
+        target_os = "illumos",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "solaris",
+        target_os = "tvos",
+        target_os = "visionos",
+        target_os = "watchos",
+    ))]
+    {
+        if let Some(name) = outbound_interface() {
+            return builder.interface(&name);
+        }
+    }
+    builder
+}
+
 /// Builds `builder` with this process's root certificates.
 pub fn build(builder: reqwest::ClientBuilder) -> reqwest::Result<reqwest::Client> {
     with_roots(builder).build()

@@ -31,7 +31,15 @@ export function Select<Value extends string>({
   onValueChange: (value: Value) => void
   /** `itemClassName`/`itemStyle` (per-item, optional) merge onto that popup item's own
    * `className`/`style` — prefer `itemClassName` over `itemStyle.backgroundColor` for colors. */
-  items: { value: Value; label: ReactNode; itemClassName?: string; itemStyle?: React.CSSProperties }[]
+  /** `description` is popup-only: a second, dimmer line under the label. The trigger still shows
+   *  `label` alone, so a two-line option never makes the control itself two lines tall. */
+  items: {
+    value: Value
+    label: ReactNode
+    description?: ReactNode
+    itemClassName?: string
+    itemStyle?: React.CSSProperties
+  }[]
   ariaLabel?: string
   /** Pick `"stdbtn"` to match a neighboring `.stdbtn`'s height exactly. */
   variant?: "stdbtn" | "favtag-btn"
@@ -103,7 +111,11 @@ export function Select<Value extends string>({
               transformOrigin: "var(--transform-origin)",
               fontSize: sizeStyle?.fontSize,
               maxHeight: "var(--available-height)",
+              // A caller's item label can be arbitrarily long; without a cap the popup grows past
+              // the viewport, and on mobile that makes the page itself scroll sideways.
+              maxWidth: "min(28rem, calc(100vw - 2rem))",
               overflowY: "auto",
+              overflowX: "hidden",
             }}
           >
             <BaseSelect.List>
@@ -115,7 +127,16 @@ export function Select<Value extends string>({
                   className={item.itemClassName}
                   style={item.itemStyle}
                 >
-                  {item.label}
+                  {item.description ? (
+                    <>
+                      <span className="block">{item.label}</span>
+                      <span className="block text-[0.85em] opacity-70">
+                        {item.description}
+                      </span>
+                    </>
+                  ) : (
+                    item.label
+                  )}
                 </SelectItem>
               ))}
             </BaseSelect.List>
@@ -146,7 +167,7 @@ function SelectItem({
     <BaseSelect.Item
       value={value}
       style={{ ...restStyle, ...(backgroundColor ? { "--select-item-bg": backgroundColor } : {}) } as React.CSSProperties}
-      className={`select-item-highlighted relative box-border w-full cursor-pointer items-center gap-2 select-none whitespace-nowrap bg-[var(--select-item-bg,transparent)] py-[.3em] pe-4 outline-none ${
+      className={`select-item-highlighted relative box-border w-full cursor-pointer items-center gap-2 truncate select-none whitespace-nowrap bg-[var(--select-item-bg,transparent)] py-[.3em] pe-4 outline-none ${
         showIndicator ? "grid grid-cols-[1em_1fr] ps-2" : "flex ps-4"
       } ${className ?? ""}`}
     >

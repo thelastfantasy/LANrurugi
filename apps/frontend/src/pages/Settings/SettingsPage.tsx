@@ -101,6 +101,9 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [idlescan, setIdlescan] = useState(settings.idlescan)
   const [newbadgemode, setNewbadgemode] = useState(settings.newbadgemode)
   const [recommendprecision, setRecommendprecision] = useState(settings.recommendprecision)
+  const [pluginBindInterface, setPluginBindInterface] = useState(
+    settings.plugin_bind_interface ?? "",
+  )
   const [keyInput, setKeyInput] = useState("")
 
   const [newPassword, setNewPassword] = useState("")
@@ -215,6 +218,9 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       timezone !== settings.timezone ||
       newbadgemode !== settings.newbadgemode ||
       recommendprecision !== settings.recommendprecision ||
+      // `?? ""`: a backend that predates this field returns nothing, and `"" !== undefined` would
+      // mark the form dirty on load — the save bar then appears before anything was touched.
+      pluginBindInterface !== (settings.plugin_bind_interface ?? "") ||
       translationIsDirty,
     [
       htmltitle, language, pagesize, enableresize, sizethreshold, readerquality,
@@ -227,6 +233,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       recycleRetentionDays, recycleMaxSizeGb,
       replacedupe, savedThumbnailFormat, thumbnailFormat, webpquality, excludednamespaces, tagruleson,
       tagrules, usedateadded, usedatemodified, timezone, newbadgemode, recommendprecision,
+      pluginBindInterface,
       settings, translationIsDirty,
     ],
   )
@@ -281,6 +288,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       timezone,
       newbadgemode,
       recommendprecision,
+      plugin_bind_interface: pluginBindInterface,
       ...(keyInput.trim() && { llm_api_key: keyInput.trim() }),
     })
     setKeyInput("")
@@ -444,6 +452,10 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             keyInput={keyInput}
             setKeyInput={setKeyInput}
             recommendprecision={recommendprecision}
+            pluginBindInterface={pluginBindInterface}
+            setPluginBindInterface={setPluginBindInterface}
+            interfaces={settings.interfaces ?? []}
+            defaultInterface={settings.default_interface ?? null}
             setRecommendprecision={setRecommendprecision}
             onStatus={setStatus}
           />

@@ -1,8 +1,11 @@
 import type { ReactNode } from "react"
 import { useTranslation } from "react-i18next"
+import { FaCopy } from "react-icons/fa6"
 
+import { Tooltip } from "@/components/common-ui/Display"
 import { Switch } from "@/components/common-ui/Form/Switch"
 import type { ImageFormatSupport } from "@/lib/utils/imageFormatSupport"
+import { copyWithToast } from "@/share/clipboard"
 
 export function Row({
   label,
@@ -120,6 +123,40 @@ export function ImageSupportBadge({ support }: { support: ImageFormatSupport }) 
         style={{ fontSize: 9 }}
       />
       {label}
+    </span>
+  )
+}
+
+/** A share code, rendered the same way in every table that lists one: the code itself reads as
+ * plain text but is a copy button, with the copy icon beside it. The share list adds its own
+ * "open the share page" link on top of this. */
+export function ShareCodeText({ code }: { code: string }) {
+  const { t } = useTranslation()
+  const copy = (e: { stopPropagation: () => void }) => {
+    e.stopPropagation()
+    void copyWithToast(
+      `lrrg:${code}`,
+      t("share.settings.codeCopied"),
+      t("share.settings.copyFailed"),
+    )
+  }
+  return (
+    <span className="share-code-cell">
+      <Tooltip label={t("share.settings.copyCode")}>
+        <button type="button" className="share-code" onClick={copy}>
+          {code}
+        </button>
+      </Tooltip>
+      <Tooltip label={t("share.settings.copyCode")}>
+        <button
+          type="button"
+          className="share-copy-code"
+          aria-label={t("share.settings.copyCode")}
+          onClick={copy}
+        >
+          <FaCopy aria-hidden="true" />
+        </button>
+      </Tooltip>
     </span>
   )
 }

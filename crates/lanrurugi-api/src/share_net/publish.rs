@@ -489,7 +489,7 @@ async fn resolve_local(
 
 /// The `via` hint every code carries: this endpoint, the addresses a peer may dial (configured
 /// external ones, then public, then private) and the relays it is connected to.
-pub fn via_hint(net: &ShareNet, settings: &ShareSettings) -> Option<Via> {
+pub fn via_hint(net: &ShareNet) -> Option<Via> {
     let endpoint = net.endpoint().addr();
     let mut found: Vec<SocketAddr> = endpoint
         .ip_addrs()
@@ -498,7 +498,7 @@ pub fn via_hint(net: &ShareNet, settings: &ShareSettings) -> Option<Via> {
         .collect();
     found.sort_by_key(|a| address_rank(a.ip()));
     let mut addrs: Vec<String> = Vec::new();
-    for addr in settings.external_addrs().into_iter().chain(found) {
+    for addr in found {
         let text = addr.to_string();
         if !addrs.contains(&text) && addrs.len() < MAX_HINT_ADDRS {
             addrs.push(text);

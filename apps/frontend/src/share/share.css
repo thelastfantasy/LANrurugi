@@ -840,21 +840,51 @@ div.ido.share-closed p:last-child {
 .share-list-scroll {
   overflow-x: auto;
 }
-.share-list {
+/* Every settings-page table that lists shares shares this chrome, so the share list and the
+   helping list line up: same column padding, same alignment, same sideways-scroll wrapper. */
+.share-table {
   width: 100%;
-  min-width: 1000px;
   table-layout: fixed;
 }
-.share-list th,
-.share-list td {
+.share-table th,
+.share-table td {
   padding: 2px 6px;
   vertical-align: middle;
   /* The legacy `.itg` theme styles and the settings panel centre cell content; a list of titles
      reads as a column only when it is left-aligned (numbers stay right, below). */
   text-align: left;
 }
+.share-list {
+  min-width: 1000px;
+}
+.share-helping {
+  min-width: 720px;
+}
 .share-list-col-title {
   width: auto;
+}
+.share-helping-col-title {
+  width: auto;
+}
+.share-helping-col-code {
+  width: 116px;
+}
+.share-helping-col-deliver {
+  width: 92px;
+}
+.share-helping-col-status {
+  width: 150px;
+}
+.share-helping-col-uploaded {
+  width: 84px;
+}
+.share-helping-col-action {
+  width: 64px;
+}
+.share-helping-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .share-list-col-code {
   width: 116px;
@@ -893,7 +923,8 @@ div.ido.share-closed p:last-child {
 .share-list-date {
   white-space: nowrap;
 }
-.share-code-cell {
+.share-code-cell,
+.share-code-with-link {
   display: inline-flex;
   align-items: center;
   gap: 2px;
@@ -1011,6 +1042,12 @@ div.ido.share-closed p:last-child {
 /* Settings → Sharing → LANrurugi 节点. One grid for both the list and the add row, so the copy
    button of a row and the "add" button line up in the same column, and the code column takes
    whatever is left without pushing the button off. */
+/* The page's collapsible body centres everything; this block reads like the panel rows below it,
+   which are left-aligned. */
+.share-node-block {
+  text-align: left;
+}
+
 /* Aligned with the title text of the panel row above (20px icon + 6px gap). */
 .share-node-body {
   margin: 10px 0 0 26px;
@@ -1073,8 +1110,96 @@ div.ido.share-closed p:last-child {
 .share-node-code {
   font-size: 1.1em;
   letter-spacing: 0.08em;
+  /* `lrrg-node:` plus four groups is one unbreakable token: wrapping it in half makes the code
+     look like two different codes. It shrinks instead (below), and ellipsises rather than wraps
+     if a translation makes the row even tighter. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.share-node-rotate {
-  margin: 8px 0 10px;
+/* This instance's own node is not one of the "added" rows: it is what other people paste into
+   *their* list, and it cannot be removed, only rotated. A box around it keeps that difference
+   visible at a glance, and `currentColor`/a neutral grey keeps it theme-agnostic. */
+.share-node-list li.share-node-own {
+  padding: 5px 7px;
+  border: 1px solid rgba(128, 128, 128, 0.45);
+  border-left-width: 3px;
+  border-left-color: currentColor;
+  border-radius: 3px;
+  background: rgba(128, 128, 128, 0.08);
+}
+
+.share-node-own .share-node-tag {
+  font-weight: bold;
+}
+
+/* Narrow screens: the code keeps one line by giving up the label column, which is the whole
+   reason the label is short ("本实例"/"added"). */
+@media (max-width: 560px) {
+  /* The settings panel is only ~280px wide here, so the label column is what makes the code,
+     its copy and its rotate button unable to share a line. The box around the row already says
+     "this instance", and the label still shows on wider screens. */
+  .share-node-list li.share-node-own {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .share-node-list li.share-node-own .share-node-tag {
+    display: none;
+  }
+  .share-node-code {
+    font-size: 0.95em;
+    letter-spacing: 0.03em;
+  }
+}
+
+/* Copy and rotate are two icons on the code's own row, not two text rows under it: on a phone the
+   text buttons cost the height of the whole block, and the code is the only thing worth reading. */
+.share-node-actions {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.share-ratio-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.share-ratio-presets {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.share-ratio-presets .stdbtn {
+  min-width: 0;
+  width: auto;
+  height: 21px;
+  padding: 0 6px;
+  margin: 0;
+  font-size: 0.85em;
+}
+
+.share-icon-btn {
+  min-width: 0;
+  width: 26px;
+  height: 21px;
+  padding: 0;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.share-node-icon {
+  min-width: 0;
+  width: 26px;
+  height: 21px;
+  padding: 0;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
 }

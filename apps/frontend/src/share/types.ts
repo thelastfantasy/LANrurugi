@@ -8,6 +8,9 @@ export interface SharePermissions {
 
 export type ShareStatus = "active" | "exhausted" | "expired" | "revoked"
 
+/** What a share does once it has served its target ratio. */
+export type RatioAction = "stop" | "throttle"
+
 export type ShareItemRef = { kind: "archive"; id: string } | { kind: "tankoubon"; id: string }
 
 export interface ShareSummary {
@@ -17,6 +20,12 @@ export interface ShareSummary {
   permissions: SharePermissions
   downloads_used: number
   download_limit: number | null
+  /** Served import bytes, and the share's own size: their quotient is the ratio shown. */
+  import_bytes: number
+  total_bytes: number
+  target_ratio: number | null
+  ratio_action: RatioAction
+  ratio_rate: number | null
   item_count: number
   created_at: number
   expires_at: number | null
@@ -67,6 +76,9 @@ export interface ShareFields {
   title?: string | null
   permissions?: SharePermissions
   download_limit?: number | null
+  target_ratio?: number | null
+  ratio_action?: RatioAction
+  ratio_rate?: number | null
   ip_allow?: string[]
   ip_first_n?: number | null
   expires_at?: number | null
@@ -162,6 +174,9 @@ export type HelpReason = "exhausted" | "revoked" | "expired" | "helping_disabled
 export interface HelpingImport {
   id: string
   title: string
+  /** The share's code, so a row can be matched against what the sharer handed out. */
+  code?: string | null
+  share_id?: string
   sharer_endpoint_id: string
   help_deliver: boolean
   help_state: HelpState

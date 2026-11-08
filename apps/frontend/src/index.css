@@ -185,16 +185,116 @@ input[type="checkbox"]:disabled {
   transition: opacity 150ms ease;
 }
 
+/* Absolutely positioned over the page area: the *image* now always reserves its box (it carries
+   width/height attributes from the moment it mounts), so this only has to paint the "not here yet"
+   tint and catch taps — it must not add height of its own, or the reserved box and the tint would
+   stack and double the area's height. */
 .reader-page-placeholder-row {
-  display: block;
-  width: 100%;
-  /* The page's own tap target while it has no bitmap; the visible box inside keeps the ratio. */
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
+  z-index: 1;
 }
 
 .reader-page-placeholder {
   display: block;
-  background: rgba(127, 127, 127, 0.12);
+  /* Same skeleton treatment as `.reader-image.loading-placeholder`: with only a flat tint on a dark
+     theme the reserved box is almost invisible, which the user reads as "nothing is happening". */
+  background: linear-gradient(
+    90deg,
+    rgba(127, 127, 127, 0.08) 25%,
+    rgba(127, 127, 127, 0.18) 37%,
+    rgba(127, 127, 127, 0.08) 63%
+  );
+  background-size: 400% 100%;
+  animation: reader-page-placeholder-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes reader-page-placeholder-pulse {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-page-placeholder {
+    animation: none;
+  }
+}
+
+/* Swap from the tiny preview to the full page by erasing the preview from the top down, revealing
+   the sharp page painted underneath it. Erasing the *preview* (rather than clipping the page in)
+   is what keeps the sweep continuous: the page is already fully decoded and painted when the
+   animation starts, so no partially drawn bitmap can be exposed mid-sweep — clipping the page in
+   meant the area below the sweep line showed whatever the decoder had produced so far. */
+@keyframes reader-page-wipe {
+  from {
+    clip-path: inset(0 0 0 0);
+  }
+  to {
+    clip-path: inset(100% 0 0 0);
+  }
+}
+
+#i3 .reader-page-wipe {
+  animation: reader-page-wipe 260ms cubic-bezier(0.2, 0, 0.2, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Keep the swap, drop the sweep: a 1ms run still fires `animationend`, which is what releases
+     the preview blob, so the pending state cannot outlive the frame. `!important` because the
+     duration is otherwise set per page height, inline. */
+  #i3 .reader-page-wipe {
+    animation: reader-page-wipe 1ms linear forwards !important;
+  }
+}
+
+/* The positioned ancestor for the placeholder above. */
+#i3 {
+  position: relative;
+}
+
+/* While the page has no bitmap, `#display` is a shrink-to-fit flex item whose child asks for
+   `width: 100%` — a percentage against an indefinite width, which Chrome resolves to zero and the
+   whole page area collapses to 2×2. The area's own width is definite (the viewport), so hand it
+   down for the loading window only; once the bitmap arrives the page sizes itself as usual. */
+#i3.loading #display {
+  width: 100%;
+}
+
+/* The same percentage problem one level deeper: `#display` is only the flex container, the page
+   itself lives in a shrink-to-fit `inline-flex` link (so the image can be sized by the theme's
+   `img { width: 100% }` and still sit centred). While the page has no bitmap that link has no
+   content to hug, so it is 0 wide and the tiny preview underneath — absolutely positioned to its
+   box — paints into 0×0 as well. Give the frame the area's width for the loading window only. */
+#i3.loading .reader-page-frame,
+#i3.loading .reader-page-frame-inner {
+  width: 100%;
+}
+
+/* `width: auto` on an `<img>` takes its *intrinsic* width, and a page that has not decoded has
+   none — the width/height attributes only supply an aspect ratio, so the element measured 0×0 and
+   the whole page area collapsed to 2px (the "dot in the middle"). Hand it the area's width for the
+   loading window; `height: auto` then follows the attribute ratio, which is exactly the box the
+   page will occupy once it paints. */
+#i3.loading #img,
+#i3.loading #img_doublepage {
+  width: 100%;
+}
+
+/* The preview is absolutely positioned against the page frame, so that frame must be exactly the
+   image's box. Themes put `margin: 1px` on the page image, which made the frame 2px larger than
+   the bitmap — the preview (and the reveal sweep) then sat 1px off on every edge, and the swap
+   visibly shifted. Margins belong to the frame's spacing, not between the two layers. */
+#i3 #img,
+#i3 #img_doublepage {
+  margin: 0;
 }
 
 /* Fallback band for the case where nothing about the incoming page is known yet (first visit, the

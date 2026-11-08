@@ -362,6 +362,10 @@ const STRING_FIELDS: &[(&str, &str)] = &[
     // aliases are recognized automatically. Auth cookies are always host-only; the former
     // `cookie_domain` field is only read to expire cookies it once widened (`auth::load`).
     ("trusted_origins", ""),
+    // Which network interface plugin traffic leaves through: empty means the kernel's own routing,
+    // a name (`tun0`) means the VPN. Covers every plugin request — metadata lookups, logins and the
+    // file download itself — because a site that refuses the host's address refuses all three.
+    ("plugin_bind_interface", ""),
     // An ordered preference list, comma-separated (`"zh,ja,en"`), not a single choice: the interface
     // takes the first language it has translations for, and a work's title takes the first its source
     // supplied. `"auto"` keeps deferring to the browser. Stored in the existing field rather than a
@@ -407,6 +411,25 @@ pub fn default_tagrules() -> &'static str {
         .find(|(key, _)| *key == "tagrules")
         .map(|(_, default)| *default)
         .expect("\"tagrules\" is a real STRING_FIELDS entry")
+}
+
+/// `BOOL_FIELDS`' declared default for one key.
+fn default_bool(key: &str) -> bool {
+    BOOL_FIELDS
+        .iter()
+        .find(|(name, _)| *name == key)
+        .map(|(_, default)| *default)
+        .expect("key is a real BOOL_FIELDS entry")
+}
+
+/// A boolean read straight from `LRR_CONFIG`, for call sites that skip the settings surface
+/// (`serve_page`'s resize switch, `/api/info`'s `server_resizes_images`).
+///
+/// A field that was never written means "never saved", not "off": it takes the declared default,
+/// which is the same value the Settings page renders. Reading it as `false` made a fresh install
+/// serve every page unoptimized while its Settings page said resizing was on.
+pub fn stored_bool(key: &str, raw: Option<&str>) -> bool {
+    raw.map_or_else(|| default_bool(key), |value| value != "0")
 }
 
 const NUMBER_FIELDS: &[(&str, i64)] = &[
@@ -611,6 +634,14 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
             return Err("Field \"max_login_devices\" must be >= 0 (0 = unlimited).".to_string());
         }
     }
+    if key == "plugin_bind_interface" {
+        let name = value.as_str().unwrap_or("").trim();
+        if !name.is_empty() && !crate::share_net::interfaces::exists(name) {
+            return Err(format!(
+                "Field \"plugin_bind_interface\" names no existing network interface: {name}."
+            ));
+        }
+    }
     if key == "trusted_origins" {
         let raw = value.as_str().unwrap_or("");
         for entry in raw
@@ -813,6 +844,20 @@ async fn get_settings(State(state): State<AppState>, headers: axum::http::Header
             .map(|s| !s.trim().is_empty())
             .unwrap_or(false);
     body.insert("llm_api_key_set".to_string(), json!(key_set));
+    // The names the download client can be bound to, so the Settings page need not guess, plus
+    // which one the kernel actually routes internet traffic through right now — the picker shows
+    // it next to "system default" and next to that interface's own entry.
+    body.insert(
+        "interfaces".to_string(),
+        json!(crate::share_net::interfaces::list()
+            .into_iter()
+            .map(|iface| iface.name)
+            .collect::<Vec<_>>()),
+    );
+    body.insert(
+        "default_interface".to_string(),
+        json!(crate::share_net::interfaces::default_route()),
+    );
 
     axum::Json(Value::Object(body)).into_response()
 }
@@ -835,6 +880,24 @@ const TOKEN_AUTH_FORBIDDEN_SETTINGS_FIELDS: &[&str] = &[
     "trusted_origins",
     "sso_auto_redirect",
 ];
+
+/// Applies the stored download-interface choice at startup, so a restart keeps downloads on the
+/// interface the operator picked instead of silently reverting to the kernel's own route.
+pub async fn apply_outbound_interface(state: &crate::AppState) {
+    let mut conn = match state.redis.config.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not read the download interface setting");
+            return;
+        }
+    };
+    let name: Option<String> = conn
+        .hget(CONFIG_KEY, "plugin_bind_interface")
+        .await
+        .ok()
+        .flatten();
+    crate::download_manager::outbound::set_outbound_interface(name);
+}
 
 async fn put_settings(
     State(state): State<AppState>,
@@ -998,6 +1061,18 @@ async fn put_settings(
                 );
             }
         };
+    }
+
+    if changed_fields.iter().any(|f| f == "plugin_bind_interface") {
+        let name = conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "plugin_bind_interface")
+            .await
+            .ok()
+            .flatten();
+        crate::download_manager::outbound::set_outbound_interface(name);
+        // The interface reaches the plugin dispatcher through its environment, so running ones
+        // must go: the next plugin call spawns with the new binding.
+        state.plugins.restart_workers().await;
     }
 
     if !changed_fields.is_empty() {
@@ -1215,6 +1290,32 @@ mod validate_setting_field_tests {
         assert!(!STRING_FIELDS.iter().any(|(k, _)| *k == "llm_api_key"));
         let stored = validate_setting_field("llm_api_key", &json!("sk-real-key")).unwrap();
         assert_eq!(stored, "sk-real-key");
+    }
+
+    /// A field nobody ever saved must resolve to the default the Settings page shows, not to
+    /// `false` — a fresh install served every page unoptimized while its Settings page reported
+    /// resizing as on.
+    #[test]
+    fn an_unwritten_bool_takes_its_declared_default() {
+        assert!(stored_bool("enableresize", None));
+        assert!(stored_bool("enableresize", Some("1")));
+        assert!(!stored_bool("enableresize", Some("0")));
+        // Declared `false`, and still `false` when absent.
+        assert!(!stored_bool("guestmode", None));
+        assert!(stored_bool("guestmode", Some("1")));
+    }
+
+    #[test]
+    fn the_download_interface_must_name_a_real_interface() {
+        // Empty is the unbound default and stays writable; a bogus name is rejected instead of
+        // producing a client that silently ignores the choice.
+        assert_eq!(
+            validate_setting_field("plugin_bind_interface", &json!("")).unwrap(),
+            ""
+        );
+        let err = validate_setting_field("plugin_bind_interface", &json!("no-such-if0"))
+            .expect_err("a name that does not exist must be refused");
+        assert!(err.contains("no-such-if0"), "got {err}");
     }
 
     #[test]

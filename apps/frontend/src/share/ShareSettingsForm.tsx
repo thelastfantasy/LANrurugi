@@ -25,6 +25,8 @@ export interface SettingField {
    *  names are shared with the share dialog's own checkboxes). A key with no translation is
    *  rendered as-is, which is what per-interface labels want. */
   optionLabels?: Record<string, string>;
+  /** Popup-only second line per option: the address and driver of a network interface. */
+  optionDescriptions?: Record<string, string>;
   /** `"interfaces"`: the options are the host's network interfaces, filled in from the settings
    *  payload at render time — they change while the app runs (a VPN tunnel appears). */
   dynamic?: "interfaces";
@@ -33,8 +35,9 @@ export interface SettingField {
   hint?: boolean;
   placeholder?: string;
   /** Render only while another field of the same block has this value — for settings that only
-   *  matter in one mode (the relay's own PEM files, which ACME mode does not use at all). */
-  onlyWhen?: { key: string; value: string };
+   *  matter in one mode (the relay's own PEM files, which ACME mode does not use at all).
+   *  `present` instead asks only that the other field be non-empty. */
+  onlyWhen?: { key: string; value?: string; present?: boolean };
   /** Hidden behind the block's "advanced" switch: a setting almost nobody needs to touch, whose
    *  default is already right. */
   advanced?: boolean;
@@ -68,16 +71,26 @@ function fillDynamicOptions(
     if (field.dynamic !== "interfaces") return field;
     const interfaces = (
       Array.isArray(settings.interfaces) ? settings.interfaces : []
-    ) as { name: string; addrs: string[] }[];
+    ) as { name: string; addrs: string[]; driver?: string | null }[];
     const optionLabels: Record<string, string> = {
       "": "share.network.interfaceAny",
     };
+    const optionDescriptions: Record<string, string> = {};
     for (const iface of interfaces) {
-      optionLabels[iface.name] = iface.addrs.length
-        ? `${iface.name} (${iface.addrs.join(", ")})`
-        : iface.name;
+      // The name is the option; the second line carries what tells two similar names apart. One
+      // IPv4 address and the driver are enough for that, and keeping them off the first line is
+      // what stops a long IPv6 list from making the popup wider than the screen.
+      optionLabels[iface.name] = iface.name;
+      const ipv4 = iface.addrs.find((a) => !a.includes(":"));
+      const description = [ipv4, iface.driver].filter(Boolean).join(" · ");
+      if (description) optionDescriptions[iface.name] = description;
     }
-    return { ...field, options: ["", ...interfaces.map((i) => i.name)], optionLabels };
+    return {
+      ...field,
+      options: ["", ...interfaces.map((i) => i.name)],
+      optionLabels,
+      optionDescriptions,
+    };
   });
 }
 
@@ -120,7 +133,9 @@ function SettingsDraft({
         .filter(
           (f) =>
             !f.onlyWhen ||
-            String(draft[f.onlyWhen.key] ?? "") === f.onlyWhen.value,
+            (f.onlyWhen.present
+              ? String(draft[f.onlyWhen.key] ?? "").trim() !== ""
+              : String(draft[f.onlyWhen.key] ?? "") === f.onlyWhen.value),
         )
         .map((f) => (
           <FieldRow
@@ -177,6 +192,7 @@ function FieldRow({
           items={(field.options ?? []).map((o) => ({
             value: o,
             label: t(field.optionLabels?.[o] ?? `${field.label}.${o}`),
+            description: field.optionDescriptions?.[o],
           }))}
         />
       );

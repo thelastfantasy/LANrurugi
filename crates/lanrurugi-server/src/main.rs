@@ -953,6 +953,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         });
     }
 
+    // Which interface plugin downloads leave through, restored before anything can download.
+    lanrurugi_api::settings::apply_outbound_interface(&state).await;
+
     // Sharing (017): the instance's iroh endpoint, the helper heartbeats and the hourly knock-record
     // republisher. A bind
     // failure (the UDP port taken, say) leaves sharing off and logged; the rest of the server runs.
@@ -963,7 +966,11 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 Ok(_) => {
                     lanrurugi_api::share_net::blobs::spawn_prepare_worker(state.clone());
                     lanrurugi_api::share_net::helper::spawn(state.clone());
-                    lanrurugi_api::share_net::publish::spawn_republisher(state);
+                    lanrurugi_api::share_net::publish::spawn_republisher(state.clone());
+                    lanrurugi_api::share_net::spawn_port_rotation(state.clone());
+                    // Only now: an import needs the endpoint this block just created, and
+                    // resuming before it exists fails with "sharing is not running".
+                    lanrurugi_api::share_imports::resume_interrupted_imports(&state).await;
                 }
                 Err(e) => tracing::warn!(error = %e, "sharing endpoint could not start"),
             }

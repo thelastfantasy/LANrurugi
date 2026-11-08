@@ -367,7 +367,9 @@ async fn download_one_inner(
     let resume_paths = resume_key.map(|key| ResumePaths::new(staging_dir, key));
     let resume_state = inspect_resume_state(staging_dir, resume_key).await;
 
-    let client = lanrurugi_core::http_client::default_client();
+    // Bound to whatever interface the settings chose (empty = kernel routing), so a download
+    // actually leaves through the VPN when the operator asked for that.
+    let client = super::outbound::outbound_client();
     let mut request = client.request(method, parsed_url.clone());
     for (name, value) in &req.headers {
         request = request.header(name, value);

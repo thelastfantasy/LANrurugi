@@ -104,6 +104,12 @@ export interface Settings {
   /** Reader recommendation-cache precision (`"low"`/`"medium"`/`"high"`); changing it triggers
    *  a full background rebuild. */
   recommendprecision: string
+  /** Empty = the kernel's own routing; otherwise the interface plugin downloads are bound to. */
+  plugin_bind_interface: string
+  /** Interface names this host exposes, for the picker above. */
+  interfaces: string[]
+  /** Interface the kernel currently routes internet traffic through, when it reports one. */
+  default_interface?: string | null
   /** JWT access-token lifetime in seconds; an expired request transparently refreshes. */
   access_token_lifetime_secs: number
   /** Days a finished download-queue entry is kept; `0` keeps them all. Swept hourly by the

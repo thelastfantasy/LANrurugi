@@ -9,6 +9,7 @@ pub mod domain_rules;
 pub mod filename;
 pub mod ingest;
 pub mod live_rate;
+pub mod outbound;
 pub mod rate_limit;
 pub mod resume_support;
 pub mod settings;

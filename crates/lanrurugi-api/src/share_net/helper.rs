@@ -17,7 +17,7 @@ use lanrurugi_share_proto::code::ShareRef;
 use lanrurugi_share_proto::messages::{
     HelpReason, HelpState as WireState, HelperAddr, HelperStatus, RefusalReason, Request, Response,
 };
-use lanrurugi_storage::shares::{HelpState, ImportArchiveState, ImportState, ShareImport};
+use lanrurugi_storage::shares::{HelpState, ImportArchiveState, ShareImport};
 use tokio::sync::Notify;
 
 use super::{call, endpoint_hex, publish, ShareNet, ShareNetError};
@@ -75,11 +75,22 @@ pub fn spawn(state: AppState) {
     });
 }
 
+/// Whether this instance should be registered as a relay for the share right now.
+///
+/// Deliberately not "the whole import finished": a partial import already holds real pieces, and
+/// waiting for the last archive would delay every downloader behind it. The registration itself
+/// only advertises the archives that did finish, so the sharer never routes a request here for a
+/// piece this instance cannot answer.
 fn helps(record: &ShareImport) -> bool {
     record.help_deliver
         && !record.help_hidden
-        && record.state == ImportState::Done
         && record.help_state != HelpState::Ended
+        && record.archives.iter().any(|a| {
+            matches!(
+                a.state,
+                ImportArchiveState::Done | ImportArchiveState::Reused
+            )
+        })
 }
 
 async fn round(state: &AppState) {
@@ -188,7 +199,10 @@ async fn contact(state: &AppState, net: &ShareNet, record: &ShareImport) {
                 removed_archives: Vec::new(),
             }
         }
-        Err(_) => return,
+        Err(e) => {
+            tracing::info!(error = %e, "helper registration failed; will retry");
+            return;
+        }
     };
     registered().lock().expect("registered lock").insert(key);
     if status.state == WireState::Active && first {
@@ -199,6 +213,37 @@ async fn contact(state: &AppState, net: &ShareNet, record: &ShareImport) {
         });
     }
     apply_status(state, &record.id, &status).await;
+}
+
+/// Tells the sharer this instance stopped helping, so it is dropped from the helper set at once
+/// rather than being offered to importers for the fifteen minutes an unreported helper survives.
+pub async fn leave(state: &AppState, record: &ShareImport) {
+    let Some(code) = record.code.as_deref() else {
+        return;
+    };
+    let Ok(reference) = ShareRef::parse(code) else {
+        return;
+    };
+    let Some(net) = super::handle().await else {
+        return;
+    };
+    let Ok((id, conn)) = publish::dial(state, &net, &reference).await else {
+        return;
+    };
+    if endpoint_hex(&id) != record.sharer_endpoint_id {
+        return;
+    }
+    let _ = call(
+        &conn,
+        Request::HelperLeave {
+            share_id: record.share_id.clone(),
+        },
+    )
+    .await;
+    registered()
+        .lock()
+        .expect("registered lock")
+        .remove(&record.id.to_string());
 }
 
 pub fn reason_code(reason: HelpReason) -> &'static str {
@@ -279,7 +324,7 @@ pub fn helper_endpoint_addr(helper: &HelperAddr) -> Option<EndpointAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lanrurugi_storage::shares::{ImportArchive, HELP_OFFLINE_AFTER_SECS};
+    use lanrurugi_storage::shares::{ImportArchive, ImportState, HELP_OFFLINE_AFTER_SECS};
 
     fn record() -> ShareImport {
         let archive = |id: &str, hash: &str| ImportArchive {

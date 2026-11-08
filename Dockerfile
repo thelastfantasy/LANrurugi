@@ -73,7 +73,7 @@ ENV LANRURUGI_TRACKER_DSN=${LANRURUGI_TRACKER_DSN}
 # error). `scripts/check-image-binaries.sh` now fails a PR that lets the two lists drift apart
 # again, and release.yml runs the built image once to confirm all four are executable.
 RUN cargo build --release -p lanrurugi-server -p lanrurugi-book-worker \
-    -p lanrurugi-embed-worker -p lanrurugi-gpu-worker
+    -p lanrurugi-embed-worker -p lanrurugi-gpu-worker -p lanrurugi-egress
 # The API reference document, generated from the crate source already copied above. Built here
 # rather than in the docs stage because the generator is Rust: it parses the API crate's route
 # registrations, which is exactly the source this stage has. `docs/api/` (the vendored upstream
@@ -264,6 +264,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=deno-bin /deno /usr/local/bin/deno
 COPY --from=redis-bin /usr/local/bin/redis-server /usr/local/bin/redis-cli /usr/local/bin/
 COPY --from=rust-builder /build/target/release/lanrurugi-server /usr/local/bin/lanrurugi-server
+# LD_PRELOAD shim for the Deno plugin dispatcher (see `lanrurugi-egress`); the pool looks for it
+# next to the server binary.
+COPY --from=rust-builder /build/target/release/liblanrurugi_egress.so /usr/local/bin/liblanrurugi_egress.so
 COPY --from=rust-builder /build/target/release/lanrurugi-book-worker /usr/local/bin/lanrurugi-book-worker
 # Spawned on demand next to the server (`embed_worker_client` / `gpu_worker_client` look for them in
 # the running executable's own directory) — see the `cargo build` comment above.
