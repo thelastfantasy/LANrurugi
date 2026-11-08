@@ -1,0 +1,234 @@
+# Tasks: Hash-Named Library
+
+**Input**: Design documents from `/specs/020-hash-named-library/`
+**Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/, quickstart.md
+
+**Tests**: Required. Every task below that changes behaviour either extends an existing test module or adds one
+next to the code it touches; the repo's gates (`mise run check-crate`, `test-crate`, `clippy`, `fmt-check`, `tsc`,
+`eslint`) are part of the definition of done, not a separate phase.
+
+**Organization**: grouped by user story. US1 is the MVP (new ingests land at `{id}.{ext}` with a sidecar and the
+conflict machinery is gone); US2–US5 build on it but each is independently testable.
+
+## Format: `[ID] [P?] [Story] Description`
+
+- **[P]**: can run in parallel (different files, no dependency on an incomplete task)
+- **[Story]**: US1–US5, matching the spec's user stories
+
+## Path Conventions
+
+Rust workspace under `crates/`, frontend under `apps/frontend/src/` — see plan.md's Project Structure.
+
+---
+
+## Phase 1: Setup (Shared Infrastructure)
+
+**Purpose**: the two new fields and the path helpers every later phase needs.
+
+- [ ] T001 [P] Add `crates/lanrurugi-storage/src/paths.rs` with `BYNAME_DIR = "_byname"`, `bucket_dir(id)`,
+  `hash_layout_path(library, id, ext)` and `is_hash_layout_path(path)`; unit tests for bucket derivation and for
+  paths that look similar but are not the layout. Export from `crates/lanrurugi-storage/src/lib.rs`.
+- [ ] T002 Add `original_filename: String` and `original_path: String` to `Archive` in
+  `crates/lanrurugi-core/src/entities.rs` (both `#[serde(default)]`), and round-trip them in
+  `crates/lanrurugi-storage/src/repository.rs` (save/load, plus the "absent means empty" test).
+- [ ] T003 [P] Add `RelocationCounters { moved_to_byname: u64, skipped_occupied: u64, failed: u64 }` in
+  `crates/lanrurugi-scanner/src/events.rs`, `Default`-constructible and `serde::Serialize`.
+
+---
+
+## Phase 2: Foundational (Blocking Prerequisites)
+
+**Purpose**: the sidecar format, title derivation and the "never catalogue a sidecar" rule. Everything else depends
+on these.
+
+- [ ] T004 Create `crates/lanrurugi-storage/src/sidecar.rs`: `SidecarV1` (version, id, original_filename,
+  original_path, title, extension, size, mtime, written), `path_for(library, id)`, `write_atomic()` (tmp file in the
+  same bucket → `fsync` → `rename`), `read()` returning `Option<SidecarV1>` with `Corrupt`/`FutureVersion` reported
+  distinctly. Unit tests: round-trip, a truncated file reads as corrupt, a `version: 2` file is refused, a write over
+  an existing sidecar replaces it atomically.
+- [ ] T005 Move `crates/lanrurugi-api/src/tankoubon_grouping/release_markers.rs` into a crate the scanner can use
+  (`crates/lanrurugi-scanner/src/release_markers.rs`, re-exported from `lanrurugi-api` so `tankoubon_grouping` keeps
+  compiling unchanged). Its tests move with it; `tankoubon_grouping`'s review tests must still pass.
+- [ ] T006 Add `crates/lanrurugi-scanner/src/title.rs` with `title_from_filename(&str) -> String`: file stem → marker
+  cleaning via T005 → trimmed result, falling back to the untouched stem when cleaning leaves nothing. Unit tests
+  cover `[Circle (Artist)] Title [中国翻訳] [DL版]`, a name that is *only* markers, and a plain name.
+- [ ] T007 Regression-test that sidecars are never archives: `watcher::is_watched_archive_path` and
+  `full_scan::walk` must ignore `{id}.json`; add the test at the existing filter tests in
+  `crates/lanrurugi-scanner/src/watcher.rs` / `full_scan.rs`.
+
+**Checkpoint**: sidecar I/O, title cleaning and the scan filter exist and are tested; no user-visible change yet.
+
+---
+
+## Phase 3: User Story 1 — Any title can be ingested (Priority: P1) 🎯 MVP
+
+**Goal**: new downloads/uploads/imports land at `<library>/<ab>/{id}.<ext>`, get a sidecar, are titled from the
+original filename, duplicates are rejected by id, and the entire filename-conflict state machine is gone.
+
+**Independent Test**: ingest a 300-byte-title file through the download queue, the upload endpoint and a share
+import; each succeeds with `file` matching `ab/{id}.ext`, a readable sidecar beside it and the title derived from the
+filename. Re-ingest the same bytes: rejected with the existing id.
+
+- [ ] T008 [US1] Rewrite the destination half of `catalogue_staged_file` in
+  `crates/lanrurugi-api/src/download_manager/ingest.rs`: compute the id first, pick `bucket_dir(id)` and
+  `{id}.{ext}`, create the bucket on demand, copy/move the staging file straight to that path. Delete
+  `unique_dest_path`, `suffixed_name`, `lock_filename` and the byte-length gate on the title.
+- [ ] T009 [US1] Write the sidecar (T004) after the archive record is committed, in the same function; a failed
+  sidecar write is a warning that names the archive, never a failed ingest.
+- [ ] T010 [US1] Thread `original_filename` through `CatalogueInput`/`catalogue_new_archive` in
+  `crates/lanrurugi-scanner/src/pipeline.rs`: `name`/`title` come from `title_from_filename` (T006), and the record
+  stores the verbatim filename and its relative path.
+- [ ] T011 [US1] Make duplicate content a first-class outcome: `IngestOutcome`/the queue error names the existing
+  archive id, and `QueueErrorText` renders it without a conflict-action link.
+- [ ] T012 [US1] Delete the conflict machinery end to end: `stage_pending_rename`, `sweep_stale_pending_renames`,
+  `PENDING_RENAME_MAX_AGE`, `IngestDownloadError::PendingRename`/`NoOverwriteTarget`/`NameTooLong` and their
+  `QueueError` mapping in `crates/lanrurugi-api/src/download_manager/ingest.rs`; `PendingFilenameConflict`,
+  `ConflictPolicy` and the `temp_*` sweeps in `crates/lanrurugi-storage/src/download_queue.rs`; the overwrite/
+  rename/compare/keep-side resolution paths in `crates/lanrurugi-api/src/download_queue.rs`; the `temp_` cleanup in
+  `crates/lanrurugi-server/src/main.rs`. Callers listed by plan.md (`upload.rs`, `subscriptions`, `bundle.rs`,
+  `plugins.rs`) follow the new signature.
+- [ ] T013 [US1] Remove `PUT /api/archives/{id}/rename` and `rename_archive` from
+  `crates/lanrurugi-api/src/archives.rs` (route at ~281, handler at ~1850), its docgen sidecar entry under
+  `docs/api/sidecar/`, and any repository helper that only it used.
+- [ ] T014 [US1] Tests: (a) 300-byte filename ingests successfully and its record has the hash-layout path plus a
+  sidecar; (b) re-ingesting the same bytes returns the existing id and adds no second record; (c) a title that is
+  only release markers keeps a non-empty title; (d) the removed endpoint answers 404/405.
+
+**Checkpoint**: the reported failure class is gone and the code that produced it no longer exists.
+
+---
+
+## Phase 4: User Story 2 — Everything outside the hash layout moves into `_byname` (Priority: P2)
+
+**Goal**: every scan relocates catalogued archives that are neither `ab/{id}.ext` nor under `_byname/` into
+`_byname/<original relative path>`, keeping names, ids and `.patch.zip` pairs; occupied targets are skipped and
+reported.
+
+**Independent Test**: a library with three archives in subdirectories scans once; ids, categories, tankoubons and
+progress are unchanged; every path is now `_byname/<original path>`; a second scan reports zero moves. Moving one
+file back by hand and scanning again puts it back under `_byname/`.
+
+- [ ] T015 [US2] Add `crates/lanrurugi-scanner/src/relocate.rs`: decide (`is_hash_layout_path` or already under
+  `_byname` → skip), compute the target, refuse when the target exists with different content (`skipped_occupied`),
+  move with `fs::rename` and an `EXDEV` copy → fsync → rename → unlink fallback, move the sibling `.patch.zip`
+  with it.
+- [ ] T016 [US2] Call it from `full_scan` for each catalogued archive and from the watcher's single-file ingest
+  path, inside the existing per-file unit of work so one failure cannot abort the scan.
+- [ ] T017 [US2] Persist the move: update `file` to the new absolute path and set `original_path` to the relative
+  path it came from; delete the stale `LRR_FILEMAP` entry and write the new one (T002's fields, keys in
+  `crates/lanrurugi-storage/src/keys.rs`).
+- [ ] T018 [US2] Surface `RelocationCounters` (T003) in `POST /api/scan`'s result and the `scan` job status in
+  `crates/lanrurugi-api/src/scan.rs`, so an administrator can see `moved_to_byname`/`skipped_occupied`/`failed`
+  after the upgrade scan.
+- [ ] T019 [US2] Tests: idempotent second pass; occupied target skipped and reported; `.patch.zip` moved with its
+  archive; an interrupted run resumes without duplicating or losing a record; a file already under `_byname/` is
+  untouched.
+
+**Checkpoint**: an upgraded library has a clean root and the user's structure still browsable under `_byname/`.
+
+---
+
+## Phase 5: User Story 3 — A lost database does not lose the library's names (Priority: P3)
+
+**Goal**: `rebuild-index` recovers hash-layout archives from file + sidecar, `_byname` archives from their
+filenames, and reports disagreements instead of duplicating.
+
+- [ ] T020 [US3] Extend the rebuild path (`crates/lanrurugi-api/src/database.rs`'s rebuild helpers, used by
+  `crates/lanrurugi-server/src/main.rs:1470`): for a hash-layout file read its sidecar when no record exists; for a
+  `_byname` file derive title from the filename (T006). Content-derived id always wins.
+- [ ] T021 [US3] Report per-file discrepancies (sidecar id ≠ content id, unreadable sidecar, missing sidecar) in the
+  rebuild report; never create a second record for the same bytes.
+- [ ] T022 [US3] Test: flush the test database, rebuild, and recover ids/titles for both layouts; a sidecar whose
+  id disagrees is reported and the content id wins.
+
+---
+
+## Phase 6: User Story 4 — Dropping files into the library still works (Priority: P3)
+
+**Goal**: files copied in over SMB/rsync are catalogued with a title from their filename and then relocated into
+`_byname/` by the same rule.
+
+- [ ] T023a [US3] Legacy backup import (`crates/lanrurugi-backup`, `import_legacy`) matches records by the
+  archive's recorded `original_filename`, not by the on-disk name; a legacy backup whose files were renamed by this
+  feature still imports with its metadata intact. Unit test with a fixture whose filenames differ from the hashed
+  paths.
+- [ ] T023b [US1] Verify the download side did not move to ids: `GET /api/archives/{id}/download-link` and the
+  signed `/api/dl/` handler still send `Content-Disposition` with the archive title (FR-019), and a tankoubon zip
+  still uses its tankoubon title. Add a test that asserts the header for a hash-named archive.
+- [ ] T023 [US4] Cover the drop flow with an integration test that writes a file into a subdirectory behind the
+  scanner's back (as SMB would), runs a scan, and asserts: catalogued once, title from the filename, path
+  `_byname/<relative path>`, no duplicate on the next scan. Fix whatever T016 missed.
+
+---
+
+## Phase 7: User Story 5 — The conflict and rename UI is gone (Priority: P4)
+
+**Goal**: no filename template, no conflict menu, no rename popover, no filename field; title editing remains.
+
+- [ ] T024 [US5] Delete `apps/frontend/src/pages/Upload/FilenameTemplateEditor.tsx` and its imports; strip the
+  conflict affordances from `apps/frontend/src/pages/Upload/QueueItemRow.tsx` and the duplicate-filename branch of
+  `apps/frontend/src/components/Layout/QueueErrorText.tsx`.
+- [ ] T025 [US5] Remove the filename/rename field from the archive edit page and the `renameArchive`/conflict calls
+  from `apps/frontend/src/api/` (and their `types.ts` entries), then delete the now-unused i18n keys from
+  `apps/frontend/src/i18n/locales/{en,zh,ja}.json`. `tsc --noEmit` and `eslint src` must pass.
+
+---
+
+## Phase 8: Polish & Cross-Cutting Concerns
+
+- [ ] T026 [P] Document the layout: a new section in `docs/src/content/docs/guide/` (and its `en/` twin) covering
+  `{id}.{ext}` buckets, `_byname/`'s role, the automatic relocation on scan, why the root is reserved, and the
+  sidecar's rebuild role. Update `docs/comparison-with-lanraragi.md` if the rename endpoint's removal belongs there.
+- [ ] T027 Run `specs/020-hash-named-library/quickstart.md` S1–S10 against a dev instance and record the result in
+  this file's implementation record.
+- [ ] T028 Gates: `mise run fmt-check`, `mise run clippy`, `mise run check-crate -- lanrurugi-storage
+  lanrurugi-scanner lanrurugi-api`, `mise run test-crate -- lanrurugi-api lanrurugi-scanner`, and the frontend's
+  `tsc --noEmit` + `eslint src`. `mise run docs-build` if the docs changed.
+
+---
+
+## Dependencies & Execution Order
+
+### Phase Dependencies
+
+- **Setup (Phase 1)**: no dependencies.
+- **Foundational (Phase 2)**: depends on Setup; blocks every story.
+- **US1 (Phase 3)**: depends on Foundational; blocks nothing but is the MVP.
+- **US2 (Phase 4)**: depends on Foundational and benefits from US1's `catalogue_new_archive` changes (same file,
+  so do it after T010 to avoid a second rewrite).
+- **US3 (Phase 5)**: depends on US1 (sidecars exist) and US2 (`_byname` exists).
+- **US4 (Phase 6)**: depends on US2's relocation step.
+- **US5 (Phase 7)**: depends on US1's API deletions; independent of US2–US4.
+- **Polish (Phase 8)**: after all desired stories.
+
+### Within Each Story
+
+- T004 → T009/T020 (sidecar before anything writes or reads it)
+- T005 → T006 → T010 (marker cleaning before titles)
+- T008 → T009 → T014; T015 → T016 → T017 → T018 → T019; T020 → T021 → T022
+
+### Parallel Opportunities
+
+- T001/T003 (different crates), T005/T007, T024/T025 (frontend files), T026 (docs) against any story still open.
+
+---
+
+## Implementation Strategy
+
+### MVP first
+
+1. Phase 1 + Phase 2.
+2. Phase 3 (US1) — the reported failure class is gone and the conflict machinery is deleted.
+3. **Validate** with quickstart S1–S3 before starting US2.
+
+### Incremental delivery
+
+US1 → US2 (the migration the user asked for) → US3 (rebuild) → US4 (drop flow) → US5 (UI) → Polish. US5 can ship
+before US3/US4 if the queue UI is what bothers the user most.
+
+## Notes
+
+- The user's date-stamped decisions are in `spec.md`'s Assumptions and in
+  `specs/share-followups-2026-11-08.md` D2; if a task appears to contradict one, the spec wins.
+- No task may reintroduce a rename-in-the-browser flow, a filename template, or a `.classic`-style second layout.
+- `.classic` was the working name; the directory is `_byname` and no task may rename it again.
