@@ -198,16 +198,16 @@ it.
 ## Connectivity
 
 Shares travel directly between instances, and instances without a public address can still import
-from each other. **The UDP port defaults to `11205`**, so a port forward set up once survives a
-restart (the port actually in use is shown under **Settings → Sharing → Connectivity**, where you can
-also change it). If something else already holds that port the instance falls back to a random one and
-logs a warning — keep the port to yourself if you want it to stay put. With **map the port on my router
+from each other. **The UDP port is random by default**: each start (and each rotation) picks a free one, so it does
+not sit at a fixed address (the port actually in use is shown under **Settings → Sharing →
+Connectivity**, where you can also pin it). If you forward a port yourself and want the rule to
+survive a restart, pin the port (say `11205`) and turn rotation off below. With **map the port on my router
 automatically (UPnP / NAT-PMP / PCP)** on, the instance asks the router to open it; turn that off if you
 would rather not have it touch the router, forward the UDP port yourself, and put the forwarded
 `IP:port` under **External addresses** (the only way to tell peers where you are when the router does
 plain port forwarding and speaks neither UPnP nor PCP).
 
-**Port rotation** (`share_port_rotate`, minutes, **`0` — off — by default**, 360–720 — six to twelve hours) rebinds a fresh port on that interval,
+**Port rotation** (`share_port_rotate`, minutes, **`480` — eight hours — by default**, 360–720 — six to twelve hours, jittered ±25%; `0` turns it off and pins the port) rebinds a fresh port on that interval,
 jittered ±25% so the period itself is not fixed and the change never lands at the same time of day. Rotation **never cuts a live transfer**: it waits for
 in-flight work to finish (up to 30 minutes, then skips the round). The node record and the addresses in
 a share code pick up the new port on their next renewal; established direct connections are unaffected.
@@ -215,7 +215,7 @@ a share code pick up the new port on their next renewal; established direct conn
 The address an instance reports comes from iroh's address discovery (QUIC address discovery through a
 relay, plus the port mapping above), and mDNS on a LAN. **External addresses** is the manual escape
 hatch for a router doing static port forwarding only: type literal addresses such as
-`203.0.113.5:11205` (IPv6 as `[2001:db8::1]:11205`) and they are published alongside the discovered
+`203.0.113.5:12345` (IPv6 as `[2001:db8::1]:12345`, with the port you actually pinned) and they are published alongside the discovered
 ones; leave it empty to rely on discovery alone. If you want sharing traffic to leave through a VPN,
 see **[Sharing over a VPN](/en/guide/sharing-vpn/)**.
 

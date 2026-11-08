@@ -43,15 +43,17 @@ const FIELDS: &[(&str, Kind, &str)] = &[
     ("share_node_relay_allow", Kind::Text, ""),
     ("share_self_relay_url", Kind::Text, ""),
     ("share_portmap", Kind::Bool, "1"),
-    // Fixed by default so a forwarded port keeps working across restarts; empty picks a free one
-    // per start. A fixed port that is already taken falls back to a free one, with a warning.
-    ("share_udp_port", Kind::Port, "11205"),
+    // Random by default, and rotated below: a fixed share port is an address a scanner can sit on.
+    // Pinning it is opt-in for a manual port forward (turn rotation off too). A fixed port that is
+    // already taken still falls back to a free one, with a warning.
+    ("share_udp_port", Kind::Port, ""),
     // Addresses this host is reachable at from outside, `host:port` each, for a router that
     // forwards ports but has no UPnP/PCP. Empty lets iroh work them out.
     ("share_external_addrs", Kind::Text, ""),
-    // Minutes between automatic port rotations, jittered ±25%; 0 pins the ports.
-    // 0 turns rotation off; anything else is clamped by validation to 6–12 hours.
-    ("share_port_rotate", Kind::Int(0), "0"),
+    // Minutes between automatic port rotations, jittered ±25% and clamped to 6–12 hours; 0 pins the
+    // ports. On by default: a port that never moves is a fixed target. Rotation never cuts a live
+    // transfer (it waits for it), so the default does not cost resumability.
+    ("share_port_rotate", Kind::Int(0), "480"),
     // Empty binds every interface; a name (`tun0`) pins the endpoint to it, so sharing can be
     // kept inside a VPN tunnel while the rest of the app still serves the LAN.
     ("share_bind_interface", Kind::Text, ""),
@@ -532,11 +534,11 @@ mod tests {
     fn defaults_fill_unset_fields() {
         let s = settings(&[]);
         assert!(s.flag("share_public_services"));
-        // A fixed port by default, so a forwarded port keeps working across restarts.
-        assert_eq!(s.number("share_udp_port"), Some(11205));
-        assert_eq!(s.text("share_udp_port"), "11205");
-        // Rotation is off unless the user asks for it: it changes the share code and the port.
-        assert_eq!(s.number("share_port_rotate"), Some(0));
+        // Random by default: a fixed port is opt-in for people who forwarded one.
+        assert_eq!(s.number("share_udp_port"), None);
+        assert_eq!(s.text("share_udp_port"), "");
+        // Rotation is on by default; 0 is what pins the ports.
+        assert_eq!(s.number("share_port_rotate"), Some(480));
         assert_eq!(s.number("share_import_concurrency"), Some(3));
         assert_eq!(s.default_permissions(), Permissions::ALL);
         assert_eq!(s.public_url(), None);
