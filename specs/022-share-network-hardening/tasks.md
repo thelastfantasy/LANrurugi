@@ -144,7 +144,7 @@ address change; rotation waits for active claims; a rebuild keeps the importer's
   a stalled stream fails into the retry path instead of hanging forever.
 - [ ] T032 [US6] Retry retryable download errors without user action, resuming from `.part` + `If-Range`; only an
   explicit 4xx/5xx refusal is terminal.
-- [ ] T033 [US6] Rebuild the repack cache per `contracts/repack.md`: content+members key, `<temp>/repack/<key>.zip.tmp`
+- [x] T033 (2026-11-09: the key, `.part`+rename publish, singleflight, `503`+`Retry-After` and 24h age pruning were already in place; added the missing size budget — oldest-first eviction above 4 GiB. Cache lives at `<temp>/download-cache/`, not `<temp>/repack/`) [US6] Rebuild the repack cache per `contracts/repack.md`: content+members key, `<temp>/repack/<key>.zip.tmp`
   → fsync → rename, singleflight, 503 + `Retry-After` while building, TTL/LRU under `tempmaxsize`, and a sweep on
   startup; stop writing merged zips for ordinary archives that need none.
 - [ ] T034 [US6] Warm-up work gets a generation token (cancelled when the viewed page changes) and respects

@@ -1426,13 +1426,21 @@ pub fn set_repack_dir(dir: std::path::PathBuf) {
     let _ = REPACK_DIR.set(dir);
 }
 
-/// Drops cache files nobody has touched for a day. Called when a build starts, which is the only
-/// moment a new file appears and so the only moment the set can grow.
+/// Drops cache files nobody has touched for a day, then the oldest ones until the cache fits in
+/// its size budget. Called when a build starts, which is the only moment a new file appears and so
+/// the only moment the set can grow.
+///
+/// A repackaged archive can be several gigabytes, so age alone is not enough: a burst of large
+/// downloads would hold all of them at once. The budget is deliberately larger than any single
+/// `tempmaxsize`-style cache — evicting a file a download manager is resuming from would make the
+/// resume start over.
 fn prune_repack_cache() {
     const KEEP: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+    const BUDGET: u64 = 4 * 1024 * 1024 * 1024;
     let Ok(entries) = std::fs::read_dir(repack_dir()) else {
         return;
     };
+    let mut kept: Vec<(std::time::SystemTime, u64, std::path::PathBuf)> = Vec::new();
     for entry in entries.flatten() {
         let Ok(meta) = entry.metadata() else {
             continue;
@@ -1445,13 +1453,27 @@ fn prune_repack_cache() {
         if !name.starts_with("merged-") && !name.starts_with("tankoubon-") {
             continue;
         }
-        let stale = meta
-            .modified()
-            .ok()
-            .and_then(|m| m.elapsed().ok())
-            .is_some_and(|age| age > KEEP);
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        let stale = modified.elapsed().is_ok_and(|age| age > KEEP);
         if stale {
             let _ = std::fs::remove_file(entry.path());
+            continue;
+        }
+        kept.push((modified, meta.len(), entry.path()));
+    }
+    let mut total: u64 = kept.iter().map(|(_, size, _)| *size).sum();
+    if total <= BUDGET {
+        return;
+    }
+    kept.sort_by_key(|(modified, _, _)| *modified);
+    for (_, size, path) in kept {
+        if total <= BUDGET {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(size);
         }
     }
 }
