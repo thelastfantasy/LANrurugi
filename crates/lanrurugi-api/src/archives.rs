@@ -1738,16 +1738,6 @@ pub(crate) fn attachment_header(filename: &str) -> header::HeaderValue {
     disposition_header(&format!("attachment; {}", disposition_filename(filename)))
 }
 
-/// `<stem>.<ext>` for a served image whose content type is only known at response time — for the
-/// endpoints whose URLs carry no filename of their own (the download-conflict comparison page, the
-/// OPDS page stream), so a save still lands on a name an image viewer will open.
-pub(crate) fn image_filename(stem: &str, content_type: &str) -> String {
-    format!(
-        "{stem}.{}",
-        canonical_extension(content_type).unwrap_or("bin")
-    )
-}
-
 /// `DELETE /archives/{id}/patch` — deletes the sidecar `.patch.zip` (if any) and clears the
 /// archive's `has_patch` flag. Lets the user undo a patch — e.g. to replace it with pages from a
 /// different source after re-running the comparison flow — without touching the archive itself.
@@ -4931,17 +4921,6 @@ mod tests {
         let rendered = value.to_str().expect("header value must be valid");
         assert!(rendered.starts_with("attachment; "));
         assert!(rendered.contains("filename*="));
-    }
-
-    #[test]
-    fn image_filename_uses_the_served_formats_extension() {
-        assert_eq!(image_filename("item_a_3", "image/jxl"), "item_a_3.jxl");
-        assert_eq!(image_filename("item_a_3", "image/webp"), "item_a_3.webp");
-        // An unrecognized content type keeps the stem rather than claiming a format.
-        assert_eq!(
-            image_filename("item_a_3", "application/octet-stream"),
-            "item_a_3.bin"
-        );
     }
 
     #[test]

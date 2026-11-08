@@ -95,9 +95,6 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
             redis.config.clone(),
         ),
     );
-    let compare_cache = Arc::new(
-        lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
-    );
     let bookmarks = Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
         redis.config.clone(),
     ));
@@ -154,7 +151,6 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         download_queue,
         recommend_cache,
         ignored_group_suggestions,
-        compare_cache,
         bookmarks,
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new(
             std::env::temp_dir().join("lanrurugi-test-models"),

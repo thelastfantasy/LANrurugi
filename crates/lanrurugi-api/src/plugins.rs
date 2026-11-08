@@ -4578,9 +4578,6 @@ pub(crate) mod tests {
                     redis.config.clone(),
                 ),
             ),
-            compare_cache: Arc::new(lanrurugi_storage::compare_cache::CompareCacheRepository::new(
-                redis.config.clone(),
-            )),
             bookmarks: Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
                 redis.config.clone(),
             )),

@@ -4,7 +4,6 @@ pub mod api_tokens;
 pub mod archive_split_suggestions;
 pub mod bookmarks;
 pub mod bootstrap;
-pub mod compare_cache;
 pub mod device_info;
 pub mod diagnostics;
 pub mod download_queue;

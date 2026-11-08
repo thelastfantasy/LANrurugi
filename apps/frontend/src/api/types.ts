@@ -930,39 +930,6 @@ export type QueueError =
   | { kind: "share_import"; reason: string }
   | { kind: "truncated_download"; expected: number; got: number }
 
-/** One aligned page pair's sharpness scores. `a`/`b` stay symmetric even though the only current
- * caller assigns `a` = staged download, `b` = existing library archive. */
-export interface PageComparison {
-  a_page_index: number
-  b_page_index: number
-  /** This page's own filename inside the archive, distinct from `ComparisonResult`'s archive-level
-   * filenames. */
-  a_filename: string
-  b_filename: string
-  /** This page's compressed byte size, distinct from `ComparisonResult`'s archive-level size. */
-  a_file_size: number
-  b_file_size: number
-  a_sharpness: number
-  b_sharpness: number
-  a_width: number
-  a_height: number
-  b_width: number
-  b_height: number
-  /** Maps a point in A's pixel space to B's, accounting for crop/resolution differences.
-   * Identity when no reliable alignment was found. */
-  crop_alignment: CropAlignment
-}
-
-/** Maps a point in A to B in normalized per-dimension coordinates: `b_u = a_u * scale + offset_x`,
- * `b_v = a_v * scale + offset_y`. */
-export interface CropAlignment {
-  scale: number
-  offset_x: number
-  offset_y: number
-}
-
-export type ComparisonSide = "a" | "b"
-
 /** One raw archive entry (file or directory) from a header-only walk — powers the tree-structure
  * popover in the comparison modal. */
 export interface ArchiveEntryInfo {
@@ -978,68 +945,6 @@ export interface ArchiveEntryInfo {
 export interface ArchiveSplitTreeResponse {
   archive_name: string
   entries: ArchiveEntryInfo[]
-}
-
-/** One page with no counterpart on the other side, plus a default anchor for where a patch
- * inserting it should go. `default_insert_after: null` means insert at the start. */
-export interface UnmatchedPage {
-  page_index: number
-  default_insert_after: number | null
-}
-
-/** `likely_different_language` is a separate signal from `recommendation` being absent — "two
- * legitimate editions" and "genuine conflict" need different UI treatment. */
-export interface ComparisonResult {
-  aligned_pairs: number
-  a_total_pages: number
-  b_total_pages: number
-  likely_different_language: boolean
-  recommendation: ComparisonSide | null
-  samples: PageComparison[]
-  a_filename: string
-  b_filename: string
-  a_file_size: number
-  b_file_size: number
-  /** Every entry (files and directories) inside each archive. */
-  a_entries: ArchiveEntryInfo[]
-  b_entries: ArchiveEntryInfo[]
-  /** A's own pages with no counterpart in B — material for the "keep extra pages as patch" flow. */
-  a_unmatched_pages: UnmatchedPage[]
-  /** The B-side mirror of `a_unmatched_pages`. */
-  b_unmatched_pages: UnmatchedPage[]
-}
-
-/** Which pass produced a `CompareEvent::Sample` — `"coarse"` opens the result view immediately;
- * `"precise"` streams in a pixel-accurate replacement afterward. */
-export type ComparePhase = "coarse" | "precise"
-
-/** One compare-stream SSE message. `sample_index` lets a `"precise"` event replace its matching
- * `"coarse"` one in place; `done` fires once as the stream-end marker. */
-export type CompareEvent =
-  | { type: "sample"; sample_index: number; phase: ComparePhase; sample: PageComparison }
-  | {
-      type: "done"
-      aligned_pairs: number
-      a_total_pages: number
-      b_total_pages: number
-      a_entries: ArchiveEntryInfo[]
-      b_entries: ArchiveEntryInfo[]
-      likely_different_language: boolean
-      recommendation: ComparisonSide | null
-      a_filename: string
-      b_filename: string
-      a_file_size: number
-      b_file_size: number
-      a_unmatched_pages: UnmatchedPage[]
-      b_unmatched_pages: UnmatchedPage[]
-    }
-
-/** One insertion group for the patch/overwrite/keep-b endpoints. `after_filename`/`before_filename`
- * anchor into the target's page list; `page_indices` are the source side's unmatched pages to insert. */
-export interface ExportPatchInsertion {
-  after_filename?: string | null
-  before_filename?: string | null
-  page_indices: number[]
 }
 
 /** Absent on records written before this field existed, which always means `'download'`. */

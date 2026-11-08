@@ -51,7 +51,6 @@ import type {
   DownloadQueueListResponse,
   DuplicateGroup,
   EmptyBinResult,
-  ExportPatchInsertion,
   HistoryEntry,
   HoverPageOrderResponse,
   ImportSnapshotMetadata,
@@ -2077,42 +2076,10 @@ export function usePauseQueueItem() {
   })
 }
 
-/** Natural-sorted real entry names for one side — anchors are filenames, not indices. */
-export function useComparePages(id: string | null, side: "a" | "b") {
-  return useQuery({
-    queryKey: ["compare-pages", id, side],
-    queryFn: () => fetchJson<{ pages: string[] }>(`/download_queue/${encodeURIComponent(id ?? "")}/compare/pages?side=${side}`),
-    enabled: id !== null,
-  })
-}
-
-/** Builds a `.patch.zip` Blob for the user to place manually; installs nothing. */
-export function useExportComparePatch() {
-  return useMutation({
-    mutationFn: ({ id, insertions }: { id: string; insertions: ExportPatchInsertion[] }) =>
-      sendJsonForBlob("POST", `/download_queue/${encodeURIComponent(id)}/compare/export-patch`, { insertions }),
-  })
-}
-
 /** Packs several installed plugins' `.ts` files into one `.zip`. */
 export function useExportPluginsBatch() {
   return useMutation({
     mutationFn: (namespaces: string[]) => sendJsonForBlob("POST", "/plugins/export-batch", { namespaces }),
-  })
-}
-
-/** Keep library archive B, discard the download; always deletes the queue item on success. */
-export function useKeepSideB() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: ({ id, insertions }: { id: string; insertions?: ExportPatchInsertion[] }) =>
-      sendJson<{ success: number }>("POST", `/download_queue/${encodeURIComponent(id)}/compare/keep-b`, {
-        insertions: insertions ?? [],
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
-      queryClient.invalidateQueries({ queryKey: ["jobs"] })
-    },
   })
 }
 

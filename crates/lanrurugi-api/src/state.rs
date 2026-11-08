@@ -11,7 +11,6 @@ use lanrurugi_storage::activity::ActivityRepository;
 use lanrurugi_storage::activity_dedup::ActivityDedupGate;
 use lanrurugi_storage::api_tokens::ApiTokenRepository;
 use lanrurugi_storage::bookmarks::BookmarksRepository;
-use lanrurugi_storage::compare_cache::CompareCacheRepository;
 use lanrurugi_storage::download_queue::DownloadQueueRepository;
 use lanrurugi_storage::ignored_group_suggestions::IgnoredGroupSuggestionsRepository;
 use lanrurugi_storage::plugin_options::PluginOptionsRepository;
@@ -158,10 +157,6 @@ pub struct AppState {
     /// `tankoubon_grouping.rs`) — also on the `config` logical DB, same placement as
     /// `plugin_options`/`download_queue`/`recommend_cache`.
     pub ignored_group_suggestions: Arc<IgnoredGroupSuggestionsRepository>,
-    /// Cached `POST /download_queue/{id}/compare` results (issue #77) — also on the `config`
-    /// logical DB, same placement as the other additive caches above. See
-    /// `lanrurugi_storage::compare_cache` module docs for the capacity/lifecycle policy.
-    pub compare_cache: Arc<CompareCacheRepository>,
     /// Page-level reading bookmarks (`bookmarks.rs`) — also on the `config` logical DB, same
     /// placement as the other additive stores above.
     pub bookmarks: Arc<BookmarksRepository>,
@@ -245,7 +240,7 @@ pub struct AppState {
     /// Operator activity log (issue #87) — a structured, persisted record of who did what,
     /// distinct from the unstructured `tracing`-based request log
     /// (`procedure::trace_request`). Also on the `config` logical DB, same placement as
-    /// `api_tokens`/`download_queue`/`compare_cache`. See `lanrurugi_storage::activity` module
+    /// `api_tokens`/`download_queue`. See `lanrurugi_storage::activity` module
     /// docs for the full data model/retention/query design.
     pub activity: Arc<ActivityRepository>,
     /// Short-TTL `(actor/caller, device)` dedup gate shared by `guest.access` and

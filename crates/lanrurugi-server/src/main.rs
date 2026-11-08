@@ -454,9 +454,6 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             redis.config.clone(),
         ),
     );
-    let compare_cache = Arc::new(
-        lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
-    );
     let bookmarks = Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
         redis.config.clone(),
     ));
@@ -555,7 +552,6 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         subscriptions_in_flight: Default::default(),
         recommend_cache,
         ignored_group_suggestions,
-        compare_cache,
         bookmarks,
         recommender: recommender.clone(),
         new_archive_tx: new_archive_tx.clone(),
@@ -697,15 +693,6 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                                 "failed to save a catalogued pre-hash-layout download"
                             );
                         }
-                        // Its cached AI comparison read sample pages out of the staged file, which
-                        // has just been ingested elsewhere; the cache would serve dead images.
-                        if let Err(e) = state.compare_cache.delete(&item_id).await {
-                            tracing::warn!(
-                                item_id = %item_id,
-                                error = %e,
-                                "failed to clear compare_cache after cataloguing a pre-hash-layout download"
-                            );
-                        }
                         continue;
                     }
 
@@ -722,17 +709,6 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                             item_id = %item.id,
                             error = %e,
                             "failed to clear a restart-orphaned pending filename conflict"
-                        );
-                    }
-                    // Redis (unlike `temp_dir`) survives a container recreate, so a cached AI
-                    // comparison result for this same item — its sample-page images read live
-                    // from the very `temp_path` that just vanished — would otherwise keep
-                    // being served as a "successful" cached comparison whose images 404.
-                    if let Err(e) = state.compare_cache.delete(&item.id).await {
-                        tracing::warn!(
-                            item_id = %item.id,
-                            error = %e,
-                            "failed to clear compare_cache for a restart-orphaned pending filename conflict"
                         );
                     }
                 }

@@ -80,7 +80,7 @@ filename. Re-ingest the same bytes: rejected with the existing id.
   stores the verbatim filename and its relative path.
 - [x] T011 [US1] Make duplicate content a first-class outcome: `IngestOutcome`/the queue error names the existing
   archive id, and `QueueErrorText` renders it without a conflict-action link.
-- [ ] T012 [US1] (2026-11-09 partial: the staging/creation half is gone — `stage_pending_rename`, `check_already_patched`, `sweep_stale_pending_renames`, `PENDING_RENAME_MAX_AGE`, `hex_crc32_of_file` and the unreachable branch in `ingest_downloaded_file` are deleted; the resolve/compare/UI half is T024's job) Delete the conflict machinery end to end: `stage_pending_rename`, `sweep_stale_pending_renames`,
+- [x] T012 [US1] (2026-11-09: complete. The staging/creation half went first; — `stage_pending_rename`, `check_already_patched`, `sweep_stale_pending_renames`, `PENDING_RENAME_MAX_AGE`, `hex_crc32_of_file` and the unreachable branch in `ingest_downloaded_file` are deleted; then the resolve/compare/server half and the UI half (T024) followed) Delete the conflict machinery end to end: `stage_pending_rename`, `sweep_stale_pending_renames`,
   `PENDING_RENAME_MAX_AGE`, `IngestDownloadError::PendingRename`/`NoOverwriteTarget`/`NameTooLong` and their
   `QueueError` mapping in `crates/lanrurugi-api/src/download_manager/ingest.rs`; `PendingFilenameConflict`,
   `ConflictPolicy` and the `temp_*` sweeps in `crates/lanrurugi-storage/src/download_queue.rs`; the overwrite/
@@ -274,12 +274,13 @@ menu (T024/T025/T026) can therefore be deleted without stranding anything.
   over every record, rather than per-file inside the ingest unit of work: it covers both the
   pre-020 upgrade and files dropped in since the last scan, in one pass, and a failed move can never
   abort a scan. The watcher path goes through `full_scan` too.
-- **Conflict machinery is dormant, not deleted (T012, T024).** `catalogue_staged_file` no longer
-  stages anything, and `PUT /api/archives/{id}/rename` and the edit page's rename control are gone,
-  but `PendingFilenameConflict`, `stage_pending_rename`, the resolve/compare endpoints and the
-  queue's conflict menu still exist and can only ever see items staged before the upgrade. Deleting
-  them is mechanical but touches the compare modal; it is left as a follow-up commit rather than
-  risking the revision-comparison flow in the same change.
+- **Conflict machinery is deleted (T012, T024).** The server half (`/overwrite`, `/rename`,
+  `/compare*`, the `/compare/keep-b` and `/export-patch` routes, `resolve_conflict` and the whole
+  comparison pipeline, the `compare_cache` store) and the client half (the conflict menu, rename
+  popover, comparison overlay and its hooks/types) are gone. Items staged by a pre-upgrade build are
+  adopted at startup by `download_manager::ingest::adopt_pending_conflict`; `DELETE /download_queue/{id}`
+  still removes their leftover temp file, and `QueueErrorText` still renders the two
+  `duplicate_filename*` codes for those historical rows.
 - **Rebuild (T020/T021/T022).** `rebuild-index` re-scans, and `catalogue_new_archive` now reads a
   sidecar when no record exists, so a lost database recovers titles and original filenames. There is
   no separate discrepancy report yet, and no test that flushes the database and rebuilds.

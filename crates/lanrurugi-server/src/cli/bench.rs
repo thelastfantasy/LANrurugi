@@ -91,9 +91,6 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
             redis.config.clone(),
         ),
     );
-    let compare_cache = Arc::new(
-        lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
-    );
     let bookmarks = Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
         redis.config.clone(),
     ));
@@ -158,7 +155,6 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         subscriptions_in_flight: Default::default(),
         recommend_cache,
         ignored_group_suggestions,
-        compare_cache,
         bookmarks,
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new(models_dir)),
         new_archive_tx,

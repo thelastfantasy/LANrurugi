@@ -44,9 +44,6 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
             redis.config.clone(),
         ),
     );
-    let compare_cache = std::sync::Arc::new(
-        lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
-    );
     let bookmarks = std::sync::Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
         redis.config.clone(),
     ));
@@ -109,7 +106,6 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         subscriptions_in_flight: Default::default(),
         recommend_cache: recommend_cache.clone(),
         ignored_group_suggestions: ignored_group_suggestions.clone(),
-        compare_cache: compare_cache.clone(),
         bookmarks: bookmarks.clone(),
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new(
             std::env::temp_dir().join("lanrurugi-test-models"),
@@ -1287,9 +1283,6 @@ async fn static_frontend_is_served_with_spa_fallback() {
             redis.config.clone(),
         ),
     );
-    let compare_cache = std::sync::Arc::new(
-        lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
-    );
     let bookmarks = std::sync::Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
         redis.config.clone(),
     ));
@@ -1352,7 +1345,6 @@ async fn static_frontend_is_served_with_spa_fallback() {
         subscriptions_in_flight: Default::default(),
         recommend_cache: recommend_cache.clone(),
         ignored_group_suggestions: ignored_group_suggestions.clone(),
-        compare_cache: compare_cache.clone(),
         bookmarks: bookmarks.clone(),
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new(
             std::env::temp_dir().join("lanrurugi-test-models"),
@@ -1465,9 +1457,6 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
             redis.config.clone(),
         ),
     );
-    let compare_cache = std::sync::Arc::new(
-        lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
-    );
     let bookmarks = std::sync::Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
         redis.config.clone(),
     ));
@@ -1530,7 +1519,6 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
         subscriptions_in_flight: Default::default(),
         recommend_cache: recommend_cache.clone(),
         ignored_group_suggestions: ignored_group_suggestions.clone(),
-        compare_cache: compare_cache.clone(),
         bookmarks: bookmarks.clone(),
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new(
             std::env::temp_dir().join("lanrurugi-test-models"),
@@ -1718,9 +1706,6 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
             redis.config.clone(),
         ),
     );
-    let compare_cache = std::sync::Arc::new(
-        lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
-    );
     let bookmarks = std::sync::Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
         redis.config.clone(),
     ));
@@ -1815,7 +1800,6 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         subscriptions_in_flight: Default::default(),
         recommend_cache: recommend_cache.clone(),
         ignored_group_suggestions: ignored_group_suggestions.clone(),
-        compare_cache: compare_cache.clone(),
         bookmarks: bookmarks.clone(),
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new(
             std::env::temp_dir().join("lanrurugi-test-models"),
@@ -1908,9 +1892,6 @@ async fn subfolders_to_tankoubons_creates_tankoubons_visible_in_list_all() {
         lanrurugi_storage::ignored_group_suggestions::IgnoredGroupSuggestionsRepository::new(
             redis.config.clone(),
         ),
-    );
-    let compare_cache = std::sync::Arc::new(
-        lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
     );
     let bookmarks = std::sync::Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
         redis.config.clone(),
@@ -2029,7 +2010,6 @@ async fn subfolders_to_tankoubons_creates_tankoubons_visible_in_list_all() {
         subscriptions_in_flight: Default::default(),
         recommend_cache: recommend_cache.clone(),
         ignored_group_suggestions: ignored_group_suggestions.clone(),
-        compare_cache: compare_cache.clone(),
         bookmarks: bookmarks.clone(),
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new(
             std::env::temp_dir().join("lanrurugi-test-models"),
