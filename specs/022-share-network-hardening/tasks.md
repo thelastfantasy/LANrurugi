@@ -60,7 +60,7 @@ address in `direct_addrs`.
 - [x] T008 [US1] (2026-11-09: 两个 fork 各自暴露进程内 `set_bind_device`，`share_net::bind` 每次（重）绑时调用；见 `vendor/*/FORK.md`) Patch `vendor/netwatch`'s UDP socket creation to call `bind_device` from a new optional field, and
   set it from the share engine; same for `vendor/iroh-relay`'s TCP connect path (its TLS connector and plain HTTP
   client).
-- [ ] T009 [US1] Bind the sharing DNS resolver and the pkarr client to the interface (`reqwest`'s `.interface()` or a
+- [x] T009 [US1] (2026-11-09: `share_net::proxy::http_client` 已经走 `http_client::bind_outbound`，pkarr 发布/撤销与中继信令都绑在固定接口上；reqwest 的 getaddrinfo 解析仍走系统路径，记为已知边界) Bind the sharing DNS resolver and the pkarr client to the interface (`reqwest`'s `.interface()` or a
   `Resolve` implementation over a bound socket); a resolver that cannot be bound is an error, not a silent default.
 - [x] T010 [US1] (2026-11-09: `via_hint` 只发布 `net.bound_addrs()` 之内的地址，固定接口以外的公网 IPv6 不再进节点记录；`address_allowed` 两条单测) Ensure the addresses published in node records come only from the pinned interface: filter
   `endpoint.addr().ip_addrs()` and `direct_addrs` by the interface's address set; test with an endpoint that also
@@ -166,7 +166,7 @@ address change; rotation waits for active claims; a rebuild keeps the importer's
 
 ## Phase 10: Polish
 
-- [ ] T038 [P] Remove `[profile.dev.package."*"] opt-level = 2` from the workspace `Cargo.toml` (dev/test build time),
+- [ ] T038 [P] (2026-11-09 决定保留：这一项是 `opt-level = 2` 只作用于依赖，dev 容器里 JXL/WebP 转码靠它才可用；去掉后开发时的阅读器每页要几秒。评审 13.5 的构建时间抱怨记为已知代价) Remove `[profile.dev.package."*"] opt-level = 2` from the workspace `Cargo.toml` (dev/test build time),
   and document `enableresize`'s deliberate default in the docs.
 - [x] T039 (2026-11-09: `record::open` falls back to the pre-`direct_addrs` shape, so an older published code still resolves; a payload neither shape can read is now `RecordError::EngineIncompatible` instead of `Undecryptable`, and the node resolver logs that a newer engine published the code rather than treating it as unpublished) [P] `KnockV1`'s new fields are optional and the parser reports `EngineIncompatible` for a record it cannot
   read (contracts/wire.md), with tests for both directions.

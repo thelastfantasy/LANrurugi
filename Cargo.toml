@@ -28,6 +28,7 @@ members = [
     "crates/lanrurugi-book-worker",
     "crates/lanrurugi-share-proto",
     "crates/lanrurugi-egress",
+    "crates/lanrurugi-share",
 ]
 
 [workspace.package]

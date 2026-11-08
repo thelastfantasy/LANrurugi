@@ -4590,6 +4590,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "lanrurugi-share"
+version = "1.0.0-beta.5"
+dependencies = [
+ "futures-util",
+ "iroh",
+ "iroh-relay",
+ "lanrurugi-core",
+ "lanrurugi-share-proto",
+ "pkarr",
+ "rand 0.10.3",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "lanrurugi-share-proto"
 version = "1.0.0-beta.5"
 dependencies = [
