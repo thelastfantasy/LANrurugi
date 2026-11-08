@@ -165,3 +165,11 @@ Nginx Proxy Manager already forwards `Host`, `X-Forwarded-Proto` and `X-Forwarde
    100% only when it finishes.
 3. On the activity log page (`/activity`), sign-ins show your client IP rather than the proxy's
    address.
+
+## Cloudflare and a separate download host
+
+If the site sits behind Cloudflare's orange cloud but downloads must bypass it, the answer is **two
+hosts**, not one general-purpose config: the page host stays proxied, the download host is
+grey-clouded (A/AAAA straight to the origin). The complete reference configuration is
+[`/nginx/lanrurugi-dual-domain.conf`](/nginx/lanrurugi-dual-domain.conf); the design notes are in
+[Sharing → download address](/en/guide/sharing/#connectivity).

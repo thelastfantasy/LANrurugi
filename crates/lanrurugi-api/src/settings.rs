@@ -1039,6 +1039,16 @@ async fn put_settings(
     // check immediately below.
     let mut changed_fields: Vec<String> = Vec::new();
 
+    // The page's own scheme decides whether an `http://` download host is usable at all. A request
+    // that changes `share_public_url` in the same call must be judged by the *new* value, not the
+    // stored one, so that "switch the site to https and fix the download host in one save" works.
+    let requested_page_origin = match fields.get("share_public_url").and_then(Value::as_str) {
+        Some(value) => {
+            Some(value.trim().trim_end_matches('/').to_string()).filter(|v| !v.is_empty())
+        }
+        None => crate::share_settings::load(&state).await.public_url(),
+    };
+
     for (key, value) in fields {
         if key == "password" || key == "session_secret" {
             // `password` has its own endpoint (needs hashing); `session_secret` is internal-only.
@@ -1055,6 +1065,21 @@ async fn put_settings(
             Ok(s) => s,
             Err(msg) => return error(StatusCode::BAD_REQUEST, "put_settings", msg),
         };
+        // FR-001/FR-003 of specs/021: the shape gate above only checks "starts with http(s)"; the
+        // page scheme and the credential/query rules are checked here, where the page origin is
+        // known.
+        if key == crate::download_url::FIELD {
+            if let Err(e) = crate::download_url::validate(
+                value.as_str().unwrap_or(""),
+                requested_page_origin.as_deref(),
+            ) {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "put_settings",
+                    format!("Field \"{key}\": {}.", e.message()),
+                );
+            }
+        }
         changed_fields.push(key.clone());
         let _: () = match conn.hset(CONFIG_KEY, &key, stored).await {
             Ok(v) => v,
@@ -1197,7 +1222,29 @@ async fn put_settings(
         });
     }
 
-    axum::Json(json!({ "operation": "put_settings", "success": 1 })).into_response()
+    // FR-004 of specs/021: a page-origin change can strand a stored download address that used to
+    // be acceptable (the usual case is a site moved from http to https while `direct_download_url`
+    // stayed http://). The save itself must succeed — the administrator may be mid-migration — but
+    // the response says which field is now wrong instead of leaving it for a broken download button.
+    let mut warnings: Vec<String> = Vec::new();
+    if let Some(stored_download) = direct_download_url(&state).await {
+        let stored_page_origin = crate::share_settings::load(&state).await.public_url();
+        if let Err(e) =
+            crate::download_url::validate(&stored_download, stored_page_origin.as_deref())
+        {
+            warnings.push(format!(
+                "Field \"{}\": {}.",
+                crate::download_url::FIELD,
+                e.message()
+            ));
+        }
+    }
+
+    let mut body = json!({ "operation": "put_settings", "success": 1 });
+    if !warnings.is_empty() {
+        body["warnings"] = json!(warnings);
+    }
+    axum::Json(body).into_response()
 }
 
 #[derive(Deserialize)]

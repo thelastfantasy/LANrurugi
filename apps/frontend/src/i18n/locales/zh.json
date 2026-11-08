@@ -977,6 +977,8 @@
   "reader.setThisPageAsThumbnail": "将当前页面设为缩略图",
   "app.settings": "设置",
   "settings.settingsSaved": "设置已保存！",
+  "settings.settingsSaveFailed": "设置保存失败",
+  "settings.settingsSavedWithWarnings": "设置已保存，但有一项需要处理",
   "Sharp": "直角",
   "upload.shiftclickToInsertWrappedIn": "按住 Shift 点击可插入并外加括号",
   "upload.shiftclickExtToInsertWith": "对 {{ext}} 按住 Shift 点击则改为插入带前导点号的形式",

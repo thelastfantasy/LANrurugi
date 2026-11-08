@@ -1070,6 +1070,8 @@
   "components.layout.serverRespondedWithStatusStatus": "サーバーがステータス {{status}} を返しました：{{url}}",
   "settings.sessionRefreshWindow": "セッション更新猶予期間",
   "settings.settingsSaved": "設定を保存しました！",
+  "settings.settingsSaveFailed": "設定を保存できませんでした",
+  "settings.settingsSavedWithWarnings": "設定は保存されましたが、確認が必要な項目があります",
   "Sharp": "シャープ",
   "upload.shiftclickToInsertWrappedIn": "Shift+クリックで括弧に囲んで挿入",
   "upload.shiftclickExtToInsertWith": "Shift+クリックで {{ext}} を先頭にドットを付けて挿入",

@@ -156,7 +156,11 @@ LANrurugi 实例里，标签、简介和单行本结构都会一起过去。只�
 4. `share_public_url` 填页面域名，`direct_download_url` 填下载域名；后者会同时被应用当作「只放行下载路径」的主机名 —— 在那个 Host 上，除 `/api/share/r/` 与 `/api/dl/` 之外一律 404，即使反代配漏了也拿不到管理接口。
 5. 运营商大内网（CGNAT）用不了这套，只能让一台公网中继节点转接。
 
-nginx 侧最小配置：页面域名只接受 Cloudflare 网段（或启用 Authenticated Origin Pulls）并把 `CF-Connecting-IP` 交给应用；下载域名只放行下载路径，并清掉访客自带的 `CF-Connecting-IP`，避免伪造地址绕过白名单与限流。
+这套部署里真正会超时的是**首字节**，不是文件大小：CDN 的回源请求如果 100 秒还没收到响应头，就会返回 524。所以它只影响「整包生成完才开始发」的打包下载 —— 单行本与带补丁的档案已改成边打包边发，首字节立刻返回，Range 请求在还没生成完时得到 `503` + `Retry-After`，而不是干等。Cloudflare 常被提到的 100 MB 是**请求体（上传）**上限，与下载无关。
+
+nginx 参考配置见 [`/nginx/lanrurugi-dual-domain.conf`](/nginx/lanrurugi-dual-domain.conf)（两个域名、Cloudflare 网段、`real_ip`、下载路径白名单、关闭缓冲与长超时），可以直接 `include` 或按需裁剪。要点与下面第 4 条一致：页面域名只接受 Cloudflare 网段（或启用 Authenticated Origin Pulls）并把 `CF-Connecting-IP` 交给应用；下载域名只放行下载路径，并清掉访客自带的 `CF-Connecting-IP`，避免伪造地址绕过白名单与限流。
+
+最后一点代价要说清：下载域名走灰云，它的 A/AAAA 记录直指你的公网地址，任何拿到域名的人都能解析出源站 IP；家庭宽带的下载带宽也就是你的上行带宽。
 
 系统开了代理时不需要额外设置：导入和导出会自动使用代理环境变量（`HTTPS_PROXY`、`ALL_PROXY` 等）或 macOS 的系统代理，TUN 模式的代理本来就透明。代理只承载经中继的连接，实例之间的直连不经过它。
 

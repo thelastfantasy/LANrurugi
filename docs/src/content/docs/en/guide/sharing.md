@@ -229,7 +229,11 @@ What a two-domain deployment needs:
 4. `share_public_url` is the page host; `direct_download_url` is the download host. The app also treats the latter as "downloads only": on that Host, everything except `/api/share/r/` and `/api/dl/` is a 404, so a proxy misconfiguration still cannot expose the admin API.
 5. CGNAT makes this impossible — only a public relay node can forward.
 
-On the nginx side: the page host should accept only Cloudflare's ranges (or use Authenticated Origin Pulls) and hand `CF-Connecting-IP` to the app; the download host should allow only the download paths and clear any `CF-Connecting-IP` a visitor sent, so a forged address cannot dodge the allowlist or the rate limiter.
+What actually times out here is the **first byte**, not the file size: an origin request that has not received response headers within 100 seconds gets a 524. That only affects repacks generated before their first byte — tankoubon and patched archives now stream while being built, and a Range request for one that is not ready gets `503` with `Retry-After` instead of waiting. Cloudflare's frequently quoted 100 MB figure is the **request body (upload)** limit, unrelated to downloads.
+
+The reference configuration is [`/nginx/lanrurugi-dual-domain.conf`](/nginx/lanrurugi-dual-domain.conf) (both hosts, Cloudflare's ranges, `real_ip`, the download path allowlist, buffering off, long timeouts); include it or trim it. The page host should accept only Cloudflare's ranges (or use Authenticated Origin Pulls) and hand `CF-Connecting-IP` to the app; the download host should allow only the download paths and clear any `CF-Connecting-IP` a visitor sent, so a forged address cannot dodge the allowlist or the rate limiter.
+
+One cost worth stating: the download host is grey-clouded, so its A/AAAA records point straight at your public address — anyone with the name can resolve your origin IP, and on a home connection your download bandwidth is your uplink.
 
 A system proxy needs no setup: imports and exports follow the proxy environment variables
 (`HTTPS_PROXY`, `ALL_PROXY` and so on) or the macOS system proxy on their own, and a TUN-mode proxy

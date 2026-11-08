@@ -929,6 +929,8 @@
   "reader.setThisPageAsThumbnail": "Set this Page as Thumbnail",
   "app.settings": "Settings",
   "settings.settingsSaved": "Settings saved!",
+  "settings.settingsSaveFailed": "Could not save settings",
+  "settings.settingsSavedWithWarnings": "Settings saved, but something needs attention",
   "Sharp": "Sharp",
   "upload.shiftclickToInsertWrappedIn": "Shift-click to insert wrapped in parentheses",
   "upload.shiftclickExtToInsertWith": "Shift-click {{ext}} to insert with a leading dot instead",

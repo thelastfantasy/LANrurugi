@@ -507,6 +507,8 @@
   "reader.setThisPageAsThumbnail": "將目前頁面設為縮圖",
   "app.settings": "設定",
   "settings.settingsSaved": "設定已儲存！",
+  "settings.settingsSaveFailed": "設定儲存失敗",
+  "settings.settingsSavedWithWarnings": "設定已儲存，但有一項需要處理",
   "logs.shinobuLogsCorrespondToThe": "Shinobu 日誌對應背景工作程序。",
   "Shinobu Worker Status": "Shinobu 工作程序狀態",
   "reader.showArchiveOverlayByDefault": "預設顯示檔案縮圖覆蓋層",

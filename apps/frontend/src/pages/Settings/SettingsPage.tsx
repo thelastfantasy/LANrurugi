@@ -252,49 +252,63 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       setNewPassword("")
       setNewPassword2("")
     }
-    await updateSettings.mutateAsync({
-      htmltitle,
-      language,
-      pagesize,
-      enableresize,
-      sizethreshold,
-      readerquality,
-      localprogress,
-      authprogress,
-      stampautobookmark,
-      stampautounbookmark,
-      subfolders_to_tankoubons: subfoldersToTankoubons,
-      archive_split_suggestions_enabled: archiveSplitSuggestionsEnabled,
-      archive_split_delete_original_enabled: archiveSplitDeleteOriginalEnabled,
-      guestmode,
-      idlescan,
-      access_token_lifetime_secs: accessTokenLifetimeSecs,
-      refresh_token_lifetime_secs: refreshTokenLifetimeSecs,
-      refresh_token_idle_lifetime_secs: refreshTokenIdleLifetimeSecs,
-      max_login_devices: maxLoginDevices,
-      trusted_origins: trustedOrigins,
-      sso_auto_redirect: ssoAutoRedirect,
-      enablecors,
-      tempmaxsize,
-      logmaxfilemb: logMaxFileMb,
-      logmaxfiles: logMaxFiles,
-      recycle_retention_days: recycleRetentionDays,
-      recycle_max_size_gb: recycleMaxSizeGb,
-      replacedupe,
-      thumbnail_format: thumbnailFormat,
-      webpquality,
-      excludednamespaces,
-      tagruleson,
-      tagrules,
-      usedateadded,
-      usedatemodified,
-      timezone,
-      newbadgemode,
-      recommendprecision,
-      plugin_bind_interface: pluginBindInterface,
-      direct_download_url: directDownloadUrl.trim(),
-      ...(keyInput.trim() && { llm_api_key: keyInput.trim() }),
-    })
+    const settingsWarnings: string[] = []
+    try {
+      const saved = (await updateSettings.mutateAsync({
+        htmltitle,
+        language,
+        pagesize,
+        enableresize,
+        sizethreshold,
+        readerquality,
+        localprogress,
+        authprogress,
+        stampautobookmark,
+        stampautounbookmark,
+        subfolders_to_tankoubons: subfoldersToTankoubons,
+        archive_split_suggestions_enabled: archiveSplitSuggestionsEnabled,
+        archive_split_delete_original_enabled: archiveSplitDeleteOriginalEnabled,
+        guestmode,
+        idlescan,
+        access_token_lifetime_secs: accessTokenLifetimeSecs,
+        refresh_token_lifetime_secs: refreshTokenLifetimeSecs,
+        refresh_token_idle_lifetime_secs: refreshTokenIdleLifetimeSecs,
+        max_login_devices: maxLoginDevices,
+        trusted_origins: trustedOrigins,
+        sso_auto_redirect: ssoAutoRedirect,
+        enablecors,
+        tempmaxsize,
+        logmaxfilemb: logMaxFileMb,
+        logmaxfiles: logMaxFiles,
+        recycle_retention_days: recycleRetentionDays,
+        recycle_max_size_gb: recycleMaxSizeGb,
+        replacedupe,
+        thumbnail_format: thumbnailFormat,
+        webpquality,
+        excludednamespaces,
+        tagruleson,
+        tagrules,
+        usedateadded,
+        usedatemodified,
+        timezone,
+        newbadgemode,
+        recommendprecision,
+        plugin_bind_interface: pluginBindInterface,
+        direct_download_url: directDownloadUrl.trim(),
+        ...(keyInput.trim() && { llm_api_key: keyInput.trim() }),
+      })) as { warnings?: string[] } | undefined
+      settingsWarnings.push(...(saved?.warnings ?? []))
+    } catch (e) {
+      // A rejected save (e.g. an http:// download address while the site is https) must say why;
+      // without this the promise rejected silently and the page kept its edited values with no
+      // feedback at all.
+      toast({
+        heading: t("settings.settingsSaveFailed") ?? undefined,
+        text: e instanceof ApiError ? e.message : String(e),
+        icon: "error",
+      })
+      return
+    }
     setKeyInput("")
 
     if (translationIsDirty && translation.settings) {
@@ -319,7 +333,15 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       dispatchTranslation({ kind: "saved", settings: saved })
     }
 
-    toast({ heading: t("settings.settingsSaved") ?? undefined, icon: "success" })
+    if (settingsWarnings.length > 0) {
+      toast({
+        heading: t("settings.settingsSavedWithWarnings") ?? undefined,
+        text: settingsWarnings.join("\n"),
+        icon: "warning",
+      })
+    } else {
+      toast({ heading: t("settings.settingsSaved") ?? undefined, icon: "success" })
+    }
   }
 
   async function handleLogout() {
