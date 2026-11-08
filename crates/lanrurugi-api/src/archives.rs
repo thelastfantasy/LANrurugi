@@ -3169,6 +3169,14 @@ fn warm_neighbours(
             return;
         };
         for offset in [1isize, -1] {
+            // The reader may have turned the page while the first neighbour was warming. Warming
+            // is only ever worth doing for the page that is about to be looked at, so a newer
+            // generation ends this one instead of finishing a list nobody will read.
+            if WARM_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != generation
+                || visible_conversions() > 0
+            {
+                return;
+            }
             let Some(target) = index
                 .checked_add_signed(offset)
                 .and_then(|next| names.get(next))

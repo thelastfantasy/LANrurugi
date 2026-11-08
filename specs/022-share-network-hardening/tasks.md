@@ -147,7 +147,7 @@ address change; rotation waits for active claims; a rebuild keeps the importer's
 - [x] T033 (2026-11-09: the key, `.part`+rename publish, singleflight, `503`+`Retry-After` and 24h age pruning were already in place; added the missing size budget — oldest-first eviction above 4 GiB. Cache lives at `<temp>/download-cache/`, not `<temp>/repack/`) [US6] Rebuild the repack cache per `contracts/repack.md`: content+members key, `<temp>/repack/<key>.zip.tmp`
   → fsync → rename, singleflight, 503 + `Retry-After` while building, TTL/LRU under `tempmaxsize`, and a sweep on
   startup; stop writing merged zips for ordinary archives that need none.
-- [ ] T034 [US6] Warm-up work gets a generation token (cancelled when the viewed page changes) and respects
+- [x] T034 (2026-11-09: the generation token already existed but was only checked once; the two-page warm loop now re-checks it — and the visible-conversion counter — before each page, so a page turn ends the old warm-up. Deviation: `LoadThrottle` is not used here; it samples global CPU through `sysinfo` for batch jobs, while a two-page warm-up needs the cheap atomic gate the reader already updates) [US6] Warm-up work gets a generation token (cancelled when the viewed page changes) and respects
   `LoadThrottle`; `list_pages` is not called once per page.
 - [ ] T035 [US6] Tests: quickstart G/H — kill the connection mid-download and observe resume; `503` → `206` on a
   repack; `kill -9` during a build leaves no half-written final file.
