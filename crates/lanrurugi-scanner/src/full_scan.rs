@@ -782,6 +782,15 @@ mod tests {
 
         let path = dir.path().join("known.zip");
         std::fs::write(&path, b"irrelevant content, never read by this test").unwrap();
+        // The relocation pass leaves files alone until they have settled, so a file written a
+        // moment ago would stay at the root and this test would be asserting the wrong path.
+        let aged = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(aged)
+            .unwrap();
         let path_str = path.to_string_lossy().to_string();
 
         let placeholder_id = "0000000000000000000000000000000000000000";

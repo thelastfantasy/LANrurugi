@@ -49,10 +49,26 @@ pub fn destination_for(library: &Path, path: &Path) -> Option<PathBuf> {
 /// `Ok(None)` means the destination already holds a file. The pass never overwrites: a collision
 /// means the user has two different files that used to be in different directories, and either one
 /// winning would be a silent data loss.
+/// A file that changed in the last minute may still be arriving (`cp`, rsync, an SMB upload).
+/// Moving it mid-copy would leave the writer appending to a path that no longer exists while
+/// `_byname/` holds a truncated copy — and, worse, a record pointing at those partial bytes. The
+/// next pass moves it once it has settled.
+const SETTLE: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub async fn relocate_file(library: &Path, path: &Path) -> std::io::Result<Option<PathBuf>> {
     let Some(dest) = destination_for(library, path) else {
         return Ok(None);
     };
+    if let Ok(meta) = tokio::fs::metadata(path).await {
+        let settling = meta
+            .modified()
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age < SETTLE);
+        if settling {
+            return Ok(None);
+        }
+    }
     if tokio::fs::try_exists(&dest).await.unwrap_or(false) {
         return Ok(None);
     }
@@ -164,6 +180,20 @@ async fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    /// The settle window keeps a file that is still being copied in place, so the tests that
+    /// expect a move have to age the file first.
+    async fn settle(path: &Path) {
+        let file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .await
+            .unwrap()
+            .into_std()
+            .await;
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+        file.set_modified(old).unwrap();
+    }
+
     #[test]
     fn only_paths_outside_both_layouts_are_destinations() {
         let library = Path::new("/library");
@@ -186,6 +216,7 @@ mod tests {
             .await
             .unwrap();
         tokio::fs::write(&original, b"bytes").await.unwrap();
+        settle(&original).await;
 
         let moved = relocate_file(library, &original).await.unwrap().unwrap();
         assert_eq!(moved, library.join("_byname/Series One/Book 01.zip"));
@@ -204,9 +235,25 @@ mod tests {
             .unwrap();
         tokio::fs::write(&original, b"new").await.unwrap();
         tokio::fs::write(&occupied, b"old").await.unwrap();
+        settle(&original).await;
 
         assert_eq!(relocate_file(library, &original).await.unwrap(), None);
         assert_eq!(tokio::fs::read(&original).await.unwrap(), b"new");
         assert_eq!(tokio::fs::read(&occupied).await.unwrap(), b"old");
+    }
+
+    #[tokio::test]
+    async fn a_file_that_is_still_being_copied_is_left_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library = tmp.path();
+        let original = library.join("Series/Arriving.zip");
+        tokio::fs::create_dir_all(original.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&original, b"half").await.unwrap();
+
+        assert_eq!(relocate_file(library, &original).await.unwrap(), None);
+        assert!(original.exists(), "an unfinished copy must not move");
+        assert!(!library.join("_byname").exists());
     }
 }

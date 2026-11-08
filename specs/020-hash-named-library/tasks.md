@@ -240,6 +240,12 @@ relocation pass are implemented and green (`lanrurugi-storage` 129 tests, `lanru
 `lanrurugi-api` 687, `mise run clippy`, `fmt-check`, frontend `tsc`). What follows records the
 departures from plan.md, so a later reader does not mistake them for unfinished work.
 
+**2026-11-09 (later pass)** — the relocation pass now refuses to move a file whose mtime is younger
+than 60 seconds. A `cp`/rsync/SMB upload that is still arriving would otherwise be moved mid-copy:
+the writer keeps appending to the old path while `_byname/` holds a truncated file, which the next
+scan would then catalogue. The next pass moves it once it has settled; the test suite ages its
+fixtures accordingly.
+
 - **No new `Archive` fields (T002).** `Archive.name` has always been the source filename minus its
   extension, so it is kept verbatim and only `title` is cleaned. This is what
   `find_all_by_filename` (`crates/lanrurugi-storage/src/repository.rs:181`) already matches, which
