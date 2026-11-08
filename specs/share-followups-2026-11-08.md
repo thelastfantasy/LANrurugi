@@ -139,3 +139,11 @@
 5. 备忘 F 节的 UI 清单仍未逐条核实。
 
 **下次开工建议顺序**：020 的休眠冲突代码清理（机械、可单测）→ 022 US6 的 repack 缓存与下载自动重试 → 022 US1 的 fork（单独一个 PR，需真机 VPN）→ 023。
+
+## H. 2026-11-09 01:35 全量测试的 OOM
+
+`setsid mise run test`（`--workspace --no-fail-fast --lib --bins --tests`）在编译
+`lanrurugi-book-worker`（pdfium-render + cosmic-text，`CARGO_BUILD_JOBS=1`）时被 SIGKILL（exit 137）
+—— 与 CLAUDE.md 记录的 `memory.high` 命中方式一致，不是测试失败。本次已跑的 crate 级门禁
+（storage 129、scanner 120、api 676+1+1+5）都通过；全量套件留待调高 `memory.high`
+（或留到 CI，CI 上的 Ubuntu runner 内存充足）后再跑，不作为 020 的阻塞项。
