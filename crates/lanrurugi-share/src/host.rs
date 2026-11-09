@@ -28,6 +28,8 @@ pub trait ShareHost: Send + Sync + 'static {
     fn archive(&self, id: &ArchiveId) -> BoxFuture<'_, Option<ShareArchive>>;
     /// The current sharing settings, defaults filled in.
     fn settings(&self) -> BoxFuture<'_, ShareSettings>;
+    /// The names of the categories an archive belongs to, static ones only.
+    fn categories(&self, id: &ArchiveId) -> BoxFuture<'_, Vec<String>>;
     /// The tankoubon behind an id, with its members in order.
     fn tankoubon(&self, id: &lanrurugi_core::ids::TankId) -> BoxFuture<'_, Option<ShareTankoubon>>;
     /// This instance's own node code, when the node role is enabled. `None` when it is off or
@@ -96,6 +98,9 @@ impl ShareHost for EmptyHost {
     }
     fn node_code(&self) -> BoxFuture<'_, Option<NodeCode>> {
         Box::pin(async { None })
+    }
+    fn categories(&self, _id: &ArchiveId) -> BoxFuture<'_, Vec<String>> {
+        Box::pin(async { Vec::new() })
     }
     fn tankoubon(
         &self,

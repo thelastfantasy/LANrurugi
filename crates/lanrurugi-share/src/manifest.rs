@@ -67,3 +67,47 @@ pub async fn browse_manifest(host: &dyn ShareHost, share: &Share) -> ShareManife
         items,
     }
 }
+
+/// The claim form of the manifest: fingerprints where they are ready, and each archive's category
+/// names for "keep the sharer's categories". Unready archives are returned as pending so the
+/// caller can queue them for fingerprinting without this function spawning work.
+pub async fn claim_manifest(
+    host: &dyn ShareHost,
+    shared: &crate::net::Shared,
+    share: &Share,
+) -> (
+    ShareManifest,
+    Vec<[u8; 32]>,
+    Vec<lanrurugi_core::ids::ArchiveId>,
+) {
+    let mut manifest = browse_manifest(host, share).await;
+    let mut roots = Vec::new();
+    let mut pending = Vec::new();
+    for item in &mut manifest.items {
+        let entries: Vec<&mut lanrurugi_share_proto::messages::ArchiveEntry> = match item {
+            ManifestItem::Archive(a) => vec![a],
+            ManifestItem::Tankoubon { members, .. } => members.iter_mut().collect(),
+            ManifestItem::Unavailable { .. } => vec![],
+        };
+        for entry in entries {
+            let id = lanrurugi_core::ids::ArchiveId(entry.archive_id.clone());
+            entry.categories = host.categories(&id).await;
+            match crate::blobs::ready(host, &id).await {
+                Some(info) => {
+                    entry.blake3 = Some(info.blake3);
+                    entry.size = info.size;
+                    roots.push(info.blake3);
+                    shared
+                        .blobs
+                        .lock()
+                        .expect("blobs lock")
+                        .insert(info.blake3, id);
+                }
+                None => pending.push(id),
+            }
+        }
+    }
+    roots.sort();
+    roots.dedup();
+    (manifest, roots, pending)
+}

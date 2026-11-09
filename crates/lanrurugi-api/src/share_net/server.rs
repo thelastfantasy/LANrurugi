@@ -410,51 +410,14 @@ impl ShareProtocol {
     /// category names for "keep the sharer's categories". Unready archives are queued for the
     /// background job and listed without a fingerprint (research §13).
     async fn claim_manifest(&self, share: &Share) -> (ShareManifest, Vec<[u8; 32]>) {
-        let mut manifest = browse_manifest(&self.state, share).await;
-        let mut roots = Vec::new();
-        let mut pending = Vec::new();
-        for item in &mut manifest.items {
-            let entries: Vec<&mut lanrurugi_share_proto::messages::ArchiveEntry> = match item {
-                ManifestItem::Archive(a) => vec![a],
-                ManifestItem::Tankoubon { members, .. } => members.iter_mut().collect(),
-                ManifestItem::Unavailable { .. } => vec![],
-            };
-            for entry in entries {
-                let id = ArchiveId(entry.archive_id.clone());
-                entry.categories = self
-                    .state
-                    .repos
-                    .categories
-                    .for_archive(&id)
-                    .await
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|c| !c.is_dynamic())
-                    .map(|c| c.name)
-                    .collect();
-                match blobs::ready(&self.state, &id).await {
-                    Some(info) => {
-                        entry.blake3 = Some(info.blake3);
-                        entry.size = info.size;
-                        roots.push(info.blake3);
-                        self.shared
-                            .blobs
-                            .lock()
-                            .expect("blobs lock")
-                            .insert(info.blake3, id);
-                    }
-                    None => pending.push(id),
-                }
-            }
-        }
+        let (manifest, roots, pending) =
+            lanrurugi_share::manifest::claim_manifest(&self.state, &self.shared, share).await;
         if !pending.is_empty() {
             let state = self.state.clone();
             tokio::spawn(async move {
-                blobs::prepare(&state, &pending).await;
+                lanrurugi_share::blobs::prepare(&state, &pending).await;
             });
         }
-        roots.sort();
-        roots.dedup();
         (manifest, roots)
     }
 

@@ -261,3 +261,10 @@ api 侧只剩 `NodeProtocol`（iroh 的 `ProtocolHandler`）与 `lanrurugi-serve
 
 `first_item_title`、`item_exists`、`enqueue_prepare` 仍留在 api：它们服务的是 HTTP 侧的表单与
 后台指纹队列，不是 wire 格式。
+
+
+### Implementation Record — 2026-11-09 20:15（claim manifest）
+
+`claim_manifest` 的清单与指纹装配也在 crate 里：它经 `ShareHost::categories` 取静态分类名、
+经 `blobs::ready` 取指纹；未就绪的档案以「pending 列表」返回，由 api 决定何时 spawn
+`blobs::prepare`（crate 里不持有 `Arc<dyn ShareHost>`，不想为此逼 host 用 `Arc`）。

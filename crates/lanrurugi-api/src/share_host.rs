@@ -48,6 +48,22 @@ impl ShareHost for AppState {
         })
     }
 
+    fn categories(&self, id: &ArchiveId) -> BoxFuture<'_, Vec<String>> {
+        let repos = self.repos.clone();
+        let id = id.clone();
+        Box::pin(async move {
+            repos
+                .categories
+                .for_archive(&id)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|c| !c.is_dynamic())
+                .map(|c| c.name)
+                .collect()
+        })
+    }
+
     fn tankoubon(
         &self,
         id: &lanrurugi_core::ids::TankId,
