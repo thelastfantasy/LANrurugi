@@ -6,6 +6,7 @@ use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use lanrurugi_core::ids::ArchiveId;
 use lanrurugi_core::jobs::JobRegistry;
+use lanrurugi_share_proto::node_code::NodeCode;
 use lanrurugi_storage::redis::RedisDbs;
 
 use crate::settings::ShareSettings;
@@ -27,6 +28,9 @@ pub trait ShareHost: Send + Sync + 'static {
     fn archive(&self, id: &ArchiveId) -> BoxFuture<'_, Option<ShareArchive>>;
     /// The current sharing settings, defaults filled in.
     fn settings(&self) -> BoxFuture<'_, ShareSettings>;
+    /// This instance's own node code, when the node role is enabled. `None` when it is off or
+    /// could not be read: publishing a record without a code is meaningless, so callers skip.
+    fn node_code(&self) -> BoxFuture<'_, Option<NodeCode>>;
     /// Adds bytes served for a share to its imported total. The engine keeps these in memory and
     /// flushes them when it gives up its endpoint, so this is the one write that must not be lost.
     fn add_import_bytes(
@@ -70,6 +74,9 @@ impl ShareHost for EmptyHost {
         _bytes: u64,
     ) -> BoxFuture<'_, ()> {
         Box::pin(async {})
+    }
+    fn node_code(&self) -> BoxFuture<'_, Option<NodeCode>> {
+        Box::pin(async { None })
     }
 }
 

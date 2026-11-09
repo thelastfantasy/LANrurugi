@@ -231,3 +231,13 @@ mDNS 发现；`Bound::take_endpoint()` 把端点交给调用方挂协议处理�
 `pkarr_relays`（用户填的优先，其次「公开服务」开关下的公共中继）、`relay_endpoint`、
 `relay_is_public`（只识别明显的私有形态：localhost/.local/私有地址/链路本地），以及
 `advertised_relays`（端点当前中继 + 自建中继，公网优先）。api 侧改为 re-export。
+
+
+### Implementation Record — 2026-11-09 17:55（节点记录发布/撤销）
+
+`ShareHost` 增加 `node_code() -> Option<NodeCode>`；`AppState` 实现里读 Redis 的
+`SHARE_NODE_CODE_KEY`（失败只 `warn!` 并返回 None，发布记录没有码本来也无意义）。据此把
+`publish_node_record` 与 `retract_node_record` 连同 `RETRACTED_ENDPOINT_ID` 搬进
+`crates/lanrurugi-share/src/publish.rs`，api 侧只剩同名薄包装。
+
+这样「拿哪个码、往哪些 pkarr 中继写、写成什么形状」全在一个 crate 内，api 不再参与记录格式。

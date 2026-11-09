@@ -39,6 +39,15 @@ impl ShareHost for AppState {
         Box::pin(async move { crate::share_settings::load(self).await })
     }
 
+    fn node_code(&self) -> BoxFuture<'_, Option<lanrurugi_share_proto::node_code::NodeCode>> {
+        Box::pin(async move {
+            crate::shares::node_code(self)
+                .await
+                .map_err(|e| tracing::warn!(error = %e, "this instance has no node code right now"))
+                .ok()
+        })
+    }
+
     fn add_import_bytes(
         &self,
         share: &lanrurugi_core::ids::ShareId,

@@ -4,9 +4,11 @@ use std::net::{IpAddr, SocketAddr};
 
 use lanrurugi_share_proto::code::Via;
 
+use crate::host::ShareHost;
 use crate::net::ShareNet;
 use crate::nodes::endpoint_hex;
 use crate::settings::{canonical_https_url, ShareSettings};
+use lanrurugi_share_proto::node_code::NodeCode;
 
 /// Enough for a public IPv6, a mapped IPv4 and a LAN address or two, without a dense QR code.
 const MAX_HINT_ADDRS: usize = 6;
@@ -152,6 +154,101 @@ pub fn relay_is_public(relay: &str) -> bool {
         }
         // A name: assume it is routable, which is what a relay hostname normally is.
         Err(_) => true,
+    }
+}
+
+pub async fn publish_node_record(host: &dyn ShareHost, net: &ShareNet, settings: &ShareSettings) {
+    let Some(code) = host.node_code().await else {
+        return;
+    };
+    let relays = super::publish::pkarr_relays(settings);
+    if relays.is_empty() {
+        return;
+    }
+    let knock = lanrurugi_share_proto::record::KnockV1 {
+        endpoint_id: *net.id().as_bytes(),
+        relay_urls: advertised_relays(net, settings),
+        // Whatever this endpoint can be dialled at right now. A LAN address in here is not
+        // useless — it is the fastest path between two peers behind the same NAT — but the
+        // internet-reachable one only exists when the portmapper mapped a port or the node has a
+        // public address, which is why the relay list still comes first as the fallback.
+        direct_addrs: net
+            .endpoint()
+            .addr()
+            .ip_addrs()
+            .map(|a| a.to_string())
+            .collect(),
+    };
+    let keys = lanrurugi_share_proto::derive::DerivedKeys {
+        lookup_key: code.lookup_keypair(),
+        record_key: code.record_key(),
+    };
+    let Ok(packet) = lanrurugi_share_proto::record::seal(&keys, &knock) else {
+        return;
+    };
+    let payload = packet.to_relay_payload();
+    let client = crate::proxy::http_client(std::time::Duration::from_secs(20));
+    for relay in relays {
+        let url = crate::nodes::node_relay_url(&relay, &code);
+        let ok = client
+            .put(&url)
+            .header("content-type", "application/pkarr.org/relays#payload")
+            .body(payload.clone())
+            .send()
+            .await
+            .is_ok_and(|r| r.status().is_success());
+        crate::status::record_rendezvous(&relay, ok);
+    }
+}
+
+/// The `endpoint_id` a retracted record carries. Nothing can ever own it, so a peer that resolves
+/// a retired code learns "this node is gone" instead of dialling an address that no longer answers.
+pub const RETRACTED_ENDPOINT_ID: [u8; 32] = [0u8; 32];
+
+pub async fn retract_node_record(host: &dyn ShareHost, code: &NodeCode) {
+    let Some(settings) = Some(host.settings().await) else {
+        return;
+    };
+    let relays = pkarr_relays(&settings);
+    if relays.is_empty() {
+        return;
+    }
+    let keys = lanrurugi_share_proto::derive::DerivedKeys {
+        lookup_key: code.lookup_keypair(),
+        record_key: code.record_key(),
+    };
+    let knock = lanrurugi_share_proto::record::KnockV1 {
+        endpoint_id: RETRACTED_ENDPOINT_ID,
+        relay_urls: Vec::new(),
+        direct_addrs: Vec::new(),
+    };
+    let Ok(packet) = lanrurugi_share_proto::record::seal(&keys, &knock) else {
+        return;
+    };
+    let payload = packet.to_relay_payload();
+    let client = crate::proxy::http_client(std::time::Duration::from_secs(20));
+    for relay in relays {
+        let url = crate::nodes::node_relay_url(&relay, code);
+        // A retraction that does not land leaves the code pointing at this instance for the whole
+        // record TTL, so retry a couple of times before giving up loudly.
+        let mut ok = false;
+        for attempt in 0..3u32 {
+            ok = client
+                .put(&url)
+                .header("content-type", "application/pkarr.org/relays#payload")
+                .body(payload.clone())
+                .send()
+                .await
+                .is_ok_and(|r| r.status().is_success());
+            if ok {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500 << attempt)).await;
+        }
+        if !ok {
+            tracing::warn!(relay = %relay, "the node record could not be retracted; it stays published until it expires");
+        }
+        crate::status::record_rendezvous(&relay, ok);
     }
 }
 

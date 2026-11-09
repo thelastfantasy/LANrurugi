@@ -33,47 +33,7 @@ pub async fn publish_node_record(
     net: &super::ShareNet,
     settings: &ShareSettings,
 ) {
-    let Ok(code) = crate::shares::node_code(state).await else {
-        return;
-    };
-    let relays = super::publish::pkarr_relays(settings);
-    if relays.is_empty() {
-        return;
-    }
-    let knock = lanrurugi_share_proto::record::KnockV1 {
-        endpoint_id: *net.id().as_bytes(),
-        relay_urls: super::publish::advertised_relays(net, settings),
-        // Whatever this endpoint can be dialled at right now. A LAN address in here is not
-        // useless — it is the fastest path between two peers behind the same NAT — but the
-        // internet-reachable one only exists when the portmapper mapped a port or the node has a
-        // public address, which is why the relay list still comes first as the fallback.
-        direct_addrs: net
-            .endpoint()
-            .addr()
-            .ip_addrs()
-            .map(|a| a.to_string())
-            .collect(),
-    };
-    let keys = lanrurugi_share_proto::derive::DerivedKeys {
-        lookup_key: code.lookup_keypair(),
-        record_key: code.record_key(),
-    };
-    let Ok(packet) = lanrurugi_share_proto::record::seal(&keys, &knock) else {
-        return;
-    };
-    let payload = packet.to_relay_payload();
-    let client = super::proxy::http_client(std::time::Duration::from_secs(20));
-    for relay in relays {
-        let url = node_relay_url(&relay, &code);
-        let ok = client
-            .put(&url)
-            .header("content-type", "application/pkarr.org/relays#payload")
-            .body(payload.clone())
-            .send()
-            .await
-            .is_ok_and(|r| r.status().is_success());
-        crate::share_net::status::record_rendezvous(&relay, ok);
-    }
+    lanrurugi_share::publish::publish_node_record(state, net, settings).await
 }
 
 /// Restarts this instance's relay role on the same endpoint: every connection being forwarded
