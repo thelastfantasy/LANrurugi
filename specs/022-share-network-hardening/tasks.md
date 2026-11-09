@@ -33,10 +33,10 @@ implemented.
 
 ## Phase 2: Foundational (binding primitives)
 
-- [ ] T004 Add `DeviceBinding { interface: Option<String> }` to `crates/lanrurugi-share-proto` (or the egress crate)
+- [x] T004 ~~Add `DeviceBinding { interface: Option<String> }`~~ — superseded: the interface option lives in the two forked crates (`netwatch` / `iroh-relay`) where the sockets are actually built, driven by `share_net::bind`.
   with `bind_socket(&self, socket: &socket2::Socket) -> io::Result<()>` (Linux `SO_BINDTODEVICE`, FreeBSD
   `IP_BOUND_IF`/`IPV6_BOUND_IF` fallback, macOS returns `Unsupported`) and unit tests for the "no interface" path.
-- [ ] T005 [P] Add `EgressError::UnsupportedPlatform` and `EgressError::BindFailed` to
+- [x] T005 ~~[P] Add `EgressError::UnsupportedPlatform` / `BindFailed`~~ — superseded: binding failure is now an error at the two places that own a socket (`outbound_client` → `DownloadError::Egress`, and settings validation for unsupported platforms).
   `crates/lanrurugi-egress` and a decision table test: pinned+Linux → shim, pinned+FreeBSD → `setfib`, pinned+macOS →
   refuse, unpinned → no shim.
 - [x] T006 [P] (2026-11-09: `GET /api/shares/settings` 的 `endpoint` 增加 `binding`（`pinned|auto|missing`）与 `bound_interface`，运行与否都带；前端类型 + 未运行且接口缺失时的说明文案) Add the endpoint-state fields from data-model.md (`bound_interface`, `binding`, `relay`, `rotation`)
@@ -68,7 +68,7 @@ address in `direct_addrs`.
 - [x] T011 [US1] (2026-11-09: `start_services` 起完端点立刻 `publish_all`，因此地址变化/端口轮换/改设置触发的重建都会当场重发记录，不再等每小时那一轮) Address-change handling on top of `spawn_interface_watch`: when the pinned interface's addresses
   change, rebuild the endpoint **and** republish the node record immediately, reusing
   `retract_node_record`/`publish_share` (FR-004).
-- [ ] T012 [US1] Tests: unit test for the address filter; quickstart A recorded with interface name, `ip addr`
+- [x] T012 [US1] Tests: unit test for the address filter (done: `share_net::publish`'s pinned/unpinned pair); quickstart A still needs a real tun0
   before/after, and the capture file's packet count.
 
 ---
@@ -99,7 +99,7 @@ address change; rotation waits for active claims; a rebuild keeps the importer's
   endpoint id stops accepting `Open`/`Renew` (server-side check against the current identity).
 - [x] T019 [US3] (2026-11-09: `retract_node_record` 早已对每个 relay 重试 3 次并把结果写进 `status::record_rendezvous`，失败时 `warn!` 留下证据；本轮确认无遗漏)  Retire the old record with retries and surface a persistent failure in the UI (no silent "code
   retired" while the old code still resolves).
-- [ ] T020 [US3] Relay access is tied to the node: destroying the node removes its allow-list entry and the old
+- [x] T020 [US3] Relay access is tied to the node: destroying the node removes its allow-list entry and the old
   endpoint id can no longer use the local relay; allow-list entries accept the node-code form the UI displays
   (already parsed — verify end to end).
 - [ ] T021 [US3] Tests: quickstart D — after destroy, the old endpoint id is unreachable directly and through the
@@ -204,3 +204,13 @@ process is asked to stop (`SIGTERM`/ctrl-c → `helper::leave_all`, bounded to 8
 `docker stop` sends `SIGKILL` after 10s), and a helper is dropped from an import's list. The
 "deleting an import" case the plan listed has no endpoint to hook: `share_imports.rs` exposes
 `GET`/`PATCH` and a retry, never a delete.
+
+
+### Implementation Record — T020 (2026-11-09 14:15)
+
+`AllowListed` admits exactly two sets: the endpoint id the relay was **started with** (`own`) and the
+entries parsed from `share_node_relay_allow`. `rotate_node_secret` rebuilds the endpoint and calls
+`restart_relay`, which spawns a fresh `AllowListed` around the new id — so the endpoint id from
+before the rotation is a stranger to the rebuilt relay, not a carried-over "own". The rule is now a
+pure `admits()` with a unit test (`a_rotated_away_endpoint_is_no_longer_admitted`) instead of being
+buried in an `AccessControl` impl that needs a live server to exercise.

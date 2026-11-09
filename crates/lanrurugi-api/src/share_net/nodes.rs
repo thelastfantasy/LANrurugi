@@ -638,13 +638,21 @@ struct AllowListed {
     allowed: std::collections::HashSet<iroh::EndpointId>,
 }
 
+impl AllowListed {
+    /// The rule on its own, so a rotation can be tested without a live relay: after the node is
+    /// destroyed its new endpoint id is the `own` of the rebuilt relay, and the previous one is
+    /// just another stranger — it is not carried over into `allowed`.
+    fn admits(&self, id: &iroh::EndpointId) -> bool {
+        id == &self.own || self.allowed.contains(id)
+    }
+}
+
 impl iroh_relay::server::AccessControl for AllowListed {
     async fn on_connect(
         &self,
         request: &iroh_relay::server::ClientRequest,
     ) -> iroh_relay::server::Access {
-        let id = request.endpoint_id();
-        if id == self.own || self.allowed.contains(&id) {
+        if self.admits(&request.endpoint_id()) {
             iroh_relay::server::Access::Allow
         } else {
             iroh_relay::server::Access::Deny { reason: None }
@@ -930,5 +938,30 @@ mod tests {
         }
         assert!(!limiter.allow("a"));
         assert!(limiter.allow("b"));
+    }
+
+    #[test]
+    fn a_rotated_away_endpoint_is_no_longer_admitted() {
+        let key = |b: u8| {
+            let mut seed = [0u8; 32];
+            seed[0] = b;
+            iroh::SecretKey::from_bytes(&seed).public()
+        };
+        let current = key(1);
+        let listed = key(2);
+        let retired = key(3);
+        let relay = AllowListed {
+            own: current,
+            allowed: [listed].into_iter().collect(),
+        };
+        assert!(relay.admits(&current), "the node may use its own relay");
+        assert!(
+            relay.admits(&listed),
+            "an allow-listed endpoint stays listed"
+        );
+        assert!(
+            !relay.admits(&retired),
+            "an endpoint id from before a rotation is a stranger"
+        );
     }
 }
