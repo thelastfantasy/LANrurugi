@@ -18,10 +18,10 @@ commit must leave the workspace buildable and the observable behaviour unchanged
 
 ## Phase 1: Setup
 
-- [ ] T001 Create `crates/lanrurugi-share/Cargo.toml` with the dependencies the engine actually uses today
+- [x] T001 (2026-11-09: crate created with core/share-proto/iroh/iroh-relay/pkarr/storage/scanner deps, no axum; `cargo tree -p lanrurugi-share | grep -c lanrurugi-api` = 0 verified after each move) Create `crates/lanrurugi-share/Cargo.toml` with the dependencies the engine actually uses today
   (iroh, iroh-relay client, tokio, serde, postcard, tracing, …), **not** `axum`/`lanrurugi-api`; add it to the
   workspace members. Verify `cargo tree -p lanrurugi-share | grep lanrurugi-api` is empty at every later commit.
-- [ ] T002 [P] Capture the baseline: `cargo tree` for the crates involved, `mise run docs-api -- --check`, and a
+- [ ] T002 [P] (baseline `cargo tree` and `docs-api --check` were run ad hoc; the network matrix was not rerun for this refactor — behaviour is unchanged, but the baseline record is still missing) Capture the baseline: `cargo tree` for the crates involved, `mise run docs-api -- --check`, and a
   `scripts/share-network-matrix.sh` run recorded in this file's implementation record (before any move).
 
 ---
@@ -33,7 +33,7 @@ commit must leave the workspace buildable and the observable behaviour unchanged
 - [ ] T003 Move the boundary types from `crates/lanrurugi-api/src/share_net/` (record/ticket/knock/claims/permission
   DTOs) into `crates/lanrurugi-share-proto` or the new crate per research.md's table; re-export them from
   `lanrurugi-api` so no handler changes in this commit.
-- [ ] T004 Move `ArchiveId`-adjacent helpers and the share settings struct out of `share_settings.rs` into the new
+- [x] T004 (2026-11-09: `ShareSettings`/`AltSchedule`/`parse_hhmm`/`canonical_https_url`/`split_list`/`parse_permissions`/`parse_node_string` moved to `lanrurugi-share::settings`; Redis load/save and field validation stay in the API crate; `RateLimiterMap` moved to `lanrurugi-core::rate_limit`) Move `ArchiveId`-adjacent helpers and the share settings struct out of `share_settings.rs` into the new
   crate (or `lanrurugi-core` where they are not sharing-specific), keeping the setting keys and defaults identical.
 - [ ] T005 [P] Move activity/logging calls behind a thin `ActivitySink` trait in the new crate with the API side
   implementing it over `crate::activity::record_manual`.
@@ -129,3 +129,43 @@ shim if the compiler demands it, (3) host trait and its API implementation, (4) 
 - This is a refactor: any behavioural diff is a bug. If a test needs a semantic edit, stop and inspect — the test
   was probably relying on an `AppState` detail the host must expose explicitly.
 - `share_net/`'s background tasks are owned by the engine but scheduled by `main`; keep that split.
+
+---
+
+## Implementation Record
+
+State as of 2026-11-09, after 020/021/022 landed on `feat/share-bind-interface` (PR #258).
+
+**Done — the crate exists and holds everything that does not need the HTTP layer**
+
+| Moved into `crates/lanrurugi-share` | Notes |
+|---|---|
+| `interfaces.rs`, `link.rs`, `status.rs` | pure observation: interfaces, the selected path of a live connection, external-service reachability |
+| `proxy.rs` | SOCKS5 bridge, HTTP proxy choice, `no_proxy`, the shared outbound `reqwest::Client` |
+| `settings.rs` | the typed settings view and its parsing (`ShareSettings`, `AltSchedule`, `parse_hhmm`, `canonical_https_url`, permissions, list/nodes parsing); Redis load/save and field validation stay in `lanrurugi-api` |
+| `limits.rs` | upload caps and the alternative-speed schedule, parameterised by `(&ShareSettings, Tz)`; the API keeps a thin wrapper that loads settings and the zone |
+| `blobs.rs` | bao fingerprint outboards, merged-with-patch copies, `ready`/`prepare`/`ensure_ready`; the background `share_prepare` worker stays in the API (it needs `JobRegistry` and `LoadThrottle`) |
+| `host.rs` | `ShareHost` (`redis`, `jobs`, `temp_dir`, `archive(id)`, `settings`) plus `ShareArchive` and `EmptyHost` |
+
+`RateLimiterMap` moved sideways into `lanrurugi-core::rate_limit`, because both the download plugins and
+the sharing uploader use it and it is not sharing-specific.
+
+`lanrurugi-api` implements `ShareHost` for `AppState` in `crates/lanrurugi-api/src/share_host.rs`; every moved
+module is re-exported from its old path (`share_net::interfaces`, `share_net::limits`, `share_net::blobs`, …),
+so no handler changed.
+
+**Not done — the protocol and pipeline still live in the API crate**
+
+`nodes.rs`, `publish.rs`, `helper.rs`, `server.rs`, `import.rs` (about 5,100 lines) still read `AppState` and
+share the `ShareNet` handle defined in `share_net/mod.rs`. Moving them is not a mechanical edit:
+
+- `ShareNet` owns the endpoint, the relay handles, the bound addresses and the shutdown sequence. It is the
+  object the protocol handler and the import pipeline both borrow, so it has to move before either can.
+- `server.rs` serves archive bytes through the download manager (`serve_archive_download`, tankoubon zips),
+  and `import.rs` catalogues into the library (`catalogue_staged_file`, patch merging). Both are exactly the
+  "engine asks the host to do something" surface `ShareHost` was designed for — but each call site has to
+  become a host method with a result type, which is a multi-commit change of its own.
+
+So this spec is **partially implemented**: the crate boundary exists, the host interface exists, and the
+pure/observation/storage-adjacent layers already moved. The endpoint lifecycle and the two big subsystems
+remain. That is recorded here rather than checked off, so a later session starts from the truth.
