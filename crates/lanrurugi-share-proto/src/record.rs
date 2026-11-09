@@ -165,6 +165,16 @@ mod tests {
         }
     }
 
+    /// The knock payload crosses two versions at once: a record published by a newer build must
+    /// still be readable field-by-field by an older one, and vice versa. Pinning the bytes of a
+    /// known payload catches any accidental field reorder or encoding change in review.
+    #[test]
+    fn the_knock_payload_bytes_are_stable() {
+        let bytes = postcard::to_allocvec(&knock()).unwrap();
+        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, "0505050505050505050505050505050505050505050505050505050505050505031e68747470733a2f2f72656c61792d6f6e652e6578616d706c652e6f72672f1e68747470733a2f2f72656c61792d74776f2e6578616d706c652e6f72672f3668747470733a2f2f612d6d7563682d6c6f6e6765722d72656c61792d686f73746e616d652e6578616d706c652e6e65743a383434332f00");
+    }
+
     #[test]
     fn a_record_round_trips_through_its_relay_payload() {
         let keys = DerivedKeys::derive(&ShareCode::parse("K7QM9XRT2H").unwrap());

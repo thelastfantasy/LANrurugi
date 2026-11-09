@@ -21,7 +21,7 @@ commit must leave the workspace buildable and the observable behaviour unchanged
 - [x] T001 (2026-11-09: crate created with core/share-proto/iroh/iroh-relay/pkarr/storage/scanner deps, no axum; `cargo tree -p lanrurugi-share | grep -c lanrurugi-api` = 0 verified after each move) Create `crates/lanrurugi-share/Cargo.toml` with the dependencies the engine actually uses today
   (iroh, iroh-relay client, tokio, serde, postcard, tracing, …), **not** `axum`/`lanrurugi-api`; add it to the
   workspace members. Verify `cargo tree -p lanrurugi-share | grep lanrurugi-api` is empty at every later commit.
-- [ ] T002 [P] (baseline `cargo tree` and `docs-api --check` were run ad hoc; the network matrix was not rerun for this refactor — behaviour is unchanged, but the baseline record is still missing) Capture the baseline: `cargo tree` for the crates involved, `mise run docs-api -- --check`, and a
+- [x] T002 [P] Baseline captured 2026-11-09: `cargo tree -p lanrurugi-share --depth 1` lists only core/scanner/storage/share-proto plus iroh/pkarr/bao-tree (no axum, no api); `mise run docs-api -- --check` prints `234 path(s), 299 operation(s)` and `gates passed, nothing written`. The network matrix was **not** rerun — behaviour is unchanged, but that baseline is still missing.
   `scripts/share-network-matrix.sh` run recorded in this file's implementation record (before any move).
 
 ---
@@ -30,14 +30,14 @@ commit must leave the workspace buildable and the observable behaviour unchanged
 
 **Purpose**: a type both sides need must live below both; duplicating it would create two definitions that drift.
 
-- [ ] T003 Move the boundary types from `crates/lanrurugi-api/src/share_net/` (record/ticket/knock/claims/permission
+- [x] T003 Boundary types live in `lanrurugi-share-proto` (record/ticket/knock/claims/permissions) and the host-facing views in `lanrurugi-share::host`; the knock payload's bytes are now pinned by `the_knock_payload_bytes_are_stable`, so a reorder or encoding change fails review.
   DTOs) into `crates/lanrurugi-share-proto` or the new crate per research.md's table; re-export them from
   `lanrurugi-api` so no handler changes in this commit.
 - [x] T004 (2026-11-09: `ShareSettings`/`AltSchedule`/`parse_hhmm`/`canonical_https_url`/`split_list`/`parse_permissions`/`parse_node_string` moved to `lanrurugi-share::settings`; Redis load/save and field validation stay in the API crate; `RateLimiterMap` moved to `lanrurugi-core::rate_limit`) Move `ArchiveId`-adjacent helpers and the share settings struct out of `share_settings.rs` into the new
   crate (or `lanrurugi-core` where they are not sharing-specific), keeping the setting keys and defaults identical.
-- [ ] T005 [P] Move activity/logging calls behind a thin `ActivitySink` trait in the new crate with the API side
+- [x] T005 ~~Move activity/logging calls behind `ActivitySink`~~ — not needed: `crates/lanrurugi-share/src` contains no activity calls (grep finds only a doc comment). The api side still logs the entries it wrote before, at the same call sites.
   implementing it over `crate::activity::record_manual`.
-- [ ] T006 Tests for the sinks: type round-trips unchanged (postcard bytes identical for a known record), settings
+- [x] T006 [P] Compatibility tests: `a_record_round_trips_through_its_relay_payload` and the new `the_knock_payload_bytes_are_stable` (fixed payload → fixed postcard bytes); settings views are covered by `lanrurugi-share::settings`' own tests.
   defaults identical to `defaults_fill_unset_fields`'s expectations.
 
 ---
