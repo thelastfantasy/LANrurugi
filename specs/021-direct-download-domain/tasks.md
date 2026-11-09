@@ -68,6 +68,10 @@ real-client-address handling, the download-host path boundary and the streaming 
   `CF-Connecting-IP`). Record the exact commands and outputs in this file's implementation record.
 - [x] T008 [US4] Keep `docs/src/content/docs/guide/reverse-proxy.md` as the prose entry point and link the new file
   from it; do not duplicate the config in the prose page.
+  (2026-11-09: `crates/lanrurugi-api/src/download_host.rs` gained `is_download_path` and tests for it plus
+  `host_matches`: only the two prefixes pass, `/api/dl`, `//api/dl/...`, `/api/%64l/...` and `/api/dlx/` do not;
+  a lookalike host does not match, and a trailing-dot spelling of the download host still does — treating that as
+  a different host would have let the admin API through on the very address that bypasses the CDN.)
 
 ---
 

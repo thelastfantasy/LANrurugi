@@ -48,13 +48,20 @@ pub async fn restrict_to_downloads(
         return next.run(request).await;
     }
     let path = request.uri().path();
-    if request.method() == Method::OPTIONS || DOWNLOAD_PATHS.iter().any(|p| path.starts_with(p)) {
+    if request.method() == Method::OPTIONS || is_download_path(path) {
         return next.run(request).await;
     }
     crate::common::not_found(
         "download_host_only",
         "This host name only serves downloads.",
     )
+}
+
+/// Whether a raw request path belongs to a route the download host may serve. Matching on the raw
+/// (still percent-encoded) path is deliberate: a request the router would decode into an admin
+/// route does not carry the prefix here, so it is refused rather than decoded into access.
+fn is_download_path(path: &str) -> bool {
+    DOWNLOAD_PATHS.iter().any(|prefix| path.starts_with(prefix))
 }
 
 /// `Host` may or may not carry the port; the configured host may or may not be the default for
@@ -66,7 +73,12 @@ fn host_matches(requested: &str, host: &str, port: Option<u16>) -> bool {
         }
         _ => (requested, None),
     };
-    name.eq_ignore_ascii_case(host) && given_port.unwrap_or(443) == port.unwrap_or(443)
+    // A trailing dot is the same name to DNS (`dl.example.org.`), and a request spelling it that way
+    // must still be held to the download-only policy — treating it as a different host would let the
+    // admin API through on the very address that deliberately bypasses the CDN.
+    name.trim_end_matches('.')
+        .eq_ignore_ascii_case(host.trim_end_matches('.'))
+        && given_port.unwrap_or(443) == port.unwrap_or(443)
 }
 
 pub async fn share_media_cors(
@@ -102,4 +114,61 @@ pub async fn share_media_cors(
     );
     headers.insert(header::VARY, HeaderValue::from_static("origin"));
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_two_download_prefixes_pass() {
+        for allowed in [
+            "/api/dl/",
+            "/api/dl/archives/abc",
+            "/api/share/r/token",
+            "/api/share/r/token/page/1",
+        ] {
+            assert!(is_download_path(allowed), "{allowed} should be served");
+        }
+        for refused in [
+            "/",
+            "/api/archives/abc",
+            "/api/settings",
+            "/api/dl",
+            "/api/dlx/archives",
+            "/api/share/",
+            "//api/dl/archives/abc",
+            "/api/%64l/archives/abc",
+        ] {
+            assert!(!is_download_path(refused), "{refused} must be refused");
+        }
+    }
+
+    #[test]
+    fn the_configured_host_matches_with_or_without_its_port() {
+        assert!(host_matches("dl.example.org", "dl.example.org", None));
+        assert!(host_matches("DL.Example.ORG", "dl.example.org", None));
+        assert!(host_matches("dl.example.org:443", "dl.example.org", None));
+        assert!(host_matches(
+            "dl.example.org:8443",
+            "dl.example.org",
+            Some(8443)
+        ));
+        assert!(!host_matches(
+            "dl.example.org",
+            "dl.example.org",
+            Some(8443)
+        ));
+    }
+
+    #[test]
+    fn a_lookalike_host_name_is_not_the_download_host() {
+        assert!(!host_matches(
+            "dl.example.org.evil.test",
+            "dl.example.org",
+            None
+        ));
+        assert!(!host_matches("evil.test", "dl.example.org", None));
+        assert!(host_matches("dl.example.org.", "dl.example.org", None));
+    }
 }
