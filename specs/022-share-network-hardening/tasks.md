@@ -118,7 +118,7 @@ address change; rotation waits for active claims; a rebuild keeps the importer's
   new ones use the new interface; `outbound_client` failure is an error, never `default_client()`.
 - [ ] T025 [US4] Platform routing: FreeBSD uses `setfib` for the Deno subprocess (`net.fibs=2` documented); macOS
   refuses a pinned interface with an explanation; native packages ship the shim where it applies.
-- [ ] T026 [US4] (2026-11-09: `GET /api/settings` 已加 `egress_binding: {state, interface}`；设置页尚未渲染)  Expose `egress_binding` in `GET /api/settings` (bound/unpinned/unsupported/failed) and render it in
+- [x] T026 [US4] (2026-11-09: `GET /api/settings` 暴露 `egress_binding: {state, interface}`；设置页在网络接口选择下渲染 `failed` 状态，四份 locale 都加文案)  Expose `egress_binding` in `GET /api/settings` (bound/unpinned/unsupported/failed) and render it in
   the settings UI; i18n in en/zh/ja.
 - [ ] T027 [US4] Tests: quickstart F (capture with an egress plugin, then confirm the relay protections still hold);
   a unit test for the hook table's platform matrix.

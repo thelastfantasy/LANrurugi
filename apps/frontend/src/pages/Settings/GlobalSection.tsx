@@ -50,6 +50,7 @@ export function GlobalSection({
   recommendprecision,
   setRecommendprecision,
   pluginBindInterface,
+  egressBinding,
   setPluginBindInterface,
   directDownloadUrl,
   onDirectDownloadUrlChange,
@@ -93,6 +94,7 @@ export function GlobalSection({
   recommendprecision: string
   setRecommendprecision: (v: string) => void
   pluginBindInterface: string
+  egressBinding?: { state: "unpinned" | "bound" | "failed"; interface: string | null }
   setPluginBindInterface: (v: string) => void
   directDownloadUrl: string
   onDirectDownloadUrlChange: (v: string) => void
@@ -228,6 +230,16 @@ export function GlobalSection({
             </div>
             <br />
             {t("settings.pluginInterfaceHint")}
+            {egressBinding?.state === "failed" ? (
+              <>
+                <br />
+                <span className="diag-field-error">
+                  {t("settings.egressBindingFailed", {
+                    iface: egressBinding.interface ?? "",
+                  })}
+                </span>
+              </>
+            ) : null}
           </Row>
           <Row label={t("settings.directDownloadUrl")}>
             <input

@@ -1047,5 +1047,6 @@
   "upload.transferringCount": "{{n}} 個傳輸中",
   "upload.transferringCountHint": "目前正在傳輸位元組的任務數（不含入庫階段）。",
   "share.status.bindingMissing": "已固定到 {iface}，但系統裡現在沒有這個網路介面 —— 共享保持關閉，等它出現後自動恢復。",
-  "components.layout.egressInterfaceUnavailable": "這次下載固定走網路介面 {interface}，但該介面無法使用。請檢查介面，或清空該設定。"
+  "components.layout.egressInterfaceUnavailable": "這次下載固定走網路介面 {interface}，但該介面無法使用。請檢查介面，或清空該設定。",
+  "settings.egressBindingFailed": "外掛已固定走介面 {iface}，但該介面在本機無法使用——外掛請求改走主機中繼了。"
 }

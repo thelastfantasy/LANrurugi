@@ -106,6 +106,9 @@ export interface Settings {
   recommendprecision: string
   /** Empty = the kernel's own routing; otherwise the interface plugin downloads are bound to. */
   plugin_bind_interface: string
+  /** 022 US4: whether plugin egress is actually pinned (`failed` = the name is set but the shim or
+   * the interface is missing on this host). */
+  egress_binding?: { state: "unpinned" | "bound" | "failed"; interface: string | null }
   direct_download_url: string
   /** Interface names this host exposes, for the picker above. */
   interfaces: string[]

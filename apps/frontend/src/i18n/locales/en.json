@@ -2975,5 +2975,6 @@
   "upload.transferringCount": "{{n}} transferring",
   "upload.transferringCountHint": "Tasks currently moving bytes (the library-writing phase is not counted).",
   "share.status.bindingMissing": "Pinned to {iface}, which is not present right now — sharing stays off until it appears.",
-  "components.layout.egressInterfaceUnavailable": "The download was pinned to network interface {interface}, which could not be used. Fix the interface or clear the setting."
+  "components.layout.egressInterfaceUnavailable": "The download was pinned to network interface {interface}, which could not be used. Fix the interface or clear the setting.",
+  "settings.egressBindingFailed": "Plugins are pinned to interface {iface}, but it is not usable on this host — plugin traffic is going through the relay instead."
 }

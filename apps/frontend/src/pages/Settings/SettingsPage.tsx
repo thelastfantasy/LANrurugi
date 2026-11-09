@@ -479,6 +479,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             setKeyInput={setKeyInput}
             recommendprecision={recommendprecision}
             pluginBindInterface={pluginBindInterface}
+            egressBinding={settings.egress_binding}
             directDownloadUrl={directDownloadUrl}
             onDirectDownloadUrlChange={setDirectDownloadUrl}
             setPluginBindInterface={setPluginBindInterface}
