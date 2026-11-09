@@ -283,8 +283,10 @@ menu (T024/T025/T026) can therefore be deleted without stranding anything.
   still removes their leftover temp file, and `QueueErrorText` still renders the two
   `duplicate_filename*` codes for those historical rows.
 - **Rebuild (T020/T021/T022).** `rebuild-index` re-scans, and `catalogue_new_archive` now reads a
-  sidecar when no record exists, so a lost database recovers titles and original filenames. There is
-  no separate discrepancy report yet, and no test that flushes the database and rebuilds.
+  sidecar when no record exists, so a lost database recovers titles and original filenames. The
+  rebuild task now also audits every hash-layout sidecar and regenerates the broken ones
+  (`sidecar_audit::audit_sidecars`, reported as `sidecars.repaired` in the job result); a full
+  flush-and-rebuild is covered by `full_scan::tests::a_scan_recovers_titles_for_both_layouts_after_the_records_are_lost`.
 
 ## Implementation Record addendum (2026-11-09)
 

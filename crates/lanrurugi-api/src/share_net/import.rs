@@ -996,7 +996,12 @@ async fn fetch_pieces(
                     error = %e,
                     "piece failed on the network; waiting for the sharer to come back"
                 );
-                tokio::time::sleep(backoff).await;
+                // Yield to cancellation instead of sleeping blind: stopping an import used to
+                // wait out the full 60-second backoff.
+                tokio::select! {
+                    () = tokio::time::sleep(backoff) => {}
+                    () = run.cancel.cancelled() => return Some(ArchiveOutcome::Interrupted),
+                }
                 queue.push_back((piece, attempts.saturating_add(1)));
             }
         }
@@ -1004,20 +1009,21 @@ async fn fetch_pieces(
 }
 
 /// Whether an import error is the sharer's answer (terminal) rather than the network's failure
-/// (worth waiting out). 022 US2/FR-012: only an explicit refusal or a share that no longer exists
+/// (worth waiting out). 022 US2/FR-003: only an explicit refusal or a share that no longer exists
 /// ends an import; everything else is "the network is down, keep trying".
 fn terminal_import_error(error: &ShareNetError) -> bool {
     matches!(
         error,
-        ShareNetError::Refused(
-            RefusalReason::PermissionDenied
-                | RefusalReason::NotFound
-                | RefusalReason::Exhausted
-                | RefusalReason::Revoked
-                | RefusalReason::Expired
-                | RefusalReason::AddressUnverifiable
-                | RefusalReason::UnsupportedVersion { .. },
-        )
+        ShareNetError::Protocol(_)
+            | ShareNetError::Refused(
+                RefusalReason::PermissionDenied
+                    | RefusalReason::NotFound
+                    | RefusalReason::Exhausted
+                    | RefusalReason::Revoked
+                    | RefusalReason::Expired
+                    | RefusalReason::AddressUnverifiable
+                    | RefusalReason::UnsupportedVersion { .. },
+            )
     )
 }
 
@@ -1887,13 +1893,17 @@ mod retry_tests {
         for network in [
             ShareNetError::NotRunning,
             ShareNetError::Unreachable("connection reset by peer".into()),
-            ShareNetError::Protocol("unexpected answer".into()),
         ] {
             assert!(
                 !terminal_import_error(&network),
                 "{network:?} is the network's silence"
             );
         }
+        // A protocol-level failure will not fix itself: the peer speaks a shape this build cannot
+        // follow, so retrying just spins (FR-003's "explicit protocol refusal is terminal").
+        assert!(terminal_import_error(&ShareNetError::Protocol(
+            "unexpected answer".into()
+        )));
         // Rate limiting is temporary by definition: the same claim succeeds later.
         assert!(!terminal_import_error(&ShareNetError::Refused(
             RefusalReason::RateLimited

@@ -277,3 +277,12 @@ api 侧只剩 `NodeProtocol`（iroh 的 `ProtocolHandler`）与 `lanrurugi-serve
 「已存格式 → 按需重生成 → 任意已存格式 → 占位图」这条与无头浏览器请求相同的路径。
 
 因此 `server.rs` 的 `thumbnail()` 变成：查清单确认档案在分享里 → 取字节 → 回 `Response::Bytes`。
+
+
+### Implementation Record — 2026-11-09 21:30（限速判定与 Range 编码）
+
+`ShareHost` 增加 `timezone()` 与默认方法 `admit_upload(group, peer)`，后者自己读 `settings()` +
+`timezone()` 再调 `limits::admit`：两个实现不可能各读一套设置。api 的 `limits::admit` 只剩一行转发。
+
+`blobs::requested_ranges`/`encode_range` 连同 `CHUNK_BYTES = 1 KiB` 搬到 crate；请按这个常量理解
+span 单位，不要用 `BLOCK_SIZE`（16 KiB，只用于分块哈希）。
