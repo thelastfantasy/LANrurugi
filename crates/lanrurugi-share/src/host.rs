@@ -1,26 +1,63 @@
 //! What the engine needs from its host, and nothing else.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use futures_util::future::BoxFuture;
 use lanrurugi_core::ids::ArchiveId;
+use lanrurugi_core::jobs::JobRegistry;
+use lanrurugi_storage::redis::RedisDbs;
+
+use crate::settings::ShareSettings;
 
 /// Everything the sharing engine borrows from the running application.
 ///
 /// Grouped accessors rather than one flat trait: the engine's subsystems each need a narrow slice,
 /// and a single trait with fifty methods would force every test host to implement all of them.
+///
+/// Storage is handed over as the same pooled handles the rest of the process uses — the engine is
+/// not the only writer to those keys, so a second connection setup would only add a way for the
+/// two to disagree.
 pub trait ShareHost: Send + Sync + 'static {
-    fn archives(&self) -> Arc<dyn ArchiveSource>;
-}
-
-/// Archives the engine may offer and serve.
-pub trait ArchiveSource: Send + Sync {
-    fn get(&self, id: &ArchiveId) -> Option<ArchiveSummary>;
+    fn redis(&self) -> RedisDbs;
+    fn jobs(&self) -> JobRegistry;
+    /// Where the engine may keep derived files (fingerprint outboards, merged copies).
+    fn temp_dir(&self) -> PathBuf;
+    /// The archive behind an id, as the engine may serve it.
+    fn archive(&self, id: &ArchiveId) -> BoxFuture<'_, Option<ShareArchive>>;
+    /// The current sharing settings, defaults filled in.
+    fn settings(&self) -> BoxFuture<'_, ShareSettings>;
 }
 
 /// The fields a share needs to describe an archive without loading its bytes.
-#[derive(Debug, Clone)]
-pub struct ArchiveSummary {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShareArchive {
     pub id: ArchiveId,
     pub title: String,
-    pub filename: String,
+    /// Path on disk, as the library records it (the archive file itself, never a derived copy).
+    pub file: PathBuf,
 }
+
+/// A host that owns nothing: useful for tests that only exercise pure parsing.
+pub struct EmptyHost;
+
+impl ShareHost for EmptyHost {
+    fn redis(&self) -> RedisDbs {
+        panic!("EmptyHost has no Redis")
+    }
+    fn jobs(&self) -> JobRegistry {
+        panic!("EmptyHost has no job registry")
+    }
+    fn temp_dir(&self) -> PathBuf {
+        std::env::temp_dir()
+    }
+    fn archive(&self, _id: &ArchiveId) -> BoxFuture<'_, Option<ShareArchive>> {
+        Box::pin(async { None })
+    }
+    fn settings(&self) -> BoxFuture<'_, ShareSettings> {
+        Box::pin(async { ShareSettings::from_stored(&Default::default()) })
+    }
+}
+
+/// Shared handle to a host, as the engine's spawned tasks hold it.
+pub type Host = Arc<dyn ShareHost>;

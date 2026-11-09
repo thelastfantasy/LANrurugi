@@ -53,6 +53,7 @@ pub mod search_history;
 pub mod sessions;
 pub mod settings;
 pub mod share_attempts;
+pub mod share_host;
 pub mod share_imports;
 pub mod share_net;
 pub mod share_recipient;

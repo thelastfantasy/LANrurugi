@@ -4,6 +4,7 @@
 //! through [`host::ShareHost`], and the API crate keeps the HTTP handlers. The split exists so the
 //! transport can be tested (and later reused) without a web server.
 
+pub mod blobs;
 pub mod host;
 pub mod interfaces;
 pub mod limits;

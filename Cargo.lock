@@ -4595,25 +4595,32 @@ dependencies = [
 name = "lanrurugi-share"
 version = "1.0.0-beta.5"
 dependencies = [
+ "bao-tree",
+ "blake3",
  "chrono",
  "chrono-tz",
+ "deadpool-redis",
  "futures-util",
  "if-addrs",
  "iroh",
  "iroh-relay",
  "lanrurugi-core",
+ "lanrurugi-scanner",
  "lanrurugi-share-proto",
+ "lanrurugi-storage",
  "pkarr",
  "rand 0.10.3",
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-socks",
  "tokio-util",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
