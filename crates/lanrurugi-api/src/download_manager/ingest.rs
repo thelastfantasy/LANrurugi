@@ -678,3 +678,114 @@ fn filename_extension(filename: &str) -> String {
         .unwrap_or_default()
         .to_ascii_lowercase()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+
+    /// A real (if minimal) zip: the scanner dispatches the format by extension, but the page count
+    /// heuristic still opens it, so a truncated header would fail ingestion for the wrong reason.
+    fn staged_zip(dir: &std::path::Path, nonce: &str) -> std::path::PathBuf {
+        let path = dir.join("staging-upload.zip");
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        writer
+            .start_file("0001.jpg", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(b"\xff\xd8\xff\xd9").unwrap();
+        // Both tests share a Redis; identical bytes would collide on the content hash.
+        writer
+            .start_file("note.txt", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(nonce.as_bytes()).unwrap();
+        writer.finish().unwrap();
+        path
+    }
+
+    async fn state_with_temp_dirs(root: &std::path::Path) -> Option<AppState> {
+        let mut state = crate::plugins::tests::test_state().await?;
+        state.library.archive_dir = root.join("content");
+        state.library.temp_dir = root.join("temp");
+        std::fs::create_dir_all(&state.library.archive_dir).unwrap();
+        std::fs::create_dir_all(&state.library.temp_dir).unwrap();
+        Some(state)
+    }
+
+    /// 020 FR-001/FR-004: the bytes land under their content id, the reader-visible title comes from
+    /// the name the download carried, and the original filename survives in the sidecar.
+    #[tokio::test]
+    async fn a_download_lands_on_its_content_id_with_its_title_and_a_sidecar() {
+        let root = tempfile::tempdir().unwrap();
+        let Some(state) = state_with_temp_dirs(root.path()).await else {
+            return;
+        };
+        let staging = staged_zip(root.path(), "first");
+
+        let ingested = catalogue_staged_file(
+            &state,
+            &staging,
+            "Some Title [DL版].zip",
+            Some("https://example.org/file"),
+            DuplicatePolicy::Reject,
+        )
+        .await
+        .expect("the download is catalogued");
+
+        assert!(ingested.is_new);
+        assert!(!staging.exists(), "the staging file moved into the library");
+
+        let archive = state
+            .repos
+            .archives
+            .get(&lanrurugi_core::ids::ArchiveId::from(
+                ingested.archive_id.clone(),
+            ))
+            .await
+            .unwrap()
+            .expect("a record was written");
+        let expected = lanrurugi_storage::paths::hash_layout_path(
+            &state.library.archive_dir,
+            &ingested.archive_id,
+            "zip",
+        );
+        assert_eq!(std::path::Path::new(&archive.file), expected);
+        assert!(expected.exists());
+        assert_eq!(archive.name, "Some Title [DL版]");
+        assert_eq!(archive.title, "Some Title");
+
+        let sidecar =
+            lanrurugi_storage::sidecar::read(&state.library.archive_dir, &ingested.archive_id)
+                .expect("the sidecar travels with the archive");
+        assert_eq!(sidecar.original_filename, "Some Title [DL版].zip");
+        assert_eq!(sidecar.title, "Some Title");
+    }
+
+    /// 020 FR-001: a name no filesystem accepts is no longer a reason to fail an ingest — the
+    /// library path is derived from the bytes, and only the record keeps the long title.
+    #[tokio::test]
+    async fn a_name_longer_than_any_filesystem_allows_still_ingests() {
+        let root = tempfile::tempdir().unwrap();
+        let Some(state) = state_with_temp_dirs(root.path()).await else {
+            return;
+        };
+        let staging = staged_zip(root.path(), "second");
+        let long = format!("{}.zip", "長い名前 ".repeat(40));
+
+        let ingested =
+            catalogue_staged_file(&state, &staging, &long, None, DuplicatePolicy::Reject)
+                .await
+                .expect("the title length is not the filename length");
+
+        let archive = state
+            .repos
+            .archives
+            .get(&lanrurugi_core::ids::ArchiveId::from(
+                ingested.archive_id.clone(),
+            ))
+            .await
+            .unwrap()
+            .expect("a record was written");
+        assert!(archive.name.len() > 255);
+        assert_eq!(archive.file.rsplit('/').next().unwrap().len(), 44);
+    }
+}
