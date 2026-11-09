@@ -788,4 +788,51 @@ mod tests {
         assert!(archive.name.len() > 255);
         assert_eq!(archive.file.rsplit('/').next().unwrap().len(), 44);
     }
+
+    /// 020 adoption pass: a queue row parked by a pre-020 build (waiting for a filename decision)
+    /// is catalogued by its bytes on the next start. The same bytes arriving twice must not create a
+    /// second archive, and the second staged copy is discarded rather than left in the temp dir.
+    #[tokio::test]
+    async fn a_legacy_pending_conflict_is_adopted_by_content_once() {
+        let root = tempfile::tempdir().unwrap();
+        let Some(state) = state_with_temp_dirs(root.path()).await else {
+            return;
+        };
+        let conflict =
+            |path: &std::path::Path| lanrurugi_storage::download_queue::PendingFilenameConflict {
+                temp_path: path.to_string_lossy().into_owned(),
+                original_filename: "Legacy Title [DL版].zip".to_string(),
+                existing_id: String::new(),
+                crc32: "deadbeef".to_string(),
+                staged_at: 0,
+            };
+
+        let first = staged_zip(root.path(), "legacy");
+        let id = adopt_pending_conflict(&state, &conflict(&first))
+            .await
+            .expect("catalogued");
+        assert!(!first.exists());
+        let archive = state
+            .repos
+            .archives
+            .get(&lanrurugi_core::ids::ArchiveId::from(id.clone()))
+            .await
+            .unwrap()
+            .expect("a record was written");
+        assert_eq!(archive.name, "Legacy Title [DL版]");
+        assert_eq!(archive.title, "Legacy Title");
+
+        // The same bytes staged again resolve to the archive that already holds them.
+        // A byte-identical copy of what the library holds: a second `staged_zip` call would embed a
+        // different zip mtime and so hash differently, which is not the case under test.
+        let staged_dir = root.path().join("again");
+        std::fs::create_dir_all(&staged_dir).unwrap();
+        let second = staged_dir.join("staging-upload.zip");
+        std::fs::copy(&archive.file, &second).unwrap();
+        let same = adopt_pending_conflict(&state, &conflict(&second))
+            .await
+            .expect("already catalogued");
+        assert_eq!(same, id);
+        assert!(!second.exists(), "the duplicate staged copy is discarded");
+    }
 }
