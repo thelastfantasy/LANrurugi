@@ -16,7 +16,7 @@ use hkdf::Hkdf;
 use lanrurugi_core::ids::ShareId;
 use lanrurugi_share_proto::code::{ShareCode, ShareRef};
 use lanrurugi_share_proto::derive::{access_hash, DerivedKeys};
-use lanrurugi_share_proto::messages::{ArchiveEntry, ManifestItem, Permissions, ShareManifest};
+use lanrurugi_share_proto::messages::{ManifestItem, Permissions, ShareManifest};
 use lanrurugi_share_proto::record::{open_bytes, seal_bytes};
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 use lanrurugi_storage::keys;
@@ -308,89 +308,21 @@ fn forwarded_address(headers: &HeaderMap, peer: IpAddr, trusted: &[ipnet::IpNet]
 // ---------------------------------------------------------------------------------------------
 // Manifest
 
-fn archive_entry(a: &lanrurugi_core::entities::Archive) -> ArchiveEntry {
-    let filename = std::path::Path::new(&a.file)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_string();
-    ArchiveEntry {
-        archive_id: a.id.to_string(),
-        title: if a.title.trim().is_empty() {
-            a.name.clone()
-        } else {
-            a.title.clone()
-        },
-        tags: a.tags.clone(),
-        summary: a.summary.clone(),
-        pagecount: a.pagecount,
-        filename,
-        size: a.arcsize,
-        blake3: None,
-        categories: Vec::new(),
-        toc: a
-            .toc
-            .iter()
-            .map(|c| lanrurugi_share_proto::messages::Chapter {
-                page: c.page,
-                name: c.name.clone(),
-            })
-            .collect(),
-    }
-}
-
-/// The share's items as they are now in the library (browse form: no fingerprints). Tankoubons
-/// list their current members in order; deleted items become `Unavailable` (US2-4).
+/// The share's items as they are now in the library (browse form: no fingerprints).
 pub(crate) async fn browse_manifest(state: &AppState, share: &Share) -> ShareManifest {
-    let mut items = Vec::with_capacity(share.items.len());
-    for item in &share.items {
-        match item {
-            ShareItem::Archive { id } => match state.repos.archives.get(id).await {
-                Ok(Some(a)) => items.push(ManifestItem::Archive(archive_entry(&a))),
-                _ => items.push(ManifestItem::Unavailable { title: None }),
-            },
-            ShareItem::Tankoubon { id } => match state.repos.groupings.get(id).await {
-                Ok(Some(tank)) => {
-                    let records = futures_util::future::join_all(
-                        tank.archives.iter().map(|a| state.repos.archives.get(a)),
-                    )
-                    .await;
-                    let members = records
-                        .into_iter()
-                        .filter_map(|r| r.ok().flatten())
-                        .map(|a| archive_entry(&a))
-                        .collect();
-                    items.push(ManifestItem::Tankoubon {
-                        id: id.to_string(),
-                        name: tank.name,
-                        tags: tank.tags,
-                        summary: tank.summary,
-                        members,
-                    });
-                }
-                _ => items.push(ManifestItem::Unavailable { title: None }),
-            },
-        }
-    }
-    ShareManifest {
-        share_id: share.id.to_string(),
-        title: share.title.clone().unwrap_or_default(),
-        permissions: share.permissions,
-        items,
-    }
+    lanrurugi_share::manifest::browse_manifest(state, share).await
 }
 
 /// Default title: the first item's own name.
 async fn first_item_title(state: &AppState, items: &[ShareItem]) -> Option<String> {
     match items.first()? {
-        ShareItem::Archive { id } => state
-            .repos
-            .archives
-            .get(id)
-            .await
-            .ok()
-            .flatten()
-            .map(|a| archive_entry(&a).title),
+        ShareItem::Archive { id } => state.repos.archives.get(id).await.ok().flatten().map(|a| {
+            if a.title.trim().is_empty() {
+                a.name.clone()
+            } else {
+                a.title.clone()
+            }
+        }),
         ShareItem::Tankoubon { id } => state
             .repos
             .groupings

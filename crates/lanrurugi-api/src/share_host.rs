@@ -30,7 +30,37 @@ impl ShareHost for AppState {
             Some(ShareArchive {
                 id: archive.id.clone(),
                 title: archive.title.clone(),
+                name: archive.name.clone(),
                 file: std::path::PathBuf::from(archive.file),
+                tags: archive.tags.clone(),
+                summary: archive.summary.clone(),
+                pagecount: archive.pagecount,
+                arcsize: archive.arcsize,
+                toc: archive
+                    .toc
+                    .iter()
+                    .map(|c| lanrurugi_share_proto::messages::Chapter {
+                        page: c.page,
+                        name: c.name.clone(),
+                    })
+                    .collect(),
+            })
+        })
+    }
+
+    fn tankoubon(
+        &self,
+        id: &lanrurugi_core::ids::TankId,
+    ) -> BoxFuture<'_, Option<lanrurugi_share::host::ShareTankoubon>> {
+        let repos = self.repos.clone();
+        let id = id.clone();
+        Box::pin(async move {
+            let tank = repos.groupings.get(&id).await.ok().flatten()?;
+            Some(lanrurugi_share::host::ShareTankoubon {
+                name: tank.name.clone(),
+                summary: tank.summary.clone(),
+                tags: tank.tags.clone(),
+                archives: tank.archives.clone(),
             })
         })
     }

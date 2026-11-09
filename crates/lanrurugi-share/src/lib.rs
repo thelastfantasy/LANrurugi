@@ -9,6 +9,7 @@ pub mod host;
 pub mod interfaces;
 pub mod limits;
 pub mod link;
+pub mod manifest;
 pub mod net;
 pub mod nodes;
 pub mod proxy;

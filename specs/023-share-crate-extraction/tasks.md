@@ -251,3 +251,13 @@ mDNS 发现；`Bound::take_endpoint()` 把端点交给调用方挂协议处理�
 
 api 侧只剩 `NodeProtocol`（iroh 的 `ProtocolHandler`）与 `lanrurugi-server share-node` 的启动代码：
 前者把连接交给 `answer_rendezvous`，后者是独立的只读节点模式。
+
+
+### Implementation Record — 2026-11-09 19:45（manifest）
+
+`browse_manifest` 与 `archive_entry` 现在在 `crates/lanrurugi-share/src/manifest.rs`，只经
+`ShareHost::archive` / `ShareHost::tankoubon` 取数据。`ShareArchive` 因此携带 manifest 需要的
+字段（name/tags/summary/pagecount/arcsize/toc），`ShareTankoubon` 携带成员顺序。
+
+`first_item_title`、`item_exists`、`enqueue_prepare` 仍留在 api：它们服务的是 HTTP 侧的表单与
+后台指纹队列，不是 wire 格式。

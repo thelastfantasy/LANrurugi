@@ -28,6 +28,8 @@ pub trait ShareHost: Send + Sync + 'static {
     fn archive(&self, id: &ArchiveId) -> BoxFuture<'_, Option<ShareArchive>>;
     /// The current sharing settings, defaults filled in.
     fn settings(&self) -> BoxFuture<'_, ShareSettings>;
+    /// The tankoubon behind an id, with its members in order.
+    fn tankoubon(&self, id: &lanrurugi_core::ids::TankId) -> BoxFuture<'_, Option<ShareTankoubon>>;
     /// This instance's own node code, when the node role is enabled. `None` when it is off or
     /// could not be read: publishing a record without a code is meaningless, so callers skip.
     fn node_code(&self) -> BoxFuture<'_, Option<NodeCode>>;
@@ -45,8 +47,25 @@ pub trait ShareHost: Send + Sync + 'static {
 pub struct ShareArchive {
     pub id: ArchiveId,
     pub title: String,
+    /// The archive's own name (the file's stem), used when the title is empty.
+    pub name: String,
     /// Path on disk, as the library records it (the archive file itself, never a derived copy).
     pub file: PathBuf,
+    pub tags: String,
+    pub summary: String,
+    pub pagecount: u32,
+    pub arcsize: u64,
+    pub toc: Vec<lanrurugi_share_proto::messages::Chapter>,
+}
+
+/// A tankoubon as a share sees it: its members in volume order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShareTankoubon {
+    pub name: String,
+    pub summary: String,
+    /// The stored tag string, handed over as-is; the wire entry carries the same text.
+    pub tags: String,
+    pub archives: Vec<ArchiveId>,
 }
 
 /// A host that owns nothing: useful for tests that only exercise pure parsing.
@@ -76,6 +95,12 @@ impl ShareHost for EmptyHost {
         Box::pin(async {})
     }
     fn node_code(&self) -> BoxFuture<'_, Option<NodeCode>> {
+        Box::pin(async { None })
+    }
+    fn tankoubon(
+        &self,
+        _id: &lanrurugi_core::ids::TankId,
+    ) -> BoxFuture<'_, Option<ShareTankoubon>> {
         Box::pin(async { None })
     }
 }
