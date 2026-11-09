@@ -6,6 +6,7 @@ use lanrurugi_share_proto::code::Via;
 
 use crate::net::ShareNet;
 use crate::nodes::endpoint_hex;
+use crate::settings::{canonical_https_url, ShareSettings};
 
 /// Enough for a public IPv6, a mapped IPv4 and a LAN address or two, without a dense QR code.
 const MAX_HINT_ADDRS: usize = 6;
@@ -72,6 +73,85 @@ pub fn address_rank(ip: IpAddr) -> u8 {
         IpAddr::V4(v4) if v4.is_private() || is_shared(v4) => 2,
         IpAddr::V6(v6) if (v6.segments()[0] & 0xfe00) == 0xfc00 => 2,
         _ => 0,
+    }
+}
+
+/// The public pkarr relays used when public services are on and nothing is configured.
+pub const DEFAULT_PKARR_RELAYS: [&str; 2] = ["https://pkarr.pubky.app", "https://relay.pkarr.org"];
+
+pub fn pkarr_relays(settings: &ShareSettings) -> Vec<String> {
+    let configured: Vec<String> = settings
+        .list("share_pkarr_relays")
+        .iter()
+        .filter_map(|r| canonical_https_url(r))
+        .collect();
+    if !configured.is_empty() {
+        return configured;
+    }
+    if settings.flag("share_public_services") {
+        DEFAULT_PKARR_RELAYS.iter().map(|s| s.to_string()).collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// Where a share's record lives at a pkarr relay: the relay URL plus the lookup key.
+pub fn relay_endpoint(relay: &str, keys: &lanrurugi_share_proto::derive::DerivedKeys) -> String {
+    format!(
+        "{}/{}",
+        relay.trim_end_matches('/'),
+        keys.lookup_key.public_key().to_z32()
+    )
+}
+
+/// The record's relay list: the relays this endpoint can currently be reached through.
+pub fn advertised_relays(net: &ShareNet, settings: &ShareSettings) -> Vec<String> {
+    let mut relays: Vec<String> = net
+        .endpoint()
+        .addr()
+        .relay_urls()
+        .map(|u| u.to_string())
+        .collect();
+    let own = settings.text("share_self_relay_url");
+    if let Some(own) = crate::settings::canonical_https_url(own) {
+        relays.push(own);
+    }
+    if relays.is_empty() {
+        relays = crate::net::relay_urls(settings)
+            .iter()
+            .map(|u| u.to_string())
+            .collect();
+    }
+    let mut seen = std::collections::HashSet::new();
+    relays.retain(|r| seen.insert(r.clone()));
+    // Publicly reachable relays first: a peer that is not on this LAN cannot use
+    // `https://192.168.x.y/`, and iroh only gives up on an unreachable relay after a timeout. The
+    // private ones stay in the list for the same-NAT case, where they are the cheap path.
+    relays.sort_by_key(|r| !relay_is_public(r));
+    relays
+}
+
+/// Whether a relay URL names a host the public internet can reach. Only the obvious private
+/// shapes are detected — a public hostname that resolves to a private address is not.
+pub fn relay_is_public(relay: &str) -> bool {
+    let Ok(url) = url::Url::parse(relay) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".local") {
+        return false;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => {
+            !(v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified())
+        }
+        Ok(std::net::IpAddr::V6(v6)) => {
+            !(v6.is_loopback() || v6.is_unspecified() || v6.is_unique_local())
+        }
+        // A name: assume it is routable, which is what a relay hostname normally is.
+        Err(_) => true,
     }
 }
 

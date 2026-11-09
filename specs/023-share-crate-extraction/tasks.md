@@ -223,3 +223,11 @@ mDNS 发现；`Bound::take_endpoint()` 把端点交给调用方挂协议处理�
 （端点自身地址 → 接口过滤 → 可拨号过滤 → 排序去重 → 中继），以及 `address_allowed` /
 `dialable` / `address_rank` 与三条对应测试。这三条规则是 022 US1 的泄漏面，放到 crate 里以后
 任何人改它都要面对同目录的测试。
+
+
+### Implementation Record — 2026-11-09 17:35（pkarr 中继与记录地址）
+
+`crates/lanrurugi-share/src/publish.rs` 现在也拥有 pkarr 这一层：`DEFAULT_PKARR_RELAYS`、
+`pkarr_relays`（用户填的优先，其次「公开服务」开关下的公共中继）、`relay_endpoint`、
+`relay_is_public`（只识别明显的私有形态：localhost/.local/私有地址/链路本地），以及
+`advertised_relays`（端点当前中继 + 自建中继，公网优先）。api 侧改为 re-export。

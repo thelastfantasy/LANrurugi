@@ -17,8 +17,7 @@ use lanrurugi_share_proto::derive::DerivedKeys;
 use lanrurugi_share_proto::record::{self, KnockV1};
 use lanrurugi_storage::shares::{Share, ShareStatus};
 
-use super::{endpoint_addr, parse_endpoint_hex, ShareNet, ShareNetError, DEFAULT_PKARR_RELAYS};
-use crate::share_settings::ShareSettings;
+use super::{endpoint_addr, parse_endpoint_hex, ShareNet, ShareNetError};
 use crate::AppState;
 
 /// Republish interval; records live an hour at the relays.
@@ -77,27 +76,6 @@ async fn keys_for_code(code: &ShareCode) -> Result<DerivedKeys, ShareNetError> {
     Ok(keys)
 }
 
-/// The pkarr relays in use: configured ones, else pkarr's defaults while public services are on.
-pub fn pkarr_relays(settings: &ShareSettings) -> Vec<String> {
-    let configured: Vec<String> = settings
-        .list("share_pkarr_relays")
-        .iter()
-        .filter_map(|r| crate::share_settings::canonical_https_url(r))
-        .collect();
-    if !configured.is_empty() {
-        return configured;
-    }
-    if settings.flag("share_public_services") {
-        DEFAULT_PKARR_RELAYS.iter().map(|s| s.to_string()).collect()
-    } else {
-        Vec::new()
-    }
-}
-
-fn http_client() -> reqwest::Client {
-    super::proxy::http_client(REQUEST_TIMEOUT)
-}
-
 /// Sends one request to a configured LANrurugi node.
 async fn ask_node(
     state: &crate::AppState,
@@ -108,69 +86,6 @@ async fn ask_node(
     let addr = super::nodes::node_addr(state, node).await?;
     let conn = super::connect(net, addr).await.ok()?;
     super::call(&conn, request).await.ok().map(|(r, _)| r)
-}
-
-fn node_label(node: &super::nodes::NodeRef) -> String {
-    format!("lrrg-node:{}", node.addr)
-}
-
-fn relay_endpoint(relay: &str, keys: &DerivedKeys) -> String {
-    format!(
-        "{}/{}",
-        relay.trim_end_matches('/'),
-        keys.lookup_key.public_key().to_z32()
-    )
-}
-
-/// The record's relay list: the relays this endpoint can currently be reached through.
-pub(super) fn advertised_relays(net: &ShareNet, settings: &ShareSettings) -> Vec<String> {
-    let mut relays: Vec<String> = net
-        .endpoint()
-        .addr()
-        .relay_urls()
-        .map(|u| u.to_string())
-        .collect();
-    let own = settings.text("share_self_relay_url");
-    if let Some(own) = crate::share_settings::canonical_https_url(own) {
-        relays.push(own);
-    }
-    if relays.is_empty() {
-        relays = super::relay_urls(settings)
-            .iter()
-            .map(|u| u.to_string())
-            .collect();
-    }
-    let mut seen = std::collections::HashSet::new();
-    relays.retain(|r| seen.insert(r.clone()));
-    // Publicly reachable relays first: a peer that is not on this LAN cannot use
-    // `https://192.168.x.y/`, and iroh only gives up on an unreachable relay after a timeout. The
-    // private ones stay in the list for the same-NAT case, where they are the cheap path.
-    relays.sort_by_key(|r| !relay_is_public(r));
-    relays
-}
-
-/// Whether a relay URL names a host the public internet can reach. Only the obvious private
-/// shapes are detected — a public hostname that resolves to a private address is not.
-fn relay_is_public(relay: &str) -> bool {
-    let Ok(url) = url::Url::parse(relay) else {
-        return false;
-    };
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".local") {
-        return false;
-    }
-    match host.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V4(v4)) => {
-            !(v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified())
-        }
-        Ok(std::net::IpAddr::V6(v6)) => {
-            !(v6.is_loopback() || v6.is_unspecified() || v6.is_unique_local())
-        }
-        // A name: assume it is routable, which is what a relay hostname normally is.
-        Err(_) => true,
-    }
 }
 
 /// Publishes one share's knock record to every configured rendezvous.
@@ -486,7 +401,17 @@ async fn resolve_local(
 
 /// The `via` hint every code carries: this endpoint, the addresses a peer may dial (configured
 /// external ones, then public, then private) and the relays it is connected to.
-pub use lanrurugi_share::publish::via_hint;
+pub use lanrurugi_share::publish::{
+    advertised_relays, pkarr_relays, relay_endpoint, relay_is_public, via_hint,
+};
+
+fn node_label(node: &lanrurugi_share::nodes::NodeRef) -> String {
+    format!("lrrg-node:{}", node.addr)
+}
+
+fn http_client() -> reqwest::Client {
+    super::proxy::http_client(REQUEST_TIMEOUT)
+}
 
 #[cfg(test)]
 mod tests {
