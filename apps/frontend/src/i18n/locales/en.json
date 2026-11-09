@@ -1056,6 +1056,7 @@
   "settings.thisWillDeleteMetadataFor": "This will delete metadata for old files when they're replaced! Use with caution.",
   "library.thisWillDeleteThisTankoubon": "This will delete this Tankoubon grouping (archives inside it are not deleted).",
   "This will merge \\${n} Archives into Tankoubon \\${name}. Proceed?": "This will merge \\${n} Archives into Tankoubon \\${name}. Proceed?",
+  "reader.thisBarShowsTheTitlePageControlsAndFileInfo": "The bar at the top of the reader: title, page controls and file info. Hiding it gives the pages more room.",
   "reader.thisWillShowTheOverlay": "This will show the overlay with thumbnails every time you open a new Reader page.",
   "reader.thoseOptionsSaveAutomatically": "Those options save automatically -- Click around and find out!",
   "Threw away the cache!": "Threw away the cache!",

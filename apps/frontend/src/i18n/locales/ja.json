@@ -585,6 +585,7 @@
   "batch.thisRemovesTheNewFlag": "選択したアーカイブの「新着」フラグを解除します。",
   "This will apply the following Tag Rules to the selected Archives.": "以下のタグルールが選択したアーカイブに適用されます。",
   "This will merge \\${n} Archives into Tankoubon \\${name}. Proceed?": "${n} 件のアーカイブを単行本「${name}」に追加します。続行しますか？",
+  "reader.thisBarShowsTheTitlePageControlsAndFileInfo": "リーダー上部のバーです（タイトル・ページ操作・ファイル情報）。非表示にするとページをより広く表示できます。",
   "reader.thisWillShowTheOverlay": "新しいリーダーページを開くたびに、サムネイル付きオーバーレイが表示されます。",
   "reader.thoseOptionsSaveAutomatically": "これらの設定は自動保存されます。自由に操作してみてください！",
   "Threw away the cache!": "キャッシュを破棄しました！",
