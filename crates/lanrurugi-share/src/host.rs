@@ -30,6 +30,21 @@ pub trait ShareHost: Send + Sync + 'static {
     fn settings(&self) -> BoxFuture<'_, ShareSettings>;
     /// An archive's cover as the share serves it: MIME type and bytes.
     fn thumbnail(&self, id: &ArchiveId, page: u32) -> BoxFuture<'_, Option<(String, Vec<u8>)>>;
+    /// The zone the sharing schedule is evaluated in (UTC when unset).
+    fn timezone(&self) -> BoxFuture<'_, chrono_tz::Tz>;
+    /// Admits one upload to `peer` under the group's current caps, reading this host's settings
+    /// and zone. Defaulted here so both implementations cannot diverge in *which* settings view
+    /// they judge against.
+    fn admit_upload(
+        &self,
+        group: crate::limits::Group,
+        peer: String,
+    ) -> BoxFuture<'_, Result<crate::limits::Caps, crate::limits::Held>> {
+        Box::pin(async move {
+            let settings = self.settings().await;
+            crate::limits::admit(&settings, self.timezone().await, group, &peer)
+        })
+    }
     /// The names of the categories an archive belongs to, static ones only.
     fn categories(&self, id: &ArchiveId) -> BoxFuture<'_, Vec<String>>;
     /// The tankoubon behind an id, with its members in order.
@@ -103,6 +118,9 @@ impl ShareHost for EmptyHost {
     }
     fn thumbnail(&self, _id: &ArchiveId, _page: u32) -> BoxFuture<'_, Option<(String, Vec<u8>)>> {
         Box::pin(async { None })
+    }
+    fn timezone(&self) -> BoxFuture<'_, chrono_tz::Tz> {
+        Box::pin(async { chrono_tz::UTC })
     }
     fn categories(&self, _id: &ArchiveId) -> BoxFuture<'_, Vec<String>> {
         Box::pin(async { Vec::new() })

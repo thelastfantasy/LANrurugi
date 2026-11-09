@@ -18,8 +18,8 @@ pub fn current_with(settings: &ShareSettings, tz: Tz) -> (ModeStatus, Caps, Caps
 
 /// Admits one upload to `peer` under the group's current caps.
 pub async fn admit(state: &AppState, group: Group, peer: &str) -> Result<Caps, Held> {
-    let settings = crate::share_settings::load(state).await;
-    lanrurugi_share::limits::admit(&settings, timezone(state).await, group, peer)
+    use lanrurugi_share::host::ShareHost;
+    state.admit_upload(group, peer.to_string()).await
 }
 
 pub use lanrurugi_share::limits::{throttle, Caps, Group, Held, ModeStatus};

@@ -58,6 +58,11 @@ impl ShareHost for AppState {
         })
     }
 
+    fn timezone(&self) -> BoxFuture<'_, chrono_tz::Tz> {
+        let state = self.clone();
+        Box::pin(async move { crate::share_net::limits::timezone(&state).await })
+    }
+
     fn categories(&self, id: &ArchiveId) -> BoxFuture<'_, Vec<String>> {
         let repos = self.repos.clone();
         let id = id.clone();
