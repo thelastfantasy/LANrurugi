@@ -68,3 +68,22 @@ git log --oneline 9116e91..HEAD     # 021 之后的全部
 cargo tree -p lanrurugi-share       # 依赖面
 grep -rn "lanrurugi_api\|AppState" crates/lanrurugi-share/src | grep -v "^.*://" # 应为 0
 ```
+
+## 6. 追加（2026-11-09 21:55）
+
+两个 commit 落在这份报告之后，内容都很窄：
+
+- `87db3af` **退避等待可取消 + 协议错误判终态**：
+  - 分块失败后的 sleep 改成 `tokio::select!` 与 `run.cancel.cancelled()` 同候，停止导入不再等满 60 秒；
+  - `terminal_import_error` 现在把 `ShareNetError::Protocol(_)` 也算终态（确定性失败，重试只是空转），
+    与 FR-003「只有对端明确的拒绝才是终态」一致；`NotRunning`/`Unreachable` 仍无限等待。
+  - 测试同步：原来断言 Protocol 可重试，改成断言终态。
+- `efdb9ba` **钉住 knock 记录的 postcard 字节**：
+  - 新测试 `the_knock_payload_bytes_are_stable` 用一个固定 payload（固定 endpoint id、三条不同长度的
+    中继 URL、空直连地址）断言字节序列；任何字段重排/新增/长度前缀变化都会失败。这是 023「搬迁
+    不改线格式」唯一的自动化保证。
+  - 顺带把 023 的基线记进 tasks（依赖面、`docs-api --check` 234 path/299 operation、crate 内
+    `AppState` 引用为 0）。
+
+仍未做（与第 1 节一致）：半截下载收编、`original_path` 填充；023 的 `server.rs`/`import.rs`/`start()`
+三个 I/O 面。
