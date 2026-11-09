@@ -26,6 +26,7 @@ futures-util.workspace = true
 rand.workspace = true
 if-addrs.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
 url.workspace = true
 tokio-socks.workspace = true
 chrono.workspace = true

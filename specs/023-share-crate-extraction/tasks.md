@@ -206,3 +206,12 @@ mDNS 发现；`Bound::take_endpoint()` 把端点交给调用方挂协议处理�
 （`endpoint_hex`/`parse_endpoint_hex`）。`crates/lanrurugi-share/src/net.rs` 拿走
 `relay_urls` 与 `relay_settings_key`。api 侧全部改为 re-export，`share_net::nodes` 只剩真正要
 `AppState` 的部分（发布/撤销记录、解析节点码、起中继、独立节点模式）。
+
+
+### Implementation Record — 2026-11-09 16:35（中继角色）
+
+`crates/lanrurugi-share/src/relay.rs` 现在负责整个内嵌中继：三种 TLS 模式（`proxy`/`files`/ACME）、
+端口选择与占用回退、每客户端限速、`AllowListed` 与允许名单解析、QUIC 地址发现、证书读取。
+`start_relay(settings, data_dir, own)` 的签名没变，api 侧 re-export 后调用点不动。
+
+`AllowListed` 的准入测试（轮换后旧端点 id 是陌生人）随之搬进 crate。
