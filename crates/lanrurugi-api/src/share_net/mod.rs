@@ -18,14 +18,13 @@ pub mod publish;
 pub mod server;
 pub use lanrurugi_share::status;
 
-use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use iroh::endpoint::{presets, Connection, RecvStream, SendStream};
+use iroh::endpoint::{Connection, RecvStream, SendStream};
 use iroh::protocol::Router;
-use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMap, RelayMode, RelayUrl, SecretKey};
+use iroh::{EndpointAddr, EndpointId, RelayMap, RelayUrl};
 
 use lanrurugi_share_proto::framing;
 use lanrurugi_share_proto::messages::{RefusalReason, Request, Response, ShareEngine};
@@ -35,10 +34,7 @@ use tokio::sync::RwLock;
 use crate::share_settings::ShareSettings;
 use crate::AppState;
 
-/// The ALPN every sharing connection uses.
-pub const ALPN: &[u8] = b"h3";
-/// Neutral mDNS service label; the library default names the transport.
-const MDNS_SERVICE: &str = "lshr";
+pub use lanrurugi_share::net::ALPN;
 /// Public rendezvous relays used while public services are on and none are configured.
 /// Two operators, so one going away leaves lookups working; records go to and are asked of both.
 /// Neither runs the default relays, so no single operator sees both a lookup and the connection
@@ -528,153 +524,29 @@ pub async fn bind(
     secret: [u8; 32],
     port: u16,
 ) -> Result<ShareNet, String> {
-    let secret_key = SecretKey::from_bytes(&secret);
-    // Never `Disabled`: with no relay of its own the endpoint must still dial through the relay a
-    // sharer names in its knock record or `via` hint (an own tunnel, a friend's node).
-    let relay_mode = RelayMode::Custom(relay_urls(settings).into_iter().collect::<RelayMap>());
-    let mut builder = Endpoint::builder(presets::Minimal)
-        .secret_key(secret_key)
-        .alpns(vec![ALPN.to_vec()])
-        .relay_mode(relay_mode);
-    // A named interface (a VPN tunnel, say) binds only its own addresses: that is the whole
-    // point — traffic must not fall back to the physical link. IPv6 is bound as well where the
-    // host has it (FR-050 item 7), without failing on IPv4-only hosts.
-    let pinned = settings.text("share_bind_interface");
-    // The two forks that own the sockets iroh opens (netwatch's UDP, iroh-relay's TCP) read this
-    // process-wide value at socket creation. Setting it here — before `builder.bind()` and before
-    // any relay dial — is what makes "pinned interface" mean the kernel will not route around it: a
-    // source-address bind alone loses to the weak-host model. Clearing it is just as important, or
-    // unpinning would keep using the last tunnel.
-    let device = pinned.trim();
-    let device = (!device.is_empty()).then_some(device);
-    netwatch::set_bind_device(device);
-    iroh_relay::client::set_bind_device(device);
-    let mut bound_addrs: Vec<std::net::IpAddr> = Vec::new();
-    if !pinned.trim().is_empty() {
-        // The builder starts with a wildcard IPv4 and IPv6 transport. Binding the tunnel's own
-        // address only replaces the transport of that address family, so on an IPv4-only tunnel
-        // iroh would still listen on `[::]` everywhere, send IPv6 over the physical link and then
-        // publish that real address as a direct address. Drop them first.
-        builder = builder.clear_ip_transports();
-    }
-    match interfaces::bind_addrs(pinned, port) {
-        Some(addrs) => {
-            for addr in addrs {
-                if addr.ip().is_unspecified() {
-                    // A wildcard bind takes whatever the host has; there is nothing stable to
-                    // compare later, so the watcher leaves those endpoints alone.
-                    bound_addrs.clear();
-                } else {
-                    bound_addrs.push(addr.ip());
-                }
-                builder = builder.bind_addr(addr).map_err(|e| e.to_string())?;
-            }
-        }
-        None => {
-            // Pinned to an interface that is not there: binding everything would serve from the
-            // physical link, which is exactly what pinning exists to prevent. Refuse to start
-            // instead; the interface watcher brings the endpoint back when the tunnel is up.
-            if !pinned.trim().is_empty() {
-                return Err(format!(
-                    "the chosen network interface {pinned} is not present; sharing stays off until it is"
-                ));
-            }
-            builder = builder
-                .bind_addr(SocketAddr::from(([0, 0, 0, 0], port)))
-                .map_err(|e| e.to_string())?
-                .bind_addr_with_opts(
-                    SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port)),
-                    iroh::endpoint::BindOpts::default().set_is_required(false),
-                )
-                .map_err(|e| e.to_string())?;
-        }
-    }
-    // The user's own proxy (FR-051): iroh only takes an HTTP proxy, so SOCKS goes through a
-    // local bridge. Only relay connections use it; direct UDP and the LAN never do.
-    match proxy::choose() {
-        proxy::Choice::Http(url) => builder = builder.proxy_url(url),
-        proxy::Choice::Socks(url) => match proxy::start_socks_bridge(url).await {
-            Ok(addr) => {
-                if let Ok(url) = url::Url::parse(&format!("http://{addr}")) {
-                    builder = builder.proxy_url(url);
-                }
-            }
-            Err(e) => tracing::warn!(error = %e, "SOCKS bridge could not start"),
-        },
-        proxy::Choice::None => {}
-    }
-    builder = builder.ca_tls_config(relay_tls());
-    if !settings.flag("share_portmap") {
-        builder = builder.portmapper_config(iroh::endpoint::PortmapperConfig::Disabled);
-    }
-    let endpoint = builder.bind().await.map_err(|e| e.to_string())?;
-    // A manual port forward: these are the addresses the router sends to this host, which iroh
-    // cannot discover on its own when the router speaks neither UPnP nor PCP.
-    for addr in external_addrs(settings, port) {
-        endpoint.add_external_addr(addr).await;
-    }
-    // mDNS under a neutral label (the library default names the transport), kept so `ResolveLocal`
-    // can ask the peers it found (FR-024).
-    let lan_peers = Arc::new(Mutex::new(std::collections::HashSet::new()));
-    match iroh_mdns_address_lookup::MdnsAddressLookup::builder()
-        .service_name(MDNS_SERVICE)
-        .build(endpoint.id())
-    {
-        Ok(mdns) => {
-            if let Ok(lookup) = endpoint.address_lookup() {
-                lookup.add(mdns.clone());
-            }
-            let peers = lan_peers.clone();
-            tokio::spawn(async move {
-                use futures_util::StreamExt;
-                let mut events = mdns.subscribe().await;
-                while let Some(event) = events.next().await {
-                    let mut peers = peers.lock().expect("lan peers lock");
-                    match event {
-                        iroh_mdns_address_lookup::DiscoveryEvent::Discovered {
-                            endpoint_info,
-                            ..
-                        } => {
-                            peers.insert(endpoint_info.endpoint_id);
-                        }
-                        iroh_mdns_address_lookup::DiscoveryEvent::Expired { endpoint_id } => {
-                            peers.remove(&endpoint_id);
-                        }
-                        _ => {}
-                    }
-                }
-            });
-        }
-        Err(e) => tracing::warn!(error = %e, "mDNS discovery unavailable"),
-    }
-    let shared = Arc::new(Shared {
-        ratios: Mutex::new(HashMap::new()),
-        signing: ed25519_dalek::SigningKey::from_bytes(&secret),
-        sessions: Mutex::new(HashMap::new()),
-        blobs: Mutex::new(HashMap::new()),
-    });
+    let mut bound = lanrurugi_share::net::bind(lanrurugi_share::net::BindOptions {
+        secret,
+        port,
+        relay_map: relay_urls(settings).into_iter().collect::<RelayMap>(),
+        pinned: settings.text("share_bind_interface").to_string(),
+        portmap: settings.flag("share_portmap"),
+        external_addrs: external_addrs(settings, port),
+    })
+    .await?;
+    let endpoint = bound.take_endpoint();
+    let shared = bound.shared.clone();
     let router = Router::builder(endpoint)
         .accept(
             ALPN,
             server::ShareProtocol {
                 state: state.clone(),
-                shared: shared.clone(),
+                shared,
             },
         )
         .spawn();
-    Ok(ShareNet {
-        router,
-        bound_addrs,
-        shared,
-        relay: tokio::sync::Mutex::new(None),
-        lan_peers,
-        udp_port: port,
-        relay_port: tokio::sync::Mutex::new(None),
-        relay_key: tokio::sync::Mutex::new(None),
-    })
+    Ok(ShareNet::from_bound(bound, router, port))
 }
 
-/// The proxy sharing follows, for the settings status line (FR-051), without credentials.
 pub fn followed_proxy() -> Option<String> {
     let mut url = match proxy::choose() {
         proxy::Choice::Http(url) | proxy::Choice::Socks(url) => url,

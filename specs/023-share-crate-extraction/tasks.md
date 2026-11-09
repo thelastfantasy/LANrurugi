@@ -185,3 +185,15 @@ shares 仓库写回已服务字节，现在只依赖 host 的这一个方法；`
 重建端点、复用中继、绑接口、启动 watcher，且 `start` 会调用 api 里的
 `nodes::restart_relay`。下一步是把 `bind` 与中继启动也搬过去（需要 host 上补「当前节点密钥」
 与「活动记录」两处）。
+
+
+### Implementation Record — 2026-11-09 15:30（端点绑定迁入）
+
+`crates/lanrurugi-share/src/net.rs` 现在负责建 socket 与端点：`bind(BindOptions) -> Bound`
+负责接口绑定、`SO_BINDTODEVICE`、HTTP/SOCKS 代理、TLS 根、portmapper 开关、手工外网地址与
+mDNS 发现；`Bound::take_endpoint()` 把端点交给调用方挂协议处理器，`ShareNet::from_bound()`
+再把它包成运行态。`ALPN` 与 `relay_tls()` 也搬过来，api 侧 re-export。
+
+仍留在 api 的是 `start`（按顺序停旧端点、保比率、复盘中继）与 `bind` 的三行胶水（把
+`relay_urls(settings)` 变成 `RelayMap`、挂 `ShareProtocol`）。`relay_urls` 与 `external_addrs`
+用到了 api 的 `nodes::configured_nodes`/`own_relay_url`，所以在它们搬走之前 `bind` 的胶水也在 api。
