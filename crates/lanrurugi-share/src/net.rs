@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use iroh::endpoint::presets;
 use iroh::protocol::Router;
-use iroh::{Endpoint, EndpointId, RelayMap, RelayMode, RelayUrl, SecretKey};
+use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMap, RelayMode, RelayUrl, SecretKey};
 
 use crate::proxy;
 use crate::settings::ShareSettings;
@@ -375,4 +375,23 @@ pub fn relay_settings_key(settings: &ShareSettings) -> String {
     .map(|field| format!("{field}={}", settings.text(field)))
     .collect::<Vec<_>>()
     .join("\n")
+}
+
+/// The endpoint address for a `via` hint or a knock record.
+pub fn endpoint_addr(
+    endpoint_id: &[u8; 32],
+    relays: &[String],
+    direct: Option<std::net::SocketAddr>,
+) -> Option<EndpointAddr> {
+    let id = EndpointId::from_bytes(endpoint_id).ok()?;
+    let mut addr = EndpointAddr::new(id);
+    for relay in relays {
+        if let Ok(url) = relay.parse::<RelayUrl>() {
+            addr = addr.with_relay_url(url);
+        }
+    }
+    if let Some(direct) = direct {
+        addr = addr.with_ip_addr(direct);
+    }
+    Some(addr)
 }

@@ -1,6 +1,11 @@
 //! Node strings and the relays they name. Pure parsing and settings lookups: the rendezvous and
 //! relay roles themselves are still built by the application.
 
+use iroh::EndpointAddr;
+
+use crate::net::endpoint_addr;
+use crate::proxy;
+use crate::publish::{pkarr_relays, RETRACTED_ENDPOINT_ID};
 use crate::settings::ShareSettings;
 
 /// 32 bytes as lowercase hex, the spelling used in node strings and `via` codes.
@@ -94,4 +99,74 @@ pub fn node_relay_url(relay: &str, code: &lanrurugi_share_proto::node_code::Node
         relay.trim_end_matches('/'),
         code.lookup_keypair().public_key().to_z32()
     )
+}
+
+/// Resolves a node code to the address published under it.
+///
+/// Returns `None` both when nothing is published and when the record is unreadable by this build
+/// (the caller cannot tell the two apart, but the log can).
+pub async fn resolve_node_code(settings: &ShareSettings, code: &str) -> Option<EndpointAddr> {
+    use lanrurugi_share_proto::node_code::NodeCode;
+    let code = NodeCode::parse(code).ok()?;
+    let relays = pkarr_relays(settings);
+    let keys = lanrurugi_share_proto::derive::DerivedKeys {
+        lookup_key: code.lookup_keypair(),
+        record_key: code.record_key(),
+    };
+    let client = proxy::http_client(std::time::Duration::from_secs(20));
+    let mut incompatible = false;
+    for relay in relays {
+        let url = node_relay_url(&relay, &code);
+        let Ok(response) = client.get(&url).send().await else {
+            continue;
+        };
+        let Ok(bytes) = response.bytes().await else {
+            continue;
+        };
+        let Ok(packet) =
+            pkarr::SignedPacket::from_relay_payload(&keys.lookup_key.public_key(), &bytes)
+        else {
+            continue;
+        };
+        let knock = match lanrurugi_share_proto::record::open(&keys, &packet) {
+            Ok(knock) => knock,
+            Err(lanrurugi_share_proto::record::RecordError::EngineIncompatible) => {
+                incompatible = true;
+                continue;
+            }
+            Err(_) => continue,
+        };
+        // A retracted identity: the code was destroyed and this record is all that is left.
+        if knock.endpoint_id == RETRACTED_ENDPOINT_ID {
+            return None;
+        }
+        let mut addr = endpoint_addr(&knock.endpoint_id, &knock.relay_urls, None)?;
+        for direct in &knock.direct_addrs {
+            if let Ok(socket) = direct.parse::<std::net::SocketAddr>() {
+                addr = addr.with_ip_addr(socket);
+            }
+        }
+        return Some(addr);
+    }
+    if incompatible {
+        // Distinguishing this from "never published" matters: one is fixed by upgrading, the
+        // other by asking the sharer to publish the code again.
+        tracing::warn!(code = %code, "the share code was published by a newer sharing engine");
+    }
+    None
+}
+
+/// The endpoint address of a configured node, its port resolved by DNS.
+pub async fn node_addr(settings: &ShareSettings, node: &NodeRef) -> Option<EndpointAddr> {
+    // A code-based node carries no address: the record under the code supplies the endpoint id and
+    // the relays, and iroh resolves the actual address through those.
+    if let Some(code) = &node.code {
+        return resolve_node_code(settings, code).await;
+    }
+    let direct = tokio::net::lookup_host(&node.addr)
+        .await
+        .ok()
+        .and_then(|mut a| a.next());
+    let relays: Vec<String> = node.relay.iter().cloned().collect();
+    endpoint_addr(&node.endpoint_id, &relays, direct)
 }

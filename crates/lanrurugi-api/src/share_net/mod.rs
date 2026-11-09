@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use iroh::protocol::Router;
-use iroh::{EndpointAddr, EndpointId, RelayMap, RelayUrl};
+use iroh::{EndpointAddr, EndpointId, RelayMap};
 
 use lanrurugi_share_proto::framing;
 use lanrurugi_share_proto::messages::{RefusalReason, Request, Response, ShareEngine};
@@ -686,37 +686,6 @@ pub async fn connect(net: &ShareNet, addr: EndpointAddr) -> Result<Connection, S
         .map_err(|e| ShareNetError::Unreachable(e.to_string()))
 }
 
-/// The endpoint address for a `via` hint or a knock record.
-pub fn endpoint_addr(
-    endpoint_id: &[u8; 32],
-    relays: &[String],
-    direct: Option<SocketAddr>,
-) -> Option<EndpointAddr> {
-    let id = EndpointId::from_bytes(endpoint_id).ok()?;
-    let mut addr = EndpointAddr::new(id);
-    for relay in relays {
-        if let Ok(url) = relay.parse::<RelayUrl>() {
-            addr = addr.with_relay_url(url);
-        }
-    }
-    if let Some(direct) = direct {
-        addr = addr.with_ip_addr(direct);
-    }
-    Some(addr)
-}
+pub use lanrurugi_share::net::endpoint_addr;
 
-/// Lowercase hex of an endpoint id, as `via` hints and node strings carry it.
-pub fn endpoint_hex(id: &EndpointId) -> String {
-    id.as_bytes().iter().map(|b| format!("{b:02x}")).collect()
-}
-
-pub fn parse_endpoint_hex(text: &str) -> Option<[u8; 32]> {
-    if text.len() != 64 {
-        return None;
-    }
-    let mut out = [0u8; 32];
-    for (i, byte) in out.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).ok()?;
-    }
-    Some(out)
-}
+pub use lanrurugi_share::nodes::{endpoint_hex, parse_endpoint_hex};

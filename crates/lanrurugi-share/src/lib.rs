@@ -16,3 +16,4 @@ pub mod publish;
 pub mod relay;
 pub mod settings;
 pub mod status;
+pub mod util;

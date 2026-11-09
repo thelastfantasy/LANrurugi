@@ -86,19 +86,9 @@ pub(crate) fn repo(state: &AppState) -> ShareRepository {
     ShareRepository::new(state.redis.config.clone())
 }
 
-pub(crate) fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
+pub(crate) use lanrurugi_share::util::hex;
 
-pub(crate) fn unhex(text: &str) -> Option<Vec<u8>> {
-    if !text.len().is_multiple_of(2) {
-        return None;
-    }
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).ok())
-        .collect()
-}
+pub(crate) use lanrurugi_share::util::unhex;
 
 /// This instance's long-term secret (also its iroh key), created on first use and included in
 /// backups so the instance keeps its identity across restores.
