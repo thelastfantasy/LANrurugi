@@ -41,15 +41,6 @@ pub(super) struct MaybeTlsStreamBuilder {
 /// LANrurugi fork (022): pin the relay's TCP socket to the interface the sharing node is bound to.
 /// `TcpStream::connect` offers no way to set a socket option before connecting, so with an interface
 /// configured the socket is built here, pinned with `SO_BINDTODEVICE`, and connected non-blockingly.
-/// The OS's `EINPROGRESS`: 115 on Linux, 36 on the BSDs and macOS.
-const fn expected_in_progress() -> i32 {
-    if cfg!(target_os = "linux") {
-        115
-    } else {
-        36
-    }
-}
-
 async fn connect_bound(addr: std::net::SocketAddr) -> std::io::Result<TcpStream> {
     let Some(name) = super::bind_device() else {
         return TcpStream::connect(addr).await;

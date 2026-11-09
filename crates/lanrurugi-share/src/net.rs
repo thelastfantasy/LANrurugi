@@ -6,9 +6,10 @@ use std::time::{Duration, Instant};
 
 use iroh::endpoint::presets;
 use iroh::protocol::Router;
-use iroh::{Endpoint, EndpointId, RelayMap, RelayMode, SecretKey};
+use iroh::{Endpoint, EndpointId, RelayMap, RelayMode, RelayUrl, SecretKey};
 
 use crate::proxy;
+use crate::settings::ShareSettings;
 use lanrurugi_core::ids::{ArchiveId, ShareId};
 
 /// How long an `Open` session stays usable.
@@ -310,4 +311,68 @@ pub fn relay_tls() -> iroh::tls::CaTlsConfig {
         lanrurugi_core::http_client::RootSource::System => iroh::tls::CaTlsConfig::system(),
         lanrurugi_core::http_client::RootSource::Bundled => iroh::tls::CaTlsConfig::embedded(),
     }
+}
+
+pub fn relay_urls(settings: &ShareSettings) -> Vec<RelayUrl> {
+    let node_relays: Vec<String> = crate::nodes::configured_nodes(settings)
+        .into_iter()
+        .filter_map(|n| n.relay)
+        .collect();
+    let mut candidates: Vec<String> = settings
+        .list("share_relay_urls")
+        .into_iter()
+        .chain(node_relays)
+        .chain(std::iter::once(
+            settings.text("share_self_relay_url").to_string(),
+        ))
+        // The relay role's own relay, so this endpoint can be reached through it.
+        .chain(
+            settings
+                .flag("share_node_relay")
+                .then(|| crate::nodes::own_relay_url(settings))
+                .flatten(),
+        )
+        .collect();
+    if settings.flag("share_public_services") {
+        candidates.extend(
+            iroh::defaults::prod::default_relay_map()
+                .urls::<Vec<RelayUrl>>()
+                .iter()
+                .map(|u| u.to_string()),
+        );
+    }
+    // One spelling per relay (iroh's own defaults end in a dot), so the same relay never appears
+    // twice in the map or in a code.
+    let mut urls: Vec<RelayUrl> = Vec::new();
+    for url in candidates
+        .iter()
+        .filter_map(|s| crate::settings::canonical_https_url(s))
+        .filter_map(|s| s.parse::<RelayUrl>().ok())
+    {
+        if !urls.contains(&url) {
+            urls.push(url);
+        }
+    }
+    urls
+}
+
+/// Starts (or restarts, after a settings change) this instance's endpoint.
+/// The settings the embedded relay is built from. Unchanged across a rebuild, the relay is kept
+/// running: restarting it drops every peer currently connected through it for no benefit.
+pub fn relay_settings_key(settings: &ShareSettings) -> String {
+    [
+        "share_node_relay",
+        "share_node_relay_port",
+        "share_node_relay_tls",
+        "share_node_relay_cert",
+        "share_node_relay_key",
+        "share_node_relay_allow",
+        "share_node_relay_rate",
+        "share_public_url",
+        "share_self_relay_url",
+    ]
+    .iter()
+    .map(|field| format!("{field}={}", settings.text(field)))
+    .collect::<Vec<_>>()
+    .join("\n")
 }

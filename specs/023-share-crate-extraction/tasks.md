@@ -197,3 +197,12 @@ mDNS 发现；`Bound::take_endpoint()` 把端点交给调用方挂协议处理�
 仍留在 api 的是 `start`（按顺序停旧端点、保比率、复盘中继）与 `bind` 的三行胶水（把
 `relay_urls(settings)` 变成 `RelayMap`、挂 `ShareProtocol`）。`relay_urls` 与 `external_addrs`
 用到了 api 的 `nodes::configured_nodes`/`own_relay_url`，所以在它们搬走之前 `bind` 的胶水也在 api。
+
+
+### Implementation Record — 2026-11-09 16:10（节点字符串与中继地址）
+
+`crates/lanrurugi-share/src/nodes.rs` 现在拥有节点字符串的一切纯逻辑：`NodeRef`、`parse_node`、
+`configured_nodes`、`own_relay_url`、`node_relay_url`，以及端点 id 的 hex 两种形态
+（`endpoint_hex`/`parse_endpoint_hex`）。`crates/lanrurugi-share/src/net.rs` 拿走
+`relay_urls` 与 `relay_settings_key`。api 侧全部改为 re-export，`share_net::nodes` 只剩真正要
+`AppState` 的部分（发布/撤销记录、解析节点码、起中继、独立节点模式）。
