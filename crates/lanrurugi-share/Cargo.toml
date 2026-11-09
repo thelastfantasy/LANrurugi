@@ -6,6 +6,7 @@ license.workspace = true
 description = "Sharing engine: protocol, transport and import pipeline, independent of the HTTP layer"
 
 [dependencies]
+bytes.workspace = true
 ed25519-dalek.workspace = true
 netwatch = "0.19.3"
 iroh-mdns-address-lookup.workspace = true

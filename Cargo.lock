@@ -4597,6 +4597,7 @@ version = "1.0.0-beta.5"
 dependencies = [
  "bao-tree",
  "blake3",
+ "bytes",
  "chrono",
  "chrono-tz",
  "deadpool-redis",

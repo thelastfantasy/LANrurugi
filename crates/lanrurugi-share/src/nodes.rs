@@ -1,12 +1,23 @@
 //! Node strings and the relays they name. Pure parsing and settings lookups: the rendezvous and
 //! relay roles themselves are still built by the application.
 
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use bytes::Bytes;
+use deadpool_redis::redis::AsyncCommands;
+use deadpool_redis::Pool;
 use iroh::EndpointAddr;
+use lanrurugi_share_proto::messages::{RefusalReason, Request, Response};
+use lanrurugi_storage::keys;
 
 use crate::net::endpoint_addr;
 use crate::proxy;
 use crate::publish::{pkarr_relays, RETRACTED_ENDPOINT_ID};
 use crate::settings::ShareSettings;
+use crate::util::{hex, unhex};
 
 /// 32 bytes as lowercase hex, the spelling used in node strings and `via` codes.
 pub fn endpoint_hex(id: &[u8; 32]) -> String {
@@ -169,4 +180,174 @@ pub async fn node_addr(settings: &ShareSettings, node: &NodeRef) -> Option<Endpo
         .and_then(|mut a| a.next());
     let relays: Vec<String> = node.relay.iter().cloned().collect();
     endpoint_addr(&node.endpoint_id, &relays, direct)
+}
+
+/// Packets held by a node-only instance: signed packet bytes and when they were last written.
+type MemoryPackets = Arc<Mutex<HashMap<String, (Vec<u8>, Instant)>>>;
+
+/// Where a rendezvous role keeps packets: Redis in a full instance, memory in node-only mode.
+#[derive(Clone)]
+pub enum RendezvousStore {
+    Redis(Pool),
+    Memory(MemoryPackets),
+}
+
+const PACKET_TTL: Duration = Duration::from_secs(keys::SHARE_RDV_TTL_SECS as u64);
+/// A pkarr packet is at most 1000 bytes of DNS plus 104 bytes of header.
+const MAX_PACKET: usize = 1104;
+
+impl RendezvousStore {
+    pub fn memory() -> Self {
+        Self::Memory(Arc::new(Mutex::new(HashMap::new())))
+    }
+
+    /// Verifies the packet's signature and keeps the newest one per key.
+    pub async fn put(&self, packet: &[u8]) -> Result<(), RefusalReason> {
+        if packet.len() < 32 + 64 + 8 || packet.len() > MAX_PACKET {
+            return Err(RefusalReason::NotFound);
+        }
+        let key = pkarr::PublicKey::try_from(&packet[..32]).map_err(|_| RefusalReason::NotFound)?;
+        let signed =
+            pkarr::SignedPacket::from_relay_payload(&key, &Bytes::copy_from_slice(&packet[32..]))
+                .map_err(|_| RefusalReason::NotFound)?;
+        let name = hex(&key.to_bytes());
+        if let Some(existing) = self.get_raw(&name).await {
+            if let Ok(old) = pkarr::SignedPacket::from_relay_payload(
+                &key,
+                &Bytes::copy_from_slice(&existing[32..]),
+            ) {
+                if old.more_recent_than(&signed) {
+                    return Ok(());
+                }
+            }
+        }
+        match self {
+            Self::Redis(pool) => {
+                let mut conn = pool.get().await.map_err(|_| RefusalReason::Internal)?;
+                let _: () = conn
+                    .set_ex(
+                        keys::share_rdv_key(&name),
+                        packet,
+                        keys::SHARE_RDV_TTL_SECS as u64,
+                    )
+                    .await
+                    .map_err(|_| RefusalReason::Internal)?;
+            }
+            Self::Memory(map) => {
+                let mut map = map.lock().expect("rendezvous lock");
+                map.retain(|_, (_, at)| at.elapsed() < PACKET_TTL);
+                map.insert(name, (packet.to_vec(), Instant::now()));
+            }
+        }
+        Ok(())
+    }
+
+    async fn get_raw(&self, name: &str) -> Option<Vec<u8>> {
+        match self {
+            Self::Redis(pool) => {
+                let mut conn = pool.get().await.ok()?;
+                conn.get(keys::share_rdv_key(name)).await.ok().flatten()
+            }
+            Self::Memory(map) => map
+                .lock()
+                .expect("rendezvous lock")
+                .get(name)
+                .filter(|(_, at)| at.elapsed() < PACKET_TTL)
+                .map(|(p, _)| p.clone()),
+        }
+    }
+
+    pub async fn get(&self, lookup_pubkey: &[u8; 32]) -> Option<Vec<u8>> {
+        self.get_raw(&hex(lookup_pubkey)).await
+    }
+
+    /// Persists a memory store across restarts of a node-only process.
+    pub fn save(&self, path: &Path) {
+        if let Self::Memory(map) = self {
+            let map = map.lock().expect("rendezvous lock");
+            let packets: Vec<String> = map
+                .values()
+                .filter(|(_, at)| at.elapsed() < PACKET_TTL)
+                .map(|(p, _)| hex(p))
+                .collect();
+            let _ = std::fs::write(path, packets.join("\n"));
+        }
+    }
+
+    pub async fn load(&self, path: &Path) {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return;
+        };
+        for line in text.lines() {
+            if let Some(packet) = unhex(line.trim()) {
+                let _ = self.put(&packet).await;
+            }
+        }
+    }
+}
+
+/// Per-source request counting for the rendezvous role, generous enough for a sharer publishing
+/// many shares at once.
+pub struct RendezvousLimiter {
+    counts: Mutex<HashMap<String, (u32, Instant)>>,
+}
+
+/// Requests per source per minute the rendezvous role answers before refusing.
+pub const RDV_PER_MINUTE: u32 = 600;
+
+impl RendezvousLimiter {
+    pub fn new() -> Self {
+        Self {
+            counts: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn allow(&self, source: &str) -> bool {
+        let mut counts = self.counts.lock().expect("rendezvous limiter lock");
+        if counts.len() > 100_000 {
+            counts.retain(|_, (_, start)| start.elapsed() < Duration::from_secs(60));
+        }
+        let entry = counts
+            .entry(source.to_string())
+            .or_insert((0, Instant::now()));
+        if entry.1.elapsed() >= Duration::from_secs(60) {
+            *entry = (0, Instant::now());
+        }
+        entry.0 += 1;
+        entry.0 <= RDV_PER_MINUTE
+    }
+}
+
+impl Default for RendezvousLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Answers `RendezvousPut`/`RendezvousGet`; `None` for any other request.
+pub async fn answer_rendezvous(
+    store: &RendezvousStore,
+    limiter: &RendezvousLimiter,
+    source: &str,
+    request: &Request,
+) -> Option<Result<Response, RefusalReason>> {
+    let answer = match request {
+        Request::RendezvousPut { signed_packet } => {
+            if !limiter.allow(source) {
+                return Some(Err(RefusalReason::RateLimited));
+            }
+            store.put(signed_packet).await.map(|_| Response::Ok)
+        }
+        Request::RendezvousGet { lookup_pubkey } => {
+            if !limiter.allow(source) {
+                return Some(Err(RefusalReason::RateLimited));
+            }
+            Ok(match store.get(lookup_pubkey).await {
+                Some(signed_packet) => Response::Packet { signed_packet },
+                None => Response::NotHere,
+            })
+        }
+        _ => return None,
+    };
+    Some(answer)
 }

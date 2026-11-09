@@ -241,3 +241,13 @@ mDNS 发现；`Bound::take_endpoint()` 把端点交给调用方挂协议处理�
 `crates/lanrurugi-share/src/publish.rs`，api 侧只剩同名薄包装。
 
 这样「拿哪个码、往哪些 pkarr 中继写、写成什么形状」全在一个 crate 内，api 不再参与记录格式。
+
+
+### Implementation Record — 2026-11-09 18:42（会合角色与十六进制）
+
+`RendezvousStore`（Redis / 只读内存两种后端）、`RendezvousLimiter`（每来源每分钟 600 次）、
+`answer_rendezvous` 与 `RDV_PER_MINUTE` 现在在 `crates/lanrurugi-share/src/nodes.rs`。它们不知道
+`AppState`，Redis 池与 TTL 键来自 `lanrurugi-storage`。
+
+api 侧只剩 `NodeProtocol`（iroh 的 `ProtocolHandler`）与 `lanrurugi-server share-node` 的启动代码：
+前者把连接交给 `answer_rendezvous`，后者是独立的只读节点模式。
