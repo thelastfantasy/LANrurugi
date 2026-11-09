@@ -1,4 +1,7 @@
 {
+  "share.network.bindInterfaceUnsupported": "Platform limitation: only Linux can bind iroh's sockets to a named interface (SO_BINDTODEVICE). On this platform sharing traffic always takes the system's default route, so this setting is not offered.",
+  "settings.pluginInterfaceUnsupported": "This platform cannot pin plugin traffic to an interface, so this setting is not available here.",
+  "settings.pluginInterfaceHintPartial": "This build can only pin the requests the app makes itself (downloads, metadata fetches). A plugin's own fetch from its subprocess still takes the system route on this platform, so the setting is partial here — pick a tunnel only when the traffic that matters comes from the app itself.",
   "settings.pluginInterface": "Plugin network interface",
   "settings.pluginInterfaceDefault": "System default (unbound)",
   "settings.pluginInterfaceFollowing": "currently {{iface}}",

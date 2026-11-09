@@ -51,6 +51,7 @@ export function GlobalSection({
   setRecommendprecision,
   pluginBindInterface,
   egressBinding,
+  pluginBindingScope,
   setPluginBindInterface,
   directDownloadUrl,
   onDirectDownloadUrlChange,
@@ -95,6 +96,8 @@ export function GlobalSection({
   setRecommendprecision: (v: string) => void
   pluginBindInterface: string
   egressBinding?: { state: "unpinned" | "bound" | "failed"; interface: string | null }
+  /** What this platform can actually pin; the hint text and the picker follow it. */
+  pluginBindingScope?: "full" | "rust-only" | "none"
   setPluginBindInterface: (v: string) => void
   directDownloadUrl: string
   onDirectDownloadUrlChange: (v: string) => void
@@ -192,6 +195,10 @@ export function GlobalSection({
             {t("settings.enteringADeepseekApiKey")}
           </Row>
           <Row label={t("settings.pluginInterface")}>
+            {pluginBindingScope === "none" ? (
+              t("settings.pluginInterfaceUnsupported")
+            ) : (
+              <>
             {/* The kernel's own default route leads the list and is labelled both on the
                 "unbound" entry (what the user is actually getting right now) and on that
                 interface's own entry (what pinning it would reproduce). */}
@@ -229,7 +236,9 @@ export function GlobalSection({
               ) : null}
             </div>
             <br />
-            {t("settings.pluginInterfaceHint")}
+            {pluginBindingScope === "rust-only"
+              ? t("settings.pluginInterfaceHintPartial")
+              : t("settings.pluginInterfaceHint")}
             {egressBinding?.state === "failed" ? (
               <>
                 <br />
@@ -240,6 +249,8 @@ export function GlobalSection({
                 </span>
               </>
             ) : null}
+              </>
+            )}
           </Row>
           <Row label={t("settings.directDownloadUrl")}>
             <input

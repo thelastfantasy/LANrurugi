@@ -113,6 +113,13 @@ async fn server_info(State(state): State<AppState>) -> Response {
         "total_archives": total_archives,
         "cache_last_cleared": 0,
         "excluded_namespaces": excluded_namespaces,
+        // What the two interface settings can actually enforce here. The UI picks its hint text
+        // from this instead of promising the same thing on every OS.
+        "interface_binding": {
+            "platform": lanrurugi_core::http_client::binding_platform(),
+            "plugin": lanrurugi_core::http_client::plugin_binding_scope(),
+            "share": lanrurugi_core::http_client::share_binding_scope(),
+        },
     }))
     .into_response()
 }

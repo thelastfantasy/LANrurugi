@@ -1,4 +1,7 @@
 {
+  "share.network.bindInterfaceUnsupported": "系统限制：只有 Linux 能给 iroh 指定网络接口（SO_BINDTODEVICE）。此平台上共享流量始终走系统默认路由，因此不提供这个设置。",
+  "settings.pluginInterfaceUnsupported": "此平台无法把插件流量钉在网卡上，因此不提供这个设置。",
+  "settings.pluginInterfaceHintPartial": "这个平台上只有应用自己发起的请求（下载、抓取元数据）会从这块网卡出去；插件子进程里的 fetch 仍然走系统路由，所以只能算部分生效——只有在关键流量确实由应用发出时才值得选隧道。",
   "settings.pluginInterface": "插件网络出口",
   "settings.pluginInterfaceDefault": "系统默认（不绑定）",
   "settings.pluginInterfaceFollowing": "当前走 {{iface}}",

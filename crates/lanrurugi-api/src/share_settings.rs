@@ -196,8 +196,14 @@ fn validate_text(key: &str, text: String) -> Result<String, String> {
         // and pinning the share to it now is the point. The endpoint stays off until it appears
         // (and comes back by itself then), so this can never fall back to the physical link.
         "share_bind_interface" if !text.is_empty() => {
-            if !lanrurugi_core::http_client::interface_binding_supported() {
-                return bad("interface binding is not supported on this platform");
+            if lanrurugi_core::http_client::share_binding_scope()
+                == lanrurugi_core::http_client::BindingScope::None
+            {
+                return bad(
+                    "only Linux can bind the sharing engine's sockets to a named interface \
+                     (SO_BINDTODEVICE); on this platform share traffic always takes the system \
+                     default route, so this setting is not available here",
+                );
             }
             let valid =
                 text.len() <= 15 && !text.contains(['/', ' ', ':']) && !text.starts_with('-');

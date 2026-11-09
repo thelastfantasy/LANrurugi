@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { FaArrowsRotate, FaCopy } from "react-icons/fa6";
 
+import { useServerInfo } from "@/api/hooks";
 import { Modal, Tooltip } from "@/components/common-ui/Display";
 import { Input, Switch } from "@/components/common-ui/Form";
 import { CollapsibleSection, DateTimeStack } from "@/components/Display";
@@ -350,6 +351,11 @@ const PANELS: {
 
 function PanelBody({ panel }: { panel: Panel }) {
   const { t } = useTranslation();
+  const info = useServerInfo();
+  // iroh's sockets are pinned inside the vendored crates, and that fork only implements
+  // SO_BINDTODEVICE: everywhere else the endpoint always takes the system route, so the picker
+  // would be a setting that does nothing.
+  const shareBindingUnsupported = info.data?.interface_binding?.share === "none";
   switch (panel) {
     case "defaults":
       return <ShareSettingsForm fields={DEFAULT_FIELDS} />;
@@ -363,7 +369,13 @@ function PanelBody({ panel }: { panel: Panel }) {
         </>
       );
     case "network":
-      return <ShareSettingsForm fields={NETWORK_FIELDS} />;
+      return shareBindingUnsupported ? (
+        <span className="share-form-hint">
+          {t("share.network.bindInterfaceUnsupported")}
+        </span>
+      ) : (
+        <ShareSettingsForm fields={NETWORK_FIELDS} />
+      );
     case "limits":
       return (
         <>

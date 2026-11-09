@@ -1,4 +1,7 @@
 {
+  "share.network.bindInterfaceUnsupported": "システム側の制約です。iroh のソケットをインターフェースに固定できるのは Linux だけです（SO_BINDTODEVICE）。このプラットフォームでは共有通信が常にシステム既定の経路を使うため、この設定は提供されません。",
+  "settings.pluginInterfaceUnsupported": "このプラットフォームではプラグインの通信を特定のインターフェースに固定できないため、この設定は提供されません。",
+  "settings.pluginInterfaceHintPartial": "このビルドで固定できるのは、アプリ自身が発行するリクエスト（ダウンロード、メタデータ取得）だけです。プラグインのサブプロセス内の fetch はこのプラットフォームではシステム既定の経路を使うため、この設定は部分的なものになります。",
   "settings.pluginInterface": "プラグインのネットワーク出口",
   "settings.pluginInterfaceDefault": "システム既定（未バインド）",
   "settings.pluginInterfaceFollowing": "現在は {{iface}}",

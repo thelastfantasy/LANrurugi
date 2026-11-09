@@ -1,4 +1,7 @@
 {
+  "share.network.bindInterfaceUnsupported": "系統限制：只有 Linux 能將 iroh 的 socket 綁定到指定網路介面（SO_BINDTODEVICE）。此平台上共享流量一律走系統預設路由，因此不提供這個設定。",
+  "settings.pluginInterfaceUnsupported": "此平台無法將外掛流量釘在網卡上，因此不提供這個設定。",
+  "settings.pluginInterfaceHintPartial": "這個平台上只有應用程式自己發出的請求（下載、抓取中繼資料）會從這張網卡出去；外掛子程序裡的 fetch 仍然走系統路由，所以只能算部分生效。",
   "common.NoCategory": " -- 無分類 -- ",
   " -- Select Rating -- ": " -- 選擇評分 -- ",
   "settings.categoriesWillAlwaysBeRestored": "（分類將會一律還原）",

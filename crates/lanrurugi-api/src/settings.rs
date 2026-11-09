@@ -660,10 +660,18 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
     }
     if key == "plugin_bind_interface" {
         let name = value.as_str().unwrap_or("").trim();
-        if !name.is_empty() && !lanrurugi_core::http_client::interface_binding_supported() {
+        // On macOS only the requests this process makes itself are pinned (reqwest's
+        // `IP_BOUND_IF`); the Deno subprocess still takes the system route, and on FreeBSD
+        // nothing is pinned at all. Accepting the first case is deliberate (it does bind the
+        // downloads), but the settings UI says so instead of promising a full tunnel.
+        if !name.is_empty()
+            && lanrurugi_core::http_client::plugin_binding_scope()
+                == lanrurugi_core::http_client::BindingScope::None
+        {
             return Err(
-                "Field \"plugin_bind_interface\": interface binding is not supported on this \
-                 platform."
+                "Field \"plugin_bind_interface\": only Linux can bind plugin traffic to a named \
+                 interface (the egress shim); this platform cannot, so the setting is not \
+                 available here."
                     .to_string(),
             );
         }

@@ -480,6 +480,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             recommendprecision={recommendprecision}
             pluginBindInterface={pluginBindInterface}
             egressBinding={settings.egress_binding}
+            pluginBindingScope={info.data?.interface_binding?.plugin ?? "full"}
             directDownloadUrl={directDownloadUrl}
             onDirectDownloadUrlChange={setDirectDownloadUrl}
             setPluginBindInterface={setPluginBindInterface}

@@ -88,6 +88,57 @@ pub fn outbound_interface() -> Option<String> {
 /// Whether this build can actually pin a socket to a named interface. The settings that ask for
 /// one are rejected up front on platforms where the answer is no, rather than accepted and then
 /// silently ignored — a pinned interface that quietly does nothing is worse than a refusal.
+/// How much of the interface pinning this build can actually enforce.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BindingScope {
+    /// Every outbound path is pinned, including plugin subprocesses.
+    Full,
+    /// Only the requests this process makes itself are pinned; a plugin subprocess's own `fetch`
+    /// still takes the system route.
+    #[serde(rename = "rust-only")]
+    RustOnly,
+    /// Nothing is pinned; the settings that ask for an interface are refused.
+    None,
+}
+
+/// The OS this build runs on, spelled the way [`plugin_binding_scope_for`] expects.
+pub fn binding_platform() -> &'static str {
+    std::env::consts::OS
+}
+
+/// What the plugin-egress setting can enforce here.
+pub fn plugin_binding_scope() -> BindingScope {
+    plugin_binding_scope_for(std::env::consts::OS)
+}
+
+/// What the sharing-engine setting can enforce here.
+pub fn share_binding_scope() -> BindingScope {
+    share_binding_scope_for(std::env::consts::OS)
+}
+
+/// Plugin egress is pinned twice: reqwest's `.interface()` for our own requests, and the
+/// `lanrurugi-egress` shim (`LD_PRELOAD`, `SO_BINDTODEVICE`) for the Deno subprocess. Only Linux has
+/// both; macOS has the first, so a plugin's own `fetch` is unbounded there.
+pub fn plugin_binding_scope_for(os: &str) -> BindingScope {
+    match os {
+        "linux" => BindingScope::Full,
+        "android" | "fuchsia" | "illumos" | "ios" | "macos" | "solaris" | "tvos" | "visionos"
+        | "watchos" => BindingScope::RustOnly,
+        _ => BindingScope::None,
+    }
+}
+
+/// Sharing traffic is pinned inside the two vendored crates (iroh's UDP sockets, the relay's TCP
+/// connections), and that fork implements `SO_BINDTODEVICE` only: everywhere else the endpoint
+/// always takes the system default route, so the setting is refused rather than silently ignored.
+pub fn share_binding_scope_for(os: &str) -> BindingScope {
+    match os {
+        "linux" => BindingScope::Full,
+        _ => BindingScope::None,
+    }
+}
+
 pub const fn interface_binding_supported() -> bool {
     cfg!(any(
         target_os = "android",
@@ -154,5 +205,26 @@ mod tests {
             .tls_certs_only(roots)
             .build()
             .is_ok());
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::{plugin_binding_scope_for, share_binding_scope_for, BindingScope};
+
+    #[test]
+    fn only_linux_pins_every_plugin_request() {
+        assert_eq!(plugin_binding_scope_for("linux"), BindingScope::Full);
+        assert_eq!(plugin_binding_scope_for("macos"), BindingScope::RustOnly);
+        assert_eq!(plugin_binding_scope_for("freebsd"), BindingScope::None);
+        assert_eq!(plugin_binding_scope_for("windows"), BindingScope::None);
+    }
+
+    #[test]
+    fn only_linux_pins_the_sharing_engine() {
+        assert_eq!(share_binding_scope_for("linux"), BindingScope::Full);
+        assert_eq!(share_binding_scope_for("macos"), BindingScope::None);
+        assert_eq!(share_binding_scope_for("freebsd"), BindingScope::None);
+        assert_eq!(share_binding_scope_for("windows"), BindingScope::None);
     }
 }

@@ -225,6 +225,12 @@ export interface ServerInfo {
   total_archives: number
   cache_last_cleared: number
   excluded_namespaces: string[]
+  /** What the two interface settings can enforce on this host; the UI picks its wording from it. */
+  interface_binding: {
+    platform: string
+    plugin: "full" | "rust-only" | "none"
+    share: "full" | "none"
+  }
 }
 
 export interface VersionCheckResponse {
