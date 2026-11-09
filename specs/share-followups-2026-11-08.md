@@ -238,3 +238,30 @@ review 的 5 条阻断全部落地，另修了 12 条「应修」：
   直接 400，而不是接受后静默不绑；iroh-relay fork 的 `EINPROGRESS` 按 OS 取值。
 - **fork 卫生**：`#[cfg(not(wasm_browser))]` 放回 `mod tls;`，fork 的静态与 helper 也加了该
   cfg，`FORK.md` 如实记录新增的两处改动。
+
+## L. review-result（2026-11-09）逐条处置
+
+| 条目 | 处置 |
+|---|---|
+| 阻断-1 绑接口未接线 | 已修：`share_net::bind` 调两个 `set_bind_device`；取消固定时传 `None` 清掉 |
+| 阻断-2 来宾可拿整本签名链接 | 已修：`route_policy.csv` 拒绝 `token_guest /api/tankoubons/:id/download-link` |
+| 阻断-3 搬家非原子 | 已修：只改 `file`、保存失败回滚文件、EXDEV 用 `.part` 再 rename、补丁失败则档案搬回 |
+| 阻断-4 快照覆盖 | 已修：保存前重读记录，只写 `file` |
+| 阻断-5 入库删唯一字节 | 已修：`dest` 已存在返回 Unchanged、出错时保留、Rejected 不删 |
+| 旁车写失败永久分叉 | 已修：重建审计对 Missing/Unreadable/Mismatched 重写并计 `repaired` |
+| `.ingest-<uuid>` 孤儿 | 已修：启动时清理 6 小时以上的 |
+| FreeBSD/macOS 静默不绑 | 已修：`interface_binding_supported()`，不支持时保存即 400 |
+| EINPROGRESS 写死 115 | 已修：按平台取 115/36 |
+| `Stalled` 无 URL | 已修：带 `url` |
+| 重试只看一种错误 | 已修：`HttpRequestFailed`/`TruncatedDownload`/429/502/503/504 |
+| 响应头阶段无超时 | 已修：`read_timeout(120s)` |
+| 下载域判定失败即 404 | 已修：`Host` → `uri().authority()` → `X-Forwarded-Host`，都没有则按非下载域 |
+| 搬家三态混报 | 已修：`RelocationOutcome` 五态，报告分 `settling`/`outside` |
+| 搬家后空目录 | 已修：`prune_empty_parents` |
+| 补丁搬失败留半套 | 已修：档案搬回 |
+| CF 信任看整条链 | 已修：最近一跳要么不受信、要么是 CF 边缘 |
+| nginx 样本缺 XFF | 已修：下载域补 `X-Forwarded-For $remote_addr` |
+| 中继复用键漏项 | 已修：补 `share_node_relay_rate` 与 `share_public_url` |
+| 半截下载 | **未做**：需要新的「等待网络」队列状态，牵动前端与重试语义，留给 022 的后续 |
+| `overwrite_on_duplicate` 失效 | 已删前端选项；字段保留（API 兼容），020 记录说明 |
+| `original_path` 恒空 | 未填补：自动流程不会把 `_byname/` 档案搬进哈希布局，字段留给手工迁移 |

@@ -249,3 +249,141 @@ mod tests {
         assert_eq!(unhex32("zz"), None);
     }
 }
+
+/// The most one `Range` request may ask for, in bytes.
+/// The protocol counts chunks in 1 KiB units, independent of the tree's block size (see
+/// `share_net::import`'s note): the ranges a `Range` request names are in these units.
+pub const CHUNK_BYTES: u64 = 1024;
+pub const MAX_RANGE_BYTES: u64 = 8 * 1024 * 1024;
+/// The most spans one `Range` request may name.
+pub const MAX_RANGE_SPANS: usize = 64;
+
+/// The chunk ranges of `spans`, refused when they exceed the per-request cap.
+pub fn requested_ranges(
+    spans: &[lanrurugi_share_proto::messages::ChunkSpan],
+    size: u64,
+    chunk_bytes: u64,
+) -> Option<bao_tree::ChunkRanges> {
+    use bao_tree::ChunkNum;
+    if spans.len() > MAX_RANGE_SPANS {
+        return None;
+    }
+    let total_chunks = size.div_ceil(chunk_bytes);
+    let mut ranges = bao_tree::ChunkRanges::empty();
+    let mut requested = 0u64;
+    for span in spans {
+        let start = span.start.min(total_chunks);
+        let end = span.end.min(total_chunks);
+        if end <= start {
+            continue;
+        }
+        requested = requested.saturating_add((end - start).saturating_mul(chunk_bytes));
+        ranges |= bao_tree::ChunkRanges::from(ChunkNum(start)..ChunkNum(end));
+    }
+    (requested <= MAX_RANGE_BYTES).then_some(ranges)
+}
+
+/// The verified bao encoding of `spans` of a prepared blob.
+pub async fn encode_range(
+    info: BlobInfo,
+    spans: &[lanrurugi_share_proto::messages::ChunkSpan],
+) -> Option<Vec<u8>> {
+    use bao_tree::io::outboard::PreOrderOutboard;
+    let ranges = requested_ranges(spans, info.size, CHUNK_BYTES)?;
+    tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
+        let data = std::fs::File::open(&info.data_path)?;
+        let outboard = PreOrderOutboard {
+            root: blake3::Hash::from_bytes(info.blake3),
+            tree: bao_tree::BaoTree::new(info.size, BLOCK_SIZE),
+            data: std::fs::File::open(&info.outboard_path)?,
+        };
+        let mut out = Vec::new();
+        bao_tree::io::sync::encode_ranges_validated(&data, &outboard, &ranges, &mut out)?;
+        Ok(out)
+    })
+    .await
+    .ok()?
+    .ok()
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::*;
+    use bao_tree::{ChunkNum, ChunkRanges};
+    use lanrurugi_share_proto::messages::ChunkSpan;
+
+    fn chunk_bytes() -> u64 {
+        CHUNK_BYTES
+    }
+
+    #[test]
+    fn a_span_that_would_wrap_the_cap_is_refused() {
+        // `(end - start) * chunk_bytes` for this pair is 2^64, i.e. 0 in a wrapping u64.
+        let spans = [ChunkSpan {
+            start: 0,
+            end: 1 << 54,
+        }];
+        assert!(requested_ranges(&spans, 1 << 30, chunk_bytes()).is_none());
+    }
+
+    #[test]
+    fn spans_are_clamped_to_the_blob_before_being_counted() {
+        let size = 1024 * 1024;
+        let ranges = requested_ranges(
+            &[ChunkSpan {
+                start: 0,
+                end: u64::MAX,
+            }],
+            size,
+            chunk_bytes(),
+        )
+        .expect("a whole small blob fits the cap");
+        assert_eq!(ranges, ChunkRanges::from(ChunkNum(0)..ChunkNum(1024)));
+    }
+
+    #[test]
+    fn too_many_spans_are_refused() {
+        let spans: Vec<ChunkSpan> = (0..=MAX_RANGE_SPANS as u64)
+            .map(|i| ChunkSpan {
+                start: i,
+                end: i + 1,
+            })
+            .collect();
+        assert!(requested_ranges(&spans, 1 << 30, chunk_bytes()).is_none());
+    }
+
+    #[test]
+    fn a_normal_piece_is_accepted() {
+        let ranges = requested_ranges(
+            &[ChunkSpan { start: 0, end: 64 }],
+            8 * 1024 * 1024,
+            chunk_bytes(),
+        )
+        .unwrap();
+        assert_eq!(ranges, ChunkRanges::from(ChunkNum(0)..ChunkNum(64)));
+    }
+
+    #[test]
+    fn a_cap_sized_request_is_accepted_and_one_chunk_more_is_not() {
+        let size = 16 * 1024 * 1024;
+        let cap_chunks = MAX_RANGE_BYTES / chunk_bytes();
+        assert!(requested_ranges(
+            &[ChunkSpan {
+                start: 0,
+                end: cap_chunks
+            }],
+            size,
+            chunk_bytes()
+        )
+        .is_some());
+        assert!(requested_ranges(
+            &[ChunkSpan {
+                start: 0,
+                end: cap_chunks + 1
+            }],
+            size,
+            chunk_bytes()
+        )
+        .is_none());
+    }
+}
