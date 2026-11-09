@@ -92,6 +92,14 @@ jobs:
 
       # The e-book worker's end-to-end tests load PDFium (pinned in scripts/fetch-pdfium.sh) and run
       # DjVuLibre's tools; the text typesetter needs CJK fonts. Without these the tests skip.
+      # GitHub's release CDN answered 504 on every retry of two consecutive runs (2026-11-09), so
+      # the download is cached: the key changes only when the pin changes.
+      - name: Cache PDFium
+        uses: actions/cache@v4
+        with:
+          path: .pdfium/linux-x64
+          key: pdfium-${{ runner.os }}-7543
+
       - name: Fetch PDFium
         run: scripts/fetch-pdfium.sh amd64 .pdfium/linux-x64
 
