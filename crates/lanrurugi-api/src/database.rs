@@ -752,6 +752,10 @@ async fn run_rebuild_sequence(
         // because the first scan after the upgrade is where a whole library moves at once.
         "relocated": scan_summary.relocated,
         "relocation_skipped": scan_summary.relocation_skipped,
+        // The three cases behind `relocation_skipped`, split so a client can say "needs a human"
+        // (occupied) versus "will clear itself" (settling) versus "outside the library" (outside).
+        "relocation_settling": scan_summary.relocation_settling,
+        "relocation_outside": scan_summary.relocation_outside,
         "relocation_failed": scan_summary.relocation_failed,
         // 020 T021: which hash-layout records could not be rebuilt from disk alone.
         "sidecars": {

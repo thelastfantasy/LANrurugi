@@ -250,10 +250,10 @@ mod tests {
     }
 }
 
-/// The most one `Range` request may ask for, in bytes.
-/// The protocol counts chunks in 1 KiB units, independent of the tree's block size (see
-/// `share_net::import`'s note): the ranges a `Range` request names are in these units.
+/// The protocol counts chunks in 1 KiB units, independent of the tree's block size: the ranges a
+/// `Range` request names are in these units.
 pub const CHUNK_BYTES: u64 = 1024;
+/// The most one `Range` request may ask for, in bytes.
 pub const MAX_RANGE_BYTES: u64 = 8 * 1024 * 1024;
 /// The most spans one `Range` request may name.
 pub const MAX_RANGE_SPANS: usize = 64;

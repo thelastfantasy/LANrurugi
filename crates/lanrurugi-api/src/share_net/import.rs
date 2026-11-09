@@ -43,7 +43,7 @@ use crate::AppState;
 /// One bao chunk: 1 KiB, the unit `ChunkNum`, `ChunkRanges` and therefore `BaoTree::chunks()` count
 /// in. `blobs::BLOCK_SIZE` (16 KiB) only groups chunks for hashing — using it here made every piece
 /// and every progress figure off by 16×.
-const CHUNK_BYTES: u64 = 1024;
+use lanrurugi_share::blobs::CHUNK_BYTES;
 /// A failure writing on *this* instance's disk — as opposed to anything the peer did. The leading
 /// code is what the queue row localizes; the OS text after it stays for support.
 fn storage_error(e: &std::io::Error) -> String {
@@ -1081,7 +1081,7 @@ async fn ingest(run: &Run, sharer_archive_id: &str, part: &Path, root: [u8; 32])
             lanrurugi_scanner::pipeline::DuplicatePolicy::Reject
         };
         match crate::download_manager::ingest::catalogue_staged_file(
-            &run.state, &staging, &name, None, policy,
+            &run.state, &staging, &name, None, policy, false,
         )
         .await
         {

@@ -1994,17 +1994,12 @@ pub(crate) async fn get_archive_thumbnail(
     )
 }
 
-/// The on-disk path of a thumbnail, or `None` when `id` cannot name a stored archive.
-///
-/// `ArchiveId` is a transparent `String` newtype that validates nothing, and callers pass ids
-/// straight from a URL path segment — so without the `is_valid_archive_id` check this would join
-/// `..`/absolute segments into `thumb_dir` and `&id[0..2]` would panic on a short or
-/// non-char-boundary string.
 /// The bytes a share serves for an archive's cover, without an HTTP request in front of it.
 ///
-/// The share protocol cannot negotiate formats (it has no `Accept` header), so it takes the same
-/// path a headerless browser request would: try the stored formats, regenerate on demand, fall
-/// back to whatever exists, then the placeholder.
+/// The share protocol cannot negotiate formats (it has no `Accept` header), so the only sensible
+/// default is the format the library already stores — WebP — exactly as the old headerless path
+/// did. Asking for a "source" capability instead made every share browse regenerate a JPEG per
+/// cover on the sharing side.
 pub(crate) async fn share_thumbnail(
     state: &AppState,
     id: &lanrurugi_core::ids::ArchiveId,
@@ -2013,7 +2008,7 @@ pub(crate) async fn share_thumbnail(
     if !is_valid_archive_id(id.as_str()) {
         return None;
     }
-    let client_support = ClientImageSupport::source();
+    let client_support = ClientImageSupport::webp();
     let mut conn = state.redis.config.get().await.ok()?;
     let thumb_settings = lanrurugi_scanner::thumbnail::read_settings(&mut conn).await;
     let desired_format = desired_thumbnail_format(client_support, thumb_settings.format);
@@ -2050,6 +2045,12 @@ fn thumbnail_etag(bytes: &[u8]) -> String {
     format!("\"{}\"", &hex.as_str()[..16])
 }
 
+/// The on-disk path of a thumbnail, or `None` when `id` cannot name a stored archive.
+///
+/// `ArchiveId` is a transparent `String` newtype that validates nothing, and callers pass ids
+/// straight from a URL path segment — so without the `is_valid_archive_id` check this would join
+/// `..`/absolute segments into `thumb_dir` and `&id[0..2]` would panic on a short or
+/// non-char-boundary string.
 fn thumbnail_disk_path(
     state: &AppState,
     id: &str,

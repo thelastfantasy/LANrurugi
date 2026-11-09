@@ -62,6 +62,7 @@ pub(crate) fn bind_device() -> Option<std::ffi::CString> {
 
 #[cfg(not(wasm_browser))]
 mod tls;
+#[cfg(not(wasm_browser))]
 mod util;
 
 /// Connection errors.

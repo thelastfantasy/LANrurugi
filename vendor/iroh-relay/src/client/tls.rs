@@ -67,7 +67,7 @@ async fn connect_bound(addr: std::net::SocketAddr) -> std::io::Result<TcpStream>
     socket.set_nonblocking(true)?;
     match socket.connect(&addr.into()) {
         Ok(()) => {}
-        Err(e) if e.raw_os_error() == Some(115) => {}
+        Err(e) if e.raw_os_error() == Some(expected_in_progress()) => {}
         Err(e) => return Err(e),
     }
     let std_stream: std::net::TcpStream = socket.into();
@@ -77,6 +77,12 @@ async fn connect_bound(addr: std::net::SocketAddr) -> std::io::Result<TcpStream>
         return Err(err);
     }
     Ok(stream)
+}
+
+/// `EINPROGRESS` as this platform numbers it (Linux 115; macOS and the BSDs 36). Spelled out
+/// rather than imported so the fork keeps no `libc` dependency.
+const fn expected_in_progress() -> i32 {
+    if cfg!(target_os = "linux") { 115 } else { 36 }
 }
 
 /// `SOL_SOCKET` (1) / `SO_BINDTODEVICE` (25) are stable on every Linux target this ships for; the

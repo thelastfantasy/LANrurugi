@@ -66,17 +66,19 @@ pub fn destination_for(library: &Path, path: &Path) -> Option<PathBuf> {
     Some(paths::byname_dir(library).join(relative))
 }
 
-/// Moves `path` and the `.patch.zip` sidecar that belongs to it (if any), returning the new path.
-///
-/// `Ok(None)` means the destination already holds a file. The pass never overwrites: a collision
-/// means the user has two different files that used to be in different directories, and either one
-/// winning would be a silent data loss.
 /// A file that changed in the last minute may still be arriving (`cp`, rsync, an SMB upload).
 /// Moving it mid-copy would leave the writer appending to a path that no longer exists while
 /// `_byname/` holds a truncated copy — and, worse, a record pointing at those partial bytes. The
 /// next pass moves it once it has settled.
 const SETTLE: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// Moves `path` and the `.patch.zip` sidecar that belongs to it (if any).
+///
+/// The outcome says why nothing moved: a destination that already holds a file is never
+/// overwritten (two different files that used to live in different directories must not silently
+/// collapse into one), a file still arriving reports `Settling`, and a record pointing outside the
+/// library reports `Outside`. The archive is only left at its destination when the caller then
+/// manages to save the new path.
 pub async fn relocate_file(
     library: &Path,
     path: &Path,
@@ -107,22 +109,30 @@ pub async fn relocate_file(
     }
     move_file(path, &dest).await?;
 
-    // A patch is addressed by its archive's own path, so it has to travel with it.
+    // A patch is addressed by its archive's own path, so it has to travel with it. Either half of
+    // a pair that cannot move together leaves the archive in place: relocation never revisits a
+    // file already in `_byname/`, so a split pair is permanent (`has_patch` stays true while the
+    // patch can no longer be found).
     let old_patch = crate::patch::patch_path_for(path);
     if tokio::fs::try_exists(&old_patch).await.unwrap_or(false) {
         let new_patch = crate::patch::patch_path_for(&dest);
         if tokio::fs::try_exists(&new_patch).await.unwrap_or(false) {
-            // Two different patches for the same relative name: keep both rather than let the
-            // rename replace the destination's patch with this one.
+            // Two different patches for the same relative name: keep both, and keep the archive
+            // with its own patch instead of letting it adopt the destination's one.
             tracing::warn!(
                 patch = %new_patch.display(),
-                "not moving the patch: _byname already has one at that path"
+                "not moving the archive: _byname already has a patch at its path"
             );
-        } else if let Err(e) = move_file(&old_patch, &new_patch).await {
-            // A patch is addressed through its archive's path, and relocation never revisits a
-            // file already in `_byname/` — so leaving the pair apart is permanent: `has_patch`
-            // stays true while the patch can no longer be found. Put the archive back instead and
-            // let the next pass try the pair again.
+            if let Err(back) = move_file(&dest, path).await {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %back,
+                    "could not move the archive back after its patch collided"
+                );
+            }
+            return Ok((RelocationOutcome::Occupied, None));
+        }
+        if let Err(e) = move_file(&old_patch, &new_patch).await {
             tracing::warn!(
                 patch = %old_patch.display(),
                 error = %e,
@@ -135,10 +145,11 @@ pub async fn relocate_file(
                     "could not move the archive back after its patch failed to move"
                 );
             }
-            return Ok((RelocationOutcome::Occupied, None));
+            // A patch that cannot be written is an I/O failure, not a collision: the caller must
+            // count it as `failed`, or a broken mount looks like "someone else took the name".
+            return Err(e);
         }
     }
-    prune_empty_parents(library, path).await;
     Ok((RelocationOutcome::Moved, Some(dest)))
 }
 
@@ -191,19 +202,28 @@ pub async fn relocate_library(
         }
         match relocate_file(library, &path).await {
             Ok((RelocationOutcome::Moved, Some(dest))) => {
+                let moved_from = path.clone();
                 let old = std::mem::replace(&mut archive.file, dest.to_string_lossy().to_string());
                 // The list was taken before this pass, and a first run over a large library can take
                 // hours; saving the whole struct would write back every field as it was then and
                 // silently drop tags, a title or reading progress changed in between. Re-read the
                 // record and change only `file`.
-                let saved = match archives.get(&archive.id).await {
+                // A record that vanished while the file was moving must not be resurrected from
+                // this pass's stale snapshot: the file goes back where it came from and the next
+                // scan decides what that path is.
+                let (saved, record_vanished) = match archives.get(&archive.id).await {
                     Ok(Some(fresh)) => {
                         let mut fresh = fresh;
                         fresh.file = archive.file.clone();
-                        archives.save(&fresh).await
+                        (archives.save(&fresh).await, false)
                     }
-                    Ok(None) => archives.save(&archive).await,
-                    Err(e) => Err(e),
+                    Ok(None) => (Ok(()), true),
+                    Err(e) => (Err(e), false),
+                };
+                let saved = if record_vanished {
+                    Err(RepositoryError::NotFound("archive", archive.id.to_string()))
+                } else {
+                    saved
                 };
                 if let Err(e) = saved {
                     tracing::warn!(
@@ -215,7 +235,10 @@ pub async fn relocate_library(
                     // path is the one state nothing later repairs: the scan sees the bytes in
                     // `_byname/` and the record already exists, so it neither re-catalogues nor
                     // fixes the path. Put it back where the record still points.
-                    if let Err(back) = tokio::fs::rename(&dest, &path).await {
+                    // `relocate_file` pruned nothing, but a rollback still has to tolerate a
+                    // missing parent (a flat library where the source directory held one file),
+                    // a cross-filesystem move, and a patch that already travelled.
+                    if let Err(back) = move_back(&dest, &path).await {
                         tracing::warn!(
                             path = %dest.display(),
                             error = %back,
@@ -229,6 +252,8 @@ pub async fn relocate_library(
                 let _: Result<(), _> = conn
                     .hset(FILEMAP_KEY, &archive.file, archive.id.as_str())
                     .await;
+                // Only now: pruning before the save is what made a failed save unrecoverable.
+                prune_empty_parents(library, &moved_from).await;
                 tracing::info!(
                     id = %archive.id,
                     from = %old,
@@ -269,6 +294,21 @@ pub async fn relocate_library(
         }
     }
     Ok(report)
+}
+
+/// Puts a moved archive (and a patch that already travelled with it) back where the record still
+/// points, recreating directories the move may have emptied.
+async fn move_back(from: &Path, to: &Path) -> std::io::Result<()> {
+    if let Some(parent) = to.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    move_file(from, to).await?;
+    let moved_patch = crate::patch::patch_path_for(from);
+    if tokio::fs::try_exists(&moved_patch).await.unwrap_or(false) {
+        let original_patch = crate::patch::patch_path_for(to);
+        move_file(&moved_patch, &original_patch).await?;
+    }
+    Ok(())
 }
 
 /// `rename`, falling back to copy + `fsync` + unlink across filesystems (`_byname/` is normally on

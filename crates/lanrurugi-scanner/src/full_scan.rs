@@ -117,9 +117,15 @@ pub struct ScanSummary {
     pub errors: usize,
     /// Archives moved under `_byname/` by the relocation pass at the end of this scan (020).
     pub relocated: usize,
-    /// Relocation candidates whose `_byname/` destination already held a different file — left
-    /// where they were and reported, never overwritten.
+    /// Relocation candidates left in place for any reason other than failure: a destination that
+    /// already held a different file, a file that had not settled yet, and a record pointing
+    /// outside the library. Kept as the sum for compatibility; the two fields below split it so a
+    /// consumer can tell a conflict that needs a human from conditions that clear themselves.
     pub relocation_skipped: usize,
+    /// Files too recently written to move safely; the next pass takes them.
+    pub relocation_settling: usize,
+    /// Records whose path is outside the library (an external mount); permanent by nature.
+    pub relocation_outside: usize,
     pub relocation_failed: usize,
 }
 
@@ -389,11 +395,15 @@ pub async fn full_scan(
             summary.relocated = report.moved as usize;
             summary.relocation_skipped =
                 (report.skipped_occupied + report.settling + report.outside) as usize;
+            summary.relocation_settling = report.settling as usize;
+            summary.relocation_outside = report.outside as usize;
             summary.relocation_failed = report.failed as usize;
             if !report.is_empty() {
                 tracing::info!(
                     moved = report.moved,
                     skipped_occupied = report.skipped_occupied,
+                    settling = report.settling,
+                    outside = report.outside,
                     failed = report.failed,
                     "_byname relocation pass"
                 );

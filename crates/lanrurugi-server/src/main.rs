@@ -675,7 +675,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                                 &state, &conflict,
                             )
                             .await;
-                        item.pending_filename_conflict = None;
+                        // Cleared only on success: on failure `adopt_pending_conflict` puts the
+                        // bytes back at `temp_path`, and keeping the field is what lets the next
+                        // start try again.
                         match outcome {
                             Ok(archive_id) => {
                                 tracing::info!(
@@ -683,6 +685,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                                     archive_id = %archive_id,
                                     "catalogued a pre-hash-layout download that was waiting for a filename decision"
                                 );
+                                item.pending_filename_conflict = None;
                                 item.state =
                                     lanrurugi_storage::download_queue::DownloadQueueState::Done;
                                 item.archive_ids = Some(vec![archive_id]);

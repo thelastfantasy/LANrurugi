@@ -589,24 +589,27 @@ pub(crate) async fn note_transfer(
 pub async fn read_frame<T: serde::de::DeserializeOwned>(
     recv: &mut RecvStream,
 ) -> Result<(ShareEngine, T), ShareNetError> {
-    fn protocol_err(e: impl std::fmt::Display) -> ShareNetError {
-        ShareNetError::Protocol(e.to_string())
+    // Reading bytes is a transport concern: a reset stream, a dropped relay or a VPN rekey shows up
+    // here, and 022 US2 requires those to be retried, not to fail the import. Only a frame this
+    // build cannot decode (below) is `Protocol`.
+    fn read_err(e: impl std::fmt::Display) -> ShareNetError {
+        ShareNetError::Unreachable(e.to_string())
     }
     let mut prefix = [0u8; 4];
-    recv.read_exact(&mut prefix).await.map_err(protocol_err)?;
+    recv.read_exact(&mut prefix).await.map_err(read_err)?;
     let total = framing::body_len(prefix).map_err(|e| ShareNetError::Protocol(e.to_string()))?;
     let mut head = [0u8; framing::ENGINE_LEN_BYTES];
-    recv.read_exact(&mut head).await.map_err(protocol_err)?;
+    recv.read_exact(&mut head).await.map_err(read_err)?;
     let engine_len = u16::from_be_bytes(head) as usize;
     if framing::ENGINE_LEN_BYTES + engine_len > total {
         return Err(ShareNetError::Protocol("malformed frame".into()));
     }
     let mut engine = vec![0u8; engine_len];
-    recv.read_exact(&mut engine).await.map_err(protocol_err)?;
+    recv.read_exact(&mut engine).await.map_err(read_err)?;
     let engine =
         framing::decode_engine(&engine).map_err(|e| ShareNetError::Protocol(e.to_string()))?;
     let mut body = vec![0u8; total - framing::ENGINE_LEN_BYTES - engine_len];
-    recv.read_exact(&mut body).await.map_err(protocol_err)?;
+    recv.read_exact(&mut body).await.map_err(read_err)?;
     let message =
         framing::decode_payload(&body).map_err(|e| ShareNetError::Protocol(e.to_string()))?;
     Ok((engine, message))
@@ -619,7 +622,7 @@ pub async fn write_frame<T: serde::Serialize>(
     let frame = framing::encode(message).map_err(|e| ShareNetError::Protocol(e.to_string()))?;
     send.write_all(&frame)
         .await
-        .map_err(|e| ShareNetError::Protocol(e.to_string()))
+        .map_err(|e| ShareNetError::Unreachable(e.to_string()))
 }
 
 /// Sends one request on a fresh stream and returns the response header, plus the stream for a
@@ -634,7 +637,7 @@ pub async fn call(
         .map_err(|e| ShareNetError::Unreachable(e.to_string()))?;
     write_frame(&mut send, &request).await?;
     send.finish()
-        .map_err(|e| ShareNetError::Protocol(e.to_string()))?;
+        .map_err(|e| ShareNetError::Unreachable(e.to_string()))?;
     let (engine, response) = tokio::time::timeout(
         Duration::from_secs(ANSWER_TIMEOUT_SECS),
         read_frame::<Response>(&mut recv),
@@ -671,9 +674,11 @@ pub async fn read_body(
     recv.take(len)
         .read_to_end(&mut body)
         .await
-        .map_err(|e| ShareNetError::Protocol(e.to_string()))?;
+        .map_err(|e| ShareNetError::Unreachable(e.to_string()))?;
     if body.len() as u64 != len {
-        return Err(ShareNetError::Protocol("truncated body".into()));
+        // The peer announced more than it sent: the stream ended early, which is transmission loss
+        // (retry), not a frame this build cannot parse.
+        return Err(ShareNetError::Unreachable("truncated body".into()));
     }
     Ok(body)
 }

@@ -82,13 +82,11 @@ pub fn outbound_interface() -> Option<String> {
         .clone()
 }
 
-/// `builder` bound to the configured interface, when there is one. Binding is what makes an
-/// interface choice a hard constraint rather than a preference: `SO_BINDTODEVICE` makes the kernel
-/// pick this device's route (and fail when there is none) instead of silently falling back.
-/// Whether this build can actually pin a socket to a named interface. The settings that ask for
-/// one are rejected up front on platforms where the answer is no, rather than accepted and then
-/// silently ignored — a pinned interface that quietly does nothing is worse than a refusal.
 /// How much of the interface pinning this build can actually enforce.
+///
+/// The settings that ask for one are rejected up front where the answer is `None`, rather than
+/// accepted and then silently ignored — a pinned interface that quietly does nothing is worse
+/// than a refusal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BindingScope {
