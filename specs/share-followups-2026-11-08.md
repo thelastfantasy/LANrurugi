@@ -197,3 +197,20 @@
 
 21. 现状是**部分实现**（crate 与 `ShareHost` 已就位，`nodes`/`publish`/`helper`/`server`/`import` 仍在 api）。
     验收方式只有一条：行为与拆分前完全一致——上面 14–20 全部通过即可，不需要额外步骤。
+
+## J. 收尾快照（2026-11-09 10:50）
+
+分支 `feat/share-bind-interface`，HEAD `808dbe5`（本轮再加一个测试 commit），CI 全绿。
+
+**020 剩下 0 个代码任务**：29 项勾选 + T014 在本轮补齐（600 字节标题、重复字节只入一次、
+全是发行标记的名字回退成文件名、删掉的端点 404）。真机项在 I 节。
+**021 剩下 0 个代码任务**：13 项勾选 + T014（文档无相关承诺，不需改）；T012/T013/T013a
+是真实下载与无 cookie 分享下载，见 I 节。
+**022**：26 项完成，14 项全部是真机/跨平台验证（抓包、FreeBSD `setfib`、macOS 拒绝、
+99% 基线、quickstart C/E/F/G/H），见 I 节；中继访问与 `HelperLeave` 的剩余触发条件
+已经写在 T020/T029 里，没有假装做完。
+**023**：crate 与 `ShareHost` 就位、六个模块已搬，`nodes/publish/helper/server/import`
+约 5,100 行仍在 api，原因写在 `specs/023-share-crate-extraction/tasks.md` 的
+Implementation Record 里。
+
+给 Claude Code 的 review 提示：`specs/review-prompt-2026-11-09.md`（整段贴过去即可）。

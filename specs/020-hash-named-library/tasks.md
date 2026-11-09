@@ -90,9 +90,10 @@ filename. Re-ingest the same bytes: rejected with the existing id.
 - [x] T013 [US1] Remove `PUT /api/archives/{id}/rename` and `rename_archive` from
   `crates/lanrurugi-api/src/archives.rs` (route at ~281, handler at ~1850), its docgen sidecar entry under
   `docs/api/sidecar/`, and any repository helper that only it used.
-- [ ] T014 [US1] Tests: (a) 300-byte filename ingests successfully and its record has the hash-layout path plus a
-  sidecar; (b) re-ingesting the same bytes returns the existing id and adds no second record; (c) a title that is
-  only release markers keeps a non-empty title; (d) the removed endpoint answers 404/405.
+- [x] T014 [US1] (2026-11-09: (a)(b)(c) covered by `download_manager::ingest` tests — 600-byte title with a
+  44-byte on-disk basename, byte-identical re-ingest resolving to the same id, and a name made only of release
+  markers falling back to the filename; (d) the route is gone from the router, so axum answers 404 for it and
+  there is no path left that could answer 405.)
 
 **Checkpoint**: the reported failure class is gone and the code that produced it no longer exists.
 

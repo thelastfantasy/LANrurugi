@@ -110,8 +110,8 @@ regress them silently.
 
 ## Phase 6: Polish
 
-- [ ] T014 [P] `docs/comparison-with-lanraragi.md` / `README.md`: only if either claims something this feature
-  changes (the download host being a private arrangement, or "no reverse-proxy reference").
+- [x] T014 [P] (2026-11-09: checked both files — their download mentions are about the P2P share transport,
+  not about the second host name, so neither makes a claim this feature changes. Nothing to edit.)
 - [x] T015 Gates: `mise run fmt-check`, `mise run clippy`, `mise run check-crate -- lanrurugi-api`,
   `mise run test-crate -- lanrurugi-api`, `tsc --noEmit`, `eslint src`, `mise run docs-build`.
 

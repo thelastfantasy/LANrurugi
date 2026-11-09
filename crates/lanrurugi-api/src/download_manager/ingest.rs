@@ -835,4 +835,34 @@ mod tests {
         assert_eq!(same, id);
         assert!(!second.exists(), "the duplicate staged copy is discarded");
     }
+
+    /// 020 FR-003: a name that is nothing but release markers must not end up with an empty title —
+    /// the filename is the fallback, brackets and all, because an empty title is unsearchable.
+    #[tokio::test]
+    async fn a_name_made_only_of_release_markers_keeps_a_non_empty_title() {
+        let root = tempfile::tempdir().unwrap();
+        let Some(state) = state_with_temp_dirs(root.path()).await else {
+            return;
+        };
+        let staging = staged_zip(root.path(), "markers-only");
+
+        let ingested = catalogue_staged_file(
+            &state,
+            &staging,
+            "[DL版] (中国翻訳).zip",
+            None,
+            DuplicatePolicy::Reject,
+        )
+        .await
+        .expect("catalogued");
+        let archive = state
+            .repos
+            .archives
+            .get(&lanrurugi_core::ids::ArchiveId::from(ingested.archive_id))
+            .await
+            .unwrap()
+            .expect("a record was written");
+        assert_eq!(archive.name, "[DL版] (中国翻訳)");
+        assert_eq!(archive.title, archive.name, "an empty title is unusable");
+    }
 }
