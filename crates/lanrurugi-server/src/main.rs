@@ -1149,6 +1149,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         });
     }
 
+    let shutdown_state = state.clone();
     let app = app::build_app(state, args.static_dir, args.docs_dir);
     let listener = match args.bind.parse::<std::net::SocketAddr>() {
         Ok(addr) => tokio::net::TcpListener::from_std(lanrurugi_server::listen::bind(addr)?)?,
@@ -1164,8 +1165,37 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal(shutdown_state))
     .await?;
     Ok(())
+}
+
+/// Runs when the process is asked to stop. The only work that has to happen here is telling the
+/// peers this node currently helps to stop counting on it: everything else is either durable in
+/// Redis already or rebuilt on the next start. `docker stop` sends SIGKILL after ten seconds, so
+/// the leave path has its own bounded budget.
+async fn shutdown_signal(state: AppState) {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            // The handler could not be installed; the process still stops on ctrl_c.
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+    tracing::info!("stopping");
+    lanrurugi_api::share_net::helper::leave_all(&state).await;
 }
 
 /// `lanrurugi rebuild-index` (User Story 6, T077): runs the same two-step repair

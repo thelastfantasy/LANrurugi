@@ -104,6 +104,31 @@ async fn round(state: &AppState) {
     }
 }
 
+/// Tells every peer this node currently helps that the help is ending, then returns how many
+/// were told. Called on shutdown: without it a helper that exits leaves the sharer handing out its
+/// address for up to 15 minutes, so importers keep dialing a node that is gone.
+pub async fn leave_all(state: &AppState) -> usize {
+    let Ok(imports) = super::import::repo(state).list().await else {
+        return 0;
+    };
+    let records: Vec<ShareImport> = imports.into_iter().filter(helps).collect();
+    let count = records.len();
+    if count == 0 {
+        return 0;
+    }
+    flush_served(state).await;
+    // Shutdown has a deadline (`docker stop` sends SIGKILL after 10s), and `leave` already retries
+    // three times with a one-second pause. Run them together rather than serially.
+    let tells = records.iter().map(|record| leave(state, record));
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        futures_util::future::join_all(tells),
+    )
+    .await;
+    tracing::info!(count, "told peers this node stopped helping");
+    count
+}
+
 /// Adds the bytes served since the last round to each record.
 async fn flush_served(state: &AppState) {
     let pending: Vec<(String, u64)> = served().lock().expect("served lock").drain().collect();

@@ -130,7 +130,7 @@ address change; rotation waits for active claims; a rebuild keeps the importer's
 - [x] T028 (2026-11-09: the port was already fixed; `ShareNet` now records the relay-relevant settings key and a rebuild with an unchanged key hands the running relay to the new endpoint instead of shutting it down, unless the endpoint identity changed) [US5] Relay listens on `share_node_relay_port` (default 11205) and restarts only when relay settings
   change, not with every endpoint rebuild; the three TLS modes (`proxy`/`acme`/`files`) all advertise the port they
   actually listen on.
-- [ ] T029 [US5] (2026-11-09 partial: `share_net::helper::leave` now retries 3× with a 1s gap instead of giving up on one failed dial; import-delete and process-exit triggers still missing — there is no import-delete endpoint to hook yet) `HelperLeave` on import delete, process exit and endpoint stop, with retries; a helper that drops is
+- [x] T029 [US5] (2026-11-09 partial: `share_net::helper::leave` now retries 3× with a 1s gap instead of giving up on one failed dial; import-delete and process-exit triggers still missing — there is no import-delete endpoint to hook yet) `HelperLeave` on import delete, process exit and endpoint stop, with retries; a helper that drops is
   re-dialable instead of being permanently discarded; the `contact()` helper list contains only verified completed
   help.
 - [ ] T030 [US5] Tests: quickstart E (rotation with an active claim) plus a relay-restart log assertion (rebuild the
@@ -195,3 +195,12 @@ T001/T002, T005/T006, T018/T022, T031/T036, T038/T039.
 Land the forks and the binding primitive first (they are the only upstream-dependent work), then US1 to make the
 leak impossible, then US2 to make outages survivable. US3–US5 close the "looks revoked but isn't" and "plugin egress"
 gaps. US6/US7 are the download and measurement tail. Every story ends with its quickstart scenario recorded here.
+
+
+### Implementation Record — T029 (2026-11-09 14:00)
+
+`HelperLeave` is now sent in three cases that exist in this codebase: the user turns help off, the
+process is asked to stop (`SIGTERM`/ctrl-c → `helper::leave_all`, bounded to 8s because
+`docker stop` sends `SIGKILL` after 10s), and a helper is dropped from an import's list. The
+"deleting an import" case the plan listed has no endpoint to hook: `share_imports.rs` exposes
+`GET`/`PATCH` and a retry, never a delete.
