@@ -215,3 +215,11 @@ mDNS 发现；`Bound::take_endpoint()` 把端点交给调用方挂协议处理�
 `start_relay(settings, data_dir, own)` 的签名没变，api 侧 re-export 后调用点不动。
 
 `AllowListed` 的准入测试（轮换后旧端点 id 是陌生人）随之搬进 crate。
+
+
+### Implementation Record — 2026-11-09 16:50（`via` 码里能写什么）
+
+`crates/lanrurugi-share/src/publish.rs` 现在决定 `via` 码可以广告哪些地址：`via_hint`
+（端点自身地址 → 接口过滤 → 可拨号过滤 → 排序去重 → 中继），以及 `address_allowed` /
+`dialable` / `address_rank` 与三条对应测试。这三条规则是 022 US1 的泄漏面，放到 crate 里以后
+任何人改它都要面对同目录的测试。

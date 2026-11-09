@@ -12,6 +12,7 @@ pub mod link;
 pub mod net;
 pub mod nodes;
 pub mod proxy;
+pub mod publish;
 pub mod relay;
 pub mod settings;
 pub mod status;
