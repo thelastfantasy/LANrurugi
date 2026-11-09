@@ -253,7 +253,11 @@ mod tests {
 /// The protocol counts chunks in 1 KiB units, independent of the tree's block size: the ranges a
 /// `Range` request names are in these units.
 pub const CHUNK_BYTES: u64 = 1024;
-/// The most one `Range` request may ask for, in bytes.
+/// The most one `Range` request may ask for, measured in the request's own 1 KiB spans.
+///
+/// Approximate, not a hard byte budget: bao verifies in 16 KiB chunk groups, so a request of many
+/// small scattered spans can decode up to about 2 MiB more than this says. That is a bound on
+/// work, not a correctness limit.
 pub const MAX_RANGE_BYTES: u64 = 8 * 1024 * 1024;
 /// The most spans one `Range` request may name.
 pub const MAX_RANGE_SPANS: usize = 64;

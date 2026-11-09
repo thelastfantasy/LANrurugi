@@ -475,8 +475,16 @@ pub(crate) async fn catalogue_staged_file(
             existing_id,
             reason,
         } => {
-            // `dest` is derived from the content id, so a rejection means these exact bytes are
-            // already catalogued — and `dest` is that archive's file, not a redundant copy.
+            // A rejection means these exact bytes are already catalogued, but `dest` is only
+            // *usually* that archive's file: a record living in `_byname/` (same content id, kept
+            // by its own name) leaves this copy as a redundant duplicate in the hash layout. Drop
+            // it when the recorded path differs, or it would linger forever (`LRR_FILEMAP` points
+            // at the record's own path, and no sweep looks in buckets).
+            if let Ok(Some(existing)) = state.repos.archives.get(&existing_id).await {
+                if Path::new(&existing.file) != dest.as_path() {
+                    let _ = tokio::fs::remove_file(&dest).await;
+                }
+            }
             return Err(IngestDownloadError::Duplicate {
                 existing_id: existing_id.into_string(),
                 reason,
