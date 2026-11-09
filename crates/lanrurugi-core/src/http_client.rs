@@ -85,6 +85,24 @@ pub fn outbound_interface() -> Option<String> {
 /// `builder` bound to the configured interface, when there is one. Binding is what makes an
 /// interface choice a hard constraint rather than a preference: `SO_BINDTODEVICE` makes the kernel
 /// pick this device's route (and fail when there is none) instead of silently falling back.
+/// Whether this build can actually pin a socket to a named interface. The settings that ask for
+/// one are rejected up front on platforms where the answer is no, rather than accepted and then
+/// silently ignored — a pinned interface that quietly does nothing is worse than a refusal.
+pub const fn interface_binding_supported() -> bool {
+    cfg!(any(
+        target_os = "android",
+        target_os = "fuchsia",
+        target_os = "illumos",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "solaris",
+        target_os = "tvos",
+        target_os = "visionos",
+        target_os = "watchos",
+    ))
+}
+
 pub fn bind_outbound(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
     #[cfg(any(
         target_os = "android",

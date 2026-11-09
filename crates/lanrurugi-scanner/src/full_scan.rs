@@ -387,7 +387,8 @@ pub async fn full_scan(
     match crate::relocate::relocate_library(&archives, config_pool, library_path).await {
         Ok(report) => {
             summary.relocated = report.moved as usize;
-            summary.relocation_skipped = report.skipped_occupied as usize;
+            summary.relocation_skipped =
+                (report.skipped_occupied + report.settling + report.outside) as usize;
             summary.relocation_failed = report.failed as usize;
             if !report.is_empty() {
                 tracing::info!(
@@ -1094,6 +1095,12 @@ mod tests {
             !lanrurugi_storage::paths::sidecar_path(dir.path(), byname_record.id.as_str()).exists(),
             "by-name archives get no sidecar"
         );
+        // Cataloguing rewrites the sidecar with the record's title. The original filename has no
+        // other home — a rebuild must reuse it rather than fall back to `<id>.zip`.
+        let rewritten =
+            lanrurugi_storage::sidecar::read(dir.path(), &id).expect("the sidecar is still there");
+        assert_eq!(rewritten.original_filename, "[Group] The Book [DL版].zip");
+        assert_eq!(rewritten.title, "The Book");
 
         for record in &records {
             archives.delete(&record.id).await.unwrap();

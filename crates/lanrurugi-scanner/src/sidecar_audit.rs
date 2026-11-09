@@ -37,6 +37,8 @@ pub struct SidecarAudit {
     pub missing: u64,
     pub unreadable: u64,
     pub mismatched: u64,
+    /// How many of the problems above were rewritten from the record during this pass.
+    pub repaired: u64,
     pub details: Vec<SidecarIssue>,
 }
 
@@ -73,7 +75,36 @@ pub async fn audit_sidecars(
             continue;
         }
         audit.checked += 1;
-        match classify(library, archive.id.as_str()) {
+        let state = classify(library, archive.id.as_str());
+        if state != SidecarState::Ok {
+            // FR-011: a sidecar is derived, so the record can always regenerate it. Leaving the
+            // disagreement in place until an operator acts is what the spec forbids.
+            let extension = Path::new(&archive.file)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let original_filename = if extension.is_empty() {
+                archive.name.clone()
+            } else {
+                format!("{}.{extension}", archive.name)
+            };
+            match lanrurugi_storage::sidecar::Sidecar::for_archive(
+                archive.id.as_str(),
+                &path,
+                &original_filename,
+                &archive.title,
+            ) {
+                Ok(sidecar) if lanrurugi_storage::sidecar::write(library, &sidecar).is_ok() => {
+                    audit.repaired += 1
+                }
+                Ok(_) => tracing::warn!(id = %archive.id, "could not rewrite the sidecar"),
+                Err(e) => {
+                    tracing::warn!(id = %archive.id, error = %e, "could not rebuild the sidecar")
+                }
+            }
+        }
+        match state {
             SidecarState::Ok => {}
             SidecarState::Missing => audit.missing += 1,
             SidecarState::Unreadable => {

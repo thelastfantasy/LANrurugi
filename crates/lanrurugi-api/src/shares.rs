@@ -286,7 +286,19 @@ fn forwarded_address(headers: &HeaderMap, peer: IpAddr, trusted: &[ipnet::IpNet]
     // trusted, so a visitor could otherwise send this header themselves and pick their own
     // address (dodging an IP allowlist, the first-N limit and the failure limiter). Requiring an
     // edge in the chain keeps the orange path working — there the peer or the last hop is one.
-    let cloudflare_in_path = is_cloudflare_edge(&peer_ip) || hops.iter().any(is_cloudflare_edge);
+    // Only the hop nearest this instance counts. `X-Forwarded-For` is appended to by every proxy,
+    // so the rightmost address is the one the last trusted proxy actually saw; an edge name the
+    // visitor typed into the header themselves sits further left and must not unlock
+    // `CF-Connecting-IP`. Walking from the right past this instance's own proxies finds that hop.
+    // The nearest hop that is either a proxy this instance does not trust (so: the client) or a
+    // Cloudflare edge (so: the CDN). A configured `share_trusted_proxies` entry covering the edge
+    // ranges must not hide the edge — that is exactly the deployment this rule exists for.
+    let nearest_hop = hops
+        .iter()
+        .rev()
+        .find(|ip| !trusted.iter().any(|net| net.contains(*ip)) || is_cloudflare_edge(ip));
+    let cloudflare_in_path =
+        is_cloudflare_edge(&peer_ip) || nearest_hop.map(is_cloudflare_edge).unwrap_or(false);
     if cloudflare_in_path {
         if let Some(client) = headers
             .get("CF-Connecting-IP")
@@ -1559,6 +1571,25 @@ mod tests {
         assert_eq!(
             forwarded_address(&cf, public, &cloudflare_and_loopback).to_string(),
             "198.51.100.4"
+        );
+    }
+
+    #[test]
+    fn a_typed_cloudflare_hop_does_not_unlock_cf_connecting_ip() {
+        let trusted: Vec<ipnet::IpNet> = vec!["127.0.0.1/32".parse().unwrap()];
+        let mut headers = HeaderMap::new();
+        // The visitor writes an edge address into `X-Forwarded-For`; the local proxy appends the
+        // address it actually saw, which is the visitor.
+        headers.insert(
+            "X-Forwarded-For",
+            "172.71.0.5, 198.51.100.7".parse().unwrap(),
+        );
+        headers.insert("CF-Connecting-IP", "203.0.113.99".parse().unwrap());
+        let peer: IpAddr = "127.0.0.1".parse().unwrap();
+        assert_eq!(
+            forwarded_address(&headers, peer, &trusted).to_string(),
+            "198.51.100.7",
+            "the header must not let a visitor pick an address on a grey-cloud host"
         );
     }
 

@@ -177,6 +177,10 @@ p, token_guest, /api/plugin-wizard/save, POST, deny
 # 017 FR-040: a whole tankoubon is an administrator download; read-only tokens are refused. Guest
 # visitors never reach it (absent from their whitelist).
 p, token_guest, /api/tankoubons/:id/download, GET, deny
+# The signed-link mint is the same whole-tankoubon download one hop earlier: it answers `GET`, so the
+# generic token_guest GET allow would otherwise hand out a `/api/dl/tankoubons/:id` URL that the
+# anonymous `/api/dl/*` allow accepts. Denying only the direct route left this open.
+p, token_guest, /api/tankoubons/:id/download-link, GET, deny
 # 017 FR-007: share management is administrators only.
 p, token_guest, /api/shares, GET, deny
 p, token_guest, /api/shares/*, GET, deny

@@ -17,8 +17,8 @@ use super::IpFamily;
 
 /// LANrurugi fork (020/022): pin the socket to an interface with `SO_BINDTODEVICE`, not just to an
 /// address. Binding an address fails to hold when the tunnel's address changes, and it does not stop
-/// the kernel picking the physical link for a route that no longer matches. `LANRURUGI_BIND_DEVICE`
-/// is set by the sharing engine only while an interface is pinned.
+/// the kernel picking the physical link for a route that no longer matches. The interface is set
+/// process-wide by the sharing engine only while one is pinned.
 #[cfg(target_os = "linux")]
 fn bind_to_device(socket: &socket2::Socket) -> std::io::Result<()> {
     use std::os::fd::AsRawFd;

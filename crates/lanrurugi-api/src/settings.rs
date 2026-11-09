@@ -660,6 +660,13 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
     }
     if key == "plugin_bind_interface" {
         let name = value.as_str().unwrap_or("").trim();
+        if !name.is_empty() && !lanrurugi_core::http_client::interface_binding_supported() {
+            return Err(
+                "Field \"plugin_bind_interface\": interface binding is not supported on this \
+                 platform."
+                    .to_string(),
+            );
+        }
         if !name.is_empty() && !crate::share_net::interfaces::exists(name) {
             return Err(format!(
                 "Field \"plugin_bind_interface\" names no existing network interface: {name}."

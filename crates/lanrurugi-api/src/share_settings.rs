@@ -196,6 +196,9 @@ fn validate_text(key: &str, text: String) -> Result<String, String> {
         // and pinning the share to it now is the point. The endpoint stays off until it appears
         // (and comes back by itself then), so this can never fall back to the physical link.
         "share_bind_interface" if !text.is_empty() => {
+            if !lanrurugi_core::http_client::interface_binding_supported() {
+                return bad("interface binding is not supported on this platform");
+            }
             let valid =
                 text.len() <= 15 && !text.contains(['/', ' ', ':']) && !text.starts_with('-');
             if valid {

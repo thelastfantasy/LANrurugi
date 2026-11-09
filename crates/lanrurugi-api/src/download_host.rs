@@ -39,12 +39,31 @@ pub async fn restrict_to_downloads(
     let Some(host) = url.host_str() else {
         return next.run(request).await;
     };
+    // The host name can arrive three ways, and a request that spells it none of them is not one
+    // this middleware can classify. `uri().authority()` covers HTTP/2, where `:authority` replaces
+    // the `Host` header; `X-Forwarded-Host` covers a proxy that rewrites `Host` to its upstream
+    // (nginx's `$proxy_host`). Missing all three is not treated as "this is the download host":
+    // failing closed here would 404 every request on a deployment whose proxy drops the header.
     let requested = request
         .headers()
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+        .or_else(|| {
+            request
+                .uri()
+                .authority()
+                .map(|authority| authority.to_string())
+        })
+        .or_else(|| {
+            request
+                .headers()
+                .get("x-forwarded-host")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        })
         .unwrap_or_default();
-    if !host_matches(requested, host, url.port()) {
+    if requested.is_empty() || !host_matches(&requested, host, url.port()) {
         return next.run(request).await;
     }
     let path = request.uri().path();

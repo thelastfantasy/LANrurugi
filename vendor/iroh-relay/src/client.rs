@@ -44,6 +44,7 @@ static BIND_DEVICE: std::sync::RwLock<Option<std::ffi::CString>> = std::sync::Rw
 
 /// Pins this client's TCP sockets to `device`. An embedded NUL is ignored — interface names cannot
 /// contain one.
+#[cfg(not(wasm_browser))]
 pub fn set_bind_device(device: Option<&str>) {
     let next = device
         .filter(|s| !s.is_empty())
@@ -51,6 +52,7 @@ pub fn set_bind_device(device: Option<&str>) {
     *BIND_DEVICE.write().unwrap_or_else(|e| e.into_inner()) = next;
 }
 
+#[cfg(not(wasm_browser))]
 pub(crate) fn bind_device() -> Option<std::ffi::CString> {
     BIND_DEVICE
         .read()
@@ -58,8 +60,8 @@ pub(crate) fn bind_device() -> Option<std::ffi::CString> {
         .clone()
 }
 
-mod tls;
 #[cfg(not(wasm_browser))]
+mod tls;
 mod util;
 
 /// Connection errors.

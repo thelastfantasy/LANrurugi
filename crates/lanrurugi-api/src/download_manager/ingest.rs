@@ -343,6 +343,17 @@ pub(crate) async fn catalogue_staged_file(
             .await
             .map_err(IngestDownloadError::Io)?;
     }
+    // Another ingest of the same bytes may have already renamed its copy into place (the record is
+    // written after that rename, so the lookup above can still have missed it). Overwriting is
+    // harmless — the bytes are identical — but *deleting* on the way out is not: that would remove
+    // the copy the other ingest is about to catalogue. Treat it as already ingested.
+    if tokio::fs::try_exists(&dest).await.unwrap_or(false) {
+        let _ = tokio::fs::remove_file(&incoming).await;
+        return Ok(IngestedDownload {
+            archive_id: id.into_string(),
+            is_new: false,
+        });
+    }
     if let Err(e) = tokio::fs::rename(&incoming, &dest).await {
         let _ = tokio::fs::remove_file(&incoming).await;
         return Err(IngestDownloadError::Io(e));
@@ -370,7 +381,14 @@ pub(crate) async fn catalogue_staged_file(
     {
         Ok(outcome) => outcome,
         Err(e) => {
-            let _ = tokio::fs::remove_file(&dest).await;
+            // `catalogue_new_archive` saves the record before the thumbnail/FILEMAP steps that can
+            // fail; deleting the bytes then leaves a record pointing at nothing, and the record is
+            // what tells the next scan the file was already known. Keep the bytes whenever a record
+            // exists for them.
+            let recorded = matches!(state.repos.archives.get(&id).await, Ok(Some(_)));
+            if !recorded {
+                let _ = tokio::fs::remove_file(&dest).await;
+            }
             return Err(e.into());
         }
     };
@@ -390,7 +408,8 @@ pub(crate) async fn catalogue_staged_file(
             existing_id,
             reason,
         } => {
-            let _ = tokio::fs::remove_file(&dest).await;
+            // `dest` is derived from the content id, so a rejection means these exact bytes are
+            // already catalogued — and `dest` is that archive's file, not a redundant copy.
             return Err(IngestDownloadError::Duplicate {
                 existing_id: existing_id.into_string(),
                 reason,
@@ -864,5 +883,67 @@ mod tests {
             .expect("a record was written");
         assert_eq!(archive.name, "[DL版] (中国翻訳)");
         assert_eq!(archive.title, archive.name, "an empty title is unusable");
+    }
+}
+
+/// Removes `.ingest-*` staging copies a crash left in the library root. Ingestion renames the copy
+/// into its bucket within the same call, so anything old enough to be here is dead weight — and
+/// because the name starts with a dot, no scan will ever pick it up either.
+pub async fn sweep_stale_ingest_copies(library: &Path, older_than: std::time::Duration) -> usize {
+    let Ok(mut entries) = tokio::fs::read_dir(library).await else {
+        return 0;
+    };
+    let now = std::time::SystemTime::now();
+    let mut removed = 0usize;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with(".ingest-") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata().await else {
+            continue;
+        };
+        let old_enough = metadata
+            .modified()
+            .ok()
+            .and_then(|mtime| now.duration_since(mtime).ok())
+            .map(|age| age >= older_than)
+            .unwrap_or(false);
+        if old_enough && tokio::fs::remove_file(entry.path()).await.is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+#[cfg(test)]
+mod sweep_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn only_old_dot_ingest_copies_are_removed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let stale = tmp.path().join(".ingest-abc");
+        let fresh = tmp.path().join(".ingest-fresh");
+        let keep = tmp.path().join("real.zip");
+        for path in [&stale, &fresh, &keep] {
+            std::fs::write(path, b"x").unwrap();
+        }
+        // Backdate the stale one past the threshold; the rest must survive.
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+        std::fs::File::options()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+
+        let removed =
+            sweep_stale_ingest_copies(tmp.path(), std::time::Duration::from_secs(3600)).await;
+        assert_eq!(removed, 1);
+        assert!(!stale.exists());
+        assert!(fresh.exists());
+        assert!(keep.exists());
     }
 }

@@ -2706,7 +2706,20 @@ pub(crate) async fn start_download(
                 // for two seconds" into a slightly slower download instead of a red row. Only
                 // transport failures retry — a 404 or a rejected page is the upstream's answer,
                 // and repeating it changes nothing.
-                const MAX_DOWNLOAD_RETRIES: u32 = 4;
+                /// Whether a failed transfer is worth repeating. Transport failures and a truncated body are what a
+/// reconnect produces; 429/502/503/504 are the upstream saying "not now" (FR-009's own repack
+/// answer is a 503 plus `Retry-After`). A 404 or a rejected page is an answer, and repeating it
+/// changes nothing.
+fn retryable_download_error(error: &lanrurugi_core::queue_error::QueueError) -> bool {
+    use lanrurugi_core::queue_error::QueueError;
+    match error {
+        QueueError::HttpRequestFailed { .. } | QueueError::TruncatedDownload { .. } => true,
+        QueueError::HttpStatus { status, .. } => matches!(status, 429 | 502 | 503 | 504),
+        _ => false,
+    }
+}
+
+const MAX_DOWNLOAD_RETRIES: u32 = 4;
                 let mut attempt = 0u32;
                 let outcome = loop {
                     match run_managed_downloads(
@@ -2724,10 +2737,10 @@ pub(crate) async fn start_download(
                     )
                     .await
                     {
-                        Err(
-                            error @ lanrurugi_core::queue_error::QueueError::HttpRequestFailed { .. },
-                        ) if attempt < MAX_DOWNLOAD_RETRIES
-                            && !cancel_for_task.is_cancelled() =>
+                        Err(error)
+                            if retryable_download_error(&error)
+                                && attempt < MAX_DOWNLOAD_RETRIES
+                                && !cancel_for_task.is_cancelled() =>
                         {
                             attempt += 1;
                             let wait = std::time::Duration::from_secs(2u64.pow(attempt).min(60));

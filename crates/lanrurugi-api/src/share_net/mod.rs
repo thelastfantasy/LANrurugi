@@ -321,6 +321,8 @@ fn relay_settings_key(settings: &ShareSettings) -> String {
         "share_node_relay_cert",
         "share_node_relay_key",
         "share_node_relay_allow",
+        "share_node_relay_rate",
+        "share_public_url",
         "share_self_relay_url",
     ]
     .iter()
@@ -662,6 +664,15 @@ pub async fn bind(
     // point — traffic must not fall back to the physical link. IPv6 is bound as well where the
     // host has it (FR-050 item 7), without failing on IPv4-only hosts.
     let pinned = settings.text("share_bind_interface");
+    // The two forks that own the sockets iroh opens (netwatch's UDP, iroh-relay's TCP) read this
+    // process-wide value at socket creation. Setting it here — before `builder.bind()` and before
+    // any relay dial — is what makes "pinned interface" mean the kernel will not route around it: a
+    // source-address bind alone loses to the weak-host model. Clearing it is just as important, or
+    // unpinning would keep using the last tunnel.
+    let device = pinned.trim();
+    let device = (!device.is_empty()).then_some(device);
+    netwatch::set_bind_device(device);
+    iroh_relay::client::set_bind_device(device);
     let mut bound_addrs: Vec<std::net::IpAddr> = Vec::new();
     if !pinned.trim().is_empty() {
         // The builder starts with a wildcard IPv4 and IPv6 transport. Binding the tunnel's own

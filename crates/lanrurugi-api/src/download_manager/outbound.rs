@@ -54,6 +54,11 @@ pub fn outbound_client() -> Result<reqwest::Client, DownloadError> {
             // indefinitely (the idle timeout in `stream.rs` covers the body, this covers the
             // handshake and the OS-level keepalive).
             .connect_timeout(std::time::Duration::from_secs(30))
+            // Time spent waiting on the peer between reads, including the wait for response
+            // headers: `connect_timeout` only covers the TCP/TLS handshake, so a server that
+            // accepts and then says nothing would otherwise hold the transfer open forever. A
+            // slow-but-alive download never trips this, because each read resets it.
+            .read_timeout(std::time::Duration::from_secs(120))
             .tcp_keepalive(Some(std::time::Duration::from_secs(60))),
     ));
     // 022 US4: pinning is a promise, not a preference. Falling back to the unbound client here

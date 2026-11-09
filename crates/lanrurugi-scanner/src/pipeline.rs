@@ -626,8 +626,13 @@ async fn catalogue_new_archive(
     // archives get one (020) — by-name archives carry their original name in the name itself.
     if let Some(library) = path.parent().and_then(Path::parent) {
         if lanrurugi_storage::paths::is_hash_layout_path(library, path, id.as_str()) {
+            // On a rebuild there is no `title_filename`: the name on disk is the id. Falling back
+            // to it would overwrite the only copy of the original name with `<id>.zip`, so an
+            // existing sidecar wins. Its `original_path` is preserved for the same reason.
+            let previous = lanrurugi_storage::sidecar::read(library, id.as_str());
             let original_filename = title_filename
                 .map(str::to_string)
+                .or_else(|| previous.as_ref().map(|s| s.original_filename.clone()))
                 .or_else(|| {
                     path.file_name()
                         .and_then(|f| f.to_str())
@@ -640,7 +645,8 @@ async fn catalogue_new_archive(
                 &original_filename,
                 &archive.title,
             ) {
-                Ok(sidecar) => {
+                Ok(mut sidecar) => {
+                    sidecar.original_path = previous.map(|s| s.original_path).unwrap_or_default();
                     if let Err(e) = lanrurugi_storage::sidecar::write(library, &sidecar) {
                         tracing::warn!(%id, error = %e, "failed to write the archive sidecar");
                     }

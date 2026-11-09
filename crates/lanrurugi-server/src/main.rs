@@ -629,6 +629,18 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // rather than as a spawned background job — it's a handful of Redis round trips and stat calls
     // at most, and every item should already be in its corrected state by the time the frontend's
     // first poll lands.
+    // 020: a crash between staging a copy and renaming it into its bucket leaves a dot-prefixed
+    // file in the library root that no scan will ever pick up. The copy lives for one call, so
+    // anything hours old is dead weight rather than an in-flight ingest.
+    let swept_ingest = lanrurugi_api::download_manager::ingest::sweep_stale_ingest_copies(
+        &state.library.archive_dir,
+        std::time::Duration::from_secs(6 * 60 * 60),
+    )
+    .await;
+    if swept_ingest > 0 {
+        tracing::info!(removed = swept_ingest, "removed abandoned ingestion copies");
+    }
+
     match state.download_queue.list_all().await {
         Ok(items) => {
             for mut item in items {

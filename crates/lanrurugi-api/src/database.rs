@@ -759,6 +759,7 @@ async fn run_rebuild_sequence(
             "missing": sidecar_audit.missing,
             "unreadable": sidecar_audit.unreadable,
             "mismatched": sidecar_audit.mismatched,
+            "repaired": sidecar_audit.repaired,
             "details": sidecar_audit.details.iter().map(|issue| json!({
                 "id": issue.id,
                 "file": issue.file,

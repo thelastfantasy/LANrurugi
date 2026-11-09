@@ -23,13 +23,35 @@ use lanrurugi_storage::repository::RepositoryError;
 pub struct RelocationReport {
     pub moved: u64,
     pub skipped_occupied: u64,
+    /// Files that changed too recently to be safe to move yet; the next pass takes them.
+    pub settling: u64,
+    /// Records whose path is outside the library (a legacy import pointing at another mount).
+    pub outside: u64,
     pub failed: u64,
 }
 
 impl RelocationReport {
     pub fn is_empty(&self) -> bool {
-        self.moved == 0 && self.skipped_occupied == 0 && self.failed == 0
+        self.moved == 0
+            && self.skipped_occupied == 0
+            && self.settling == 0
+            && self.outside == 0
+            && self.failed == 0
     }
+}
+
+/// What one `relocate_file` call decided. The three "did not move" cases are distinct on purpose:
+/// folding them together made every pass log "`_byname` already holds a file" for a file that was
+/// merely still being copied, and counted paths outside the library as collisions forever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelocationOutcome {
+    Moved,
+    Settling,
+    Occupied,
+    /// The record already points inside `_byname/`; `relocate_library` never asks about these.
+    AlreadyPlaced,
+    /// The record's path is not under the library at all (a legacy import pointing elsewhere).
+    Outside,
 }
 
 /// Where `path` should live, or `None` when it is already in one of the two layouts.
@@ -55,9 +77,17 @@ pub fn destination_for(library: &Path, path: &Path) -> Option<PathBuf> {
 /// next pass moves it once it has settled.
 const SETTLE: std::time::Duration = std::time::Duration::from_secs(60);
 
-pub async fn relocate_file(library: &Path, path: &Path) -> std::io::Result<Option<PathBuf>> {
+pub async fn relocate_file(
+    library: &Path,
+    path: &Path,
+) -> std::io::Result<(RelocationOutcome, Option<PathBuf>)> {
+    if paths::is_in_byname(library, path) {
+        return Ok((RelocationOutcome::AlreadyPlaced, None));
+    }
     let Some(dest) = destination_for(library, path) else {
-        return Ok(None);
+        // `relocate_library` already skips `_byname/`, so the only way here is a record whose path
+        // is not under the library at all.
+        return Ok((RelocationOutcome::Outside, None));
     };
     if let Ok(meta) = tokio::fs::metadata(path).await {
         let settling = meta
@@ -66,11 +96,11 @@ pub async fn relocate_file(library: &Path, path: &Path) -> std::io::Result<Optio
             .and_then(|modified| modified.elapsed().ok())
             .is_some_and(|age| age < SETTLE);
         if settling {
-            return Ok(None);
+            return Ok((RelocationOutcome::Settling, None));
         }
     }
     if tokio::fs::try_exists(&dest).await.unwrap_or(false) {
-        return Ok(None);
+        return Ok((RelocationOutcome::Occupied, None));
     }
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent).await?;
@@ -81,17 +111,55 @@ pub async fn relocate_file(library: &Path, path: &Path) -> std::io::Result<Optio
     let old_patch = crate::patch::patch_path_for(path);
     if tokio::fs::try_exists(&old_patch).await.unwrap_or(false) {
         let new_patch = crate::patch::patch_path_for(&dest);
-        if let Err(e) = move_file(&old_patch, &new_patch).await {
-            // The archive moved; leaving its patch behind is recoverable by hand and must not
-            // undo (or fail) the move.
+        if tokio::fs::try_exists(&new_patch).await.unwrap_or(false) {
+            // Two different patches for the same relative name: keep both rather than let the
+            // rename replace the destination's patch with this one.
+            tracing::warn!(
+                patch = %new_patch.display(),
+                "not moving the patch: _byname already has one at that path"
+            );
+        } else if let Err(e) = move_file(&old_patch, &new_patch).await {
+            // A patch is addressed through its archive's path, and relocation never revisits a
+            // file already in `_byname/` — so leaving the pair apart is permanent: `has_patch`
+            // stays true while the patch can no longer be found. Put the archive back instead and
+            // let the next pass try the pair again.
             tracing::warn!(
                 patch = %old_patch.display(),
                 error = %e,
-                "archive moved into _byname but its patch did not"
+                "could not move the patch with its archive; moving the archive back"
             );
+            if let Err(back) = move_file(&dest, path).await {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %back,
+                    "could not move the archive back after its patch failed to move"
+                );
+            }
+            return Ok((RelocationOutcome::Occupied, None));
         }
     }
-    Ok(Some(dest))
+    prune_empty_parents(library, path).await;
+    Ok((RelocationOutcome::Moved, Some(dest)))
+}
+
+/// Removes the directories a moved archive left empty, up to (but never including) the library
+/// root. The recycle bin does the same; without it a flat-library conversion leaves a skeleton of
+/// empty folders behind.
+async fn prune_empty_parents(library: &Path, moved_from: &Path) {
+    let Some(mut dir) = moved_from.parent() else {
+        return;
+    };
+    while dir.starts_with(library) && dir != library {
+        match tokio::fs::remove_dir(dir).await {
+            Ok(()) => {}
+            // Not empty (another file still lives there) or gone: either way stop climbing.
+            Err(_) => return,
+        }
+        let Some(parent) = dir.parent() else {
+            return;
+        };
+        dir = parent;
+    }
 }
 
 /// One pass over every catalogued archive, moving those outside both layouts into `_byname/`.
@@ -122,14 +190,38 @@ pub async fn relocate_library(
             continue;
         }
         match relocate_file(library, &path).await {
-            Ok(Some(dest)) => {
+            Ok((RelocationOutcome::Moved, Some(dest))) => {
                 let old = std::mem::replace(&mut archive.file, dest.to_string_lossy().to_string());
-                if let Err(e) = archives.save(&archive).await {
+                // The list was taken before this pass, and a first run over a large library can take
+                // hours; saving the whole struct would write back every field as it was then and
+                // silently drop tags, a title or reading progress changed in between. Re-read the
+                // record and change only `file`.
+                let saved = match archives.get(&archive.id).await {
+                    Ok(Some(fresh)) => {
+                        let mut fresh = fresh;
+                        fresh.file = archive.file.clone();
+                        archives.save(&fresh).await
+                    }
+                    Ok(None) => archives.save(&archive).await,
+                    Err(e) => Err(e),
+                };
+                if let Err(e) = saved {
                     tracing::warn!(
                         id = %archive.id,
                         error = %e,
-                        "moved an archive into _byname but could not update its record"
+                        "moved an archive into _byname but could not update its record; moving it back"
                     );
+                    // Leaving the file at its destination with a record that still names the old
+                    // path is the one state nothing later repairs: the scan sees the bytes in
+                    // `_byname/` and the record already exists, so it neither re-catalogues nor
+                    // fixes the path. Put it back where the record still points.
+                    if let Err(back) = tokio::fs::rename(&dest, &path).await {
+                        tracing::warn!(
+                            path = %dest.display(),
+                            error = %back,
+                            "could not move the archive back after the record update failed"
+                        );
+                    }
                     report.failed += 1;
                     continue;
                 }
@@ -139,12 +231,26 @@ pub async fn relocate_library(
                     .await;
                 report.moved += 1;
             }
-            Ok(None) => {
+            Ok((RelocationOutcome::Occupied, _)) => {
                 tracing::warn!(
                     path = %path.display(),
                     "not relocating: _byname already holds a file at that relative path"
                 );
                 report.skipped_occupied += 1;
+            }
+            Ok((RelocationOutcome::Settling, _)) => {
+                report.settling += 1;
+            }
+            Ok((RelocationOutcome::AlreadyPlaced, _)) => {}
+            Ok((RelocationOutcome::Outside, _)) => {
+                tracing::info!(
+                    path = %path.display(),
+                    "not relocating: the record points outside the library"
+                );
+                report.outside += 1;
+            }
+            Ok((RelocationOutcome::Moved, None)) => {
+                report.failed += 1;
             }
             Err(e) => {
                 tracing::warn!(
@@ -165,10 +271,31 @@ async fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
     match tokio::fs::rename(from, to).await {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == ErrorKind::CrossesDevices || e.raw_os_error() == Some(18) => {
-            tokio::fs::copy(from, to).await?;
-            // `copy` is not durable; the rename path is, so match it here.
-            let file = tokio::fs::OpenOptions::new().write(true).open(to).await?;
-            file.sync_all().await?;
+            // Copy under a temporary name and rename it into place: a copy straight to `to` that is
+            // interrupted leaves a truncated file at the destination, which then looks "occupied"
+            // forever and gets catalogued as an archive of its own.
+            let staging = to.with_file_name(format!(
+                ".{}.part-{}",
+                to.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "relocate".to_string()),
+                uuid::Uuid::new_v4().simple()
+            ));
+            let copied = async {
+                tokio::fs::copy(from, &staging).await?;
+                // `copy` is not durable; the rename path is, so match it here.
+                let file = tokio::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&staging)
+                    .await?;
+                file.sync_all().await?;
+                tokio::fs::rename(&staging, to).await
+            }
+            .await;
+            if let Err(e) = copied {
+                let _ = tokio::fs::remove_file(&staging).await;
+                return Err(e);
+            }
             tokio::fs::remove_file(from).await?;
             Ok(())
         }
@@ -218,7 +345,9 @@ mod tests {
         tokio::fs::write(&original, b"bytes").await.unwrap();
         settle(&original).await;
 
-        let moved = relocate_file(library, &original).await.unwrap().unwrap();
+        let (outcome, moved) = relocate_file(library, &original).await.unwrap();
+        assert_eq!(outcome, RelocationOutcome::Moved);
+        let moved = moved.unwrap();
         assert_eq!(moved, library.join("_byname/Series One/Book 01.zip"));
         assert!(!original.exists());
         assert_eq!(tokio::fs::read(&moved).await.unwrap(), b"bytes");
@@ -237,7 +366,10 @@ mod tests {
         tokio::fs::write(&occupied, b"old").await.unwrap();
         settle(&original).await;
 
-        assert_eq!(relocate_file(library, &original).await.unwrap(), None);
+        assert_eq!(
+            relocate_file(library, &original).await.unwrap().0,
+            RelocationOutcome::Occupied
+        );
         assert_eq!(tokio::fs::read(&original).await.unwrap(), b"new");
         assert_eq!(tokio::fs::read(&occupied).await.unwrap(), b"old");
     }
@@ -252,7 +384,10 @@ mod tests {
             .unwrap();
         tokio::fs::write(&original, b"half").await.unwrap();
 
-        assert_eq!(relocate_file(library, &original).await.unwrap(), None);
+        assert_eq!(
+            relocate_file(library, &original).await.unwrap().0,
+            RelocationOutcome::Settling
+        );
         assert!(original.exists(), "an unfinished copy must not move");
         assert!(!library.join("_byname").exists());
     }
@@ -271,7 +406,7 @@ mod tests {
         settle(&original).await;
         settle(&patch).await;
 
-        let moved = relocate_file(library, &original).await.unwrap().unwrap();
+        let moved = relocate_file(library, &original).await.unwrap().1.unwrap();
         assert_eq!(moved, library.join("_byname/Series/Book.zip"));
         let moved_patch = crate::patch::patch_path_for(&moved);
         assert!(
@@ -290,9 +425,12 @@ mod tests {
         tokio::fs::write(&original, b"bytes").await.unwrap();
         settle(&original).await;
 
-        let moved = relocate_file(library, &original).await.unwrap().unwrap();
+        let moved = relocate_file(library, &original).await.unwrap().1.unwrap();
         settle(&moved).await;
-        assert_eq!(relocate_file(library, &moved).await.unwrap(), None);
+        assert_eq!(
+            relocate_file(library, &moved).await.unwrap().0,
+            RelocationOutcome::AlreadyPlaced
+        );
         assert!(moved.exists());
     }
 }

@@ -118,8 +118,8 @@ pub enum DownloadError {
     /// No chunk arrived within the idle window. Without this, a connection that died without an
     /// RST/FIN (a NAT rebind, a suspended laptop) leaves `stream.next()` pending forever and the
     /// queue row sits at "downloading" with no error at all.
-    #[error("no data for {seconds} seconds")]
-    Stalled { seconds: u64 },
+    #[error("no data for {seconds} seconds from {url}")]
+    Stalled { seconds: u64, url: String },
     /// 022 US4: the interface a download was pinned to could not be used. Deliberately an error
     /// rather than a fallback to the default route — that fallback is the leak pinning prevents.
     #[error("could not bind the download to interface {0}: {1}")]
@@ -158,7 +158,9 @@ impl From<&DownloadError> for lanrurugi_core::queue_error::QueueError {
             // queue item to `Queued` instead of recording an error) — this arm only exists so the
             // match stays exhaustive; `Internal` is a harmless placeholder that should never
             // actually surface.
-            DownloadError::Stalled { .. } => QueueError::HttpRequestFailed { url: String::new() },
+            DownloadError::Stalled { url, .. } => {
+                QueueError::HttpRequestFailed { url: url.clone() }
+            }
             DownloadError::Truncated { expected, got } => QueueError::TruncatedDownload {
                 expected: *expected,
                 got: *got,
@@ -612,6 +614,7 @@ async fn download_one_inner(
                     }
                     return Err(DownloadError::Stalled {
                         seconds: READ_IDLE_TIMEOUT.as_secs(),
+                        url: req.url.clone(),
                     });
                 }
             },

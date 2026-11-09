@@ -9,6 +9,11 @@ Upstream: `iroh-relay 1.4.1` from crates.io, copied verbatim except for the chan
 - `src/client/tls.rs`: `connect_bound` replaces `TcpStream::connect` for the relay's TCP dial. With an
   interface pinned it builds the socket itself, sets `SO_BINDTODEVICE`, connects non-blockingly, and
   waits for writability; with none it is the original `TcpStream::connect`.
+- `src/client.rs`: the fork's statics and helpers carry `#[cfg(not(wasm_browser))]`, and the same
+  attribute stays on `mod tls;` where upstream had it — the pin is meaningless on wasm and the
+  module is only compiled where `TcpStream` exists.
+- `src/client/tls.rs`: `EINPROGRESS` comes from `expected_in_progress()` instead of a literal `115`,
+  because the value is 36 on the BSDs and macOS.
 
 ## Why
 

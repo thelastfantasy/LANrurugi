@@ -214,3 +214,27 @@
 Implementation Record 里。
 
 给 Claude Code 的 review 提示：`specs/review-prompt-2026-11-09.md`（整段贴过去即可）。
+
+## K. 按 review-result-2026-11-09 修的项（2026-11-09 13:10）
+
+review 的 5 条阻断全部落地，另修了 12 条「应修」：
+
+- **022 绑定真的接上了**：`share_net::bind` 调 `netwatch::set_bind_device` 与
+  `iroh_relay::client::set_bind_device`（之前两个 fork 有 setter 却没人调用）。
+- **021 只读 token 不能再借 `download-link` 下整本**：策略加 deny。
+- **020 搬家原子性**：save 失败回滚文件、只改 `file` 字段、EXDEV 走临时名 + fsync、
+  补丁搬失败则把档案一起搬回、成功后清理空目录。
+- **020 入库不再删唯一一份字节**：目的名已被占则返回 Unchanged 并保留现场、
+  记录已写入但后续步骤失败时保留字节、`Rejected` 不再删档案文件。
+- **020 旁车**：重建时沿用旁车的 `original_filename`/`original_path`；重建报告里的审计现在会
+  **重写**缺失/损坏/ID 不符的旁车（`repaired` 计数），不再只报告。
+- **020 收编半截下载**这一条没有改：收编路径不校验完整性，与 review 同意见，留待产品决定。
+- **021 Cloudflare 信任只看最近一跳**：伪造的 `X-Forwarded-For` 前缀不再能解锁
+  `CF-Connecting-IP`；下载域参考配置补 `X-Forwarded-For`；下载域判定在缺 `Host` 时回退
+  `:authority`/`X-Forwarded-Host`。
+- **022 下载重试**：`TruncatedDownload` 与 429/502/503/504 也重试；`Stalled` 错误带 URL；
+  出站客户端加 120 秒读超时（覆盖等响应头）。
+- **平台能力**：`interface_binding_supported()`；不支持绑定的平台上，把接口固定写进设置会
+  直接 400，而不是接受后静默不绑；iroh-relay fork 的 `EINPROGRESS` 按 OS 取值。
+- **fork 卫生**：`#[cfg(not(wasm_browser))]` 放回 `mod tls;`，fork 的静态与 helper 也加了该
+  cfg，`FORK.md` 如实记录新增的两处改动。
