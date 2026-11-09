@@ -946,6 +946,7 @@ pub async fn apply_outbound_interface(state: &crate::AppState) {
 async fn put_settings(
     State(state): State<AppState>,
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
+    headers: axum::http::HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Response {
     let Value::Object(mut fields) = body else {
@@ -1062,11 +1063,18 @@ async fn put_settings(
     // The page's own scheme decides whether an `http://` download host is usable at all. A request
     // that changes `share_public_url` in the same call must be judged by the *new* value, not the
     // stored one, so that "switch the site to https and fix the download host in one save" works.
+    // When no public address has ever been configured, the request that carries the save is the
+    // only evidence of how this instance is reached — otherwise `http://` would be accepted
+    // unconditionally, which is the case the check exists to reject. A proxy's
+    // `X-Forwarded-Proto` is honoured because TLS often ends there.
     let requested_page_origin = match fields.get("share_public_url").and_then(Value::as_str) {
         Some(value) => {
             Some(value.trim().trim_end_matches('/').to_string()).filter(|v| !v.is_empty())
         }
-        None => crate::share_settings::load(&state).await.public_url(),
+        None => crate::share_settings::load(&state)
+            .await
+            .public_url()
+            .or_else(|| request_page_origin(&headers)),
     };
 
     for (key, value) in fields {
@@ -1353,9 +1361,61 @@ async fn change_password(
     }
 }
 
+/// The origin this save request arrived on, used only when no public address is configured.
+fn request_page_origin(headers: &axum::http::HeaderMap) -> Option<String> {
+    if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
+        let origin = origin
+            .to_str()
+            .ok()?
+            .trim()
+            .trim_end_matches('/')
+            .to_string();
+        if origin.starts_with("http://") || origin.starts_with("https://") {
+            return Some(origin);
+        }
+    }
+    let forwarded = headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|scheme| *scheme == "http" || *scheme == "https");
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|host| !host.is_empty())?;
+    Some(format!("{}://{host}", forwarded.unwrap_or("http")))
+}
+
 #[cfg(test)]
 mod validate_setting_field_tests {
     use super::*;
+
+    #[test]
+    fn the_request_origin_answers_when_no_public_address_is_configured() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::ORIGIN,
+            "https://lrr.example.org".parse().unwrap(),
+        );
+        assert_eq!(
+            request_page_origin(&headers).as_deref(),
+            Some("https://lrr.example.org")
+        );
+
+        // A proxy that terminates TLS tells us the scheme; the Host header supplies the name.
+        let mut proxied = axum::http::HeaderMap::new();
+        proxied.insert(axum::http::header::HOST, "lrr.example.org".parse().unwrap());
+        proxied.insert("x-forwarded-proto", "https".parse().unwrap());
+        assert_eq!(
+            request_page_origin(&proxied).as_deref(),
+            Some("https://lrr.example.org")
+        );
+
+        // Nothing to go on is `None`, not a guess: the caller then skips the scheme check.
+        assert_eq!(request_page_origin(&axum::http::HeaderMap::new()), None);
+    }
 
     #[test]
     fn rejects_an_unknown_key() {

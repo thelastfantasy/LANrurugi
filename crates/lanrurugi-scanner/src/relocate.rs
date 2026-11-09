@@ -229,6 +229,12 @@ pub async fn relocate_library(
                 let _: Result<(), _> = conn
                     .hset(FILEMAP_KEY, &archive.file, archive.id.as_str())
                     .await;
+                tracing::info!(
+                    id = %archive.id,
+                    from = %old,
+                    to = %archive.file,
+                    "moved an archive into _byname"
+                );
                 report.moved += 1;
             }
             Ok((RelocationOutcome::Occupied, _)) => {

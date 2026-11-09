@@ -603,20 +603,9 @@ export function QueueItemRow({
               />
             </Tooltip>
 
-            <Tooltip label={t("upload.overwriteDuplicate") ?? ""}>
-              <input
-                className="queue-item-flag"
-                type="checkbox"
-                checked={item.overwrite_on_duplicate}
-                disabled={item.state !== "queued"}
-                onChange={(e) =>
-                  void update.mutateAsync({
-                    id: item.id,
-                    overwrite_on_duplicate: e.target.checked,
-                  })
-                }
-              />
-            </Tooltip>
+            {/* `overwrite_on_duplicate` is gone from the UI: since 020 an archive is addressed by
+                its content id, so identical bytes are always reported as already present and a
+                filename collision cannot happen. The field survives in the API for older clients. */}
           </>
         )}
 

@@ -294,3 +294,15 @@ its `name` keeps the original filename verbatim, its `title` is the cleaned one,
 holds `original_filename` and `title`. The second test feeds a 600-byte title and asserts the
 record keeps it while the on-disk basename stays 44 bytes (40 hex + `.zip`) — the ENAMETOOLONG case
 that started 020 is now an ingest-level assertion, not only a scan-level one.
+
+
+## Implementation Record — 2026-11-09 13:40（按 review-result-2026-11-09 的补充）
+
+- `overwrite_on_duplicate` 的队列行开关已从 `QueueItemRow.tsx` 移除：020 之后档案按内容 id 寻址，
+  相同内容一律报「已存在」，文件名冲突不再发生，这个开关没有可作用的对象。字段仍在 API/Redis 里
+  （旧客户端仍可读写），不读它也不因它改变行为。
+- `original_path` 在旁车里只有一种情况非空：一个档案曾在 `_byname/` 之外、后来被显式放进哈希布局。
+  自动流程不会这么做（`_byname/` 里的档案永久留在 `_byname/`），所以当前版本写入时它是空串，
+  而不是「忘记填」。此处与 plan 的差别以本记录为准。
+- 搬家现在每移动一个文件打一行 `moved an archive into _byname`（含 id、旧路径、新路径），
+  对应 FR-009「源→目标可追溯」。
