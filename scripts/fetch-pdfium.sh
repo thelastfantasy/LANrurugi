@@ -29,7 +29,10 @@ sha256_of() {
 
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
-curl -fsSL -o "$tmp" "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/${VERSION}/pdfium-${name}.tgz"
+# GitHub's release CDN answers 504 here often enough to have failed CI twice in one day; the
+# retry flags turn that into a slower success instead of a red build.
+curl -fsSL --retry 6 --retry-all-errors --retry-delay 5 --connect-timeout 20 \
+    -o "$tmp" "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/${VERSION}/pdfium-${name}.tgz"
 actual="$(sha256_of "$tmp")"
 if [ "$actual" != "$sha256" ]; then
     echo "fetch-pdfium: checksum mismatch for pdfium-${name}.tgz (got $actual)" >&2
