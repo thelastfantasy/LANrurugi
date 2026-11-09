@@ -2000,6 +2000,47 @@ pub(crate) async fn get_archive_thumbnail(
 /// straight from a URL path segment — so without the `is_valid_archive_id` check this would join
 /// `..`/absolute segments into `thumb_dir` and `&id[0..2]` would panic on a short or
 /// non-char-boundary string.
+/// The bytes a share serves for an archive's cover, without an HTTP request in front of it.
+///
+/// The share protocol cannot negotiate formats (it has no `Accept` header), so it takes the same
+/// path a headerless browser request would: try the stored formats, regenerate on demand, fall
+/// back to whatever exists, then the placeholder.
+pub(crate) async fn share_thumbnail(
+    state: &AppState,
+    id: &lanrurugi_core::ids::ArchiveId,
+    page: u32,
+) -> Option<(&'static str, Vec<u8>)> {
+    if !is_valid_archive_id(id.as_str()) {
+        return None;
+    }
+    let client_support = ClientImageSupport::source();
+    let mut conn = state.redis.config.get().await.ok()?;
+    let thumb_settings = lanrurugi_scanner::thumbnail::read_settings(&mut conn).await;
+    let desired_format = desired_thumbnail_format(client_support, thumb_settings.format);
+    if let Some((content_type, bytes)) =
+        read_thumbnail_format(state, id.as_str(), page, desired_format).await
+    {
+        return Some((content_type, bytes.to_vec()));
+    }
+    if let Some((content_type, bytes)) = regenerate_thumbnail_on_demand(
+        state,
+        id.as_str(),
+        page,
+        desired_format,
+        thumb_settings.quality,
+    )
+    .await
+    {
+        return Some((content_type, bytes.to_vec()));
+    }
+    if let Some((content_type, bytes)) =
+        read_thumbnail_from_disk(state, id.as_str(), page, client_support).await
+    {
+        return Some((content_type, bytes.to_vec()));
+    }
+    Some(("image/png", PLACEHOLDER_THUMBNAIL.to_vec()))
+}
+
 /// A strong validator for one thumbnail payload, quoted per RFC 9110. Truncated to 16 hex digits:
 /// this is a cache key for a user's own screen, not a security boundary, and the whole point is
 /// cheap revalidation on every navigation.

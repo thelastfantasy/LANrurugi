@@ -6,13 +6,13 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use axum::extract::{Path, Query, State};
 use bao_tree::io::outboard::PreOrderOutboard;
 use bao_tree::{BaoTree, ChunkNum, ChunkRanges};
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use iroh::protocol::{AcceptError, ProtocolHandler};
 use iroh::EndpointId;
 use lanrurugi_core::ids::{ArchiveId, ClaimId, ShareId};
+use lanrurugi_share::host::ShareHost;
 use lanrurugi_share_proto::messages::{
     ChunkSpan, HelpReason, HelpState, HelperAddr, HelperStatus, ManifestItem, RefusalReason,
     Request, Response, ShareEngine, ShareManifest,
@@ -376,33 +376,16 @@ impl ShareProtocol {
         if !manifest.archives().any(|a| a.archive_id == archive_id) {
             return Err(RefusalReason::NotFound);
         }
-        let params: crate::archives::GetThumbnailParams =
-            serde_json::from_value(serde_json::json!({})).map_err(|_| RefusalReason::Internal)?;
-        let response = crate::archives::get_archive_thumbnail(
-            State(self.state.clone()),
-            None,
-            Path(ArchiveId(archive_id)),
-            Query(params),
-            axum::http::HeaderMap::new(),
-        )
-        .await;
-        if !response.status().is_success() {
+        let id = ArchiveId(archive_id);
+        let Some((content_type, bytes)) = self.state.thumbnail(&id, 0).await else {
             return Err(RefusalReason::NotFound);
-        }
-        let content_type = response
-            .headers()
-            .get(axum::http::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string);
-        let body = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024)
-            .await
-            .map_err(|_| RefusalReason::Internal)?;
+        };
         Ok((
             Response::Bytes {
-                content_type,
-                len: body.len() as u64,
+                content_type: Some(content_type),
+                len: bytes.len() as u64,
             },
-            Some(body.to_vec()),
+            Some(bytes),
         ))
     }
 

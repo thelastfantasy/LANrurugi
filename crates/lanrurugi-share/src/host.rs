@@ -28,6 +28,8 @@ pub trait ShareHost: Send + Sync + 'static {
     fn archive(&self, id: &ArchiveId) -> BoxFuture<'_, Option<ShareArchive>>;
     /// The current sharing settings, defaults filled in.
     fn settings(&self) -> BoxFuture<'_, ShareSettings>;
+    /// An archive's cover as the share serves it: MIME type and bytes.
+    fn thumbnail(&self, id: &ArchiveId, page: u32) -> BoxFuture<'_, Option<(String, Vec<u8>)>>;
     /// The names of the categories an archive belongs to, static ones only.
     fn categories(&self, id: &ArchiveId) -> BoxFuture<'_, Vec<String>>;
     /// The tankoubon behind an id, with its members in order.
@@ -97,6 +99,9 @@ impl ShareHost for EmptyHost {
         Box::pin(async {})
     }
     fn node_code(&self) -> BoxFuture<'_, Option<NodeCode>> {
+        Box::pin(async { None })
+    }
+    fn thumbnail(&self, _id: &ArchiveId, _page: u32) -> BoxFuture<'_, Option<(String, Vec<u8>)>> {
         Box::pin(async { None })
     }
     fn categories(&self, _id: &ArchiveId) -> BoxFuture<'_, Vec<String>> {

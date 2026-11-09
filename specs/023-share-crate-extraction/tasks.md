@@ -268,3 +268,12 @@ api 侧只剩 `NodeProtocol`（iroh 的 `ProtocolHandler`）与 `lanrurugi-serve
 `claim_manifest` 的清单与指纹装配也在 crate 里：它经 `ShareHost::categories` 取静态分类名、
 经 `blobs::ready` 取指纹；未就绪的档案以「pending 列表」返回，由 api 决定何时 spawn
 `blobs::prepare`（crate 里不持有 `Arc<dyn ShareHost>`，不想为此逼 host 用 `Arc`）。
+
+
+### Implementation Record — 2026-11-09 20:40（缩略图）
+
+分享协议里的缩略图不再反调 axum handler：`ShareHost::thumbnail(id, page)` 返回
+`(content_type, bytes)`，api 侧由 `archives::share_thumbnail` 在无 `Accept` 头的前提下走
+「已存格式 → 按需重生成 → 任意已存格式 → 占位图」这条与无头浏览器请求相同的路径。
+
+因此 `server.rs` 的 `thumbnail()` 变成：查清单确认档案在分享里 → 取字节 → 回 `Response::Bytes`。

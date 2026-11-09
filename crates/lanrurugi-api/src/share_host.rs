@@ -48,6 +48,16 @@ impl ShareHost for AppState {
         })
     }
 
+    fn thumbnail(&self, id: &ArchiveId, page: u32) -> BoxFuture<'_, Option<(String, Vec<u8>)>> {
+        let state = self.clone();
+        let id = id.clone();
+        Box::pin(async move {
+            crate::archives::share_thumbnail(&state, &id, page)
+                .await
+                .map(|(content_type, bytes)| (content_type.to_string(), bytes))
+        })
+    }
+
     fn categories(&self, id: &ArchiveId) -> BoxFuture<'_, Vec<String>> {
         let repos = self.repos.clone();
         let id = id.clone();
