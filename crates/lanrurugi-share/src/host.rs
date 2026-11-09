@@ -27,6 +27,13 @@ pub trait ShareHost: Send + Sync + 'static {
     fn archive(&self, id: &ArchiveId) -> BoxFuture<'_, Option<ShareArchive>>;
     /// The current sharing settings, defaults filled in.
     fn settings(&self) -> BoxFuture<'_, ShareSettings>;
+    /// Adds bytes served for a share to its imported total. The engine keeps these in memory and
+    /// flushes them when it gives up its endpoint, so this is the one write that must not be lost.
+    fn add_import_bytes(
+        &self,
+        share: &lanrurugi_core::ids::ShareId,
+        bytes: u64,
+    ) -> BoxFuture<'_, ()>;
 }
 
 /// The fields a share needs to describe an archive without loading its bytes.
@@ -56,6 +63,13 @@ impl ShareHost for EmptyHost {
     }
     fn settings(&self) -> BoxFuture<'_, ShareSettings> {
         Box::pin(async { ShareSettings::from_stored(&Default::default()) })
+    }
+    fn add_import_bytes(
+        &self,
+        _share: &lanrurugi_core::ids::ShareId,
+        _bytes: u64,
+    ) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
     }
 }
 

@@ -38,4 +38,18 @@ impl ShareHost for AppState {
     fn settings(&self) -> BoxFuture<'_, ShareSettings> {
         Box::pin(async move { crate::share_settings::load(self).await })
     }
+
+    fn add_import_bytes(
+        &self,
+        share: &lanrurugi_core::ids::ShareId,
+        bytes: u64,
+    ) -> BoxFuture<'_, ()> {
+        let repo = crate::shares::repo(self);
+        let share = share.clone();
+        Box::pin(async move {
+            if let Err(error) = repo.add_import_bytes(&share, bytes).await {
+                tracing::warn!(share = %share, error = %error, "could not flush served import bytes");
+            }
+        })
+    }
 }

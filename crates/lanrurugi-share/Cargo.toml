@@ -6,6 +6,7 @@ license.workspace = true
 description = "Sharing engine: protocol, transport and import pipeline, independent of the HTTP layer"
 
 [dependencies]
+ed25519-dalek.workspace = true
 lanrurugi-core.workspace = true
 lanrurugi-share-proto.workspace = true
 lanrurugi-scanner.workspace = true

@@ -4600,6 +4600,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "deadpool-redis",
+ "ed25519-dalek",
  "futures-util",
  "if-addrs",
  "iroh",

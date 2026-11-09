@@ -169,3 +169,19 @@ share the `ShareNet` handle defined in `share_net/mod.rs`. Moving them is not a 
 So this spec is **partially implemented**: the crate boundary exists, the host interface exists, and the
 pure/observation/storage-adjacent layers already moved. The endpoint lifecycle and the two big subsystems
 remain. That is recorded here rather than checked off, so a later session starts from the truth.
+
+
+### Implementation Record — 2026-11-09 14:40（`ShareNet` 本体迁入）
+
+`crates/lanrurugi-share/src/net.rs` 现在持有 `ShareNet`、`Shared`、`Session`、`RatioState` 与
+`SESSION_TTL`；`crates/lanrurugi-api/src/share_net/mod.rs` 只 `pub use` 回来，因此所有
+`crate::share_net::ShareNet` 的调用点未变。
+
+为此 `ShareHost` 增加 `add_import_bytes`：`ShareNet::flush_ratios` 原来直接拿 `AppState` 的
+shares 仓库写回已服务字节，现在只依赖 host 的这一个方法；`Impl for AppState` 里用
+`crate::shares::repo(self)` 实现，`EmptyHost` 里是 no-op。
+
+仍在 api 的是 `start`/`bind`/`handle`/`RUNNING`/`Shared` 的构造和四个后台任务：它们要按顺序
+重建端点、复用中继、绑接口、启动 watcher，且 `start` 会调用 api 里的
+`nodes::restart_relay`。下一步是把 `bind` 与中继启动也搬过去（需要 host 上补「当前节点密钥」
+与「活动记录」两处）。
