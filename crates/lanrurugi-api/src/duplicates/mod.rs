@@ -54,11 +54,11 @@ async fn scan_duplicates(
     Query(params): Query<ScanParams>,
 ) -> Response {
     let threshold = params.threshold.unwrap_or(detect::DEFAULT_THRESHOLD);
-    if threshold > 16 {
+    if threshold > detect::MAX_THRESHOLD {
         return error(
             StatusCode::BAD_REQUEST,
             "find_duplicates",
-            "threshold must be between 0 and 16",
+            "threshold must be between 0 and 7",
         );
     }
     if state
@@ -119,26 +119,22 @@ async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, 
     let covers = cover::collect(state, &ids).await;
     state.jobs.set_progress(job, 0.6).await;
 
-    let decisions = decisions::load_all(state).await;
+    let rejects = decisions::load_rejects(state).await;
     let hashes = covers.hashes;
     let metas_for_task = metas.clone();
     let hashes_for_task = hashes.clone();
+    let rejects_for_task = rejects.clone();
     let mut groups = lanrurugi_core::concurrency::run_blocking(move || {
-        detect::build_groups(&metas_for_task, &hashes_for_task, threshold, now_secs())
+        detect::build_groups(
+            &metas_for_task,
+            &hashes_for_task,
+            threshold,
+            now_secs(),
+            &rejects_for_task,
+        )
     })
     .await
     .map_err(|e| e.to_string())?;
-
-    // A pair the user marked "not duplicate" never becomes a group edge again, even when both
-    // files are still within the threshold.
-    for group in &mut groups {
-        group.pairs.retain(|p| {
-            !decisions
-                .get(&group_key(&group.members))
-                .map(|d| d.rejects(&p.a, &p.b))
-                .unwrap_or(false)
-        });
-    }
     let hashes_for_regroup = hashes.clone();
     groups = groups
         .iter()
@@ -160,20 +156,12 @@ async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, 
             )
             .await;
     }
-    // Semantic review: one model call per group without a cached verdict. A fallback verdict is
-    // returned to the UI but never stored — it is a local guess, and caching it would make the
-    // guess permanent the moment a provider appears.
+    // Semantic review: one model call per group without a cached verdict. `ensure_with` reuses one
+    // loaded map for the whole pass and stores both the content-keyed verdict and the group-keyed
+    // copy the read endpoints use.
+    let mut reviews = review::load_all(state).await;
     for group in &groups {
-        let verdict = review::ensure(state, group, &metas).await;
-        if verdict.fallback {
-            continue;
-        }
-        if let Ok(mut conn) = state.redis.config.get().await {
-            let value = serde_json::to_string(&verdict).unwrap_or_default();
-            let _: Result<(), _> = conn
-                .hset(review::REVIEW_KEY, group_key(&group.members), value)
-                .await;
-        }
+        review::ensure_with(state, group, &metas, &mut reviews).await;
     }
 
     state.jobs.set_progress(job, 1.0).await;
@@ -256,6 +244,7 @@ async fn group_view(
             "size": archive.arcsize,
             "pages": archive.pagecount,
             "cover": format!("/api/archives/{id}/thumbnail"),
+            "tags": split_tags(&archive.tags),
             "decision": decision.state(id),
             "recommended": recommended,
         }));
@@ -427,6 +416,9 @@ async fn put_decisions(
     }
     record.updated_at = now_secs();
     if let Err(e) = decisions::save(&state, &body.group_key, &record).await {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "duplicates", e);
+    }
+    if let Err(e) = decisions::add_rejects(&state, &record.not_duplicate).await {
         return error(StatusCode::INTERNAL_SERVER_ERROR, "duplicates", e);
     }
     axum::Json(json!({"operation": "duplicate_decisions", "success": 1})).into_response()

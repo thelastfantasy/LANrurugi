@@ -57,3 +57,14 @@ export const DEFAULT_INDEX_ORDER = "desc"
 /** Last-applied legacy theme filename — also hardcoded in `index.html`'s inline script (can't
  * `import` this constant); keep both in sync by hand if this key name ever changes. */
 export const THEME_STORAGE_KEY = "lrrTheme"
+
+/** The duplicate card's cover-thumbnail width as a percentage of the card row — a per-browser
+ * viewing preference, not a server setting: it only changes how big the member covers render.
+ * Percentage (not px) so the same choice looks the same on a phone and on a wide desktop card. */
+export const DUPLICATES_COVER_PERCENT_KEY = "duplicatesCoverPercent"
+
+export const DEFAULT_DUPLICATES_COVER_PERCENT = 32
+
+export const MIN_DUPLICATES_COVER_PERCENT = 16
+
+export const MAX_DUPLICATES_COVER_PERCENT = 50

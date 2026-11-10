@@ -1557,6 +1557,8 @@ export interface DuplicateMember {
   size: number
   pages: number
   cover: string
+  /** Every tag on the archive, `language:…` included — the card shows that one as a chip. */
+  tags: string[]
   decision: "keep" | "discard" | "undecided"
   recommended: boolean
   /** The member that wins the most pairwise comparisons (FR-003's "best copy"). */

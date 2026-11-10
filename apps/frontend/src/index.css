@@ -141,6 +141,19 @@ input[type="checkbox"]::after {
   vertical-align: 0.13em;
 }
 
+/* Compact list rows (the duplicate card's per-member toggles) want just the themed glyph: legacy's
+ * `config.css` also stamps "ON"/"OFF" after every checkbox with a 5px margin, which inside a 20px box
+ * reads as an unexplained gap before the thumbnail (reported live 2026-11-10). Drop the text, shrink
+ * the glyph to the row's text size. */
+input[type="checkbox"].lrr-checkbox-bare {
+  font-size: 16px;
+  margin-left: 0;
+}
+
+input[type="checkbox"].lrr-checkbox-bare::after {
+  content: none;
+}
+
 /* Legacy's reader hides its own header at 1000px (`lrr.css:620-622` hides `#i2`, which carries
  * `#archive-title`), so on a phone or tablet the overview overlay is the only place the title is
  * still visible. Shown below that same breakpoint, hidden above it where the header already has it. */
@@ -2488,6 +2501,31 @@ body div.ido {
   display: block;
   height: 196px;
   margin: 0 auto;
+}
+
+/* The phone nav drawer's header: the app's own mark plus the library's name, linking home. Only
+ * layout, so it lives here rather than in the five theme files — the colours are inherited from the
+ * drawer's own text (themes already style `.id1`). */
+.nav-drawer-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.nav-drawer-brand-logo {
+  display: block;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+}
+
+.nav-drawer-brand-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* One maintenance script under the Plugins page's "维护脚本" section: an explanation and its single

@@ -2000,6 +2000,14 @@ pub(crate) async fn get_archive_thumbnail(
 /// default is the format the library already stores — WebP — exactly as the old headerless path
 /// did. Asking for a "source" capability instead made every share browse regenerate a JPEG per
 /// cover on the sharing side.
+/// Whether these bytes are the "no thumbnail" placeholder rather than a real cover. Callers that
+/// derive data from the *image* (the duplicate detector's perceptual hash) must treat the
+/// placeholder as "no cover available": it is one fixed PNG, so every archive that fell back to it
+/// would otherwise hash identically and look like a 100% visual match.
+pub(crate) fn is_placeholder_thumbnail(bytes: &[u8]) -> bool {
+    bytes == PLACEHOLDER_THUMBNAIL
+}
+
 pub(crate) async fn share_thumbnail(
     state: &AppState,
     id: &lanrurugi_core::ids::ArchiveId,

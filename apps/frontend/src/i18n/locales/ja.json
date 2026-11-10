@@ -2817,5 +2817,6 @@
   "duplicates.bestCopy": "最良のコピー",
   "duplicates.bestCopyHint": "グループ内でページが最も揃っているもの。",
   "library.lastRead": "最近読んだ順",
-  "library.recentlyRead": "最近読んだもの"
+  "library.recentlyRead": "最近読んだもの",
+  "duplicates.coverSize": "表紙サイズ"
 }

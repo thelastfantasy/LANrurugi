@@ -340,18 +340,33 @@ pub async fn relocate_library(
 
 /// Puts a moved archive (and a patch that already travelled with it) back where the record still
 /// points, recreating directories the move may have emptied.
-/// Test seam: a save that can be made to fail, so the rollback path is reachable without a Redis
-/// fault. Compiled away outside tests.
+/// Test seam: a save that can be made to fail for one archive id, so the rollback path is
+/// reachable without a Redis fault. Keyed by id rather than a global flag: `cargo test` runs the
+/// relocation tests in parallel and a process-wide switch made unrelated tests fail at random.
 #[cfg(test)]
-pub(crate) static FAIL_SAVES: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static FAIL_SAVE_FOR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn fail_saves_for(id: &str) {
+    *FAIL_SAVE_FOR.lock().unwrap() = Some(id.to_string());
+}
+
+#[cfg(test)]
+pub(crate) fn allow_saves() {
+    *FAIL_SAVE_FOR.lock().unwrap() = None;
+}
 
 async fn save_record(
     archives: &ArchiveRepository,
     archive: &Archive,
 ) -> Result<(), RepositoryError> {
     #[cfg(test)]
-    if FAIL_SAVES.load(std::sync::atomic::Ordering::SeqCst) {
+    if FAIL_SAVE_FOR
+        .lock()
+        .unwrap()
+        .as_deref()
+        .is_some_and(|id| id == archive.id.as_str())
+    {
         return Err(RepositoryError::NotFound("archive", archive.id.to_string()));
     }
     archives.save(archive).await
@@ -634,9 +649,9 @@ mod tests {
         let id = lanrurugi_storage::id::size_aware_id(&original).unwrap();
         archives.save(&archive_at(&original, &id)).await.unwrap();
 
-        FAIL_SAVES.store(true, std::sync::atomic::Ordering::SeqCst);
+        fail_saves_for(id.as_str());
         let report = relocate_library(&archives, &filemap, library).await;
-        FAIL_SAVES.store(false, std::sync::atomic::Ordering::SeqCst);
+        allow_saves();
         let report = report.unwrap();
 
         assert_eq!(report.failed, 1);

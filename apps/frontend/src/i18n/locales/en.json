@@ -3055,5 +3055,6 @@
   "duplicates.bestCopy": "Best copy",
   "duplicates.bestCopyHint": "Most complete pages in the group.",
   "library.lastRead": "Recently read",
-  "library.recentlyRead": "Recently read"
+  "library.recentlyRead": "Recently read",
+  "duplicates.coverSize": "Cover size"
 }

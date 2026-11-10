@@ -7,20 +7,28 @@ use super::model::{ArchiveMeta, GroupRecord, PairEvidence};
 pub const ALGORITHM: &str = "cover-phash-v1";
 pub const DEFAULT_THRESHOLD: u32 = 7;
 
+/// The largest threshold the 8×8 pigeonhole banding can support: at 8 bits, two hashes 7 bits
+/// apart must still share one band, but 8 apart need not. Anything higher used to degrade to
+/// enumerating every pair (n²/2 `String` pairs — gigabytes on a real library), so the API rejects
+/// it instead.
+pub const MAX_THRESHOLD: u32 = DEFAULT_THRESHOLD;
+
+/// A single band bucket larger than this is not expanded: pairwise work inside one bucket is
+/// quadratic, and a bucket that big means the banding cannot discriminate (e.g. thousands of
+/// archives sharing one band). Skipped buckets are logged; the pass keeps the pairs it did see.
+const MAX_BUCKET: usize = 512;
+
 /// Pairs within `threshold` bits, found through 8 pigeonhole bands (8 bits each): any two hashes
 /// differing in at most 7 bits must share at least one band byte exactly, so no near pair is
 /// missed. A threshold of 8 or more degrades to all pairs, where banding proves nothing.
 pub fn candidates(hashes: &HashMap<String, [u8; 8]>, threshold: u32) -> Vec<(String, String)> {
     let ids: Vec<&String> = hashes.keys().collect();
     let mut out: HashSet<(String, String)> = HashSet::new();
-
-    if threshold >= 8 {
-        for (i, a) in ids.iter().enumerate() {
-            for b in ids.iter().skip(i + 1) {
-                out.insert(ordered(a, b));
-            }
-        }
-        return out.into_iter().collect();
+    // Above the banding limit no band is guaranteed to be shared, so no pair is provably near —
+    // return nothing rather than falling back to enumerating every pair (n²/2, gigabytes on a real
+    // library). The API rejects such thresholds before they get here.
+    if threshold > MAX_THRESHOLD {
+        return Vec::new();
     }
 
     let mut buckets: HashMap<(u8, u8), Vec<&String>> = HashMap::new();
@@ -33,7 +41,15 @@ pub fn candidates(hashes: &HashMap<String, [u8; 8]>, threshold: u32) -> Vec<(Str
                 .push(id);
         }
     }
-    for members in buckets.values() {
+    for ((band, _), members) in &buckets {
+        if members.len() > MAX_BUCKET {
+            tracing::warn!(
+                band,
+                members = members.len(),
+                "duplicate scan skipped an oversized cover-hash bucket"
+            );
+            continue;
+        }
         for (i, a) in members.iter().enumerate() {
             for b in members.iter().skip(i + 1) {
                 out.insert(ordered(a, b));
@@ -166,6 +182,7 @@ pub fn build_groups(
     hashes: &HashMap<String, [u8; 8]>,
     threshold: u32,
     now: i64,
+    rejects: &HashSet<(String, String)>,
 ) -> Vec<GroupRecord> {
     let by_id: HashMap<&str, &ArchiveMeta> = metas.iter().map(|m| (m.id.as_str(), m)).collect();
     let mut parent: HashMap<&str, &str> = metas
@@ -192,6 +209,16 @@ pub fn build_groups(
         let (Some(ma), Some(mb)) = (by_id.get(a.as_str()), by_id.get(b.as_str())) else {
             continue;
         };
+        // A pair the user ruled out is never an edge again, whatever group it now falls into:
+        // the decision is global, not tied to the member list it was made against.
+        let ordered = if a <= b {
+            (a.clone(), b.clone())
+        } else {
+            (b.clone(), a.clone())
+        };
+        if rejects.contains(&ordered) {
+            continue;
+        }
         let distance = super::cover::distance(&hashes[&a], &hashes[&b]);
         if distance > threshold {
             continue;
@@ -415,6 +442,31 @@ mod tests {
     }
 
     #[test]
+    fn an_oversized_threshold_does_not_enumerate_every_pair() {
+        // Thresholds above 7 cannot be handled by 8 bands, and the old fallback enumerated n(n-1)/2
+        // pairs — gigabytes on a real library. The API rejects them; the function must not silently
+        // agree to the enumeration either.
+        let mut hashes = HashMap::new();
+        for i in 0..64u8 {
+            hashes.insert(format!("{i:040}"), [i; 8]);
+        }
+        assert!(candidates(&hashes, 8).is_empty());
+        assert!(candidates(&hashes, 200).is_empty());
+    }
+
+    #[test]
+    fn an_oversized_bucket_is_skipped() {
+        // Every archive with the same band byte in the same position would otherwise form one
+        // quadratic bucket; the pass skips it instead of allocating the pair set.
+        let mut hashes = HashMap::new();
+        for i in 0..600u16 {
+            // Same value in every band, so every bucket is over the cap and none is expanded.
+            hashes.insert(format!("{i:040}"), [0xAB; 8]);
+        }
+        assert!(candidates(&hashes, 7).is_empty());
+    }
+
+    #[test]
     fn near_hashes_are_candidates() {
         let mut hashes = HashMap::new();
         let mut near = [0u8; 8];
@@ -436,7 +488,7 @@ mod tests {
             meta("b", "Work [中国翻訳]", &["artist:someone"], 99, 800),
         ];
         let hashes = HashMap::from([("a".to_string(), hash_of(0)), ("b".to_string(), hash_of(0))]);
-        let groups = build_groups(&metas, &hashes, 7, 1);
+        let groups = build_groups(&metas, &hashes, 7, 1, &HashSet::new());
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].members, vec!["a".to_string(), "b".to_string()]);
         assert!(!groups[0].chained);
@@ -449,7 +501,7 @@ mod tests {
             meta("b", "Work", &["artist:bob"], 100, 1000),
         ];
         let hashes = HashMap::from([("a".to_string(), hash_of(0)), ("b".to_string(), hash_of(0))]);
-        assert!(build_groups(&metas, &hashes, 7, 1).is_empty());
+        assert!(build_groups(&metas, &hashes, 7, 1, &HashSet::new()).is_empty());
     }
 
     #[test]
@@ -471,7 +523,7 @@ mod tests {
             meta("b", "Work 2", &["artist:alice"], 100, 900),
             meta("c", "Work 3", &["artist:alice"], 100, 800),
         ];
-        let groups = build_groups(&metas, &hashes, 7, 1);
+        let groups = build_groups(&metas, &hashes, 7, 1, &HashSet::new());
         assert_eq!(groups.len(), 1);
         assert!(groups[0].chained);
         assert_eq!(groups[0].middle.as_deref(), Some("b"));
@@ -489,7 +541,7 @@ mod tests {
             ("b".to_string(), hash_of(0)),
             ("c".to_string(), hash_of(0)),
         ]);
-        let group = build_groups(&metas, &hashes, 7, 1).remove(0);
+        let group = build_groups(&metas, &hashes, 7, 1, &HashSet::new()).remove(0);
         let pages = HashMap::from([
             ("a".to_string(), 100u32),
             ("b".to_string(), 120),
@@ -515,7 +567,7 @@ mod tests {
             ("b".to_string(), hash_of(0)),
             ("c".to_string(), hash_of(0)),
         ]);
-        let mut group = build_groups(&metas, &hashes, 7, 1);
+        let mut group = build_groups(&metas, &hashes, 7, 1, &HashSet::new());
         assert_eq!(group.len(), 1);
         let mut record = group.remove(0);
         // The user says a..b is not a duplicate; c was only connected through b.

@@ -3055,5 +3055,6 @@
   "duplicates.bestCopy": "最佳副本",
   "duplicates.bestCopyHint": "组内页数最完整的一份。",
   "library.lastRead": "最近阅读",
-  "library.recentlyRead": "最近阅读"
+  "library.recentlyRead": "最近阅读",
+  "duplicates.coverSize": "封面大小"
 }

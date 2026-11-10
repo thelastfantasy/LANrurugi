@@ -1390,9 +1390,66 @@ async fn collect_tag_index(
         } else {
             format!("INDEX_*{folded}*")
         };
-        collect_index_keys(conn, &pattern, ids).await?;
+        collect_index_keys(conn, &pattern, None, ids).await?;
     }
     Ok(())
+}
+
+/// Unions every variant of one query token in as few scans as possible.
+///
+/// `source:` tags are written by plugins in several shapes (`source:`, `source:https://`, with or
+/// without a trailing slash, plus equivalent hosts), and `collect_tag_index` scans once *per*
+/// variant — up to a dozen full `SCAN INDEX_*` passes for a single URL. All those patterns are
+/// prefixes of `INDEX_<namespace>:*`, so one scan of that pattern plus a client-side prefix filter
+/// is equivalent. Exact lookups first try their literal keys (cheap `EXISTS`), which is also
+/// legacy's own early-return rule.
+async fn collect_tag_variants(
+    conn: &mut deadpool_redis::Connection,
+    variants: &[String],
+    isexact: bool,
+    ids: &mut HashSet<String>,
+) -> Result<()> {
+    if variants.is_empty() {
+        return Ok(());
+    }
+
+    if isexact {
+        let mut hit = false;
+        for variant in variants {
+            let key = format!("INDEX_{variant}");
+            if conn.exists(&key).await.unwrap_or(false) {
+                let members: Vec<String> = conn.smembers(&key).await.unwrap_or_default();
+                ids.extend(members);
+                hit = true;
+            }
+        }
+        if hit {
+            return Ok(());
+        }
+    }
+
+    if let Some(namespace) = shared_namespace(variants) {
+        let prefixes: Vec<String> = variants.iter().map(|v| format!("INDEX_{v}")).collect();
+        let pattern = format!("INDEX_{namespace}:*");
+        return collect_index_keys(conn, &pattern, Some(&prefixes), ids).await;
+    }
+
+    for variant in variants {
+        collect_tag_index(conn, variant, isexact, ids).await?;
+    }
+    Ok(())
+}
+
+/// The namespace part shared by every variant (`"source"` for `source:…`), or `None` when they
+/// disagree — the caller then falls back to per-variant lookups.
+fn shared_namespace(variants: &[String]) -> Option<String> {
+    let mut iter = variants.iter();
+    let first = iter.next()?.split_once(':')?.0.to_string();
+    if iter.all(|v| v.split_once(':').is_some_and(|(ns, _)| ns == first)) {
+        Some(first)
+    } else {
+        None
+    }
 }
 
 /// pages:/read: numeric filters, the additive `date_added:YYYY-MM-DD` date-range filter, and the
@@ -1557,15 +1614,11 @@ async fn token_matches(
     // legacy's syntax had no way to express, since a bare token always searched tags *and* the
     // title. `folded` is still needed by the title half below.
     if token.field == Field::Any {
-        for variant in tag_index_variants(&token.tag, ctx.source_equivalences) {
-            collect_tag_index(
-                search_conn,
-                &eq.fold_pattern(&variant),
-                token.isexact,
-                &mut ids,
-            )
-            .await?;
-        }
+        let variants: Vec<String> = tag_index_variants(&token.tag, ctx.source_equivalences)
+            .iter()
+            .map(|variant| eq.fold_pattern(variant).into_owned())
+            .collect();
+        collect_tag_variants(search_conn, &variants, token.isexact, &mut ids).await?;
     }
 
     // Title match: LRR_TITLES_FOLDED members are "<folded title>\0id". `isexact` deliberately does
@@ -1585,9 +1638,8 @@ async fn token_matches(
     // branch is disabled and only the canonical indexes are used.
     if legacy_fallback {
         if token.field == Field::Any {
-            for variant in tag_index_variants(&token.tag, ctx.source_equivalences) {
-                collect_tag_index(search_conn, &variant, token.isexact, &mut ids).await?;
-            }
+            let variants = tag_index_variants(&token.tag, ctx.source_equivalences);
+            collect_tag_variants(search_conn, &variants, token.isexact, &mut ids).await?;
         }
 
         // Same title semantics as the canonical branch above (phrase anywhere in the title), and
@@ -1618,6 +1670,7 @@ async fn token_matches(
 async fn collect_index_keys(
     conn: &mut deadpool_redis::Connection,
     pattern: &str,
+    prefixes: Option<&[String]>,
     ids: &mut HashSet<String>,
 ) -> Result<()> {
     let mut cursor = String::from("0");
@@ -1636,6 +1689,15 @@ async fn collect_index_keys(
             break;
         }
         cursor = next;
+    }
+    // `prefixes` narrows one broad scan (`INDEX_source:*`) down to the exact variant keys, so the
+    // caller pays for one SCAN instead of one per variant (see `collect_tag_variants`).
+    if let Some(prefixes) = prefixes {
+        keys.retain(|key| {
+            prefixes
+                .iter()
+                .any(|prefix| key.starts_with(prefix.as_str()))
+        });
     }
     if keys.is_empty() {
         return Ok(());

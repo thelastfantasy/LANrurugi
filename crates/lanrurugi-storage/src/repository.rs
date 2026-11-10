@@ -227,6 +227,15 @@ impl ArchiveRepository {
         Ok(archives.into_iter().find(|a| a.file == file))
     }
 
+    /// Rewrites one archive's `tags` field and nothing else. Unlike [`Self::save`] this cannot
+    /// clobber fields another writer changed while a long pass held a stale snapshot (reading
+    /// progress, or `file` after a relocation).
+    pub async fn set_tags(&self, id: &ArchiveId, tags: &str) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        let _: () = conn.hset(id.as_str(), "tags", tags).await?;
+        Ok(())
+    }
+
     /// Creates or fully overwrites an archive record's hash fields.
     pub async fn save(&self, archive: &Archive) -> Result<()> {
         let mut conn = self.pool.get().await?;

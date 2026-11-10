@@ -145,3 +145,51 @@
   `false`，读取方已不依赖它。
 - 插件协议里的 `overwrite_on_duplicate` 声明仍会出现在插件向导的试用结果页（纯信息展示），
   以及活动记录的变更详情里；彻底删除需要改插件契约，留作后续。
+
+## 附：2026-11-10 b 复查的修复记录
+
+复查文件：`specs/review-result-2026-11-10-duplicates.md`。逐条处置如下。
+
+### 阻断
+
+- 阈值上限改为 7（`detect::MAX_THRESHOLD`），后端 `POST /database/duplicates/scan` 超过即 400
+  `"threshold must be between 0 and 7"`，前端输入框 `max={7}`；`candidates()` 不再有「≥8 退化成
+  全对枚举」的分支，超过上限直接返回空集（宁可漏判也不分配 n²/2 个 `String`）。
+- 单个 band 桶超过 `MAX_BUCKET = 512` 时跳过并 `tracing::warn!`，不再对超大的桶做二次方展开。
+
+### 应修
+
+1. **占位图被当成真实封面**：`archives::is_placeholder_thumbnail()` 暴露占位图判定；`cover::hash_one`
+   命中占位图返回 `None`（计入 `missing`，且不写入缓存，缩略图之后补出来时能重新计算）。
+2. **FR-011 的 404**：`describeImpact` 的两条路径去掉多余的 `/api`（`fetchJson` 自带前缀）。
+3. **模型没看过的成员被标成丢弃**：`onlyRecommended` 只对 `keep ∪ discard` 里出现的 id 写状态，
+   其余成员保持用户原来的勾选（`setSelected` 改用 updater）。
+4. **「不是重复」按组 key 存储**：新增全局 `LANRURUGI_DUP_NOT_DUPLICATE`（Redis set，`a|b` 排序后
+   的 id 对），`build_groups` 在连边之前过滤；组 key 变化不再让旧决定失效，三人组去掉一对后也能
+   真正断开。旧的分组记录仍保留在 `DECISIONS_KEY` 里供读取接口回显。
+5. **复核缓存键只读不写 / 降级结论不可见 / 每组两次 HGETALL**：
+   - 写入与查找统一用 `review_cache_key`（prompt 版本 + 模型 + 成员签名），同时再写一份 group key
+     供读取接口使用；
+   - 本地降级结论也落库，没有配置模型的实例能在卡片上看到建议；
+   - 但降级结论永远不会遮蔽真实复核：一旦配置了 provider，`fallback` 缓存会被忽略并重新计算；
+   - `ensure_with` 复用调用方加载的 review 映射，扫描一次只 `HGETALL` 一次。
+6. **整理标签覆盖并发修改**：新增 `ArchiveRepository::set_tags()`（只 `HSET tags`），`tidy_tags`
+   改用它，不再整条回写快照。
+7. **`FAIL_SAVES` 的测试竞态**：改成按档案 id 生效的 `FAIL_SAVE_FOR`（`fail_saves_for(id)` /
+   `allow_saves()`），只影响目标档案的 save，其它并行测试不受干扰。
+8. **`source:` 每个变体一次全库 SCAN**：新增 `collect_tag_variants`——精确查询先对每个变体做
+   `EXISTS`（命中就只读那几个集合），否则当所有变体共享同一命名空间时只 `SCAN INDEX_source:*`
+   一次并在客户端按变体前缀过滤。
+
+### 需要你决定（未改）
+
+1. **`date_added` 保留哪一个**：当前规则是导入时丢弃 legacy 的值、整理标签时保留最新值。按复查
+   意见，这会让从 LANraragi 迁移来的库整体塌缩到迁移日；是否改成保留最早的值，请你定。
+2. **`token_guest` 能否 GET 新的重复端点**：`route_policy.csv` 的 `token_guest, /api/*, GET, allow`
+   让只读 token 能列出全库分组并调用 `compare`（后者会解码两本档案的全部页）。是否收紧，请你定。
+
+### 门禁
+
+`fmt-check`、`clippy`、`check-crate`、`test-crate lanrurugi-api`（662 + 1 + 1 + 5）、
+`test-crate lanrurugi-share`（28）、`test-crate lanrurugi-scanner`（129 + 1 既有 animation 夹具失败）、
+`tsc -b --force`、`eslint src`（0 error / 4 既有 warning）全部通过。

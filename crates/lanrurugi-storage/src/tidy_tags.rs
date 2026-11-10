@@ -54,8 +54,8 @@ pub async fn tidy_tags(archives: &ArchiveRepository) -> Result<TidyTagsReport, R
                 old_tags: archive.tags.clone(),
                 new_tags: tidied.clone(),
             });
+            archives.set_tags(&archive.id, &tidied).await?;
             archive.tags = tidied;
-            archives.save(&archive).await?;
             report.repaired += 1;
         }
     }

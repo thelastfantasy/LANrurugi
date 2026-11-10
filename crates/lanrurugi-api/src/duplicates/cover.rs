@@ -71,6 +71,12 @@ pub async fn collect(state: &AppState, ids: &[String]) -> CoverHashes {
 async fn hash_one(state: &AppState, id: &str) -> Option<[u8; 8]> {
     let archive_id = lanrurugi_core::ids::ArchiveId(id.to_string());
     let (_, bytes) = crate::archives::share_thumbnail(state, &archive_id, 0).await?;
+    // `share_thumbnail` never returns `None` for a valid id — it falls back to a shared placeholder
+    // PNG. Hashing that would make every cover-less archive look identical, so treat it as missing
+    // (and don't cache it: a real thumbnail may appear later without the id changing).
+    if crate::archives::is_placeholder_thumbnail(&bytes) {
+        return None;
+    }
     let image = lanrurugi_core::concurrency::run_blocking(move || image::load_from_memory(&bytes))
         .await
         .ok()?

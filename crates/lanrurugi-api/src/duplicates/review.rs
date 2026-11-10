@@ -34,12 +34,19 @@ pub async fn load_all(state: &AppState) -> HashMap<String, ReviewVerdict> {
 /// Reviews one group. Never fails: no provider, an invalid answer, or a model error all produce a
 /// `fallback: true` verdict from the local rule.
 pub async fn ensure(state: &AppState, group: &GroupRecord, metas: &[ArchiveMeta]) -> ReviewVerdict {
-    let key = super::group_key(&group.members);
-    let cached = load_all(state).await.get(&key).cloned();
-    if let Some(cached) = cached {
-        return cached;
-    }
+    let mut cache = load_all(state).await;
+    ensure_with(state, group, metas, &mut cache).await
+}
 
+/// Same as [`ensure`], reusing a review map the caller already loaded: a scan reviews every group
+/// and one `HGETALL` per group made the pass quadratic in the number of groups.
+pub async fn ensure_with(
+    state: &AppState,
+    group: &GroupRecord,
+    metas: &[ArchiveMeta],
+    cache: &mut HashMap<String, ReviewVerdict>,
+) -> ReviewVerdict {
+    let key = super::group_key(&group.members);
     let members: Vec<&ArchiveMeta> = group
         .members
         .iter()
@@ -50,21 +57,54 @@ pub async fn ensure(state: &AppState, group: &GroupRecord, metas: &[ArchiveMeta]
         return local_verdict(&members, "members_changed");
     }
 
+    // The content key carries the prompt version, the model and a member signature, so upgrading
+    // the prompt or the model invalidates old verdicts even though the group key is unchanged.
     let cache_key = review_cache_key(&key, &members);
-    let cached_by_content = load_all(state)
+    let has_provider = lanrurugi_llm::resolve_api_key(&state.redis.config)
         .await
-        .iter()
-        .find(|(field, _)| *field == &cache_key)
-        .map(|(_, v)| v.clone());
-    if let Some(cached) = cached_by_content {
-        return cached;
+        .is_some();
+    // A fallback verdict is a local guess, not a model answer: show it while there is no provider,
+    // but never let it shadow a real review once one is configured.
+    let usable = |cached: &ReviewVerdict| !(cached.fallback && has_provider);
+
+    if let Some(cached) = cache.get(&cache_key) {
+        if usable(cached) {
+            return cached.clone();
+        }
+    }
+    // Verdicts written before the content key existed live under the bare group key.
+    if let Some(cached) = cache.get(&key).cloned() {
+        if usable(&cached) {
+            cache.insert(cache_key.clone(), cached.clone());
+            return cached;
+        }
     }
 
-    let Some(_) = lanrurugi_llm::resolve_api_key(&state.redis.config).await else {
-        return local_verdict(&members, "not_configured");
+    let verdict = if has_provider {
+        ask_model(state, group, &members).await
+    } else {
+        local_verdict(&members, "not_configured")
     };
 
-    let user = build_input(&members, group);
+    cache.insert(cache_key.clone(), verdict.clone());
+    // Also under the group key: the read endpoints load by group key, and a local fallback still
+    // has to be visible in the UI before a model is configured.
+    cache.insert(key.clone(), verdict.clone());
+    if let Ok(mut conn) = state.redis.config.get().await {
+        let value = serde_json::to_string(&verdict).unwrap_or_default();
+        let _: Result<(), _> = conn.hset(REVIEW_KEY, &cache_key, &value).await;
+        let _: Result<(), _> = conn.hset(REVIEW_KEY, &key, &value).await;
+    }
+    verdict
+}
+
+/// The one model call, returning a local fallback when the answer never arrives or fails validation.
+async fn ask_model(
+    state: &AppState,
+    group: &GroupRecord,
+    members: &[&ArchiveMeta],
+) -> ReviewVerdict {
+    let user = build_input(members, group);
     let spec = lanrurugi_llm::CallSpec::new(lanrurugi_llm::FeatureId::DUPLICATE_REVIEW);
     let answer = crate::repair::json_chat_checked::<LlmAnswer>(
         &state.redis.config,
@@ -78,15 +118,9 @@ pub async fn ensure(state: &AppState, group: &GroupRecord, metas: &[ArchiveMeta]
     .await;
 
     let Ok(checked) = answer else {
-        return local_verdict(&members, "model_error");
+        return local_verdict(members, "model_error");
     };
-    let answer = checked.value;
-    let verdict = verdict_from_answer(answer, &members);
-    if let Ok(mut conn) = state.redis.config.get().await {
-        let value = serde_json::to_string(&verdict).unwrap_or_default();
-        let _: Result<(), _> = conn.hset(REVIEW_KEY, &key, &value).await;
-    }
-    verdict
+    verdict_from_answer(checked.value, members)
 }
 
 fn build_input(members: &[&ArchiveMeta], group: &GroupRecord) -> serde_json::Value {

@@ -1,5 +1,6 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
+import { useNavigate } from "react-router-dom"
 
 import { waitForJob } from "@/api/client"
 import { fetchJson } from "@/api/client"
@@ -12,10 +13,27 @@ import {
   useScanDuplicates,
 } from "@/api/hooks"
 import type { DuplicateGroupView, DuplicateMember } from "@/api/types"
-import { NumberInput } from "@/components/common-ui/Form"
+import { Button, NumberInput } from "@/components/common-ui/Form"
 import { confirmDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
+import {
+  DEFAULT_DUPLICATES_COVER_PERCENT,
+  DUPLICATES_COVER_PERCENT_KEY,
+  MAX_DUPLICATES_COVER_PERCENT,
+  MIN_DUPLICATES_COVER_PERCENT,
+} from "@/lib/storageKeys"
+
+/** The cover slider is stepped, not continuous: five preset widths read as "small → large" and
+ *  are easy to hit on a phone, where a 35-step range is not. The stored value is the percentage,
+ *  so a slider position always means the same thing across screens. */
+const COVER_STOPS = [16, 24, 32, 40, 50] as const
+
+function nearestCoverStop(percent: number): number {
+  return COVER_STOPS.reduce((best, stop) =>
+    Math.abs(stop - percent) < Math.abs(best - percent) ? stop : best,
+  )
+}
 import { useApplyTheme } from "@/theme"
 
 /**
@@ -25,6 +43,7 @@ import { useApplyTheme } from "@/theme"
  */
 export function Duplicates() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const groups = useDuplicateGroups()
   const scanDuplicates = useScanDuplicates()
   const clearDuplicates = useClearDuplicates()
@@ -32,6 +51,17 @@ export function Duplicates() {
   useDocumentTitle(t("app.duplicateDetection") ?? undefined)
 
   const [threshold, setThreshold] = useState(7)
+  const [coverPercent, setCoverPercent] = useState(() => {
+    const stored = Number(localStorage.getItem(DUPLICATES_COVER_PERCENT_KEY))
+    if (!Number.isFinite(stored) || stored <= 0) return DEFAULT_DUPLICATES_COVER_PERCENT
+    return nearestCoverStop(
+      Math.min(MAX_DUPLICATES_COVER_PERCENT, Math.max(MIN_DUPLICATES_COVER_PERCENT, stored)),
+    )
+  })
+
+  useEffect(() => {
+    localStorage.setItem(DUPLICATES_COVER_PERCENT_KEY, String(coverPercent))
+  }, [coverPercent])
   const [busy, setBusy] = useState(false)
   const [compare, setCompare] = useState<[string, string] | null>(null)
 
@@ -53,38 +83,61 @@ export function Duplicates() {
       <h1 className="ih">{t("app.duplicateDetection")}</h1>
       <p>{t("duplicates.intro")}</p>
 
-      <div className="mb-4 flex flex-wrap items-end gap-3">
-        <label className="flex items-center gap-2 text-sm">
+      <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <label className="flex items-center gap-2 whitespace-nowrap text-sm">
           {t("duplicates.threshold")}
-          <div className="w-20">
-            <NumberInput value={threshold} min={0} max={16} onValueChange={setThreshold} />
+          <div className="w-16">
+            <NumberInput value={threshold} min={0} max={7} onValueChange={setThreshold} />
           </div>
         </label>
-        <button className="stdbtn" onClick={handleScan} disabled={busy || scanDuplicates.isPending}>
-          {(busy || scanDuplicates.isPending) && <i className="fa fa-spinner fa-spin mr-2" />}
-          {t("duplicates.scan")}
-        </button>
-        {list.length > 0 && (
-          <button
-            className="stdbtn"
-            onClick={async () => {
-              if (await confirmDialog(t("duplicates.clearConfirm"), true)) {
-                await clearDuplicates.mutateAsync()
-              }
-            }}
-          >
-            {t("duplicates.clear")}
+        <label className="ml-auto flex items-center gap-2 text-xs whitespace-nowrap">
+          <i className="fa fa-image opacity-70" aria-hidden="true" />
+          <input
+            type="range"
+            min={0}
+            max={COVER_STOPS.length - 1}
+            step={1}
+            value={Math.max(0, COVER_STOPS.indexOf(coverPercent as (typeof COVER_STOPS)[number]))}
+            onChange={(e) => setCoverPercent(COVER_STOPS[Number(e.target.value)])}
+            title={t("duplicates.coverSize") ?? undefined}
+            aria-label={t("duplicates.coverSize")}
+            aria-valuetext={`${coverPercent}%`}
+            list="duplicate-cover-stops"
+          />
+          <datalist id="duplicate-cover-stops">
+            {COVER_STOPS.map((stop) => (
+              <option key={stop} value={COVER_STOPS.indexOf(stop)} />
+            ))}
+          </datalist>
+          <span className="w-8 text-right tabular-nums opacity-70">{coverPercent}%</span>
+        </label>
+        <div className="flex items-center gap-2">
+          <button className="stdbtn" onClick={handleScan} disabled={busy || scanDuplicates.isPending}>
+            {(busy || scanDuplicates.isPending) && <i className="fa fa-spinner fa-spin mr-2" />}
+            {t("duplicates.scan")}
           </button>
-        )}
-        <span className="text-xs opacity-70">
-          {groups.data?.scanned_at
-            ? t("duplicates.lastScan", {
-                count: list.length,
-                chained: groups.data.chained_groups,
-              })
-            : t("duplicates.neverScanned")}
-        </span>
+          {list.length > 0 && (
+            <button
+              className="stdbtn"
+              onClick={async () => {
+                if (await confirmDialog(t("duplicates.clearConfirm"), true)) {
+                  await clearDuplicates.mutateAsync()
+                }
+              }}
+            >
+              {t("duplicates.clear")}
+            </button>
+          )}
+        </div>
       </div>
+      <p className="mb-4 text-xs opacity-70">
+        {groups.data?.scanned_at
+          ? t("duplicates.lastScan", {
+              count: list.length,
+              chained: groups.data.chained_groups,
+            })
+          : t("duplicates.neverScanned")}
+      </p>
 
       {groups.isLoading && (
         <div id="processing">
@@ -98,9 +151,19 @@ export function Duplicates() {
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {list.map((group) => (
-          <GroupCard key={group.key} group={group} onCompare={setCompare} busy={busy} />
+          <GroupCard
+            key={group.key}
+            group={group}
+            onCompare={setCompare}
+            busy={busy}
+            coverPercent={coverPercent}
+          />
         ))}
       </div>
+
+      <Button id="return" className="mt-4" onClick={() => navigate(routes.library())}>
+        {t("common.returnToLibrary")}
+      </Button>
 
       {compare && (
         <SmartCompareModal
@@ -117,10 +180,12 @@ function GroupCard({
   group,
   onCompare,
   busy,
+  coverPercent,
 }: {
   group: DuplicateGroupView
   onCompare: (pair: [string, string]) => void
   busy: boolean
+  coverPercent: number
 }) {
   const { t } = useTranslation()
   const save = useSaveDuplicateDecisions()
@@ -162,12 +227,23 @@ function GroupCard({
   }
 
   async function onlyRecommended() {
-    if (!group.review) return
+    const review = group.review
+    if (!review) return
+    // The review only ever sees the first `MAX_MEMBERS` members, so `keep`/`discard` are the only
+    // ids it actually ruled on. Members outside that set keep whatever the user had chosen —
+    // marking them "discard" would present an opinion the model never held.
+    const judged = new Set([...review.keep, ...review.discard])
     const states: Record<string, "keep" | "discard"> = {}
     for (const member of group.members) {
-      states[member.id] = group.review.keep.includes(member.id) ? "keep" : "discard"
+      if (!judged.has(member.id)) continue
+      states[member.id] = review.keep.includes(member.id) ? "keep" : "discard"
     }
-    setSelected(new Set(group.review.keep))
+    setSelected((current) => {
+      const next = new Set(current)
+      for (const id of review.keep) next.add(id)
+      for (const id of review.discard) next.delete(id)
+      return next
+    })
     await persist(states)
   }
 
@@ -212,13 +288,17 @@ function GroupCard({
         </span>
       </div>
 
-      <ul className="flex flex-col gap-2">
+      {/* `ps-0`: the member list is a bare flex column. Without it the browser's (or a legacy
+          * theme's) default `ul` indent of ~40px reads as an unexplained gap before the first
+          checkbox. */}
+      <ul className="m-0 flex list-none flex-col gap-2 ps-0">
         {visible.map((member) => (
           <MemberRow
             key={member.id}
             member={member}
             checked={selected.has(member.id)}
             onToggle={() => toggle(member.id)}
+            coverPercent={coverPercent}
           />
         ))}
       </ul>
@@ -230,11 +310,12 @@ function GroupCard({
       )}
 
       {group.review && (
-        <div className="mt-2 rounded bg-black/5 p-2 text-xs">
-          <div className="mb-1 font-semibold">
-            {t(`duplicates.verdict.${group.review.verdict}`)}
+        <div className="mt-2 rounded bg-black/5 p-2 text-left text-xs">
+          <div className="mb-1 flex items-center gap-1.5 font-semibold">
+            <i className="fa fa-lightbulb opacity-80" aria-hidden="true" />
+            <span>{t(`duplicates.verdict.${group.review.verdict}`)}</span>
             {group.review.fallback && (
-              <span className="ml-2 font-normal opacity-70">{t("duplicates.localOnly")}</span>
+              <span className="font-normal opacity-70">{t("duplicates.localOnly")}</span>
             )}
           </div>
           <div className="opacity-80">{group.review.reason}</div>
@@ -289,9 +370,9 @@ async function describeImpact(members: DuplicateMember[]): Promise<string> {
       try {
         const [cats, tanks] = await Promise.all([
           fetchJson<{ categories: { id: string; name: string }[] }>(
-            `/api/archives/${member.id}/categories`,
+            `/archives/${member.id}/categories`,
           ),
-          fetchJson<{ tankoubons: string[] }>(`/api/archives/${member.id}/tankoubons`),
+          fetchJson<{ tankoubons: string[] }>(`/archives/${member.id}/tankoubons`),
         ])
         const names = cats.categories.map((c) => c.name)
         return `${member.title}: ${names.length ? names.join(", ") : "-"} (+${tanks.tankoubons.length})`
@@ -315,34 +396,55 @@ function MemberRow({
   member,
   checked,
   onToggle,
+  coverPercent,
 }: {
   member: DuplicateMember
   checked: boolean
   onToggle: () => void
+  coverPercent: number
 }) {
   const { t } = useTranslation()
+  const language = (member.tags ?? [])
+    .find((tag) => tag.toLowerCase().startsWith("language:"))
+    ?.slice("language:".length)
+    .trim()
   return (
-    <li className="flex items-start gap-2">
+    <li className="flex items-start gap-2 text-left">
       <input
         type="checkbox"
-        className="mt-1"
+        className="lrr-checkbox-bare mt-0.5 shrink-0"
         checked={checked}
         onChange={onToggle}
         aria-label={member.title}
       />
-      <img src={member.cover} alt="" className="h-14 w-10 shrink-0 object-cover" loading="lazy" />
-      <div className="min-w-0 flex-1 text-sm">
+      <img
+        src={member.cover}
+        alt=""
+        className="shrink-0 object-cover"
+        style={{ width: `${coverPercent}%`, aspectRatio: "5 / 7", height: "auto" }}
+        loading="lazy"
+      />
+      <div className="min-w-0 flex-1 text-left text-sm">
         <div className="flex items-start gap-1">
-          <span className="line-clamp-2 break-words">{member.title}</span>
+          <span className="line-clamp-2 break-words text-left">{member.title}</span>
           {member.recommended && <i className="fa fa-star mt-0.5 text-xs" title={t("duplicates.recommended")} />}
           {member.best && <i className="fa fa-crown mt-0.5 text-xs" title={t("duplicates.bestCopy")} />}
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs opacity-75">
           <span>{member.pages} {t("duplicates.pages")}</span>
           <span>{humanSize(member.size)}</span>
+          {language && <span>{language}</span>}
           {member.decision === "discard" && <span>{t("duplicates.markedDiscard")}</span>}
         </div>
       </div>
+      <a
+        href={`/reader/${member.id}`}
+        className="mt-0.5 shrink-0 self-start px-1 opacity-70 hover:opacity-100"
+        title={t("common.read")}
+        aria-label={t("common.read")}
+      >
+        <i className="fa fa-book-open" aria-hidden="true" />
+      </a>
     </li>
   )
 }
