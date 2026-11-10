@@ -47,6 +47,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+# `[patch.crates-io]` points at these forked crates (022), so cargo refuses to resolve the
+# workspace without them (`patch location ... does not contain packages matching`).
+COPY vendor ./vendor
 # Cache mounts persist cargo registry + incremental build artifacts across
 # rebuilds, but their contents are NOT part of the image layer — the binary
 # must be copied out explicitly for the `COPY --from` in the runtime stage

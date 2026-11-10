@@ -52,6 +52,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+# `[patch.crates-io]` points at these forked crates (022), so cargo refuses to resolve the
+# workspace without them (`patch location ... does not contain packages matching`).
+COPY vendor ./vendor
 # Both build-time values are declared here rather than at the top of the stage: the git sha changes
 # every commit, and an `ARG` invalidates every layer after it — placed above the `apt-get` they
 # forced a full toolchain-dependency reinstall on every cached rebuild (2026-11-01).

@@ -1262,14 +1262,25 @@ fn parse_progress_range_filter(tag: &str) -> Option<(f64, f64)> {
 /// - The `source_equivalences` setting groups hosts that are the same site (`e-hentai.org` /
 ///   `exhentai.org` by default, or `*.a.com` / `*.b.com` for mirror domains); only the host is
 ///   substituted, the path that identifies the gallery is preserved.
+///
+/// A `source:` tag stores a bare host and path, but a URL pasted from a browser may keep its scheme
+/// in any casing; both `http://` and `https://` mean the same tag.
+fn strip_url_scheme(value: &str) -> &str {
+    for prefix in ["https://", "http://"] {
+        if let Some(head) = value.get(..prefix.len()) {
+            if head.eq_ignore_ascii_case(prefix) {
+                return &value[prefix.len()..];
+            }
+        }
+    }
+    value
+}
+
 fn tag_index_variants(tag: &str, source_equivalences: &[Vec<String>]) -> Vec<String> {
     let Some(rest) = tag.strip_prefix("source:") else {
         return vec![tag.to_string()];
     };
-    let bare = rest
-        .strip_prefix("https://")
-        .or_else(|| rest.strip_prefix("http://"))
-        .unwrap_or(rest);
+    let bare = strip_url_scheme(rest);
     let mut variants = Vec::new();
     let mut push = |value: String| {
         if !variants.contains(&value) {
@@ -2385,6 +2396,32 @@ mod tests {
         let copied =
             tag_index_variants("source:https://e-hentai.org/g/637474/02981a1399/", &groups);
         assert!(copied.contains(&"source:exhentai.org/g/637474/02981a1399".to_string()));
+
+        // `http://` and `https://` are the same tag, and a pasted scheme may be upper-case.
+        let plain = tag_index_variants("source:E-Hentai.org/g/1/abc", &groups);
+        assert!(plain
+            .iter()
+            .any(|variant| variant.eq_ignore_ascii_case("source:http://e-hentai.org/g/1/abc")));
+        assert!(plain
+            .iter()
+            .any(|variant| variant.eq_ignore_ascii_case("source:https://e-hentai.org/g/1/abc")));
+    }
+
+    #[test]
+    fn a_literal_group_may_hold_more_than_two_hosts() {
+        let groups = vec![vec![
+            "g.e-hentai.org".to_string(),
+            "g.exhentai.org".to_string(),
+            "e-hentai.org".to_string(),
+            "exhentai.org".to_string(),
+        ]];
+        let variants = tag_index_variants("source:g.e-hentai.org/g/1/abc", &groups);
+        for host in ["g.exhentai.org", "e-hentai.org", "exhentai.org"] {
+            assert!(
+                variants.contains(&format!("source:{host}/g/1/abc")),
+                "missing {host} in {variants:?}"
+            );
+        }
     }
 
     #[test]

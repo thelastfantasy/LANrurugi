@@ -210,12 +210,25 @@ impl Parser {
     }
 }
 
+/// A CN/JA IME produces typographic quotes; map them onto the ASCII quote the grammar understands
+/// *before* lexing, since `read_term` decides "this is quoted" from the character it sees.
+fn ascii_quotes(filter: &str) -> String {
+    filter
+        .chars()
+        .map(|c| match c {
+            '\u{201c}' | '\u{201d}' | '\u{201e}' | '\u{201f}' | '\u{ff02}' => '"',
+            other => other,
+        })
+        .collect()
+}
+
 /// Splits the input into [`Piece`]s, mirroring the character scanning legacy's
 /// `compute_search_filter` used (quotes, `\"`/`\\` escapes, `_`/`%` glob rewriting, lowercasing)
 /// while additionally recognizing the boolean structure.
 fn lex(filter: &str) -> Vec<Piece> {
     let mut pieces = Vec::new();
-    let mut chars = filter.chars().peekable();
+    let quoted = ascii_quotes(filter);
+    let mut chars = quoted.chars().peekable();
 
     loop {
         // Delimiters are separators, not pieces: juxtaposition is the AND.
@@ -436,6 +449,18 @@ mod tests {
     #[test]
     fn exact_match_via_quotes() {
         assert_eq!(parse_query("\"artist:jane\""), tok("artist:jane", true));
+    }
+
+    #[test]
+    fn typographic_quotes_still_quote() {
+        assert_eq!(
+            parse_query("source:\u{201c}http://e-hentai.org/g/1/abc/\u{201d}"),
+            tok("source:http://e-hentai.org/g/1/abc/", true)
+        );
+        assert_eq!(
+            parse_query("\u{201c}artist:jane\u{201d}"),
+            tok("artist:jane", true)
+        );
     }
 
     #[test]
