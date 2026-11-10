@@ -2,6 +2,7 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { waitForJob } from "@/api/client"
+import { fetchJson } from "@/api/client"
 import {
   useClearDuplicates,
   useDeleteArchive,
@@ -179,9 +180,11 @@ function GroupCard({
   async function deleteUnselected() {
     if (keepCount === 0 || keepCount === group.members.length) return
     const doomed = group.members.filter((m) => !selected.has(m.id))
+    // Spec FR-011: say what else these archives belong to before deleting them.
+    const impact = await describeImpact(doomed)
     if (
       !(await confirmDialog(
-        t("duplicates.deleteConfirm", { count: doomed.length }),
+        [t("duplicates.deleteConfirm", { count: doomed.length }), impact].join("\n\n"),
         true,
         true,
       ))
@@ -275,6 +278,29 @@ function GroupCard({
       </div>
     </div>
   )
+}
+
+/** Fetches each archive's category and tankoubon memberships so the delete confirmation can name
+ *  the places a deletion will also empty (spec FR-011). A failed lookup is reported as unknown
+ *  rather than blocking the deletion. */
+async function describeImpact(members: DuplicateMember[]): Promise<string> {
+  const rows = await Promise.all(
+    members.map(async (member) => {
+      try {
+        const [cats, tanks] = await Promise.all([
+          fetchJson<{ categories: { id: string; name: string }[] }>(
+            `/api/archives/${member.id}/categories`,
+          ),
+          fetchJson<{ tankoubons: string[] }>(`/api/archives/${member.id}/tankoubons`),
+        ])
+        const names = cats.categories.map((c) => c.name)
+        return `${member.title}: ${names.length ? names.join(", ") : "-"} (+${tanks.tankoubons.length})`
+      } catch {
+        return `${member.title}: ?`
+      }
+    }),
+  )
+  return rows.join("\n")
 }
 
 function bestPair(group: DuplicateGroupView): [string, string] | null {
