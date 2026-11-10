@@ -134,6 +134,13 @@ input[type="checkbox"].lrr-checkbox-labeled {
   vertical-align: middle;
 }
 
+/* The `::after` text sits on the 20px glyph's baseline, so at 15px its optical center lands ~2px
+ * below the glyph's (measured in Firefox) — reported live as "ON/OFF 比左边的图标偏下". Raising the
+ * pseudo box by that much centres the pair; `em` so it follows the pseudo's own 15px size. */
+input[type="checkbox"]::after {
+  vertical-align: 0.13em;
+}
+
 /* Additive: the reader overview overlay's page-grid briefly outlines whichever page it opened on
  * (`ArchiveOverviewOverlay.tsx`'s `PageGridCell`, `highlighted` prop) — a static outline alone is
  * easy to miss at a glance across a grid that can run into the hundreds of otherwise-identical
