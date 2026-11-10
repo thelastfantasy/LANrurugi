@@ -153,7 +153,6 @@
   "pluginOptions.remove": "Remove",
   "batch.removeNewFlag": "Rimuovi Nuova Flag",
   "Remove rating": "Rimuovi valutazione",
-  "settings.replaceDuplicatedArchives": "Sostituisci archivi duplicati",
   "settings.rescanArchiveDirectory": "Nuova Scansione Cartella Archivio",
   "settings.resetDatabase": "Reset del Database",
   "settings.resetSearchCache": "Ripristina cache di ricerca",

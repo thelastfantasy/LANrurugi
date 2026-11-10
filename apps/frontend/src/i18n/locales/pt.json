@@ -312,7 +312,6 @@
   "batch.removeNewFlag": "Remover a Nova Flag",
   "Remove rating": "Remover a classificação",
   "Removed \\${id} from category \\${cat}!": "Removido o ${id} da categoria ${cat}!",
-  "settings.replaceDuplicatedArchives": "Substituir arquivos duplicados",
   "Replaced tags for ID \\${id} (New tags: \\${tags})": "Etiquetas trocadas para o ID ${id} (Novas etiquetas: ${tags})",
   "settings.rescanArchiveDirectory": "Verificar novamente o diretório de arquivos",
   "settings.resetDatabase": "Reiniciar Banco de Dados",

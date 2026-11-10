@@ -27,10 +27,5 @@ describe("needsDecision", () => {
     expect(needsDecision(item({ state: "done" }))).toBe(false)
     expect(needsDecision(item({ state: "error" }))).toBe(true)
     expect(needsDecision(item({ state: "awaiting_revision_confirmation" }))).toBe(true)
-    expect(
-      needsDecision(
-        item({ pending_filename_conflict: { filename: "a.zip", staged_at: 1 } as DownloadQueueItem["pending_filename_conflict"] }),
-      ),
-    ).toBe(true)
   })
 })

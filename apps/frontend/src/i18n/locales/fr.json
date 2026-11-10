@@ -371,7 +371,6 @@
   "Remove from selection": "Retirer de la sélection",
   "Remove rating": "Enlever la note",
   "Removed \\${id} from category \\${cat}!": "${id} a été supprimé de la catégorie ${cat} !",
-  "settings.replaceDuplicatedArchives": "Remplacer les doublons",
   "Replaced tags for ID \\${id} (New tags: \\${tags})": "Remplacé les tags de l'ID ${id} (Nouveaux tags : ${tags})",
   "settings.rescanArchiveDirectory": "Rescanner le dossier de stockage des archives",
   "settings.resetDatabase": "Réinitialiser la BDD",

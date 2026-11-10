@@ -320,7 +320,6 @@
   "batch.removeNewFlag": "Quitar marcador de nuevo",
   "Remove rating": "Eliminar puntuación",
   "Removed \\${id} from category \\${cat}!": "¡Removida ${id} de la categoría ${cat}!",
-  "settings.replaceDuplicatedArchives": "Reemplazar archivos duplicados",
   "Replaced tags for ID \\${id} (New tags: \\${tags})": "Etiquetas reemplazas por ID ${id} (Nuevas etiquetas: ${tags})",
   "settings.rescanArchiveDirectory": "Escanear carpeta de archivos",
   "settings.resetDatabase": "Reiniciar base de datos",

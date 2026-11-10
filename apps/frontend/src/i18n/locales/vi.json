@@ -332,7 +332,6 @@
   "batch.removeNewFlag": "Xoá Cờ Mới",
   "Remove rating": "Xóa đánh giá",
   "Removed \\${id} from category \\${cat}!": "Đã xoá ${id} khỏi danh mục ${cat}!",
-  "settings.replaceDuplicatedArchives": "Thay thế các truyện bị trùng",
   "Replaced tags for ID \\${id} (New tags: \\${tags})": "Đã thay thế thẻ cho ID ${id} (Thẻ mới: ${tags})",
   "settings.rescanArchiveDirectory": "Quét lại Thư mục Truyện",
   "settings.resetDatabase": "Đặt lại cơ sở dữ liệu",

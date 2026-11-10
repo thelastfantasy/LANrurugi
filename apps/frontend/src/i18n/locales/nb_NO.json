@@ -326,7 +326,6 @@
   "batch.removeNewFlag": "Fjern Nytt Flagg",
   "Remove rating": "Fjerner vurdering",
   "Removed \\${id} from category \\${cat}!": "Fjernet ${id} fra kategori ${cat}!",
-  "settings.replaceDuplicatedArchives": "Erstatt dupliserte arkiver",
   "Replaced tags for ID \\${id} (New tags: \\${tags})": "Erstattet tagger for ID ${id} (Nye tagger: ${tags})",
   "settings.rescanArchiveDirectory": "Søk gjennom arkivmappe på nytt",
   "settings.resetDatabase": "Tilbakestill Database",

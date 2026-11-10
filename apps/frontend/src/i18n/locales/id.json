@@ -371,7 +371,6 @@
   "Remove from selection": "Hapus dari pilihan",
   "Remove rating": "Hapus penilaian",
   "Removed \\${id} from category \\${cat}!": "Menghapus ${id} dari kategori ${cat}!",
-  "settings.replaceDuplicatedArchives": "Ganti arsip duplikat",
   "Replaced tags for ID \\${id} (New tags: \\${tags})": "Mengganti tag untuk ID ${id} (Tag baru: ${tags})",
   "settings.rescanArchiveDirectory": "Pindai Ulang Direktori Arsip",
   "settings.resetDatabase": "Atur Ulang Pangkalan Data",

@@ -117,3 +117,31 @@
    group key 为键，key 变了就等于新组，这是有意的，请确认没有遗漏的引用。
 4. 删除前的引用清单是**逐档案两次请求**（分类、单行本），组大时是一次十几请求的突发；若要更省，
    可以再加一个批量端点。FR-011 的语义已满足。
+
+
+## 9. 无用控件清理（2026-11-10 追加，用户指出）
+
+020 把档案改成按内容寻址后，设置页与订阅表单里仍留着一些**已经不可能改变结果**的控件。这一轮
+把它们删掉：
+
+| 控件 / 字段 | 处理 | 理由 |
+|---|---|---|
+| 设置 → 档案文件 → **「替换重复的档案」开关**（`replacedupe`） | 从前端移除（状态、保存负载、脏检查、i18n 键） | 磁盘名现在由内容 id 决定，同名档案不可能出现；字节完全相同的重复一律拒绝，`DuplicatePolicy::Overwrite` 对 `ContentHash` 从不生效。这个开关开着也没有任何可覆盖的对象 |
+| 上传页解析 `replacedupe` 与插件 `overwrite_on_duplicate` 再塞进请求体 | 移除 | 同上；后端 `AddQueueItem.overwrite_on_duplicate` 改为 `#[serde(default)]`，旧客户端发送仍被接受但不再影响结果 |
+| 订阅表单 → **「文件名冲突时」单选组**（先等我确认/自动改名/自动覆盖/丢弃 + 说明） | 从表单移除 | 它描述的冲突暂存流程（24 小时、`pending_filename_conflict`、覆盖/改名端点）在 020 已整体删除 |
+| 阅读缓存两段说明里的「不会影响上传页面中仍在等待处理的冲突文件」 | 改写 | 那段流程已不存在 |
+| 9 个死 i18n 键 | 从全部 locale 删除 | 对应控件已删 |
+
+顺带修掉 020 遗留的两个前端单测：`tests/unit/alignmentBands.test.ts` 引用了已删除的
+`AlignmentBandOverlay`，`tests/unit/queueGroupTabs.test.ts` 仍在断言已删除的
+`pending_filename_conflict` 字段。**CI 的 Frontend 作业只跑 `eslint`，不跑 `test:unit`**，所以这两个
+失败一直没被发现；本轮 `vitest run tests/unit` 为 379 passed / 1 skipped。
+
+有意保留的（不是漏删）：
+
+- `replacedupe` 仍在 `/api/settings` 的响应与允许字段里——它是 legacy 配置键，第三方脚本可能读写；
+  现在只作为兼容字段保留，前端不再展示。
+- 下载队列项的存储字段 `overwrite_on_duplicate` 仍在（旧记录需要反序列化），但写入方一律传
+  `false`，读取方已不依赖它。
+- 插件协议里的 `overwrite_on_duplicate` 声明仍会出现在插件向导的试用结果页（纯信息展示），
+  以及活动记录的变更详情里；彻底删除需要改插件契约，留作后续。

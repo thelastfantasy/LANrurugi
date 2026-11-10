@@ -362,7 +362,6 @@
   "Remove from selection": "Aus Auswahl entfernen",
   "Remove rating": "Bewertung entfernen",
   "Removed \\${id} from category \\${cat}!": "${id} von Kategorie ${cat} entfernt!",
-  "settings.replaceDuplicatedArchives": "Archivduplikate ersetzen",
   "Replaced tags for ID \\${id} (New tags: \\${tags})": "Tags für ID ${id} ersetzt (Neue Tags: ${tags})",
   "settings.rescanArchiveDirectory": "Archivordner erneut durchsuchen",
   "settings.resetDatabase": "Datenbank zurücksetzen",
