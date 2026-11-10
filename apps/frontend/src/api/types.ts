@@ -93,6 +93,9 @@ export interface Settings {
   language: string
   htmltitle: string
   excludednamespaces: string
+  /** `source:` hosts treated as the same site, one equivalence group per line, members comma
+   * separated (`host` or `*.domain`). Defaults to `e-hentai.org, exhentai.org`. */
+  source_equivalences: string
   tagrules: string
   /** IANA timezone id (e.g. `"Asia/Tokyo"`) used to render date-tag values and build
    *  same-day search URLs. */

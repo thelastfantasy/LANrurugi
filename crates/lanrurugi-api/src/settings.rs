@@ -260,6 +260,86 @@ pub(crate) async fn read_release_track(state: &AppState) -> String {
     }
 }
 
+/// The default `source_equivalences` value: e-hentai's two front ends. Both names are read from
+/// [`parse_source_equivalences`] at request time, never only here, so an unset field behaves the
+/// same through every entry point.
+pub(crate) const DEFAULT_SOURCE_EQUIVALENCES: &str = "e-hentai.org, exhentai.org";
+
+/// Parses `source_equivalences` into the groups the search engine matches against: one group per
+/// line, one `host` or `*.domain` pattern per comma-separated member. Blank lines are ignored; a
+/// malformed pattern, a line with fewer than two members, or a duplicate member within a line is an
+/// error rather than being silently dropped (a typo must not quietly narrow the equivalence).
+pub(crate) fn parse_source_equivalences(raw: &str) -> Result<Vec<Vec<String>>, String> {
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    for (index, line) in raw.lines().enumerate() {
+        let mut group: Vec<String> = Vec::new();
+        for entry in line
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+        {
+            let host = entry.to_ascii_lowercase();
+            if !is_valid_source_host_pattern(&host) {
+                return Err(format!(
+                    "line {} contains an invalid host pattern {entry:?} (expected `host` or `*.host`).",
+                    index + 1
+                ));
+            }
+            if group.contains(&host) {
+                return Err(format!(
+                    "line {} lists {entry:?} more than once.",
+                    index + 1
+                ));
+            }
+            group.push(host);
+        }
+        if group.is_empty() {
+            continue;
+        }
+        if group.len() < 2 {
+            return Err(format!(
+                "line {} needs at least two host patterns to describe an equivalence.",
+                index + 1
+            ));
+        }
+        groups.push(group);
+    }
+    Ok(groups)
+}
+
+fn is_valid_source_host_pattern(host: &str) -> bool {
+    let host = host.strip_prefix("*.").unwrap_or(host);
+    if host.is_empty() || host.len() > 253 || !host.contains('.') {
+        return false;
+    }
+    host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    })
+}
+
+/// Reads the configured `source_equivalences` groups for a search request, falling back to the
+/// default pair when the field is unset *or* malformed — a bad stored value must not make every
+/// `source:` search match nothing.
+pub(crate) async fn read_source_equivalences(state: &AppState) -> Vec<Vec<String>> {
+    let raw = match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "source_equivalences")
+            .await
+            .ok()
+            .flatten(),
+        Err(_) => None,
+    };
+    raw.as_deref()
+        .and_then(|raw| parse_source_equivalences(raw).ok())
+        .unwrap_or_else(lanrurugi_search::engine::default_source_equivalences)
+}
+
 pub(crate) async fn read_new_badge_mode(state: &AppState) -> String {
     match state.redis.config.get().await {
         Ok(mut conn) => conn
@@ -390,6 +470,12 @@ const STRING_FIELDS: &[(&str, &str)] = &[
     // (`STRING_FIELDS`) declares a field, and an older deployment simply reads the default.
     ("release_track", "stable"),
     ("excludednamespaces", "source, date_added"),
+    // Hosts that `source:` searches treat as the same site, so the same gallery is findable by
+    // whichever front-end domain a user has at hand. Blank-line-separated groups, comma-separated
+    // members; a member is a literal host or `*.domain` (any subdomain of it, not the apex). The
+    // default pairs e-hentai's two front ends, which index the same galleries under different
+    // hostnames. See `lanrurugi_search::engine::tag_index_variants`.
+    ("source_equivalences", DEFAULT_SOURCE_EQUIVALENCES),
     // IANA timezone identifier (e.g. `"Asia/Tokyo"`, `"UTC"` — anything `chrono_tz` accepts),
     // used by date display/search-range math (see `lanrurugi_search::engine`'s `date_added`
     // date-range handling) so that "the day an archive was added" is unambiguous regardless of
@@ -680,6 +766,10 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
                 "Field \"plugin_bind_interface\" names no existing network interface: {name}."
             ));
         }
+    }
+    if key == "source_equivalences" {
+        parse_source_equivalences(value.as_str().unwrap_or(""))
+            .map_err(|message| format!("Field \"source_equivalences\": {message}"))?;
     }
     if key == "trusted_origins" {
         let raw = value.as_str().unwrap_or("");
@@ -1429,6 +1519,54 @@ mod validate_setting_field_tests {
     fn rejects_an_unknown_key() {
         let err = validate_setting_field("not_a_real_field", &json!("value")).unwrap_err();
         assert!(err.contains("Unknown settings field"));
+    }
+
+    #[test]
+    fn source_equivalences_accepts_literal_and_wildcard_groups() {
+        assert_eq!(
+            parse_source_equivalences("e-hentai.org, exhentai.org").unwrap(),
+            vec![vec!["e-hentai.org".to_string(), "exhentai.org".to_string()]]
+        );
+        // Blank lines are separators, not errors; case is folded for matching.
+        assert_eq!(
+            parse_source_equivalences("\nE-Hentai.org, exhentai.org\n\n*.a.com, *.b.com\n")
+                .unwrap(),
+            vec![
+                vec!["e-hentai.org".to_string(), "exhentai.org".to_string()],
+                vec!["*.a.com".to_string(), "*.b.com".to_string()],
+            ]
+        );
+        assert_eq!(
+            validate_setting_field("source_equivalences", &json!("e-hentai.org, exhentai.org"))
+                .unwrap(),
+            "e-hentai.org, exhentai.org"
+        );
+        // The declared default must itself be a valid value.
+        assert!(parse_source_equivalences(DEFAULT_SOURCE_EQUIVALENCES).is_ok());
+    }
+
+    #[test]
+    fn source_equivalences_rejects_malformed_groups() {
+        for bad in [
+            // One member is not an equivalence.
+            "e-hentai.org",
+            // A URL is not a host pattern.
+            "e-hentai.org, https://exhentai.org",
+            "*.a.com, e-hentai.org/path",
+            // `*` must be the whole leading label.
+            "a.com, *b.com",
+            // A group member may not repeat.
+            "a.com, a.com",
+        ] {
+            assert!(
+                parse_source_equivalences(bad).is_err(),
+                "{bad:?} should be rejected"
+            );
+            assert!(
+                validate_setting_field("source_equivalences", &json!(bad)).is_err(),
+                "{bad:?} should be rejected by the write-side check"
+            );
+        }
     }
 
     #[test]

@@ -70,6 +70,12 @@ pub struct SearchParams {
     /// `restrict_to_archive_ids` below already uses. `None` means "not computed", and the operator
     /// then matches nothing rather than silently matching everything.
     pub split_suggestion_archive_ids: Option<HashSet<String>>,
+    /// `source_equivalences` setting: groups of host patterns treated as the same site when
+    /// matching `source:` tags, e.g. `[["e-hentai.org", "exhentai.org"]]`. A pattern is either a
+    /// literal host or `*.domain`, which stands for any (and only a) subdomain — so
+    /// `*.a.com` ↔ `*.b.com` maps `sub.a.com` to `sub.b.com` but never `sub.a.com` to
+    /// `sub2.b.com`. Empty means no host equivalence; see [`tag_index_variants`].
+    pub source_equivalences: Vec<Vec<String>>,
     /// 007-guest-restricted-access: when `Some`, narrows the candidate set to exactly these
     /// archive ids before any other filter runs — the union of archive ids across every
     /// `visible_to_guest` category, computed once per request by the caller. `None` means no
@@ -93,9 +99,18 @@ impl Default for SearchParams {
             timezone: "UTC".to_string(),
             new_badge_mode: "until_opened".to_string(),
             split_suggestion_archive_ids: None,
+            source_equivalences: default_source_equivalences(),
             restrict_to_archive_ids: None,
         }
     }
+}
+
+/// The `source_equivalences` setting's out-of-the-box value: the two front ends of the same
+/// e-hentai index. Kept here (not only in the API's default settings string) so callers that
+/// construct [`SearchParams`] directly — `search_exists`, dynamic category membership — behave
+/// like an unconfigured site instead of silently ignoring host equivalence.
+pub fn default_source_equivalences() -> Vec<Vec<String>> {
+    vec![vec!["e-hentai.org".to_string(), "exhentai.org".to_string()]]
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +248,7 @@ pub async fn search_exists(
         candidates.retain(|id| !unpublished.contains(id));
     }
 
+    let source_equivalences = default_source_equivalences();
     let mut ctx = EvalCtx {
         archive_pool,
         bookmarks,
@@ -243,6 +259,7 @@ pub async fn search_exists(
         timezone,
         split_suggestions: None,
         category_depth: 0,
+        source_equivalences: &source_equivalences,
     };
     let matched = eval_expr(&mut ctx, &expr, candidates).await?;
     Ok(!matched.is_empty())
@@ -274,6 +291,8 @@ struct EvalCtx<'a> {
     /// through a cycle, this one. Capped rather than cycle-detected: a chain that deep is a
     /// misconfiguration either way, and matching nothing is the safe outcome.
     category_depth: u8,
+    /// See [`SearchParams::source_equivalences`]; used only by `source:` tag lookups.
+    source_equivalences: &'a [Vec<String>],
 }
 
 /// Whether a filter string mentions the `has:split-suggestion` operator — the API's cue to compute
@@ -635,6 +654,7 @@ pub async fn search(
             timezone: &params.timezone,
             split_suggestions: params.split_suggestion_archive_ids.as_ref(),
             category_depth: 0,
+            source_equivalences: &params.source_equivalences,
         };
         eval_expr(&mut ctx, &expr, filtered).await?
     };
@@ -1233,6 +1253,137 @@ fn parse_progress_range_filter(tag: &str) -> Option<(f64, f64)> {
     Some((low.min(high), low.max(high)))
 }
 
+/// The tag-index spellings one token should be looked up under. Two things widen the set, both
+/// additively so neither an index built before either change nor a mixed library needs a rebuild:
+///
+/// - `source:` is a URL namespace plugins write inconsistently (`ehentai.ts`'s `canonicalizeSource`
+///   drops the scheme, ComicInfo's `<Web>`/FAKKU keep it), so a URL copied out of the address bar
+///   (`source:https://…`) must find an archive indexed as `source:example.org/…`, and vice versa.
+/// - The `source_equivalences` setting groups hosts that are the same site (`e-hentai.org` /
+///   `exhentai.org` by default, or `*.a.com` / `*.b.com` for mirror domains); only the host is
+///   substituted, the path that identifies the gallery is preserved.
+fn tag_index_variants(tag: &str, source_equivalences: &[Vec<String>]) -> Vec<String> {
+    let Some(rest) = tag.strip_prefix("source:") else {
+        return vec![tag.to_string()];
+    };
+    let bare = rest
+        .strip_prefix("https://")
+        .or_else(|| rest.strip_prefix("http://"))
+        .unwrap_or(rest);
+    let mut variants = Vec::new();
+    let mut push = |value: String| {
+        if !variants.contains(&value) {
+            variants.push(value);
+        }
+    };
+    let mut push_bare = |bare: &str| {
+        for prefix in ["source:", "source:https://", "source:http://"] {
+            push(format!("{prefix}{bare}"));
+        }
+    };
+    push_bare(bare);
+    // A URL copied out of a browser usually ends with `/`, but the tag a plugin stored does not —
+    // the prefix glob would then require a slash the stored key does not have, so the trimmed form
+    // is looked up too (as a prefix, it still matches a stored trailing slash).
+    if let Some(trimmed) = bare.strip_suffix('/') {
+        push_bare(trimmed);
+    }
+    if !source_equivalences.is_empty() {
+        let (host, path) = match bare.split_once('/') {
+            Some((host, path)) => (host, Some(path)),
+            None => (bare, None),
+        };
+        for equivalent in equivalent_hosts(&host.to_ascii_lowercase(), source_equivalences) {
+            match path {
+                Some(path) => {
+                    let combined = format!("{equivalent}/{path}");
+                    push_bare(&combined);
+                    if let Some(trimmed) = combined.strip_suffix('/') {
+                        push_bare(trimmed);
+                    }
+                }
+                None => push_bare(&equivalent),
+            }
+        }
+    }
+    variants
+}
+
+/// One pattern of a `source_equivalences` group matched against a host.
+enum HostMatch<'h> {
+    /// The pattern is a literal host and equals the host.
+    Literal,
+    /// The pattern is `*.<base>`; holds the concrete subdomain prefix that matched.
+    Subdomain(&'h str),
+}
+
+fn match_host_pattern<'h>(host: &'h str, pattern: &str) -> Option<HostMatch<'h>> {
+    match pattern.strip_prefix("*.") {
+        Some(base) => {
+            let sub = host.strip_suffix(base)?.strip_suffix('.')?;
+            (!sub.is_empty()).then_some(HostMatch::Subdomain(sub))
+        }
+        None => (host == pattern).then_some(HostMatch::Literal),
+    }
+}
+
+/// The hosts a group says are equivalent to `host`. Literal ↔ literal swaps the whole host;
+/// wildcard ↔ wildcard keeps the same subdomain prefix (`sub.a.com` → `sub.b.com`, never
+/// `sub2.b.com`). A `*.a.com` entry may also be grouped with a literal host, which subdomains of
+/// a.com map to that literal; a literal host never maps onto a `*.` entry, because there is no
+/// subdomain to carry and `*.b.com` does not cover the apex `b.com`.
+fn equivalent_hosts(host: &str, equivalences: &[Vec<String>]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for group in equivalences {
+        let Some(matched) = group
+            .iter()
+            .find_map(|pattern| match_host_pattern(host, pattern))
+        else {
+            continue;
+        };
+        for pattern in group {
+            let candidate = match (&matched, pattern.strip_prefix("*.")) {
+                (HostMatch::Literal, None) => pattern.clone(),
+                (HostMatch::Subdomain(sub), Some(base)) => format!("{sub}.{base}"),
+                (HostMatch::Subdomain(_), None) => pattern.clone(),
+                (HostMatch::Literal, Some(_)) => continue,
+            };
+            if candidate != host && !out.contains(&candidate) {
+                out.push(candidate);
+            }
+        }
+    }
+    out
+}
+
+/// Unions the archive ids behind one `INDEX_<folded>` tag lookup. `Search.pm::search_uncached`
+/// only trusts a literal set when an *exact* search finds `INDEX_$tag` actually exists; otherwise
+/// (even though `isexact` is true) it falls back to the same glob-key lookup the non-exact case
+/// uses. That fallback is load-bearing, not a redundant legacy quirk: `_`/`%` in a tag are
+/// unconditionally glob-escaped to `?`/`*` *before* this check runs, so the literal
+/// `INDEX_date?added:...` key almost never exists, and skipping the fallback silently returned zero
+/// results for exact-match searches on any namespace containing an underscore.
+async fn collect_tag_index(
+    conn: &mut deadpool_redis::Connection,
+    folded: &str,
+    isexact: bool,
+    ids: &mut HashSet<String>,
+) -> Result<()> {
+    let exact_key = format!("INDEX_{folded}");
+    if isexact && conn.exists(&exact_key).await.unwrap_or(false) {
+        let members: Vec<String> = conn.smembers(&exact_key).await.unwrap_or_default();
+        ids.extend(members);
+    } else {
+        let pattern = if folded.contains(':') {
+            format!("INDEX_{folded}*")
+        } else {
+            format!("INDEX_*{folded}*")
+        };
+        collect_index_keys(conn, &pattern, ids).await?;
+    }
+    Ok(())
+}
+
 /// pages:/read: numeric filters, the additive `date_added:YYYY-MM-DD` date-range filter, and the
 /// general tag-index/title-fuzzy-match lookup, matching `search_uncached`'s per-token logic (the
 /// date-range branch is an additive improvement over legacy, which has no "search by calendar day"
@@ -1386,17 +1537,6 @@ async fn token_matches(
 
     let mut ids = HashSet::new();
 
-    // `Search.pm::search_uncached`: for an exact-tag search, checks `exists("INDEX_$tag")` first
-    // and only trusts a direct `smembers` on that literal key if it's really there — otherwise
-    // (even though `isexact` is true) it falls through to the exact same glob-key lookup the
-    // non-exact branch below uses. This fallback is load-bearing, not a redundant legacy quirk:
-    // `_`/`%` in a tag are unconditionally glob-escaped to `?`/`*` *before* this check runs (both
-    // here and in legacy), with no exception for underscores that are part of a namespace name
-    // rather than an intentional wildcard (e.g. `date_added:...$` normalizes its own tag to
-    // `date?added:...`) — so the literal `INDEX_date?added:...` key almost never actually exists,
-    // and skipping the fallback (an earlier version of this function did) silently returned zero
-    // results for exact-match searches on any namespace containing an underscore, a real
-    // live-confirmed regression from legacy's own actual (if accidental) behavior.
     // Canonicalize the query token's literal segments; `*`/`?` wildcards are preserved by
     // `fold_pattern` and only the literal runs between them are folded, so glob semantics stay
     // intact and OpenCC phrase mappings never cross a wildcard.
@@ -1406,18 +1546,14 @@ async fn token_matches(
     // legacy's syntax had no way to express, since a bare token always searched tags *and* the
     // title. `folded` is still needed by the title half below.
     if token.field == Field::Any {
-        let exact_key = format!("INDEX_{folded}");
-        let exact_hit = token.isexact && search_conn.exists(&exact_key).await.unwrap_or(false);
-        if exact_hit {
-            let members: Vec<String> = search_conn.smembers(&exact_key).await.unwrap_or_default();
-            ids.extend(members);
-        } else {
-            let pattern = if folded.contains(':') {
-                format!("INDEX_{folded}*")
-            } else {
-                format!("INDEX_*{folded}*")
-            };
-            collect_index_keys(search_conn, &pattern, &mut ids).await?;
+        for variant in tag_index_variants(&token.tag, ctx.source_equivalences) {
+            collect_tag_index(
+                search_conn,
+                &eq.fold_pattern(&variant),
+                token.isexact,
+                &mut ids,
+            )
+            .await?;
         }
     }
 
@@ -1438,22 +1574,8 @@ async fn token_matches(
     // branch is disabled and only the canonical indexes are used.
     if legacy_fallback {
         if token.field == Field::Any {
-            let raw_exact_key = format!("INDEX_{}", token.tag);
-            let raw_exact_hit =
-                token.isexact && search_conn.exists(&raw_exact_key).await.unwrap_or(false);
-            if raw_exact_hit {
-                let members: Vec<String> = search_conn
-                    .smembers(&raw_exact_key)
-                    .await
-                    .unwrap_or_default();
-                ids.extend(members);
-            } else {
-                let raw_pattern = if token.tag.contains(':') {
-                    format!("INDEX_{}*", token.tag)
-                } else {
-                    format!("INDEX_*{}*", token.tag)
-                };
-                collect_index_keys(search_conn, &raw_pattern, &mut ids).await?;
+            for variant in tag_index_variants(&token.tag, ctx.source_equivalences) {
+                collect_tag_index(search_conn, &variant, token.isexact, &mut ids).await?;
             }
         }
 
@@ -2245,6 +2367,64 @@ mod tests {
         }
     }
 
+    /// `source_equivalences`: e-hentai's two front ends are one site by default, so a Chaika or
+    /// e-hentai source tag is found by either hostname, with the scheme variants still applied.
+    #[test]
+    fn source_equivalence_maps_hosts_without_touching_the_path() {
+        let groups = default_source_equivalences();
+        let variants = tag_index_variants("source:e-hentai.org/g/637474/02981a1399", &groups);
+        assert!(variants.contains(&"source:exhentai.org/g/637474/02981a1399".to_string()));
+        assert!(variants.contains(&"source:https://e-hentai.org/g/637474/02981a1399".to_string()));
+
+        // And the other direction, for an archive that stored the exhentai front end.
+        let variants = tag_index_variants("source:exhentai.org/g/1/abc", &groups);
+        assert!(variants.contains(&"source:e-hentai.org/g/1/abc".to_string()));
+
+        // A URL copied from the address bar usually ends with `/`; both the scheme and host
+        // equivalence still have to find the tag stored without it.
+        let copied =
+            tag_index_variants("source:https://e-hentai.org/g/637474/02981a1399/", &groups);
+        assert!(copied.contains(&"source:exhentai.org/g/637474/02981a1399".to_string()));
+    }
+
+    #[test]
+    fn wildcard_equivalence_keeps_the_same_subdomain_prefix() {
+        let groups = vec![vec!["*.a.com".to_string(), "*.b.com".to_string()]];
+
+        let variants = tag_index_variants("source:sub1.a.com/g/1/abc", &groups);
+        assert!(variants.contains(&"source:sub1.b.com/g/1/abc".to_string()));
+        assert!(!variants
+            .iter()
+            .any(|variant| variant.contains("sub2.b.com")));
+
+        // A deeper subdomain keeps its whole prefix rather than collapsing to one label.
+        let deep = tag_index_variants("source:x.y.a.com/g/1", &groups);
+        assert!(deep.contains(&"source:x.y.b.com/g/1".to_string()));
+
+        // `*.a.com` does not cover the apex, so `a.com` maps to nothing.
+        let apex = tag_index_variants("source:a.com/g/1", &groups);
+        assert!(!apex.iter().any(|variant| variant.contains("b.com")));
+    }
+
+    #[test]
+    fn literal_equivalence_does_not_cross_into_subdomains() {
+        let groups = vec![vec!["a.com".to_string(), "b.com".to_string()]];
+        assert!(tag_index_variants("source:a.com/g/1", &groups)
+            .contains(&"source:b.com/g/1".to_string()));
+        // A literal entry is exactly one host; its subdomains are not implicitly equivalent.
+        let sub = tag_index_variants("source:sub.a.com/g/1", &groups);
+        assert!(!sub.iter().any(|variant| variant.contains("b.com")));
+    }
+
+    #[test]
+    fn only_source_tags_are_expanded() {
+        let groups = default_source_equivalences();
+        assert_eq!(
+            tag_index_variants("artist:someone", &groups),
+            vec!["artist:someone".to_string()]
+        );
+    }
+
     #[tokio::test]
     async fn finds_archive_by_tag_and_respects_negation() {
         let Some((archive_pool, search_pool, bookmarks)) = test_pools().await else {
@@ -2336,6 +2516,90 @@ mod tests {
                 vec![
                     "book a\0".to_string() + &id_a,
                     "book b\0".to_string() + &id_b,
+                ],
+            )
+            .await
+            .unwrap();
+    }
+
+    /// A `source:` value pasted straight out of the address bar (`source:https://…`) and the bare
+    /// host path must select the same archive, whichever spelling the archive was *indexed* under:
+    /// `ehentai.ts` stores the bare form, ComicInfo's `<Web>`/FAKKU keep the scheme. Scoped to this
+    /// test's own two archives because the file's other tests share the same Redis.
+    #[tokio::test]
+    async fn source_tag_matches_with_or_without_a_url_scheme() {
+        let Some((archive_pool, search_pool, bookmarks)) = test_pools().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let eq = test_eq();
+        let id_a = "a".repeat(40);
+        let id_b = "b".repeat(40);
+        let bare = "source:e-hentai.org/g/2752616/b4cdde17d1";
+        let scheme = "source:https://fakku.net/g/12345";
+
+        let mut aconn = archive_pool.get().await.unwrap();
+        for (id, tag, title) in [
+            (&id_a, bare, "source scheme a"),
+            (&id_b, scheme, "source scheme b"),
+        ] {
+            let _: () = aconn
+                .hset_multiple(id, &[("tags", tag), ("pagecount", "1"), ("progress", "0")])
+                .await
+                .unwrap();
+            crate::indexer::index_new_archive(&search_pool, &eq, id, title)
+                .await
+                .unwrap();
+            crate::indexer::update_tag_indexes(&search_pool, &eq, id, "", tag)
+                .await
+                .unwrap();
+        }
+
+        let scope: HashSet<lanrurugi_core::ids::ArchiveId> = [&id_a, &id_b]
+            .into_iter()
+            .map(|id| lanrurugi_core::ids::ArchiveId(id.clone()))
+            .collect();
+        for (filter, expected) in [
+            ("source:https://e-hentai.org/g/2752616/b4cdde17d1", &id_a),
+            (bare, &id_a),
+            ("source:fakku.net/g/12345", &id_b),
+            (scheme, &id_b),
+            // The default equivalence group pairs the two e-hentai front ends, so either host
+            // finds the tag stored under the other one — including a URL copied with `https://`
+            // and a trailing slash.
+            ("source:exhentai.org/g/2752616/b4cdde17d1", &id_a),
+            ("source:https://exhentai.org/g/2752616/b4cdde17d1/", &id_a),
+        ] {
+            let params = SearchParams {
+                filter: filter.to_string(),
+                groupby_tanks: true,
+                restrict_to_archive_ids: Some(scope.clone()),
+                ..Default::default()
+            };
+            let result = search(&archive_pool, &search_pool, &eq, &bookmarks, &params)
+                .await
+                .unwrap();
+            assert_eq!(result.ids, vec![expected.clone()], "filter {filter:?}");
+        }
+
+        for id in [&id_a, &id_b] {
+            let _: () = aconn.del(id).await.unwrap();
+        }
+        let mut sconn = search_pool.get().await.unwrap();
+        for tag in [bare, scheme] {
+            let _: () = sconn.del(format!("INDEX_{tag}")).await.unwrap();
+        }
+        for id in [&id_a, &id_b] {
+            let _: () = sconn.srem(UNTAGGED_KEY, id).await.unwrap();
+            let _: () = sconn.srem(NEW_KEY, id).await.unwrap();
+            let _: () = sconn.srem(TANKGROUPED_KEY, id).await.unwrap();
+        }
+        let _: () = sconn
+            .zrem(
+                TITLES_KEY,
+                vec![
+                    "source scheme a\0".to_string() + &id_a,
+                    "source scheme b\0".to_string() + &id_b,
                 ],
             )
             .await

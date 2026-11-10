@@ -412,6 +412,10 @@ async fn build_params(
         // build_params has no access to the request's AuthContext. See those two handlers' own
         // call sites.
         restrict_to_archive_ids: None,
+        // `source:` host equivalences (`e-hentai.org` ≡ `exhentai.org` out of the box) — a search
+        // setting rather than a per-query operator, so every entry point that funnels through this
+        // builder (search/suggest/random) honors the configured groups.
+        source_equivalences: crate::settings::read_source_equivalences(state).await,
     };
 
     // `has:split-suggestion` is the one operator whose data lives outside the pools the search

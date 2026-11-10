@@ -137,6 +137,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [thumbnailFormat, setThumbnailFormat] = useState(savedThumbnailFormat)
   const [webpquality, setWebpquality] = useState(settings.webpquality)
   const [excludednamespaces, setExcludednamespaces] = useState(settings.excludednamespaces)
+  const [sourceEquivalences, setSourceEquivalences] = useState(settings.source_equivalences)
   const [tagruleson, setTagruleson] = useState(settings.tagruleson)
   const [tagrules, setTagrules] = useState(settings.tagrules)
   const [usedateadded, setUsedateadded] = useState(settings.usedateadded)
@@ -212,6 +213,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       thumbnailFormat !== savedThumbnailFormat ||
       webpquality !== settings.webpquality ||
       excludednamespaces !== settings.excludednamespaces ||
+      sourceEquivalences !== settings.source_equivalences ||
       tagruleson !== settings.tagruleson ||
       tagrules !== settings.tagrules ||
       usedateadded !== settings.usedateadded ||
@@ -233,7 +235,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       trustedOrigins, ssoAutoRedirect, enablecors, tempmaxsize,
       logMaxFileMb, logMaxFiles,
       recycleRetentionDays, recycleMaxSizeGb,
-      replacedupe, savedThumbnailFormat, thumbnailFormat, webpquality, excludednamespaces, tagruleson,
+      replacedupe, savedThumbnailFormat, thumbnailFormat, webpquality, excludednamespaces,
+      sourceEquivalences, tagruleson,
       tagrules, usedateadded, usedatemodified, timezone, newbadgemode, recommendprecision,
       pluginBindInterface,
       directDownloadUrl,
@@ -286,6 +289,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         thumbnail_format: thumbnailFormat,
         webpquality,
         excludednamespaces,
+        source_equivalences: sourceEquivalences,
         tagruleson,
         tagrules,
         usedateadded,
@@ -612,6 +616,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             setWebpquality={setWebpquality}
             excludednamespaces={excludednamespaces}
             setExcludednamespaces={setExcludednamespaces}
+            sourceEquivalences={sourceEquivalences}
+            setSourceEquivalences={setSourceEquivalences}
             tagruleson={tagruleson}
             setTagruleson={setTagruleson}
             tagrules={tagrules}

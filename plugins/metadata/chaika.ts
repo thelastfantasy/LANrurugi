@@ -61,6 +61,11 @@ interface ChaikaGallery {
   posted?: string | number;
   title: string;
   title_jpn?: string;
+  /** Present on gallery objects and gallery-search hits; archive/sha1 records only carry the
+   * internal `gallery` id — see `with_gallery_link`. */
+  link?: string;
+  gid?: string | number;
+  token?: string | null;
 }
 
 export async function execMetadata(hostArgs: Record<string, unknown>) {
@@ -152,7 +157,7 @@ async function search_for_archive(
   logger.debug(`Chaika API returned this JSON: ${res.body}`);
   const galleries = (res.json as { galleries?: ChaikaGallery[] } | undefined)?.galleries;
   if (!galleries || galleries.length === 0) return "";
-  return parse_chaika_json(galleries[0], addextra, addother, addsource, jpntitle);
+  return parse_chaika_json(await with_gallery_link(galleries[0]), addextra, addother, addsource, jpntitle);
 }
 
 /** Uses the jsearch API to get the best JSON match for a gallery/archive URL's type+ID. */
@@ -166,7 +171,7 @@ async function tags_from_chaika_id(
 ): Promise<[string, string] | ""> {
   let json = await get_json_from_chaika(type, ID);
   if (!json) return "";
-  return parse_chaika_json(json as ChaikaGallery, addextra, addother, addsource, jpntitle);
+  return parse_chaika_json(await with_gallery_link(json as ChaikaGallery), addextra, addother, addsource, jpntitle);
 }
 
 /** Uses Chaika's SHA-1 search with the first page hash we have — the jsearch API immediately
@@ -180,7 +185,40 @@ async function tags_from_sha1(
 ): Promise<[string, string] | ""> {
   let json_by_sha1 = await get_json_from_chaika('sha1', sha1) as ChaikaGallery[] | undefined;
   if (!json_by_sha1 || json_by_sha1.length === 0) return "";
-  return parse_chaika_json(json_by_sha1[0], addextra, addother, addsource, jpntitle);
+  return parse_chaika_json(await with_gallery_link(json_by_sha1[0]), addextra, addother, addsource, jpntitle);
+}
+
+/** Archive and sha1 jsearch records carry only their internal `gallery` id, while the e-hentai
+ * link lives on the gallery object — one extra request fills it in so the source tag below can be
+ * added for those two lookup paths too. Best-effort: a failed or empty fetch keeps the record
+ * as-is (the archive still gets its other tags). */
+async function with_gallery_link(json: ChaikaGallery): Promise<ChaikaGallery> {
+  if (json.link || json.gid) return json;
+  const gallery = json.gallery;
+  if (typeof gallery !== "number" && !(typeof gallery === "string" && /^[0-9]+$/.test(gallery))) {
+    return json;
+  }
+  const parent = await get_json_from_chaika("gallery", String(gallery)) as ChaikaGallery | undefined;
+  if (!parent) return json;
+  return { ...json, link: parent.link, gid: parent.gid, token: parent.token };
+}
+
+/** The canonical e-hentai gallery URL for a Chaika record, or `""` when it is not an e-hentai
+ * gallery (FAKKU entries have a slug gid and no token). Both e-hentai front ends collapse onto
+ * `e-hentai.org` — the same canonical form `download/ehentai.ts`'s `canonicalizeSource` stores —
+ * so a Chaika-sourced archive stays findable with either domain, and the e-hentai metadata plugin
+ * recognizes the tag instead of searching again. */
+function ehentai_source(json: ChaikaGallery): string {
+  const link = json.link ?? "";
+  const match = link.match(/^(?:https?:\/\/)?(?:www\.)?(?:ex|e-)hentai\.org\/g\/([0-9]+)\/([0-9a-z]+)/i);
+  if (match) {
+    return `e-hentai.org/g/${match[1]}/${match[2].toLowerCase()}`;
+  }
+  const gid = String(json.gid ?? "");
+  if (/^[0-9]+$/.test(gid) && typeof json.token === "string" && json.token !== "") {
+    return `e-hentai.org/g/${gid}/${json.token.toLowerCase()}`;
+  }
+  return "";
 }
 
 /** Calls Chaika's own jsearch API — `undefined` on an HTTP error response (mirrors legacy's own
@@ -243,6 +281,13 @@ function parse_chaika_json(
     // Add custom source, but only if having found gallery.
     if (addsource && addsource !== "") {
       tags.push("source:" + addsource);
+    }
+    // e-hentai is a second, independent source for the same gallery: the same canonical tag the
+    // e-hentai metadata plugin would store, so adding it here saves that lookup and makes the
+    // archive findable by its e-hentai URL even when it was downloaded from Chaika.
+    const ehSource = ehentai_source(json);
+    if (ehSource !== "" && !tags.includes("source:" + ehSource)) {
+      tags.push("source:" + ehSource);
     }
     let title = jpntitle ? json.title_jpn : json.title;
     if (title === "" && jpntitle) {

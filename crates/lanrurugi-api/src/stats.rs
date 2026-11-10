@@ -2138,6 +2138,12 @@ mod tests {
         assert_eq!(totals.unread, 1);
         assert_eq!(totals.reading, 1);
         assert_eq!(totals.finished, 2);
+        // The three reading cards on the stats page are presented as a partition of the library,
+        // so they must always add up to the archive count above them.
+        assert_eq!(
+            totals.unread + totals.reading + totals.finished,
+            totals.archives
+        );
         assert_eq!(totals.rated, 1);
         assert_eq!(totals.tankoubons, 3);
         assert_eq!(totals.pages, 400);
