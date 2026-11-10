@@ -2,7 +2,7 @@ import { useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { useCleanDatabase, useDropDatabase } from "@/api/hooks"
+import { useCleanDatabase, useDropDatabase, useTidyTags } from "@/api/hooks"
 import { NumberInput } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
 import { confirmDialog } from "@/dialog"
@@ -119,6 +119,7 @@ export function GlobalSection({
       : rest
   }, [interfaces, defaultInterface])
   const cleanDatabase = useCleanDatabase()
+  const tidyTags = useTidyTags()
   const dropDatabase = useDropDatabase()
 
   return (
@@ -391,6 +392,22 @@ export function GlobalSection({
           >
             {t("settings.evenWithThePasswordProtection")}
           </CheckboxRow>
+          <ActionRow
+            id="tidy-tags"
+            label={t("settings.tidyTags")}
+            onClick={async () => {
+              if (!(await confirmDialog(t("settings.tidyTagsConfirm")))) return
+              const result = await tidyTags.mutateAsync()
+              onStatus(
+                t("settings.tidyTagsResult", {
+                  scanned: result.scanned,
+                  repaired: result.repaired,
+                }),
+              )
+            }}
+          >
+            {t("settings.tidyTagsDescription")}
+          </ActionRow>
           <ActionRow
             id="clean-db"
             label={t("settings.cleanDatabase")}

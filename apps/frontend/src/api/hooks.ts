@@ -1733,6 +1733,14 @@ export function useCleanDatabase() {
   })
 }
 
+/** Collapses duplicate tags across the whole library — idempotent, safe to run again any time. */
+export function useTidyTags() {
+  return useMutation({
+    mutationFn: () =>
+      sendJson<{ scanned: number; repaired: number }>("POST", "/database/tidy-tags"),
+  })
+}
+
 export function useDropDatabase() {
   return useMutation({
     mutationFn: () => sendJson("POST", "/database/drop"),

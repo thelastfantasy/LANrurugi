@@ -40,6 +40,7 @@ pub fn router() -> Router<AppState> {
         .route("/database/restore", post(queue_restore))
         .route("/database/isnew", delete(clear_new_all))
         .route("/database/clean", post(clean_database))
+        .route("/database/tidy-tags", post(tidy_tags))
         .route("/database/rebuild-index", post(rebuild_index))
         .route(
             "/database/import-legacy",
@@ -517,6 +518,25 @@ async fn drop_database(
     .await;
 
     axum::Json(json!({ "operation": "drop_database", "success": 1 })).into_response()
+}
+
+/// `POST /database/tidy-tags` — the settings page's "自动整理标签" button. An explicit, repeatable
+/// action rather than a startup migration: the duplicate tags it collapses can be reintroduced by
+/// another import or restore, and re-running it on a clean library is a read-only scan that writes
+/// nothing back. That matters more than the few seconds it costs on a large library.
+async fn tidy_tags(State(state): State<AppState>) -> Response {
+    match lanrurugi_storage::tidy_tags::tidy_tags(&state.repos.archives).await {
+        Ok(report) => axum::Json(json!({
+            "scanned": report.scanned,
+            "repaired": report.repaired,
+        }))
+        .into_response(),
+        Err(e) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "tidy_tags",
+            e.to_string(),
+        ),
+    }
 }
 
 /// Two-phase cleanup matching the legacy contract's documented *effect* ("unlinked at first,

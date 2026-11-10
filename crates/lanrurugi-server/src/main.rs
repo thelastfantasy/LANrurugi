@@ -599,32 +599,6 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         });
     }
 
-    // One-time repair for a library imported from LANraragi before the import path stopped
-    // bringing `date_added:` along: both sides' tags were unioned, leaving two values on one
-    // archive. Runs detached and only once (flag in the config DB), so a normal start pays a
-    // single EXISTS.
-    {
-        let state = state.clone();
-        tokio::spawn(async move {
-            match lanrurugi_storage::migrations::dedupe_date_added_tags(
-                &state.repos.archives,
-                &state.redis.config,
-            )
-            .await
-            {
-                Ok(report) if report.repaired > 0 => tracing::info!(
-                    scanned = report.scanned,
-                    repaired = report.repaired,
-                    "collapsed duplicate date_added tags left by a legacy import"
-                ),
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::warn!(%error, "date_added tag cleanup failed; will retry at next start");
-                }
-            }
-        });
-    }
-
     // Error telemetry: one background writer, so an envelope never costs a request a Redis round
     // trip (specs/018, research.md §1/§5).
     lanrurugi_api::diagnostics::start_writer(state.clone());
