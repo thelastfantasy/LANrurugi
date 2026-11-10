@@ -412,6 +412,8 @@ export function GlobalSection({
                       "settings.tidyTagsRuleDateAdded",
                       "settings.tidyTagsRuleDuplicates",
                       "settings.tidyTagsRuleWhitespace",
+                      "settings.tidyTagsRuleNamespace",
+                      "settings.tidyTagsRuleEmptyValue",
                     ].map((key) => (
                       <li key={key} style={{ padding: "2px 0" }}>
                         • {t(key)}

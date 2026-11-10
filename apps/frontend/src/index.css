@@ -122,6 +122,17 @@ input[type="checkbox"]:disabled {
   cursor: not-allowed;
 }
 
+/* Legacy's `config.css` stamps "ON"/"OFF" after every `input[type=checkbox]` via `::after`, on top
+ * of the `fa-toggle-on`/`fa-toggle-off` glyph its `::before` already draws. The glyph is the state
+ * indicator; the text only repeats it, and because it overflows the input's own 20px box it lands on
+ * top of whatever follows the checkbox inline (reported live, 2026-11-10, on the settings page's
+ * "自动（使用浏览器默认设置）" row). `!important` because `theme.ts` injects `config.css` into
+ * `<head>` at runtime, after this bundle, so an equal-specificity rule here would lose.
+ */
+input[type="checkbox"]::after {
+  content: none !important;
+}
+
 /* Additive: the reader overview overlay's page-grid briefly outlines whichever page it opened on
  * (`ArchiveOverviewOverlay.tsx`'s `PageGridCell`, `highlighted` prop) — a static outline alone is
  * easy to miss at a glance across a grid that can run into the hundreds of otherwise-identical

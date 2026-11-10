@@ -525,18 +525,39 @@ async fn drop_database(
 /// another import or restore, and re-running it on a clean library is a read-only scan that writes
 /// nothing back. That matters more than the few seconds it costs on a large library.
 async fn tidy_tags(State(state): State<AppState>) -> Response {
-    match lanrurugi_storage::tidy_tags::tidy_tags(&state.repos.archives).await {
-        Ok(report) => axum::Json(json!({
-            "scanned": report.scanned,
-            "repaired": report.repaired,
-        }))
-        .into_response(),
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "tidy_tags",
-            e.to_string(),
-        ),
+    let report = match lanrurugi_storage::tidy_tags::tidy_tags(&state.repos.archives).await {
+        Ok(report) => report,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "tidy_tags",
+                e.to_string(),
+            )
+        }
+    };
+
+    // Dropping an empty-value tag removes its `INDEX_<namespace>:` key; every other rewrite folds
+    // to the same key, so this is a no-op for them. Warnings rather than a failure: the archives
+    // are already written, and re-running the tidy does not repair a stale index.
+    for change in &report.changes {
+        if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
+            &state.redis.search,
+            &state.equivalence,
+            &change.id,
+            &change.old_tags,
+            &change.new_tags,
+        )
+        .await
+        {
+            tracing::warn!(id = %change.id, error = %e, "tidy tags: search index update failed");
+        }
     }
+
+    axum::Json(json!({
+        "scanned": report.scanned,
+        "repaired": report.repaired,
+    }))
+    .into_response()
 }
 
 /// Two-phase cleanup matching the legacy contract's documented *effect* ("unlinked at first,
