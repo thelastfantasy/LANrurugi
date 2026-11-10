@@ -5,19 +5,15 @@ import { NumberInput } from "@/components/common-ui/Form/NumberInput"
 import { CollapsibleSection } from "@/components/Display"
 import { FONT_SIZE_SM } from "@/theme"
 
-import { ActionRow, CheckboxRow, Row } from "./shared"
+import { ActionRow, Row } from "./shared"
 
 export function ArchiveFilesSection({
   tempmaxsize,
   setTempmaxsize,
-  replacedupe,
-  setReplacedupe,
   onStatus,
 }: {
   tempmaxsize: number
   setTempmaxsize: (v: number) => void
-  replacedupe: boolean
-  setReplacedupe: (v: boolean) => void
   onStatus: (status: string) => void
 }) {
   const { t } = useTranslation()
@@ -88,12 +84,6 @@ export function ArchiveFilesSection({
             <br />
             {t("settings.ifYouWantToClear")}
           </ActionRow>
-          <CheckboxRow id="replacedupe" checked={replacedupe} onChange={setReplacedupe} label={t("settings.replaceDuplicatedArchives")}>
-            {t("settings.ifEnabledLanraragiWillOverwrite")}
-            <br />
-            <i className="fas fa-exclamation-triangle" style={{ color: "red" }}></i>{" "}
-            {t("settings.thisWillDeleteMetadataFor")}
-          </CheckboxRow>
       </div>
     </CollapsibleSection>
   )

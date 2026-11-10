@@ -1034,7 +1034,8 @@ export interface AddToQueueItem {
   plugin_namespace: string
   category?: string
   auto_fetch_metadata: boolean
-  overwrite_on_duplicate: boolean
+  /** Ignored since 020 (archives are addressed by content, never by name); kept for older clients. */
+  overwrite_on_duplicate?: boolean
 }
 
 export interface AddToQueueResponse {

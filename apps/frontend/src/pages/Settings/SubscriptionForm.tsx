@@ -9,7 +9,6 @@ import {
   useUpdateSubscription,
 } from "@/api/hooks"
 import type {
-  ConflictPolicy,
   SourceChangePolicy,
   SourceRemovalPolicy,
   SubscriptionBody,
@@ -315,22 +314,6 @@ export function SubscriptionForm({
         <RadioItem value="confirm">{t("subscriptions.waitForConfirmation")}</RadioItem>
         <RadioItem value="auto">{t("subscriptions.downloadAutomatically")}</RadioItem>
       </RadioGroup>
-
-      <p className="sub-form-section">{t("subscriptions.whenFilenamesCollide")}</p>
-      <RadioGroup
-        value={draft.conflict_policy}
-        onValueChange={(v) => setDraft({ ...draft, conflict_policy: v as ConflictPolicy })}
-        name={`subscription-conflict-policy-${subscriptionId ?? "new"}`}
-        style={CHOICES_STYLE}
-      >
-        <RadioItem value="ask">{t("subscriptions.conflictAsk")}</RadioItem>
-        <RadioItem value="auto_rename">{t("subscriptions.conflictAutoRename")}</RadioItem>
-        <RadioItem value="overwrite">{t("subscriptions.conflictOverwrite")}</RadioItem>
-        <RadioItem value="discard">{t("subscriptions.conflictDiscard")}</RadioItem>
-      </RadioGroup>
-      <p className="sub-form-hint" style={{ marginLeft: 12 }}>
-        {t("subscriptions.conflictHint")}
-      </p>
 
       <p className="sub-form-section">{t("subscriptions.whenSourceChanges")}</p>
       <RadioGroup

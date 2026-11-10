@@ -49,7 +49,7 @@ export function LanguageOrderEditor({
       <label style={{ display: "block", marginBottom: 6 }}>
         <input
           type="checkbox"
-          className="fa"
+          className="fa lrr-checkbox-labeled"
           checked={isAuto}
           onChange={(e) => commit(e.target.checked ? [] : [SUPPORTED_LANGUAGES[0].code])}
         />{" "}

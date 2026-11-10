@@ -128,7 +128,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [recycleRetentionDays, setRecycleRetentionDays] = useState(settings.recycle_retention_days)
   const [recycleMaxSizeGb, setRecycleMaxSizeGb] = useState(settings.recycle_max_size_gb)
   const [tempmaxsize, setTempmaxsize] = useState(settings.tempmaxsize)
-  const [replacedupe, setReplacedupe] = useState(settings.replacedupe)
 
   // Normalize the API value so the radio group is always selectable across the `"auto"` ->
   // `"jxl"` rename and older backends that don't return the one-field contract yet. Saving writes
@@ -209,7 +208,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       logMaxFiles !== savedLogMaxFiles ||
       recycleRetentionDays !== settings.recycle_retention_days ||
       recycleMaxSizeGb !== settings.recycle_max_size_gb ||
-      replacedupe !== settings.replacedupe ||
       thumbnailFormat !== savedThumbnailFormat ||
       webpquality !== settings.webpquality ||
       excludednamespaces !== settings.excludednamespaces ||
@@ -235,7 +233,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       trustedOrigins, ssoAutoRedirect, enablecors, tempmaxsize,
       logMaxFileMb, logMaxFiles,
       recycleRetentionDays, recycleMaxSizeGb,
-      replacedupe, savedThumbnailFormat, thumbnailFormat, webpquality, excludednamespaces,
+      savedThumbnailFormat, thumbnailFormat, webpquality, excludednamespaces,
       sourceEquivalences, tagruleson,
       tagrules, usedateadded, usedatemodified, timezone, newbadgemode, recommendprecision,
       pluginBindInterface,
@@ -285,7 +283,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         logmaxfiles: logMaxFiles,
         recycle_retention_days: recycleRetentionDays,
         recycle_max_size_gb: recycleMaxSizeGb,
-        replacedupe,
         thumbnail_format: thumbnailFormat,
         webpquality,
         excludednamespaces,
@@ -604,8 +601,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           <ArchiveFilesSection
             tempmaxsize={tempmaxsize}
             setTempmaxsize={setTempmaxsize}
-            replacedupe={replacedupe}
-            setReplacedupe={setReplacedupe}
             onStatus={setStatus}
           />
 

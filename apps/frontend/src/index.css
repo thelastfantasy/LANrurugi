@@ -122,15 +122,16 @@ input[type="checkbox"]:disabled {
   cursor: not-allowed;
 }
 
-/* Legacy's `config.css` stamps "ON"/"OFF" after every `input[type=checkbox]` via `::after`, on top
- * of the `fa-toggle-on`/`fa-toggle-off` glyph its `::before` already draws. The glyph is the state
- * indicator; the text only repeats it, and because it overflows the input's own 20px box it lands on
- * top of whatever follows the checkbox inline (reported live, 2026-11-10, on the settings page's
- * "自动（使用浏览器默认设置）" row). `!important` because `theme.ts` injects `config.css` into
- * `<head>` at runtime, after this bundle, so an equal-specificity rule here would lose.
- */
-input[type="checkbox"]::after {
-  content: none !important;
+/* Legacy's `config.css` stamps "ON"/"OFF" after every `input[type=checkbox]` via `::after`, painted
+ * outside the input's own ~20px box — so a label that follows the checkbox inline is laid out from
+ * the box edge and lands on top of the "OFF" (reported live, 2026-11-10, on the settings page's
+ * "自动（使用浏览器默认设置）" row in Firefox Android). The text is kept; the box is widened to
+ * cover it for the inputs that actually have text after them. A blanket width would push every bare
+ * toggle in the compact list/table rows out of place, so this is opt-in per input.
+ * 3.2em = glyph (20px) + `::after` margin (5px) + "OFF", with a few px of slack (measured). */
+input[type="checkbox"].lrr-checkbox-labeled {
+  width: 3.2em;
+  vertical-align: middle;
 }
 
 /* Additive: the reader overview overlay's page-grid briefly outlines whichever page it opened on

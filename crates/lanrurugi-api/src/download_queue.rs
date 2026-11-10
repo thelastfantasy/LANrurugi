@@ -171,6 +171,10 @@ struct AddQueueItem {
     #[serde(default)]
     metadata_tags: Vec<String>,
     auto_fetch_metadata: bool,
+    /// Accepted for wire compatibility with older clients; since 020 an archive is addressed by
+    /// its content, so a queued download cannot collide with an existing name and this flag has
+    /// no effect (`catalogue_staged_file` passes no `intended_filename`).
+    #[serde(default)]
     overwrite_on_duplicate: bool,
 }
 

@@ -140,8 +140,7 @@ export function Upload() {
 
   // Hooks can't be called conditionally/in a loop, so the per-plugin defaults are fetched here —
   // but once per *namespace*, not once per URL: a 310-URL paste used to issue ~3 requests per line
-  // (settings/options/plugin-settings) before the single queue POST, which is why a ten-line paste
-  // took seconds to render and a few hundred would take minutes.
+  // before the single queue POST, which is why a ten-line paste took seconds to render.
   async function resolveDefaultsAndAdd(
     items: Array<{
       url: string
@@ -150,31 +149,21 @@ export function Upload() {
       metadataNamespace?: string
     }>,
   ) {
-    const downloadNamespaces = [...new Set(items.map((item) => item.plugin_namespace))]
     const metadataNamespaces = [
       ...new Set(items.map((item) => item.metadataNamespace).filter((ns): ns is string => !!ns)),
     ]
 
-    const [settings, options, metadataSettings] = await Promise.all([
-      fetchJson<{ replacedupe: boolean }>("/settings").catch(() => null),
-      Promise.all(
-        downloadNamespaces.map((ns) =>
-          fetchJson<{ overwrite_on_duplicate?: { value: boolean } }>(
-            `/plugins/options?namespace=${encodeURIComponent(ns)}`,
-          ).catch(() => null),
-        ),
+    // `overwrite_on_duplicate` is deliberately absent: since 020 an archive is addressed by its
+    // content, so a download never collides with an existing name — the flag (and its global
+    // `replacedupe` default) could not change any outcome.
+    const metadataSettings = await Promise.all(
+      metadataNamespaces.map((ns) =>
+        fetchJson<{ enabled: boolean }>(
+          `/plugins/settings?namespace=${encodeURIComponent(ns)}`,
+        ).catch(() => null),
       ),
-      Promise.all(
-        metadataNamespaces.map((ns) =>
-          fetchJson<{ enabled: boolean }>(
-            `/plugins/settings?namespace=${encodeURIComponent(ns)}`,
-          ).catch(() => null),
-        ),
-      ),
-    ])
-    const optionsByNamespace = new Map(downloadNamespaces.map((ns, i) => [ns, options[i]]))
+    )
     const metadataEnabled = new Map(metadataNamespaces.map((ns, i) => [ns, metadataSettings[i]?.enabled ?? false]))
-    const defaultOverwrite = settings?.replacedupe ?? false
 
     const resolved = items.map((item) => ({
       url: item.url,
@@ -183,9 +172,6 @@ export function Upload() {
       auto_fetch_metadata: item.metadataNamespace
         ? (metadataEnabled.get(item.metadataNamespace) ?? false)
         : false,
-      overwrite_on_duplicate:
-        optionsByNamespace.get(item.plugin_namespace)?.overwrite_on_duplicate?.value ??
-        defaultOverwrite,
     }))
     await addToQueue.mutateAsync(resolved)
   }
