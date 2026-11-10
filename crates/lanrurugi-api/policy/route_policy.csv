@@ -144,6 +144,16 @@ p, token_guest, /api/activity/:id, DELETE, deny
 p, token_guest, /api/activity/retention, PUT, deny
 p, token_guest, /api/archives, DELETE, deny
 p, token_guest, /api/database/drop, POST, deny
+# Duplicate review groups archives across the whole library, so it is not a guest surface even
+# though every call is a GET.
+p, token_guest, /api/database/duplicates, GET, deny
+p, token_guest, /api/database/duplicates, DELETE, deny
+p, token_guest, /api/database/duplicates/scan, POST, deny
+p, token_guest, /api/database/duplicates/groups, GET, deny
+p, token_guest, /api/database/duplicates/groups/:key, GET, deny
+p, token_guest, /api/database/duplicates/compare, GET, deny
+p, token_guest, /api/database/duplicates/decisions, GET, deny
+p, token_guest, /api/database/duplicates/decisions, POST, deny
 p, token_guest, /api/database/import-legacy, POST, deny
 p, token_guest, /api/database/import-legacy/count, GET, deny
 p, token_guest, /api/database/import-snapshots, GET, deny

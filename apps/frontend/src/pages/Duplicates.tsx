@@ -29,6 +29,15 @@ import {
  *  so a slider position always means the same thing across screens. */
 const COVER_STOPS = [16, 24, 32, 40, 50] as const
 
+/** How many lines a title may take. A wider cover leaves less room beside it, so the text needs
+ *  more lines for the same title — 2 lines at the smallest thumbnail, 5 at the largest. */
+function titleLines(percent: number): number {
+  if (percent >= 50) return 5
+  if (percent >= 40) return 4
+  if (percent >= 32) return 3
+  return 2
+}
+
 function nearestCoverStop(percent: number): number {
   return COVER_STOPS.reduce((best, stop) =>
     Math.abs(stop - percent) < Math.abs(best - percent) ? stop : best,
@@ -410,13 +419,27 @@ function MemberRow({
     .trim()
   return (
     <li className="flex items-start gap-2 text-left">
-      <input
-        type="checkbox"
-        className="lrr-checkbox-bare mt-0.5 shrink-0"
-        checked={checked}
-        onChange={onToggle}
-        aria-label={member.title}
-      />
+      {/* The checkbox and the two member badges share one narrow gutter on the left: the title
+          gets the whole remaining width instead of losing it to icons on the right. */}
+      <div className="flex shrink-0 flex-col items-center gap-1.5 pt-0.5">
+        <input
+          type="checkbox"
+          className="lrr-checkbox-bare shrink-0"
+          checked={checked}
+          onChange={onToggle}
+          aria-label={member.title}
+        />
+        {member.recommended && <i className="fa fa-star text-xs" title={t("duplicates.recommended")} />}
+        {member.best && <i className="fa fa-crown text-xs" title={t("duplicates.bestCopy")} />}
+        <a
+          href={`/reader/${member.id}`}
+          className="px-1 opacity-70 hover:opacity-100"
+          title={t("common.read")}
+          aria-label={t("common.read")}
+        >
+          <i className="fa fa-book-open" aria-hidden="true" />
+        </a>
+      </div>
       <img
         src={member.cover}
         alt=""
@@ -425,11 +448,18 @@ function MemberRow({
         loading="lazy"
       />
       <div className="min-w-0 flex-1 text-left text-sm">
-        <div className="flex items-start gap-1">
-          <span className="line-clamp-2 break-words text-left">{member.title}</span>
-          {member.recommended && <i className="fa fa-star mt-0.5 text-xs" title={t("duplicates.recommended")} />}
-          {member.best && <i className="fa fa-crown mt-0.5 text-xs" title={t("duplicates.bestCopy")} />}
-        </div>
+        <span
+          className="break-words text-left"
+          title={member.title}
+          style={{
+            display: "-webkit-box",
+            WebkitBoxOrient: "vertical",
+            WebkitLineClamp: titleLines(coverPercent),
+            overflow: "hidden",
+          }}
+        >
+          {member.title}
+        </span>
         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs opacity-75">
           <span>{member.pages} {t("duplicates.pages")}</span>
           <span>{humanSize(member.size)}</span>
@@ -437,14 +467,6 @@ function MemberRow({
           {member.decision === "discard" && <span>{t("duplicates.markedDiscard")}</span>}
         </div>
       </div>
-      <a
-        href={`/reader/${member.id}`}
-        className="mt-0.5 shrink-0 self-start px-1 opacity-70 hover:opacity-100"
-        title={t("common.read")}
-        aria-label={t("common.read")}
-      >
-        <i className="fa fa-book-open" aria-hidden="true" />
-      </a>
     </li>
   )
 }
