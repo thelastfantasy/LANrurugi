@@ -252,6 +252,14 @@ export function ArchiveOverviewOverlay({
     ? [...chapters].filter((c) => c.page <= currentPage).sort((a, b) => b.page - a.page)[0]
     : undefined
 
+  /** Chapter name per start page, for the badge `PageGridCell` paints on that page's thumbnail.
+   * Built over the whole ToC, not just the loaded slice: `pageMeta` decides what renders. Two
+   * chapters sharing a start page keep the first one, matching the selector's own ordering. */
+  const chapterNameByPage = new Map<number, string>()
+  for (const entry of chapters ?? []) {
+    if (!chapterNameByPage.has(entry.page)) chapterNameByPage.set(entry.page, displayTocName(entry.name, t))
+  }
+
   const setThumbnail = useSetArchiveThumbnail(isTank ? "" : archive.arcid)
   const setTankoubonThumbnail = useSetTankoubonThumbnail(archive.arcid)
   const addTocEntry = useAddTocEntry(isTank ? "" : archive.arcid)
@@ -468,6 +476,9 @@ export function ArchiveOverviewOverlay({
         <h2 className="ih" style={{ textAlign: "center" }}>
           {t("reader.archiveOverview")}
         </h2>
+        {/* The reader's own header (which carries the title) is hidden at <=1000px — see
+            `.overview-archive-title` in `index.css`. */}
+        <div className="overview-archive-title">{archive.title}</div>
 
         <div id="tagContainer" className="caption caption-tags caption-reader" style={{ maxWidth: "100%", boxSizing: "border-box", overflow: "hidden" }}>
           <br />
@@ -1012,6 +1023,7 @@ export function ArchiveOverviewOverlay({
                   onOpenLightbox={setLightboxPage}
                   isTank={isTank}
                   isPatch={patchPageSet?.has(page) ?? false}
+                  chapterName={chapterNameByPage.get(page)}
                 />
               )
             }

@@ -141,6 +141,25 @@ input[type="checkbox"]::after {
   vertical-align: 0.13em;
 }
 
+/* Legacy's reader hides its own header at 1000px (`lrr.css:620-622` hides `#i2`, which carries
+ * `#archive-title`), so on a phone or tablet the overview overlay is the only place the title is
+ * still visible. Shown below that same breakpoint, hidden above it where the header already has it. */
+.overview-archive-title {
+  display: none;
+}
+
+@media all and (max-width: 1000px) {
+  .overview-archive-title {
+    display: block;
+    margin: -4px 0 16px;
+    text-align: center;
+    font-size: 1.05rem;
+    font-weight: 600;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+}
+
 /* Additive: the reader overview overlay's page-grid briefly outlines whichever page it opened on
  * (`ArchiveOverviewOverlay.tsx`'s `PageGridCell`, `highlighted` prop) — a static outline alone is
  * easy to miss at a glance across a grid that can run into the hundreds of otherwise-identical

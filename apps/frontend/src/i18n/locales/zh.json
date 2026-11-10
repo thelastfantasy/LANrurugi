@@ -3053,5 +3053,7 @@
   "duplicates.openA": "打开 A",
   "duplicates.openB": "打开 B",
   "duplicates.bestCopy": "最佳副本",
-  "duplicates.bestCopyHint": "组内页数最完整的一份。"
+  "duplicates.bestCopyHint": "组内页数最完整的一份。",
+  "library.lastRead": "最近阅读",
+  "library.recentlyRead": "最近阅读"
 }

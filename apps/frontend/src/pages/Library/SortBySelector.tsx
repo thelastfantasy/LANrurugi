@@ -25,6 +25,7 @@ export function SortBySelector({
   const label = (key: string) => {
     if (key === "title") return t("common.title")
     if (key === "date_added") return t("library.date")
+    if (key === "lastread_all") return t("library.lastRead")
     if (key === RELEVANCE_SORT) return t("library.relevance")
     return key.charAt(0).toUpperCase() + key.slice(1)
   }
@@ -32,11 +33,16 @@ export function SortBySelector({
   const namespaces = [
     ...new Set([
       ...(stats ?? []).map((s) => s.namespace).filter((n): n is string => !!n && n !== "date_added"),
-      ...(sortby !== "title" && sortby !== "date_added" && sortby !== RELEVANCE_SORT ? [sortby] : []),
+      ...(sortby !== "title" &&
+      sortby !== "date_added" &&
+      sortby !== "lastread_all" &&
+      sortby !== RELEVANCE_SORT
+        ? [sortby]
+        : []),
     ]),
   ].sort()
 
-  const options = ["title", "date_added", RELEVANCE_SORT, ...namespaces]
+  const options = ["title", "date_added", "lastread_all", RELEVANCE_SORT, ...namespaces]
 
   return (
     <div className="thumbnail-options" style={{ display: "flex", alignItems: "center" }}>

@@ -1937,7 +1937,12 @@ async fn sort_ids(
         return Ok(result);
     }
 
-    if sortkey == "lastread" {
+    // `lastread` keeps its original meaning (only archives that have actually been opened, newest
+    // first) because the carousel's "continue reading" mode depends on it. `lastread_all` is the
+    // library-facing variant: never-opened archives get key 0 and therefore sit at the back when
+    // descending and at the front when ascending, so nothing silently disappears from the grid.
+    if sortkey == "lastread" || sortkey == "lastread_all" {
+        let include_unread = sortkey == "lastread_all";
         // One round trip for every plain archive's `lastreadtime`; Tankoubons have no such field
         // and are imputed from their members below (each tank's own members come back in one
         // further round trip rather than one per member).
@@ -1984,11 +1989,18 @@ async fn sort_ids(
             } else {
                 lastread.get(id.as_str()).copied().unwrap_or(0)
             };
-            if t > 0 {
+            if include_unread || t > 0 {
                 pairs.push((id.clone(), t));
             }
         }
-        pairs.sort_by_key(|p| std::cmp::Reverse(p.1));
+        // Unlike the tag-namespace branch below there is no unkeyed tail to leave behind: every
+        // candidate carries a number here (0 for a never-opened archive), so the direction
+        // applies to the whole list.
+        if order_desc {
+            pairs.sort_by_key(|p| std::cmp::Reverse(p.1));
+        } else {
+            pairs.sort_by_key(|p| p.1);
+        }
         return Ok(pairs.into_iter().map(|(id, _)| id).collect());
     }
 
@@ -3609,6 +3621,59 @@ mod tests {
             position(&id_a) < position(&id_b),
             "a title hit must outrank a tag hit: {ordered:?}"
         );
+
+        // `sortby=lastread` / `lastread_all` — reading order, both directions. `b` was opened
+        // more recently than `a`; `c` was never opened at all. The plain key hides `c` (the
+        // carousel's "continue reading" mode depends on that), `lastread_all` keeps it at the
+        // back when descending and at the front when ascending.
+        let _: () = aconn
+            .hset(&id_a, "lastreadtime", 1_700_000_000_u64)
+            .await
+            .unwrap();
+        let _: () = aconn
+            .hset(&id_b, "lastreadtime", 1_700_000_900_u64)
+            .await
+            .unwrap();
+        let cases = vec![
+            (
+                "lastread",
+                true,
+                vec![id_b.clone(), id_a.clone()],
+                "newest read first, never-opened hidden",
+            ),
+            (
+                "lastread",
+                false,
+                vec![id_a.clone(), id_b.clone()],
+                "oldest read first",
+            ),
+            (
+                "lastread_all",
+                true,
+                vec![id_b.clone(), id_a.clone(), id_c.clone()],
+                "never-opened archive trails a descending reading order",
+            ),
+            (
+                "lastread_all",
+                false,
+                vec![id_c.clone(), id_a.clone(), id_b.clone()],
+                "never-opened archive leads an ascending reading order",
+            ),
+        ];
+        for (sortby, desc, expected, why) in cases {
+            let params = SearchParams {
+                filter: "artist:alpha | artist:beta | artist:gamma".to_string(),
+                sortby: Some(sortby.to_string()),
+                order_desc: desc,
+                groupby_tanks: true,
+                ..Default::default()
+            };
+            let got = search(&archive_pool, &search_pool, &eq, &bookmarks, &params)
+                .await
+                .unwrap()
+                .ids;
+            assert_eq!(got, expected, "{why}");
+        }
 
         // `category:` and `has:category` — one static category (by id and by name) plus one
         // *dynamic* one whose predicate must be evaluated as a nested query. Synthetic ids/names

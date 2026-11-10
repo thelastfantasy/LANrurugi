@@ -2815,5 +2815,7 @@
   "duplicates.openA": "A を開く",
   "duplicates.openB": "B を開く",
   "duplicates.bestCopy": "最良のコピー",
-  "duplicates.bestCopyHint": "グループ内でページが最も揃っているもの。"
+  "duplicates.bestCopyHint": "グループ内でページが最も揃っているもの。",
+  "library.lastRead": "最近読んだ順",
+  "library.recentlyRead": "最近読んだもの"
 }

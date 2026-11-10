@@ -3053,5 +3053,7 @@
   "duplicates.openA": "Open A",
   "duplicates.openB": "Open B",
   "duplicates.bestCopy": "Best copy",
-  "duplicates.bestCopyHint": "Most complete pages in the group."
+  "duplicates.bestCopyHint": "Most complete pages in the group.",
+  "library.lastRead": "Recently read",
+  "library.recentlyRead": "Recently read"
 }

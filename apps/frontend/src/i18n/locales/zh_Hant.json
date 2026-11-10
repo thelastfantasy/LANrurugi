@@ -1102,5 +1102,7 @@
   "duplicates.openB": "開啟 B",
   "common.close": "關閉",
   "duplicates.bestCopy": "最佳副本",
-  "duplicates.bestCopyHint": "組內頁數最完整的一份。"
+  "duplicates.bestCopyHint": "組內頁數最完整的一份。",
+  "library.lastRead": "最近閱讀",
+  "library.recentlyRead": "最近閱讀"
 }

@@ -11,7 +11,8 @@ export const RELEVANCE_SORT = "relevance"
  *  A→Z for everything else (title and tag namespaces). Carrying the previous field's direction
  *  over is what used to turn "Date" into oldest-first after sorting by Title descending. */
 export function defaultSortDir(sortby: string): "asc" | "desc" {
-  if (sortby === "date_added" || sortby === "lastread") return "desc"
+  if (sortby === "date_added" || sortby === "lastread" || sortby === "lastread_all")
+    return "desc"
   return "asc"
 }
 
