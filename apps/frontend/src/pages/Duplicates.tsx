@@ -335,6 +335,7 @@ function MemberRow({
         <div className="flex items-start gap-1">
           <span className="line-clamp-2 break-words">{member.title}</span>
           {member.recommended && <i className="fa fa-star mt-0.5 text-xs" title={t("duplicates.recommended")} />}
+          {member.best && <i className="fa fa-crown mt-0.5 text-xs" title={t("duplicates.bestCopy")} />}
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs opacity-75">
           <span>{member.pages} {t("duplicates.pages")}</span>

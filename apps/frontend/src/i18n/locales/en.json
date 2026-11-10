@@ -3058,5 +3058,7 @@
   "duplicates.onlyInB": "{{count}} pages only in B",
   "duplicates.sharpness": "sharpness",
   "duplicates.openA": "Open A",
-  "duplicates.openB": "Open B"
+  "duplicates.openB": "Open B",
+  "duplicates.bestCopy": "Best copy",
+  "duplicates.bestCopyHint": "Most complete pages in the group."
 }

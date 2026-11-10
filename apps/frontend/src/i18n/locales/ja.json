@@ -2820,5 +2820,7 @@
   "duplicates.onlyInB": "B のみ {{count}} ページ",
   "duplicates.sharpness": "鮮明度",
   "duplicates.openA": "A を開く",
-  "duplicates.openB": "B を開く"
+  "duplicates.openB": "B を開く",
+  "duplicates.bestCopy": "最良のコピー",
+  "duplicates.bestCopyHint": "グループ内でページが最も揃っているもの。"
 }

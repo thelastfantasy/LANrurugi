@@ -282,6 +282,53 @@ fn chain_marker(
     (true, best.map(|(_, m)| m.clone()))
 }
 
+/// The member that wins the most pairwise comparisons. A pair is won by the closer cover, then by
+/// the one with more pages, then the larger file — the same order of evidence the reviewer is told
+/// to weigh. Used for the card's "best copy" marker (spec FR-003).
+pub fn best_member(
+    group: &GroupRecord,
+    pages: &HashMap<String, u32>,
+    sizes: &HashMap<String, u64>,
+) -> Option<String> {
+    let mut wins: HashMap<&str, u32> = HashMap::new();
+    for pair in &group.pairs {
+        let (a, b) = (pair.a.as_str(), pair.b.as_str());
+        let winner = if pair.similarity > 0.0 && pair.distance < 64 {
+            // A pair always has one side that the metadata gate liked better; the tie-breakers are
+            // page completeness (a missing page cannot be recovered) and then file size.
+            let pa = pages.get(a).copied().unwrap_or(0);
+            let pb = pages.get(b).copied().unwrap_or(0);
+            if pa != pb {
+                if pa > pb {
+                    a
+                } else {
+                    b
+                }
+            } else {
+                let sa = sizes.get(a).copied().unwrap_or(0);
+                let sb = sizes.get(b).copied().unwrap_or(0);
+                if sa >= sb {
+                    a
+                } else {
+                    b
+                }
+            }
+        } else {
+            a
+        };
+        *wins.entry(winner).or_default() += 1;
+    }
+    let mut ranked: Vec<(&&str, &u32)> = wins.iter().collect();
+    ranked.sort_by(|a, b| {
+        let pages_of = |id: &str| pages.get(id).copied().unwrap_or(0);
+        let size_of = |id: &str| sizes.get(id).copied().unwrap_or(0);
+        b.1.cmp(a.1)
+            .then_with(|| pages_of(b.0).cmp(&pages_of(a.0)))
+            .then_with(|| size_of(b.0).cmp(&size_of(a.0)))
+    });
+    ranked.first().map(|(id, _)| id.to_string())
+}
+
 /// Rebuilds groups after user rejections removed some edges: a member whose only edges were
 /// rejected is no longer part of any group, and a chained group can split in two.
 pub fn regroup_by_pairs(
@@ -428,6 +475,32 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert!(groups[0].chained);
         assert_eq!(groups[0].middle.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn the_best_member_wins_on_pages_then_size() {
+        let metas = vec![
+            meta("a", "Work", &["artist:alice"], 100, 1000),
+            meta("b", "Work", &["artist:alice"], 120, 1000),
+            meta("c", "Work", &["artist:alice"], 120, 2000),
+        ];
+        let hashes = HashMap::from([
+            ("a".to_string(), hash_of(0)),
+            ("b".to_string(), hash_of(0)),
+            ("c".to_string(), hash_of(0)),
+        ]);
+        let group = build_groups(&metas, &hashes, 7, 1).remove(0);
+        let pages = HashMap::from([
+            ("a".to_string(), 100u32),
+            ("b".to_string(), 120),
+            ("c".to_string(), 120),
+        ]);
+        let sizes = HashMap::from([
+            ("a".to_string(), 1000u64),
+            ("b".to_string(), 1000),
+            ("c".to_string(), 2000),
+        ]);
+        assert_eq!(best_member(&group, &pages, &sizes).as_deref(), Some("c"));
     }
 
     #[test]

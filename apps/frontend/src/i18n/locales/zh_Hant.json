@@ -1101,5 +1101,7 @@
   "duplicates.sharpness": "清晰度",
   "duplicates.openA": "開啟 A",
   "duplicates.openB": "開啟 B",
-  "common.close": "關閉"
+  "common.close": "關閉",
+  "duplicates.bestCopy": "最佳副本",
+  "duplicates.bestCopyHint": "組內頁數最完整的一份。"
 }

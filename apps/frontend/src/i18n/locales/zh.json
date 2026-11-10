@@ -3058,5 +3058,7 @@
   "duplicates.onlyInB": "B 独有的 {{count}} 页",
   "duplicates.sharpness": "清晰度",
   "duplicates.openA": "打开 A",
-  "duplicates.openB": "打开 B"
+  "duplicates.openB": "打开 B",
+  "duplicates.bestCopy": "最佳副本",
+  "duplicates.bestCopyHint": "组内页数最完整的一份。"
 }

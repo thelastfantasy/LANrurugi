@@ -1558,6 +1558,8 @@ export interface DuplicateMember {
   cover: string
   decision: "keep" | "discard" | "undecided"
   recommended: boolean
+  /** The member that wins the most pairwise comparisons (FR-003's "best copy"). */
+  best?: boolean
 }
 
 export interface DuplicatePairEvidence {
