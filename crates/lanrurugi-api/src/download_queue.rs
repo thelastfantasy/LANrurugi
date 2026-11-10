@@ -1052,6 +1052,7 @@ async fn delete_selected(
     axum::Json(json!({ "deleted": deleted })).into_response()
 }
 
+#[derive(Debug)]
 enum StartError {
     NotFound,
     NotQueued,
@@ -1736,6 +1737,102 @@ mod tests {
             parameters
         );
         assert_eq!(payload["overwrite_on_duplicate"], true);
+    }
+
+    /// The registry exists to stop a second download of the same source *before* the bytes are
+    /// fetched (content addressing would only catch it after hashing the whole file), and
+    /// "download anyway" must get past it for that one row.
+    #[tokio::test]
+    async fn a_source_url_that_already_produced_an_archive_is_refused_before_the_plugin_runs() {
+        let Some(state) = crate::plugins::tests::test_state().await else {
+            eprintln!("skipping: test Redis not reachable");
+            return;
+        };
+        let url = format!(
+            "https://example.com/gallery/{}",
+            uuid::Uuid::new_v4().simple()
+        );
+        let archive_id = format!("srcguard{}", uuid::Uuid::new_v4().simple());
+        tokio::fs::create_dir_all(&state.library.archive_dir)
+            .await
+            .unwrap();
+        let file = state.library.archive_dir.join(format!("{archive_id}.zip"));
+        tokio::fs::write(&file, b"PK\x03\x04").await.unwrap();
+        let archive = lanrurugi_core::entities::Archive {
+            id: lanrurugi_core::ids::ArchiveId(archive_id.clone()),
+            name: archive_id.clone(),
+            title: archive_id.clone(),
+            file: file.to_string_lossy().into_owned(),
+            tags: String::new(),
+            summary: String::new(),
+            arcsize: 4,
+            pagecount: 1,
+            isnew: false,
+            lastreadpage: 0,
+            lastreadtime: 0,
+            thumbhash: None,
+            toc: vec![],
+            stamp_ids: vec![],
+            heal_failed_at: None,
+            corrupted_pages: vec![],
+            has_patch: false,
+        };
+        state.repos.archives.save(&archive).await.unwrap();
+        crate::download_sources::record(&state, &url, &archive_id).await;
+
+        // `add` mints the row's id itself; keep what it returns rather than the placeholder.
+        let item_id = state
+            .download_queue
+            .add(lanrurugi_storage::download_queue::NewQueueItem {
+                origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
+                subscription_id: None,
+                url: url.clone(),
+                plugin_namespace: "download/this-plugin-does-not-exist".to_string(),
+                file_size: None,
+                category: None,
+                metadata_tags: vec![],
+                auto_fetch_metadata: false,
+                overwrite_on_duplicate: false,
+                conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
+                state: DownloadQueueState::Queued,
+            })
+            .await
+            .unwrap()
+            .id;
+
+        let refused = start_one(&state, None, &item_id, None, false).await;
+        assert!(
+            matches!(refused, Err(StartError::SourceAlreadyImported(ref id)) if id == &archive_id),
+            "expected the source guard to refuse, got {refused:?}"
+        );
+        let row = state.download_queue.get(&item_id).await.unwrap().unwrap();
+        assert_eq!(row.state, DownloadQueueState::Error);
+        assert!(matches!(
+            row.error,
+            Some(lanrurugi_core::queue_error::QueueError::SourceAlreadyImported { ref existing_id })
+                if existing_id == &archive_id
+        ));
+
+        // "Download anyway" is the user's override: this row alone skips the guard, and the
+        // failure it reaches next is the (deliberately missing) plugin, not the registry.
+        let mut forced = row;
+        forced.forced = true;
+        forced.state = DownloadQueueState::Queued;
+        forced.error = None;
+        state.download_queue.update(&forced).await.unwrap();
+        let after_force = start_one(&state, None, &item_id, None, false).await;
+        assert!(
+            !matches!(after_force, Err(StartError::SourceAlreadyImported(_))),
+            "forced row must pass the source guard, got {after_force:?}"
+        );
+
+        let _ = state.download_queue.delete(&item_id).await;
+        let _ = state
+            .repos
+            .archives
+            .delete(&lanrurugi_core::ids::ArchiveId(archive_id))
+            .await;
+        let _ = tokio::fs::remove_file(&file).await;
     }
 
     #[test]
