@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { ApiError } from "@/api/client";
 import { startDownload } from "@/api/download";
@@ -2801,14 +2801,14 @@ export function Reader() {
 
         <div id="i5">
           <div className="sb">
-            <a
+            {/* A real link, not a button: middle-click / ctrl-click must open the library in a new tab. */}
+            <Link
               id="return-to-index"
-              style={{ cursor: "pointer" }}
+              to={routes.library()}
               title={t("reader.doneReadingGoBackTo") ?? undefined}
-              onClick={() => navigate(routes.library())}
             >
               <i className="fas fa-angle-down fa-3x"></i>
-            </a>
+            </Link>
           </div>
         </div>
 
