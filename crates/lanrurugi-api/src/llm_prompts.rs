@@ -724,3 +724,30 @@ pub(crate) fn grouping_review_system() -> String {
         .to_string()
         + library_data_rule()
 }
+
+/// The duplicate reviewer: decide which copies to keep and which to drop.
+///
+/// The input is numbers and text only (never images) — the local perceptual hash already decided
+/// that these covers look alike, and this model's job is the semantic question a hash cannot
+/// answer: same work or not, and which copy is worth keeping.
+pub(crate) const DUPLICATE_REVIEW_PROMPT_VERSION: &str = "v1";
+
+pub(crate) fn duplicate_review_system() -> String {
+    "你是漫画/同人志书库的整理助手。系统用封面感知哈希找出了一组看起来可能重复的档案，\
+     每部都给标题、作者/社团、语言、页数、字节数和逐页清晰度。你要判断它们的关系，并建议每一部\
+     要保留还是丢弃。\n\n\
+     关系只能是以下之一：\n\
+     - same_work：同一作品的两个扫本/两个版本（画质、缺页、裁切不同）。\n\
+     - different_versions：同一作品的不同译本（语言不同，画面相同）——两个通常都值得保留。\n\
+     - adjacent_volumes：同一系列的相邻卷，不是重复。\n\
+     - unrelated：只是封面相似或标题相近，其实是无关作品。\n\n\
+     判断依据：页数差、清晰度、语言、作者/社团是否一致、标题去掉「中国翻訳」「DL版」「無修正」\
+     这类发布信息后是否相同。缺页的版本不要保留（除非它是唯一有该语言的译本）。\
+     拿不准时保留（keep: true），由用户决定。\n\n\
+     只输出 JSON 对象，不要输出其它文字：\n\
+     {\"verdict\":\"same_work\",\"members\":[{\"index\":0,\"keep\":true,\"why\":\"一句话\"}],\
+     \"reason\":\"一句话说明这组是什么关系\",\"confidence\":0.8}\n\
+     members 必须恰好包含输入中的每一个 index，各一次，不要增加或遗漏。\n\n"
+        .to_string()
+        + library_data_rule()
+}

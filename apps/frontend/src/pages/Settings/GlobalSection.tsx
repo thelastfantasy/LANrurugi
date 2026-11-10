@@ -396,7 +396,32 @@ export function GlobalSection({
             id="tidy-tags"
             label={t("settings.tidyTags")}
             onClick={async () => {
-              if (!(await confirmDialog(t("settings.tidyTagsConfirm")))) return
+              const confirmed = await confirmDialog(
+                <div>
+                  <div>{t("settings.tidyTagsConfirmIntro")}</div>
+                  <ul
+                    style={{
+                      margin: "4px auto 0",
+                      padding: 0,
+                      listStyle: "none",
+                      display: "inline-block",
+                      textAlign: "left",
+                    }}
+                  >
+                    {[
+                      "settings.tidyTagsRuleDateAdded",
+                      "settings.tidyTagsRuleDuplicates",
+                      "settings.tidyTagsRuleWhitespace",
+                    ].map((key) => (
+                      <li key={key} style={{ padding: "2px 0" }}>
+                        • {t(key)}
+                      </li>
+                    ))}
+                  </ul>
+                  <div style={{ marginTop: 8 }}>{t("settings.tidyTagsConfirmNote")}</div>
+                </div>,
+              )
+              if (!confirmed) return
               const result = await tidyTags.mutateAsync()
               onStatus(
                 t("settings.tidyTagsResult", {

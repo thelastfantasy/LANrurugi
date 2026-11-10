@@ -49,7 +49,9 @@ import type {
   Condition,
   DownloadQueueItem,
   DownloadQueueListResponse,
+  DuplicateCompare,
   DuplicateGroup,
+  DuplicateGroupsResponse,
   EmptyBinResult,
   HistoryEntry,
   HoverPageOrderResponse,
@@ -1751,6 +1753,38 @@ export function useDuplicates() {
   return useQuery({
     queryKey: ["duplicates"],
     queryFn: () => fetchJson<DuplicateGroup[]>("/database/duplicates"),
+  })
+}
+
+export function useDuplicateGroups() {
+  return useQuery({
+    queryKey: ["duplicates", "groups"],
+    queryFn: () => fetchJson<DuplicateGroupsResponse>("/database/duplicates/groups"),
+  })
+}
+
+export function useDuplicateCompare(a: string | null, b: string | null) {
+  return useQuery({
+    queryKey: ["duplicates", "compare", a, b],
+    queryFn: () =>
+      fetchJson<DuplicateCompare>(
+        `/database/duplicates/compare?a=${encodeURIComponent(a ?? "")}&b=${encodeURIComponent(b ?? "")}`,
+      ),
+    enabled: a !== null && b !== null,
+  })
+}
+
+export function useSaveDuplicateDecisions() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: {
+      group_key: string
+      decisions: Record<string, "keep" | "discard" | "undecided">
+      not_duplicate_pairs?: [string, string][]
+    }) => sendJson("POST", "/database/duplicates/decisions", body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["duplicates"] })
+    },
   })
 }
 

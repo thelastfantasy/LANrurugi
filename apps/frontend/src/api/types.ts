@@ -1548,3 +1548,79 @@ export interface SafetyPasswordStatus {
   locked_until: number | null
   attempts_remaining: number | null
 }
+
+/** One member row of a duplicate group (spec 024). */
+export interface DuplicateMember {
+  id: string
+  title: string
+  size: number
+  pages: number
+  cover: string
+  decision: "keep" | "discard" | "undecided"
+  recommended: boolean
+}
+
+export interface DuplicatePairEvidence {
+  a: string
+  b: string
+  similarity: number
+  distance: number
+  title_similarity: number
+}
+
+export interface DuplicateReview {
+  verdict: "same_work" | "different_versions" | "adjacent_volumes" | "unrelated"
+  keep: string[]
+  discard: string[]
+  reason: string
+  confidence: number
+  fallback: boolean
+}
+
+export interface DuplicateGroupView {
+  key: string
+  chained: boolean
+  middle: string | null
+  members: DuplicateMember[]
+  pairs: DuplicatePairEvidence[]
+  review: DuplicateReview | null
+  matrix?: number[][]
+}
+
+export interface DuplicateGroupsResponse {
+  scanned_at: number
+  algorithm: string
+  chained_groups: number
+  groups: DuplicateGroupView[]
+}
+
+export interface DuplicateDecisions {
+  group_key: string
+  decisions: Record<string, "keep" | "discard" | "undecided">
+  not_duplicate_pairs: [string, string][]
+  updated_at: number
+}
+
+export interface DuplicateCompareSample {
+  a_page_index: number
+  b_page_index: number
+  a_sharpness: number
+  b_sharpness: number
+  a_width: number
+  a_height: number
+  b_width: number
+  b_height: number
+  a_filename: string
+  b_filename: string
+}
+
+export interface DuplicateCompare {
+  a: { id: string; title: string; size: number; pages: number }
+  b: { id: string; title: string; size: number; pages: number }
+  aligned_pairs: number
+  likely_different_language: boolean
+  recommendation: "a" | "b" | null
+  samples: DuplicateCompareSample[]
+  a_unmatched_pages: { page_index: number }[]
+  b_unmatched_pages: { page_index: number }[]
+}
