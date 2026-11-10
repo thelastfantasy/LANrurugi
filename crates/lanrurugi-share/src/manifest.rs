@@ -111,3 +111,203 @@ pub async fn claim_manifest(
     roots.dedup();
     (manifest, roots, pending)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use futures_util::future::BoxFuture;
+    use lanrurugi_core::ids::{ArchiveId, ShareId, TankId};
+    use lanrurugi_core::jobs::JobRegistry;
+    use lanrurugi_share_proto::messages::Permissions;
+    use lanrurugi_share_proto::node_code::NodeCode;
+    use lanrurugi_storage::redis::RedisDbs;
+    use lanrurugi_storage::shares::{RatioAction, Share};
+    use serde_json::json;
+
+    use super::*;
+    use crate::host::{EmptyHost, ShareTankoubon};
+
+    /// A host that only knows the archives and tankoubon a test hands it. Everything else comes
+    /// from `EmptyHost`, so this stays a handful of lines.
+    struct StubHost {
+        archives: Vec<ShareArchive>,
+        tankoubon: Option<ShareTankoubon>,
+        inner: EmptyHost,
+    }
+
+    impl ShareHost for StubHost {
+        fn redis(&self) -> RedisDbs {
+            self.inner.redis()
+        }
+        fn jobs(&self) -> JobRegistry {
+            self.inner.jobs()
+        }
+        fn temp_dir(&self) -> PathBuf {
+            self.inner.temp_dir()
+        }
+        fn archive(&self, id: &ArchiveId) -> BoxFuture<'_, Option<ShareArchive>> {
+            let found = self.archives.iter().find(|a| &a.id == id).cloned();
+            Box::pin(async move { found })
+        }
+        fn settings(&self) -> BoxFuture<'_, crate::settings::ShareSettings> {
+            self.inner.settings()
+        }
+        fn thumbnail(
+            &self,
+            _id: &ArchiveId,
+            _page: u32,
+        ) -> BoxFuture<'_, Option<(String, Vec<u8>)>> {
+            Box::pin(async { None })
+        }
+        fn timezone(&self) -> BoxFuture<'_, chrono_tz::Tz> {
+            Box::pin(async { chrono_tz::UTC })
+        }
+        fn categories(&self, _id: &ArchiveId) -> BoxFuture<'_, Vec<String>> {
+            Box::pin(async { Vec::new() })
+        }
+        fn tankoubon(&self, _id: &TankId) -> BoxFuture<'_, Option<ShareTankoubon>> {
+            let found = self.tankoubon.clone();
+            Box::pin(async move { found })
+        }
+        fn node_code(&self) -> BoxFuture<'_, Option<NodeCode>> {
+            Box::pin(async { None })
+        }
+        fn add_import_bytes(&self, _share: &ShareId, _bytes: u64) -> BoxFuture<'_, ()> {
+            Box::pin(async {})
+        }
+    }
+
+    fn archive(id: &str, title: &str, name: &str, file: &str) -> ShareArchive {
+        ShareArchive {
+            id: ArchiveId(id.to_string()),
+            title: title.to_string(),
+            name: name.to_string(),
+            file: PathBuf::from(file),
+            tags: "artist:someone".to_string(),
+            summary: format!("summary of {id}"),
+            pagecount: 24,
+            arcsize: 1234,
+            toc: vec![],
+        }
+    }
+
+    fn share() -> Share {
+        Share {
+            id: ShareId("SHARE_ONE".to_string()),
+            title: Some("My Share".to_string()),
+            code_hash: String::new(),
+            short_code: false,
+            code_enc: String::new(),
+            lookup_pubkey: String::new(),
+            record_key: String::new(),
+            items: vec![
+                ShareItem::Archive {
+                    id: ArchiveId("A".to_string()),
+                },
+                ShareItem::Tankoubon {
+                    id: TankId("TANK".to_string()),
+                },
+                ShareItem::Archive {
+                    id: ArchiveId("GONE".to_string()),
+                },
+            ],
+            permissions: Permissions::ALL,
+            download_limit: None,
+            downloads_used: 0,
+            import_bytes: 0,
+            total_bytes: 0,
+            target_ratio: None,
+            ratio_action: RatioAction::Stop,
+            ratio_rate: None,
+            ip_allow: Vec::new(),
+            ip_first_n: None,
+            expires_at: None,
+            embed: false,
+            allow_helpers: true,
+            helpers_disabled_at: None,
+            revoked_at: None,
+            created_at: 1,
+            created_by: "tester".to_string(),
+        }
+    }
+
+    /// Snapshot of the browse manifest: titles, tags, sizes, the filename, and how a tankoubon's
+    /// members and a deleted item are represented. 023 moved this code between crates; a change in
+    /// any of these values would be invisible to the import tests until a recipient noticed it.
+    #[tokio::test]
+    async fn the_browse_manifest_is_stable() {
+        let host = StubHost {
+            archives: vec![
+                archive("A", "Alpha", "Alpha", "/library/5f/A.cbz"),
+                archive("B", "  ", "Beta", "/library/9c/B.zip"),
+            ],
+            tankoubon: Some(ShareTankoubon {
+                name: "Volume One".to_string(),
+                summary: "the first volume".to_string(),
+                tags: "artist:someone".to_string(),
+                archives: vec![ArchiveId("B".to_string()), ArchiveId("A".to_string())],
+            }),
+            inner: EmptyHost,
+        };
+
+        let manifest = browse_manifest(&host, &share()).await;
+        let value = serde_json::to_value(&manifest).unwrap();
+
+        assert_eq!(
+            value,
+            json!({
+                "share_id": "SHARE_ONE",
+                "title": "My Share",
+                "permissions": {"import": true, "read": true, "download": true},
+                "items": [
+                    {"Archive": {
+                        "archive_id": "A",
+                        "title": "Alpha",
+                        "tags": "artist:someone",
+                        "summary": "summary of A",
+                        "pagecount": 24,
+                        "filename": "A.cbz",
+                        "size": 1234,
+                        "blake3": null,
+                        "categories": [],
+                        "toc": []
+                    }},
+                    {"Tankoubon": {
+                        "id": "TANK",
+                        "name": "Volume One",
+                        "tags": "artist:someone",
+                        "summary": "the first volume",
+                        "members": [
+                            {
+                                "archive_id": "B",
+                                "title": "Beta",
+                                "tags": "artist:someone",
+                                "summary": "summary of B",
+                                "pagecount": 24,
+                                "filename": "B.zip",
+                                "size": 1234,
+                                "blake3": null,
+                                "categories": [],
+                                "toc": []
+                            },
+                            {
+                                "archive_id": "A",
+                                "title": "Alpha",
+                                "tags": "artist:someone",
+                                "summary": "summary of A",
+                                "pagecount": 24,
+                                "filename": "A.cbz",
+                                "size": 1234,
+                                "blake3": null,
+                                "categories": [],
+                                "toc": []
+                            }
+                        ]
+                    }},
+                    {"Unavailable": {"title": null}}
+                ]
+            })
+        );
+    }
+}

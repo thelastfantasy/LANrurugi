@@ -395,3 +395,70 @@ pub fn endpoint_addr(
     }
     Some(addr)
 }
+
+#[cfg(test)]
+mod relay_url_tests {
+    use std::collections::HashMap;
+
+    use super::relay_urls;
+    use crate::settings::ShareSettings;
+
+    fn settings(overrides: &[(&str, &str)]) -> ShareSettings {
+        let stored: HashMap<String, String> = overrides
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        ShareSettings::from_stored(&stored)
+    }
+
+    /// Snapshot of the relay selection 023 moved into this crate: the configured order is kept, the
+    /// self-relay comes last, a duplicate is dropped, and each entry carries one spelling. A silent
+    /// change here would send the endpoint to different relays without failing any other test.
+    #[test]
+    fn the_relay_list_is_stable() {
+        let settings = settings(&[
+            (
+                "share_relay_urls",
+                "https://relay-b.example.org,https://relay-a.example.org,https://relay-b.example.org",
+            ),
+            ("share_self_relay_url", "https://relay-self.example.org:8443"),
+            // The public relays are a service; pin them off so this snapshot covers our own list.
+            ("share_public_services", "0"),
+        ]);
+
+        let urls: Vec<String> = relay_urls(&settings)
+            .iter()
+            .map(|u| u.to_string())
+            .collect();
+
+        assert_eq!(
+            urls,
+            vec![
+                "https://relay-b.example.org/",
+                "https://relay-a.example.org/",
+                "https://relay-self.example.org:8443/",
+            ]
+        );
+    }
+
+    /// The public relays are a service, not a default: they only join the list when the switch is
+    /// on, and they come after everything the user configured.
+    #[test]
+    fn public_relays_are_appended_only_when_asked_for() {
+        let settings = settings(&[
+            ("share_relay_urls", "https://relay-a.example.org"),
+            ("share_public_services", "1"),
+        ]);
+
+        let urls: Vec<String> = relay_urls(&settings)
+            .iter()
+            .map(|u| u.to_string())
+            .collect();
+
+        assert!(
+            urls.len() > 1,
+            "the public relays joined the list: {urls:?}"
+        );
+        assert_eq!(urls[0], "https://relay-a.example.org/");
+    }
+}
