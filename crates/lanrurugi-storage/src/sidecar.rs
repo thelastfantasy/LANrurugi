@@ -10,15 +10,23 @@
 //! carries everything a sidecar would.
 
 use std::path::Path;
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::paths;
 
-/// The sidecar format this build writes. A file with a higher version is left alone (a newer
-/// LANrurugi owns it); a lower one is upgraded on the next write.
+/// The sidecar format this build writes. Nothing else has ever shipped, so there is no older
+/// shape to read: a file claiming a higher version is left alone (a newer LANrurugi owns it).
 pub const SIDECAR_VERSION: u32 = 1;
+
+/// Formats `t` as an RFC 3339 timestamp in UTC with millisecond precision
+/// (`2026-11-11T01:06:03.123Z`).
+fn stamp(t: SystemTime) -> String {
+    let at: chrono::DateTime<chrono::Utc> = t.into();
+    at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sidecar {
@@ -36,9 +44,10 @@ pub struct Sidecar {
     #[serde(default)]
     pub extension: String,
     pub size: u64,
-    pub mtime: u64,
-    /// Seconds since the Unix epoch.
-    pub written: u64,
+    /// The file's modification time, RFC 3339 UTC with milliseconds.
+    pub mtime: String,
+    /// When this sidecar was written, RFC 3339 UTC with milliseconds.
+    pub written: String,
 }
 
 impl Sidecar {
@@ -52,10 +61,8 @@ impl Sidecar {
         let meta = std::fs::metadata(path)?;
         let mtime = meta
             .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+            .map(stamp)
+            .unwrap_or_else(|_| stamp(SystemTime::UNIX_EPOCH));
         Ok(Self {
             version: SIDECAR_VERSION,
             id: id.to_string(),
@@ -69,10 +76,7 @@ impl Sidecar {
                 .to_string(),
             size: meta.len(),
             mtime,
-            written: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
+            written: stamp(SystemTime::now()),
         })
     }
 
@@ -90,7 +94,13 @@ pub fn write(library: &Path, sidecar: &Sidecar) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let tmp = dest.with_extension("json.tmp");
-    let bytes = serde_json::to_vec_pretty(sidecar)
+    // Always stamp the version we actually emit: a sidecar read back from an older file would
+    // otherwise be rewritten with the current field shapes while still claiming to be version 1.
+    let current = Sidecar {
+        version: SIDECAR_VERSION,
+        ..sidecar.clone()
+    };
+    let bytes = serde_json::to_vec_pretty(&current)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     {
         use std::io::Write;
@@ -141,6 +151,14 @@ mod tests {
         assert_eq!(read_back.original_filename, "[Circle] Book.zip");
         assert_eq!(read_back.title, "Book");
         assert_eq!(read_back.size, 5);
+        // Timestamps are RFC 3339 UTC with milliseconds, not epoch seconds.
+        assert!(read_back.written.ends_with('Z'), "{}", read_back.written);
+        assert!(read_back.written.contains('.'), "{}", read_back.written);
+        assert!(chrono::DateTime::parse_from_rfc3339(&read_back.written).is_ok());
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(paths::sidecar_path(library, id)).unwrap())
+                .unwrap();
+        assert!(raw["mtime"].is_string(), "{raw}");
     }
 
     #[test]
