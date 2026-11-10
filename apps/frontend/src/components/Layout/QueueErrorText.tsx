@@ -104,6 +104,13 @@ export function QueueErrorText({ error }: { error: QueueError }) {
           </a>
         </span>
       )
+    case "ingest_failed":
+      return (
+        <span>
+          {t("components.layout.ingestFailed")}{" "}
+          <span style={{ opacity: 0.75 }}>{error.reason}</span>
+        </span>
+      )
     case "source_download_in_progress":
       return <span>{t("components.layout.thisSourceIsAlreadyDownloading")}</span>
     case "source_already_imported":

@@ -61,11 +61,15 @@ impl From<&IngestDownloadError> for lanrurugi_core::queue_error::QueueError {
         match e {
             IngestDownloadError::Pipeline(err) => {
                 tracing::warn!(error = %err, "cataloging failed");
-                QueueError::Internal
+                QueueError::IngestFailed {
+                    reason: err.to_string(),
+                }
             }
             IngestDownloadError::Io(err) => {
                 tracing::warn!(error = %err, "failed to move downloaded file into place");
-                QueueError::WriteFailed
+                QueueError::IngestFailed {
+                    reason: err.to_string(),
+                }
             }
             IngestDownloadError::Duplicate {
                 existing_id,
@@ -123,6 +127,7 @@ pub async fn adopt_pending_conflict(
         None,
         DuplicatePolicy::Reject,
         true,
+        false,
     )
     .await
     {
@@ -227,6 +232,8 @@ pub async fn ingest_downloaded_file(
     } else {
         DuplicatePolicy::Reject
     };
+    // The fast path (rename into the library) stays; if cataloguing fails, the bytes go back to
+    // this staging path so the queue row's retry can re-ingest them instead of downloading again.
     catalogue_staged_file(
         state,
         &downloaded.path,
@@ -234,6 +241,7 @@ pub async fn ingest_downloaded_file(
         source_url,
         duplicate_policy,
         false,
+        true,
     )
     .await
 }
@@ -283,6 +291,7 @@ pub(crate) async fn catalogue_staged_file(
     source_url: Option<&str>,
     duplicate_policy: DuplicatePolicy,
     keep_bytes_on_failure: bool,
+    restore_staging_on_failure: bool,
 ) -> Result<IngestedDownload, IngestDownloadError> {
     // The destination is derived from the bytes, not from the name: the id is the content hash and
     // the file is `<bucket>/<id>.<ext>`, so two downloads can never want the same path for
@@ -312,7 +321,7 @@ pub(crate) async fn catalogue_staged_file(
     let id = match lanrurugi_storage::id::size_aware_id(&incoming) {
         Ok(id) => ArchiveId(id),
         Err(e) => {
-            let _ = tokio::fs::remove_file(&incoming).await;
+            put_bytes_back(&incoming, staging_path, restore_staging_on_failure).await;
             return Err(IngestDownloadError::Io(std::io::Error::other(e)));
         }
     };
@@ -376,7 +385,7 @@ pub(crate) async fn catalogue_staged_file(
     // The bytes are identical by construction (the id is a hash of them), so replacing it is right;
     // a directory or other non-file in the way is a real error.
     if let Err(e) = tokio::fs::rename(&incoming, &dest).await {
-        let _ = tokio::fs::remove_file(&incoming).await;
+        put_bytes_back(&incoming, staging_path, restore_staging_on_failure).await;
         return Err(IngestDownloadError::Io(e));
     }
 
@@ -409,8 +418,9 @@ pub(crate) async fn catalogue_staged_file(
             let recorded = matches!(state.repos.archives.get(&id).await, Ok(Some(_)));
             if !recorded {
                 // `dest` is the copy this call renamed in. An adopted file's original is a
-                // separate copy that was never moved, so dropping this one loses nothing.
-                let _ = tokio::fs::remove_file(&dest).await;
+                // separate copy that was never moved, so dropping this one loses nothing; a
+                // download asks for the bytes back at its staging path instead.
+                put_bytes_back(&dest, staging_path, restore_staging_on_failure).await;
             }
             return Err(e.into());
         }
@@ -701,6 +711,7 @@ pub async fn resolve_overwrite(
         source_url,
         DuplicatePolicy::Overwrite,
         false,
+        false,
     )
     .await
 }
@@ -725,8 +736,32 @@ pub async fn resolve_rename(
         source_url,
         DuplicatePolicy::Reject,
         false,
+        false,
     )
     .await
+}
+
+/// Removes the bits this call produced, or — when the caller kept a queue row pointing at
+/// `staging_path` — puts them back there so a later retry can re-ingest instead of re-downloading.
+async fn put_bytes_back(file: &Path, staging_path: &Path, restore: bool) {
+    if !restore {
+        let _ = tokio::fs::remove_file(file).await;
+        return;
+    }
+    if let Some(parent) = staging_path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    if tokio::fs::rename(file, staging_path).await.is_err() {
+        // The library and `temp_dir` can sit on different filesystems.
+        match tokio::fs::copy(file, staging_path).await {
+            Ok(_) => {
+                let _ = tokio::fs::remove_file(file).await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, path = %file.display(), "could not keep the downloaded bytes for a retry")
+            }
+        }
+    }
 }
 
 /// The extension to keep on the hash-layout file, lowercased. The name carries no meaning any
@@ -831,6 +866,7 @@ mod tests {
                 None,
                 DuplicatePolicy::Reject,
                 false,
+                false,
             ),
             catalogue_staged_file(
                 &state,
@@ -838,6 +874,7 @@ mod tests {
                 "Second Copy.zip",
                 None,
                 DuplicatePolicy::Reject,
+                false,
                 false,
             ),
         );
@@ -882,6 +919,7 @@ mod tests {
             "Some Title [DL版].zip",
             Some("https://example.org/file"),
             DuplicatePolicy::Reject,
+            false,
             false,
         )
         .await
@@ -933,6 +971,7 @@ mod tests {
             &long,
             None,
             DuplicatePolicy::Reject,
+            false,
             false,
         )
         .await
@@ -1014,6 +1053,7 @@ mod tests {
             "[DL版] (中国翻訳).zip",
             None,
             DuplicatePolicy::Reject,
+            false,
             false,
         )
         .await

@@ -944,6 +944,9 @@ export type QueueError =
   | { kind: "egress_unavailable"; interface: string }
   | { kind: "source_already_imported"; existing_id: string }
   | { kind: "source_download_in_progress" }
+  /** The bytes arrived but cataloguing them failed; the file is kept, so retrying can re-ingest
+   *  it instead of downloading the archive again. */
+  | { kind: "ingest_failed"; reason: string }
 
 /** One raw archive entry (file or directory) from a header-only walk — powers the tree-structure
  * popover in the comparison modal. */
@@ -967,6 +970,8 @@ export type QueueItemOrigin = "download" | "local_upload" | "share_import"
 
 export interface DownloadQueueItem {
   id: string
+  /** A downloaded file kept after a failed cataloguing attempt — see `download_queue/{id}/reingest`. */
+  staged?: { path: string; filename: string } | null
   origin?: QueueItemOrigin
   /** Which subscription queued this item, when one did — absent for a manual add or an upload. */
   subscription_id?: string | null

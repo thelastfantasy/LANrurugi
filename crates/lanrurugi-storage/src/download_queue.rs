@@ -131,6 +131,14 @@ pub struct PendingFilenameConflict {
     pub staged_at: i64,
 }
 
+/// A downloaded file that outlived its failed cataloguing attempt — see
+/// [`DownloadQueueItem::staged`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StagedDownload {
+    pub path: String,
+    pub filename: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DownloadQueueItem {
     pub id: String,
@@ -254,6 +262,11 @@ pub struct DownloadQueueItem {
     /// of "clear completed" so a forced re-download is not wiped by a routine cleanup.
     #[serde(default)]
     pub forced: bool,
+    /// The downloaded file kept when cataloguing failed (`QueueError::IngestFailed`): the row's
+    /// retry can then re-ingest these bytes instead of downloading them a second time. Cleared on
+    /// a successful retry, and the file is removed when the item is deleted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staged: Option<StagedDownload>,
     /// The download plugin's own revision chain for this work, as `(source, posted_at)` pairs —
     /// carried from the download call to whichever ingestion path catalogues it (the ordinary one, or
     /// the filename-conflict resolution that happens later) and stored onto the resulting archive
@@ -375,6 +388,7 @@ impl DownloadQueueRepository {
             pending_revision_confirmation: None,
             revision_confirmed: false,
             forced: false,
+            staged: None,
             version_history: None,
             started_at: None,
             finished_at: None,
@@ -545,6 +559,7 @@ mod tests {
             pending_revision_confirmation: None,
             revision_confirmed: false,
             forced: false,
+            staged: None,
             version_history: None,
             started_at: Some(created_at),
             finished_at: Some(created_at),

@@ -3997,6 +3997,18 @@ async fn run_managed_downloads(
         )
         .await
         .map_err(|e| lanrurugi_core::queue_error::QueueError::from(&e))?;
+        let ingest_result =
+            ingest_downloaded_file(&state, &bundled, overwrite, Some(source_url), queue_item_id)
+                .await;
+        if ingest_result.is_err() {
+            crate::download_queue::note_ingest_failure(
+                &state,
+                queue_item_id,
+                &bundled.path,
+                &bundled.filename,
+            )
+            .await;
+        }
         let ingested = crate::download_manager::ingest::record_ingest_result(
             &state,
             auth.as_ref(),
@@ -4007,8 +4019,7 @@ async fn run_managed_downloads(
                 "source_url": source_url,
                 "queue_item_id": queue_item_id,
             }),
-            ingest_downloaded_file(&state, &bundled, overwrite, Some(source_url), queue_item_id)
-                .await,
+            ingest_result,
         )
         .await
         .map_err(|e| lanrurugi_core::queue_error::QueueError::from(&e))?;
@@ -4019,6 +4030,23 @@ async fn run_managed_downloads(
         archive_ids.push(ingested.archive_id);
     } else {
         for downloaded_result in downloaded_files {
+            let ingest_result = ingest_downloaded_file(
+                &state,
+                &downloaded_result,
+                overwrite,
+                Some(source_url),
+                queue_item_id,
+            )
+            .await;
+            if ingest_result.is_err() {
+                crate::download_queue::note_ingest_failure(
+                    &state,
+                    queue_item_id,
+                    &downloaded_result.path,
+                    &downloaded_result.filename,
+                )
+                .await;
+            }
             let ingested = crate::download_manager::ingest::record_ingest_result(
                 &state,
                 auth.as_ref(),
@@ -4029,14 +4057,7 @@ async fn run_managed_downloads(
                     "source_url": source_url,
                     "queue_item_id": queue_item_id,
                 }),
-                ingest_downloaded_file(
-                    &state,
-                    &downloaded_result,
-                    overwrite,
-                    Some(source_url),
-                    queue_item_id,
-                )
-                .await,
+                ingest_result,
             )
             .await
             .map_err(|e| lanrurugi_core::queue_error::QueueError::from(&e))?;

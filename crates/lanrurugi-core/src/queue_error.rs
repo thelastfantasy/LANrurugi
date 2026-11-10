@@ -147,6 +147,13 @@ pub enum QueueError {
     /// [`QueueError::SourceAlreadyImported`] (and with the same "download anyway" escape hatch),
     /// but there is no archive id to link to yet — the bytes are not catalogued.
     SourceDownloadInProgress,
+    /// The bytes arrived and were kept, but cataloguing them failed (a corrupt archive, a
+    /// thumbnail/PDFium failure, a Redis write error). Distinct from [`QueueError::Internal`]
+    /// because the downloaded file is still on disk: the row offers "retry ingest", which re-runs
+    /// cataloguing on the same bytes instead of downloading them again.
+    IngestFailed {
+        reason: String,
+    },
     /// Every other internal fault (Redis/DB/filesystem/timeout/task-panic) — deliberately not
     /// broken out into more specific kinds, since none of these are actionable by the user beyond
     /// "something went wrong, check the server logs".
@@ -201,6 +208,7 @@ impl QueueError {
             QueueError::EgressUnavailable { .. } => 1010,
             QueueError::SourceAlreadyImported { .. } => 1011,
             QueueError::SourceDownloadInProgress => 1012,
+            QueueError::IngestFailed { .. } => 1013,
         }
     }
 }

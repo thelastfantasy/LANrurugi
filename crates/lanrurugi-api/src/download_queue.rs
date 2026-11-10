@@ -51,6 +51,7 @@ pub fn router() -> Router<AppState> {
         .route("/download_queue/delete_selected", post(delete_selected))
         .route("/download_queue/clear_completed", post(clear_completed))
         .route("/download_queue/{id}/force", post(force_start))
+        .route("/download_queue/{id}/reingest", post(reingest))
 }
 
 /// `GET /download_queue/stream` — SSE endpoint that pushes incremental queue-item state changes
@@ -740,6 +741,11 @@ async fn confirm_older_revision(
         .as_ref()
         .map(|c| c.newer_archive_id.clone());
     item.pending_revision_confirmation = None;
+    // A fresh run supersedes the bytes a failed cataloguing attempt kept: leaving them would leak
+    // the file and keep offering a "re-ingest" choice that no longer matches the row.
+    if let Some(staged) = item.staged.take() {
+        let _ = tokio::fs::remove_file(&staged.path).await;
+    }
 
     if !body.proceed {
         item.state = DownloadQueueState::Cancelled;
@@ -1026,6 +1032,7 @@ async fn delete_selected(
                 tracing::warn!(%id, temp_path = %conflict.temp_path, error = %e, "failed to remove pending-rename temp file on queue item delete");
             }
         }
+        remove_kept_bytes(item.as_ref()).await;
         if state.download_queue.delete(id).await.is_ok() {
             if let Some(tx) = &state.download_queue_tx {
                 let _ = tx.send(serde_json::json!({ "kind": "remove", "id": id }));
@@ -1227,6 +1234,11 @@ async fn start_one(
     // Without this the row would keep rendering the old banner through the entire new attempt —
     // the same bug `pending_filename_conflict` had to be cleared here for.
     item.pending_revision_confirmation = None;
+    // A fresh run supersedes the bytes a failed cataloguing attempt kept: leaving them would leak
+    // the file and keep offering a "re-ingest" choice that no longer matches the row.
+    if let Some(staged) = item.staged.take() {
+        let _ = tokio::fs::remove_file(&staged.path).await;
+    }
     // Re-learned from the domain registry (and this run's own resume attempt): the previous run may
     // have used a different host, so its observation must not carry over.
     item.resume_support = None;
@@ -1577,11 +1589,14 @@ async fn clear_completed(
             )
         }
     };
-    let ids: Vec<String> = items
+    let cleared_items: Vec<_> = items
         .into_iter()
         .filter(|i| i.state == DownloadQueueState::Done && !i.forced)
-        .map(|i| i.id)
         .collect();
+    let ids: Vec<String> = cleared_items.iter().map(|i| i.id.clone()).collect();
+    for item in &cleared_items {
+        remove_kept_bytes(Some(item)).await;
+    }
     let cleared = ids.len();
     if let Err(e) = state.download_queue.delete_many(&ids).await {
         // A real, attempted bulk-delete that hit a Redis failure (not just "nothing to do" —
@@ -1634,6 +1649,119 @@ async fn clear_completed(
         "clear_completed_download_queue",
         [("cleared", json!(cleared))],
     )
+}
+
+/// Deletes the downloaded file a failed cataloguing attempt kept — see
+/// [`lanrurugi_storage::download_queue::StagedDownload`].
+async fn remove_kept_bytes(item: Option<&lanrurugi_storage::download_queue::DownloadQueueItem>) {
+    let Some(staged) = item.and_then(|i| i.staged.as_ref()) else {
+        return;
+    };
+    if let Err(e) = tokio::fs::remove_file(&staged.path).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(path = %staged.path, error = %e, "failed to remove a kept download");
+        }
+    }
+}
+
+/// Records, on the queue row, where its downloaded bytes were put back after cataloguing failed.
+pub(crate) async fn note_ingest_failure(
+    state: &AppState,
+    item_id: Option<&str>,
+    path: &std::path::Path,
+    filename: &str,
+) {
+    let Some(id) = item_id else { return };
+    let Ok(Some(mut item)) = state.download_queue.get(id).await else {
+        return;
+    };
+    item.staged = Some(lanrurugi_storage::download_queue::StagedDownload {
+        path: path.display().to_string(),
+        filename: filename.to_string(),
+    });
+    if let Err(e) = state.download_queue.update(&item).await {
+        tracing::warn!(%id, error = %e, "could not record the kept download");
+    }
+}
+
+/// `POST /download_queue/{id}/reingest` — runs cataloguing again over the bytes a failed ingest
+/// kept on disk, instead of downloading the archive a second time.
+async fn reingest(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let mut item = match state.download_queue.get(&id).await {
+        Ok(Some(item)) => item,
+        Ok(None) => return not_found("reingest_download", format!("Item {id} not found.")),
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "reingest_download",
+                e.to_string(),
+            )
+        }
+    };
+    let Some(staged) = item.staged.clone() else {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "reingest_download",
+            format!("Item {id} has no kept download to ingest."),
+        );
+    };
+    let path = std::path::PathBuf::from(&staged.path);
+    if !path.is_file() {
+        return error(
+            StatusCode::GONE,
+            "reingest_download",
+            format!("The kept download for {id} is gone; start it again."),
+        );
+    }
+    let downloaded = crate::download_manager::stream::DownloadedFile {
+        path,
+        filename: staged.filename,
+        bytes_downloaded: item.file_size.unwrap_or(0),
+    };
+    match crate::download_manager::ingest::ingest_downloaded_file(
+        &state,
+        &downloaded,
+        item.overwrite_on_duplicate,
+        Some(&item.url),
+        Some(&id),
+    )
+    .await
+    {
+        Ok(ingested) => {
+            item.staged = None;
+            item.state = DownloadQueueState::Done;
+            item.archive_ids = Some(vec![ingested.archive_id.clone()]);
+            item.error = None;
+            item.finished_at = Some(now_ms());
+            if let Err(e) = state.download_queue.update(&item).await {
+                return error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "reingest_download",
+                    e.to_string(),
+                );
+            }
+            if let Some(tx) = &state.download_queue_tx {
+                let _ = tx.send(serde_json::json!({ "kind": "update", "id": id }));
+            }
+            crate::download_sources::record(&state, &item.url, &ingested.archive_id).await;
+            axum::Json(json!({
+                "operation": "reingest_download",
+                "success": 1,
+                "archive_ids": [ingested.archive_id],
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            let queue_error = lanrurugi_core::queue_error::QueueError::from(&e);
+            item.error = Some(queue_error.clone());
+            let _ = state.download_queue.update(&item).await;
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "reingest_download",
+                format!("{queue_error:?}"),
+            )
+        }
+    }
 }
 
 /// Wall-clock milliseconds — the unit every other timestamp on the wire uses (`created_at`,
@@ -1689,8 +1817,92 @@ mod tests {
             pending_revision_confirmation: None,
             revision_confirmed: false,
             forced: false,
+            staged: None,
             created_at: 0,
         }
+    }
+
+    /// A download whose bytes arrived but whose cataloguing failed keeps the file; retrying must
+    /// re-ingest that file rather than downloading the archive again.
+    #[tokio::test]
+    async fn retrying_after_a_failed_catalog_ingests_the_kept_bytes() {
+        use lanrurugi_storage::download_queue::{NewQueueItem, QueueItemOrigin, StagedDownload};
+        let Some(mut state) = crate::plugins::tests::test_state().await else {
+            return;
+        };
+        let root = tempfile::tempdir().unwrap();
+        state.library.archive_dir = root.path().join("content");
+        state.library.temp_dir = root.path().join("temp");
+        std::fs::create_dir_all(&state.library.archive_dir).unwrap();
+        std::fs::create_dir_all(&state.library.temp_dir).unwrap();
+
+        let kept = state.library.temp_dir.join("kept.zip");
+        {
+            use std::io::Write as _;
+            let mut writer = zip::ZipWriter::new(std::fs::File::create(&kept).unwrap());
+            writer
+                .start_file("0001.jpg", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(b"\xff\xd8\xff\xd9").unwrap();
+            writer
+                .start_file("note.txt", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(b"retry-after-failed-catalog").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let created = state
+            .download_queue
+            .add(NewQueueItem {
+                origin: QueueItemOrigin::Download,
+                subscription_id: None,
+                url: "https://example.org/gallery/retry".to_string(),
+                plugin_namespace: "download/ehentai".to_string(),
+                file_size: Some(1234),
+                category: None,
+                metadata_tags: Vec::new(),
+                auto_fetch_metadata: false,
+                overwrite_on_duplicate: false,
+                conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
+                state: DownloadQueueState::Error,
+            })
+            .await
+            .unwrap();
+        let mut row = created.clone();
+        row.error = Some(lanrurugi_core::queue_error::QueueError::IngestFailed {
+            reason: "the thumbnail could not be written".to_string(),
+        });
+        row.staged = Some(StagedDownload {
+            path: kept.display().to_string(),
+            filename: "Kept [DL版].zip".to_string(),
+        });
+        state.download_queue.update(&row).await.unwrap();
+
+        let response = reingest(State(state.clone()), Path(created.id.clone())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let stored = state
+            .download_queue
+            .get(&created.id)
+            .await
+            .unwrap()
+            .expect("the row survives the retry");
+        assert_eq!(stored.state, DownloadQueueState::Done);
+        assert!(stored.error.is_none());
+        assert!(
+            stored.staged.is_none(),
+            "the kept file is consumed on success"
+        );
+        assert!(!kept.exists(), "the file moved into the library");
+        let archive_id = stored.archive_ids.expect("the archive id is recorded")[0].clone();
+        let archive = state
+            .repos
+            .archives
+            .get(&lanrurugi_core::ids::ArchiveId(archive_id))
+            .await
+            .unwrap()
+            .expect("the archive is catalogued");
+        assert_eq!(archive.title, "Kept");
     }
 
     #[test]

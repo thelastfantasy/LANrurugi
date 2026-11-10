@@ -2053,6 +2053,23 @@ export function useForceDownloadQueueItem() {
   })
 }
 
+/** Re-runs cataloguing over the bytes a failed ingest kept on disk. */
+export function useReingestQueueItem() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<{ archive_ids: string[] }>(
+        "POST",
+        `/download_queue/${encodeURIComponent(id)}/reingest`,
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+      queryClient.invalidateQueries({ queryKey: ["jobs"] })
+      queryClient.invalidateQueries({ queryKey: ["archives"] })
+    },
+  })
+}
+
 /** Answers the older-revision prompt (issue #107). `proceed: false` abandons the item
  * (`cancelled`); `proceed: true` records the decision and restarts the download. */
 export function useConfirmOlderRevision() {

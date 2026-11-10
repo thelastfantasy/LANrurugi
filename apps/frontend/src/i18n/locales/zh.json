@@ -3062,5 +3062,13 @@
   "reader.allAuthors": "显示全部 {{count}} 位作者",
   "components.layout.thisSourceWasAlreadyImported": "该来源已入库：",
   "upload.forceDownload": "强制下载",
-  "components.layout.thisSourceIsAlreadyDownloading": "该来源正在下载中；如需另下可以强制下载。"
+  "components.layout.thisSourceIsAlreadyDownloading": "该来源正在下载中；如需另下可以强制下载。",
+  "upload": {
+    "reingest": "重新入库（不重新下载）"
+  },
+  "components": {
+    "layout": {
+      "ingestFailed": "已下载完成，但入库失败："
+    }
+  }
 }

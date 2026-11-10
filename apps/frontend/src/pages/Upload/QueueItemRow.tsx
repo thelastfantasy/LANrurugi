@@ -9,6 +9,7 @@ import {
   useForceDownloadQueueItem,
   useJobProgressOverride,
   usePauseQueueItem,
+  useReingestQueueItem,
   useStartQueueItem,
   useStopQueueItem,
   useSubscriptions,
@@ -287,6 +288,10 @@ export function QueueItemRow({
   const fetchMetadata = useFetchQueueItemMetadata();
   const start = useStartQueueItem();
   const forceStart = useForceDownloadQueueItem();
+  const reingest = useReingestQueueItem();
+  // A failed cataloguing attempt keeps the downloaded file: retrying then means re-ingesting those
+  // bytes, not downloading the archive again.
+  const needsReingest = item.error?.kind === "ingest_failed" && !!item.staged;
   const sourceBlocked =
     item.error?.kind === "source_already_imported" ||
     item.error?.kind === "source_download_in_progress";
@@ -701,11 +706,13 @@ export function QueueItemRow({
           )}
           <Tooltip
             label={
-              (item.state === "error" || wasCancelled
-                ? t("upload.retry")
-                : item.state === "paused"
-                  ? t("upload.resume")
-                  : t("library.download")) ?? ""
+              (needsReingest
+                ? t("upload.reingest")
+                : item.state === "error" || wasCancelled
+                  ? t("upload.retry")
+                  : item.state === "paused"
+                    ? t("upload.resume")
+                    : t("library.download")) ?? ""
             }
           >
             <button
@@ -717,19 +724,25 @@ export function QueueItemRow({
                   item.state !== "error" &&
                   item.state !== "cancelled" &&
                   item.state !== "paused") ||
-                start.isPending
+                (needsReingest ? reingest.isPending : start.isPending)
               }
               onClick={() => {
-                void start.mutateAsync(item.id);
+                if (needsReingest) {
+                  void reingest.mutateAsync(item.id);
+                } else {
+                  void start.mutateAsync(item.id);
+                }
               }}
             >
               <i
                 className={`fa ${
-                  item.state === "paused"
-                    ? "fa-play"
-                    : item.state === "error" || wasCancelled
-                      ? "fa-redo"
-                      : "fa-download"
+                  needsReingest
+                    ? "fa-file-import"
+                    : item.state === "paused"
+                      ? "fa-play"
+                      : item.state === "error" || wasCancelled
+                        ? "fa-redo"
+                        : "fa-download"
                 }`}
                 aria-hidden="true"
               ></i>

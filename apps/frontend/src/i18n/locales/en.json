@@ -3062,5 +3062,13 @@
   "reader.allAuthors": "Show all {{count}} authors",
   "components.layout.thisSourceWasAlreadyImported": "This source was already catalogued:",
   "upload.forceDownload": "Download anyway",
-  "components.layout.thisSourceIsAlreadyDownloading": "This source is already downloading; you can start it anyway."
+  "components.layout.thisSourceIsAlreadyDownloading": "This source is already downloading; you can start it anyway.",
+  "upload": {
+    "reingest": "Re-ingest the downloaded file"
+  },
+  "components": {
+    "layout": {
+      "ingestFailed": "Downloaded, but could not be catalogued:"
+    }
+  }
 }

@@ -2824,5 +2824,13 @@
   "reader.allAuthors": "全{{count}}名の作者を表示",
   "components.layout.thisSourceWasAlreadyImported": "このURLは既に取り込み済み：",
   "upload.forceDownload": "強制ダウンロード",
-  "components.layout.thisSourceIsAlreadyDownloading": "このURLはダウンロード中です。強制的に開始できます。"
+  "components.layout.thisSourceIsAlreadyDownloading": "このURLはダウンロード中です。強制的に開始できます。",
+  "upload": {
+    "reingest": "再取り込み（再ダウンロードなし）"
+  },
+  "components": {
+    "layout": {
+      "ingestFailed": "ダウンロード済みですが、登録に失敗しました："
+    }
+  }
 }
