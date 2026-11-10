@@ -942,6 +942,7 @@ export type QueueError =
   | { kind: "share_import"; reason: string }
   | { kind: "truncated_download"; expected: number; got: number }
   | { kind: "egress_unavailable"; interface: string }
+  | { kind: "source_already_imported"; existing_id: string }
 
 /** One raw archive entry (file or directory) from a header-only walk — powers the tree-structure
  * popover in the comparison modal. */

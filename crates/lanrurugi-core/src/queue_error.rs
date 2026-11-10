@@ -137,6 +137,12 @@ pub enum QueueError {
     EgressUnavailable {
         interface: String,
     },
+    /// This source URL has already produced an archive in the library. Detected before any bytes
+    /// are fetched again; the queue row offers "download anyway" for the case where the source
+    /// changed without changing its URL (the record keeps the first archive's id).
+    SourceAlreadyImported {
+        existing_id: String,
+    },
     /// Every other internal fault (Redis/DB/filesystem/timeout/task-panic) — deliberately not
     /// broken out into more specific kinds, since none of these are actionable by the user beyond
     /// "something went wrong, check the server logs".
@@ -189,6 +195,7 @@ impl QueueError {
             QueueError::ShareImport { .. } => 1008,
             QueueError::TruncatedDownload { .. } => 1009,
             QueueError::EgressUnavailable { .. } => 1010,
+            QueueError::SourceAlreadyImported { .. } => 1011,
         }
     }
 }

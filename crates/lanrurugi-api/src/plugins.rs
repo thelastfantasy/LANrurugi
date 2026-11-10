@@ -4048,6 +4048,12 @@ async fn run_managed_downloads(
             archive_ids.push(ingested.archive_id);
         }
     }
+    // Remember which archive this source URL produced, so re-adding the same URL is refused
+    // before another whole download rather than discovered after hashing it (020 makes the bytes
+    // identical, but the bandwidth would already be spent).
+    if let Some(first) = archive_ids.first() {
+        crate::download_sources::record(&state, source_url, first).await;
+    }
     Ok(archive_ids)
 }
 

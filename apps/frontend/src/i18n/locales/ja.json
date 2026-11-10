@@ -2821,5 +2821,7 @@
   "library.lastRead": "最近読んだ順",
   "library.recentlyRead": "最近読んだもの",
   "duplicates.coverSize": "表紙サイズ",
-  "reader.allAuthors": "全{{count}}名の作者を表示"
+  "reader.allAuthors": "全{{count}}名の作者を表示",
+  "components.layout.thisSourceWasAlreadyImported": "このURLは既に取り込み済み：",
+  "upload.forceDownload": "強制ダウンロード"
 }

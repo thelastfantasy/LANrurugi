@@ -50,6 +50,7 @@ pub fn router() -> Router<AppState> {
         .route("/download_queue/start_selected", post(start_selected))
         .route("/download_queue/delete_selected", post(delete_selected))
         .route("/download_queue/clear_completed", post(clear_completed))
+        .route("/download_queue/{id}/force", post(force_start))
 }
 
 /// `GET /download_queue/stream` — SSE endpoint that pushes incremental queue-item state changes
@@ -636,6 +637,11 @@ async fn start_queue_item(
             "start_download_queue_item",
             format!("Another item for the same URL as {id} is already downloading."),
         ),
+        Err(StartError::SourceAlreadyImported(existing_id)) => error(
+            StatusCode::CONFLICT,
+            "start_download_queue_item",
+            format!("This URL already produced archive {existing_id}."),
+        ),
         Err(StartError::Storage(e)) => {
             // `start_one` itself hit a real Redis failure marking the item `Starting` — the
             // download attempt never even got to spawn, worth recording since the earlier
@@ -824,6 +830,11 @@ async fn confirm_older_revision(
             StatusCode::CONFLICT,
             "confirm_older_revision",
             format!("Another item for the same URL as {id} is already downloading."),
+        ),
+        Err(StartError::SourceAlreadyImported(existing_id)) => error(
+            StatusCode::CONFLICT,
+            "confirm_older_revision",
+            format!("This URL already produced archive {existing_id}."),
         ),
         Err(StartError::NotQueued) => error(
             StatusCode::CONFLICT,
@@ -1047,6 +1058,8 @@ enum StartError {
     PluginMissing,
     Storage(String),
     DuplicateInFlight,
+    /// The source URL already produced an archive; reported before any bytes are fetched again.
+    SourceAlreadyImported(String),
 }
 
 fn start_error_message(e: &StartError) -> String {
@@ -1057,6 +1070,9 @@ fn start_error_message(e: &StartError) -> String {
         StartError::Storage(msg) => msg.clone(),
         StartError::DuplicateInFlight => {
             "another item for this same URL is already downloading".to_string()
+        }
+        StartError::SourceAlreadyImported(id) => {
+            format!("this URL already produced archive {id}; download anyway to fetch it again")
         }
     }
 }
@@ -1117,6 +1133,22 @@ async fn start_one(
         .map_err(|e| StartError::Storage(e.to_string()))?;
     if has_running_duplicate(&item, &all_items) {
         return Err(StartError::DuplicateInFlight);
+    }
+
+    // Content addressing would catch this *after* re-downloading and hashing the whole file; the
+    // registry exists to stop it here. Forced items already carry the user's explicit override.
+    if item.origin == lanrurugi_storage::download_queue::QueueItemOrigin::Download && !item.forced {
+        if let Some(existing_id) = crate::download_sources::lookup(state, &item.url).await {
+            item.state = DownloadQueueState::Error;
+            item.error = Some(
+                lanrurugi_core::queue_error::QueueError::SourceAlreadyImported {
+                    existing_id: existing_id.clone(),
+                },
+            );
+            item.finished_at = Some(now_ms());
+            let _ = state.download_queue.update(&item).await;
+            return Err(StartError::SourceAlreadyImported(existing_id));
+        }
     }
 
     // 017: a share import runs its own transfer task, not a plugin; stopping and retrying go
@@ -1457,6 +1489,73 @@ async fn pause_one(state: &AppState, id: &str) -> Result<(), StopError> {
 /// `DELETE /download_queue/{id}` (which does clean up a `pending_filename_conflict`'s own staged
 /// temp file — `Done` items never carry one, so this handler has nothing analogous to worry
 /// about).
+/// `POST /download_queue/{id}/force` — "download anyway" for a row stopped by the source-URL
+/// guard: mark it forced (bypassing the guard from then on, and keeping it out of "clear
+/// completed"), reset it to `Queued` and start it in the same request, so the button does what its
+/// label says instead of only flipping a flag.
+async fn force_start(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    Path(id): Path<String>,
+) -> Response {
+    let mut item = match state.download_queue.get(&id).await {
+        Ok(Some(item)) => item,
+        Ok(None) => return not_found("force_start_download", format!("Item {id} not found.")),
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "force_start_download",
+                e.to_string(),
+            )
+        }
+    };
+    item.forced = true;
+    item.state = DownloadQueueState::Queued;
+    item.error = None;
+    item.finished_at = None;
+    if let Err(e) = state.download_queue.update(&item).await {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "force_start_download",
+            e.to_string(),
+        );
+    }
+    match start_one(&state, auth.as_ref().map(|e| &e.0), &id, None, false).await {
+        Ok(job_id) => axum::Json(json!({
+            "operation": "force_start_download",
+            "success": 1,
+            "job": job_id,
+        }))
+        .into_response(),
+        Err(StartError::NotFound) => {
+            not_found("force_start_download", format!("Item {id} not found."))
+        }
+        Err(StartError::NotQueued) => error(
+            StatusCode::CONFLICT,
+            "force_start_download",
+            format!("Item {id} is not in the Queued state."),
+        ),
+        Err(StartError::PluginMissing) => error(
+            StatusCode::BAD_REQUEST,
+            "force_start_download",
+            "The plugin this item was queued under is no longer installed.",
+        ),
+        Err(StartError::DuplicateInFlight) => error(
+            StatusCode::CONFLICT,
+            "force_start_download",
+            format!("Another item for the same URL as {id} is already downloading."),
+        ),
+        Err(StartError::Storage(e)) => {
+            error(StatusCode::INTERNAL_SERVER_ERROR, "force_start_download", e)
+        }
+        Err(StartError::SourceAlreadyImported(existing_id)) => error(
+            StatusCode::CONFLICT,
+            "force_start_download",
+            format!("This URL already produced archive {existing_id}."),
+        ),
+    }
+}
+
 async fn clear_completed(
     State(state): State<AppState>,
     auth: Option<axum::extract::Extension<AuthContext>>,
@@ -1473,7 +1572,7 @@ async fn clear_completed(
     };
     let ids: Vec<String> = items
         .into_iter()
-        .filter(|i| i.state == DownloadQueueState::Done)
+        .filter(|i| i.state == DownloadQueueState::Done && !i.forced)
         .map(|i| i.id)
         .collect();
     let cleared = ids.len();
@@ -1582,6 +1681,7 @@ mod tests {
             pending_filename_conflict: None,
             pending_revision_confirmation: None,
             revision_confirmed: false,
+            forced: false,
             created_at: 0,
         }
     }

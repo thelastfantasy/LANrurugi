@@ -20,6 +20,7 @@ pub mod direct_download;
 pub mod download_host;
 pub mod download_manager;
 pub mod download_queue;
+pub mod download_sources;
 pub mod download_url;
 pub mod duplicates;
 pub mod embed_worker_client;

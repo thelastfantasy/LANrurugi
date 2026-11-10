@@ -2039,6 +2039,20 @@ export function useStartQueueItem() {
   })
 }
 
+/** "Download anyway" for a row stopped by the source-URL guard: marks the item forced (so
+ * "clear completed" leaves it alone) and starts it in one request. */
+export function useForceDownloadQueueItem() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<{ job: string }>("POST", `/download_queue/${encodeURIComponent(id)}/force`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+      queryClient.invalidateQueries({ queryKey: ["jobs"] })
+    },
+  })
+}
+
 /** Answers the older-revision prompt (issue #107). `proceed: false` abandons the item
  * (`cancelled`); `proceed: true` records the decision and restarts the download. */
 export function useConfirmOlderRevision() {

@@ -249,6 +249,11 @@ pub struct DownloadQueueItem {
     /// so a later re-run of the same URL asks again instead of silently inheriting a stale yes.
     #[serde(default)]
     pub revision_confirmed: bool,
+    /// The user asked for this URL again even though the source registry says it already produced
+    /// an archive (`QueueError::SourceAlreadyImported`). Bypasses that guard, and keeps the row out
+    /// of "clear completed" so a forced re-download is not wiped by a routine cleanup.
+    #[serde(default)]
+    pub forced: bool,
     /// The download plugin's own revision chain for this work, as `(source, posted_at)` pairs —
     /// carried from the download call to whichever ingestion path catalogues it (the ordinary one, or
     /// the filename-conflict resolution that happens later) and stored onto the resulting archive
@@ -369,6 +374,7 @@ impl DownloadQueueRepository {
             pending_filename_conflict: None,
             pending_revision_confirmation: None,
             revision_confirmed: false,
+            forced: false,
             version_history: None,
             started_at: None,
             finished_at: None,
@@ -538,6 +544,7 @@ mod tests {
             pending_filename_conflict: None,
             pending_revision_confirmation: None,
             revision_confirmed: false,
+            forced: false,
             version_history: None,
             started_at: Some(created_at),
             finished_at: Some(created_at),

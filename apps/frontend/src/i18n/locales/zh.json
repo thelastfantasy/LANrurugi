@@ -3059,5 +3059,7 @@
   "library.lastRead": "最近阅读",
   "library.recentlyRead": "最近阅读",
   "duplicates.coverSize": "封面大小",
-  "reader.allAuthors": "显示全部 {{count}} 位作者"
+  "reader.allAuthors": "显示全部 {{count}} 位作者",
+  "components.layout.thisSourceWasAlreadyImported": "该来源已入库：",
+  "upload.forceDownload": "强制下载"
 }

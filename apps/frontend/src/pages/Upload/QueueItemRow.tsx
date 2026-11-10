@@ -6,6 +6,7 @@ import {
   useConfirmOlderRevision,
   useDeleteQueueItem,
   useFetchQueueItemMetadata,
+  useForceDownloadQueueItem,
   useJobProgressOverride,
   usePauseQueueItem,
   useStartQueueItem,
@@ -285,6 +286,8 @@ export function QueueItemRow({
   const update = useUpdateQueueItem();
   const fetchMetadata = useFetchQueueItemMetadata();
   const start = useStartQueueItem();
+  const forceStart = useForceDownloadQueueItem();
+  const sourceAlreadyImported = item.error?.kind === "source_already_imported";
   const stop = useStopQueueItem();
   const pause = usePauseQueueItem();
   const confirmOlder = useConfirmOlderRevision();
@@ -680,6 +683,20 @@ export function QueueItemRow({
             </Tooltip>
           </>
         ) : (
+          <>
+          {item.state === "error" && sourceAlreadyImported && (
+            <Tooltip label={t("upload.forceDownload") ?? ""}>
+              <button
+                type="button"
+                className="stdbtn"
+                style={ICON_BUTTON_STYLE}
+                disabled={forceStart.isPending}
+                onClick={() => void forceStart.mutateAsync(item.id)}
+              >
+                <i className="fa fa-download" aria-hidden="true"></i>
+              </button>
+            </Tooltip>
+          )}
           <Tooltip
             label={
               (item.state === "error" || wasCancelled
@@ -716,6 +733,7 @@ export function QueueItemRow({
               ></i>
             </button>
           </Tooltip>
+          </>
         )}
         </div>
 

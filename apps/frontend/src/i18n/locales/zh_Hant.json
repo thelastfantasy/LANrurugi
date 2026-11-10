@@ -1106,5 +1106,7 @@
   "library.lastRead": "最近閱讀",
   "library.recentlyRead": "最近閱讀",
   "duplicates.coverSize": "封面大小",
-  "reader.allAuthors": "顯示全部 {{count}} 位作者"
+  "reader.allAuthors": "顯示全部 {{count}} 位作者",
+  "components.layout.thisSourceWasAlreadyImported": "該來源已入庫：",
+  "upload.forceDownload": "強制下載"
 }

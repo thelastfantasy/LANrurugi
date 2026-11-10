@@ -3059,5 +3059,7 @@
   "library.lastRead": "Recently read",
   "library.recentlyRead": "Recently read",
   "duplicates.coverSize": "Cover size",
-  "reader.allAuthors": "Show all {{count}} authors"
+  "reader.allAuthors": "Show all {{count}} authors",
+  "components.layout.thisSourceWasAlreadyImported": "This source was already catalogued:",
+  "upload.forceDownload": "Download anyway"
 }

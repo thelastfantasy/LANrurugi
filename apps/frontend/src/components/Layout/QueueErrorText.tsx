@@ -104,6 +104,21 @@ export function QueueErrorText({ error }: { error: QueueError }) {
           </a>
         </span>
       )
+    case "source_already_imported":
+      return (
+        <span>
+          {t("components.layout.thisSourceWasAlreadyImported")}{" "}
+          <a
+            href={routes.reader(error.existing_id)}
+            onClick={(e) => {
+              e.preventDefault()
+              navigate(routes.reader(error.existing_id))
+            }}
+          >
+            {error.existing_id}
+          </a>
+        </span>
+      )
     case "already_patched":
       return (
         <span style={{ color: "#c79121" }}>
