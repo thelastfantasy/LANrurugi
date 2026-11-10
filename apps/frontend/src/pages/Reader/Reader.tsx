@@ -2485,22 +2485,49 @@ export function Reader() {
     </div>
   );
 
-  const artistMatch = metadata.data.tags.match(/artist:([^,]+)(?:,|$)/i);
+  // Every artist, not just the first: an anthology or a joint work lists several, and picking one
+  // arbitrarily made the heading look like the others were missing (2026-11-10).
+  const artists = Array.from(metadata.data.tags.matchAll(/artist:([^,]+)(?:,|$)/gi))
+    .map((match) => match[1].trim())
+    .filter(Boolean);
+  const primaryArtist = artists[0];
   const formatBadge = isBookExtension(metadata.data.extension) && (
     <>
       {" "}
       <FormatBadge extension={metadata.data.extension} />
     </>
   );
-  const archiveHeading = artistMatch ? (
-    <>
-      {metadata.data.title} by{" "}
-      <a href={getTagSearchURL("artist", artistMatch[1])}>{artistMatch[1]}</a>
-      {formatBadge}
-    </>
-  ) : (
+  const archiveHeading = (
     <>
       {metadata.data.title}
+      {primaryArtist && (
+        <>
+          {" by "}
+          <a href={getTagSearchURL("artist", primaryArtist)}>{primaryArtist}</a>
+        </>
+      )}
+      {artists.length > 1 && (
+        <Menu
+          side="bottom"
+          align="start"
+          trigger={
+            <button
+              type="button"
+              className="ml-1 cursor-pointer border-0 bg-transparent p-0 align-baseline"
+              title={t("reader.allAuthors", { count: artists.length })}
+              aria-label={t("reader.allAuthors", { count: artists.length })}
+            >
+              <i className="fa fa-caret-down" aria-hidden="true" />
+            </button>
+          }
+        >
+          {artists.map((artist) => (
+            <MenuItem key={artist} closeOnClick>
+              <a href={getTagSearchURL("artist", artist)}>{artist}</a>
+            </MenuItem>
+          ))}
+        </Menu>
+      )}
       {formatBadge}
     </>
   );

@@ -3058,5 +3058,6 @@
   "duplicates.bestCopyHint": "Most complete pages in the group.",
   "library.lastRead": "Recently read",
   "library.recentlyRead": "Recently read",
-  "duplicates.coverSize": "Cover size"
+  "duplicates.coverSize": "Cover size",
+  "reader.allAuthors": "Show all {{count}} authors"
 }

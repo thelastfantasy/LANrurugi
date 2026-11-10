@@ -1105,5 +1105,6 @@
   "duplicates.bestCopyHint": "組內頁數最完整的一份。",
   "library.lastRead": "最近閱讀",
   "library.recentlyRead": "最近閱讀",
-  "duplicates.coverSize": "封面大小"
+  "duplicates.coverSize": "封面大小",
+  "reader.allAuthors": "顯示全部 {{count}} 位作者"
 }
