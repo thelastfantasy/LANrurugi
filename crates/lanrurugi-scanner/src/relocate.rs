@@ -12,6 +12,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use deadpool_redis::redis::AsyncCommands;
+use lanrurugi_core::entities::Archive;
 use lanrurugi_storage::keys::FILEMAP_KEY;
 use lanrurugi_storage::paths;
 use lanrurugi_storage::repository::ArchiveRepository;
@@ -27,6 +28,8 @@ pub struct RelocationReport {
     pub settling: u64,
     /// Records whose path is outside the library (a legacy import pointing at another mount).
     pub outside: u64,
+    /// Records whose path was put right after an interrupted pass (see `relocate_library`).
+    pub repaired: u64,
     pub failed: u64,
 }
 
@@ -36,6 +39,7 @@ impl RelocationReport {
             && self.skipped_occupied == 0
             && self.settling == 0
             && self.outside == 0
+            && self.repaired == 0
             && self.failed == 0
     }
 }
@@ -191,8 +195,46 @@ pub async fn relocate_library(
 
     for mut archive in all {
         let path = PathBuf::from(&archive.file);
-        // A record without bytes is the sweeper's problem, not this pass's.
         if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            // A pass killed between its rename and its save leaves exactly this: the record still
+            // names the original path, the bytes are already in `_byname/`, and nothing else would
+            // ever put them back together (the scanner sees the file at its new place and the
+            // record already exists). Derive the counterpart and fix the record in place.
+            if let Some(dest) = destination_for(library, &path) {
+                let same_bytes = tokio::fs::try_exists(&dest).await.unwrap_or(false)
+                    && lanrurugi_storage::id::size_aware_id(&dest)
+                        .map(|id| id == archive.id.as_str())
+                        .unwrap_or(false);
+                if same_bytes {
+                    archive.file = dest.to_string_lossy().to_string();
+                    match save_record(archives, &archive).await {
+                        Ok(()) => {
+                            let _: Result<(), _> = conn
+                                .hdel(FILEMAP_KEY, path.to_string_lossy().to_string())
+                                .await;
+                            let _: Result<(), _> = conn
+                                .hset(FILEMAP_KEY, archive.file.as_str(), archive.id.as_str())
+                                .await;
+                            tracing::info!(
+                                id = %archive.id,
+                                from = %path.display(),
+                                to = %archive.file,
+                                "repaired a record left behind by an interrupted relocation"
+                            );
+                            report.repaired += 1;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                id = %archive.id,
+                                error = %e,
+                                "found an interrupted relocation but could not repair its record"
+                            );
+                            report.failed += 1;
+                        }
+                    }
+                }
+            }
+            // A record without bytes is the sweeper's problem, not this pass's.
             continue;
         }
         if paths::is_hash_layout_path(library, &path, archive.id.as_str())
@@ -215,7 +257,7 @@ pub async fn relocate_library(
                     Ok(Some(fresh)) => {
                         let mut fresh = fresh;
                         fresh.file = archive.file.clone();
-                        (archives.save(&fresh).await, false)
+                        (save_record(archives, &fresh).await, false)
                     }
                     Ok(None) => (Ok(()), true),
                     Err(e) => (Err(e), false),
@@ -298,6 +340,23 @@ pub async fn relocate_library(
 
 /// Puts a moved archive (and a patch that already travelled with it) back where the record still
 /// points, recreating directories the move may have emptied.
+/// Test seam: a save that can be made to fail, so the rollback path is reachable without a Redis
+/// fault. Compiled away outside tests.
+#[cfg(test)]
+pub(crate) static FAIL_SAVES: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+async fn save_record(
+    archives: &ArchiveRepository,
+    archive: &Archive,
+) -> Result<(), RepositoryError> {
+    #[cfg(test)]
+    if FAIL_SAVES.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(RepositoryError::NotFound("archive", archive.id.to_string()));
+    }
+    archives.save(archive).await
+}
+
 async fn move_back(from: &Path, to: &Path) -> std::io::Result<()> {
     if let Some(parent) = to.parent() {
         tokio::fs::create_dir_all(parent).await?;
@@ -365,6 +424,25 @@ mod tests {
             .await;
         let old = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
         file.set_modified(old).unwrap();
+    }
+
+    /// Two scratch pools: one for records, one for `LRR_FILEMAP`. Each test uses its own db offset.
+    async fn test_repo(db: u8) -> Option<(ArchiveRepository, deadpool_redis::Pool)> {
+        let base = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
+        let url = |d: u8| format!("{}/{d}", base.trim_end_matches('/'));
+        let archive = lanrurugi_storage::test_support::test_pool_for_url(&url(db)).await?;
+        let filemap = lanrurugi_storage::test_support::test_pool_for_url(&url(db + 1)).await?;
+        let archives = ArchiveRepository::new(archive);
+        // These slices belong to this test alone; start from a clean one.
+        for record in archives.list_all().await.unwrap_or_default() {
+            let _ = archives.delete(&record.id).await;
+        }
+        let mut conn = filemap.get().await.unwrap();
+        let _: Result<(), _> = deadpool_redis::redis::cmd("DEL")
+            .arg(FILEMAP_KEY)
+            .query_async(&mut conn)
+            .await;
+        Some((archives, filemap))
     }
 
     #[test]
@@ -461,6 +539,118 @@ mod tests {
         );
         assert_eq!(tokio::fs::read(&moved_patch).await.unwrap(), b"patch");
         assert!(!patch.exists());
+    }
+
+    fn archive_at(path: &Path, id: &str) -> Archive {
+        Archive {
+            id: lanrurugi_core::ids::ArchiveId(id.to_string()),
+            name: "Book".into(),
+            title: "Book".into(),
+            file: path.to_string_lossy().to_string(),
+            tags: String::new(),
+            summary: String::new(),
+            arcsize: 6,
+            pagecount: 1,
+            isnew: false,
+            lastreadpage: 0,
+            lastreadtime: 0,
+            thumbhash: None,
+            toc: vec![],
+            stamp_ids: vec![],
+            heal_failed_at: None,
+            corrupted_pages: vec![],
+            has_patch: false,
+        }
+    }
+
+    /// A relocation pass killed between the rename and the save leaves the record naming the old
+    /// path with the bytes already in `_byname/`. The next pass must put them back together instead
+    /// of leaving a record that points at nothing.
+    #[tokio::test]
+    async fn an_interrupted_relocation_is_repaired_by_the_next_pass() {
+        let Some((archives, filemap)) = test_repo(44).await else {
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let library = tmp.path();
+        let original = library.join("Series/Book.zip");
+        tokio::fs::create_dir_all(original.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&original, b"archive bytes").await.unwrap();
+        settle(&original).await;
+        let id = lanrurugi_storage::id::size_aware_id(&original).unwrap();
+
+        // Simulate the kill: the file moved, the record did not.
+        let moved = library.join("_byname/Series/Book.zip");
+        tokio::fs::create_dir_all(moved.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::rename(&original, &moved).await.unwrap();
+        archives.save(&archive_at(&original, &id)).await.unwrap();
+
+        let report = relocate_library(&archives, &filemap, library)
+            .await
+            .unwrap();
+
+        assert_eq!(report.repaired, 1, "the pass repairs the stale path");
+        assert_eq!(report.moved, 0);
+        let record = archives
+            .get(&lanrurugi_core::ids::ArchiveId(id.clone()))
+            .await
+            .unwrap()
+            .expect("the record still exists");
+        assert_eq!(
+            PathBuf::from(&record.file),
+            moved,
+            "the record now names where the bytes actually are"
+        );
+        assert!(moved.exists());
+        assert!(!original.exists());
+        archives
+            .delete(&lanrurugi_core::ids::ArchiveId(id))
+            .await
+            .unwrap();
+    }
+
+    /// When the record cannot be saved after the move, the file and the patch have to come back —
+    /// otherwise the record points at a path nothing exists at and no later pass repairs it.
+    #[tokio::test]
+    async fn a_failed_save_puts_the_archive_and_its_patch_back() {
+        let Some((archives, filemap)) = test_repo(46).await else {
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let library = tmp.path();
+        let original = library.join("Series/Book.zip");
+        tokio::fs::create_dir_all(original.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&original, b"archive bytes").await.unwrap();
+        let patch = crate::patch::patch_path_for(&original);
+        tokio::fs::write(&patch, b"patch").await.unwrap();
+        settle(&original).await;
+        settle(&patch).await;
+        let id = lanrurugi_storage::id::size_aware_id(&original).unwrap();
+        archives.save(&archive_at(&original, &id)).await.unwrap();
+
+        FAIL_SAVES.store(true, std::sync::atomic::Ordering::SeqCst);
+        let report = relocate_library(&archives, &filemap, library).await;
+        FAIL_SAVES.store(false, std::sync::atomic::Ordering::SeqCst);
+        let report = report.unwrap();
+
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.moved, 0);
+        assert!(
+            original.exists(),
+            "the archive is back where the record says"
+        );
+        assert!(patch.exists(), "the patch came back with it");
+        assert!(!library.join("_byname/Series/Book.zip").exists());
+        archives
+            .delete(&lanrurugi_core::ids::ArchiveId(id))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

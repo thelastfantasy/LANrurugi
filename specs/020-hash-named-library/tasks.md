@@ -308,3 +308,13 @@ that started 020 is now an ingest-level assertion, not only a scan-level one.
   而不是「忘记填」。此处与 plan 的差别以本记录为准。
 - 搬家现在每移动一个文件打一行 `moved an archive into _byname`（含 id、旧路径、新路径），
   对应 FR-009「源→目标可追溯」。
+
+
+### Implementation Record — 2026-11-10 09:40（搬家中断的启动修复）
+
+复查 2026-11-10 可延后 3 已收：`relocate_library` 在跳过「记录指向的文件不存在」之前，先看
+`destination_for(original)` 是否存在且 `size_aware_id` 与记录 id 一致；是则就地改正记录的 `file`
+并改写 `LRR_FILEMAP`，计入新增的 `relocation_repaired`（rebuild 结果 JSON 里也能看到）。这条覆盖
+「rename 完成、save 未完成时进程被 kill」，下一次扫描（含启动扫描）就会修好，不再需要两次
+Clean Database 才暴露。回归测试：`relocate::tests::an_interrupted_relocation_is_repaired_by_the_next_pass`，
+以及 saves 失败时文件与补丁都回到原处的 `a_failed_save_puts_the_archive_and_its_patch_back`。

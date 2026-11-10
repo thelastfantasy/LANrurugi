@@ -126,6 +126,7 @@ pub struct ScanSummary {
     pub relocation_settling: usize,
     /// Records whose path is outside the library (an external mount); permanent by nature.
     pub relocation_outside: usize,
+    pub relocation_repaired: usize,
     pub relocation_failed: usize,
 }
 
@@ -397,6 +398,7 @@ pub async fn full_scan(
                 (report.skipped_occupied + report.settling + report.outside) as usize;
             summary.relocation_settling = report.settling as usize;
             summary.relocation_outside = report.outside as usize;
+            summary.relocation_repaired = report.repaired as usize;
             summary.relocation_failed = report.failed as usize;
             if !report.is_empty() {
                 tracing::info!(

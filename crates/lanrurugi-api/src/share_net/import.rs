@@ -1011,7 +1011,7 @@ async fn fetch_pieces(
 /// Whether an import error is the sharer's answer (terminal) rather than the network's failure
 /// (worth waiting out). 022 US2/FR-003: only an explicit refusal or a share that no longer exists
 /// ends an import; everything else is "the network is down, keep trying".
-fn terminal_import_error(error: &ShareNetError) -> bool {
+pub(crate) fn terminal_import_error(error: &ShareNetError) -> bool {
     matches!(
         error,
         ShareNetError::Protocol(_)
@@ -1872,6 +1872,17 @@ mod tests {
 #[cfg(test)]
 mod retry_tests {
     use super::*;
+
+    /// Review 2026-11-10 可延后 4: a body that ends before its announced length is transmission
+    /// loss, so it must not end the import. The error `read_body` raises is the one checked here.
+    #[test]
+    fn a_truncated_body_is_worth_retrying() {
+        let error = crate::share_net::truncated_body_error();
+        assert!(
+            !terminal_import_error(&error),
+            "a truncated body must wait for the network: {error:?}"
+        );
+    }
 
     /// 022 US2: only the sharer's own answers end an import. Everything the network did is worth
     /// waiting out, which is what makes an unplug-and-replug recover without user action.

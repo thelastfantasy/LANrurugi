@@ -115,8 +115,9 @@ async fn server_info(State(state): State<AppState>) -> Response {
         "excluded_namespaces": excluded_namespaces,
         // What the two interface settings can actually enforce here. The UI picks its hint text
         // from this instead of promising the same thing on every OS.
+        // Only the two scopes: which OS the server runs on is not the visitor's business, and
+        // the UI needs nothing but "can this platform pin, and how far".
         "interface_binding": {
-            "platform": lanrurugi_core::http_client::binding_platform(),
             "plugin": lanrurugi_core::http_client::plugin_binding_scope(),
             "share": lanrurugi_core::http_client::share_binding_scope(),
         },

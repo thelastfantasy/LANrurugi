@@ -703,9 +703,15 @@ pub async fn read_body(
     if body.len() as u64 != len {
         // The peer announced more than it sent: the stream ended early, which is transmission loss
         // (retry), not a frame this build cannot parse.
-        return Err(ShareNetError::Unreachable("truncated body".into()));
+        return Err(truncated_body_error());
     }
     Ok(body)
+}
+
+/// The error for a body that ended before its announced length. Transmission loss, so retryable:
+/// `terminal_import_error` must treat it as such (review 2026-11-10 可延后 4).
+pub(crate) fn truncated_body_error() -> ShareNetError {
+    ShareNetError::Unreachable("truncated body".into())
 }
 
 /// Dials a sharer.

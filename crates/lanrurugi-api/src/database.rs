@@ -752,6 +752,7 @@ async fn run_rebuild_sequence(
         // because the first scan after the upgrade is where a whole library moves at once.
         "relocated": scan_summary.relocated,
         "relocation_skipped": scan_summary.relocation_skipped,
+        "relocation_repaired": scan_summary.relocation_repaired,
         // The three cases behind `relocation_skipped`, split so a client can say "needs a human"
         // (occupied) versus "will clear itself" (settling) versus "outside the library" (outside).
         "relocation_settling": scan_summary.relocation_settling,

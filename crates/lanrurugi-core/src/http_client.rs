@@ -100,11 +100,6 @@ pub enum BindingScope {
     None,
 }
 
-/// The OS this build runs on, spelled the way [`plugin_binding_scope_for`] expects.
-pub fn binding_platform() -> &'static str {
-    std::env::consts::OS
-}
-
 /// What the plugin-egress setting can enforce here.
 pub fn plugin_binding_scope() -> BindingScope {
     plugin_binding_scope_for(std::env::consts::OS)
