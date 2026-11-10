@@ -142,24 +142,25 @@ const LIMIT_FIELDS: SettingField[] = [
   },
 ];
 
-const NETWORK_FIELDS: SettingField[] = [
-  {
-    // The qBittorrent setting, for the same reason: send share traffic out of a VPN tunnel while
-    // the library itself stays on the LAN. Written as a name so a tunnel that is not up yet can
-    // still be chosen; the server refuses a name the host does not have.
-    key: "share_bind_interface",
-    kind: "choice",
-    dynamic: "interfaces",
-    label: "share.network.bindInterface",
-    hint: true,
-  },
-  {
-    key: "share_portmap",
-    kind: "bool",
-    label: "share.network.portmap",
-    hint: true,
-  },
-];
+// The qBittorrent setting, for the same reason: send share traffic out of a VPN tunnel while the
+// library itself stays on the LAN. Written as a name so a tunnel that is not up yet can still be
+// chosen; the server refuses a name the host does not have.
+const BIND_INTERFACE_FIELD: SettingField = {
+  key: "share_bind_interface",
+  kind: "choice",
+  dynamic: "interfaces",
+  label: "share.network.bindInterface",
+  hint: true,
+};
+
+// Port mapping has nothing to do with which interface traffic leaves through, so it stays on every
+// platform even where the interface picker is hidden.
+const PORTMAP_FIELD: SettingField = {
+  key: "share_portmap",
+  kind: "bool",
+  label: "share.network.portmap",
+  hint: true,
+};
 
 const CONNECTIVITY_FIELDS: SettingField[] = [
   {
@@ -369,12 +370,19 @@ function PanelBody({ panel }: { panel: Panel }) {
         </>
       );
     case "network":
-      return shareBindingUnsupported ? (
-        <span className="share-form-hint">
-          {t("share.network.bindInterfaceUnsupported")}
-        </span>
-      ) : (
-        <ShareSettingsForm fields={NETWORK_FIELDS} />
+      return (
+        <>
+          {shareBindingUnsupported ? (
+            // Only the picker goes away: `share_portmap` and everything else in this panel still
+            // works on platforms where the sharing engine cannot pin its sockets.
+            <span className="share-form-hint">
+              {t("share.network.bindInterfaceUnsupported")}
+            </span>
+          ) : (
+            <ShareSettingsForm fields={[BIND_INTERFACE_FIELD]} />
+          )}
+          <ShareSettingsForm fields={[PORTMAP_FIELD]} />
+        </>
       );
     case "limits":
       return (

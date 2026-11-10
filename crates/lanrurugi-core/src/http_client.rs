@@ -137,21 +137,10 @@ pub fn share_binding_scope_for(os: &str) -> BindingScope {
     }
 }
 
-pub const fn interface_binding_supported() -> bool {
-    cfg!(any(
-        target_os = "android",
-        target_os = "fuchsia",
-        target_os = "illumos",
-        target_os = "ios",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "solaris",
-        target_os = "tvos",
-        target_os = "visionos",
-        target_os = "watchos",
-    ))
-}
-
+/// Points `builder` at the interface the user pinned for outbound traffic (`share`/plugin egress),
+/// when this platform can express that on a single socket. Only the requests this process makes
+/// itself go through it; a plugin subprocess's own `fetch` cannot be steered this way on every
+/// platform (see `plugin_binding_scope`).
 pub fn bind_outbound(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
     #[cfg(any(
         target_os = "android",

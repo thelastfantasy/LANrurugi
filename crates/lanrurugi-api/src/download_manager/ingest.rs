@@ -48,11 +48,6 @@ pub enum IngestDownloadError {
         existing_id: String,
         filename: String,
     },
-    /// Another ingest of the same bytes is between its rename into the bucket and its record
-    /// write. This copy is kept in place (not deleted) so a retry can pick it up once the other
-    /// side either finishes or fails.
-    #[error("another ingestion of these bytes is in flight; retry shortly")]
-    InFlight,
 }
 
 /// Converts to the structured, translatable `QueueError` the frontend actually renders — logs
@@ -90,10 +85,6 @@ impl From<&IngestDownloadError> for lanrurugi_core::queue_error::QueueError {
                 existing_id: existing_id.clone(),
                 filename: filename.clone(),
             },
-            IngestDownloadError::InFlight => {
-                tracing::warn!("another ingestion of the same bytes is in flight");
-                QueueError::Internal
-            }
         }
     }
 }
@@ -125,17 +116,6 @@ pub async fn adopt_pending_conflict(
     conflict: &PendingFilenameConflict,
 ) -> Result<String, lanrurugi_core::queue_error::QueueError> {
     let staging = Path::new(&conflict.temp_path);
-    // Where the bytes will land if they get that far: needed to put them back when cataloguing
-    // fails, so the next start can try again instead of losing the user's only copy.
-    let dest = lanrurugi_storage::id::size_aware_id(staging)
-        .ok()
-        .map(|id| {
-            lanrurugi_storage::paths::hash_layout_path(
-                &state.library.archive_dir,
-                &id,
-                &filename_extension(&conflict.original_filename),
-            )
-        });
     match catalogue_staged_file(
         state,
         staging,
@@ -159,23 +139,10 @@ pub async fn adopt_pending_conflict(
             }
             Ok(existing_id)
         }
-        Err(e) => {
-            if let Some(dest) = dest {
-                if tokio::fs::try_exists(&dest).await.unwrap_or(false) {
-                    if let Some(parent) = staging.parent() {
-                        let _ = tokio::fs::create_dir_all(parent).await;
-                    }
-                    if let Err(back) = tokio::fs::rename(&dest, staging).await {
-                        tracing::warn!(
-                            from = %dest.display(),
-                            error = %back,
-                            "could not put an adopted download back where the queue item points"
-                        );
-                    }
-                }
-            }
-            Err(lanrurugi_core::queue_error::QueueError::from(&e))
-        }
+        // The copy made for cataloguing has already been removed (no record was written), so the
+        // only thing left to guarantee is the original: it was copied, never moved, and is still
+        // exactly where the queue row points.
+        Err(e) => Err(lanrurugi_core::queue_error::QueueError::from(&e)),
     }
 }
 
@@ -355,6 +322,13 @@ pub(crate) async fn catalogue_staged_file(
         &extension,
     );
 
+    // Only one ingest may work on a given content id at a time. The record is written *after* the
+    // rename into `dest`, so two ingests of the same bytes would otherwise both see "no record"
+    // and one would end up deleting the file the other was about to catalogue. Holding this lock
+    // through the whole cataloguing step makes the second one wait, then see the record and hand
+    // back `Unchanged`; if the first one failed, the second renames its copy in and proceeds.
+    let _ingest_guard = content_lock(id.as_str()).await;
+
     // These exact bytes are already catalogued and on disk: nothing to move, nothing to update.
     if let Ok(Some(existing)) = state.repos.archives.get(&id).await {
         if Path::new(&existing.file).is_file() {
@@ -398,26 +372,9 @@ pub(crate) async fn catalogue_staged_file(
             .await
             .map_err(IngestDownloadError::Io)?;
     }
-    // Another ingest of the same bytes may have already renamed its copy into place (the record is
-    // written after that rename, so the lookup above can still have missed it). Overwriting is
-    // harmless — the bytes are identical — but *deleting* on the way out is not: that would remove
-    // the copy the other ingest is about to catalogue. Treat it as already ingested.
-    if tokio::fs::try_exists(&dest).await.unwrap_or(false) {
-        // The other ingest writes its record right after the rename, so wait briefly for it before
-        // concluding nobody owns these bytes. Deleting our copy here and letting the other side
-        // fail (it deletes `dest` when it has no record) used to lose both.
-        for _ in 0..30 {
-            if matches!(state.repos.archives.get(&id).await, Ok(Some(_))) {
-                let _ = tokio::fs::remove_file(&incoming).await;
-                return Ok(IngestedDownload {
-                    archive_id: id.into_string(),
-                    is_new: false,
-                });
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-        return Err(IngestDownloadError::InFlight);
-    }
+    // `dest` can still exist without a record: an ingest killed between its rename and its save.
+    // The bytes are identical by construction (the id is a hash of them), so replacing it is right;
+    // a directory or other non-file in the way is a real error.
     if let Err(e) = tokio::fs::rename(&incoming, &dest).await {
         let _ = tokio::fs::remove_file(&incoming).await;
         return Err(IngestDownloadError::Io(e));
@@ -450,7 +407,9 @@ pub(crate) async fn catalogue_staged_file(
             // what tells the next scan the file was already known. Keep the bytes whenever a record
             // exists for them.
             let recorded = matches!(state.repos.archives.get(&id).await, Ok(Some(_)));
-            if !recorded && !keep_bytes_on_failure {
+            if !recorded {
+                // `dest` is the copy this call renamed in. An adopted file's original is a
+                // separate copy that was never moved, so dropping this one loses nothing.
                 let _ = tokio::fs::remove_file(&dest).await;
             }
             return Err(e.into());
@@ -851,6 +810,62 @@ mod tests {
         );
     }
 
+    /// Two ingests of the same bytes must not race for the same destination (review 2026-11-10
+    /// 应修 2): the second waits for the first, then reports the same archive, and neither leaves a
+    /// `.ingest-` copy behind for the startup sweep to find hours later.
+    #[tokio::test]
+    async fn two_ingests_of_the_same_bytes_agree_on_one_archive() {
+        let root = tempfile::tempdir().unwrap();
+        let Some(state) = state_with_temp_dirs(root.path()).await else {
+            return;
+        };
+        let first_staging = staged_zip(root.path(), "same-bytes");
+        let second_staging = root.path().join("staging-second.zip");
+        std::fs::copy(&first_staging, &second_staging).unwrap();
+
+        let (first, second) = tokio::join!(
+            catalogue_staged_file(
+                &state,
+                &first_staging,
+                "First Copy.zip",
+                None,
+                DuplicatePolicy::Reject,
+                false,
+            ),
+            catalogue_staged_file(
+                &state,
+                &second_staging,
+                "Second Copy.zip",
+                None,
+                DuplicatePolicy::Reject,
+                false,
+            ),
+        );
+
+        let first = first.expect("the first ingest is catalogued");
+        let second = second.expect("the second ingest rides on the first");
+        assert_eq!(
+            first.archive_id, second.archive_id,
+            "identical bytes are one archive"
+        );
+        assert_eq!(
+            [first.is_new, second.is_new]
+                .iter()
+                .filter(|new| **new)
+                .count(),
+            1,
+            "exactly one of them created the record"
+        );
+
+        let leftovers: Vec<String> = std::fs::read_dir(&state.library.archive_dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| name.starts_with(".ingest-"))
+            .collect();
+        assert!(leftovers.is_empty(), "left {leftovers:?} behind");
+    }
+
     /// 020 FR-001/FR-004: the bytes land under their content id, the reader-visible title comes from
     /// the name the download carried, and the original filename survives in the sidecar.
     #[tokio::test]
@@ -1075,4 +1090,28 @@ mod sweep_tests {
         assert!(fresh.exists());
         assert!(keep.exists());
     }
+}
+
+/// One mutex per content id, so two ingests of the same bytes serialize instead of racing for the
+/// same destination path. Entries are dropped once no one holds or waits on them.
+fn content_lock(id: &str) -> impl std::future::Future<Output = tokio::sync::OwnedMutexGuard<()>> {
+    use std::sync::{Arc, LazyLock, Mutex, Weak};
+
+    static LOCKS: LazyLock<Mutex<std::collections::HashMap<String, Weak<tokio::sync::Mutex<()>>>>> =
+        LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+    let lock: Arc<tokio::sync::Mutex<()>> = {
+        let mut locks = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+        locks.retain(|_, weak| weak.strong_count() > 0);
+        let entry = locks.entry(id.to_string()).or_default();
+        match entry.upgrade() {
+            Some(lock) => lock,
+            None => {
+                let lock = Arc::new(tokio::sync::Mutex::new(()));
+                *entry = Arc::downgrade(&lock);
+                lock
+            }
+        }
+    };
+    lock.lock_owned()
 }

@@ -320,12 +320,12 @@ pub fn spawn_interface_watch(state: AppState) {
                         continue;
                     }
                 }
-                let pinned = settings.text("share_bind_interface");
-                if pinned.trim().is_empty() || running.bound_addrs.is_empty() {
+                let pinned = effective_bind_interface(&settings);
+                if pinned.is_empty() || running.bound_addrs.is_empty() {
                     continue;
                 }
                 let now: Vec<std::net::IpAddr> =
-                    match interfaces::bind_addrs(pinned, running.udp_port) {
+                    match interfaces::bind_addrs(&pinned, running.udp_port) {
                         Some(addrs) => addrs.into_iter().map(|a| a.ip()).collect(),
                         None => Vec::new(),
                     };
@@ -345,8 +345,8 @@ pub fn spawn_interface_watch(state: AppState) {
                 }
             }
             let settings = crate::share_settings::load(&state).await;
-            let pinned = settings.text("share_bind_interface").to_string();
-            if !pinned.trim().is_empty() && !interfaces::exists(&pinned) {
+            let pinned = effective_bind_interface(&settings);
+            if !pinned.is_empty() && !interfaces::exists(&pinned) {
                 continue;
             }
             match start_services(&state).await {
@@ -455,6 +455,31 @@ fn jittered(base: u64) -> u64 {
     drawn.clamp(ROTATE_MIN_SECS, ROTATE_MAX_SECS)
 }
 
+/// The interface the sharing engine should pin to, or an empty string.
+///
+/// A value stored on a host whose fork cannot honour it (saved by an older build, or restored from
+/// a Linux backup) is ignored: honouring it would keep sharing stuck on an interface that may not
+/// even exist, and the settings page no longer offers a way to clear it.
+pub fn effective_bind_interface(settings: &ShareSettings) -> String {
+    let stored = settings.text("share_bind_interface").trim();
+    if stored.is_empty() {
+        return String::new();
+    }
+    if lanrurugi_core::http_client::share_binding_scope()
+        != lanrurugi_core::http_client::BindingScope::Full
+    {
+        static WARNED: std::sync::Once = std::sync::Once::new();
+        WARNED.call_once(|| {
+            tracing::warn!(
+                interface = stored,
+                "ignoring share_bind_interface: this platform cannot pin the sharing engine's sockets"
+            );
+        });
+        return String::new();
+    }
+    stored.to_string()
+}
+
 /// Binds an endpoint serving the share protocol for `state`. Tests bind several in one process.
 pub async fn bind(
     state: &AppState,
@@ -466,7 +491,7 @@ pub async fn bind(
         secret,
         port,
         relay_map: relay_urls(settings).into_iter().collect::<RelayMap>(),
-        pinned: settings.text("share_bind_interface").to_string(),
+        pinned: effective_bind_interface(settings),
         portmap: settings.flag("share_portmap"),
         external_addrs: external_addrs(settings, port),
     })
