@@ -912,6 +912,7 @@
   "library.selectAllInPage": "Select All in Page",
   "Select All on Page": "Select All on Page",
   "batch.selectArchives": "Select Archives",
+  "batch.selectedCount": "Selected {{n}} of {{total}} archives",
   "categories.selectACategoryInThe": "Select a category in the combobox below to edit its name, the archives it contains, or its predicate.",
   "settings.selectACategoryToShow": "Select a category to show the matching settings.",
   "jobs.selectAll": "Select all",

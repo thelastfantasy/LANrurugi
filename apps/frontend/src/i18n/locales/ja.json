@@ -529,6 +529,7 @@
   "settings.security": "セキュリティ",
   "library.selectAllInPage": "このページをすべて選択",
   "batch.selectArchives": "アーカイブを選択",
+  "batch.selectedCount": "{{total}} 件中 {{n}} 件を選択中",
   "settings.selectACategoryToShow": "カテゴリを選択して設定を表示します。",
   "batch.selectWhatYouDLike": "操作を選択し、対象のアーカイブにチェックを入れて実行してください！",
   "app.selection": "選択項目",

@@ -960,6 +960,7 @@
   "library.selectAllInPage": "本页全选",
   "Select All on Page": "全选本页",
   "batch.selectArchives": "选择档案",
+  "batch.selectedCount": "已选择 {{n}} / {{total}} 个档案",
   "categories.selectACategoryInThe": "在下面的组合框中选择一个分类以编辑其名称、包含的档案或其谓词。",
   "settings.selectACategoryToShow": "选择一个分类以显示匹配的设置。",
   "jobs.selectAll": "全选",
