@@ -2823,5 +2823,6 @@
   "duplicates.coverSize": "表紙サイズ",
   "reader.allAuthors": "全{{count}}名の作者を表示",
   "components.layout.thisSourceWasAlreadyImported": "このURLは既に取り込み済み：",
-  "upload.forceDownload": "強制ダウンロード"
+  "upload.forceDownload": "強制ダウンロード",
+  "components.layout.thisSourceIsAlreadyDownloading": "このURLはダウンロード中です。強制的に開始できます。"
 }

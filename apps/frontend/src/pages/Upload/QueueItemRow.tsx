@@ -287,7 +287,9 @@ export function QueueItemRow({
   const fetchMetadata = useFetchQueueItemMetadata();
   const start = useStartQueueItem();
   const forceStart = useForceDownloadQueueItem();
-  const sourceAlreadyImported = item.error?.kind === "source_already_imported";
+  const sourceBlocked =
+    item.error?.kind === "source_already_imported" ||
+    item.error?.kind === "source_download_in_progress";
   const stop = useStopQueueItem();
   const pause = usePauseQueueItem();
   const confirmOlder = useConfirmOlderRevision();
@@ -684,7 +686,7 @@ export function QueueItemRow({
           </>
         ) : (
           <>
-          {item.state === "error" && sourceAlreadyImported && (
+          {item.state === "error" && sourceBlocked && (
             <Tooltip label={t("upload.forceDownload") ?? ""}>
               <button
                 type="button"

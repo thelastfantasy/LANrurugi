@@ -104,6 +104,8 @@ export function QueueErrorText({ error }: { error: QueueError }) {
           </a>
         </span>
       )
+    case "source_download_in_progress":
+      return <span>{t("components.layout.thisSourceIsAlreadyDownloading")}</span>
     case "source_already_imported":
       return (
         <span>

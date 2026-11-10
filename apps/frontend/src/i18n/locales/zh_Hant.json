@@ -1108,5 +1108,6 @@
   "duplicates.coverSize": "封面大小",
   "reader.allAuthors": "顯示全部 {{count}} 位作者",
   "components.layout.thisSourceWasAlreadyImported": "該來源已入庫：",
-  "upload.forceDownload": "強制下載"
+  "upload.forceDownload": "強制下載",
+  "components.layout.thisSourceIsAlreadyDownloading": "該來源正在下載中；如需另下可以強制下載。"
 }

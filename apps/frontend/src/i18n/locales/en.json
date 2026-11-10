@@ -3061,5 +3061,6 @@
   "duplicates.coverSize": "Cover size",
   "reader.allAuthors": "Show all {{count}} authors",
   "components.layout.thisSourceWasAlreadyImported": "This source was already catalogued:",
-  "upload.forceDownload": "Download anyway"
+  "upload.forceDownload": "Download anyway",
+  "components.layout.thisSourceIsAlreadyDownloading": "This source is already downloading; you can start it anyway."
 }

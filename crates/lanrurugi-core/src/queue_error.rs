@@ -143,6 +143,10 @@ pub enum QueueError {
     SourceAlreadyImported {
         existing_id: String,
     },
+    /// Another queue item for the same source URL is still downloading. Blocked the same way as
+    /// [`QueueError::SourceAlreadyImported`] (and with the same "download anyway" escape hatch),
+    /// but there is no archive id to link to yet — the bytes are not catalogued.
+    SourceDownloadInProgress,
     /// Every other internal fault (Redis/DB/filesystem/timeout/task-panic) — deliberately not
     /// broken out into more specific kinds, since none of these are actionable by the user beyond
     /// "something went wrong, check the server logs".
@@ -196,6 +200,7 @@ impl QueueError {
             QueueError::TruncatedDownload { .. } => 1009,
             QueueError::EgressUnavailable { .. } => 1010,
             QueueError::SourceAlreadyImported { .. } => 1011,
+            QueueError::SourceDownloadInProgress => 1012,
         }
     }
 }

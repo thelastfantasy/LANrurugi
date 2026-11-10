@@ -1132,7 +1132,13 @@ async fn start_one(
         .list_all()
         .await
         .map_err(|e| StartError::Storage(e.to_string()))?;
-    if has_running_duplicate(&item, &all_items) {
+    if !item.forced && has_running_duplicate(&item, &all_items) {
+        // Refuse on the row itself, not just as a 409: the row then shows the same
+        // "download anyway" action the already-imported block offers.
+        item.state = DownloadQueueState::Error;
+        item.error = Some(lanrurugi_core::queue_error::QueueError::SourceDownloadInProgress);
+        item.finished_at = Some(now_ms());
+        let _ = state.download_queue.update(&item).await;
         return Err(StartError::DuplicateInFlight);
     }
 
@@ -1737,6 +1743,74 @@ mod tests {
             parameters
         );
         assert_eq!(payload["overwrite_on_duplicate"], true);
+    }
+
+    /// A second row for the same URL is refused while the first is still downloading, with the
+    /// block visible on the row (so "download anyway" is offered exactly like the imported case).
+    #[tokio::test]
+    async fn a_running_download_for_the_same_url_blocks_the_second_row_until_forced() {
+        let Some(state) = crate::plugins::tests::test_state().await else {
+            eprintln!("skipping: test Redis not reachable");
+            return;
+        };
+        let url = format!(
+            "https://example.com/gallery/{}",
+            uuid::Uuid::new_v4().simple()
+        );
+        let make = |state: &crate::AppState, url: String| {
+            let state = state.clone();
+            async move {
+                state
+                    .download_queue
+                    .add(lanrurugi_storage::download_queue::NewQueueItem {
+                        origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
+                        subscription_id: None,
+                        url,
+                        plugin_namespace: "download/this-plugin-does-not-exist".to_string(),
+                        file_size: None,
+                        category: None,
+                        metadata_tags: vec![],
+                        auto_fetch_metadata: false,
+                        overwrite_on_duplicate: false,
+                        conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
+                        state: DownloadQueueState::Queued,
+                    })
+                    .await
+                    .unwrap()
+            }
+        };
+        let mut first = make(&state, url.clone()).await;
+        first.state = DownloadQueueState::Downloading;
+        state.download_queue.update(&first).await.unwrap();
+        let second = make(&state, url.clone()).await;
+
+        let refused = start_one(&state, None, &second.id, None, false).await;
+        assert!(
+            matches!(refused, Err(StartError::DuplicateInFlight)),
+            "expected the in-flight block, got {refused:?}"
+        );
+        let row = state.download_queue.get(&second.id).await.unwrap().unwrap();
+        assert!(matches!(
+            row.error,
+            Some(lanrurugi_core::queue_error::QueueError::SourceDownloadInProgress)
+        ));
+
+        let mut forced = row;
+        forced.forced = true;
+        forced.state = DownloadQueueState::Queued;
+        forced.error = None;
+        state.download_queue.update(&forced).await.unwrap();
+        let after_force = start_one(&state, None, &second.id, None, false).await;
+        assert!(
+            !matches!(
+                after_force,
+                Err(StartError::DuplicateInFlight) | Err(StartError::SourceAlreadyImported(_))
+            ),
+            "forced row must pass both blocks, got {after_force:?}"
+        );
+
+        let _ = state.download_queue.delete(&first.id).await;
+        let _ = state.download_queue.delete(&second.id).await;
     }
 
     /// The registry exists to stop a second download of the same source *before* the bytes are
