@@ -184,20 +184,43 @@ export function needsDecision(item: DownloadQueueItem): boolean {
   )
 }
 
+/** Mirrors the server's `trim_url` (download source tag): no scheme, `www.`, query or trailing
+ * slash, so a preview tag can be compared with the URL the download was started from. */
+function trimSourceUrl(url: string): string {
+  return url
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/^www\./i, "")
+    .split("?")[0]
+    .replace(/\/+$/, "")
+}
+
 /** Renders a metadata plugin's `{tags?, title?, summary?}` response as a short tooltip body,
- * grouped by namespace. No separate "raw URL" line when a `source:` tag already covers it. */
+ * grouped by namespace. The URL the download was started from is shown as its own `source:` tag
+ * unless the plugin already reported it — a chaika download whose plugin adds the e-hentai
+ * `source:` therefore lists both, matching the two sources the finished archive ends up with. */
 export function MetadataPreviewTooltip({ preview, url }: { preview: Record<string, unknown>; url: string }) {
   const tags = typeof preview.tags === "string" ? preview.tags : ""
   const summary = typeof preview.summary === "string" ? preview.summary : undefined
-  const hasSourceTag = "source" in splitTagsByNamespace(tags)
+  const isUrl = /^https?:\/\//i.test(url.trim())
+  const ownSource = isUrl ? trimSourceUrl(url) : ""
+  const showsOwnSource =
+    ownSource === "" || (splitTagsByNamespace(tags).source ?? []).includes(ownSource)
+  const displayTags = showsOwnSource
+    ? tags
+    : tags
+      ? `${tags}, source:${ownSource}`
+      : `source:${ownSource}`
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       <div style={{ fontWeight: "bold", wordBreak: "break-word" }}>
         {typeof preview.title === "string" ? preview.title : url}
       </div>
-      {!hasSourceTag && <div style={{ wordBreak: "break-all", opacity: 0.8, fontSize: FONT_SIZE_XS }}>{url}</div>}
-      <TagTable tags={tags} />
+      {!showsOwnSource && !isUrl && (
+        <div style={{ wordBreak: "break-all", opacity: 0.8, fontSize: FONT_SIZE_XS }}>{url}</div>
+      )}
+      <TagTable tags={displayTags} />
       {summary && <div style={{ opacity: 0.8 }}>{summary}</div>}
     </div>
   )
