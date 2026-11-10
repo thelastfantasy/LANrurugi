@@ -301,7 +301,7 @@ pub(crate) async fn catalogue_staged_file(
     if keep_bytes_on_failure {
         // An adopted file is the user's only copy: leave it where the queue row points until a
         // record exists for the bytes, and drop it only on success.
-        tokio::fs::copy(staging_path, &incoming)
+        crate::download_manager::copy_file(staging_path, &incoming)
             .await
             .map_err(IngestDownloadError::Io)?;
     } else {

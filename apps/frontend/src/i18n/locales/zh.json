@@ -1005,6 +1005,7 @@
   "settings.splitRulesWithLinebreaks": "用换行符分隔规则。",
   "Stamp name": "图章名称",
   "upload.startN": "开始（{{n}}）",
+  "upload.startByGroup": "按分组开始",
   "Start All": "全部开始",
   "Start Selected ({{n}})": "开始已选择（{{n}}）",
   "batch.startTask": "开始任务",

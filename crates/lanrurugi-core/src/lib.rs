@@ -5,6 +5,7 @@ pub mod entities;
 pub mod filename_lock;
 pub mod http_client;
 pub mod ids;
+pub mod io;
 pub mod jobs;
 pub mod logging;
 pub mod password;

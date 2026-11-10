@@ -387,6 +387,12 @@ async fn move_back(from: &Path, to: &Path) -> std::io::Result<()> {
 
 /// `rename`, falling back to copy + `fsync` + unlink across filesystems (`_byname/` is normally on
 /// the same one, but a library can be assembled from several mounts).
+/// Same buffered copy the download manager uses (`lanrurugi_core::io`): an 8 KiB fallback buffer
+/// turns a cross-dataset `_byname/` migration into a multi-minute stall per gigabyte.
+async fn copy_buffered(from: &Path, to: &Path) -> std::io::Result<u64> {
+    lanrurugi_core::io::copy_file(from, to).await
+}
+
 async fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
     match tokio::fs::rename(from, to).await {
         Ok(()) => Ok(()),
@@ -402,7 +408,7 @@ async fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
                 uuid::Uuid::new_v4().simple()
             ));
             let copied = async {
-                tokio::fs::copy(from, &staging).await?;
+                copy_buffered(from, &staging).await?;
                 // `copy` is not durable; the rename path is, so match it here.
                 let file = tokio::fs::OpenOptions::new()
                     .write(true)

@@ -954,6 +954,7 @@
   "settings.splitRulesWithLinebreaks": "Split rules with linebreaks.",
   "Stamp name": "Stamp name",
   "upload.startN": "Start ({{n}})",
+  "upload.startByGroup": "Start a single plugin group",
   "Start Selected ({{n}})": "Start Selected ({{n}})",
   "batch.startTask": "Start Task",
   "Start another job": "Start another job",

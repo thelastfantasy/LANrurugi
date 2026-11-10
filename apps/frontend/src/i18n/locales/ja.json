@@ -1085,6 +1085,7 @@
   "Source page {{n}} → {{where}}": "ページ {{n}} → {{where}}",
   "upload.sourcePagesDashedExtra": "元ページ（破線 = 追加ページ、下の行へドラッグしてください）",
   "upload.startN": "開始 ({{n}})",
+  "upload.startByGroup": "グループ単位で開始",
   "jobs.state": "状態",
   "categories.staticCategoriesAreArbitraryCollections": "静的カテゴリは任意のアーカイブの集まりで、好きなだけ項目を追加できます。",
   "app.staticCategory": "静的カテゴリー",
