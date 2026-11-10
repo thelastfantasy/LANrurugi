@@ -12,3 +12,4 @@ pub mod queue_error;
 pub mod rate_limit;
 pub mod session;
 pub mod singleflight;
+pub mod tags;

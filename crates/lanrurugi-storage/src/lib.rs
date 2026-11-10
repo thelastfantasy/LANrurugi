@@ -11,6 +11,7 @@ pub mod grouping_labels;
 pub mod id;
 pub mod ignored_group_suggestions;
 pub mod keys;
+pub mod migrations;
 pub mod paths;
 pub mod plugin_options;
 pub mod rebuild;
