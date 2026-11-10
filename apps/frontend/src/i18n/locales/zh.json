@@ -461,7 +461,7 @@
   "Exact title match not found": "未找到完全匹配的标题",
   "settings.excludedNamespaces": "排除的命名空间",
   "settings.sourceEquivalences": "来源等效域名",
-  "settings.sourceEquivalencesHint": "每行一组等效域名，主机名用逗号分隔。搜索 `source:` 时会匹配同一组内的任意主机；`*.example.com` 表示它的任意子域名（不含该域名本身）。留空则不启用任何等效。",
+  "settings.sourceEquivalencesHint": "每行一组等效域名，主机名用逗号分隔。搜索「source:」时会匹配同一组内的任意主机；「*.example.com」表示它的任意子域名（不含该域名本身）。留空则不启用任何等效。",
   "settings.sourceEquivalencesExample": "示例：e-hentai.org, exhentai.org —— 通配符：*.a.com, *.b.com",
   "Excluded namespaces for Tag Rules:": "标签规则排除的命名空间：",
   "Exit selection mode? Your current selection will be lost. ": "退出选择模式？您当前的选择将会丢失。 ",

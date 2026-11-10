@@ -438,7 +438,7 @@
   "Exact title match not found": "Exact title match not found",
   "settings.excludedNamespaces": "Excluded Namespaces",
   "settings.sourceEquivalences": "Source host equivalences",
-  "settings.sourceEquivalencesHint": "One equivalence group per line, hosts separated by commas. A `source:` search matches every host in the same group; `*.example.com` stands for any subdomain of it, not the domain itself. Leave empty to disable equivalences.",
+  "settings.sourceEquivalencesHint": "One equivalence group per line, hosts separated by commas. A \"source:\" search matches every host in the same group; \"*.example.com\" stands for any subdomain of it, not the domain itself. Leave empty to disable equivalences.",
   "settings.sourceEquivalencesExample": "Example: e-hentai.org, exhentai.org — wildcards: *.a.com, *.b.com",
   "Exit selection mode? Your current selection will be lost. ": "Exit selection mode? Your current selection will be lost. ",
   "components.layout.expiredPleaseDownloadAgain": "Expired, please download again",

@@ -242,7 +242,7 @@
   "Error! Terminating session.": "エラーが発生しました！ セッションを終了します。",
   "settings.excludedNamespaces": "除外する名前空間",
   "settings.sourceEquivalences": "ソースの等価ホスト",
-  "settings.sourceEquivalencesHint": "1行に1つの等価グループ、ホストはカンマ区切り。`source:` 検索は同じグループのホストすべてに一致します。`*.example.com` はその任意のサブドメイン（ドメイン自体は含まない）を表します。空欄にすると等価設定は無効になります。",
+  "settings.sourceEquivalencesHint": "1行に1つの等価グループ、ホストはカンマ区切り。「source:」検索は同じグループのホストすべてに一致します。「*.example.com」はその任意のサブドメイン（ドメイン自体は含まない）を表します。空欄にすると等価設定は無効になります。",
   "settings.sourceEquivalencesExample": "例: e-hentai.org, exhentai.org — ワイルドカード: *.a.com, *.b.com",
   "Exit selection mode? Your current selection will be lost. ": "選択モードを終了しますか？現在の選択は失われます。 ",
   "reader.fToggleFullscreenMode": "フルスクリーンモードの切り替え",
