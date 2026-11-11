@@ -23,7 +23,6 @@ export function UpdateBanner() {
       html: true,
       icon: "info",
       closeOnClick: false,
-      draggable: false,
       hideAfter: 7000,
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps

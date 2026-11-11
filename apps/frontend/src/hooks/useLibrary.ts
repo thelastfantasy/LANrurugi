@@ -294,7 +294,6 @@ export function useLibrary() {
         icon: "warning",
         hideAfter: 25000,
         closeOnClick: false,
-        draggable: false,
       });
     }
   }, [usingDefaultPassword, firstRunWizardPending, t]);
@@ -308,7 +307,6 @@ export function useLibrary() {
       icon: "warning",
       hideAfter: 25000,
       closeOnClick: false,
-      draggable: false,
     });
   }, [storageWarnings, t]);
 
