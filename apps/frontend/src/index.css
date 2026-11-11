@@ -350,8 +350,12 @@ input[type="checkbox"].lrr-checkbox-bare::after {
     display: flex;
     flex-direction: column;
     justify-content: center;
-    min-height: 100dvh;
+    /* `div.sni` carries the legacy 2px/6px vertical margins and `body` a 2px padding; a 100dvh
+       box plus those pushes the container past the viewport and clips its bottom border, so the
+       height is measured against the body's content box and the margins are dropped. */
+    min-height: calc(100dvh - 4px);
     box-sizing: border-box;
+    margin: 0;
   }
 
   #i1.reader-headless #display {
