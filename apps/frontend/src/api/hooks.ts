@@ -6,7 +6,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
 
 import { clearDiagnosticsDevice } from "@/diagnostics/device"
 import { startDiagnostics } from "@/diagnostics/sdk"
@@ -910,13 +910,23 @@ export function useAiGroupSuggestions() {
     return () => source.close()
   }, [queryClient])
 
-  const start = useCallback(async () => {
-    const state = await sendJson<AiGroupSuggestionsState>(
+  // One POST in flight at a time: development StrictMode runs mount effects twice, which would
+  // otherwise start the same run twice and report the same failure twice. Cleared once settled, so
+  // "recheck" always sends a fresh one.
+  const startInFlight = useRef<Promise<AiGroupSuggestionsState> | null>(null)
+  const start = useCallback(() => {
+    startInFlight.current ??= sendJson<AiGroupSuggestionsState>(
       "POST",
       "/tankoubons/ai-group-suggestions/run",
     )
-    queryClient.setQueryData<AiGroupSuggestionsState>(AI_GROUP_SUGGESTIONS_KEY, state)
-    return state
+      .then((state) => {
+        queryClient.setQueryData<AiGroupSuggestionsState>(AI_GROUP_SUGGESTIONS_KEY, state)
+        return state
+      })
+      .finally(() => {
+        startInFlight.current = null
+      })
+    return startInFlight.current
   }, [queryClient])
 
   return { state: query.data, start }
