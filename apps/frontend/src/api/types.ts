@@ -577,6 +577,9 @@ export type CandidateVerdict =
    *  with that work — no download, and no round trip to the source to find out. */
   | { verdict: "superseded"; newer_source: string }
   | { verdict: "already_seen" }
+  /** Published before the subscription's time window. A check never acts on one; the preview keeps
+   *  it so the pane explains its own count, and renders it greyed out. */
+  | { verdict: "out_of_window" }
   /** Not settled yet. Deliberately not a rejection — it is reconsidered on a later check and is not
    *  recorded as seen, so it must never be shown as "already seen". `reason` is absent on records
    *  written before it existed. */
@@ -635,7 +638,6 @@ export interface SubscriptionPreview {
    *  less on purpose — fewer requests to the source — so the pane states the window instead of
    *  letting the shorter list look like everything the source has. */
   listing_pages?: number
-  check_listing_pages?: number
 }
 
 /** One candidate as some subscription's check saw it, for the cross-subscription history. */

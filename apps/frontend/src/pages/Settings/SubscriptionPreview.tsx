@@ -15,12 +15,15 @@ import { ICON_BUTTON_STYLE } from "@/pages/Upload/shared"
 import { CandidateTitleLink } from "./CandidateTitleLink"
 import { tooSoonText } from "./subscriptionVerdicts"
 
-/** Which of the three bands a candidate falls into.
+/** Which band a candidate falls into.
  *
- * Three rather than two: "would be taken" and "ruled out" are the question asked, but a candidate
- * still inside a waiting period is neither — it will be reconsidered, and colouring it as excluded
- * would say the opposite of what happens. */
-function bandOf(record: CandidateRecord): "match" | "waiting" | "excluded" | "held" {
+ * "Would be taken" and "ruled out" are the question asked, but two cases are neither: a candidate
+ * still inside a waiting period is not excluded (it will be reconsidered), and one published before
+ * the subscription's time window was never a candidate at all — it is shown greyed out only so the
+ * pane's own count is explicable. */
+export function bandOf(
+  record: CandidateRecord,
+): "match" | "waiting" | "excluded" | "held" | "expired" {
   const v = record.verdict
   switch (v.verdict) {
     case "queued":
@@ -33,6 +36,8 @@ function bandOf(record: CandidateRecord): "match" | "waiting" | "excluded" | "he
     case "already_held":
     case "superseded":
       return "held"
+    case "out_of_window":
+      return "expired"
     default:
       return "excluded"
   }
@@ -55,6 +60,7 @@ const ROW_CLASS = {
   waiting: "preview-row-waiting",
   excluded: "preview-row-excluded",
   held: "preview-row-held",
+  expired: "preview-row-expired",
 } as const
 
 /** The shared preview grid's track list, driven by the fields the source actually reports. Title,
@@ -155,6 +161,11 @@ function reasonText(
         short: t("subscriptions.verdictShort.superseded"),
         full: t("subscriptions.verdictSuperseded", { source: v.newer_source }),
       }
+    case "out_of_window":
+      return {
+        short: t("subscriptions.verdictShort.outOfWindow"),
+        full: t("subscriptions.verdictOutOfWindow"),
+      }
     default:
       return {
         short: t("subscriptions.verdictShort.alreadySeen"),
@@ -254,6 +265,7 @@ export function SubscriptionPreview({
     waiting: 0,
     excluded: 0,
     held: 0,
+    expired: 0,
   }
   for (const r of rows) counts[bandOf(r)]++
 
@@ -261,24 +273,24 @@ export function SubscriptionPreview({
     <div>
       <p style={{ margin: "0 0 6px" }}>
         {t("subscriptions.previewSummary", {
+          pages: preview.listing_pages ?? 1,
           total: rows.length,
           matched: counts.match,
           excluded: counts.excluded,
         })}
+        {counts.held > 0 && ` ${t("subscriptions.previewHeldCount", { count: counts.held })}`}
         {counts.waiting > 0 && ` ${t("subscriptions.previewWaitingCount", { count: counts.waiting })}`}
+        {counts.expired > 0 &&
+          ` ${t("subscriptions.previewExpiredCount", { count: counts.expired })}`}
       </p>
 
-      {preview.listing_pages !== undefined && (
-        // Why this list is shorter than a check's: a preview fetches only the newest listing page
-        // (each page is another request to the source). What a check reads beyond that is the
-        // subscription's own scan window, so it is stated here rather than guessed at from pages.
+      {scan && (
+        // The preview runs the subscription's own scan window, so this states the range the list
+        // was gathered with rather than warning that it is a smaller sample.
         <p className="sub-form-hint" style={{ margin: "0 0 6px" }}>
-          {scan?.mode === "days"
+          {scan.mode === "days"
             ? t("subscriptions.previewWindowDays", { days: scan.days })
-            : t("subscriptions.previewWindow", {
-                pages: preview.listing_pages,
-                checkPages: scan?.mode === "pages" ? scan.pages : 4,
-              })}
+            : t("subscriptions.previewWindow", { pages: scan.pages })}
         </p>
       )}
 

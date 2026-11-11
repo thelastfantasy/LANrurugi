@@ -314,9 +314,9 @@ function parsePage(html: string, seen: Set<string>): DiscoveredCandidateResult[]
 
 /** Unix seconds from a candidate's `posted_at`, whatever shape it currently has.
  *
- * The listing's own text has no timezone attached, so it is only a fallback for the rare case where
- * `gdata` did not answer; `gdata`'s value (a Unix-seconds string) is what the age check normally
- * sees. */
+ * The listing's own text is UTC with no zone suffix, so it is only a fallback for the rare case
+ * where `gdata` did not answer; `gdata`'s value (a Unix-seconds string) is what the age check
+ * normally sees. */
 function postedSeconds(value: unknown): number | undefined {
   if (typeof value === "number") {
     return Number.isFinite(value) ? (value > 1e12 ? Math.floor(value / 1000) : value) : undefined;
@@ -328,7 +328,12 @@ function postedSeconds(value: unknown): number | undefined {
     const seconds = Number(text);
     return seconds > 1e12 ? Math.floor(seconds / 1000) : seconds;
   }
-  const parsed = Date.parse(text.includes("T") ? text : text.replace(" ", "T"));
+  // The listing prints UTC without a zone suffix, so it must be read as UTC: `Date.parse` would
+  // otherwise treat it as local time and shift both the age window and the displayed time by the
+  // browser's offset.
+  const iso = text.includes("T") ? text : text.replace(" ", "T");
+  const zoned = /([zZ]|[+-]\d{2}:?\d{2})$/.test(iso) ? iso : `${iso}Z`;
+  const parsed = Date.parse(zoned);
   return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : undefined;
 }
 
@@ -402,30 +407,31 @@ export async function discover(
       };
     }
 
-    pagesRead++;
     if (looksSignedOut(html)) degraded = true;
 
     const pageCandidates = parsePage(html, seen);
     await addOriginalTitles(pageCandidates, criteria, logger);
 
-    // The window is a hard bound, not a hint: an entry older than it is not this subscription's to
-    // act on, however cheaply it was listed.
-    let inWindow = pageCandidates;
+    // The window bounds what a check *acts on*, not what the pane may show: a page that straddles
+    // the boundary is returned whole, old rows included, so the preview can grey them out and
+    // explain its own count. A page that is entirely outside the window is a different case —
+    // nothing on it is worth showing, and the next page is older still — so it is dropped here
+    // instead of being handed to the host only to be discarded.
     if (cutoff !== undefined) {
-      inWindow = pageCandidates.filter((c) => {
-        const posted = postedSeconds(c.posted_at);
-        return posted === undefined || posted >= cutoff;
-      });
-      const dated = pageCandidates.filter((c) => postedSeconds(c.posted_at) !== undefined);
+      const dated = pageCandidates
+        .map((c) => postedSeconds(c.posted_at))
+        .filter((posted): posted is number => posted !== undefined);
       // A whole page outside the window means the next one is older still: stop rather than paging
       // through the rest of the result set for nothing.
-      if (dated.length > 0 && inWindow.length === 0) {
+      if (dated.length > 0 && dated.every((posted) => posted < cutoff)) {
         stop = "age";
         break;
       }
     }
-
-    candidates.push(...inWindow);
+    // Counted only once its rows are actually kept: a page whose rows are all outside the window
+    // ends the walk but contributes neither rows nor a page to the pane's totals.
+    pagesRead++;
+    candidates.push(...pageCandidates);
     next = html.match(/[?&]next=(\d+)/)?.[1];
     if (!next) {
       stop = "end";

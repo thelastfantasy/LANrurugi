@@ -613,6 +613,42 @@ if (!pluginsDir || !namespace) {
  * string — including one that merely mentions the key in prose (`"version_history: none found"`) —
  * is blanked as usual. Without the exception a quoted key is invisible to the scan; without the
  * `:` requirement any mention in any message would count. */
+/** Whether the `/` at `i` opens a regex literal rather than being a division operator.
+ *
+ * A regex literal may contain quotes (`/uploader\/([^"'<>]+)/`), and those quotes must not be read
+ * as string delimiters: a lone `"` inside one would pair with a real string's quote later in the
+ * file and blank everything between them — which is exactly how e-hentai's discovery plugin lost
+ * `posted_at`/`tags`/`uploader` from its reported fields. This scanner has no parser, so it decides
+ * from the previous significant character, the way JS engines' own lexers do. */
+function startsRegexLiteral(src: string, i: number): boolean {
+  let k = i - 1;
+  while (k >= 0 && (src[k] === " " || src[k] === "\t" || src[k] === "\n" || src[k] === "\r")) k--;
+  if (k < 0) return true;
+  const prev = src[k];
+  if ("([{,;:=!&|?+-*%^~<>".includes(prev)) return true;
+  if (/[A-Za-z_$]/.test(prev)) {
+    let s = k;
+    while (s >= 0 && /[\w$]/.test(src[s])) s--;
+    const word = src.slice(s + 1, k + 1);
+    return [
+      "return",
+      "typeof",
+      "case",
+      "in",
+      "of",
+      "new",
+      "delete",
+      "void",
+      "instanceof",
+      "do",
+      "else",
+      "yield",
+      "await",
+    ].includes(word);
+  }
+  return false;
+}
+
 function blankCommentsAndStrings(
   src: string,
   keepPropertyKeyStrings = false,
@@ -636,6 +672,28 @@ function blankCommentsAndStrings(
       const stop = end === -1 ? src.length : end + 2;
       blankTo(stop);
       i = stop;
+    } else if (c === "/" && startsRegexLiteral(src, i)) {
+      // Blank the literal whole: its quotes are regex syntax, its body is never a property key.
+      let j = i + 1;
+      let inClass = false;
+      while (j < src.length) {
+        const ch = src[j];
+        if (ch === "\\") {
+          j += 2;
+          continue;
+        }
+        if (ch === "\n") break;
+        if (ch === "[") inClass = true;
+        else if (ch === "]") inClass = false;
+        else if (ch === "/" && !inClass) {
+          j++;
+          break;
+        }
+        j++;
+      }
+      const stop = Math.min(j, src.length);
+      blankTo(stop);
+      i = stop;
     } else if (c === '"' || c === "'" || c === "`") {
       const quote = c;
       let j = i + 1;
@@ -648,11 +706,11 @@ function blankCommentsAndStrings(
         j++;
       }
       if (j >= src.length) {
-        // No closing quote anywhere: this was never a string. The usual culprit is a quote inside
-        // a regex literal (`/["']/`), which this scanner has no way to recognize as such. Blanking
-        // to EOF here would erase the rest of the file — including a real `version_history` key —
-        // and report the plugin as unsupported. Treating the character as ordinary code costs
-        // nothing by comparison: the worst case is one stray quote the regexes ignore anyway.
+        // No closing quote anywhere: this was never a string. Regex literals are handled above, so
+        // the usual remaining culprit is a quote this scanner's regex heuristic could not classify
+        // (e.g. after a `)`, where `/` is division). Blanking to EOF here would erase the rest of
+        // the file — including a real `version_history` key — and report the plugin as unsupported.
+        // Treating the character as ordinary code costs nothing by comparison.
         i++;
         continue;
       }

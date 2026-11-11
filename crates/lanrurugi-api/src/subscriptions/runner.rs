@@ -68,6 +68,13 @@ pub struct CycleContext<'a> {
     pub categories_for: &'a dyn Fn(&str) -> Vec<String>,
     /// Unix seconds, supplied rather than read so `decide` stays clock-free and testable.
     pub now: i64,
+    /// Unix seconds before which a candidate is outside the subscription's own window. `None` for a
+    /// page-window scan, which has no age bound.
+    pub window_cutoff: Option<i64>,
+    /// Whether candidates older than `window_cutoff` are recorded as `OutOfWindow` (the preview
+    /// keeps them, greyed out) or dropped without a trace (a real cycle never acts on them, and
+    /// history should not fill up with works it was never going to consider).
+    pub keep_out_of_window: bool,
     /// Normalises a tag before comparison, so a rule written in one script or width still matches a
     /// listing that spells the same tag differently. Supplied rather than built here to keep `decide`
     /// free of state.
@@ -113,21 +120,6 @@ pub fn revision_lookup(
     }
 }
 
-/// How many listing pages a check may read.
-///
-/// Four rather than one because a work edited to carry a subscription's tag enters the result set at
-/// its original publication date — mid-list, never on page one. Four rather than unbounded because a
-/// tag search can run to tens of thousands of works, and reading all of it on every check is both slow
-/// and a good way to be rate-limited.
-pub(crate) const MAX_LISTING_PAGES: u32 = 4;
-/// Pages a *preview* asks for. A preview answers "what would this rule catch right now", so it
-/// reads the newest page only: every page is a separate request to the source (and, on a signed-in
-/// E-Hentai query, four more `gdata` batches per page), so asking for four to show a pane that
-/// displays a couple of dozen rows was four times the work for the same answer. The scheduled
-/// check still reads all [`MAX_LISTING_PAGES`] — catching an edit that landed mid-list is exactly
-/// what its wider window is for, and it runs hourly rather than per keystroke.
-pub(crate) const PREVIEW_LISTING_PAGES: u32 = 1;
-
 /// How many per-candidate rows one cycle keeps.
 ///
 /// A time-window scan can legitimately see tens of thousands of works, and fifty retained cycles of
@@ -165,6 +157,28 @@ pub fn decide(
 
     for candidate in candidates {
         let source = candidate.source.clone();
+        let posted_secs = candidate
+            .posted_at
+            .as_deref()
+            .and_then(matcher::parse_posted_at);
+        // Older than the subscription's window. The source stops at that bound for a real check, so
+        // this can only be reached through a preview — which keeps the row to explain its own count.
+        if let (Some(cutoff), Some(posted)) = (ctx.window_cutoff, posted_secs) {
+            if posted < cutoff {
+                if ctx.keep_out_of_window {
+                    records.push(CandidateRecord {
+                        source_url: source,
+                        title: candidate.title.clone(),
+                        uploader: candidate.uploader.clone(),
+                        rating: candidate.rating,
+                        posted_at: posted_secs,
+                        tags: candidate.tags.clone(),
+                        verdict: CandidateVerdict::OutOfWindow,
+                    });
+                }
+                continue;
+            }
+        }
         let seen = ctx.already_seen.iter().any(|s| s == &source);
         // Only a work that was *rejected* is decided afresh; one that was handled is not revisited.
         let redecide = seen && ctx.reconsider.iter().any(|r| r == &source);
@@ -249,10 +263,7 @@ pub fn decide(
             title: candidate.title.clone(),
             uploader: candidate.uploader.clone(),
             rating: candidate.rating,
-            posted_at: candidate
-                .posted_at
-                .as_deref()
-                .and_then(matcher::parse_posted_at),
+            posted_at: posted_secs,
             tags: candidate.tags.clone(),
             verdict,
         });
@@ -407,6 +418,12 @@ pub async fn preview_decide(
 
     let no_categories = |_: &str| Vec::<String>::new();
     let fold = |t: &str| state.equivalence.fold(t).into_owned();
+    // Same bound a check's own `scan_plan` uses, so a row the pane greys out is exactly one a real
+    // cycle would never have been offered.
+    let window_cutoff = match &subscription.scan {
+        ScanWindow::Days { days } => Some(now_secs() - i64::from(*days) * 86_400),
+        ScanWindow::Pages { .. } => None,
+    };
     decide(
         subscription,
         result,
@@ -419,6 +436,8 @@ pub async fn preview_decide(
             discarded: &settled,
             categories_for: &no_categories,
             now: now_secs(),
+            window_cutoff,
+            keep_out_of_window: true,
             fold: &fold,
         },
     )
@@ -426,13 +445,32 @@ pub async fn preview_decide(
 
 /// Fetches from the source, then decides. The listing it read is returned alongside so a later
 /// re-judge can reuse it.
+///
+/// The scan follows the subscription's own window, so the pane's count is the count a scheduled
+/// check would see (including the settled-run stop rule). Reading one page only would have made a
+/// fourteen-day window display whatever fits on page one and look like that was all of it.
 pub async fn preview_check_raw(
     state: &AppState,
     subscription: &Subscription,
 ) -> Result<(CycleDecision, lanrurugi_plugin::protocol::DiscoveryResult), String> {
-    let result = fetch_listing(state, subscription, PREVIEW_LISTING_PAGES).await?;
-    let decision = preview_decide(state, subscription, &result).await;
-    Ok((decision, result))
+    let base_args = scan_base_args(state, subscription).await?;
+    let (mut plan, _) = scan_plan(subscription);
+    // The preview answers "what is in this window", not "what will the next check read": the check
+    // stops as soon as it has seen a run of already-settled works, and a steady-state subscription
+    // would make every preview look like one page again. Keep the window's own boundaries only.
+    plan.stop_on_cache = false;
+    let known = known_sources(state, &subscription.id).await;
+    let outcome = scan_listing(
+        state,
+        subscription,
+        &base_args,
+        |source| known.contains(source),
+        &plan,
+        |_, _| {},
+    )
+    .await?;
+    let decision = preview_decide(state, subscription, &outcome.result).await;
+    Ok((decision, outcome.result))
 }
 
 /// Folds hand-entered cookies and headers into the same keys a login plugin's result goes into.
@@ -533,26 +571,224 @@ async fn discover_with(
     Ok(result)
 }
 
-/// One call for a preview: the criteria, plus the page budget the preview is allowed.
-async fn fetch_listing(
+/// What one scan is allowed to do, independent of how the pages come back.
+struct ScanPlan {
+    page_budget: u32,
+    posted_after: Option<i64>,
+    stop_on_cache: bool,
+}
+
+struct ScanOutcome {
+    result: DiscoveryResult,
+    stopped_by_cache: bool,
+}
+
+/// The scan a subscription's own settings describe: a page budget, or a time window that ends at
+/// the age cutoff. Returns the plan plus whether this cycle is the first after the rules changed.
+fn scan_plan(subscription: &Subscription) -> (ScanPlan, bool) {
+    let (page_budget, posted_after) = match subscription.scan {
+        ScanWindow::Pages { pages } => (pages.min(MAX_SCAN_PAGES), None),
+        ScanWindow::Days { days } => (MAX_SCAN_PAGES, Some(now_secs() - i64::from(days) * 86_400)),
+    };
+    // The one cycle that must not trust the cache is the first after the rules changed: everything
+    // the old rules rejected is a fresh question again, and stopping on it would make an edit look
+    // inert until the next scheduled check.
+    let settings_just_changed = match (
+        subscription.settings_changed_at,
+        subscription.last_checked_at,
+    ) {
+        (Some(changed), Some(checked)) => changed > checked,
+        (Some(_), None) => true,
+        _ => false,
+    };
+    let stop_on_cache =
+        matches!(subscription.scan, ScanWindow::Days { .. }) && !settings_just_changed;
+    (
+        ScanPlan {
+            page_budget,
+            posted_after,
+            stop_on_cache,
+        },
+        settings_just_changed,
+    )
+}
+
+/// The criteria plus whatever signed-in state the source declared it needs.
+async fn scan_base_args(
     state: &AppState,
     subscription: &Subscription,
-    pages: u32,
-) -> Result<lanrurugi_plugin::protocol::DiscoveryResult, String> {
+) -> Result<serde_json::Value, String> {
     let info = state
         .plugins
         .plugin_info(&subscription.source)
         .await
         .map_err(|e| e.to_string())?;
-
-    let mut base = serde_json::to_value(&subscription.criteria).unwrap_or_default();
-    if let Some(obj) = base.as_object_mut() {
-        obj.insert("max_pages".into(), serde_json::json!(pages));
+    let mut args = serde_json::to_value(&subscription.criteria).unwrap_or_default();
+    if let Some(obj) = args.as_object_mut() {
+        // The page budget belongs to the scan plan, not to the stored criteria.
+        obj.remove("max_pages");
     }
-    let mut args = crate::plugins::with_login_cookies(state, &info, base).await;
+    let mut args = crate::plugins::with_login_cookies(state, &info, args).await;
     apply_manual_credentials(&mut args, &subscription.credentials);
+    Ok(args)
+}
 
-    fetch_listing_with(state, subscription, args).await
+/// Sources a scan should treat as handled already: seen, rejected, settled, and held in the library.
+async fn known_sources(
+    state: &AppState,
+    subscription_id: &str,
+) -> std::collections::HashSet<String> {
+    let seen = state
+        .subscriptions
+        .seen_all(subscription_id)
+        .await
+        .unwrap_or_default();
+    let reconsider = state
+        .subscriptions
+        .rejected_all(subscription_id)
+        .await
+        .unwrap_or_default();
+    let reservations = state
+        .subscriptions
+        .list_reservations()
+        .await
+        .unwrap_or_default();
+    let settled = super::reservations::settled_sources(&reservations, subscription_id);
+    let held = held_sources(state).await;
+    seen.into_iter()
+        .chain(reconsider)
+        .chain(settled)
+        .chain(held.into_iter().map(|(source, _)| source))
+        .collect()
+}
+
+/// Pages the listing until the plan says stop.
+///
+/// The host owns paging because only it can see what is already settled: the extension cannot know
+/// that a chunk contained a hundred works a previous cycle already handled, and that is exactly the
+/// signal that ends a steady-state scan after a page or two. `on_chunk` reports progress after every
+/// chunk; `Err` means the very first call failed, so there is nothing partial to return.
+async fn scan_listing<F>(
+    state: &AppState,
+    subscription: &Subscription,
+    base_args: &serde_json::Value,
+    is_known: F,
+    plan: &ScanPlan,
+    mut on_chunk: impl FnMut(u32, usize),
+) -> Result<ScanOutcome, String>
+where
+    F: Fn(&str) -> bool,
+{
+    let mut collected: Vec<DiscoveredCandidate> = Vec::new();
+    let mut collected_sources = std::collections::HashSet::new();
+    let mut cache_run = 0usize;
+    let mut pages_read = 0u32;
+    let mut cursor: Option<String> = None;
+    let mut degraded = false;
+    let mut error = None;
+    let mut stop_reason = None;
+    let mut stopped_by_cache = false;
+    // The first chunk is deliberately one page: in steady state it is enough to hit the settled run
+    // and stop, and a larger first chunk would re-read uploads the previous cycle already handled.
+    let mut chunk = 1u32;
+
+    loop {
+        let remaining = plan.page_budget.saturating_sub(pages_read);
+        if remaining == 0 {
+            break;
+        }
+        let this_chunk = chunk.min(remaining);
+        let mut args = base_args.clone();
+        if let Some(obj) = args.as_object_mut() {
+            obj.insert("max_pages".into(), serde_json::json!(this_chunk));
+            if let Some(cursor) = &cursor {
+                obj.insert("start_after".into(), serde_json::json!(cursor));
+            }
+            if let Some(cutoff) = plan.posted_after {
+                obj.insert("posted_after".into(), serde_json::json!(cutoff));
+            }
+            let budget = (MAX_SCAN_CANDIDATES as usize)
+                .saturating_sub(collected.len())
+                .max(1);
+            obj.insert("max_candidates".into(), serde_json::json!(budget));
+        }
+
+        let result = match fetch_listing_with(state, subscription, args).await {
+            Ok(result) => result,
+            Err(e) => {
+                if collected.is_empty() {
+                    return Err(e);
+                }
+                break;
+            }
+        };
+        let DiscoveryResult {
+            candidates,
+            degraded: chunk_degraded,
+            error: chunk_error,
+            next_cursor,
+            pages_read: chunk_pages,
+            stop_reason: chunk_stop,
+        } = result;
+
+        degraded |= chunk_degraded;
+        if let Some(chunk_error) = chunk_error {
+            // A source that could not be read at all tells us nothing about what exists. Keep a
+            // partial answer from earlier chunks only when there is one to keep.
+            if collected.is_empty() {
+                error = Some(chunk_error);
+            }
+            break;
+        }
+        // Older extensions do not report this; one call is still at least one page.
+        pages_read += chunk_pages.max(1);
+
+        for candidate in candidates.unwrap_or_default() {
+            if !collected_sources.insert(candidate.source.clone()) {
+                continue;
+            }
+            if is_known(candidate.source.as_str()) {
+                cache_run += 1;
+            } else {
+                cache_run = 0;
+            }
+            collected.push(candidate);
+            if collected.len() >= MAX_SCAN_CANDIDATES as usize {
+                break;
+            }
+        }
+
+        on_chunk(pages_read, collected.len());
+
+        if plan.stop_on_cache && cache_run >= SCAN_CACHE_RUN {
+            stopped_by_cache = true;
+            break;
+        }
+        if let Some(stop) = chunk_stop {
+            stop_reason = Some(stop);
+            break;
+        }
+        if collected.len() >= MAX_SCAN_CANDIDATES as usize {
+            break;
+        }
+        cursor = next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+        chunk = 5;
+    }
+
+    Ok(ScanOutcome {
+        result: DiscoveryResult {
+            candidates: Some(collected),
+            degraded,
+            error,
+            next_cursor: None,
+            pages_read,
+            stop_reason,
+        },
+        stopped_by_cache,
+    })
 }
 
 pub async fn run_check(state: &AppState, subscription_id: &str) {
@@ -564,20 +800,13 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
 
     // Discovery runs with whatever signed-in state the source declared it needs, exactly like a
     // metadata or download call — subscriptions introduce no second credential path.
-    let info = match state.plugins.plugin_info(&subscription.source).await {
-        Ok(info) => info,
+    let base_args = match scan_base_args(state, &subscription).await {
+        Ok(args) => args,
         Err(e) => {
             tracing::warn!(%subscription_id, error = %e, "subscription source is no longer installed");
             return;
         }
     };
-    let mut base_args = serde_json::to_value(&subscription.criteria).unwrap_or_default();
-    if let Some(obj) = base_args.as_object_mut() {
-        // The page budget belongs to the scan plan, not to the stored criteria.
-        obj.remove("max_pages");
-    }
-    let mut base_args = crate::plugins::with_login_cookies(state, &info, base_args).await;
-    apply_manual_credentials(&mut base_args, &subscription.credentials);
 
     // Everything the scan's own stop rule needs, plus what the decision below needs. Read before
     // discovery because deciding whether to keep paging requires knowing what is already settled —
@@ -611,126 +840,33 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
         .collect();
 
     let scan = subscription.scan;
-    let (page_budget, posted_after) = match scan {
-        ScanWindow::Pages { pages } => (pages.min(MAX_SCAN_PAGES), None),
-        ScanWindow::Days { days } => (MAX_SCAN_PAGES, Some(now_secs() - i64::from(days) * 86_400)),
+    let (plan, _) = scan_plan(&subscription);
+    let outcome = match scan_listing(
+        state,
+        &subscription,
+        &base_args,
+        |source| known.contains(source),
+        &plan,
+        |pages, candidates| emit_scan_progress(state, &subscription, pages, candidates, false),
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(e) => {
+            tracing::warn!(%subscription_id, error = %e, "discovery call failed");
+            emit_scan_progress(state, &subscription, 0, 0, true);
+            return;
+        }
     };
-    // The one cycle that must not trust the cache is the first after the rules changed: everything
-    // the old rules rejected is a fresh question again, and stopping on it would make an edit look
-    // inert until the next scheduled check.
-    let settings_just_changed = match (
-        subscription.settings_changed_at,
-        subscription.last_checked_at,
-    ) {
-        (Some(changed), Some(checked)) => changed > checked,
-        (Some(_), None) => true,
-        _ => false,
-    };
-    let stop_on_cache = matches!(scan, ScanWindow::Days { .. }) && !settings_just_changed;
-
-    let mut collected: Vec<DiscoveredCandidate> = Vec::new();
-    let mut collected_sources = std::collections::HashSet::new();
-    let mut cache_run = 0usize;
-    let mut pages_read = 0u32;
-    let mut cursor: Option<String> = None;
-    let mut degraded = false;
-    let mut error = None;
-    let mut stop_reason = None;
-    let mut stopped_by_cache = false;
-    // The first chunk is deliberately one page: in steady state it is enough to hit the settled run
-    // and stop, and a larger first chunk would re-read uploads the previous cycle already handled.
-    let mut chunk = 1u32;
-
-    loop {
-        let remaining = page_budget.saturating_sub(pages_read);
-        if remaining == 0 {
-            break;
-        }
-        let this_chunk = chunk.min(remaining);
-        let mut args = base_args.clone();
-        if let Some(obj) = args.as_object_mut() {
-            obj.insert("max_pages".into(), serde_json::json!(this_chunk));
-            if let Some(cursor) = &cursor {
-                obj.insert("start_after".into(), serde_json::json!(cursor));
-            }
-            if let Some(cutoff) = posted_after {
-                obj.insert("posted_after".into(), serde_json::json!(cutoff));
-            }
-            let budget = (MAX_SCAN_CANDIDATES as usize)
-                .saturating_sub(collected.len())
-                .max(1);
-            obj.insert("max_candidates".into(), serde_json::json!(budget));
-        }
-
-        let result = match fetch_listing_with(state, &subscription, args).await {
-            Ok(result) => result,
-            Err(e) => {
-                tracing::warn!(%subscription_id, error = %e, "discovery call failed");
-                if collected.is_empty() {
-                    emit_scan_progress(state, &subscription, pages_read, 0, true);
-                    return;
-                }
-                break;
-            }
-        };
-        let DiscoveryResult {
-            candidates,
-            degraded: chunk_degraded,
-            error: chunk_error,
-            next_cursor,
-            pages_read: chunk_pages,
-            stop_reason: chunk_stop,
-        } = result;
-
-        degraded |= chunk_degraded;
-        if let Some(chunk_error) = chunk_error {
-            // A source that could not be read at all tells us nothing about what exists. Keep a
-            // partial answer from earlier chunks only when there is one to keep.
-            if collected.is_empty() {
-                error = Some(chunk_error);
-            }
-            break;
-        }
-        // Older extensions do not report this; one call is still at least one page.
-        pages_read += chunk_pages.max(1);
-
-        for candidate in candidates.unwrap_or_default() {
-            if !collected_sources.insert(candidate.source.clone()) {
-                continue;
-            }
-            if known.contains(candidate.source.as_str()) {
-                cache_run += 1;
-            } else {
-                cache_run = 0;
-            }
-            collected.push(candidate);
-            if collected.len() >= MAX_SCAN_CANDIDATES as usize {
-                break;
-            }
-        }
-
-        emit_scan_progress(state, &subscription, pages_read, collected.len(), false);
-
-        if stop_on_cache && cache_run >= SCAN_CACHE_RUN {
-            stopped_by_cache = true;
-            break;
-        }
-        if let Some(stop) = chunk_stop {
-            stop_reason = Some(stop);
-            break;
-        }
-        if collected.len() >= MAX_SCAN_CANDIDATES as usize {
-            break;
-        }
-        cursor = next_cursor;
-        if cursor.is_none() {
-            break;
-        }
-        chunk = 5;
-    }
+    let stopped_by_cache = outcome.stopped_by_cache;
+    let result = outcome.result;
 
     if stopped_by_cache {
-        tracing::debug!(%subscription_id, candidates = collected.len(), "scan stopped on settled works");
+        tracing::debug!(
+            %subscription_id,
+            candidates = result.candidates.as_ref().map_or(0, |c| c.len()),
+            "scan stopped on settled works"
+        );
     }
 
     // A snapshot diff may only report works as *removed from the source* when this cycle saw the
@@ -741,20 +877,20 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
         ScanWindow::Pages { .. } => true,
         ScanWindow::Days { .. } => {
             !stopped_by_cache
-                && matches!(stop_reason, Some(DiscoveryStop::End | DiscoveryStop::Age))
+                && matches!(
+                    result.stop_reason,
+                    Some(DiscoveryStop::End | DiscoveryStop::Age)
+                )
         }
     };
 
-    emit_scan_progress(state, &subscription, pages_read, collected.len(), true);
-
-    let result = DiscoveryResult {
-        candidates: Some(collected),
-        degraded,
-        error,
-        next_cursor: None,
-        pages_read,
-        stop_reason,
-    };
+    emit_scan_progress(
+        state,
+        &subscription,
+        result.pages_read,
+        result.candidates.as_ref().map_or(0, |c| c.len()),
+        true,
+    );
 
     let held_names: Vec<String> = held.iter().map(|(source, _)| source.clone()).collect();
     let archive_for: std::collections::HashMap<&str, &str> = held
@@ -775,6 +911,8 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
             discarded: &settled,
             categories_for: &no_categories,
             now: now_secs(),
+            window_cutoff: plan.posted_after,
+            keep_out_of_window: false,
             fold: &fold,
         };
         decide(&subscription, &result, &ctx)
@@ -1278,6 +1416,9 @@ mod tests {
             fold: &|t: &str| t.to_string(),
             // Fixed so age-based rules are deterministic in tests; well past any fixture's posted_at.
             now: 4_000_000_000,
+            // Page-window semantics: no age bound, so nothing is out of window.
+            window_cutoff: None,
+            keep_out_of_window: false,
         }
     }
 
@@ -1308,6 +1449,47 @@ mod tests {
             d.actionable,
             vec!["a".to_string()],
             "still actionable, just not yet spent"
+        );
+    }
+
+    /// A work older than the window is not a candidate: a check drops it without a trace (history is
+    /// not the place for works it was never going to consider), while the preview keeps the row so
+    /// the pane's own count stays explicable.
+    #[test]
+    fn a_work_older_than_the_window_is_dropped_from_a_check_but_kept_by_the_preview() {
+        let mut old = cand("old", &[]);
+        old.posted_at = Some("2020-01-01 00:00".into());
+        let mut fresh = cand("fresh", &[]);
+        fresh.posted_at = Some("2026-01-01 00:00".into());
+        // 2023-11-14: after "old", before "fresh".
+        let cutoff = Some(1_700_000_000);
+        let run = |keep| {
+            decide(
+                &sub(true, Filters::default()),
+                &result(vec![old.clone(), fresh.clone()], false),
+                &CycleContext {
+                    window_cutoff: cutoff,
+                    keep_out_of_window: keep,
+                    ..ctx(&[], &[], &[], NO_CATS)
+                },
+            )
+        };
+
+        let check = run(false);
+        assert_eq!(check.records.len(), 1, "the old row is not even recorded");
+        assert_eq!(check.records[0].source_url, "fresh");
+        assert_eq!(check.actionable, vec!["fresh".to_string()]);
+        assert!(check.to_mark_seen.contains(&"fresh".to_string()));
+        assert!(!check.to_mark_seen.contains(&"old".to_string()));
+
+        let preview = run(true);
+        assert_eq!(preview.records.len(), 2);
+        assert_eq!(preview.records[0].verdict, CandidateVerdict::OutOfWindow);
+        assert_eq!(preview.records[1].verdict, CandidateVerdict::Queued);
+        assert_eq!(
+            preview.actionable,
+            vec!["fresh".to_string()],
+            "a greyed-out row must not be counted as a download"
         );
     }
 
@@ -1623,6 +1805,39 @@ mod tests {
             "got {:?}",
             d.records[0].verdict
         );
+    }
+
+    #[test]
+    fn a_day_window_reads_to_its_age_cutoff() {
+        let mut subscription = sub(true, Filters::default());
+        subscription.scan = ScanWindow::Days { days: 14 };
+        let (plan, just_changed) = scan_plan(&subscription);
+        assert_eq!(plan.page_budget, MAX_SCAN_PAGES);
+        assert!(!just_changed);
+        let cutoff = plan.posted_after.expect("a day window carries a cutoff");
+        assert!((cutoff - (now_secs() - 14 * 86_400)).abs() < 5);
+        assert!(plan.stop_on_cache);
+    }
+
+    #[test]
+    fn a_page_window_reads_exactly_its_pages() {
+        let mut subscription = sub(true, Filters::default());
+        subscription.scan = ScanWindow::Pages { pages: 3 };
+        let (plan, _) = scan_plan(&subscription);
+        assert_eq!(plan.page_budget, 3);
+        assert!(plan.posted_after.is_none());
+        assert!(!plan.stop_on_cache, "a page window has no settled-run stop");
+    }
+
+    #[test]
+    fn changing_the_rules_disables_the_settled_run_stop_once() {
+        let mut subscription = sub(true, Filters::default());
+        subscription.scan = ScanWindow::Days { days: 7 };
+        subscription.last_checked_at = Some(100);
+        subscription.settings_changed_at = Some(200);
+        let (plan, just_changed) = scan_plan(&subscription);
+        assert!(just_changed);
+        assert!(!plan.stop_on_cache);
     }
 
     /// FR-016: the user already said no. Re-offering it every cycle would make the discard

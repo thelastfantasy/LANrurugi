@@ -10,7 +10,7 @@ import type {
 import { Modal } from "@/components/common-ui/Display"
 
 import { SubscriptionForm } from "./SubscriptionForm"
-import { previewGridColumns, SubscriptionPreview } from "./SubscriptionPreview"
+import { bandOf, previewGridColumns, SubscriptionPreview } from "./SubscriptionPreview"
 
 /** Below this the two columns cannot both be read, so the preview moves to its own tab. */
 const TWO_COLUMN_MIN = 1024
@@ -124,6 +124,18 @@ export function SubscriptionFormModal({
   const [tab, setTab] = useState<"form" | "preview">("form")
   /** The draft as currently typed, kept here so the preview can run against it. */
   const [draft, setDraft] = useState<SubscriptionBody>(initial)
+
+  /** The tab's headline is the fraction that matters: rows that would be taken out of rows read. */
+  const previewCounts = preview.data
+    ? preview.data.candidates.reduce(
+        (acc, record) => {
+          acc.total += 1
+          if (bandOf(record) === "match") acc.matched += 1
+          return acc
+        },
+        { matched: 0, total: 0 },
+      )
+    : null
 
   // Two separate triggers, because only one of them is a network call.
   //
@@ -275,7 +287,7 @@ export function SubscriptionFormModal({
               onClick={() => setTab("preview")}
             >
               {t("subscriptions.tabPreview")}
-              {preview.data ? ` (${preview.data.candidates.length})` : ""}
+              {previewCounts ? ` (${previewCounts.matched}/${previewCounts.total})` : ""}
             </button>
           </div>
           {/* Both stay mounted: unmounting the form would discard what has been typed whenever the

@@ -876,6 +876,32 @@ mod tests {
         );
     }
 
+    /// A regex literal whose quotes are unbalanced on their own (`[^"'<>]`) used to pair with the
+    /// next real string's opening quote, blanking every line between them — e-hentai's discovery
+    /// plugin lost `posted_at`/`tags`/`uploader` this way, so the preview showed no publish times
+    /// and the form offered only the one filter field left over.
+    #[tokio::test]
+    async fn a_regex_literal_with_quotes_does_not_hide_candidate_fields() {
+        let Some(found) = introspects_candidate_fields(
+            "regexcand",
+            r#"  const uploader = row.match(/uploader\/([^"'<>]+)/)?.[1];
+  return { candidates: [{ source: "s", posted_at: "2026-01-01 00:00", uploader, tags: [] }] };"#,
+        )
+        .await
+        else {
+            eprintln!("skipping: deno not available");
+            return;
+        };
+        assert_eq!(
+            found,
+            vec![
+                "posted_at".to_string(),
+                "tags".to_string(),
+                "uploader".to_string()
+            ],
+        );
+    }
+
     #[tokio::test]
     async fn a_shorthand_property_counts_as_support() {
         let Some(found) = introspects_version_history(

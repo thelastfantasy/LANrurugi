@@ -14,7 +14,7 @@ import type {
   SubscriptionBody,
   SubscriptionSource,
 } from "@/api/types"
-import { RadioGroup, RadioItem, Switch } from "@/components/common-ui/Form"
+import { NumberInput, RadioGroup, RadioItem, Switch } from "@/components/common-ui/Form"
 import { TagInput } from "@/components/Form"
 import { toast } from "@/toast"
 
@@ -52,7 +52,6 @@ const CHOICES_STYLE = {
   display: "flex",
   flexDirection: "column",
   gap: 3,
-  marginLeft: 12,
 } as const
 
 /** A name describing what the subscription actually follows.
@@ -293,29 +292,25 @@ export function SubscriptionForm({
             <RadioItem value="pages">{t("subscriptions.scanByPages")}</RadioItem>
             <RadioItem value="days">{t("subscriptions.scanByDays")}</RadioItem>
           </RadioGroup>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "8px 0 0 12px" }}>
-            <input
-              className="stdinput"
-              type="number"
-              style={{ width: 90 }}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "8px 0 0" }}>
+            <NumberInput
               min={1}
               max={draft.scan.mode === "pages" ? 75 : 30}
               value={draft.scan.mode === "pages" ? draft.scan.pages : draft.scan.days}
-              onChange={(e) => {
-                const raw = Number(e.target.value)
-                if (!Number.isFinite(raw)) return
+              onValueChange={(value) => {
                 // Clamped here as well as on the server: the field's own bounds stop a typo from
                 // turning into a whole tag search being read on every check.
                 const max = draft.scan.mode === "pages" ? 75 : 30
-                const value = Math.min(max, Math.max(1, Math.trunc(raw)))
+                const clamped = Math.min(max, Math.max(1, Math.trunc(value)))
                 setDraft({
                   ...draft,
                   scan:
                     draft.scan.mode === "pages"
-                      ? { mode: "pages", pages: value }
-                      : { mode: "days", days: value },
+                      ? { mode: "pages", pages: clamped }
+                      : { mode: "days", days: clamped },
                 })
               }}
+              style={{ width: 90 }}
             />
             <span>
               {t(
@@ -330,7 +325,9 @@ export function SubscriptionForm({
               draft.scan.mode === "pages"
                 ? "subscriptions.scanPagesHint"
                 : "subscriptions.scanDaysHint",
-              { max: draft.scan.mode === "pages" ? 75 : 30 },
+              draft.scan.mode === "pages"
+                ? { max: 75 }
+                : { days: draft.scan.days, max: 30 },
             )}
           </p>
         </div>
@@ -403,7 +400,7 @@ export function SubscriptionForm({
         <RadioItem value="notify">{t("subscriptions.removalNotify")}</RadioItem>
         <RadioItem value="ignore">{t("subscriptions.removalIgnore")}</RadioItem>
       </RadioGroup>
-      <p className="sub-form-hint" style={{ marginLeft: 12 }}>
+      <p className="sub-form-hint">
         {t("subscriptions.removalNeverDeletes")}
       </p>
 

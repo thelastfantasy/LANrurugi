@@ -521,6 +521,10 @@ pub enum CandidateVerdict {
         newer_archive_id: String,
     },
     AlreadySeen,
+    /// Published before the subscription's time window. A real check never acts on one — the source
+    /// stops at the window — but the preview keeps it so the pane can show what the pages actually
+    /// held, greyed out, instead of a count the user cannot account for.
+    OutOfWindow,
     /// Not settled yet. Deliberately not a rejection: it will be reconsidered on a later check, so
     /// it must not be recorded as seen.
     ///

@@ -1057,6 +1057,14 @@ div.id4 {
   border-left: 3px solid rgba(199, 145, 33, 0.6);
 }
 
+/* Outside the subscription's time window: read from the source, never a candidate. Grey rather than
+   red — nothing was ruled out — and dimmed so a long list still reads as "these are not the ones". */
+.preview-row-expired {
+  background-color: rgba(128, 128, 128, 0.1);
+  border-left: 3px solid rgba(128, 128, 128, 0.45);
+  opacity: 0.55;
+}
+
 /* One condition within a group. Banded so that where one condition ends and the next begins is
    visible: three stacked controls with nothing between them read as one list, not as two rules.
    Fainter than .field-rule-group's own border, since a condition sits *inside* a group and should not

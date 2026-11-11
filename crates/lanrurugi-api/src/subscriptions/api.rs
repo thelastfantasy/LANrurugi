@@ -716,12 +716,9 @@ async fn preview_judge(
     axum::Json(json!({
         "outcome": decision.outcome,
         "candidates": decision.records,
-        // A preview reads a narrower window than a scheduled check (see
-        // `runner::PREVIEW_LISTING_PAGES`), and the pane says so rather than letting the shorter
-        // list read as the whole result set. The data itself is always a live fetch — nothing
-        // here is replayed from a stored copy the source has not just confirmed.
-        "listing_pages": super::runner::PREVIEW_LISTING_PAGES,
-        "check_listing_pages": super::runner::MAX_LISTING_PAGES,
+        // Pages this preview actually read. The preview follows the subscription's own scan
+        // window now, so this is the same route a scheduled check takes, not a smaller sample.
+        "listing_pages": body.listing.pages_read,
         "would_act_on": decision.actionable.len(),
     }))
     .into_response_owned()
@@ -802,12 +799,9 @@ async fn preview_draft(
         Ok((decision, listing)) => axum::Json(json!({
             "outcome": decision.outcome,
             "candidates": decision.records,
-        // A preview reads a narrower window than a scheduled check (see
-        // `runner::PREVIEW_LISTING_PAGES`), and the pane says so rather than letting the shorter
-        // list read as the whole result set. The data itself is always a live fetch — nothing
-        // here is replayed from a stored copy the source has not just confirmed.
-        "listing_pages": super::runner::PREVIEW_LISTING_PAGES,
-        "check_listing_pages": super::runner::MAX_LISTING_PAGES,
+        // Pages this preview actually read. The preview follows the subscription's own scan
+        // window now, so this is the same route a scheduled check takes, not a smaller sample.
+        "listing_pages": listing.pages_read,
             "would_act_on": decision.actionable.len(),
             // Handed back so changing a *condition* can be re-judged against this same listing: only
             // `criteria` shapes the request, so a rule change should not fetch the source again.
@@ -850,12 +844,9 @@ async fn preview(
         Ok((decision, listing)) => axum::Json(json!({
             "outcome": decision.outcome,
             "candidates": decision.records,
-        // A preview reads a narrower window than a scheduled check (see
-        // `runner::PREVIEW_LISTING_PAGES`), and the pane says so rather than letting the shorter
-        // list read as the whole result set. The data itself is always a live fetch — nothing
-        // here is replayed from a stored copy the source has not just confirmed.
-        "listing_pages": super::runner::PREVIEW_LISTING_PAGES,
-        "check_listing_pages": super::runner::MAX_LISTING_PAGES,
+        // Pages this preview actually read. The preview follows the subscription's own scan
+        // window now, so this is the same route a scheduled check takes, not a smaller sample.
+        "listing_pages": listing.pages_read,
             "would_act_on": decision.actionable.len(),
             // Handed back so changing a *condition* can be re-judged against this same listing: only
             // `criteria` shapes the request, so a rule change should not fetch the source again.
