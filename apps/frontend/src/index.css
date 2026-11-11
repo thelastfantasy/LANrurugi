@@ -28,6 +28,13 @@
    as plain `html`/`html::-webkit-scrollbar` element selectors rather than reusing the
    `.thin-scrollbar` class itself, since `<html>` isn't a React-rendered element any component here
    can attach a className to. */
+/* react-toastify sets `touch-action: none` so a swipe never scrolls the page instead of dragging
+   the toast. `pan-y` keeps that guarantee for horizontal drags — the browser only claims vertical
+   pans — so a long page can still be scrolled from on top of a toast. */
+.Toastify__toast {
+  touch-action: pan-y;
+}
+
 html {
   scrollbar-gutter: stable;
   scrollbar-width: thin;

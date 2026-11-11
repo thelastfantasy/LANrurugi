@@ -60,7 +60,17 @@ export function App() {
     <BrowserRouter>
       <AuthBridgeGate />
       <FirstRunWizardGate />
-      <ToastContainer limit={7} theme="light" />
+      {/* Toasts dismiss on a horizontal swipe. The library's own default asks for 80% of the
+          toast's width, which on a phone is nearly a full-screen drag — reported as "swipe does
+          nothing" — so a short flick is enough here. Vertical scrolling still works over a toast
+          because `index.css` relaxes the library's `touch-action: none` to `pan-y`. */}
+      <ToastContainer
+        limit={7}
+        theme="light"
+        draggable
+        draggableDirection="x"
+        draggablePercent={30}
+      />
       <DialogHost />
       <Suspense fallback={<RouteFallback />}>
       <Routes>

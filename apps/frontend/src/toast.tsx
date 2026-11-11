@@ -44,7 +44,10 @@ export function toast(c: ToastConfig) {
     position: "bottom-right",
     autoClose: c.hideAfter ?? AUTO_CLOSE_TIME[type] ?? 7000,
     closeOnClick: c.closeOnClick ?? !isWarningOrError,
-    draggable: c.draggable ?? !isWarningOrError,
+    // Draggable even for warnings/errors: those are exactly the toasts that stay until dismissed,
+    // and a phone has no room for a row of X buttons (reported 2026-11-11). Dismissal by accidental
+    // tap is what `closeOnClick: false` guards against — a deliberate swipe is not that.
+    draggable: c.draggable ?? true,
   }
   return emitToast(
     // react-toastify 11.x doesn't render its own `.Toastify__toast-body` wrapper, so this class is
