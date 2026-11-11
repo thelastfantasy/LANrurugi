@@ -10,6 +10,7 @@ import {
   usePendingApprovals,
   usePreviewSubscription,
   useSetSubscriptionState,
+  useSubscriptionCheckProgress,
   useSubscriptions,
   useSubscriptionSources,
 } from "@/api/hooks"
@@ -39,6 +40,7 @@ function emptyBody(source: string, intervalSecs: number): SubscriptionBody {
     name: "",
     source,
     criteria: {},
+    scan: { mode: "pages", pages: 4 },
     filters: {},
     interval_secs: intervalSecs,
     metadata_tags: [],
@@ -60,6 +62,7 @@ function bodyOf(s: Subscription): SubscriptionBody {
     name: s.name,
     source: s.source,
     criteria: s.criteria,
+    scan: s.scan ?? { mode: "pages", pages: 4 },
     filters: s.filters,
     interval_secs: s.interval_secs,
     target_category: s.target_category ?? undefined,
@@ -159,6 +162,7 @@ function SubscriptionsBody({
   subscriptions: Subscription[]
   sources: SubscriptionSource[]
 }) {
+  const checkProgress = useSubscriptionCheckProgress()
   const { t } = useTranslation()
   const remove = useDeleteSubscription()
   const setState = useSetSubscriptionState()
@@ -365,7 +369,17 @@ function SubscriptionsBody({
             {subscriptions.map((s) => (
               <Fragment key={s.id}>
                 <tr className="gtr1">
-                  <td>{s.name}</td>
+                  <td>
+                    {s.name}
+                    {checkProgress[s.id] && (
+                      <div className="sub-form-hint" style={{ marginTop: 2 }}>
+                        {t("subscriptions.checkProgress", {
+                          pages: checkProgress[s.id].pages_read,
+                          candidates: checkProgress[s.id].candidates,
+                        })}
+                      </div>
+                    )}
+                  </td>
                   <td>{s.source}</td>
                   <td>{Math.round(s.interval_secs / 3600)}h</td>
                   <td>{renderTiming(s)}</td>
@@ -403,7 +417,12 @@ function SubscriptionsBody({
             ) : preview.isError ? (
               <p style={{ color: "red" }}>{String(preview.error)}</p>
             ) : preview.data ? (
-              <SubscriptionPreview preview={preview.data} subscriptionId={previewFor} fields={previewFields} />
+              <SubscriptionPreview
+                preview={preview.data}
+                subscriptionId={previewFor}
+                fields={previewFields}
+                scan={previewSubscription.scan}
+              />
             ) : (
               <p>{t("subscriptions.previewRunning")}</p>
             )}

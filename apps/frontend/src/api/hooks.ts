@@ -91,6 +91,7 @@ import type {
   StatTag,
   Subscription,
   SubscriptionBody,
+  SubscriptionCheckProgress,
   SubscriptionPreview,
   SubscriptionSource,
   TankBookmarkedPageResponse,
@@ -1374,6 +1375,34 @@ export function useCheckSubscriptionNow() {
  *  by mistake or for works rejected under a rule that has since been widened. */
 /** The user's own "no" about a matched work: never downloaded by this subscription again, and only
  *  undoable on purpose (`useForgetSeen`). */
+/** Live progress of subscription checks in flight, keyed by subscription id.
+ *
+ * The stream is only a display aid: the cycle record a finished check writes is the authority, so
+ * a dropped connection (or a check started before this page opened) costs nothing.
+ */
+export function useSubscriptionCheckProgress() {
+  const [progress, setProgress] = useState<Record<string, SubscriptionCheckProgress>>({})
+  useEffect(() => {
+    const source = new EventSource("/api/subscriptions/stream")
+    source.addEventListener("progress", (e) => {
+      const raw = (e as MessageEvent<string>).data
+      if (!raw) return
+      const data = JSON.parse(raw) as SubscriptionCheckProgress
+      setProgress((old) => {
+        const next = { ...old }
+        // `done` removes the row rather than showing a finished counter; the history modal is
+        // where a finished check is read.
+        if (data.done) delete next[data.subscription_id]
+        else next[data.subscription_id] = data
+        return next
+      })
+    })
+    // A native connection failure fires `error` with no data; EventSource reconnects by itself.
+    return () => source.close()
+  }, [])
+  return progress
+}
+
 export function useBlockSubscriptionSources() {
   const queryClient = useQueryClient()
   return useMutation({

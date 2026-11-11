@@ -563,6 +563,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         translation_telemetry: Default::default(),
         filename_locks: filename_locks.clone(),
         download_queue_tx: Some(tokio::sync::broadcast::channel(64).0),
+        subscription_check_tx: Some(tokio::sync::broadcast::channel(64).0),
         grouping: Default::default(),
         refresh_tokens,
         api_tokens,

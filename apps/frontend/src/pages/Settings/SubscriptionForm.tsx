@@ -271,6 +271,71 @@ export function SubscriptionForm({
 
       </div>
 
+      <p className="sub-form-section">{t("subscriptions.scanWindow")}</p>
+      <div className="sub-form-grid">
+        <label>{t("subscriptions.scanMode")}</label>
+        <div>
+          <RadioGroup
+            value={draft.scan.mode}
+            onValueChange={(mode) => {
+              const scan = draft.scan
+              setDraft({
+                ...draft,
+                scan:
+                  mode === "days"
+                    ? { mode: "days", days: scan.mode === "days" ? scan.days : 14 }
+                    : { mode: "pages", pages: scan.mode === "pages" ? scan.pages : 4 },
+              })
+            }}
+            name={`subscription-scan-${subscriptionId ?? "new"}`}
+            style={CHOICES_STYLE}
+          >
+            <RadioItem value="pages">{t("subscriptions.scanByPages")}</RadioItem>
+            <RadioItem value="days">{t("subscriptions.scanByDays")}</RadioItem>
+          </RadioGroup>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "8px 0 0 12px" }}>
+            <input
+              className="stdinput"
+              type="number"
+              style={{ width: 90 }}
+              min={1}
+              max={draft.scan.mode === "pages" ? 75 : 30}
+              value={draft.scan.mode === "pages" ? draft.scan.pages : draft.scan.days}
+              onChange={(e) => {
+                const raw = Number(e.target.value)
+                if (!Number.isFinite(raw)) return
+                // Clamped here as well as on the server: the field's own bounds stop a typo from
+                // turning into a whole tag search being read on every check.
+                const max = draft.scan.mode === "pages" ? 75 : 30
+                const value = Math.min(max, Math.max(1, Math.trunc(raw)))
+                setDraft({
+                  ...draft,
+                  scan:
+                    draft.scan.mode === "pages"
+                      ? { mode: "pages", pages: value }
+                      : { mode: "days", days: value },
+                })
+              }}
+            />
+            <span>
+              {t(
+                draft.scan.mode === "pages"
+                  ? "subscriptions.scanPagesUnit"
+                  : "subscriptions.scanDaysUnit",
+              )}
+            </span>
+          </div>
+          <p className="sub-form-hint">
+            {t(
+              draft.scan.mode === "pages"
+                ? "subscriptions.scanPagesHint"
+                : "subscriptions.scanDaysHint",
+              { max: draft.scan.mode === "pages" ? 75 : 30 },
+            )}
+          </p>
+        </div>
+      </div>
+
       <p className="sub-form-section">{t("subscriptions.filterRules")}</p>
       <FieldRuleEditor
         fields={availableFields}

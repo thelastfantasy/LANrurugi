@@ -4657,6 +4657,7 @@ pub(crate) mod tests {
         translation_telemetry: Default::default(),
             filename_locks: Default::default(),
             download_queue_tx: None,
+            subscription_check_tx: None,
             grouping: Default::default(),
             refresh_tokens: Arc::new(lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(
                 redis.config.clone(),

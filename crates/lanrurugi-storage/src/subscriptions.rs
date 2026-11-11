@@ -337,6 +337,34 @@ pub enum RuleValue {
     List(Vec<String>),
 }
 
+/// How far one check may walk a source's listing.
+///
+/// A subscription is a standing instruction, and "everything new" means something different for a
+/// creator who posts daily than for a tag that gains a thousand works a month. Either ceiling is
+/// hard: the API refuses a larger one rather than clamping silently, and no check reads more than
+/// [`MAX_SCAN_CANDIDATES`] entries whichever mode is set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum ScanWindow {
+    /// Read at most this many listing pages. The historical default, and still the cheapest.
+    Pages { pages: u32 },
+    /// Read back this far in time, then stop early once the cache covers a full run of entries.
+    ///
+    /// The age bound is what keeps a quiet source from paying for pages it already knows: once a
+    /// listing of *already cached* works resumes, there is nothing left to discover deeper — entries
+    /// are ordered newest first, and a work edited into a tag lands at its original date, so the
+    /// cache boundary is also where the next check would pick up.
+    Days { days: u32 },
+}
+
+impl Default for ScanWindow {
+    fn default() -> Self {
+        ScanWindow::Pages {
+            pages: DEFAULT_SCAN_PAGES,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Subscription {
     pub id: String,
@@ -344,6 +372,9 @@ pub struct Subscription {
     /// The extension namespace that discovers for this subscription.
     pub source: String,
     pub criteria: Criteria,
+    /// How far each check looks into the source's listing.
+    #[serde(default)]
+    pub scan: ScanWindow,
     #[serde(default)]
     pub filters: Filters,
     /// Seconds between checks. Enforced against the source's declared minimum at the API boundary —
@@ -396,6 +427,22 @@ pub struct Subscription {
 /// saved — by which time, without this, a check would already have queued downloads against it. A
 /// minute is long enough to re-open the form and fix it, and short enough that nobody waits on it.
 pub const SETTLE_SECS: i64 = 60;
+
+/// The largest page budget a subscription may ask for.
+pub const MAX_SCAN_PAGES: u32 = 75;
+pub const DEFAULT_SCAN_PAGES: u32 = 4;
+/// The longest look-back a time-window scan may ask for.
+pub const MAX_SCAN_DAYS: u32 = 30;
+pub const DEFAULT_SCAN_DAYS: u32 = 14;
+/// No check reads more entries than this, whatever its scan window says.
+pub const MAX_SCAN_CANDIDATES: u32 = 15_000;
+/// Consecutive already-cached candidates that end a time-window scan.
+///
+/// A full page of cached entries means the check has caught up with everything this subscription
+/// has already decided; deeper entries are older still, and an edit resurfaces at the work's
+/// original date anyway. One hundred is one member-layout page: small enough to stop promptly,
+/// large enough that a source inserting a few new items does not reset the count forever.
+pub const SCAN_CACHE_RUN: usize = 100;
 
 fn default_true() -> bool {
     true
@@ -1061,6 +1108,24 @@ mod tests {
         }
     }
 
+    /// The wire shape the form and the host agree on: a tag-free mode field so an older record
+    /// (written before scan windows existed) still reads as the default page window.
+    #[test]
+    fn a_scan_window_round_trips_and_defaults_to_pages() {
+        assert_eq!(
+            ScanWindow::default(),
+            ScanWindow::Pages {
+                pages: DEFAULT_SCAN_PAGES
+            }
+        );
+        let days: ScanWindow = serde_json::from_str(r#"{"mode":"days","days":14}"#).unwrap();
+        assert_eq!(days, ScanWindow::Days { days: 14 });
+        assert_eq!(
+            serde_json::to_string(&ScanWindow::Pages { pages: 6 }).unwrap(),
+            r#"{"mode":"pages","pages":6}"#
+        );
+    }
+
     /// The behaviour a user depends on: deleting a downloaded archive must NOT cause the subscription
     /// to fetch it again. Deletion deliberately does not touch the seen set, so this asserts the set
     /// keeps the record — the archive being gone is not evidence the user wants it back.
@@ -1296,6 +1361,7 @@ mod tests {
             name: "test".to_string(),
             source: "discovery/example".to_string(),
             criteria: Criteria::default(),
+            scan: ScanWindow::default(),
             filters: Filters::default(),
             interval_secs: interval,
             target_category: None,

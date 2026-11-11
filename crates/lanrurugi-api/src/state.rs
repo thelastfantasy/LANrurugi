@@ -222,6 +222,10 @@ pub struct AppState {
     /// write succeeds. `None` in test/bench contexts (no SSE subscribers); real `serve` always
     /// sets this.
     pub download_queue_tx: Option<tokio::sync::broadcast::Sender<serde_json::Value>>,
+    /// SSE fan-out for subscription checks in flight — same arrangement as `download_queue_tx`.
+    /// A day-window scan can run for minutes, and without a progress event the UI has nothing to
+    /// show between "check started" and the cycle record appearing.
+    pub subscription_check_tx: Option<tokio::sync::broadcast::Sender<serde_json::Value>>,
     /// The AI grouping run in flight plus its SSE fan-out — same arrangement as
     /// `download_queue_tx`, and for the same reason: the expensive pass must outlive the request
     /// that started it. `POST .../ai-group-suggestions` used to do that pass inline, so a ~100s

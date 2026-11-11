@@ -215,7 +215,12 @@ export function SubscriptionFormModal({
         // Kept on screen while a re-judge is in flight, so changing a rule updates the verdicts in
         // place instead of blanking the list and rebuilding it.
         <div style={{ opacity: judge.isPending ? 0.6 : 1, transition: "opacity 120ms" }}>
-          <SubscriptionPreview preview={shown} subscriptionId={subscriptionId} fields={candidateFields} />
+          <SubscriptionPreview
+            preview={shown}
+            subscriptionId={subscriptionId}
+            fields={candidateFields}
+            scan={draft.scan}
+          />
         </div>
       ) : preview.isPending ? (
         <PreviewSkeleton fields={candidateFields} />

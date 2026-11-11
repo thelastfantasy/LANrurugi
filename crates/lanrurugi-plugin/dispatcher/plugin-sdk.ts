@@ -422,6 +422,17 @@ export interface DiscoveryCriteria {
    * work edited to carry a tag enters the result set *in the middle*, ordered by its original
    * publication date, so it never appears on page one. */
   max_pages?: number;
+  /** Where to resume, as returned by the previous call's {@linkcode DiscoveryResult.next_cursor}.
+   * Opaque to the host — only the extension knows what its listing pages by (an id, an offset, a
+   * token). Present because the host, not the extension, decides when to stop paging: only the host
+   * can see which works a subscription has already handled, and a long look-back is broken into
+   * calls short enough to stay within one request's timeout. */
+  start_after?: string;
+  /** Unix seconds. Candidates older than this are outside the scan's time window; an extension may
+   * stop reading once a whole page predates it rather than paging to the end of a tag search. */
+  posted_after?: number;
+  /** Never return more than this many candidates across the call. */
+  max_candidates?: number;
 }
 
 /** One work a listing offered. */
@@ -492,7 +503,16 @@ export interface DiscoveryResult {
   degraded?: boolean;
   /** Why the result is degraded, or why nothing could be read at all. */
   error?: PluginError;
+  /** Where the next call should resume; omit when the listing ended or this plugin cannot page. */
+  next_cursor?: string;
+  /** How many listing pages this call actually read. */
+  pages_read?: number;
+  /** Why reading stopped short, when this plugin can tell. */
+  stop_reason?: DiscoveryStop;
 }
+
+/** Why a {@linkcode discover} call stopped before exhausting {@linkcode DiscoveryCriteria.max_pages}. */
+export type DiscoveryStop = "end" | "age" | "cap";
 
 /** Optional export, parallel to {@linkcode pluginOptions}. Given a subscription's criteria (or a
  * listing URL), returns the candidate works this source currently offers.

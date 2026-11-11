@@ -512,12 +512,28 @@ export type SubscriptionState =
    * which is the user's own choice. */
   | { state: "paused"; reason: "insufficient_credit" }
 
+/** How far a check reads before it stops.
+ *
+ * `pages` is a hard page budget; `days` bounds the scan by publication date instead and pages until
+ * the listing runs out, the date window closes, or it keeps meeting works it has already settled. */
+export type ScanWindow = { mode: "pages"; pages: number } | { mode: "days"; days: number }
+
+/** Live progress of a running subscription check, from `GET /subscriptions/stream`. */
+export interface SubscriptionCheckProgress {
+  subscription_id: string
+  name: string
+  pages_read: number
+  candidates: number
+  done: boolean
+}
+
 export interface Subscription {
   id: string
   name: string
   /** The extension namespace that discovers for this subscription. */
   source: string
   criteria: SubscriptionCriteria
+  scan: ScanWindow
   filters: SubscriptionFilters
   interval_secs: number
   target_category?: string | null
@@ -682,6 +698,7 @@ export interface SubscriptionBody {
   name: string
   source: string
   criteria: SubscriptionCriteria
+  scan: ScanWindow
   filters: SubscriptionFilters
   interval_secs: number
   target_category?: string

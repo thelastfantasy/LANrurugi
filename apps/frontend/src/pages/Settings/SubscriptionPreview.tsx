@@ -3,7 +3,7 @@ import { type CSSProperties, useLayoutEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { useBlockSubscriptionSources, useForgetSeen } from "@/api/hooks"
-import type { CandidateRecord, SubscriptionPreview as Preview } from "@/api/types"
+import type { CandidateRecord, ScanWindow, SubscriptionPreview as Preview } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
 import { StarRatingDisplay } from "@/components/common-ui/Form"
 import { DateTimeStack } from "@/components/Display"
@@ -226,12 +226,15 @@ export function SubscriptionPreview({
   preview,
   subscriptionId,
   fields,
+  scan,
 }: {
   preview: Preview
   /** Omitted when previewing unsaved rules — there is no stored seen set to act on yet. */
   subscriptionId?: string
   /** The source's declared candidate fields. Drives which optional columns are rendered. */
   fields?: string[]
+  /** The subscription's own scan window, so the pane can say what a check reads beyond this page. */
+  scan?: ScanWindow
 }) {
   const { t } = useTranslation()
   const forget = useForgetSeen()
@@ -265,14 +268,17 @@ export function SubscriptionPreview({
         {counts.waiting > 0 && ` ${t("subscriptions.previewWaitingCount", { count: counts.waiting })}`}
       </p>
 
-      {preview.listing_pages !== undefined && preview.check_listing_pages !== undefined && (
+      {preview.listing_pages !== undefined && (
         // Why this list is shorter than a check's: a preview fetches only the newest listing page
-        // (each page is another request to the source), while the hourly check reads them all.
+        // (each page is another request to the source). What a check reads beyond that is the
+        // subscription's own scan window, so it is stated here rather than guessed at from pages.
         <p className="sub-form-hint" style={{ margin: "0 0 6px" }}>
-          {t("subscriptions.previewWindow", {
-            pages: preview.listing_pages,
-            checkPages: preview.check_listing_pages,
-          })}
+          {scan?.mode === "days"
+            ? t("subscriptions.previewWindowDays", { days: scan.days })
+            : t("subscriptions.previewWindow", {
+                pages: preview.listing_pages,
+                checkPages: scan?.mode === "pages" ? scan.pages : 4,
+              })}
         </p>
       )}
 

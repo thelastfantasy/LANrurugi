@@ -6,16 +6,20 @@
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::response::Response;
+use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use serde::Deserialize;
 use serde_json::json;
 
 use lanrurugi_storage::subscriptions::{
-    CreditPolicy, Criteria, Filters, ReservationStatus, SourceChangePolicy, SourceRemovalPolicy,
-    Subscription, SubscriptionState,
+    CreditPolicy, Criteria, Filters, ReservationStatus, ScanWindow, SourceChangePolicy,
+    SourceRemovalPolicy, Subscription, SubscriptionState, MAX_SCAN_DAYS, MAX_SCAN_PAGES,
 };
+
+use futures_util::StreamExt;
+use tokio_stream::wrappers::BroadcastStream;
 
 use crate::common::{error, not_found};
 
@@ -25,6 +29,7 @@ use crate::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/subscriptions", get(list).post(create))
+        .route("/subscriptions/stream", get(stream_progress))
         .route("/subscriptions/sources", get(list_sources))
         // Registered before the `{id}` routes so the literal segments are unambiguous to read, even
         // though the router would prefer them anyway.
@@ -61,6 +66,9 @@ pub struct SubscriptionBody {
     pub source: String,
     #[serde(default)]
     pub criteria: Criteria,
+    /// How far each check looks into the listing. Omitted means the historical four pages.
+    #[serde(default)]
+    pub scan: ScanWindow,
     #[serde(default)]
     pub filters: Filters,
     pub interval_secs: u64,
@@ -143,6 +151,27 @@ async fn validate(state: &AppState, body: &SubscriptionBody) -> Result<(), Respo
                 body.source
             ),
         ));
+    }
+    match body.scan {
+        ScanWindow::Pages { pages } if pages == 0 || pages > MAX_SCAN_PAGES => {
+            return Err(error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "create_subscription",
+                format!(
+                    "A page-window scan may read 1–{MAX_SCAN_PAGES} pages; {pages} is outside that range."
+                ),
+            ));
+        }
+        ScanWindow::Days { days } if days == 0 || days > MAX_SCAN_DAYS => {
+            return Err(error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "create_subscription",
+                format!(
+                    "A time-window scan may look back 1–{MAX_SCAN_DAYS} days; {days} is outside that range."
+                ),
+            ));
+        }
+        _ => {}
     }
     if let Some(minimum) = declared_minimum_interval(state, &body.source).await {
         if body.interval_secs < minimum {
@@ -255,6 +284,7 @@ async fn create(
         name: body.name,
         source: body.source,
         criteria: body.criteria,
+        scan: body.scan,
         filters: body.filters,
         interval_secs: body.interval_secs,
         target_category: body.target_category,
@@ -319,6 +349,7 @@ async fn update(
         name: body.name,
         source: body.source,
         criteria: body.criteria,
+        scan: body.scan,
         filters: body.filters,
         interval_secs: body.interval_secs,
         target_category: body.target_category,
@@ -711,6 +742,7 @@ fn draft_subscription(body: SubscriptionBody) -> Subscription {
         name: body.name,
         source: body.source,
         criteria: body.criteria,
+        scan: body.scan,
         filters: body.filters,
         interval_secs: body.interval_secs,
         target_category: body.target_category,
@@ -749,6 +781,7 @@ async fn preview_draft(
         name: body.name,
         source: body.source,
         criteria: body.criteria,
+        scan: body.scan,
         filters: body.filters,
         interval_secs: body.interval_secs,
         target_category: body.target_category,
@@ -806,6 +839,7 @@ async fn preview(
     let subscription = match body {
         Some(axum::Json(draft)) => Subscription {
             criteria: draft.criteria,
+            scan: draft.scan,
             filters: draft.filters,
             ..saved
         },
@@ -1048,4 +1082,32 @@ impl<T: serde::Serialize> IntoResponseOwned for axum::Json<T> {
     fn into_response_owned(self) -> Response {
         axum::response::IntoResponse::into_response(self)
     }
+}
+
+/// `GET /subscriptions/stream` — live progress of subscription checks.
+///
+/// Only progress is sent here; the authoritative result is the cycle record the check writes when
+/// it finishes, so a client that misses events simply sees the next poll's answer.
+async fn stream_progress(State(state): State<AppState>) -> Response {
+    let Some(tx) = &state.subscription_check_tx else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "subscriptions_stream",
+            "SSE not available",
+        );
+    };
+    let rx = tx.subscribe();
+    let events = BroadcastStream::new(rx).filter_map(|result| async move {
+        match result {
+            Ok(value) => Some(Ok::<_, std::convert::Infallible>(
+                Event::default().event("progress").data(value.to_string()),
+            )),
+            // Lagged means this subscriber missed events; the next chunk's event carries the
+            // current totals, so there is nothing to rebuild.
+            Err(_) => None,
+        }
+    });
+    Sse::new(events)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }

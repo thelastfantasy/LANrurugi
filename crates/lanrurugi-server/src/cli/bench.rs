@@ -166,6 +166,7 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         translation_telemetry: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
+        subscription_check_tx: None,
         grouping: Default::default(),
         refresh_tokens,
         api_tokens,

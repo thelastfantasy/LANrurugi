@@ -13,9 +13,10 @@
 
 use std::sync::Arc;
 
-use lanrurugi_plugin::protocol::{DiscoveredCandidate, DiscoveryResult};
+use lanrurugi_plugin::protocol::{DiscoveredCandidate, DiscoveryResult, DiscoveryStop};
 use lanrurugi_storage::subscriptions::{
-    CandidateRecord, CandidateVerdict, CheckCycle, CycleOutcome, Subscription,
+    CandidateRecord, CandidateVerdict, CheckCycle, CycleOutcome, ScanWindow, Subscription,
+    MAX_SCAN_CANDIDATES, MAX_SCAN_PAGES, SCAN_CACHE_RUN,
 };
 
 use super::matcher;
@@ -126,6 +127,13 @@ pub(crate) const MAX_LISTING_PAGES: u32 = 4;
 /// check still reads all [`MAX_LISTING_PAGES`] — catching an edit that landed mid-list is exactly
 /// what its wider window is for, and it runs hourly rather than per keystroke.
 pub(crate) const PREVIEW_LISTING_PAGES: u32 = 1;
+
+/// How many per-candidate rows one cycle keeps.
+///
+/// A time-window scan can legitimately see tens of thousands of works, and fifty retained cycles of
+/// that size would dominate Redis. The count stays honest — only the detail is bounded — so the
+/// history still says how much a cycle looked at.
+pub const CYCLE_RECORD_LIMIT: usize = 2000;
 
 /// Turns a discovery result into a decision. Pure: no I/O, no clock, no Redis.
 pub fn decide(
@@ -301,7 +309,12 @@ pub fn build_cycle(
         finished_at,
         outcome: decision.outcome.clone(),
         candidates_seen: decision.records.len() as u32,
-        candidates: decision.records.clone(),
+        candidates: decision
+            .records
+            .iter()
+            .take(CYCLE_RECORD_LIMIT)
+            .cloned()
+            .collect(),
     }
 }
 
@@ -473,32 +486,55 @@ fn apply_manual_credentials(
     }
 }
 
-async fn fetch_listing(
+/// Fetches one chunk of a listing, collapsing concurrent identical requests onto one source call.
+///
+/// Unlike a time-based cache this can never serve data the source has not just produced: only calls
+/// in flight at the same moment share, and they would have been asking for the same thing anyway.
+/// The whole argument set is part of the key — a chunk's page budget and resume cursor change what
+/// the call means.
+async fn fetch_listing_with(
     state: &AppState,
     subscription: &Subscription,
-    pages: u32,
+    args: serde_json::Value,
 ) -> Result<lanrurugi_plugin::protocol::DiscoveryResult, String> {
-    // Concurrent identical discoveries collapse onto one source fetch. Unlike a time-based cache
-    // this can never serve data the source has not just produced: only calls that are in flight at
-    // the same moment share, and they would have been asking for the same thing anyway.
     let key = format!(
-        "{}\n{}\n{pages}",
+        "{}\n{}",
         subscription.source,
-        serde_json::to_string(&subscription.criteria).unwrap_or_default()
+        serde_json::to_string(&args).unwrap_or_default()
     );
     let singleflight = state.discovery_singleflight.clone();
     let state = state.clone();
-    let subscription = subscription.clone();
+    let source = subscription.source.clone();
     Arc::unwrap_or_clone(
         singleflight
             .run(key, || async move {
-                Arc::new(fetch_listing_uncached(&state, &subscription, pages).await)
+                Arc::new(discover_with(&state, &source, args).await)
             })
             .await,
     )
 }
 
-async fn fetch_listing_uncached(
+async fn discover_with(
+    state: &AppState,
+    source: &str,
+    args: serde_json::Value,
+) -> Result<lanrurugi_plugin::protocol::DiscoveryResult, String> {
+    // `None` means the extension has no `discover` at all — distinct from a discovery that ran and
+    // found nothing, and worth saying so rather than showing an empty preview.
+    let Some(result) = state
+        .plugins
+        .discover(source, args)
+        .await
+        .map_err(|e| e.to_string())?
+    else {
+        return Err("this source no longer offers discovery".into());
+    };
+
+    Ok(result)
+}
+
+/// One call for a preview: the criteria, plus the page budget the preview is allowed.
+async fn fetch_listing(
     state: &AppState,
     subscription: &Subscription,
     pages: u32,
@@ -516,18 +552,7 @@ async fn fetch_listing_uncached(
     let mut args = crate::plugins::with_login_cookies(state, &info, base).await;
     apply_manual_credentials(&mut args, &subscription.credentials);
 
-    // `None` means the extension has no `discover` at all — distinct from a discovery that ran and
-    // found nothing, and worth saying so rather than showing an empty preview.
-    let Some(result) = state
-        .plugins
-        .discover(&subscription.source, args)
-        .await
-        .map_err(|e| e.to_string())?
-    else {
-        return Err("this source no longer offers discovery".into());
-    };
-
-    Ok(result)
+    fetch_listing_with(state, subscription, args).await
 }
 
 pub async fn run_check(state: &AppState, subscription_id: &str) {
@@ -539,40 +564,24 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
 
     // Discovery runs with whatever signed-in state the source declared it needs, exactly like a
     // metadata or download call — subscriptions introduce no second credential path.
-    let args = match state.plugins.plugin_info(&subscription.source).await {
-        Ok(info) => {
-            let mut base = serde_json::to_value(&subscription.criteria).unwrap_or_default();
-            // A ceiling the host sets, not the user: reading one page misses works that entered the
-            // result set by being edited (they sort by original publication date, so they land
-            // mid-list), while walking a whole tag search means tens of thousands of requests.
-            if let Some(obj) = base.as_object_mut() {
-                obj.insert("max_pages".into(), serde_json::json!(MAX_LISTING_PAGES));
-            }
-            crate::plugins::with_login_cookies(state, &info, base).await
-        }
+    let info = match state.plugins.plugin_info(&subscription.source).await {
+        Ok(info) => info,
         Err(e) => {
             tracing::warn!(%subscription_id, error = %e, "subscription source is no longer installed");
             return;
         }
     };
+    let mut base_args = serde_json::to_value(&subscription.criteria).unwrap_or_default();
+    if let Some(obj) = base_args.as_object_mut() {
+        // The page budget belongs to the scan plan, not to the stored criteria.
+        obj.remove("max_pages");
+    }
+    let mut base_args = crate::plugins::with_login_cookies(state, &info, base_args).await;
+    apply_manual_credentials(&mut base_args, &subscription.credentials);
 
-    let result = match state.plugins.discover(&subscription.source, args).await {
-        Ok(Some(result)) => result,
-        Ok(None) => {
-            tracing::warn!(
-                %subscription_id,
-                source = %subscription.source,
-                "source no longer offers discovery; skipping this check"
-            );
-            return;
-        }
-        Err(e) => {
-            tracing::warn!(%subscription_id, error = %e, "discovery call failed");
-            return;
-        }
-    };
-
-    // Gather what the decision needs, then decide purely.
+    // Everything the scan's own stop rule needs, plus what the decision below needs. Read before
+    // discovery because deciding whether to keep paging requires knowing what is already settled —
+    // the extension cannot, since only the host holds that cache.
     let seen = state
         .subscriptions
         .seen_all(subscription_id)
@@ -593,6 +602,159 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
         .unwrap_or_default();
     let settled = super::reservations::settled_sources(&reservations, subscription_id);
     let held = held_sources(state).await;
+    let known: std::collections::HashSet<&str> = seen
+        .iter()
+        .chain(reconsider.iter())
+        .chain(settled.iter())
+        .chain(held.iter().map(|(source, _)| source))
+        .map(String::as_str)
+        .collect();
+
+    let scan = subscription.scan;
+    let (page_budget, posted_after) = match scan {
+        ScanWindow::Pages { pages } => (pages.min(MAX_SCAN_PAGES), None),
+        ScanWindow::Days { days } => (MAX_SCAN_PAGES, Some(now_secs() - i64::from(days) * 86_400)),
+    };
+    // The one cycle that must not trust the cache is the first after the rules changed: everything
+    // the old rules rejected is a fresh question again, and stopping on it would make an edit look
+    // inert until the next scheduled check.
+    let settings_just_changed = match (
+        subscription.settings_changed_at,
+        subscription.last_checked_at,
+    ) {
+        (Some(changed), Some(checked)) => changed > checked,
+        (Some(_), None) => true,
+        _ => false,
+    };
+    let stop_on_cache = matches!(scan, ScanWindow::Days { .. }) && !settings_just_changed;
+
+    let mut collected: Vec<DiscoveredCandidate> = Vec::new();
+    let mut collected_sources = std::collections::HashSet::new();
+    let mut cache_run = 0usize;
+    let mut pages_read = 0u32;
+    let mut cursor: Option<String> = None;
+    let mut degraded = false;
+    let mut error = None;
+    let mut stop_reason = None;
+    let mut stopped_by_cache = false;
+    // The first chunk is deliberately one page: in steady state it is enough to hit the settled run
+    // and stop, and a larger first chunk would re-read uploads the previous cycle already handled.
+    let mut chunk = 1u32;
+
+    loop {
+        let remaining = page_budget.saturating_sub(pages_read);
+        if remaining == 0 {
+            break;
+        }
+        let this_chunk = chunk.min(remaining);
+        let mut args = base_args.clone();
+        if let Some(obj) = args.as_object_mut() {
+            obj.insert("max_pages".into(), serde_json::json!(this_chunk));
+            if let Some(cursor) = &cursor {
+                obj.insert("start_after".into(), serde_json::json!(cursor));
+            }
+            if let Some(cutoff) = posted_after {
+                obj.insert("posted_after".into(), serde_json::json!(cutoff));
+            }
+            let budget = (MAX_SCAN_CANDIDATES as usize)
+                .saturating_sub(collected.len())
+                .max(1);
+            obj.insert("max_candidates".into(), serde_json::json!(budget));
+        }
+
+        let result = match fetch_listing_with(state, &subscription, args).await {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::warn!(%subscription_id, error = %e, "discovery call failed");
+                if collected.is_empty() {
+                    emit_scan_progress(state, &subscription, pages_read, 0, true);
+                    return;
+                }
+                break;
+            }
+        };
+        let DiscoveryResult {
+            candidates,
+            degraded: chunk_degraded,
+            error: chunk_error,
+            next_cursor,
+            pages_read: chunk_pages,
+            stop_reason: chunk_stop,
+        } = result;
+
+        degraded |= chunk_degraded;
+        if let Some(chunk_error) = chunk_error {
+            // A source that could not be read at all tells us nothing about what exists. Keep a
+            // partial answer from earlier chunks only when there is one to keep.
+            if collected.is_empty() {
+                error = Some(chunk_error);
+            }
+            break;
+        }
+        // Older extensions do not report this; one call is still at least one page.
+        pages_read += chunk_pages.max(1);
+
+        for candidate in candidates.unwrap_or_default() {
+            if !collected_sources.insert(candidate.source.clone()) {
+                continue;
+            }
+            if known.contains(candidate.source.as_str()) {
+                cache_run += 1;
+            } else {
+                cache_run = 0;
+            }
+            collected.push(candidate);
+            if collected.len() >= MAX_SCAN_CANDIDATES as usize {
+                break;
+            }
+        }
+
+        emit_scan_progress(state, &subscription, pages_read, collected.len(), false);
+
+        if stop_on_cache && cache_run >= SCAN_CACHE_RUN {
+            stopped_by_cache = true;
+            break;
+        }
+        if let Some(stop) = chunk_stop {
+            stop_reason = Some(stop);
+            break;
+        }
+        if collected.len() >= MAX_SCAN_CANDIDATES as usize {
+            break;
+        }
+        cursor = next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+        chunk = 5;
+    }
+
+    if stopped_by_cache {
+        tracing::debug!(%subscription_id, candidates = collected.len(), "scan stopped on settled works");
+    }
+
+    // A snapshot diff may only report works as *removed from the source* when this cycle saw the
+    // whole window. A day-window scan that stopped on settled works, hit the cap, or ran out of
+    // page budget saw a prefix, and everything after it would look deleted. A page-window scan
+    // answers exactly the range it was asked about, so its own budget is the complete answer.
+    let scan_complete = match scan {
+        ScanWindow::Pages { .. } => true,
+        ScanWindow::Days { .. } => {
+            !stopped_by_cache
+                && matches!(stop_reason, Some(DiscoveryStop::End | DiscoveryStop::Age))
+        }
+    };
+
+    emit_scan_progress(state, &subscription, pages_read, collected.len(), true);
+
+    let result = DiscoveryResult {
+        candidates: Some(collected),
+        degraded,
+        error,
+        next_cursor: None,
+        pages_read,
+        stop_reason,
+    };
 
     let held_names: Vec<String> = held.iter().map(|(source, _)| source.clone()).collect();
     let archive_for: std::collections::HashMap<&str, &str> = held
@@ -789,7 +951,7 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
             .await;
     }
 
-    apply_snapshot_diff(state, &subscription, &result, &decision).await;
+    apply_snapshot_diff(state, &subscription, &result, &decision, scan_complete).await;
 
     let cycle = build_cycle(
         uuid::Uuid::new_v4().to_string(),
@@ -818,11 +980,33 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
 /// whatever the subscription's own policies ask for (FR-012b–e, issue #111).
 ///
 /// Separated from `decide` because this is all I/O and policy, while `decide` stays pure.
+/// Reports how far a running check has read. Deliberately fire-and-forget: a progress event is
+/// not part of the check's result, and no subscriber is a normal state (tests, bench, no UI open).
+fn emit_scan_progress(
+    state: &AppState,
+    subscription: &Subscription,
+    pages_read: u32,
+    candidates: usize,
+    done: bool,
+) {
+    let Some(tx) = &state.subscription_check_tx else {
+        return;
+    };
+    let _ = tx.send(serde_json::json!({
+        "subscription_id": subscription.id,
+        "name": subscription.name,
+        "pages_read": pages_read,
+        "candidates": candidates,
+        "done": done,
+    }));
+}
+
 async fn apply_snapshot_diff(
     state: &AppState,
     subscription: &Subscription,
     result: &lanrurugi_plugin::protocol::DiscoveryResult,
     decision: &CycleDecision,
+    scan_complete: bool,
 ) {
     let candidates = result.candidates.as_deref().unwrap_or(&[]);
     let previous = state
@@ -847,7 +1031,7 @@ async fn apply_snapshot_diff(
     let diff = super::snapshot::diff(
         candidates,
         &previous,
-        decision.outcome.is_authoritative(),
+        decision.outcome.is_authoritative() && scan_complete,
         now_secs(),
         &still_matches,
     );
@@ -1018,6 +1202,7 @@ mod tests {
             name: "n".into(),
             source: "discovery/example".into(),
             criteria: Criteria::default(),
+            scan: ScanWindow::default(),
             filters,
             interval_secs: 3600,
             target_category: None,
@@ -1054,6 +1239,7 @@ mod tests {
             candidates: Some(candidates),
             degraded,
             error: None,
+            ..Default::default()
         }
     }
 
@@ -1408,6 +1594,7 @@ mod tests {
                 error_code: "source unreachable".into(),
                 data: None,
             }),
+            ..Default::default()
         };
         let d = decide(
             &sub(true, Filters::default()),
