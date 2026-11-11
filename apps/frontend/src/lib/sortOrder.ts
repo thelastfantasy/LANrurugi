@@ -26,3 +26,17 @@ export function effectiveSortDir(
   if (sortby === RELEVANCE_SORT) return "asc"
   return dir
 }
+
+/** The direction a sort change settles on: an explicit choice wins, switching to a field takes
+ *  that field's natural direction, otherwise the current direction carries over. Shared so the
+ *  request and the URL cannot disagree — computing it in one place and rebuilding the URL from the
+ *  other is what made "Date" come out oldest-first when the previous field was relevance. */
+export function nextSortDir(
+  current: "asc" | "desc",
+  switchedTo?: string,
+  explicit?: "asc" | "desc",
+): "asc" | "desc" {
+  if (explicit) return explicit
+  if (switchedTo !== undefined) return defaultSortDir(switchedTo)
+  return current
+}

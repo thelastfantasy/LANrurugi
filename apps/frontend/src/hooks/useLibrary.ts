@@ -41,7 +41,7 @@ import {
   tagSuggestions,
   toggleQuickFilter,
 } from "@/lib/searchSuggestions";
-import { defaultSortDir, effectiveSortDir } from "@/lib/sortOrder";
+import { effectiveSortDir, nextSortDir } from "@/lib/sortOrder";
 import {
   COLUMN_COUNT_KEY,
   CROP_THUMBS_KEY,
@@ -199,9 +199,7 @@ export function useLibrary() {
     const nextSortby = overrides.sortby ?? sortby;
     // Switching fields resets to that field's own natural direction: relevance has no reverse,
     // dates are newest-first, title/tag namespaces are A→Z.
-    const nextOrder =
-      overrides.order ??
-      (overrides.sortby !== undefined ? defaultSortDir(overrides.sortby) : order);
+    const nextOrder = nextSortDir(order, overrides.sortby, overrides.order);
     if (overrides.sortby !== undefined) {
       localStorage.setItem(INDEX_SORT_KEY, overrides.sortby);
     }
@@ -220,7 +218,10 @@ export function useLibrary() {
     // Only a genuinely *applied* filter is history-worthy — paging, sorting and category clicks
     // all route through here without carrying an `appliedFilter`.
     if (overrides.appliedFilter !== undefined) rememberSearch(overrides.appliedFilter);
-    navigate({ search: buildSearch(overrides) });
+    // `nextOrder` has to be handed to `buildSearch` explicitly: it re-derives the direction from
+    // `overrides.order ?? order`, so leaving it out made a field switch fall back to the *previous*
+    // field's direction — relevance's forced `asc` turned "Date" into oldest-first.
+    navigate({ search: buildSearch({ ...overrides, order: nextOrder }) });
   }
   const [viewMode, setViewModeState] = useState<"thumbnail" | "compact">(() =>
     localStorage.getItem(INDEX_VIEW_MODE_KEY) === "0" ? "compact" : "thumbnail",
