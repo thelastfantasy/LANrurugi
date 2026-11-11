@@ -46,8 +46,6 @@ function emptyBody(source: string, intervalSecs: number): SubscriptionBody {
     // Off by default (FR-007a): a brand-new subscription's rules are usually still being tuned.
     auto_download: false,
     credit_policy: "pause",
-    // Ask, like every download before subscriptions existed.
-    conflict_policy: "ask",
     // Least destructive defaults: a change is surfaced, a removal is only marked. Neither touches an
     // archive already in the library.
     on_source_changed: "notify_only",
@@ -69,7 +67,6 @@ function bodyOf(s: Subscription): SubscriptionBody {
     enrich_metadata: s.enrich_metadata,
     auto_download: s.auto_download,
     credit_policy: s.credit_policy,
-    conflict_policy: s.conflict_policy ?? "ask",
     on_source_changed: s.on_source_changed,
     on_source_removed: s.on_source_removed,
   }

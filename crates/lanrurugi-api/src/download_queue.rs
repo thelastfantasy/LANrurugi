@@ -298,7 +298,6 @@ async fn add_to_queue(
                 auto_fetch_metadata: item.auto_fetch_metadata,
                 overwrite_on_duplicate: item.overwrite_on_duplicate,
                 // A manual add answers its own conflicts in the UI, like it always has.
-                conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
                 state: DownloadQueueState::Queued,
             })
             .await
@@ -1809,7 +1808,6 @@ mod tests {
             metadata_tags: Vec::new(),
             auto_fetch_metadata: false,
             overwrite_on_duplicate: false,
-            conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
             state,
             transferring: false,
             version_history: None,
@@ -1871,7 +1869,6 @@ mod tests {
                 metadata_tags: Vec::new(),
                 auto_fetch_metadata: false,
                 overwrite_on_duplicate: false,
-                conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
                 state: DownloadQueueState::Error,
             })
             .await
@@ -1992,7 +1989,6 @@ mod tests {
                         metadata_tags: vec![],
                         auto_fetch_metadata: false,
                         overwrite_on_duplicate: false,
-                        conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
                         state: DownloadQueueState::Queued,
                     })
                     .await
@@ -2087,7 +2083,6 @@ mod tests {
                 metadata_tags: vec![],
                 auto_fetch_metadata: false,
                 overwrite_on_duplicate: false,
-                conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
                 state: DownloadQueueState::Queued,
             })
             .await

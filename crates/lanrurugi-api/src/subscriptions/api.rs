@@ -77,9 +77,6 @@ pub struct SubscriptionBody {
     pub auto_download: bool,
     #[serde(default)]
     pub credit_policy: CreditPolicy,
-    /// What this subscription's downloads do when a filename collides with an existing archive.
-    #[serde(default)]
-    pub conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy,
     /// What to do when a tracked work's title or tags change at the source. Defaults to the least
     /// destructive option (FR-012c).
     /// Whether it starts enabled. Defaults to on, which is what creating one usually means — but a
@@ -265,7 +262,6 @@ async fn create(
         enrich_metadata: body.enrich_metadata,
         auto_download: body.auto_download,
         credit_policy: body.credit_policy,
-        conflict_policy: body.conflict_policy,
         credentials: body.credentials,
         on_source_changed: body.on_source_changed,
         on_source_removed: body.on_source_removed,
@@ -330,7 +326,6 @@ async fn update(
         enrich_metadata: body.enrich_metadata,
         auto_download: body.auto_download,
         credit_policy: body.credit_policy,
-        conflict_policy: body.conflict_policy,
         credentials: body.credentials,
         on_source_changed: body.on_source_changed,
         on_source_removed: body.on_source_removed,
@@ -723,7 +718,6 @@ fn draft_subscription(body: SubscriptionBody) -> Subscription {
         enrich_metadata: body.enrich_metadata,
         auto_download: body.auto_download,
         credit_policy: body.credit_policy,
-        conflict_policy: body.conflict_policy,
         credentials: body.credentials,
         on_source_changed: body.on_source_changed,
         on_source_removed: body.on_source_removed,
@@ -762,7 +756,6 @@ async fn preview_draft(
         enrich_metadata: body.enrich_metadata,
         auto_download: body.auto_download,
         credit_policy: body.credit_policy,
-        conflict_policy: body.conflict_policy,
         credentials: body.credentials,
         on_source_changed: body.on_source_changed,
         on_source_removed: body.on_source_removed,
@@ -921,10 +914,8 @@ async fn approve_pending(
             }));
             continue;
         };
-        let overwrite_on_duplicate = super::overwrite_under_conflict_policy(
-            subscription.conflict_policy,
-            crate::plugins::resolve_queue_overwrite_on_duplicate(&state, &download_namespace).await,
-        );
+        let overwrite_on_duplicate =
+            crate::plugins::resolve_queue_overwrite_on_duplicate(&state, &download_namespace).await;
 
         let queued = state
             .download_queue
@@ -938,7 +929,6 @@ async fn approve_pending(
                 metadata_tags: subscription.metadata_tags.clone(),
                 auto_fetch_metadata: subscription.enrich_metadata,
                 overwrite_on_duplicate,
-                conflict_policy: subscription.conflict_policy,
                 // Enters the queue exactly as a manually added URL would, inheriting the existing
                 // start/stop/retry behaviour rather than getting a path of its own.
                 state: lanrurugi_storage::download_queue::DownloadQueueState::Queued,

@@ -35,6 +35,76 @@
   touch-action: pan-y;
 }
 
+/* Android-style dismissal animations for toasts (`AndroidToastTransition` in `src/toast.tsx`).
+   The exit starts at the exact transform/opacity the drag left the card at, so a swipe continues
+   from the finger instead of snapping back first; left and right mirror each other. */
+.lrr-toast-enter {
+  animation: lrr-toast-in 260ms cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+.lrr-toast-exit-right {
+  animation: lrr-toast-out-right 240ms cubic-bezier(0.32, 0, 0.75, 0.35) forwards;
+}
+.lrr-toast-exit-left {
+  animation: lrr-toast-out-left 240ms cubic-bezier(0.32, 0, 0.75, 0.35) forwards;
+}
+.lrr-toast-exit-fade {
+  animation: lrr-toast-out-fade 180ms ease-in forwards;
+}
+/* Overrides the drag's inline fade (which reaches 0 at the 30% dismissal threshold) so the card
+   stays readable under the finger; the fly-out keyframes do the fading instead. */
+.lrr-toast-dragging {
+  opacity: 1 !important;
+}
+
+@keyframes lrr-toast-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 16px, 0) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+@keyframes lrr-toast-out-right {
+  from {
+    opacity: 1;
+    transform: var(--lrr-exit-from, none);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(115%, -4px, 0) rotate(6deg) scale(0.97);
+  }
+}
+@keyframes lrr-toast-out-left {
+  from {
+    opacity: 1;
+    transform: var(--lrr-exit-from, none);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(-115%, -4px, 0) rotate(-6deg) scale(0.97);
+  }
+}
+@keyframes lrr-toast-out-fade {
+  from {
+    opacity: 1;
+    transform: var(--lrr-exit-from, none);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(0, -10px, 0) scale(0.98);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lrr-toast-enter,
+  .lrr-toast-exit-right,
+  .lrr-toast-exit-left,
+  .lrr-toast-exit-fade {
+    animation-duration: 1ms;
+  }
+}
+
 html {
   scrollbar-gutter: stable;
   scrollbar-width: thin;

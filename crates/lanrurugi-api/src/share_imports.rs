@@ -336,7 +336,6 @@ async fn create_import(
             metadata_tags: Vec::new(),
             auto_fetch_metadata: false,
             overwrite_on_duplicate: false,
-            conflict_policy: Default::default(),
             state: DownloadQueueState::Queued,
         })
         .await;

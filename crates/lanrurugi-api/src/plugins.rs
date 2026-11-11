@@ -2609,8 +2609,9 @@ pub(crate) async fn start_download(
                         }
                         // Under either policy the incoming revision is meant to win: with
                         // `always_overwrite` the old archive is already gone, and with
-                        // `overwrite_if_same_name` this is precisely the "filenames collide, so
-                        // replace" case — otherwise nothing collides and this has no effect.
+                        // `overwrite_if_same_name` the old one stays, so the incoming revision is
+                        // simply catalogued beside it. `overwrite` here only decides what happens
+                        // to a byte-identical file already in the library.
                         overwrite = true;
                     }
                     RevisionRelation::OlderThan { archive_id, hops } => {
@@ -4786,7 +4787,6 @@ pub(crate) mod tests {
                     metadata_tags: Vec::new(),
                     auto_fetch_metadata: false,
                     overwrite_on_duplicate: false,
-                    conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
                     state: lanrurugi_storage::download_queue::DownloadQueueState::Queued,
                 })
                 .await

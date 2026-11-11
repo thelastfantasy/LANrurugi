@@ -678,10 +678,8 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
             let _ = state.subscriptions.save_reservation(&entry).await;
             continue;
         };
-        let overwrite_on_duplicate = super::overwrite_under_conflict_policy(
-            subscription.conflict_policy,
-            crate::plugins::resolve_queue_overwrite_on_duplicate(state, &download_namespace).await,
-        );
+        let overwrite_on_duplicate =
+            crate::plugins::resolve_queue_overwrite_on_duplicate(state, &download_namespace).await;
 
         let queued = state
             .download_queue
@@ -697,7 +695,6 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
                 metadata_tags: subscription.metadata_tags.clone(),
                 auto_fetch_metadata: subscription.enrich_metadata,
                 overwrite_on_duplicate,
-                conflict_policy: subscription.conflict_policy,
                 // Enters the queue the same way a manually added URL does, so it inherits the
                 // existing start/stop/retry behaviour rather than getting a path of its own.
                 state: lanrurugi_storage::download_queue::DownloadQueueState::Queued,
@@ -1028,7 +1025,6 @@ mod tests {
             enrich_metadata: true,
             auto_download: auto,
             credit_policy: CreditPolicy::default(),
-            conflict_policy: Default::default(),
             credentials: Default::default(),
             settings_changed_at: None,
             on_source_changed: Default::default(),

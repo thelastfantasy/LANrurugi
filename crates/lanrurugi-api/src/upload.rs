@@ -808,7 +808,6 @@ async fn finalize_staged_upload(
             auto_fetch_metadata: false,
             overwrite_on_duplicate: false,
             // A local upload has no subscription behind it; its collisions are resolved by hand.
-            conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
             state: DownloadQueueState::Queued,
         })
         .await

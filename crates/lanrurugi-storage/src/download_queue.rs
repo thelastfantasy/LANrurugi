@@ -16,8 +16,6 @@ use deadpool_redis::Pool;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::subscriptions::ConflictPolicy;
-
 #[derive(Debug, Error)]
 pub enum DownloadQueueStorageError {
     #[error("Redis error: {0}")]
@@ -199,13 +197,6 @@ pub struct DownloadQueueItem {
     pub metadata_tags: Vec<String>,
     pub auto_fetch_metadata: bool,
     pub overwrite_on_duplicate: bool,
-    /// The policy the subscription that queued this item pre-answered its filename conflicts with
-    /// (`ConflictPolicy::Ask` for everything else, including a manual add). Carried on the item
-    /// rather than looked up from the subscription at ingest time: the conflict is resolved long
-    /// after the decision to download, and a policy edited in between should govern the *next*
-    /// download, not retroactively re-decide one already in flight.
-    #[serde(default)]
-    pub conflict_policy: ConflictPolicy,
     pub state: DownloadQueueState,
     /// Set once `start` has launched the actual background download —
     /// `lanrurugi_core::jobs::JobRegistry` job ID, used by the frontend to look up live
@@ -330,8 +321,6 @@ pub struct NewQueueItem {
     pub metadata_tags: Vec<String>,
     pub auto_fetch_metadata: bool,
     pub overwrite_on_duplicate: bool,
-    /// See [`DownloadQueueItem::conflict_policy`].
-    pub conflict_policy: ConflictPolicy,
     /// A download starts `Queued` (waiting for the user to press Start/for `start_all`). A local
     /// upload's bytes are already fully in hand by the time this is called — its own `add` call
     /// site sets this straight to whatever the synchronous ingest attempt that follows actually
@@ -376,7 +365,6 @@ impl DownloadQueueRepository {
             metadata_tags: new_item.metadata_tags,
             auto_fetch_metadata: new_item.auto_fetch_metadata,
             overwrite_on_duplicate: new_item.overwrite_on_duplicate,
-            conflict_policy: new_item.conflict_policy,
             state: new_item.state,
             job_id: None,
             archive_ids: None,
@@ -547,7 +535,6 @@ mod tests {
             metadata_tags: Vec::new(),
             auto_fetch_metadata: false,
             overwrite_on_duplicate: false,
-            conflict_policy: ConflictPolicy::Ask,
             state: DownloadQueueState::Done,
             job_id: None,
             archive_ids: None,
@@ -613,7 +600,6 @@ mod tests {
             metadata_tags: Vec::new(),
             auto_fetch_metadata: false,
             overwrite_on_duplicate: false,
-            conflict_policy: crate::subscriptions::ConflictPolicy::Ask,
             state: DownloadQueueState::Queued,
         }
     }
@@ -689,7 +675,6 @@ mod tests {
                 metadata_tags: Vec::new(),
                 auto_fetch_metadata: false,
                 overwrite_on_duplicate: false,
-                conflict_policy: crate::subscriptions::ConflictPolicy::Ask,
                 state: DownloadQueueState::Done,
             })
             .await

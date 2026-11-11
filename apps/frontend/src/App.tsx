@@ -2,6 +2,8 @@ import { lazy,Suspense } from "react"
 import { BrowserRouter, Route, Routes, useParams } from "react-router-dom"
 import { ToastContainer } from "react-toastify"
 
+import { AndroidToastTransition } from "@/toast"
+
 import { AuthBridgeGate } from "./AuthBridgeGate"
 import { NotFoundPage } from "./components/Display/NotFoundPage"
 import { DialogHost } from "./dialog"
@@ -67,6 +69,7 @@ export function App() {
       <ToastContainer
         limit={7}
         theme="light"
+        transition={AndroidToastTransition}
         draggable
         draggableDirection="x"
         draggablePercent={30}

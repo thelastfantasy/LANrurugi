@@ -2,7 +2,11 @@ import { type CSSProperties, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { useJudgePreview, usePreviewSubscription } from "@/api/hooks"
-import type { SubscriptionBody, SubscriptionSource } from "@/api/types"
+import type {
+  SubscriptionBody,
+  SubscriptionPreview as SubscriptionPreviewData,
+  SubscriptionSource,
+} from "@/api/types"
 import { Modal } from "@/components/common-ui/Display"
 
 import { SubscriptionForm } from "./SubscriptionForm"
@@ -133,15 +137,35 @@ export function SubscriptionFormModal({
   const listing = useRef<unknown>(null)
   const latest = useRef(draft)
   latest.current = draft
+  /** What the pane is showing; both paths below write it explicitly, in completion order. */
+  const [shown, setShown] = useState<SubscriptionPreviewData | null>(null)
+
+  // A fetch and a judgment are separate requests that can overlap, so neither `data` field alone can
+  // be trusted to be the newer one: a judgment started first can still land after the fetch that
+  // replaced its listing. Each request carries a ticket; only the newest accepted one is shown, and
+  // a fresh listing always invalidates judgments made against the previous one.
+  const fetchTicket = useRef(0)
+  const listingGeneration = useRef(0)
+  const judgeTicket = useRef(0)
 
   const fetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     if (!draft.source) return
     if (fetchTimer.current) clearTimeout(fetchTimer.current)
     fetchTimer.current = setTimeout(() => {
+      const ticket = ++fetchTicket.current
       preview.mutate(
         { id: subscriptionId, draft: latest.current },
-        { onSuccess: (data) => (listing.current = data.listing ?? null) },
+        {
+          onSuccess: (data) => {
+            if (ticket !== fetchTicket.current) return
+            listingGeneration.current += 1
+            // Includes a judgment still in flight for the old listing.
+            judgeTicket.current += 1
+            listing.current = data.listing ?? null
+            setShown(data)
+          },
+        },
       )
     }, 600)
     return () => {
@@ -157,17 +181,25 @@ export function SubscriptionFormModal({
     if (!listing.current) return
     if (judgeTimer.current) clearTimeout(judgeTimer.current)
     judgeTimer.current = setTimeout(() => {
-      judge.mutate({ subscription: latest.current, listing: listing.current })
+      const judgedListing = listingGeneration.current
+      const ticket = ++judgeTicket.current
+      judge.mutate(
+        { subscription: latest.current, listing: listing.current },
+        {
+          onSuccess: (data) => {
+            if (ticket !== judgeTicket.current || judgedListing !== listingGeneration.current) {
+              return
+            }
+            setShown(data)
+          },
+        },
+      )
     }, 300)
     return () => {
       if (judgeTimer.current) clearTimeout(judgeTimer.current)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [judgeKey])
-
-  // The newest result from either path. A re-judge supersedes the fetch that produced it, and a fresh
-  // fetch supersedes an older judgment.
-  const shown = judge.data ?? preview.data
 
   // Which optional columns the source actually reports. Plugins without uploader/rating/posted_at
   // must not show empty columns (or skeleton bars for them).

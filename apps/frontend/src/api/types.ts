@@ -494,11 +494,6 @@ export interface SubscriptionFilters {
  * source exposes a balance to check beforehand, so the failure itself is the only trigger. */
 export type CreditPolicy = "pause" | "continue_and_reserve"
 
-/** What a subscription's downloads do when a filename collides with an archive the library already
- * has. A subscription downloads unattended, so the default (`ask`) can park bytes nobody is there
- * to decide about — see `PENDING_RENAME_TTL_HOURS`. */
-export type ConflictPolicy = "ask" | "auto_rename" | "overwrite" | "discard"
-
 /** What to do when a tracked work's title or tags change at the source.
  *
  * `refetch_metadata` re-runs the metadata capability rather than copying the listing's own tags onto
@@ -534,7 +529,6 @@ export interface Subscription {
    * when an over-broad rule would spend real credit unattended. */
   auto_download: boolean
   credit_policy: CreditPolicy
-  conflict_policy: ConflictPolicy
   on_source_changed: SourceChangePolicy
   on_source_removed: SourceRemovalPolicy
   state: SubscriptionState
@@ -695,8 +689,6 @@ export interface SubscriptionBody {
   enrich_metadata: boolean
   auto_download: boolean
   credit_policy: CreditPolicy
-  /** What this subscription's downloads do about a filename collision. */
-  conflict_policy: ConflictPolicy
   /** Whether it starts enabled. Defaults on — but a rule can be written now and switched on once its
    *  preview looks right. Only meaningful on create; an existing one is toggled from its row. */
   enabled?: boolean
@@ -994,8 +986,6 @@ export interface DownloadQueueItem {
   category: string | null
   auto_fetch_metadata: boolean
   overwrite_on_duplicate: boolean
-  /** The subscription's own pre-answered conflict policy; `ask` for anything else. */
-  conflict_policy?: ConflictPolicy
   state: DownloadQueueState
   /** When this item's download began and finished (epoch ms), persisted rather than only held on
    *  the job — a finished job is dropped when the process restarts, and a finished row still owes

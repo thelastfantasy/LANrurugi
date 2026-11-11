@@ -157,36 +157,6 @@ pub enum SourceRemovalPolicy {
     Ignore,
 }
 
-/// What a subscription's downloads do when a filename collides with an archive the library already
-/// has — the one conflict a download cannot resolve on its own.
-///
-/// A per-subscription answer rather than a global one because a subscription downloads unattended:
-/// the default (`Ask`) parks the bytes in `temp_dir` for a decision, and a decision nobody is
-/// present to make expires with them 24 hours later (see `PENDING_RENAME_MAX_AGE`). A subscription
-/// whose rules are trusted can pre-answer instead.
-///
-/// Deliberately no "ask only when it matters" middle ground: the collision is either resolved by
-/// this policy or handed to the user, and pretending to know which are worth asking about is how a
-/// filter silently stops matching.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ConflictPolicy {
-    /// Park it and ask (the default, and the only behavior before this existed).
-    #[default]
-    Ask,
-    /// Catalogue it beside the existing archive, under `{name}_{crc}.{ext}` — the same derived name
-    /// the rename popover's own default template produces, so an automatic and a manual resolution
-    /// of the same collision land on the same filename.
-    AutoRename,
-    /// Replace the colliding archive. The same mechanism as the download plugin's own
-    /// `overwrite_on_duplicate` option (and the global `replacedupe` setting), just chosen per
-    /// subscription instead of per plugin.
-    Overwrite,
-    /// Drop it: no archive, no question. For a subscription whose criteria are broad enough that an
-    /// occasional collision is expected noise.
-    Discard,
-}
-
 /// Cookies and headers supplied by hand, for a source no login plugin covers.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Credentials {
@@ -394,9 +364,6 @@ pub struct Subscription {
     pub auto_download: bool,
     #[serde(default)]
     pub credit_policy: CreditPolicy,
-    /// What this subscription's downloads do about a filename collision — see [`ConflictPolicy`].
-    #[serde(default)]
-    pub conflict_policy: ConflictPolicy,
     /// Cookies and headers to send with this subscription's own checks, for a source whose login
     /// plugin is missing or that authenticates in a way no plugin covers.
     ///
@@ -1336,7 +1303,6 @@ mod tests {
             enrich_metadata: true,
             auto_download: false,
             credit_policy: CreditPolicy::default(),
-            conflict_policy: ConflictPolicy::default(),
             credentials: Credentials::default(),
             settings_changed_at: None,
             on_source_changed: SourceChangePolicy::default(),

@@ -92,7 +92,7 @@ export function pluginOptions() {
     ],
     overwrite_on_duplicate: {
       default: false,
-      description: "Overwrite an existing archive with the same content or filename when re-downloading (e.g. after a gallery was revised).",
+      description: "Overwrite an existing archive when the downloaded file has identical content (e.g. to re-ingest it after a metadata fix).",
     },
   };
 }
