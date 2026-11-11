@@ -58,15 +58,17 @@ pub(crate) fn tankoubon_chapter_rename_system() -> String {
 
 /// Bump whenever the reranking instructions change: the ordering is cached per
 /// `(archive, limit, version)`, so a stale entry would otherwise outlive the prompt it came from.
-pub(crate) const RECOMMEND_RERANK_PROMPT_VERSION: &str = "v1";
+pub(crate) const RECOMMEND_RERANK_PROMPT_VERSION: &str = "v2";
 
 /// Recommendation LLM rerank prompt.
 pub(crate) fn recommend_llm_system() -> String {
-    "你是一个漫画/同人志推荐引擎。你会收到当前漫画的标题和标签、以及候选漫画清单（id: 标题 | 标签 | 页数 | 版本）。\n\
+    "你是一个漫画/同人志推荐引擎。你会收到当前漫画的标题、标签、页数与阅读进度，以及候选漫画清单（id: 标题 | 标签 | 页数 | 阅读进度 | 版本）。\n\
          请从候选中挑选并排序推荐。排序规则（按优先级）：\n\
          1) 同一系列的下一卷必须排第一（例如当前是第10卷，那么第11卷就是第一推荐，没有第二种可能）；\n\
          2) 同一系列的其它卷紧随其后，按卷号顺序；\n\
          3) 其余候选按与当前漫画的相关度降序。\n\
+         阅读进度规则：候选清单已经排除了「已读完」的作品；「未读」优先于「在读」，「在读」优先于「进度未知」；\n\
+         当前漫画若已读完，同一系列的下一卷优先；当前漫画若在读，先推荐同一系列里接续当前进度的卷。\n\
          候选清单里的标题已经去掉了翻译/版本信息，同一作品的不同版本也已合并成一条，版本仅作为行尾「版本: …」的说明——\
          不要因为版本或翻译不同而改变排序，也不要把它当成另一部作品。\n\
          副标题（如「～聖職姉妹の背徳～」）不同的是不同作品，不要当成同一系列。\n\
@@ -486,6 +488,19 @@ mod tests {
             a.trim_end().ends_with(']'),
             "nothing follows the field list"
         );
+    }
+
+    /// v2 is the reading-aware ranking contract: the prompt must say candidates are already
+    /// filtered, and how the progress tiers order — otherwise the cache version bump is the only
+    /// thing that changed.
+    #[test]
+    fn the_rerank_prompt_teaches_the_reading_progress_rules() {
+        assert_eq!(RECOMMEND_RERANK_PROMPT_VERSION, "v2");
+        let prompt = recommend_llm_system();
+        assert!(prompt.contains("阅读进度"));
+        assert!(prompt.contains("已经排除了「已读完」"));
+        assert!(prompt.contains("「未读」优先于「在读」"));
+        assert!(prompt.contains("阅读进度 | 版本"));
     }
 
     fn prompt_for(plugin_type: &str) -> String {

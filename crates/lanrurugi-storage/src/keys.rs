@@ -153,15 +153,20 @@ pub fn thumbnail_retry_key(archive_id: &str, page: u32) -> String {
 /// currently unreadable, short enough that a worker that came back is picked up on the next visit.
 pub const THUMBNAIL_RETRY_TTL_SECS: i64 = 10 * 60;
 
-/// Additive, LANrurugi-only. One reader-recommendation LLM rerank, keyed by anchor, limit and
-/// prompt version: the ordered archive ids the model picked.
+/// Additive, LANrurugi-only. One reader-recommendation LLM rerank, keyed by anchor, limit, prompt
+/// version and the reading-progress digest: the ordered archive ids the model picked.
 ///
 /// The rerank is a synchronous DeepSeek call (observed 6–64 s); the candidate shortlist itself is
 /// already cached by `lanrurugi_storage::recommend_cache`, so without this every panel open paid
 /// the model call again for the same answer. A hit is re-validated against the live candidate list,
 /// so an id that has since been deleted simply falls through to a fresh call.
-pub fn recommend_rerank_key(archive_id: &str, limit: usize, prompt_version: &str) -> String {
-    format!("LANRURUGI_RECOMMEND_RERANK:{archive_id}:{limit}:{prompt_version}")
+pub fn recommend_rerank_key(
+    archive_id: &str,
+    limit: usize,
+    prompt_version: &str,
+    progress_digest: &str,
+) -> String {
+    format!("LANRURUGI_RECOMMEND_RERANK:{archive_id}:{limit}:{prompt_version}:{progress_digest}")
 }
 
 /// 6 hours: a library that does not change reuses one answer all day, while any new archive makes
