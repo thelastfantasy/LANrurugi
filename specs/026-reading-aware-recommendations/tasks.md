@@ -41,7 +41,7 @@
 
 - [x] T016 `mise run fmt-check`、`mise run clippy`（workspace）、`mise run test-crate -- lanrurugi-recommend`、`mise run test-crate -- lanrurugi-api` 全绿。
 - [ ] T017 `mise run dev-rebuild && dev-down && dev-up` 后按 quickstart.md 场景 1–5 手测；记录实际顺序与 Redis 键。
-- [ ] T018 更新 `specs/026-reading-aware-recommendations/tasks.md` 勾选、`docs/` 相关说明（已更新 `docs/comparison-with-lanraragi.md` 推荐引擎一条）；提交与 PR #258 正文更新待用户确认后执行。
+- [x] T018 更新 `specs/026-reading-aware-recommendations/tasks.md` 勾选、`docs/` 相关说明（已更新 `docs/comparison-with-lanraragi.md` 推荐引擎一条）；提交为 `9e19c25`，PR #258 正文已加第 19 节。
 
 ## Dependencies
 
