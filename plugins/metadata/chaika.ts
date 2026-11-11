@@ -37,7 +37,7 @@ export function pluginInfo() {
     declared_permissions: { net: ["panda.chaika.moe"], read: false, write: false },
     name: "Chaika.moe",
     author: "thelastfantasy",
-    description: "Searches chaika.moe for tags matching your archive. This will try to use the thumbnail first, and fallback to a default text search.",
+    description: "Searches chaika.moe for tags matching your archive. Uses the Chaika id the download stamped onto the archive when there is one, and falls back to a title search.",
     version: "0.1",
     icon: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAACXBIWXMAAAsTAAALEwEAmpwYAAAA\nB3RJTUUH4wYCFQocjU4r+QAAAB1pVFh0Q29tbWVudAAAAAAAQ3JlYXRlZCB3aXRoIEdJTVBkLmUH\nAAAEZElEQVQ4y42T3WtTdxzGn/M7J+fk5SRpTk7TxMZkXU84tTbVNrUT3YxO7HA4pdtQZDe7cgx2\ns8vBRvEPsOwFYTDYGJUpbDI2wV04cGXCGFLonIu1L2ptmtrmxeb1JDkvv121ZKVze66f74eH7/f5\nMmjRwMCAwrt4/9KDpflMJpPHvyiR2DPcJklJ3TRDDa0xk36cvrm8vDwHAAwAqKrqjjwXecPG205w\nHBuqa9rk77/d/qJYLD7cCht5deQIIczbgiAEKLVAKXWUiqVV06Tf35q8dYVJJBJem2A7Kwi2nQzD\nZig1CG93+PO5/KN6tf5NKpVqbsBUVVVFUUxwHJc1TXNBoxojS7IbhrnLMMx9pVJlBqFQKBKPxwcB\nkJYgjKIo3QCE1nSKoghbfJuKRqN2RVXexMaQzWaLezyeEUEQDjscjk78PxFFUYRkMsltJgGA3t7e\nyMLCwie6rr8iCILVbDbvMgwzYRjGxe0o4XC4s1AoHPP5fMP5/NNOyzLKAO6Ew+HrDADBbre/Ryk9\nnzx81FXJNlEpVpF+OqtpWu2MpmnXWmH9/f2umZmZi4cOHXnLbILLzOchhz1YerJAs9m1GwRAg2GY\nh7GYah488BJYzYW+2BD61AFBlmX/1nSNRqN9//792ujoaIPVRMjOKHoie3DytVGmp2fXCAEAjuMm\nu7u7Umosho6gjL/u/QHeEgvJZHJ2K/D+/fuL4+PjXyvPd5ldkShy1UXcmb4DnjgQj/fd5gDA6/XS\nYCAwTwh9oT3QzrS1+VDVi+vd3Tsy26yQVoFF3dAXJVmK96p9EJ0iLNOwKKU3CQCk0+lSOpP5WLDz\nF9Q9kZqyO0SloOs6gMfbHSU5NLRiUOuax2/HyZPHEOsLw2SbP83eu/fLxrkNp9P554XxCzVa16MC\n7+BPnTk9cfmH74KJE8nmga7Xy5JkZ8VKifGIHpoBb1VX8hNTd3/t/7lQ3OeXfFPvf/jBRw8ezD/a\n7M/aWq91cGgnJaZ2VcgSdnV1XRNNd3vAoBVVYusmnEQS65hfgSG6c+zy3Kre7nF/KrukcMW0Zg8O\nD08DoJutDxxOEb5IPUymwrq8ft1gLKfkFojkkRxemERCAQUACPFWRazYLJcrFGwQhyufbQQ7rFpy\nLMkCwGZC34qPIuwp+XPOjBFwazQ/txrdFS2GGS/Xuj+pUKLGk1Kjvlded3s72lyGW+PLbGVcmrAA\ngN0wTk1NWYODg9XOKltGtpazi5GigzroUnHN5nUHG1ylRsG7rDXHmnEpu4CeEtEKkqNc6QqlLc/M\n8uT5lLH5eq0aGxsju1O7GQB498a5s/0x9dRALPaQEDZnYwnhWJtMCCNrjeb0UP34Z6e/PW22zjPP\n+vwXBwfPvbw38XnXjk7GsiwKAIQQhjAMMrlsam45d+zLH6/8o6vkWcBcrXbVKQhf6bpucCwLjmUB\nSmmhXC419eblrbD/TAgAkUjE987xE0c7ZDmk66ajUCnq+cL63fErl25s5/8baQPaWLhx6goAAAAA\nSUVORK5CYII=",
     oneshot_arg: "Chaika Gallery or Archive URL (Will attach matching tags to your archive)",
@@ -61,8 +61,8 @@ interface ChaikaGallery {
   posted?: string | number;
   title: string;
   title_jpn?: string;
-  /** Present on gallery objects and gallery-search hits; archive/sha1 records only carry the
-   * internal `gallery` id — see `with_gallery_link`. */
+  /** Present on gallery objects and gallery-search hits; archive records only carry the internal
+   * `gallery` id — see `with_gallery_link`. */
   link?: string;
   gid?: string | number;
   token?: string | null;
@@ -76,7 +76,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
       info.user_agent.cookie_jar.add(c);
     }
   }
-  interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "arg" | "thumbnail_hash" | "archive_title" | "existing_tags" | "customargs">> {
+  interface ExecMetadataInfo extends Required<Pick<MetadataHostArgs, "arg" | "archive_title" | "existing_tags" | "customargs">> {
     user_agent: LegacyUserAgent;
     user_agent_cookies?: LegacyCookie[];
   }
@@ -111,9 +111,8 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   //     plugin has no way to disambiguate from a bare number).
   let oneshotarg = lrr_info["arg"] ?? "";
   // The row that downloaded this archive already knew its Chaika id, and the download stamped it
-  // onto the archive (`source:panda.chaika.moe/archive/<id>`). That is the one identifier an
-  // auto-run start has for a freshly ingested archive, whose title may be the bare id and whose
-  // thumbnail is not in Chaika's sha1 index — without this, "Run Automatically" could never match.
+  // onto the archive (`source:panda.chaika.moe/archive/<id>`). That is the one exact identifier an
+  // auto-run start has for a freshly ingested archive, whose title is still the bare filename.
   const tagged = chaika_id_from_tags(lrr_info["existing_tags"] ?? "");
   if ((match = oneshotarg.match(/^(?:https?:\/\/)?panda\.chaika\.moe\/(gallery|archive)\/([0-9]+)\/?.*/))) {
     apply_result(await tags_from_chaika_id(match[1], match[2], addextra, addother, addsource, jpntitle));
@@ -123,12 +122,8 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     logger.info(`Using the Chaika id from the archive's own tags: ${tagged.type}/${tagged.id}`);
     apply_result(await tags_from_chaika_id(tagged.type, tagged.id, addextra, addother, addsource, jpntitle));
   } else {
-    logger.info("Using thumbnail hash " + lrr_info["thumbnail_hash"]);
-    apply_result(await tags_from_sha1(lrr_info["thumbnail_hash"], addextra, addother, addsource, jpntitle));
-    if (newtags === "") {
-      logger.info("No results, falling back to text search.");
-      apply_result(await search_for_archive(lrr_info["archive_title"], lrr_info["existing_tags"], addextra, addother, addsource, jpntitle));
-    }
+    logger.info("No Chaika id on the archive, falling back to text search.");
+    apply_result(await search_for_archive(lrr_info["archive_title"], lrr_info["existing_tags"], addextra, addother, addsource, jpntitle));
   }
   if (newtags === "") {
     let message = "No matching Chaika Archive Found!";
@@ -153,6 +148,58 @@ function chaika_id_from_tags(tags: string): { type: "gallery" | "archive"; id: s
     if (gallery) return { type: "gallery", id: gallery[1] };
   }
   return null;
+}
+
+/** Title tokens for comparing a jsearch hit against the title we searched with. */
+function title_tokens(title: string): Set<string> {
+  return new Set(
+    title
+      .toLowerCase()
+      .replace(/[\[\]()【】「」"“”']/g, " ")
+      .split(/[\s\-_.,:;!?\/]+/)
+      .filter((token) => token !== ""),
+  );
+}
+
+/** Jaccard overlap — penalizes a hit whose title carries extra words (an edition marker, a volume
+ * number) even when it contains every token we searched for. */
+function title_similarity(want: Set<string>, got: Set<string>): number {
+  if (want.size === 0 || got.size === 0) return 0;
+  let shared = 0;
+  for (const token of want) {
+    if (got.has(token)) shared++;
+  }
+  return shared / (want.size + got.size - shared);
+}
+
+function has_translation_marker(title: string): boolean {
+  return /\[english\]|\[英訳\]|\(english\)|英訳/i.test(title);
+}
+
+/** jsearch orders matches by recency, not by relevance, so a work that exists both as the
+ * Japanese original and as a translated sibling can come back translation-first — live: a search
+ * for `… Shizuru Ninshin Kouhen` returned `…19 "Shizuru Ninshin Kouhen" [English]` before the
+ * archive's own release, and legacy's blind `galleries[0]` titled the archive with the wrong
+ * edition. Take the title-closest hit instead, preferring an unmarked edition when the search
+ * term carries no translation marker itself. */
+function pick_best_gallery(galleries: ChaikaGallery[], title: string): ChaikaGallery {
+  let want = title_tokens(title);
+  let want_translated = has_translation_marker(title);
+  let best = galleries[0];
+  let best_score = -1;
+  for (const gallery of galleries) {
+    let english = gallery.title ?? "";
+    let japanese = gallery.title_jpn ?? "";
+    let score = Math.max(title_similarity(want, title_tokens(english)), title_similarity(want, title_tokens(japanese)));
+    if (!want_translated && (has_translation_marker(english) || has_translation_marker(japanese))) {
+      score -= 0.1;
+    }
+    if (score > best_score) {
+      best_score = score;
+      best = gallery;
+    }
+  }
+  return best;
 }
 
 /** Uses Chaika's HTML search to find a matching archive by title/tags. */
@@ -180,7 +227,11 @@ async function search_for_archive(
   logger.debug(`Chaika API returned this JSON: ${res.body}`);
   const galleries = (res.json as { galleries?: ChaikaGallery[] } | undefined)?.galleries;
   if (!galleries || galleries.length === 0) return "";
-  return parse_chaika_json(await with_gallery_link(galleries[0]), addextra, addother, addsource, jpntitle);
+  let picked = pick_best_gallery(galleries, title);
+  if (galleries.length > 1) {
+    logger.info(`Search matched ${galleries.length} galleries, picked ${picked.id}: ${galleries.map((g) => g.id).join(", ")}`);
+  }
+  return parse_chaika_json(await with_gallery_link(picked), addextra, addother, addsource, jpntitle);
 }
 
 /** Uses the jsearch API to get the best JSON match for a gallery/archive URL's type+ID. */
@@ -197,24 +248,10 @@ async function tags_from_chaika_id(
   return parse_chaika_json(await with_gallery_link(json as ChaikaGallery), addextra, addother, addsource, jpntitle);
 }
 
-/** Uses Chaika's SHA-1 search with the first page hash we have — the jsearch API immediately
- * returns a JSON array containing multiple archive objects; only the first one is used. */
-async function tags_from_sha1(
-  sha1: string,
-  addextra: boolean,
-  addother: boolean,
-  addsource: string,
-  jpntitle: boolean,
-): Promise<[string, string] | ""> {
-  let json_by_sha1 = await get_json_from_chaika('sha1', sha1) as ChaikaGallery[] | undefined;
-  if (!json_by_sha1 || json_by_sha1.length === 0) return "";
-  return parse_chaika_json(await with_gallery_link(json_by_sha1[0]), addextra, addother, addsource, jpntitle);
-}
-
-/** Archive and sha1 jsearch records carry only their internal `gallery` id, while the e-hentai
- * link lives on the gallery object — one extra request fills it in so the source tag below can be
- * added for those two lookup paths too. Best-effort: a failed or empty fetch keeps the record
- * as-is (the archive still gets its other tags). */
+/** Archive jsearch records carry only their internal `gallery` id, while the e-hentai link lives
+ * on the gallery object — one extra request fills it in so the source tag below can be added for
+ * that lookup path too. Best-effort: a failed or empty fetch keeps the record as-is (the archive
+ * still gets its other tags). */
 async function with_gallery_link(json: ChaikaGallery): Promise<ChaikaGallery> {
   if (json.link || json.gid) return json;
   const gallery = json.gallery;
@@ -245,13 +282,10 @@ function ehentai_source(json: ChaikaGallery): string {
 }
 
 /** Calls Chaika's own jsearch API — `undefined` on an HTTP error response (mirrors legacy's own
- * bare `return;`). Unlike legacy (which would just die dereferencing an undef further down), every
- * caller here checks for `undefined`/an empty result and returns `""` (parse_chaika_json's own "no
- * usable match" sentinel) instead of crashing — a real bug found live: a `sha1`-search miss (a
- * completely normal "no match" outcome, not an error) reached `parse_chaika_json` unchecked and
- * threw `Cannot read properties of undefined (reading 'tags')`, aborting the whole metadata fetch
- * instead of falling through to the text-search fallback `execMetadata` already has for exactly
- * this case. */
+ * bare `return;`). Every caller checks for `undefined`/an empty result and returns `""`
+ * (parse_chaika_json's own "no usable match" sentinel) instead of dereferencing it — a real bug
+ * found live: an unchecked miss threw `Cannot read properties of undefined (reading 'tags')`,
+ * aborting the whole metadata fetch instead of falling through to the text-search fallback. */
 async function get_json_from_chaika(type: string, value: string): Promise<unknown> {
   let logger = legacyCompat.getLogger("Chaika.moe", "plugins");
   let URL = `${chaika_url}/jsearch/?${type}=${value}`;
