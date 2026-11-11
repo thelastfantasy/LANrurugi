@@ -75,16 +75,20 @@
 mod eval;
 mod labels;
 pub mod review;
+mod run;
+
+pub use run::GroupingHub;
 
 pub use eval::{evaluate, EvalReview, EvaluationReport};
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::Router;
-use deadpool_redis::redis::AsyncCommands;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -96,6 +100,15 @@ pub fn router() -> Router<AppState> {
         .route(
             "/tankoubons/ai-group-suggestions",
             post(ai_group_suggestions),
+        )
+        .route("/tankoubons/ai-group-suggestions/run", post(start_grouping))
+        .route(
+            "/tankoubons/ai-group-suggestions/result",
+            axum::routing::get(group_suggestions_result),
+        )
+        .route(
+            "/tankoubons/ai-group-suggestions/stream",
+            axum::routing::get(run::stream),
         )
         .route(
             "/tankoubons/ai-group-suggestions/ignore",
@@ -516,6 +529,41 @@ pub(crate) struct Scorer<'a> {
     pub settings: &'a GroupingSettings,
     pub rarity: TagRarity<'a>,
     empty: HashSet<&'a str>,
+    /// Id → index into `nodes`; every id present in any of the three input maps is indexed.
+    index: HashMap<&'a str, u32>,
+    /// Per-candidate projections of the pair inputs. Built once so the O(n²) pass never allocates
+    /// or re-parses a tag string — the old loop allocated two `HashSet`s per pair.
+    nodes: Vec<Node<'a>>,
+    /// Whether the blend's weights are all non-negative, i.e. whether the upper-bound prune in
+    /// [`Scorer::judge`] is actually an upper bound. `GroupingSettings` is user-supplied through
+    /// `eval-grouping`, so this is checked rather than assumed.
+    prune_safe: bool,
+}
+
+/// One candidate's per-pair inputs.
+struct Node<'a> {
+    vector: Option<&'a [f32]>,
+    /// Euclidean length, for the Cauchy–Schwarz bound on the raw dot product `cosine_similarity`
+    /// returns. Stored vectors are unit-norm, so this is 1.0 in practice — computed rather than
+    /// assumed, because a bound that is not really a bound silently drops real pairs.
+    norm: f32,
+    /// Sorted: intersections become binary searches, and the weighted sums get a stable order
+    /// (a `HashSet`'s iteration order made the old float sums nondeterministic).
+    tags: Vec<&'a str>,
+    tokens: Vec<&'a str>,
+    categories: Vec<&'a str>,
+    cosplayers: Vec<&'a str>,
+    creators: Vec<&'a str>,
+    anthology: bool,
+    tankoubon: bool,
+}
+
+/// The pair decision on its own, without [`PairEvidence`]'s strings and allocations.
+#[derive(Clone, Copy)]
+struct Judged {
+    similar: bool,
+    /// Ranking score consulted only when `similar` — a shared cosplayer outranks any blend.
+    sort_score: f32,
 }
 
 impl<'a> Scorer<'a> {
@@ -525,6 +573,57 @@ impl<'a> Scorer<'a> {
         tokens: &'a HashMap<&'a str, HashSet<&'a str>>,
         settings: &'a GroupingSettings,
     ) -> Self {
+        let mut ids: Vec<&'a str> = vectors
+            .keys()
+            .chain(tags.keys())
+            .chain(tokens.keys())
+            .copied()
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        let mut index = HashMap::with_capacity(ids.len());
+        let mut nodes = Vec::with_capacity(ids.len());
+        for (i, id) in ids.iter().enumerate() {
+            index.insert(*id, i as u32);
+            let vector = vectors.get(id).copied();
+            let mut tag_list: Vec<&'a str> = tags
+                .get(id)
+                .map(|t| t.iter().copied().collect())
+                .unwrap_or_default();
+            tag_list.sort_unstable();
+            let mut token_list: Vec<&'a str> = tokens
+                .get(id)
+                .map(|t| t.iter().copied().collect())
+                .unwrap_or_default();
+            token_list.sort_unstable();
+            let mut categories: Vec<&'a str> = tag_list
+                .iter()
+                .filter_map(|t| t.strip_prefix("category:"))
+                .collect();
+            categories.sort_unstable();
+            let mut cosplayers: Vec<&'a str> = tag_list
+                .iter()
+                .filter_map(|t| t.strip_prefix("cosplayer:"))
+                .collect();
+            cosplayers.sort_unstable();
+            let mut creators: Vec<&'a str> =
+                tag_list.iter().filter_map(|t| creator_value(t)).collect();
+            creators.sort_unstable();
+            let norm = vector
+                .map(|v| v.iter().map(|x| x * x).sum::<f32>().sqrt())
+                .unwrap_or(0.0);
+            nodes.push(Node {
+                vector,
+                norm,
+                anthology: tag_list.contains(&"category:anthology"),
+                tankoubon: is_existing_tankoubon_node(id),
+                tags: tag_list,
+                tokens: token_list,
+                categories,
+                cosplayers,
+                creators,
+            });
+        }
         Self {
             vectors,
             tags,
@@ -532,6 +631,11 @@ impl<'a> Scorer<'a> {
             settings,
             rarity: TagRarity::build(tags.values()),
             empty: HashSet::new(),
+            index,
+            nodes,
+            prune_safe: settings.title_weight >= 0.0
+                && settings.tag_weight >= 0.0
+                && settings.token_weight >= 0.0,
         }
     }
 
@@ -607,41 +711,273 @@ impl<'a> Scorer<'a> {
         })
     }
 
-    pub(crate) fn similar(&self, a: &str, b: &str) -> bool {
-        self.evidence(a, b).is_some_and(|e| e.similar)
+    /// One pair's decision and ranking score, allocation-free — the O(n²) hot path. Ordered
+    /// cheapest-decisive-first rather than the way `evidence` reports it: the gates settle most
+    /// pairs, and the blend's own upper bound settles most of the rest before a 1024-dim dot
+    /// product ever runs.
+    fn judge(&self, i: u32, j: u32) -> Judged {
+        let not_similar = Judged {
+            similar: false,
+            sort_score: 0.0,
+        };
+        let (a, b) = (&self.nodes[i as usize], &self.nodes[j as usize]);
+        let (Some(a_vec), Some(b_vec)) = (a.vector, b.vector) else {
+            return not_similar;
+        };
+        // `tankoubon_pair_gate` then `category_conflict` — both are the `BlockedBy::Category` case.
+        if a.tankoubon && b.tankoubon {
+            return not_similar;
+        }
+        if !a.categories.is_empty()
+            && !b.categories.is_empty()
+            && sorted_disjoint(&a.categories, &b.categories)
+        {
+            return not_similar;
+        }
+        // Shared cosplayer wins before the creator gate can veto (see `evidence`).
+        if sorted_overlap(&a.cosplayers, &b.cosplayers) {
+            return Judged {
+                similar: true,
+                sort_score: 2.0,
+            };
+        }
+        let s = self.settings;
+        if s.creator_gate
+            && !a.anthology
+            && !b.anthology
+            && !a.creators.is_empty()
+            && !b.creators.is_empty()
+            && sorted_disjoint(&a.creators, &b.creators)
+        {
+            return not_similar;
+        }
+        let tag = self.tag_overlap_indexed(a, b);
+        let tokens = jaccard_sorted(&a.tokens, &b.tokens);
+        if self.prune_safe {
+            let upper =
+                s.title_weight * (a.norm * b.norm) + s.tag_weight * tag + s.token_weight * tokens;
+            if upper < s.threshold {
+                return not_similar;
+            }
+        }
+        let title = lanrurugi_recommend::embedding::cosine_similarity(a_vec, b_vec);
+        let score = s.title_weight * title + s.tag_weight * tag + s.token_weight * tokens;
+        Judged {
+            similar: score >= s.threshold,
+            sort_score: score,
+        }
     }
 
-    /// Ranking-only score for clique extension: a shared cosplayer outranks any blend.
-    fn sort_score(&self, a: &str, b: &str) -> f32 {
-        match self.evidence(a, b) {
-            Some(e) if e.shared_cosplayer => 2.0,
-            Some(e) => e.score,
-            None => 0.0,
+    /// [`Scorer::tag_overlap`] over the precomputed sorted sets: same formula, no allocation.
+    fn tag_overlap_indexed(&self, a: &Node<'a>, b: &Node<'a>) -> f32 {
+        let strip_creators = a.anthology || b.anthology;
+        let keep = |t: &str| !(strip_creators && creator_value(t).is_some());
+        let weighted = self.settings.idf_tags;
+        let (mut union, mut intersection) = (0.0f32, 0.0f32);
+        for &t in &a.tags {
+            if !keep(t) {
+                continue;
+            }
+            let w = if weighted { self.rarity.weight(t) } else { 1.0 };
+            union += w;
+            if b.tags.binary_search(&t).is_ok() {
+                intersection += w;
+            }
         }
+        for &t in &b.tags {
+            if !keep(t) || a.tags.binary_search(&t).is_ok() {
+                continue;
+            }
+            union += if weighted { self.rarity.weight(t) } else { 1.0 };
+        }
+        if union == 0.0 {
+            0.0
+        } else {
+            intersection / union
+        }
+    }
+
+    /// Every pair decision, computed once: the one expensive pass, and the only place the
+    /// O(n²) work happens. Parallel over rows with the crate's usual ~30%-of-cores cap, because
+    /// this is a burst inside one user action rather than a background job.
+    pub(crate) fn similarity_graph(
+        &self,
+        ids: &[&str],
+        cancel: Option<&AtomicBool>,
+        progress: Option<&(dyn Fn(u64, u64) + Sync)>,
+    ) -> SimilarityGraph {
+        let positions: Vec<Option<u32>> =
+            ids.iter().map(|id| self.index.get(id).copied()).collect();
+        let n = positions.len();
+        if n < 2 {
+            return SimilarityGraph {
+                rows: vec![Vec::new(); n],
+            };
+        }
+        let total = n as u64;
+        let cancelled = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
+        let report = |done: u64| {
+            if let Some(p) = progress {
+                p(done, total);
+            }
+        };
+        let scan_row = |i: usize| -> Vec<(u32, f32)> {
+            let Some(ai) = positions[i] else {
+                return Vec::new();
+            };
+            let mut row = Vec::new();
+            for (j, slot) in positions.iter().enumerate().skip(i + 1) {
+                let Some(bj) = *slot else {
+                    continue;
+                };
+                let judged = self.judge(ai, bj);
+                if judged.similar {
+                    row.push((j as u32, judged.sort_score));
+                }
+            }
+            row
+        };
+
+        let budget = crate::recommend_precompute::precompute_worker_budget();
+        let per_row: Vec<Vec<(u32, f32)>> = if cancelled() {
+            vec![Vec::new(); n]
+        } else if budget > 1 {
+            match rayon::ThreadPoolBuilder::new().num_threads(budget).build() {
+                Ok(pool) => {
+                    let done = AtomicU64::new(0);
+                    pool.install(|| {
+                        (0..n)
+                            .into_par_iter()
+                            .map(|i| {
+                                let row = if cancelled() { Vec::new() } else { scan_row(i) };
+                                let d = done.fetch_add(1, Ordering::Relaxed) + 1;
+                                if d.is_multiple_of(32) || d == total {
+                                    report(d);
+                                }
+                                row
+                            })
+                            .collect()
+                    })
+                }
+                Err(_) => (0..n).map(scan_row).collect(),
+            }
+        } else {
+            (0..n)
+                .map(|i| {
+                    if i.is_multiple_of(32) {
+                        report(i as u64);
+                    }
+                    if cancelled() {
+                        Vec::new()
+                    } else {
+                        scan_row(i)
+                    }
+                })
+                .collect()
+        };
+
+        let mut rows: Vec<Vec<(u32, f32)>> = vec![Vec::new(); n];
+        for (i, row) in per_row.into_iter().enumerate() {
+            let iu = i as u32;
+            for (j, score) in row {
+                rows[i].push((j, score));
+                rows[j as usize].push((iu, score));
+            }
+        }
+        // Ascending neighbour order keeps `connected_components`'s stack order identical to the
+        // old full-scan loop, and makes neighbour lookup a binary search.
+        for row in &mut rows {
+            row.sort_unstable_by_key(|&(pos, _)| pos);
+        }
+        report(total);
+        SimilarityGraph { rows }
+    }
+}
+
+/// `!cosplayer_values(a).is_disjoint(...)` over sorted slices.
+fn sorted_overlap(a: &[&str], b: &[&str]) -> bool {
+    a.iter().any(|t| b.binary_search(t).is_ok())
+}
+
+fn sorted_disjoint(a: &[&str], b: &[&str]) -> bool {
+    a.iter().all(|t| b.binary_search(t).is_err())
+}
+
+/// [`jaccard`] over sorted slices.
+fn jaccard_sorted(a: &[&str], b: &[&str]) -> f32 {
+    let (mut union, mut intersection) = (0usize, 0usize);
+    for &t in a {
+        union += 1;
+        if b.binary_search(&t).is_ok() {
+            intersection += 1;
+        }
+    }
+    for &t in b {
+        if a.binary_search(&t).is_err() {
+            union += 1;
+        }
+    }
+    if union == 0 {
+        0.0
+    } else {
+        intersection as f32 / union as f32
+    }
+}
+
+/// The similarity relation over one candidate pool, as an adjacency list indexed by position in
+/// the `ids` slice: only pairs the algorithm can ever consult are stored, because a clique only
+/// extends along an edge and a component only walks one.
+pub(crate) struct SimilarityGraph {
+    /// Neighbours, ascending by position, with the pair's clique ranking score.
+    rows: Vec<Vec<(u32, f32)>>,
+}
+
+impl SimilarityGraph {
+    fn is_similar(&self, i: u32, j: u32) -> bool {
+        self.rows[i as usize]
+            .binary_search_by_key(&j, |&(p, _)| p)
+            .is_ok()
+    }
+
+    fn sort_score(&self, i: u32, j: u32) -> f32 {
+        let row = &self.rows[i as usize];
+        row.binary_search_by_key(&j, |&(p, _)| p)
+            .map(|k| row[k].1)
+            .unwrap_or(0.0)
     }
 }
 
 /// Plain connected-components DFS over the similarity relation — only to shrink the search space
 /// the clique extraction has to consider, NOT the final grouping: a component alone over-merges (a
 /// real case chained three different cosplayers' shoots into one 9-archive "suggestion").
-fn connected_components<'a>(ids: &[&'a str], scorer: &Scorer) -> Vec<Vec<&'a str>> {
-    let mut visited: HashSet<&str> = HashSet::new();
+///
+/// Positions, not ids, so neighbours are O(log n) lookups instead of a full rescan of the pool.
+fn connected_components(
+    ids: &[&str],
+    vectors: &HashMap<&str, &[f32]>,
+    graph: &SimilarityGraph,
+) -> Vec<Vec<u32>> {
+    let mut visited = vec![false; ids.len()];
     let mut components = Vec::new();
 
-    for &start_id in ids {
-        if visited.contains(start_id) || !scorer.vectors.contains_key(start_id) {
+    for start in 0..ids.len() {
+        if visited[start] || !vectors.contains_key(ids[start]) {
             continue;
         }
-        let mut stack = vec![start_id];
+        let mut stack = vec![start as u32];
         let mut component = Vec::new();
         while let Some(node) = stack.pop() {
-            if !visited.insert(node) {
+            let position = node as usize;
+            if visited[position] {
                 continue;
             }
+            visited[position] = true;
             component.push(node);
-            for &other_id in ids {
-                if !visited.contains(other_id) && scorer.similar(node, other_id) {
-                    stack.push(other_id);
+            // Ascending, and only unvisited ones are pushed — same order and same duplicates as
+            // the old `for &other_id in ids` scan, which is what keeps component order stable.
+            for &(other, _) in &graph.rows[position] {
+                if !visited[other as usize] {
+                    stack.push(other);
                 }
             }
         }
@@ -653,26 +989,18 @@ fn connected_components<'a>(ids: &[&'a str], scorer: &Scorer) -> Vec<Vec<&'a str
 /// Greedy maximal-clique extension: repeatedly add whichever remaining candidate is similar to
 /// EVERY current member, preferring the highest average fit. No backtracking — components are
 /// small, and a greedy near-maximal clique is the right cost/quality trade-off.
-fn largest_clique_containing<'a>(
-    start_id: &'a str,
-    candidates: &[&'a str],
-    scorer: &Scorer,
-) -> Vec<&'a str> {
-    let mut clique = vec![start_id];
-    let mut remaining: Vec<&str> = candidates
-        .iter()
-        .copied()
-        .filter(|&id| id != start_id)
-        .collect();
+fn largest_clique_containing(start: u32, candidates: &[u32], graph: &SimilarityGraph) -> Vec<u32> {
+    let mut clique = vec![start];
+    let mut remaining: Vec<u32> = candidates.iter().copied().filter(|&p| p != start).collect();
     loop {
-        let mut best: Option<(&str, f32)> = None;
+        let mut best: Option<(u32, f32)> = None;
         for &candidate in &remaining {
-            if !clique.iter().all(|&m| scorer.similar(m, candidate)) {
+            if !clique.iter().all(|&m| graph.is_similar(m, candidate)) {
                 continue;
             }
             let avg = clique
                 .iter()
-                .map(|&m| scorer.sort_score(m, candidate))
+                .map(|&m| graph.sort_score(m, candidate))
                 .sum::<f32>()
                 / clique.len() as f32;
             if best.is_none_or(|(_, best_avg)| avg > best_avg) {
@@ -681,7 +1009,7 @@ fn largest_clique_containing<'a>(
         }
         let Some((chosen, _)) = best else { break };
         clique.push(chosen);
-        remaining.retain(|&id| id != chosen);
+        remaining.retain(|&p| p != chosen);
     }
     clique
 }
@@ -690,26 +1018,47 @@ fn largest_clique_containing<'a>(
 /// repeatedly the largest clique (every member pairwise similar, not just chain-connected). An
 /// existing-Tankoubon node starts first, so an archive that fits it is claimed by it.
 pub(crate) fn group_with(ids: &[String], scorer: &Scorer) -> Vec<Vec<String>> {
+    group_with_hooked(ids, scorer, None, None)
+}
+
+/// [`group_with`] with cancellation and row-level progress, for the detached run.
+///
+/// Cancellation is checked between rows, so an abandoned run stops within one row's work rather
+/// than at the next phase boundary — with a stale fingerprint, restarting is the normal path, not
+/// an exceptional one.
+pub(crate) fn group_with_hooked(
+    ids: &[String],
+    scorer: &Scorer,
+    cancel: Option<&AtomicBool>,
+    progress: Option<&(dyn Fn(u64, u64) + Sync)>,
+) -> Vec<Vec<String>> {
     let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let graph = scorer.similarity_graph(&id_refs, cancel, progress);
     let mut groups = Vec::new();
-    for component in connected_components(&id_refs, scorer) {
+    for component in connected_components(&id_refs, scorer.vectors, &graph) {
         let mut remaining = component;
         while remaining.len() >= MIN_GROUP_SIZE {
             let start = remaining
                 .iter()
-                .find(|&&id| is_existing_tankoubon_node(id))
                 .copied()
+                .find(|&pos| is_existing_tankoubon_node(id_refs[pos as usize]))
                 .unwrap_or(remaining[0]);
-            let mut clique = largest_clique_containing(start, &remaining, scorer);
+            let clique = largest_clique_containing(start, &remaining, &graph);
             if clique.len() < MIN_GROUP_SIZE {
                 // Drop the unclusterable start so it is not re-selected forever.
-                remaining.retain(|&id| id != start);
+                remaining.retain(|&pos| pos != start);
                 continue;
             }
-            clique.sort();
-            let clique_set: HashSet<&str> = clique.iter().copied().collect();
-            remaining.retain(|id| !clique_set.contains(id));
-            groups.push(clique.into_iter().map(String::from).collect());
+            let clique_set: HashSet<u32> = clique.iter().copied().collect();
+            remaining.retain(|pos| !clique_set.contains(pos));
+            let mut group: Vec<String> = clique
+                .into_iter()
+                .map(|pos| ids[pos as usize].clone())
+                .collect();
+            // Sorted by id, not by position in the candidate list — the id list's own order comes
+            // from a Redis set and is not stable between runs.
+            group.sort();
+            groups.push(group);
         }
     }
     groups
@@ -744,22 +1093,6 @@ pub(crate) fn group_evidence(group: &[String], scorer: &Scorer) -> Vec<PairEvide
 /// Drops any suggestion whose exact fingerprint (see `lanrurugi_storage::
 /// ignored_group_suggestions::fingerprint`) is in `ignored_fingerprints` — pure filtering logic,
 /// pulled out of `ai_group_suggestions` itself so it's testable without a real Redis connection.
-fn filter_ignored_suggestions(
-    suggestions: Vec<GroupSuggestion>,
-    ignored_fingerprints: &HashSet<String>,
-) -> Vec<GroupSuggestion> {
-    suggestions
-        .into_iter()
-        .filter(|s| {
-            let fp = lanrurugi_storage::ignored_group_suggestions::fingerprint(
-                &s.archive_ids,
-                s.existing_tankoubon_id.as_deref(),
-            );
-            !ignored_fingerprints.contains(&fp)
-        })
-        .collect()
-}
-
 #[derive(Deserialize)]
 struct AiGroupSuggestionsQuery {
     /// Default `false` — a previously-ignored exact combination ("Don't suggest this again",
@@ -805,373 +1138,79 @@ fn suggestions_fingerprint(
     format!("{:016x}", hasher.finish())
 }
 
+/// Legacy entry point (`POST /tankoubons/ai-group-suggestions`), kept so a frontend build from
+/// before the split keeps working. The computation does not run inside this request any more — it
+/// used to, and that is exactly what produced the 524: the future owned an unbounded whole-library
+/// pass, so Cloudflare giving up at ~100s (nginx then logged the disconnect as 499) discarded the
+/// work and left nothing cached to retry from.
+///
+/// A fresh cache still answers synchronously with the old `{"suggestions": [...]}` shape; anything
+/// else starts (or joins) the detached run and answers `202` at once.
 async fn ai_group_suggestions(
     State(state): State<AppState>,
     Query(query): Query<AiGroupSuggestionsQuery>,
 ) -> Response {
-    // No upfront "is the model ready" gate here anymore — `lanrurugi-embed-worker` (see
-    // `crate::embed_worker_client`'s own doc comment) is spawned on demand by the very first
-    // `embed()` call below, same as every other on-demand subprocess in this codebase
-    // (`gpu_worker_client`'s own workers); there is no longer a background "still downloading the
-    // model" state a request could be rejected for arriving during. A genuinely failed embed
-    // still degrades this endpoint's own results per-candidate (see the `embed()` call sites
-    // below), it just never blocks the whole request up front on a state that no longer exists.
-
-    // "Not currently a member of any Tankoubon" is exactly `LRR_TANKGROUPED` membership (despite
-    // the legacy-inherited name — see that key's own doc comment in lanrurugi-search::keys) minus
-    // the Tankoubons' own aggregate entries (also members of this set, identifiable by their
-    // `TANK_` id prefix — real archive ids are 40 lowercase-hex chars and never start with that).
-    let mut search_conn = match state.redis.search.get().await {
-        Ok(c) => c,
+    let candidates = match run::candidate_set(&state).await {
+        Ok(candidates) => candidates,
         Err(e) => {
             return error(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 "ai_group_suggestions",
-                e.to_string(),
+                e,
             )
         }
     };
-    let ungrouped_ids: Vec<String> = match search_conn
-        .smembers::<_, Vec<String>>(lanrurugi_search::keys::TANKGROUPED_KEY)
-        .await
-    {
-        Ok(ids) => ids
-            .into_iter()
-            .filter(|id| !id.starts_with("TANK_"))
-            .collect(),
-        Err(e) => {
-            return error(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "ai_group_suggestions",
-                e.to_string(),
-            )
-        }
-    };
-
-    // Every existing Tankoubon also participates as a synthetic node (see this module's own
-    // top-level docs) — fetched even when `ungrouped_ids` alone is below `MIN_GROUP_SIZE`, since a
-    // single loose archive plus one existing Tankoubon is still a valid "add to existing" scenario
-    // (a real archive count of exactly 1 candidate isn't "nothing to suggest" the way it would be
-    // for two loose archives with nothing else around them).
-    let existing_tankoubons = match state.repos.groupings.list_all().await {
-        Ok(g) => g,
-        Err(e) => {
-            return error(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "ai_group_suggestions",
-                e.to_string(),
-            )
-        }
-    };
-
-    if ungrouped_ids.is_empty()
-        || (ungrouped_ids.len() < MIN_GROUP_SIZE && existing_tankoubons.is_empty())
-    {
-        return axum::Json(json!({ "suggestions": Vec::<GroupSuggestion>::new() })).into_response();
+    if candidates.nothing_to_suggest() {
+        return axum::Json(json!({ "suggestions": [] })).into_response();
     }
-
-    // Everything the answer depends on, before the expensive part: an unchanged library and
-    // unchanged settings mean the previous list is still exact, however long ago it was computed.
-    let ignored_for_fingerprint = match state.ignored_group_suggestions.ignored_fingerprints().await
-    {
-        Ok(fps) => fps,
-        Err(e) => {
-            return error(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "ai_group_suggestions",
-                e.to_string(),
-            )
-        }
-    };
-    let fingerprint = suggestions_fingerprint(
-        &ungrouped_ids,
-        &existing_tankoubons,
-        &ignored_for_fingerprint,
-        &GroupingSettings::default(),
-    );
-    if let Ok(mut conn) = state.redis.config.get().await {
-        if let Ok(Some(raw)) = conn.get::<_, Option<String>>(SUGGESTIONS_CACHE_KEY).await {
-            if let Ok(cached) = serde_json::from_str::<serde_json::Value>(&raw) {
-                if cached.get("fingerprint").and_then(|v| v.as_str()) == Some(fingerprint.as_str())
-                {
-                    tracing::debug!("ai_group_suggestions: cache hit");
-                    return axum::Json(json!({
-                        "suggestions": cached.get("suggestions").cloned().unwrap_or_else(|| json!([])),
-                    }))
-                    .into_response();
-                }
-            }
-        }
-    }
-
-    // Title + tags for every ungrouped archive — tags come straight from the archive record
-    // (cheap, no separate cache); title *vectors* prefer the persisted recommend-cache (populated
-    // by `recommend_precompute.rs` at catalogue/title-change time) and fall back to embedding
-    // on-the-spot for any archive that cache doesn't have yet (a fresh install before the initial
-    // backfill finishes, or an archive whose title changed since — same graceful-degradation shape
-    // `recommend.rs`'s own request path uses).
-    let mut tags_by_id: HashMap<String, String> = HashMap::new();
-    let mut titles_by_id: HashMap<String, String> = HashMap::new();
-    let mut vectors_by_id: HashMap<String, Vec<f32>> = HashMap::new();
-    let mut missing_titles: Vec<(String, String)> = Vec::new();
-
-    for id in &ungrouped_ids {
-        let Ok(Some(archive)) = state
-            .repos
-            .archives
-            .get(&lanrurugi_core::ids::ArchiveId(id.clone()))
-            .await
-        else {
-            continue;
+    if let Some(entry) = run::cached(&state, &candidates.fingerprint).await {
+        let suggestions = if query.include_ignored {
+            entry.suggestions
+        } else {
+            run::filter_ignored(entry.suggestions, &candidates.ignored)
         };
-        tags_by_id.insert(id.clone(), archive.tags.clone());
-        titles_by_id.insert(id.clone(), archive.title.clone());
-        match state.recommend_cache.get_vector(id).await {
-            Ok(Some((cached_title, vector))) if cached_title == archive.title => {
-                vectors_by_id.insert(id.clone(), vector);
-            }
-            _ => missing_titles.push((id.clone(), archive.title)),
-        }
+        return axum::Json(json!({ "suggestions": suggestions })).into_response();
     }
+    let handle = state.grouping.start_or_join(&state, candidates).await;
+    (
+        axum::http::StatusCode::ACCEPTED,
+        axum::Json(json!({ "status": "running", "run_id": handle.run_id })),
+    )
+        .into_response()
+}
 
-    // Each existing Tankoubon's synthetic node needs the same three inputs a real archive has
-    // (vector, tags, title-token source) — built from its own members, not stored directly on
-    // `Grouping` itself, so this stays in sync automatically as members/tags change over time
-    // rather than needing its own separate cache invalidation story.
-    let mut tankoubon_ids: Vec<String> = Vec::new();
-    for tankoubon in &existing_tankoubons {
-        if tankoubon.archives.is_empty() {
-            // An empty Tankoubon has no member titles/tags to derive a synthetic node from —
-            // nothing meaningful to suggest adding to, so it just doesn't participate at all
-            // (distinct from a Tankoubon whose members simply don't have their own tags — that
-            // still has a valid, if all-empty, tag set and a real average vector).
-            continue;
-        }
-        let node_id = tankoubon.tankid.as_str().to_string();
-        let mut member_tags: Vec<String> = Vec::new();
-        let mut member_vectors: Vec<Vec<f32>> = Vec::new();
-        for member_id in &tankoubon.archives {
-            let Ok(Some(archive)) = state.repos.archives.get(member_id).await else {
-                continue;
-            };
-            member_tags.push(archive.tags.clone());
-            match state.recommend_cache.get_vector(member_id.as_str()).await {
-                Ok(Some((cached_title, vector))) if cached_title == archive.title => {
-                    member_vectors.push(vector);
-                }
-                _ => {
-                    let normalized =
-                        lanrurugi_recommend::recommend::normalize_title(&archive.title);
-                    if let Ok(vector) = state
-                        .recommender
-                        .embed_worker_client()
-                        .embed(&normalized)
-                        .await
-                    {
-                        let _ = state
-                            .recommend_cache
-                            .put_vector(member_id.as_str(), &archive.title, &vector)
-                            .await;
-                        member_vectors.push(vector);
-                    }
-                }
-            }
-        }
-        if member_vectors.is_empty() {
-            continue;
-        }
-        let dims = member_vectors[0].len();
-        let mut averaged = vec![0.0f32; dims];
-        for v in &member_vectors {
-            for (i, x) in v.iter().enumerate() {
-                averaged[i] += x;
-            }
-        }
-        let count = member_vectors.len() as f32;
-        for x in &mut averaged {
-            *x /= count;
-        }
-        vectors_by_id.insert(node_id.clone(), averaged);
-        tags_by_id.insert(node_id.clone(), member_tags.join(","));
-        // The Tankoubon's own name stands in for a "title" — used only to derive its synthetic
-        // node's title-token set (see `title_tokens`'s own docs on what that bonus is for); a
-        // freshly-created Tankoubon's name is initialized from its first member's own title (see
-        // `AiSmartTankoubonModal.tsx`'s create flow), so this carries the same creator-handle/
-        // series-keyword signal a real archive's own title would.
-        titles_by_id.insert(node_id.clone(), tankoubon.name.clone());
-        tankoubon_ids.push(node_id);
-    }
-
-    if !missing_titles.is_empty() {
-        let embedder = state.recommender.embed_worker_client();
-        // Sequential, not `spawn_blocking`+parallel — same reasoning as
-        // `recommend_precompute.rs`'s own batch-embed loop: `embed()` is now an IPC round trip to
-        // `lanrurugi-embed-worker`'s single serialized session, not in-process ONNX inference, so
-        // there's no local blocking work to bounce off this handler's thread and no real
-        // parallelism to gain from fanning these out.
-        let mut computed: Vec<(String, String, Vec<f32>)> =
-            Vec::with_capacity(missing_titles.len());
-        for (id, title) in missing_titles {
-            let normalized = lanrurugi_recommend::recommend::normalize_title(&title);
-            if let Ok(v) = embedder.embed(&normalized).await {
-                computed.push((id, title, v));
-            }
-        }
-        for (id, title, vector) in computed {
-            // Best-effort cache the freshly-computed vector for next time — same reasoning as
-            // `recommend.rs`'s own miss-path fire-and-forget `precompute_one`, but done inline
-            // here (already off the async reactor via spawn_blocking above, and this handler
-            // doesn't have a hot per-request latency budget to protect the way the live
-            // recommendations endpoint does).
-            let _ = state.recommend_cache.put_vector(&id, &title, &vector).await;
-            vectors_by_id.insert(id, vector);
-        }
-    }
-
-    // Nothing could be vectorized at all — no cache hits and every `embed()` failed. That is an
-    // environment problem (the worker binary is missing from the image, or the model download
-    // failed), not "this library happens to have no same-series pairs", and the two must not look
-    // the same to a user staring at an empty list (beta.1/beta.2 shipped exactly that).
-    let scored_archives = ungrouped_ids
-        .iter()
-        .filter(|id| vectors_by_id.contains_key(*id))
-        .count();
-    if ungrouped_ids.len() >= MIN_GROUP_SIZE && scored_archives == 0 {
-        tracing::warn!(
-            candidates = ungrouped_ids.len(),
-            "ai_group_suggestions: no archive could be embedded; the local worker or model is unavailable"
-        );
-        return (
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(json!({
-                "error": "embed_unavailable",
-                "message": "The local embedding worker or its model is unavailable, so titles cannot be compared.",
-            })),
-        )
-            .into_response();
-    }
-
-    // The borrowed `&str`/`&[f32]` views `group_by_similarity` wants are built INSIDE the blocking
-    // closure (not passed in from out here) — `spawn_blocking` requires a `'static` closure, and a
-    // `HashMap<&str, _>` borrowing from `vectors_by_id`/`tags_by_id` can't satisfy that from the
-    // outside; moving the owned maps in and re-deriving the borrowed views locally sidesteps that
-    // instead of fighting the borrow checker with unnecessary cloning.
-    let settings = GroupingSettings::default();
-    let settings_for_task = settings.clone();
-    // Kept for the inline review lookup after grouping (the originals move into the task).
-    let titles_for_review = titles_by_id.clone();
-    let tags_for_review = tags_by_id.clone();
-    let groups = tokio::task::spawn_blocking(move || {
-        let settings = settings_for_task;
-        let vector_refs: HashMap<&str, &[f32]> = vectors_by_id
-            .iter()
-            .map(|(id, v)| (id.as_str(), v.as_slice()))
-            .collect();
-        let tag_refs: HashMap<&str, HashSet<&str>> = tags_by_id
-            .iter()
-            .map(|(id, t)| (id.as_str(), tag_set(t)))
-            .collect();
-        let title_token_refs: HashMap<&str, HashSet<&str>> = titles_by_id
-            .iter()
-            .map(|(id, t)| (id.as_str(), title_tokens_for(t, &settings)))
-            .collect();
-        // Every existing-Tankoubon synthetic node id is appended after the real ungrouped archive
-        // ids — order doesn't matter to `group_by_similarity` itself (it only reads this as an id
-        // set to iterate/filter, not as a priority ordering; the actual "prefer a Tankoubon node as
-        // a clique's starting point" preference lives inside that function, driven by
-        // `is_existing_tankoubon_node`, not by this list's order).
-        let all_ids: Vec<String> = ungrouped_ids.into_iter().chain(tankoubon_ids).collect();
-        let scorer = Scorer::new(&vector_refs, &tag_refs, &title_token_refs, &settings);
-        group_with(&all_ids, &scorer)
-            .into_iter()
-            .map(|group| {
-                let evidence = group_evidence(&group, &scorer);
-                let hints = review_hints(&group, &evidence, &scorer);
-                (group, evidence, hints)
-            })
-            .collect::<Vec<_>>()
-    })
-    .await;
-    let groups = match groups {
-        Ok(g) => g,
+/// Starts the run and answers where things stand: `200` when the cache already holds the answer,
+/// `202` while a run is going. The frontend calls this on the click and then follows the stream.
+async fn start_grouping(State(state): State<AppState>) -> Response {
+    let candidates = match run::candidate_set(&state).await {
+        Ok(candidates) => candidates,
         Err(e) => {
             return error(
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 "ai_group_suggestions",
-                e.to_string(),
+                e,
             )
         }
     };
-
-    // Split each group into its existing-Tankoubon anchor (if any — at most one, per
-    // `tankoubon_pair_gate`'s own guarantee) plus the real archive ids, which become the
-    // suggestion's own `existing_tankoubon_id`/`archive_ids` pair. A group with no Tankoubon node
-    // at all is a plain "suggest a new Tankoubon" entry, same as before this feature existed.
-    let suggestions: Vec<GroupSuggestion> = groups
-        .into_iter()
-        .map(|(group, evidence, hints)| {
-            let mut existing_tankoubon_id = None;
-            let mut archive_ids = Vec::with_capacity(group.len());
-            for id in group {
-                if is_existing_tankoubon_node(&id) {
-                    existing_tankoubon_id = Some(id);
-                } else {
-                    archive_ids.push(id);
-                }
-            }
-            let suggestion_id = lanrurugi_storage::ignored_group_suggestions::suggestion_id(
-                &archive_ids,
-                existing_tankoubon_id.as_deref(),
-            );
-            GroupSuggestion {
-                archive_ids,
-                existing_tankoubon_id,
-                suggestion_id,
-                evidence,
-                review: None,
-                hints,
-            }
-        })
-        .collect();
-
-    // Drop any suggestion the user already dismissed ("Don't suggest this again"), unless the
-    // frontend explicitly asked to see them too (`?include_ignored=true`, the "Show ignored
-    // combinations" checkbox). Fetched/filtered only now, after the full (possibly expensive)
-    // grouping pass already ran — the ignored set is typically tiny, so gating the grouping work
-    // itself behind it wouldn't save anything, and doing it as a plain post-filter here keeps
-    // `group_by_similarity` itself free of a concern that has nothing to do with clustering.
-    let suggestions = if query.include_ignored {
-        suggestions
-    } else {
-        let ignored_fingerprints =
-            match state.ignored_group_suggestions.ignored_fingerprints().await {
-                Ok(fps) => fps,
-                Err(e) => {
-                    return error(
-                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                        "ai_group_suggestions",
-                        e.to_string(),
-                    )
-                }
-            };
-        filter_ignored_suggestions(suggestions, &ignored_fingerprints)
-    };
-    let suggestions = enrich_suggestions(
-        &state,
-        suggestions,
-        &titles_for_review,
-        &tags_for_review,
-        &settings,
-    )
-    .await;
-
-    let payload = json!({ "suggestions": suggestions });
-    if let Ok(mut conn) = state.redis.config.get().await {
-        let entry =
-            json!({ "fingerprint": fingerprint, "suggestions": payload["suggestions"].clone() });
-        let _: Result<(), _> = conn.set(SUGGESTIONS_CACHE_KEY, entry.to_string()).await;
+    if candidates.nothing_to_suggest() {
+        return axum::Json(json!({ "status": "ready", "suggestions": [] })).into_response();
     }
-    axum::Json(payload).into_response()
+    if let Some(entry) = run::cached(&state, &candidates.fingerprint).await {
+        return axum::Json(run::result_json(Some(&entry), None)).into_response();
+    }
+    let handle = state.grouping.start_or_join(&state, candidates).await;
+    let mut body = handle.snapshot();
+    body["status"] = json!("running");
+    (axum::http::StatusCode::ACCEPTED, axum::Json(body)).into_response()
+}
+
+/// Current state of the answer: cache or run, whichever is newer. Cheap enough to poll — it reads
+/// the candidate set and the cache, never the vectors.
+async fn group_suggestions_result(
+    State(state): State<AppState>,
+    Query(query): Query<AiGroupSuggestionsQuery>,
+) -> Response {
+    axum::Json(run::snapshot(&state, query.include_ignored).await).into_response()
 }
 
 /// Repository for the harness's labels and records, on the config pool.
@@ -1453,48 +1492,50 @@ mod tests {
         assert_eq!(jaccard_tag_score(&a, &b), 1.0);
     }
 
+    fn suggestion_json(ids: &[&str], existing: Option<&str>) -> serde_json::Value {
+        serde_json::to_value(GroupSuggestion::for_test(
+            ids.iter().map(|id| id.to_string()).collect(),
+            existing.map(|id| id.to_string()),
+        ))
+        .unwrap()
+    }
+
     #[test]
-    fn filter_ignored_suggestions_drops_a_matching_fingerprint() {
-        let s1 = GroupSuggestion::for_test(vec!["a".to_string(), "b".to_string()], None);
-        let s2 = GroupSuggestion::for_test(vec!["c".to_string(), "d".to_string()], None);
+    fn filter_ignored_drops_a_matching_fingerprint() {
+        let s1 = suggestion_json(&["a", "b"], None);
+        let s2 = suggestion_json(&["c", "d"], None);
         let ignored_fp = lanrurugi_storage::ignored_group_suggestions::fingerprint(
-            &s1.archive_ids,
-            s1.existing_tankoubon_id.as_deref(),
+            &["a".to_string(), "b".to_string()],
+            None,
         );
         let ignored: HashSet<String> = [ignored_fp].into_iter().collect();
 
-        let result = filter_ignored_suggestions(vec![s1, s2], &ignored);
+        let result = run::filter_ignored(vec![s1, s2], &ignored);
         assert_eq!(result.len(), 1);
-        assert_eq!(
-            result[0].archive_ids,
-            vec!["c".to_string(), "d".to_string()]
-        );
+        assert_eq!(result[0]["archive_ids"], json!(["c", "d"]));
     }
 
     #[test]
-    fn filter_ignored_suggestions_keeps_everything_when_nothing_is_ignored() {
-        let s1 = GroupSuggestion::for_test(vec!["a".to_string(), "b".to_string()], None);
-        let result = filter_ignored_suggestions(vec![s1], &HashSet::new());
+    fn filter_ignored_keeps_everything_when_nothing_is_ignored() {
+        let s1 = suggestion_json(&["a", "b"], None);
+        let result = run::filter_ignored(vec![s1], &HashSet::new());
         assert_eq!(result.len(), 1);
     }
 
     #[test]
-    fn filter_ignored_suggestions_distinguishes_by_existing_tankoubon_id() {
+    fn filter_ignored_distinguishes_by_existing_tankoubon_id() {
         // Same archive_ids, but one is a plain new-group suggestion and the other is an
         // add-to-existing-Tankoubon suggestion — ignoring one must not silently drop the other,
         // since they represent genuinely different actions (see `fingerprint`'s own docs).
-        let new_group = GroupSuggestion::for_test(vec!["a".to_string()], None);
-        let add_to_existing =
-            GroupSuggestion::for_test(vec!["a".to_string()], Some("TANK_1".to_string()));
-        let ignored_fp = lanrurugi_storage::ignored_group_suggestions::fingerprint(
-            &new_group.archive_ids,
-            new_group.existing_tankoubon_id.as_deref(),
-        );
+        let new_group = suggestion_json(&["a"], None);
+        let add_to_existing = suggestion_json(&["a"], Some("TANK_1"));
+        let ignored_fp =
+            lanrurugi_storage::ignored_group_suggestions::fingerprint(&["a".to_string()], None);
         let ignored: HashSet<String> = [ignored_fp].into_iter().collect();
 
-        let result = filter_ignored_suggestions(vec![new_group, add_to_existing], &ignored);
+        let result = run::filter_ignored(vec![new_group, add_to_existing], &ignored);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].existing_tankoubon_id, Some("TANK_1".to_string()));
+        assert_eq!(result[0]["existing_tankoubon_id"], json!("TANK_1"));
     }
 
     #[test]
@@ -2327,5 +2368,300 @@ mod tests {
         assert!(d.iter().any(|m| m == "D2"), "{groups:?}");
         let e = find("E1").expect("anthology issues still groupable");
         assert!(e.iter().any(|m| m == "E2"), "{groups:?}");
+    }
+
+    /// The indexed scorer (built for speed) must decide exactly what the readable
+    /// [`Scorer::evidence`] does — that function is the specification, and every existing test above
+    /// asserts against it. These tests keep the old all-pairs implementation around as an executable
+    /// reference and compare outputs, rather than trusting the rewrite by inspection.
+    #[cfg(test)]
+    mod equivalence {
+        use super::*;
+        use crate::tankoubon_grouping::run;
+
+        /// Deterministic pseudo-random source — a real RNG would need a dependency and a seed to
+        /// reproduce a failure.
+        fn lcg(state: &mut u64) -> f32 {
+            *state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((*state >> 33) as f32) / (u32::MAX >> 1) as f32
+        }
+
+        struct Fixture {
+            ids: Vec<String>,
+            vectors: HashMap<String, Vec<f32>>,
+            tags: HashMap<String, String>,
+            titles: HashMap<String, String>,
+        }
+
+        /// A library-shaped fixture: overlapping tags (so tag overlap and creator gates both fire),
+        /// correlated vectors per creator (so real pairs cross the threshold), a couple of anthology
+        /// items (the gate's exception) and existing-Tankoubon nodes (the anchor path).
+        fn fixture(n: usize) -> Fixture {
+            let mut seed = 7u64;
+            let mut ids = Vec::new();
+            let mut vectors = HashMap::new();
+            let mut tags = HashMap::new();
+            let mut titles = HashMap::new();
+            let mut bases: HashMap<usize, Vec<f32>> = HashMap::new();
+            for i in 0..n {
+                let id = format!("{i:040x}");
+                let creator = i % 6;
+                let base = bases.entry(creator).or_insert_with(|| {
+                    let mut v: Vec<f32> = (0..16).map(|_| lcg(&mut seed) - 0.5).collect();
+                    normalize(&mut v);
+                    v
+                });
+                let mut v: Vec<f32> = base
+                    .iter()
+                    .map(|x| x + (lcg(&mut seed) - 0.5) * 0.25)
+                    .collect();
+                normalize(&mut v);
+                vectors.insert(id.clone(), v);
+                let anthology = i % 23 == 0;
+                let mut tag_list = vec![
+                    format!("artist:a{creator}"),
+                    format!("circle:c{}", creator % 3),
+                    format!("character:k{}", i % 4),
+                    format!(
+                        "category:{}",
+                        if anthology { "anthology" } else { "cosplay" }
+                    ),
+                    format!("female:f{}", i % 5),
+                ];
+                if i % 7 == 0 {
+                    tag_list.push(format!("cosplayer:p{}", i % 3));
+                }
+                tags.insert(id.clone(), tag_list.join(","));
+                titles.insert(id.clone(), format!("series {creator} part {}", i % 4));
+                ids.push(id);
+            }
+            for t in 0..2 {
+                let id = format!("TANK_{t}");
+                vectors.insert(id.clone(), vectors[&ids[t * 3]].clone());
+                tags.insert(id.clone(), tags[&ids[t * 3]].clone());
+                titles.insert(id.clone(), format!("tankoubon {t}"));
+                ids.push(id);
+            }
+            // One candidate with no vector at all: the old components scan skipped these outright.
+            let id = format!("{:040x}", n + 100);
+            tags.insert(id.clone(), "artist:zz, category:cosplay".to_string());
+            titles.insert(id.clone(), "vectorless".to_string());
+            ids.push(id);
+            Fixture {
+                ids,
+                vectors,
+                tags,
+                titles,
+            }
+        }
+
+        fn normalize(v: &mut [f32]) {
+            let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
+            for x in v.iter_mut() {
+                *x /= norm;
+            }
+        }
+
+        /// `Scorer::evidence`-based reimplementation of the pre-rewrite algorithm, kept verbatim
+        /// apart from the two calls it needs (`similar`/`sort_score` no longer exist on `Scorer`).
+        fn reference_similar(scorer: &Scorer, a: &str, b: &str) -> bool {
+            scorer.evidence(a, b).is_some_and(|e| e.similar)
+        }
+
+        fn reference_sort_score(scorer: &Scorer, a: &str, b: &str) -> f32 {
+            match scorer.evidence(a, b) {
+                Some(e) if e.shared_cosplayer => 2.0,
+                Some(e) => e.score,
+                None => 0.0,
+            }
+        }
+
+        fn reference_connected_components<'a>(
+            ids: &[&'a str],
+            scorer: &Scorer,
+        ) -> Vec<Vec<&'a str>> {
+            let mut visited: HashSet<&str> = HashSet::new();
+            let mut components = Vec::new();
+            for &start_id in ids {
+                if visited.contains(start_id) || !scorer.vectors.contains_key(start_id) {
+                    continue;
+                }
+                let mut stack = vec![start_id];
+                let mut component = Vec::new();
+                while let Some(node) = stack.pop() {
+                    if !visited.insert(node) {
+                        continue;
+                    }
+                    component.push(node);
+                    for &other_id in ids {
+                        if !visited.contains(other_id) && reference_similar(scorer, node, other_id)
+                        {
+                            stack.push(other_id);
+                        }
+                    }
+                }
+                components.push(component);
+            }
+            components
+        }
+
+        fn reference_largest_clique<'a>(
+            start_id: &'a str,
+            candidates: &[&'a str],
+            scorer: &Scorer,
+        ) -> Vec<&'a str> {
+            let mut clique = vec![start_id];
+            let mut remaining: Vec<&str> = candidates
+                .iter()
+                .copied()
+                .filter(|&id| id != start_id)
+                .collect();
+            loop {
+                let mut best: Option<(&str, f32)> = None;
+                for &candidate in &remaining {
+                    if !clique
+                        .iter()
+                        .all(|&m| reference_similar(scorer, m, candidate))
+                    {
+                        continue;
+                    }
+                    let avg = clique
+                        .iter()
+                        .map(|&m| reference_sort_score(scorer, m, candidate))
+                        .sum::<f32>()
+                        / clique.len() as f32;
+                    if best.is_none_or(|(_, best_avg)| avg > best_avg) {
+                        best = Some((candidate, avg));
+                    }
+                }
+                let Some((chosen, _)) = best else { break };
+                clique.push(chosen);
+                remaining.retain(|&id| id != chosen);
+            }
+            clique
+        }
+
+        fn reference_group_with(ids: &[String], scorer: &Scorer) -> Vec<Vec<String>> {
+            let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+            let mut groups = Vec::new();
+            for component in reference_connected_components(&id_refs, scorer) {
+                let mut remaining = component;
+                while remaining.len() >= MIN_GROUP_SIZE {
+                    let start = remaining
+                        .iter()
+                        .find(|&&id| is_existing_tankoubon_node(id))
+                        .copied()
+                        .unwrap_or(remaining[0]);
+                    let mut clique = reference_largest_clique(start, &remaining, scorer);
+                    if clique.len() < MIN_GROUP_SIZE {
+                        remaining.retain(|&id| id != start);
+                        continue;
+                    }
+                    clique.sort();
+                    let clique_set: HashSet<&str> = clique.iter().copied().collect();
+                    remaining.retain(|id| !clique_set.contains(id));
+                    groups.push(clique.into_iter().map(String::from).collect());
+                }
+            }
+            groups
+        }
+
+        /// The three borrowed views `Scorer::new` wants, built once from the fixture — everything in
+        /// them points into `fixture`, so they outlive the scorer.
+        #[allow(clippy::type_complexity)]
+        fn views<'a>(
+            fixture: &'a Fixture,
+            settings: &GroupingSettings,
+        ) -> (
+            HashMap<&'a str, &'a [f32]>,
+            HashMap<&'a str, HashSet<&'a str>>,
+            HashMap<&'a str, HashSet<&'a str>>,
+        ) {
+            let mut vectors = HashMap::new();
+            let mut tags = HashMap::new();
+            let mut tokens = HashMap::new();
+            for id in &fixture.ids {
+                if let Some(v) = fixture.vectors.get(id) {
+                    vectors.insert(id.as_str(), v.as_slice());
+                }
+                tags.insert(id.as_str(), tag_set(&fixture.tags[id]));
+                tokens.insert(id.as_str(), title_tokens_for(&fixture.titles[id], settings));
+            }
+            (vectors, tags, tokens)
+        }
+
+        #[test]
+        fn judge_matches_evidence_for_every_pair() {
+            let settings = GroupingSettings::default();
+            let fixture = fixture(60);
+            let (vectors, tags, tokens) = views(&fixture, &settings);
+            let scorer = Scorer::new(&vectors, &tags, &tokens, &settings);
+
+            for a in &fixture.ids {
+                for b in &fixture.ids {
+                    let (Some(ia), Some(ib)) =
+                        (scorer.index.get(a.as_str()), scorer.index.get(b.as_str()))
+                    else {
+                        panic!("every id is indexed");
+                    };
+                    let judged = scorer.judge(*ia, *ib);
+                    let expected = scorer.evidence(a.as_str(), b.as_str());
+                    assert_eq!(
+                        judged.similar,
+                        expected.as_ref().is_some_and(|e| e.similar),
+                        "similar() disagreed for {a} / {b}"
+                    );
+                    if judged.similar {
+                        let expected_score = reference_sort_score(&scorer, a.as_str(), b.as_str());
+                        assert!(
+                            (judged.sort_score - expected_score).abs() < 1e-4,
+                            "sort_score disagreed for {a} / {b}: {} vs {expected_score}",
+                            judged.sort_score
+                        );
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn group_with_matches_the_reference_implementation() {
+            let settings = GroupingSettings::default();
+            let fixture = fixture(200);
+            let (vectors, tags, tokens) = views(&fixture, &settings);
+            let scorer = Scorer::new(&vectors, &tags, &tokens, &settings);
+
+            let expected = reference_group_with(&fixture.ids, &scorer);
+            let actual = group_with(&fixture.ids, &scorer);
+            assert_eq!(
+                actual, expected,
+                "grouping changed: {actual:?} vs {expected:?}"
+            );
+            assert!(
+                !expected.is_empty(),
+                "fixture must produce at least one group, otherwise this proves nothing"
+            );
+        }
+
+        #[test]
+        fn filter_ignored_is_applied_at_read_time() {
+            let ignored: HashSet<String> =
+                [lanrurugi_storage::ignored_group_suggestions::fingerprint(
+                    &["a".to_string(), "b".to_string()],
+                    None,
+                )]
+                .into_iter()
+                .collect();
+            let kept = run::filter_ignored(
+                vec![
+                    json!({"archive_ids": ["a", "b"]}),
+                    json!({"archive_ids": ["c", "d"]}),
+                ],
+                &ignored,
+            );
+            assert_eq!(kept.len(), 1);
+            assert_eq!(kept[0]["archive_ids"], json!(["c", "d"]));
+        }
     }
 }

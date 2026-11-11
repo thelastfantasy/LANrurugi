@@ -754,6 +754,18 @@ async fn run_rebuild_sequence(
             "some hash-named archives cannot be recovered from their sidecar"
         );
     }
+    // The other half of the same cleanup: snapshots whose archive is gone. Deletes used to remove
+    // the bytes but leave `<ab>/<id>.json` behind, and nothing ever read them back.
+    match lanrurugi_scanner::sidecar_audit::sweep_orphans(
+        &repos.archives,
+        &state.library.archive_dir,
+    )
+    .await
+    {
+        Ok(0) => {}
+        Ok(removed) => tracing::info!(removed, "removed orphaned sidecars"),
+        Err(e) => tracing::warn!(error = %e, "failed to sweep orphaned sidecars"),
+    }
 
     // Issue #67: unconditional, not gated behind `rekey_summary.rekeyed` being non-empty — a
     // Category/Grouping saved before the `archive_id -> [category_id]`/`[tankoubon_id]`

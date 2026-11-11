@@ -221,7 +221,7 @@ function PluginOptionsFormBody({
           {initial.bundle_as_archive && (
             <p>
               <label>
-                <input type="checkbox" className="fa lrr-checkbox-labeled" checked={bundleValue} onChange={(e) => setBundleValue(e.target.checked)} />{" "}
+                <input type="checkbox" className="fa" checked={bundleValue} onChange={(e) => setBundleValue(e.target.checked)} />{" "}
                 {t(initial.bundle_as_archive.description)}
               </label>
             </p>
@@ -230,7 +230,7 @@ function PluginOptionsFormBody({
           {initial.overwrite_on_duplicate && (
             <p>
               <label>
-                <input type="checkbox" className="fa lrr-checkbox-labeled" checked={overwriteValue} onChange={(e) => setOverwriteValue(e.target.checked)} />{" "}
+                <input type="checkbox" className="fa" checked={overwriteValue} onChange={(e) => setOverwriteValue(e.target.checked)} />{" "}
                 {t(initial.overwrite_on_duplicate.description)}
               </label>
             </p>

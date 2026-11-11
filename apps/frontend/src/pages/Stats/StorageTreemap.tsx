@@ -16,6 +16,7 @@ import {
   buildGroups,
   buildTiles,
   fitText,
+  progressBandKey,
   rankColorKeys,
   type StorageArchive,
   type StorageColorKey,
@@ -41,6 +42,7 @@ const DIMENSIONS: { value: StorageDimension; labelKey: string }[] = [
   { value: "file", labelKey: "stats.storageTreemapByFile" },
   { value: "artist", labelKey: "stats.storageTreemapByArtist" },
   { value: "category", labelKey: "stats.storageTreemapByCategory" },
+  { value: "progress", labelKey: "stats.storageTreemapByProgress" },
 ]
 
 /** `ResizeObserver`-measured box of the chart frame. The treemap needs real pixel area to decide
@@ -102,6 +104,8 @@ export function StorageTreemap({ archives }: { archives: ArchiveMetadata[] | und
             pages: archive.pagecount,
             artist: tags.artist?.[0] ?? "",
             category: tags.category?.[0] ?? "",
+            lastReadPage: archive.progress,
+            lastReadTime: archive.lastreadtime,
           }
         })
         // Biggest first: recharts lays tiles out in array order, and the file level wants its
@@ -122,7 +126,7 @@ export function StorageTreemap({ archives }: { archives: ArchiveMetadata[] | und
       })
       return colors
     }
-    return { artist: build("artist"), category: build("category") }
+    return { artist: build("artist"), category: build("category"), progress: build("progress") }
   }, [entries, series])
 
   const colorFor = (colorBy: StorageColorKey, key: string) => colorMaps[colorBy].get(key) ?? NEUTRAL_FILL
@@ -136,6 +140,7 @@ export function StorageTreemap({ archives }: { archives: ArchiveMetadata[] | und
       groups: buildGroups(entries, dimension, {
         unknownArtist: t("stats.storageTreemapNoArtist"),
         unknownCategory: t("stats.storageTreemapNoCategory"),
+        progressBand: (key) => t(`stats.storageTreemapProgress.${key}`),
       }),
       colorBy: dimension,
     }
@@ -160,7 +165,8 @@ export function StorageTreemap({ archives }: { archives: ArchiveMetadata[] | und
   }
 
   function selectDimension(next: StorageDimension) {
-    if (next === dimension) return
+    // Re-clicking the active tab is how you get back out of a drilled-in level: it re-renders the
+    // view the tab was opened with, instead of ignoring the click because nothing changed.
     setDimension(next)
     setStack([])
     setSelected(null)
@@ -257,8 +263,15 @@ export function StorageTreemap({ archives }: { archives: ArchiveMetadata[] | und
 
   if (entries.length === 0) return null
 
-  const selectedColorKey =
-    dimension === "category" ? selected?.category : selected?.artist
+  // Which colour the selected archive's row is written in — whatever the *open level* colours its
+  // tiles by, since that is the colour the reader just clicked.
+  const selectedColorKey = selected
+    ? level.colorBy === "category"
+      ? selected.category
+      : level.colorBy === "artist"
+        ? selected.artist
+        : progressBandKey(selected)
+    : undefined
   const selectedShare = selected ? percentOf(selected.bytes, totalBytes) : 0
   const crumbs = [
     { title: t("stats.storageTreemapAll"), index: 0 },
@@ -425,7 +438,9 @@ export function StorageTreemap({ archives }: { archives: ArchiveMetadata[] | und
         {" · "}
         {level.colorBy === "artist"
           ? t("stats.storageTreemapColorsByArtist")
-          : t("stats.storageTreemapColorsByCategory")}
+          : level.colorBy === "category"
+            ? t("stats.storageTreemapColorsByCategory")
+            : t("stats.storageTreemapColorsByProgress")}
       </p>
     </StatsSection>
   )

@@ -120,6 +120,7 @@ async fn test_app_with_static_dir() -> Option<(axum::Router, RedisDbs, tempfile:
         translation_telemetry: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
+        grouping: Default::default(),
         refresh_tokens,
         api_tokens,
         api_token_last_touch: Default::default(),

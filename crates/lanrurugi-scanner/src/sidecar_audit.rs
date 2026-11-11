@@ -130,6 +130,66 @@ pub async fn audit_sidecars(
     Ok(audit)
 }
 
+/// Deletes `<ab>/<id>.json` sidecars whose id no longer has an archive record.
+///
+/// A sidecar is only ever written next to a live archive and the record is the source of truth, so
+/// one whose id has no record is left over from a delete (builds before this pass removed the
+/// bytes but not the snapshot). Runs during rebuild, after the audit that regrows missing ones.
+pub async fn sweep_orphans(
+    archives: &ArchiveRepository,
+    library: &Path,
+) -> Result<u64, RepositoryError> {
+    use std::collections::HashSet;
+
+    let live: HashSet<String> = archives
+        .list_all()
+        .await?
+        .into_iter()
+        .map(|a| a.id.as_str().to_string())
+        .collect();
+
+    let mut removed = 0u64;
+    let Ok(entries) = std::fs::read_dir(library) else {
+        return Ok(0);
+    };
+    for entry in entries.flatten() {
+        let dir_path = entry.path();
+        let dir_name = entry.file_name();
+        let Some(dir) = dir_name.to_str() else {
+            continue;
+        };
+        // Only `<ab>` buckets hold hash-layout archives; `_byname/` never has sidecars.
+        if dir.len() != 2 || !dir.chars().all(|c| c.is_ascii_hexdigit()) || !dir_path.is_dir() {
+            continue;
+        }
+        let Ok(files) = std::fs::read_dir(&dir_path) else {
+            continue;
+        };
+        for file in files.flatten() {
+            let path = file.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if stem.len() != 40 || !stem.chars().all(|c| c.is_ascii_hexdigit()) {
+                continue;
+            }
+            if live.contains(stem) {
+                continue;
+            }
+            match std::fs::remove_file(&path) {
+                Ok(()) => removed += 1,
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "failed to remove an orphaned sidecar")
+                }
+            }
+        }
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

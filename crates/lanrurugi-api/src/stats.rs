@@ -105,8 +105,10 @@ const HIGHLIGHTED_NAMESPACES: &[&str] = &["language", "artist", "circle", "cospl
 const PREF_HALF_LIFE_DAYS: f64 = 90.0;
 
 /// Bucket boundaries in bytes, upper-exclusive except the last. Chosen around the shape of real
-/// manga archives (a single chapter is a few MB, a full volume tens of MB); every boundary is an
-/// exact binary unit so the frontend's labels never have to round.
+/// manga archives (a single chapter is a few MB, a full volume tens of MB, a full-colour or
+/// art-book volume hundreds of MB); every boundary is an exact binary unit so the frontend's
+/// labels never have to round. The GB bands split what used to be one open-ended "500 MB or more"
+/// bucket, which on a large library held thousands of archives and hundreds of gigabytes.
 const SIZE_BUCKETS: &[(&str, u64, Option<u64>)] = &[
     ("lt_1mb", 0, Some(1 << 20)),
     ("lt_5mb", 1 << 20, Some(5 << 20)),
@@ -116,7 +118,10 @@ const SIZE_BUCKETS: &[(&str, u64, Option<u64>)] = &[
     ("lt_100mb", 50 << 20, Some(100 << 20)),
     ("lt_250mb", 100 << 20, Some(250 << 20)),
     ("lt_500mb", 250 << 20, Some(500 << 20)),
-    ("gte_500mb", 500 << 20, None),
+    ("lt_1gb", 500 << 20, Some(1 << 30)),
+    ("lt_1_5gb", 1 << 30, Some(1536 << 20)),
+    ("lt_2gb", 1536 << 20, Some(2 << 30)),
+    ("gte_2gb", 2 << 30, None),
 ];
 
 // ─────────────────────────── response shapes ───────────────────────────
@@ -158,7 +163,7 @@ pub struct Totals {
 
 #[derive(Debug, Serialize)]
 pub struct SizeBucketStat {
-    /// Stable identifier the frontend localizes — `lt_1mb`, `gte_500mb`, ...
+    /// Stable identifier the frontend localizes — `lt_1mb`, `gte_2gb`, ...
     pub key: &'static str,
     pub min_bytes: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1730,9 +1735,10 @@ mod tests {
             archive("c", "", 1 << 20, 0),
             archive("d", "", (5 << 20) - 1, 0),
             archive("e", "", 500 << 20, 0),
+            archive("f", "", 2 << 30, 0),
         ];
         let buckets = size_buckets(&archives);
-        assert_eq!(buckets.iter().map(|b| b.archives).sum::<u64>(), 5);
+        assert_eq!(buckets.iter().map(|b| b.archives).sum::<u64>(), 6);
         assert_eq!(
             buckets.iter().map(|b| b.bytes).sum::<u64>(),
             archives.iter().map(|a| a.arcsize).sum::<u64>()
@@ -1740,6 +1746,11 @@ mod tests {
         // 1 MiB is the first bucket's *upper* bound (exclusive), so it lands in `lt_5mb`.
         assert_eq!(buckets[0].archives, 2);
         assert_eq!(buckets[1].archives, 2);
+        // 500 MiB is the *lower* bound of the first GB band, so it opens `lt_1gb` — the band that
+        // used to be the open-ended last one.
+        assert_eq!(buckets[8].key, "lt_1gb");
+        assert_eq!(buckets[8].archives, 1);
+        assert_eq!(buckets.last().unwrap().key, "gte_2gb");
         assert_eq!(buckets.last().unwrap().archives, 1);
     }
 

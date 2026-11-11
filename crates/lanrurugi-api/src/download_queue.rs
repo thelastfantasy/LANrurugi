@@ -1146,6 +1146,10 @@ async fn start_one(
         item.error = Some(lanrurugi_core::queue_error::QueueError::SourceDownloadInProgress);
         item.finished_at = Some(now_ms());
         let _ = state.download_queue.update(&item).await;
+        // Persisting the refusal is not enough on its own: without this, an open Upload page
+        // keeps showing the row exactly as it was until something else refetches the list, so a
+        // single-row Start looks like it did nothing (reported live for a chaika item).
+        broadcast_item_update(state, &item);
         return Err(StartError::DuplicateInFlight);
     }
 
@@ -1161,6 +1165,9 @@ async fn start_one(
             );
             item.finished_at = Some(now_ms());
             let _ = state.download_queue.update(&item).await;
+            // Same reason as the duplicate-in-flight branch above: the row must flip to its
+            // blocked/error presentation immediately, not only after a manual refresh.
+            broadcast_item_update(state, &item);
             return Err(StartError::SourceAlreadyImported(existing_id));
         }
     }
@@ -1755,6 +1762,7 @@ async fn reingest(State(state): State<AppState>, Path(id): Path<String>) -> Resp
             let queue_error = lanrurugi_core::queue_error::QueueError::from(&e);
             item.error = Some(queue_error.clone());
             let _ = state.download_queue.update(&item).await;
+            broadcast_item_update(&state, &item);
             error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "reingest_download",

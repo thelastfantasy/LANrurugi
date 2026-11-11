@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { fetchJson, sendJson } from "@/api/client"
@@ -11,7 +11,8 @@ import {
   useStartSelectedQueue,
 } from "@/api/hooks"
 import type { ArchiveMetadata, DownloadQueueItem, JobRecord, PluginInfo } from "@/api/types"
-import { Menu, MenuItem, Tooltip } from "@/components/common-ui/Display"
+import { MenuItem, MenuSeparator, Tooltip } from "@/components/common-ui/Display"
+import { SplitButton } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
 import { useIsNarrowViewport } from "@/hooks"
 import { FONT_SIZE_XS } from "@/theme"
@@ -153,23 +154,6 @@ export function DownloadQueuePanel({
   /** Ids the active tabs are showing — what every bulk button below is allowed to touch. */
   const visibleIds = useMemo(() => new Set(visibleItems.map((i) => i.id)), [visibleItems])
 
-  /** Per group, the startable ids the split button's menu offers: the same "what is on screen"
-   * scope every other bulk action uses, so a group behind the other tab is not started unseen. */
-  const startableByGroup = useMemo(() => {
-    const byGroup = new Map<string, string[]>()
-    for (const item of visibleItems) {
-      if (!selectableItemIds.has(item.id)) continue
-      const list = byGroup.get(item.plugin_namespace) ?? []
-      list.push(item.id)
-      byGroup.set(item.plugin_namespace, list)
-    }
-    return [...byGroup.entries()].map(([namespace, ids]) => ({
-      namespace,
-      title: groupTitleFor(namespace),
-      ids,
-    }))
-  }, [visibleItems, selectableItemIds, groupTitleFor])
-
   // Scoped to the visible tab: with a group split, the items behind the other tab are still in
   // `selected` (switching back finds them as they were) but they are not part of what Start/Delete
   // act on, and they do not count towards the buttons' own numbers.
@@ -182,6 +166,24 @@ export function DownloadQueuePanel({
       ),
     [selected, itemIds, selectableItemIds, visibleIds],
   )
+
+  /** Per group, the selected ids the split button's menu offers. Both halves of the split button
+   * act on the checkbox selection — the caret only chooses *which* of the selected groups to
+   * start, never starts rows the user has not selected. */
+  const startableByGroup = useMemo(() => {
+    const byGroup = new Map<string, string[]>()
+    for (const item of visibleItems) {
+      if (!effectiveSelected.has(item.id)) continue
+      const list = byGroup.get(item.plugin_namespace) ?? []
+      list.push(item.id)
+      byGroup.set(item.plugin_namespace, list)
+    }
+    return [...byGroup.entries()].map(([namespace, ids]) => ({
+      namespace,
+      title: groupTitleFor(namespace),
+      ids,
+    }))
+  }, [visibleItems, effectiveSelected, groupTitleFor])
 
   const triggeredRef = useRef<Set<string>>(new Set())
   useEffect(() => {
@@ -245,6 +247,14 @@ export function DownloadQueuePanel({
     setSelected((prev) => new Set(selectableIds.filter((id) => !prev.has(id))))
   }
 
+  /** Start the whole checkbox selection (the split button's left half). */
+  async function startSelection() {
+    // Display order, not click order: the server starts them in the order given.
+    const selectedIds = visibleItems.filter((i) => effectiveSelected.has(i.id)).map((i) => i.id)
+    await startSelected.mutateAsync(selectedIds)
+    setSelected(new Set())
+  }
+
   /** Start one group's rows; only those ids leave the selection, so other groups stay as ticked. */
   async function startGroup(ids: string[]) {
     if (ids.length === 0) return
@@ -285,61 +295,28 @@ export function DownloadQueuePanel({
           {t("upload.invertSelection")}
         </button>
         {/* Split button: the left half starts the selection, the caret starts one group's rows
-            instead — with several plugin groups queued, "start everything" was the only option. */}
-        <span style={{ display: "inline-flex" }}>
-          <button
-            type="button"
-            className="stdbtn"
-            style={{
-              ...TOOLBAR_BUTTON_STYLE,
-              ...(startableByGroup.length > 1 && {
-                borderTopRightRadius: 0,
-                borderBottomRightRadius: 0,
-              }),
-            }}
-            disabled={effectiveSelected.size === 0 || startSelected.isPending}
-            onClick={async () => {
-              // Display order, not click order: the server starts them in the order given.
-              const selectedIds = visibleItems.filter((i) => effectiveSelected.has(i.id)).map((i) => i.id)
-              await startSelected.mutateAsync(selectedIds)
-              setSelected(new Set())
-            }}
-          >
-            {t("upload.startN", { n: effectiveSelected.size })}
-          </button>
-          {startableByGroup.length > 1 && (
-            <Menu
-              side="bottom"
-              align="start"
-              trigger={
-                <button
-                  type="button"
-                  className="stdbtn"
-                  style={{
-                    ...TOOLBAR_BUTTON_STYLE,
-                    borderTopLeftRadius: 0,
-                    borderBottomLeftRadius: 0,
-                  }}
-                  aria-label={t("upload.startByGroup") ?? undefined}
-                  title={t("upload.startByGroup") ?? undefined}
-                  disabled={startSelected.isPending}
-                >
-                  <i className="fa fa-caret-down" aria-hidden="true" />
-                </button>
-              }
-            >
-              {startableByGroup.map((group) => (
-                <MenuItem
-                  key={group.namespace}
-                  disabled={group.ids.length === 0}
-                  onClick={() => void startGroup(group.ids)}
-                >
-                  {`${group.title} (${group.ids.length})`}
-                </MenuItem>
-              ))}
-            </Menu>
-          )}
-        </span>
+            instead. The caret stays visible-but-disabled until the selection spans two or more
+            groups, so the affordance does not appear and disappear as rows are ticked. */}
+        <SplitButton
+          label={t("upload.startN", { n: effectiveSelected.size })}
+          onClick={() => void startSelection()}
+          disabled={effectiveSelected.size === 0 || startSelected.isPending}
+          caretDisabled={startableByGroup.length < 2}
+          menuLabel={t("upload.startByGroup")}
+          buttonStyle={TOOLBAR_BUTTON_STYLE}
+        >
+          {startableByGroup.map((group, index) => (
+            <Fragment key={group.namespace}>
+              {index > 0 && <MenuSeparator />}
+              <MenuItem
+                disabled={group.ids.length === 0}
+                onClick={() => void startGroup(group.ids)}
+              >
+                {`${group.title} (${group.ids.length})`}
+              </MenuItem>
+            </Fragment>
+          ))}
+        </SplitButton>
         <button
           type="button"
           className="stdbtn"

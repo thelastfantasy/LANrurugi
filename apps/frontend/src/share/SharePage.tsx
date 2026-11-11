@@ -5,8 +5,8 @@ import { useTranslation } from "react-i18next"
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom"
 
 import { Button } from "@/components/common-ui/Form"
+import { copyWithToast } from "@/lib/clipboard"
 
-import { copyWithToast } from "./clipboard"
 import { formatShareCode, normalizeShareCode } from "./code"
 import { ShareItemCard } from "./ShareItemCard"
 import { ShareQr } from "./ShareQr"

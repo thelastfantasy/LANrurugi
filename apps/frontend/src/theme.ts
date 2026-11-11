@@ -112,6 +112,11 @@ export const FLOATING_POPUP_REVEAL_DOWN_CLASSES =
 // rendering on top of that modal itself (not just a popup triggered from inside it) must clear it.
 export const Z_OVERLAY_ABOVE_LEGACY_MODAL = 9500
 
+// `Drawer` sits at 9000/9001, above everything on the page — a dialog or tooltip opened from
+// inside one (the upload page's drawer holds the "new category" control) would otherwise render
+// underneath it and look like nothing happened.
+export const Z_OVERLAY_ABOVE_DRAWER = 9200
+
 const LEGACY_STRUCTURAL_CSS_ID = "legacy-structural-css"
 const LEGACY_THEME_CSS_ID = "legacy-theme-css"
 const LEGACY_FILEUPLOAD_CSS_ID = "legacy-fileupload-css"

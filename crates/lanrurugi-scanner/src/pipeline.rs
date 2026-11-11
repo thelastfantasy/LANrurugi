@@ -253,6 +253,11 @@ pub struct IngestOptions<'a> {
     /// fixup + the startup zombie-repair sweep in `main.rs`. The watcher path leaves this
     /// `false` (`path` IS already final there).
     pub defer_file_path: bool,
+    /// Set by a caller that already holds [`content_lock`] for this content id (the download
+    /// manager does, from before it renames the file into the library). Without it that caller
+    /// would deadlock on its own lock. Everything else leaves this `false` and gets serialized
+    /// here.
+    pub locked: bool,
 }
 
 impl<'a> IngestOptions<'a> {
@@ -263,6 +268,7 @@ impl<'a> IngestOptions<'a> {
             intended_filename: Some(name),
             title_filename: Some(name),
             defer_file_path: false,
+            locked: false,
         }
     }
 }
@@ -284,9 +290,19 @@ pub async fn ingest_file_with_policy(
         intended_filename,
         title_filename,
         defer_file_path,
+        locked,
     } = options;
 
     let id = ArchiveId(size_aware_id(path)?);
+    // One ingest at a time per content id. The watcher can see these same bytes while the
+    // download manager is about to catalogue them (it renames the staged file into the library
+    // before cataloguing), and without this both paths catalogue the same id — the later
+    // `catalogue_new_archive` saving a bare record that wipes the title/source the other wrote.
+    let _ingest_guard = if locked {
+        None
+    } else {
+        Some(content_lock(id.as_str()).await)
+    };
     let path_str = path.to_string_lossy().to_string();
 
     let mut config_conn = config_pool.get().await?;
@@ -667,6 +683,24 @@ async fn catalogue_new_archive(
         tracing::warn!(%id, error = %e, "failed to index new archive for search");
     }
 
+    // `index_new_archive` only writes the title/new/untagged entries. The record's own tags
+    // (`date_added:…`, and whatever a caller stamps right after) need their `INDEX_<tag>` sets
+    // here too — otherwise a freshly catalogued archive is invisible to every tag search
+    // (`source:`, `date_added:`, …) until something edits its tags again. Found live: four
+    // archives showed on the homepage but `source:` could not find them, while the same page's
+    // untagged/title searches worked.
+    if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
+        search_pool,
+        equivalence,
+        id.as_str(),
+        "",
+        &archive.tags,
+    )
+    .await
+    {
+        tracing::warn!(%id, error = %e, "failed to index a new archive's tags for search");
+    }
+
     if pagecount > 0 {
         let shard = &id.as_str()[0..2.min(id.len())];
         let output = thumb_dir
@@ -715,6 +749,30 @@ pub(crate) fn book_outline_toc(path: &Path) -> Vec<lanrurugi_core::entities::Toc
         .collect();
     toc.sort_by_key(|t| t.page);
     toc
+}
+
+/// One mutex per content id, so two ingests of the same bytes serialize instead of racing for the
+/// same destination path. Entries are dropped once no one holds or waits on them.
+pub async fn content_lock(id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+    use std::sync::{Arc, LazyLock, Mutex, Weak};
+
+    static LOCKS: LazyLock<Mutex<std::collections::HashMap<String, Weak<tokio::sync::Mutex<()>>>>> =
+        LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+    let lock: Arc<tokio::sync::Mutex<()>> = {
+        let mut locks = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+        locks.retain(|_, weak| weak.strong_count() > 0);
+        let entry = locks.entry(id.to_string()).or_default();
+        match entry.upgrade() {
+            Some(lock) => lock,
+            None => {
+                let lock = Arc::new(tokio::sync::Mutex::new(()));
+                *entry = Arc::downgrade(&lock);
+                lock
+            }
+        }
+    };
+    lock.lock_owned().await
 }
 
 #[cfg(test)]

@@ -257,6 +257,11 @@ pub(crate) async fn recycle_archive(
     // The file (and its patch) left this directory: remove any directory the move emptied, so a
     // deleted archive does not leave a skeleton of empty folders behind.
     prune_empty_parents(&state.library.archive_dir, Path::new(&original_path)).await;
+    // The sidecar describes bytes that are no longer in the library. Restoring the archive
+    // re-catalogues it, which writes a fresh one — so this is not a data loss.
+    if let Err(e) = lanrurugi_storage::sidecar::remove(&state.library.archive_dir, id.as_str()) {
+        tracing::warn!(%id, error = %e, "failed to remove recycled archive's sidecar");
+    }
 
     let entry = entry_from_record(&archive, snapshot, patch_file_name, actor(auth));
 

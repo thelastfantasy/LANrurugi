@@ -32,6 +32,7 @@ import {
   STATE_COLOR,
 } from "@/components/Display";
 import { QueueErrorText } from "@/components/Layout";
+import { useIsNarrowViewport } from "@/hooks/useIsNarrowViewport";
 import { routes } from "@/lib/routes";
 import { FONT_SIZE_SM, FONT_SIZE_XS, Z_OVERLAY_TOOLTIP } from "@/theme";
 
@@ -72,6 +73,10 @@ export function RowStats({
   onOpenSubscriptions: () => void
 }) {
   const { t } = useTranslation()
+  // On a phone this line always wraps anyway, so it is split at a meaningful point instead of
+  // wherever the width happens to run out: when it started + how long it took, then how fast and
+  // how big. On a desktop it stays one line.
+  const narrow = useIsNarrowViewport()
   // The same SSE-pushed bytes the progress bar uses: `computeSpeed` keeps one smoothing window per
   // job, so the two must not feed it polled values and SSE values alternately — that made every
   // other reading a negative delta and the displayed rate swing far wider than the transfer did.
@@ -169,20 +174,49 @@ export function RowStats({
       )
     : null
 
+  // Today reads as "today <time>"; anything older carries its real date, so a row from two days
+  // ago can never be mistaken for one that just started. On a phone the seconds are dropped: they
+  // were the difference between two lines and three, and a queue row never needs them.
+  const startedLabel = startedMs
+    ? isToday(startedMs)
+      ? t("upload.statStartedToday", {
+          time: new Date(startedMs).toLocaleTimeString(
+            undefined,
+            narrow ? { hour: "2-digit", minute: "2-digit" } : undefined,
+          ),
+        })
+      : t("upload.statStarted", {
+          time: new Date(startedMs).toLocaleString(
+            undefined,
+            narrow
+              ? { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }
+              : undefined,
+          ),
+        })
+    : null
+  const startedParts = [startedLabel].filter(Boolean) as string[]
+  const elapsedText =
+    durationMs != null ? t("upload.statElapsed", { duration: formatDuration(durationMs) }) : null
+  // The size is kept out of the wrapped text: on a phone it sits on the right of the two-line
+  // block, vertically centered, so the numbers stay readable instead of trailing a wrapped line.
+  const averageText =
+    average != null ? t("upload.statAverage", { rate: formatBytes(average) }) : null
+  const remainingText =
+    !ingesting && remainingMs != null
+      ? t("upload.statRemaining", { duration: formatDuration(remainingMs) })
+      : null
+  const transferParts = [elapsedText, remainingText].filter(Boolean) as string[]
+  // The two figures on the right of the narrow layout: the rate keeps its /s suffix without the
+  // "average" label, which the row's context already supplies.
+  const speedText = average != null ? `${formatBytes(average)}/s` : null
+  const sizeText = bytes != null ? formatBytes(bytes) : null
   const parts = [
-    // Today reads as "today <time>"; anything older carries its real date, so a row from two days
-    // ago can never be mistaken for one that just started.
-    startedMs &&
-      (isToday(startedMs)
-        ? t("upload.statStartedToday", { time: new Date(startedMs).toLocaleTimeString() })
-        : t("upload.statStarted", { time: new Date(startedMs).toLocaleString() })),
-    durationMs != null && t("upload.statElapsed", { duration: formatDuration(durationMs) }),
-    average != null && t("upload.statAverage", { rate: formatBytes(average) }),
-    !ingesting &&
-      remainingMs != null &&
-      t("upload.statRemaining", { duration: formatDuration(remainingMs) }),
-    bytes != null && formatBytes(bytes),
-  ].filter(Boolean) as string[]
+    ...startedParts,
+    ...(elapsedText ? [elapsedText] : []),
+    ...(averageText ? [averageText] : []),
+    ...(remainingText ? [remainingText] : []),
+    ...(sizeText ? [sizeText] : []),
+  ]
 
   if (parts.length === 0 && !item.subscription_id) return null
 
@@ -212,7 +246,80 @@ export function RowStats({
           </a>
         </Tooltip>
       )}
-      {parts.length > 0 && <span>{parts.join(" · ")}</span>}
+      {narrow ? (
+        <span
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flex: "1 1 0%",
+            minWidth: 0,
+          }}
+        >
+          <span
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 0,
+              flex: 1,
+              minWidth: 0,
+              lineHeight: 1.15,
+              // Reserved so a finished row still keeps the two-line height the right-hand figures
+              // stretch to.
+              minHeight: "2.3em",
+            }}
+          >
+            {startedParts.length > 0 && (
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {startedParts.join(" · ")}
+              </span>
+            )}
+            {transferParts.length > 0 && (
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {transferParts.join(" · ")}
+              </span>
+            )}
+          </span>
+          {speedText && (
+            <span
+              style={{
+                flexShrink: 0,
+                alignSelf: "stretch",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "flex-end",
+                minWidth: "6ch",
+                fontSize: "0.8rem",
+                lineHeight: 1,
+                whiteSpace: "nowrap",
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              {speedText}
+            </span>
+          )}
+          {sizeText && (
+            <span
+              style={{
+                flexShrink: 0,
+                alignSelf: "stretch",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "flex-end",
+                minWidth: "7ch",
+                fontSize: "0.95rem",
+                lineHeight: 1,
+                whiteSpace: "nowrap",
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              {sizeText}
+            </span>
+          )}
+        </span>
+      ) : (
+        parts.length > 0 && <span>{parts.join(" · ")}</span>
+      )}
     </div>
   )
 }

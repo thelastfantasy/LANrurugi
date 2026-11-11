@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
@@ -25,6 +25,7 @@ import {
   useUpdateSettings,
   useUpdateTankoubonProgress,
 } from "@/api/hooks";
+import type { TocEntry } from "@/api/types";
 import { Menu, MenuItem, MenuSeparator, Tooltip } from "@/components/common-ui/Display";
 import { IconButton, ToggleButtonMenu } from "@/components/common-ui/Form";
 import { currentRating,RatingWidget } from "@/components/common-ui/Form/RatingWidget";
@@ -69,6 +70,7 @@ import {
   type ResizedPageInfo,
 } from "@/lib/utils/imageMeta";
 import { isTankoubonId } from "@/lib/utils/isTankoubonId";
+import { displayTocName } from "@/lib/utils/tocValidation";
 import { useSession } from "@/session/SessionProvider";
 import { FONT_SIZE_XS, useApplyTheme } from "@/theme";
 import { toast } from "@/toast";
@@ -259,6 +261,26 @@ export function Reader() {
   const translationArchiveId = isTank
     ? tankReading.getArchiveForPage(currentPage)?.arcId ?? null
     : archiveId;
+  // The chapter the current page belongs to, for headless mode's bottom-left line. Chapters have
+  // two sources and both count: a Tankoubon's member archives, and a plain archive's own ToC.
+  const currentChapter = useMemo(() => {
+    if (isTank) {
+      const chapter = tankReading.chapters.find(
+        (c) => currentPage >= c.startPage && currentPage <= c.endPage,
+      );
+      return chapter
+        ? { title: displayTocName(chapter.title, t), startPage: chapter.startPage }
+        : null;
+    }
+    // The last ToC entry at or before the current page — the same "which chapter am I in"
+    // question the overview's chapter selector answers. First entry wins on a shared page.
+    let entry: TocEntry | undefined;
+    for (const candidate of metadata.data?.toc ?? []) {
+      if (candidate.page > currentPage) continue;
+      if (!entry || candidate.page > entry.page) entry = candidate;
+    }
+    return entry ? { title: displayTocName(entry.name, t), startPage: entry.page } : null;
+  }, [currentPage, isTank, tankReading.chapters, metadata.data?.toc, t]);
   // `null` whenever translation is off, unconfigured, or the settings fetch failed — the overlay
   // renders nothing in all three cases (`specs/004-ocr-manga-translation` FR-007).
   const [translationSettings, translationScope, toggleTranslationEnabled, setTranslationTargetLanguage] =
@@ -351,6 +373,102 @@ export function Reader() {
   // Shared by both toolbars, so changing the primary action in one updates the other too.
   const [fitAction, setFitAction] = useState<FitAction>(readStoredFitAction);
   /**
+   * Headless reading: only the page and the fit control, everything else hidden. App-only (not one
+   * of legacy's reader settings) and persisted like `fitAction`, so reopening a tab keeps the mode —
+   * the control that leaves it is always on screen, so that is never a dead end.
+   */
+  const [headless, setHeadless] = useState(() => localStorage.getItem("readerHeadless") === "true");
+  const toggleHeadless = useCallback(() => {
+    setHeadless((prev) => {
+      const next = !prev;
+      localStorage.setItem("readerHeadless", String(next));
+      return next;
+    });
+  }, []);
+  // The one control headless leaves on screen would otherwise sit on the artwork all the time, so
+  // it stays at 10% and only comes back when the pointer reaches the corner it lives in (or when
+  // it is hovered/focused — CSS covers those two).
+  const [headlessControlsRevealed, setHeadlessControlsRevealed] = useState(false);
+  useEffect(() => {
+    if (!headless || !supportsHover) return;
+    function onMove(e: MouseEvent) {
+      setHeadlessControlsRevealed(
+        e.clientX > window.innerWidth * 0.8 && e.clientY < window.innerHeight * 0.2,
+      );
+    }
+    window.addEventListener("mousemove", onMove);
+    return () => window.removeEventListener("mousemove", onMove);
+  }, [headless, supportsHover]);
+  // A touch screen has neither a pointer to reveal that corner nor a fit menu to walk back out
+  // from, so headless is left by holding a finger on the page. The click that the release produces
+  // must not also turn the page — it would land in the mode that just came back.
+  const longPressRef = useRef(false);
+  useEffect(() => {
+    if (!headless || supportsHover) return;
+    let timer: number | undefined;
+    const start = () => {
+      // Cleared per gesture: a hold that ends without a click must not swallow the next tap.
+      longPressRef.current = false;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        longPressRef.current = true;
+        toggleHeadless();
+      }, 550);
+    };
+    const cancel = () => window.clearTimeout(timer);
+    // A hold that turns into a scroll is cancelled by movement. `pointercancel` alone is not a
+    // reliable cancel: a long press on the artwork makes the browser claim the gesture (the image
+    // callout), which fires it before the timer, and the press that was meant to leave headless
+    // then does nothing.
+    let startX = 0;
+    let startY = 0;
+    const down = new Set<number>();
+    const startAt = (e: PointerEvent) => {
+      down.add(e.pointerId);
+      // A second finger is a two-finger gesture, never a hold.
+      if (down.size > 1) {
+        cancel();
+        return;
+      }
+      startX = e.clientX;
+      startY = e.clientY;
+      start();
+    };
+    const lift = (e: PointerEvent) => {
+      down.delete(e.pointerId);
+      if (down.size === 0) cancel();
+    };
+    // The browser claiming the gesture (the image callout) fires `pointercancel` mid-hold. That is
+    // exactly the press this mode is waiting for, so only the bookkeeping is updated.
+    const forget = (e: PointerEvent) => {
+      down.delete(e.pointerId);
+    };
+    const moved = (e: PointerEvent) => {
+      if (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10) cancel();
+    };
+    document.addEventListener("pointerdown", startAt);
+    document.addEventListener("pointermove", moved);
+    document.addEventListener("pointerup", lift);
+    document.addEventListener("pointercancel", forget);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("pointerdown", startAt);
+      document.removeEventListener("pointermove", moved);
+      document.removeEventListener("pointerup", lift);
+      document.removeEventListener("pointercancel", forget);
+    };
+  }, [headless, supportsHover, toggleHeadless]);
+  // The browser's own long-press menu (save/open image, select text) would sit on top of headless
+  // reading and interrupt the gesture that leaves it, so it stays closed there.
+  useEffect(() => {
+    if (!headless || supportsHover) return;
+    function onContextMenu(e: MouseEvent) {
+      e.preventDefault();
+    }
+    document.addEventListener("contextmenu", onContextMenu);
+    return () => document.removeEventListener("contextmenu", onContextMenu);
+  }, [headless, supportsHover]);
+  /**
    * Fit-height used to be a flat `90vh` (98vh with the header hidden), which ignores the reader's
    * own chrome — title, toolbar, the page-info line, the footer — so the page still ended up taller
    * than the viewport and kept the scrollbar that this mode exists to remove. Measure the space that
@@ -412,7 +530,7 @@ export function Reader() {
    * the viewport. Neither depends on the image's own height, so the measurement cannot chase itself.
    */
   useEffect(() => {
-    if (readerSettings.fitMode !== FIT_MODE.FIT_HEIGHT || isFullscreen) {
+    if (readerSettings.fitMode !== FIT_MODE.FIT_HEIGHT) {
       return;
     }
     let frame = 0;
@@ -486,7 +604,15 @@ export function Reader() {
       window.removeEventListener("resize", schedule);
       observer.disconnect();
     };
-  }, [readerSettings.fitMode, readerSettings.hideHeader, readerSettings.infiniteScroll, isFullscreen, measureTick]);
+  }, [
+    readerSettings.fitMode,
+    readerSettings.hideHeader,
+    readerSettings.infiniteScroll,
+    isFullscreen,
+    measureTick,
+    // Leaving headless brings most of that chrome back, so the free height must be taken again.
+    headless,
+  ]);
 
   const lastSpreadHeightRef = useRef<number | null>(null);
   const lastFileInfoRef = useRef<string | null>(null);
@@ -618,7 +744,7 @@ export function Reader() {
   /** Sizing for that placeholder, in the fit mode currently selected. */
   const placeholderStyle: React.CSSProperties | null = mainReady[spread.left]
     ? null
-      : readerSettings.fitMode === FIT_MODE.FIT_HEIGHT && !isFullscreen
+      : readerSettings.fitMode === FIT_MODE.FIT_HEIGHT
         ? {
             height: fitHeightPx !== null ? `${fitHeightPx}px` : "90vh",
             aspectRatio: `${placeholderDims.width} / ${placeholderDims.height}`,
@@ -1169,11 +1295,70 @@ export function Reader() {
       });
   }
 
-  async function readAdjacentArchive(direction: "prev" | "next") {
-    if (document.fullscreenElement) {
-      console.warn("Archive navigation not supported in fullscreen mode.");
-      return;
+  // Headless hides the chrome, so the page's own click surface no longer covers the screen: the
+  // whole viewport becomes the turn target, split down the middle like the page itself. The image
+  // link already turns pages and calls `preventDefault`, the loading placeholder does the same, and
+  // the floating fit control stays out of the exclusion list, so nothing turns twice or fights the
+  // mode menu. `goTo` closes over this render's page, hence the ref instead of re-subscribing.
+  const goToRef = useRef(goTo);
+  useEffect(() => {
+    goToRef.current = goTo;
+  });
+  // Where the gesture started decides whether it may turn a page. A backdrop that dismisses its
+  // modal on press deletes it before the click is dispatched, and the browser then delivers that
+  // click to whatever is under the pointer by then — the reading surface. So the click's own
+  // target cannot answer this question.
+  const turnBlockedRef = useRef(false);
+  useEffect(() => {
+    if (!headless) return;
+    /** True when the element belongs to a control or to an overlay/menu/dialog layer — the fixed
+     * ancestor walk catches the plain-div backdrops no selector can name. */
+    function inOtherLayer(target: HTMLElement | null): boolean {
+      if (
+        target?.closest?.(
+          '.reader-headless-controls,a,button,input,select,textarea,label,[role="menu"],[role="menuitem"],[role="menuitemcheckbox"],[role="dialog"]',
+        )
+      ) {
+        return true;
+      }
+      // Stops before the reader's own container: a fullscreen element is `position: fixed` by the
+      // user agent, and counting it would swallow every tap that is not on a link — including the
+      // blank margins above and below a headless page.
+      for (
+        let el: HTMLElement | null = target;
+        el && el !== document.body && el !== containerRef.current;
+        el = el.parentElement
+      ) {
+        if (getComputedStyle(el).position === "fixed") return true;
+      }
+      return false;
     }
+    function onPointerDown(e: PointerEvent) {
+      turnBlockedRef.current =
+        overlay !== null || inOtherLayer(e.target as HTMLElement | null);
+    }
+    function onClick(e: MouseEvent) {
+      const blocked = turnBlockedRef.current;
+      turnBlockedRef.current = false;
+      if (blocked) return;
+      if (longPressRef.current) {
+        longPressRef.current = false;
+        return;
+      }
+      if (overlay !== null) return;
+      if (e.defaultPrevented) return;
+      if (inOtherLayer(e.target as HTMLElement | null)) return;
+      goToRef.current(e.clientX < window.innerWidth / 2 ? "prev" : "next");
+    }
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("click", onClick);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("click", onClick);
+    };
+  }, [headless, overlay]);
+
+  async function readAdjacentArchive(direction: "prev" | "next") {
     const adjacentId = resolveAdjacentArchive(navState, direction);
     if (!adjacentId) {
       toast({
@@ -1253,7 +1438,7 @@ export function Reader() {
     if (isPreview) return;
     mainReadyRef.current[page] = true;
     setMainReady((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
-    if (readerSettings.fitMode === FIT_MODE.FIT_HEIGHT && !isFullscreen) {
+    if (readerSettings.fitMode === FIT_MODE.FIT_HEIGHT) {
       setMeasureTick((tick) => tick + 1);
     }
     if (img.naturalWidth > 0 && img.naturalHeight > 0) {
@@ -1315,12 +1500,16 @@ export function Reader() {
     }
   }
 
-  function toggleFullScreen() {
-    if (!document.fullscreenElement) {
+  const setFullscreen = useCallback((on: boolean) => {
+    if (on && !document.fullscreenElement) {
       containerRef.current?.requestFullscreen?.().catch(() => undefined);
-    } else {
+    } else if (!on && document.fullscreenElement) {
       document.exitFullscreen?.().catch(() => undefined);
     }
+  }, []);
+
+  function toggleFullScreen() {
+    setFullscreen(!document.fullscreenElement);
   }
 
   useEffect(() => {
@@ -1331,6 +1520,43 @@ export function Reader() {
     return () =>
       document.removeEventListener("fullscreenchange", onFullscreenChange);
   }, []);
+
+  // Touch screens have no fullscreen button while headless, and no keyboard for `f`. Two fingers
+  // swiping up enter fullscreen, down leave it; the first movement past the threshold decides and
+  // nothing repeats until the fingers lift. The move listener is non-passive because otherwise the
+  // swipe scrolls the page out from under the gesture instead.
+  useEffect(() => {
+    if (supportsHover) return;
+    let startY: number | null = null;
+    let fired = false;
+    const midY = (touches: TouchList) => (touches[0].clientY + touches[1].clientY) / 2;
+    function onTouchStart(e: TouchEvent) {
+      fired = false;
+      startY = e.touches.length === 2 ? midY(e.touches) : null;
+    }
+    function onTouchMove(e: TouchEvent) {
+      if (startY === null || fired || e.touches.length !== 2) return;
+      const delta = midY(e.touches) - startY;
+      if (Math.abs(delta) < 60) return;
+      e.preventDefault();
+      fired = true;
+      setFullscreen(delta < 0);
+    }
+    function onTouchEnd() {
+      startY = null;
+      fired = false;
+    }
+    document.addEventListener("touchstart", onTouchStart, { passive: true });
+    document.addEventListener("touchmove", onTouchMove, { passive: false });
+    document.addEventListener("touchend", onTouchEnd);
+    document.addEventListener("touchcancel", onTouchEnd);
+    return () => {
+      document.removeEventListener("touchstart", onTouchStart);
+      document.removeEventListener("touchmove", onTouchMove);
+      document.removeEventListener("touchend", onTouchEnd);
+      document.removeEventListener("touchcancel", onTouchEnd);
+    };
+  }, [supportsHover, setFullscreen]);
 
   async function goRandom() {
     const id = await fetchRandomArchiveId();
@@ -1512,12 +1738,44 @@ export function Reader() {
         case "Backspace":
           navigate(routes.library());
           return;
+        // Headless only: with the chrome visible, Home/End meaning "scroll the document" is what a
+        // reader expects, and there the toolbar already offers the first/last-page arrows.
+        case "Home":
+        case "End":
+          if (!headless) return;
+          e.preventDefault();
+          if (readerSettings.infiniteScroll) {
+            selectPage(e.key === "Home" ? 1 : totalPages);
+          } else {
+            goTo(e.key === "Home" ? "first" : "last");
+          }
+          return;
         case "Escape":
           if (markerPlacementMode) {
             setMarkerPlacementMode(false);
             return;
           }
-          setOverlay(null);
+          // A menu row owns Escape while it has focus: that keystroke is "close this menu", and
+          // letting it through exited headless mode as a side effect of dismissing the fit menu.
+          if (
+            (e.target as HTMLElement)?.closest?.(
+              '[role="menuitem"],[role="menuitemcheckbox"]',
+            )
+          ) {
+            return;
+          }
+          // An open overlay owns Escape first: it is something the reader just opened and expects
+          // one keystroke to dismiss, whereas leaving headless changes the whole page.
+          if (overlay !== null) {
+            setOverlay(null);
+            return;
+          }
+          // Headless hides the toolbar, and with it the overview button, so Escape takes over that
+          // job there. Leaving headless is the fit menu's row (or a long press on touch).
+          if (headless) {
+            setOverlay("archive");
+            return;
+          }
           return;
         case " ":
           window.scrollBy({
@@ -1637,6 +1895,9 @@ export function Reader() {
     loggedIn,
     markerPlacementMode,
     archiveTransition,
+    headless,
+    toggleHeadless,
+    overlay,
   ]);
 
   useEffect(() => {
@@ -1860,33 +2121,33 @@ export function Reader() {
   // it back on top; `placementImageStyle` may raise its own z-index further for marker placement.
   imageStyle.position = "relative";
   imageStyle.zIndex = 1;
-  if (!isFullscreen) {
-    if (readerSettings.fitMode === FIT_MODE.FIT_HEIGHT) {
-      const heightVh =
-        readerSettings.hideHeader || readerSettings.infiniteScroll ? 98 : 90;
-      imageStyle.maxHeight =
-        fitHeightPx !== null ? `${fitHeightPx}px` : `${heightVh}vh`;
-      // On desktop the container hugs the page (legacy's shape), but not tighter than the toolbar
-      // needs: its two side icon groups are absolutely positioned (198px and 214px) and the paginator
-      // between them is ~224px, so ~676px is where they stop overlapping. Measuring that instead
-      // feeds back into itself (the side groups widen with the container), hence a constant. Phones
-      // keep the plain full-width container — their toolbar is a separate floating bar, and
-      // `fit-content` there overflowed by a few pixels.
-      if (!isMobileToolbarViewport) {
-        outerStyle.width = "fit-content";
-        outerStyle.minWidth = "min(680px, 100%)";
-      }
-    } else if (readerSettings.fitMode === FIT_MODE.FIT_WIDTH) {
-      imageStyle.width = "100%";
-      outerStyle.maxWidth = "98%";
-    } else if (readerSettings.containerWidth) {
-      outerStyle.maxWidth = readerSettings.containerWidth;
-      imageStyle.width = "100%";
-    } else if (isSpreadShowing) {
-      outerStyle.maxWidth = "90%";
-    } else {
-      outerStyle.maxWidth = "1200px";
+  if (readerSettings.fitMode === FIT_MODE.FIT_HEIGHT) {
+    const heightVh =
+      readerSettings.hideHeader || headless || readerSettings.infiniteScroll ? 98 : 90;
+    imageStyle.maxHeight =
+      fitHeightPx !== null ? `${fitHeightPx}px` : `${heightVh}vh`;
+    // On desktop the container hugs the page (legacy's shape), but not tighter than the toolbar
+    // needs: its two side icon groups are absolutely positioned (198px and 214px) and the paginator
+    // between them is ~224px — plus another 120px when the adjacent-archive arrows are shown, which
+    // is why 680px was not enough and the right-hand arrow landed on the "reading direction" button
+    // (real report). 800px leaves those arrows room. Measuring it instead feeds back into itself
+    // (the side groups widen with the container), hence a constant. Phones keep the plain
+    // full-width container — their toolbar is a separate floating bar, and `fit-content` there
+    // overflowed by a few pixels.
+    if (!isMobileToolbarViewport) {
+      outerStyle.width = "fit-content";
+      outerStyle.minWidth = "min(800px, 100%)";
     }
+  } else if (readerSettings.fitMode === FIT_MODE.FIT_WIDTH) {
+    imageStyle.width = "100%";
+    outerStyle.maxWidth = "98%";
+  } else if (readerSettings.containerWidth) {
+    outerStyle.maxWidth = readerSettings.containerWidth;
+    imageStyle.width = "100%";
+  } else if (isSpreadShowing) {
+    outerStyle.maxWidth = "90%";
+  } else {
+    outerStyle.maxWidth = "1200px";
   }
 
   /** The tiny preview, pinned under the streaming page in the same box: it costs ~10 KB and paints
@@ -1996,6 +2257,16 @@ export function Reader() {
         <li>
           <Key>G</Key> {t("reader.gGoToPageNumber")}
         </li>
+        <li>
+          <Key>Backspace</Key> {t("reader.backspaceReturnsToTheLibrary")}
+        </li>
+        <li>
+          <Key>Home</Key>/<Key>End</Key> {t("reader.homeEndInHeadless")}
+        </li>
+        <li>
+          <Key>Esc</Key> {t("reader.escapeInHeadless")}
+        </li>
+        <li>{t("reader.twoFingerFullscreen")}</li>
         {loggedIn && (
           <li>
             <Key>S</Key> {t("reader.sSetAStamp")}
@@ -2141,6 +2412,8 @@ export function Reader() {
             storeFitAction(action);
           }}
           compact={isMobileToolbarViewport}
+          headless={headless}
+          onToggleHeadless={toggleHeadless}
         />
       </div>
     </>
@@ -2305,6 +2578,16 @@ export function Reader() {
             }
           />
         )}
+        {/* The only way into headless on a phone: the fit menu that carries it on desktop is
+            reduced to a bare fullscreen button in the mobile toolbar. */}
+        <IconButton
+          variant="ghost-btn"
+          icon={`fas ${headless ? "fa-eye" : "fa-eye-slash"} fa-2x`}
+          title={t("reader.headlessMode") ?? undefined}
+          size={32}
+          style={{ borderRadius: "50%", opacity: 0.55 }}
+          onClick={toggleHeadless}
+        />
         {!supportsHover && loggedIn && (
           <IconButton
             variant="ghost-btn"
@@ -2384,6 +2667,8 @@ export function Reader() {
             storeFitAction(action);
           }}
           compact={isMobileToolbarViewport}
+          headless={headless}
+          onToggleHeadless={toggleHeadless}
         />
         {moreMenu}
       </div>
@@ -2534,13 +2819,72 @@ export function Reader() {
 
   return (
     <>
-      <div id="i1" className="sni" ref={containerRef} style={outerStyle}>
-        {!readerSettings.hideHeader && (
+      <div
+        id="i1"
+        className={headless ? "sni reader-headless" : "sni"}
+        ref={containerRef}
+        style={outerStyle}
+      >
+        {!headless && !readerSettings.hideHeader && (
           <div id="i2">
             <h1 id="archive-title">{archiveHeading}</h1>
             {pagesel}
             {arrows}
             {fileinfo}
+          </div>
+        )}
+
+        {headless && !supportsHover && (
+          // Touch headless has no toolbar, and the page never reaches the very top of a phone
+          // screen, so those two corners are the one place the jump-to-end buttons can sit
+          // without covering artwork.
+          <div className="reader-headless-jump">
+            <a
+              className="fas fa-angle-double-left page-link"
+              role="button"
+              title={t("reader.firstPage") ?? undefined}
+              onClick={() => {
+                if (readerSettings.infiniteScroll) selectPage(1);
+                else goTo("first");
+              }}
+            />
+            <a
+              className="fas fa-angle-double-right page-link"
+              role="button"
+              title={t("reader.lastPage") ?? undefined}
+              onClick={() => {
+                if (readerSettings.infiniteScroll) selectPage(totalPages);
+                else goTo("last");
+              }}
+            />
+          </div>
+        )}
+
+        {headless && (
+          // Bottom-left, and deliberately `pointer-events: none`: it captions what is on screen
+          // rather than being a control, and in this mode the whole viewport is a turn target.
+          <div className="reader-headless-info">
+            <div className="reader-headless-title">{metadata.data?.title}</div>
+            <div className="reader-headless-line">
+              <span>
+                {currentPage} / {totalPages}
+              </span>
+              {currentChapter && (
+                <span className="reader-headless-chapter">
+                  <i className="fas fa-bookmark" aria-hidden="true" />
+                  {/* The title truncates on its own: clipping the whole row (the obvious fix) used
+                      to push the chapter-start flag off the end, so the marker vanished exactly when
+                      a long chapter name needed it. */}
+                  <span className="reader-headless-chapter-title">{currentChapter.title}</span>
+                  {currentPage === currentChapter.startPage && (
+                    <i
+                      className="fas fa-flag reader-headless-chapter-start"
+                      title={t("reader.chapterStart")}
+                    />
+                  )}
+                </span>
+              )}
+            </div>
           </div>
         )}
 
@@ -2814,57 +3158,88 @@ export function Reader() {
           )}
         </div>
 
-        <div id="i4">
-          {fileinfo}
-          {isMobileToolbarViewport ? (
-            mobileToolbar
-          ) : (
-            <>
-              {pagesel}
-              {arrows}
-            </>
-          )}
-        </div>
-
-        <div id="i5">
-          <div className="sb">
-            {/* A real link, not a button: middle-click / ctrl-click must open the library in a new tab. */}
-            <Link
-              id="return-to-index"
-              to={routes.library()}
-              title={t("reader.doneReadingGoBackTo") ?? undefined}
-            >
-              <i className="fas fa-angle-down fa-3x"></i>
-            </Link>
+        {/* Headless keeps exactly two things on screen: the page above, and this control — the fit
+            menu doubles as the way back out, so there is no state with no way to leave it. Touch
+            screens get no control at all: they enter from the toolbar and leave by long-pressing,
+            and a phone has no fit menu for this to open anyway. */}
+        {headless && supportsHover && (
+          <div
+            className={`reader-headless-controls${headlessControlsRevealed ? " is-revealed" : ""}`}
+          >
+            <FitMenuButton
+              isFullscreen={isFullscreen}
+              fullscreenHost={isFullscreen ? containerRef.current : null}
+              onToggleFullscreen={toggleFullScreen}
+              onSelectFitMode={(mode) => updateReaderSettings({ fitMode: mode })}
+              primary={fitAction}
+              onPrimaryChange={(action) => {
+                setFitAction(action);
+                storeFitAction(action);
+              }}
+              // The split control, even on a phone: this is the only chrome left, so it has to
+              // carry the whole fit menu rather than shrink to the bare fullscreen button.
+              compact={false}
+              headless
+              onToggleHeadless={toggleHeadless}
+            />
           </div>
-        </div>
+        )}
 
-        <div id="i7" className="if">
-          <i className="fas fa-caret-right fa-lg"></i>
-          <a href={originalLeftUrl} target="_blank" rel="noreferrer">
-            {t("reader.viewFullsizeImage")}
-          </a>
-          <i className="fas fa-caret-right fa-lg"></i>
-          <a style={{ cursor: "pointer" }} onClick={() => void goRandom()}>
-            {t("reader.switchToAnotherRandomArchive")}
-          </a>
-          {loggedIn && (
-            <>
-              <i className="fas fa-caret-right fa-lg"></i>
-              <a style={{ cursor: "pointer" }} onClick={cleanCache}>
-                {t("reader.cleanArchiveCache")}
-              </a>
-              {translationScope?.enabled && (
+        {!headless && (
+          <>
+            <div id="i4">
+              {fileinfo}
+              {isMobileToolbarViewport ? (
+                mobileToolbar
+              ) : (
                 <>
-                  <i className="fas fa-caret-right fa-lg"></i>
-                  <a style={{ cursor: "pointer" }} onClick={retranslatePage}>
-                    {t("reader.retranslatePage")}
-                  </a>
+                  {pagesel}
+                  {arrows}
                 </>
               )}
-            </>
-          )}
-        </div>
+            </div>
+
+            <div id="i5">
+              <div className="sb">
+                {/* A real link, not a button: middle-click / ctrl-click must open the library in a new tab. */}
+                <Link
+                  id="return-to-index"
+                  to={routes.library()}
+                  title={t("reader.doneReadingGoBackTo") ?? undefined}
+                >
+                  <i className="fas fa-angle-down fa-3x"></i>
+                </Link>
+              </div>
+            </div>
+
+            <div id="i7" className="if">
+              <i className="fas fa-caret-right fa-lg"></i>
+              <a href={originalLeftUrl} target="_blank" rel="noreferrer">
+                {t("reader.viewFullsizeImage")}
+              </a>
+              <i className="fas fa-caret-right fa-lg"></i>
+              <a style={{ cursor: "pointer" }} onClick={() => void goRandom()}>
+                {t("reader.switchToAnotherRandomArchive")}
+              </a>
+              {loggedIn && (
+                <>
+                  <i className="fas fa-caret-right fa-lg"></i>
+                  <a style={{ cursor: "pointer" }} onClick={cleanCache}>
+                    {t("reader.cleanArchiveCache")}
+                  </a>
+                  {translationScope?.enabled && (
+                    <>
+                      <i className="fas fa-caret-right fa-lg"></i>
+                      <a style={{ cursor: "pointer" }} onClick={retranslatePage}>
+                        {t("reader.retranslatePage")}
+                      </a>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          </>
+        )}
 
         {shareItem && (
           <Suspense fallback={null}>
@@ -2891,6 +3266,7 @@ export function Reader() {
             tankPages={isTank ? pages.data.pages : undefined}
             hasTankSplitCandidates={tankSplitCandidates.length > 0}
             onOpenTankSplit={() => setShowTankSplit(true)}
+            headless={headless}
             onShare={
               archiveId
                 ? () => {
@@ -3152,7 +3528,7 @@ export function Reader() {
           </>
         )}
       </div>
-      <Footer />
+      {!headless && <Footer />}
     </>
   );
 }

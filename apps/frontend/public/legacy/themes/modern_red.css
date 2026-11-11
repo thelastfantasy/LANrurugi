@@ -783,6 +783,14 @@ div.id4 a:hover {
     box-shadow: 0 0 0 1.5px #DCDDCB, 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
+/* `.stdbtn:focus` repaints a focused button in the paper palette; a closing dialog hands focus
+   back to the button that opened it, which would leave this solid pill looking inverted. */
+.modal-close-btn:focus {
+    background-color: #E9A53A;
+    color: #FFFFFF;
+    border: none;
+}
+
 /* Destructive-action button (`components/Display/Confirm.tsx`'s `danger` prop) — a real class,
    not an inline hardcoded color (see g.css's own comment on this class for why inline defeats
    `.stdbtn:hover` entirely). Reuses this theme's own existing warning colors
@@ -1707,4 +1715,12 @@ textarea {
     font-variant-numeric: tabular-nums;
     opacity: 0.75;
     line-height: 28px;
+}
+
+/* Headless reader's title/progress line: this theme's ink, haloed in this theme's own page
+   colour so a caption over artwork stays readable without inventing a new palette. */
+.reader-headless-info,
+.reader-headless-jump {
+    color: #EFEAEA;
+    text-shadow: 0 1px 2px #E9BBC5, 0 0 6px #E9BBC5, 0 0 12px #E9BBC5;
 }

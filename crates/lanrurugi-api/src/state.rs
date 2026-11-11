@@ -222,6 +222,11 @@ pub struct AppState {
     /// write succeeds. `None` in test/bench contexts (no SSE subscribers); real `serve` always
     /// sets this.
     pub download_queue_tx: Option<tokio::sync::broadcast::Sender<serde_json::Value>>,
+    /// The AI grouping run in flight plus its SSE fan-out — same arrangement as
+    /// `download_queue_tx`, and for the same reason: the expensive pass must outlive the request
+    /// that started it. `POST .../ai-group-suggestions` used to do that pass inline, so a ~100s
+    /// Cloudflare timeout discarded it and nothing was cached (see `tankoubon_grouping/run.rs`).
+    pub grouping: Arc<crate::tankoubon_grouping::GroupingHub>,
     /// The SPA login flow's revocable refresh-token half (`lanrurugi_core::session` mints the
     /// paired stateless JWT access token) — on the `config` logical DB, same placement as
     /// `plugin_options`/`download_queue`/etc. See `lanrurugi_storage::refresh_tokens` module docs.

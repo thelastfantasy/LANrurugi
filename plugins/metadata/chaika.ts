@@ -110,10 +110,18 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   //     example/error messages already center on; `gallery` is a different Chaika ID space this
   //     plugin has no way to disambiguate from a bare number).
   let oneshotarg = lrr_info["arg"] ?? "";
+  // The row that downloaded this archive already knew its Chaika id, and the download stamped it
+  // onto the archive (`source:panda.chaika.moe/archive/<id>`). That is the one identifier an
+  // auto-run start has for a freshly ingested archive, whose title may be the bare id and whose
+  // thumbnail is not in Chaika's sha1 index — without this, "Run Automatically" could never match.
+  const tagged = chaika_id_from_tags(lrr_info["existing_tags"] ?? "");
   if ((match = oneshotarg.match(/^(?:https?:\/\/)?panda\.chaika\.moe\/(gallery|archive)\/([0-9]+)\/?.*/))) {
     apply_result(await tags_from_chaika_id(match[1], match[2], addextra, addother, addsource, jpntitle));
   } else if ((match = oneshotarg.match(/^([0-9]+)$/))) {
     apply_result(await tags_from_chaika_id("archive", match[1], addextra, addother, addsource, jpntitle));
+  } else if (tagged !== null) {
+    logger.info(`Using the Chaika id from the archive's own tags: ${tagged.type}/${tagged.id}`);
+    apply_result(await tags_from_chaika_id(tagged.type, tagged.id, addextra, addother, addsource, jpntitle));
   } else {
     logger.info("Using thumbnail hash " + lrr_info["thumbnail_hash"]);
     apply_result(await tags_from_sha1(lrr_info["thumbnail_hash"], addextra, addother, addsource, jpntitle));
@@ -130,6 +138,21 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     logger.info(`Sending the following tags to LRR: ${newtags}`);
     return { tags: newtags, title: newtitle };
   }
+}
+
+/** Recovers the Chaika id an archive was downloaded from, out of the tags that download stamped:
+ * `source:panda.chaika.moe/archive/<id>`, `download:/archive/<id>/download/`, or `gallery:<id>`. */
+function chaika_id_from_tags(tags: string): { type: "gallery" | "archive"; id: string } | null {
+  for (const raw of tags.split(",")) {
+    const tag = raw.trim();
+    const source = tag.match(/^source:(?:https?:\/\/)?(?:www\.)?panda\.chaika\.moe\/(gallery|archive)\/([0-9]+)/i);
+    if (source) return { type: source[1].toLowerCase() as "gallery" | "archive", id: source[2] };
+    const download = tag.match(/^download:\/archive\/([0-9]+)\/download\/?$/i);
+    if (download) return { type: "archive", id: download[1] };
+    const gallery = tag.match(/^gallery:([0-9]+)$/i);
+    if (gallery) return { type: "gallery", id: gallery[1] };
+  }
+  return null;
 }
 
 /** Uses Chaika's HTML search to find a matching archive by title/tags. */

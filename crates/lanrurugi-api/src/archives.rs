@@ -591,6 +591,14 @@ pub(crate) async fn purge_one_archive(
                         tracing::warn!(%id, file = %archive.file, error = %e, "failed to remove deleted archive's file from disk");
                     }
                 }
+                // The sidecar snapshots this archive's own filename/title; with the bytes gone it
+                // can never be read back for anything, and leaving it behind is exactly the
+                // orphaned `<ab>/<id>.json` files a library accumulates (found live in `./ef/`).
+                if let Err(e) =
+                    lanrurugi_storage::sidecar::remove(&state.library.archive_dir, id.as_str())
+                {
+                    tracing::warn!(%id, error = %e, "failed to remove deleted archive's sidecar");
+                }
             }
             // A sidecar `.patch.zip` (issue #77's own follow-on design) is associated purely by
             // filename convention (same directory, same stem) — leaving it behind after its

@@ -746,7 +746,7 @@ export interface StatsTotals {
   bookmarks: number
 }
 
-/** `key` is the stable identifier the frontend localizes (`lt_1mb` … `gte_500mb`). */
+/** `key` is the stable identifier the frontend localizes (`lt_1mb` … `gte_2gb`). */
 export interface StatsSizeBucket {
   key: string
   min_bytes: number

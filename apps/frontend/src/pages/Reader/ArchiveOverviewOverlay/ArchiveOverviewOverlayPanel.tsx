@@ -193,6 +193,7 @@ export function ArchiveOverviewOverlay({
   hasTankSplitCandidates,
   onOpenTankSplit,
   onShare,
+  headless = false,
 }: {
   archive: ArchiveMetadata
   categories: CategoryMetadata[] | undefined
@@ -216,6 +217,9 @@ export function ArchiveOverviewOverlay({
   onOpenTankSplit?: () => void
   /** Opens the share dialog for this archive or tankoubon (017). */
   onShare?: () => void
+  /** Headless reading hides the reader's own header, which is what normally carries the title;
+   *  the overlay shows it itself then, exactly where narrow viewports already do. */
+  headless?: boolean
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -476,9 +480,11 @@ export function ArchiveOverviewOverlay({
         <h2 className="ih" style={{ textAlign: "center" }}>
           {t("reader.archiveOverview")}
         </h2>
-        {/* The reader's own header (which carries the title) is hidden at <=1000px — see
-            `.overview-archive-title` in `index.css`. */}
-        <div className="overview-archive-title">{archive.title}</div>
+        {/* The reader's own header (which carries the title) is hidden at <=1000px and in headless
+            mode — see `.overview-archive-title` in `index.css`. */}
+        <div className={headless ? "overview-archive-title is-shown" : "overview-archive-title"}>
+          {archive.title}
+        </div>
 
         <div id="tagContainer" className="caption caption-tags caption-reader" style={{ maxWidth: "100%", boxSizing: "border-box", overflow: "hidden" }}>
           <br />

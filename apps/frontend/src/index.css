@@ -123,13 +123,13 @@ input[type="checkbox"]:disabled {
 }
 
 /* Legacy's `config.css` stamps "ON"/"OFF" after every `input[type=checkbox]` via `::after`, painted
- * outside the input's own ~20px box — so a label that follows the checkbox inline is laid out from
- * the box edge and lands on top of the "OFF" (reported live, 2026-11-10, on the settings page's
- * "自动（使用浏览器默认设置）" row in Firefox Android). The text is kept; the box is widened to
- * cover it for the inputs that actually have text after them. A blanket width would push every bare
- * toggle in the compact list/table rows out of place, so this is opt-in per input.
+ * outside the input's own box, while Font Awesome 7's `.fa` class pins that box to 1.25em — so the
+ * text spilled onto whatever came next: the label's own text (the subscriptions list and the delete
+ * dialog) or the neighbouring table cell (a checkbox alone in a column). Opting single inputs in
+ * left the rest broken, so every `.fa` toggle reserves the room; `.lrr-checkbox-bare` stays the
+ * opt-out for the compact rows that want just the glyph.
  * 3.2em = glyph (20px) + `::after` margin (5px) + "OFF", with a few px of slack (measured). */
-input[type="checkbox"].lrr-checkbox-labeled {
+input[type="checkbox"].fa:not(.lrr-checkbox-bare) {
   width: 3.2em;
   vertical-align: middle;
 }
@@ -157,8 +157,162 @@ input[type="checkbox"].lrr-checkbox-bare::after {
 /* Legacy's reader hides its own header at 1000px (`lrr.css:620-622` hides `#i2`, which carries
  * `#archive-title`), so on a phone or tablet the overview overlay is the only place the title is
  * still visible. Shown below that same breakpoint, hidden above it where the header already has it. */
+/* Hidden where the reader's own header already shows the title; `.is-shown` forces it back for
+ * headless reading, which hides that header at every width. */
 .overview-archive-title {
   display: none;
+}
+
+.overview-archive-title.is-shown {
+  display: block;
+  margin: -4px 0 16px;
+  text-align: center;
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+/* Headless reading leaves only the page and the fit control. The control has to stay reachable but
+ * out of the way, so it sits in the corner at low opacity and comes up on hover or keyboard focus. */
+.reader-headless-controls {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 60;
+  display: flex;
+  gap: 6px;
+  /* Nearly invisible by default: it sits on the artwork, and a phone-sized hint of it is enough to
+     say "the corner is here". The pointer entering that corner (or hovering/focusing the control)
+     brings it fully back. */
+  opacity: 0.1;
+  transition: opacity 0.15s ease;
+}
+
+.reader-headless-controls.is-revealed,
+.reader-headless-controls:hover,
+.reader-headless-controls:focus-within {
+  opacity: 1;
+}
+
+/* Title / progress / chapter of a headless read, pinned bottom-left over the page. Never a target:
+ * the whole viewport turns pages in this mode, so it must not swallow a tap. The colour and halo
+ * come from each theme file — a fixed colour would be unreadable on one theme or the other. */
+.reader-headless-info {
+  position: fixed;
+  left: 14px;
+  bottom: 10px;
+  z-index: 55;
+  max-width: min(70vw, 620px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  pointer-events: none;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  opacity: 0.75;
+  /* This block lives on the artwork, not in a text column: the reader's own `sni` wrapper centres
+     text, which would otherwise centre the title over a left-aligned page/chapter row. */
+  text-align: left;
+}
+
+/* Hovering a link in the page — the page image is itself a link — puts the browser's own link
+   preview in the bottom-left corner, on top of this block's last line (reported 2026-11-11).
+   Touch devices have no such preview, so they keep the corner to themselves. */
+@media (hover: hover) and (pointer: fine) {
+  .reader-headless-info {
+    bottom: 26px;
+  }
+}
+
+.reader-headless-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reader-headless-line {
+  display: flex;
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 2px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.reader-headless-chapter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Icons keep their own width; only the name gives way when the row is narrow. */
+.reader-headless-chapter > i {
+  flex: none;
+}
+
+.reader-headless-chapter-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reader-headless-chapter-start {
+  opacity: 0.9;
+}
+
+/* Headless on a phone leaves nothing but the page, so it is centred in the viewport instead of
+ * hugging the top edge with the rest of the screen empty below it. */
+@media all and (max-width: 1000px) {
+  #i1.reader-headless {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-height: 100dvh;
+    box-sizing: border-box;
+  }
+
+  #i1.reader-headless #display {
+    width: 100%;
+  }
+}
+
+/* Touch only: headless has no toolbar, and a phone's top edge is the one strip the page never
+ * reaches, so the jump-to-first/last buttons live there. */
+.reader-headless-jump {
+  position: fixed;
+  top: 2px;
+  left: 2px;
+  right: 2px;
+  z-index: 55;
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+  opacity: 0.55;
+}
+
+.reader-headless-jump .page-link {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  font-size: 1.25rem;
+}
+
+/* A long press is the touch gesture that leaves headless, so the browser must not claim it for the
+ * image callout mid-press. */
+.reader-headless .reader-image,
+.reader-headless #imgLink {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 @media all and (max-width: 1000px) {
@@ -2461,14 +2615,15 @@ body div.ido {
   text-align: center;
   /* Tapping the page turns it. Without this, a quick double tap is a *browser* gesture instead:
      it selects the page filename/toolbar text (the selection highlight then follows the reader
-     around), and on some Android builds it zooms. `manipulation` keeps panning/pinch (which the
-     reader does want) and drops the double-tap-to-zoom; the selection/touch-callout rules cover
-     the rest. Scoped to the page area — the title, tooltips and dialogs keep their normal text
-     behaviour. */
+     around), and on some Android builds it zooms. Panning stays enabled in both directions,
+     which also rules out pinch-zoom: a two-finger vertical swipe is the fullscreen gesture here,
+     and the browser reading it as a pinch zoomed the page a little every time. The full-size
+     lightbox is its own element and still zooms. Scoped to the page area — the title, tooltips
+     and dialogs keep their normal text behaviour. */
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
-  touch-action: manipulation;
+  touch-action: pan-x pan-y;
   /* The page image is inline-level, so its line box adds leading/descender space below it — which
      the fit-height measurement (based on the image's own height) cannot account for, leaving the
      page a few pixels taller than the viewport. Zeroing the line height removes exactly that. */

@@ -336,11 +336,14 @@ pub(crate) async fn catalogue_staged_file(
     // and one would end up deleting the file the other was about to catalogue. Holding this lock
     // through the whole cataloguing step makes the second one wait, then see the record and hand
     // back `Unchanged`; if the first one failed, the second renames its copy in and proceeds.
-    let _ingest_guard = content_lock(id.as_str()).await;
+    let _ingest_guard = lanrurugi_scanner::pipeline::content_lock(id.as_str()).await;
 
     // These exact bytes are already catalogued and on disk: nothing to move, nothing to update.
     if let Ok(Some(existing)) = state.repos.archives.get(&id).await {
         if Path::new(&existing.file).is_file() {
+            // Another path (the file watcher) catalogued these bytes first. This call still owes
+            // the record its download source: that URL is the one fact only the download knows.
+            stamp_source_tag(state, &id, source_url).await;
             let _ = tokio::fs::remove_file(&incoming).await;
             if keep_bytes_on_failure {
                 // The library already holds these bytes, so an adopted copy has nothing left to
@@ -397,6 +400,10 @@ pub(crate) async fn catalogue_staged_file(
         intended_filename: None,
         title_filename: Some(filename),
         defer_file_path: false,
+        // This function holds the same per-content lock already (taken before the rename below),
+        // so `ingest_file_with_policy` must not take it again — same mutex, same task, no
+        // re-entrancy.
+        locked: true,
     };
     let outcome = match ingest_file_with_policy(
         &state.repos.archives,
@@ -428,6 +435,9 @@ pub(crate) async fn catalogue_staged_file(
 
     let (archive_id, is_new) = match outcome {
         IngestOutcome::Unchanged { id } => {
+            // Same as the early-existing case above: the record is there, but its source tag may
+            // never have been stamped if the watcher won the catalogue race.
+            stamp_source_tag(state, &id, source_url).await;
             // The file at `dest` *is* this archive's bytes now (it was renamed into its canonical
             // path above) — removing it here would delete the only copy.
             if keep_bytes_on_failure {
@@ -477,6 +487,9 @@ pub(crate) async fn catalogue_staged_file(
         match state.repos.archives.get(&archive_id).await {
             Ok(Some(mut archive)) => {
                 archive.file = dest.to_string_lossy().to_string();
+                // Indexing below diffs against this: without the diff, the appended `source:`
+                // would never get its `INDEX_source:…` set and `source:` search would not find it.
+                let old_tags = archive.tags.clone();
                 // `None` for a local upload (its callers pass the queue item's own filename-as-`url`
                 // through nothing — see `upload.rs`/`download_queue.rs::resolve_conflict`) — there's no
                 // real external source for a file the user picked off their own disk, so stamping one
@@ -499,7 +512,20 @@ pub(crate) async fn catalogue_staged_file(
                     }
                 }
                 match state.repos.archives.save(&archive).await {
-                    Ok(()) => break,
+                    Ok(()) => {
+                        if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
+                            &state.redis.search,
+                            &state.equivalence,
+                            archive_id.as_str(),
+                            &old_tags,
+                            &archive.tags,
+                        )
+                        .await
+                        {
+                            tracing::warn!(%archive_id, error = %e, "failed to index the download source tag");
+                        }
+                        break;
+                    }
                     Err(e) if i + 1 < RETRIES as usize => {
                         tracing::warn!(%archive_id, attempt = i + 1, delay_ms = delay, error = %e, "failed to fix up archive file path, retrying");
                         tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
@@ -1101,6 +1127,48 @@ pub async fn sweep_stale_ingest_copies(library: &Path, older_than: std::time::Du
     removed
 }
 
+/// Keeps the download URL's `source:` tag on a record another path already catalogued — the file
+/// watcher can ingest the same bytes concurrently (the download manager renames into the library
+/// before cataloguing), and when the watcher's catalogue wins this call's own fixup never runs.
+async fn stamp_source_tag(state: &AppState, archive_id: &str, source_url: Option<&str>) {
+    let Some(source_url) = source_url else {
+        return;
+    };
+    let source_tag = format!("source:{}", crate::plugins::trim_url(source_url));
+    let Ok(Some(mut archive)) = state
+        .repos
+        .archives
+        .get(&ArchiveId(archive_id.to_string()))
+        .await
+    else {
+        return;
+    };
+    if archive.tags.split(',').any(|t| t.trim() == source_tag) {
+        return;
+    }
+    let old_tags = archive.tags.clone();
+    archive.tags = if archive.tags.is_empty() {
+        source_tag
+    } else {
+        format!("{},{source_tag}", archive.tags)
+    };
+    if let Err(e) = state.repos.archives.save(&archive).await {
+        tracing::warn!(archive_id, error = %e, "failed to stamp the download source tag");
+        return;
+    }
+    if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
+        &state.redis.search,
+        &state.equivalence,
+        archive_id,
+        &old_tags,
+        &archive.tags,
+    )
+    .await
+    {
+        tracing::warn!(archive_id, error = %e, "failed to index a stamped download source tag");
+    }
+}
+
 #[cfg(test)]
 mod sweep_tests {
     use super::*;
@@ -1130,28 +1198,4 @@ mod sweep_tests {
         assert!(fresh.exists());
         assert!(keep.exists());
     }
-}
-
-/// One mutex per content id, so two ingests of the same bytes serialize instead of racing for the
-/// same destination path. Entries are dropped once no one holds or waits on them.
-fn content_lock(id: &str) -> impl std::future::Future<Output = tokio::sync::OwnedMutexGuard<()>> {
-    use std::sync::{Arc, LazyLock, Mutex, Weak};
-
-    static LOCKS: LazyLock<Mutex<std::collections::HashMap<String, Weak<tokio::sync::Mutex<()>>>>> =
-        LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
-
-    let lock: Arc<tokio::sync::Mutex<()>> = {
-        let mut locks = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
-        locks.retain(|_, weak| weak.strong_count() > 0);
-        let entry = locks.entry(id.to_string()).or_default();
-        match entry.upgrade() {
-            Some(lock) => lock,
-            None => {
-                let lock = Arc::new(tokio::sync::Mutex::new(()));
-                *entry = Arc::downgrade(&lock);
-                lock
-            }
-        }
-    };
-    lock.lock_owned()
 }

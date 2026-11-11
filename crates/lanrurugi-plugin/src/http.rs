@@ -42,6 +42,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// HTTP moved host-side: a request for an unresolvable host used to be refused instantly by Deno's
 /// `--allow-net` flag, and became a multi-second stall once a real resolver was involved.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Pause before the single connect-failure retry. Long enough for a transient DNS/TCP reset to
+/// clear, short enough that a genuinely unreachable host still fails inside the plugin's budget.
+const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(300);
 
 /// One relayed request, as the dispatcher sends it.
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -201,15 +204,39 @@ impl HostHttp {
                 builder = builder.header("If-Modified-Since", last_modified);
             }
         }
+        let has_body = request.body.is_some();
         if let Some(body) = request.body {
             builder = builder.body(body);
         }
 
+        // A connect failure never put a byte on the wire, so retrying once cannot duplicate work.
+        // Both E-Hentai's archiver and the Chaika API occasionally reset a fresh connection; before
+        // this, a single blip failed the whole queue item with no retry inside the plugin.
+        let retry = if is_bodyless_idempotent(&method, has_body) {
+            builder.try_clone()
+        } else {
+            None
+        };
+
         let _permit = self.host_permit(host).await;
-        let response = builder
-            .send()
-            .await
-            .map_err(|e| format!("request to {} failed: {e}", redact(&request.url)))?;
+        let response = match builder.send().await {
+            Ok(response) => response,
+            Err(error) => match retry {
+                Some(retry) if error.is_connect() => {
+                    tokio::time::sleep(CONNECT_RETRY_DELAY).await;
+                    retry
+                        .send()
+                        .await
+                        .map_err(|e| format!("request to {} failed: {e}", redact(&request.url)))?
+                }
+                _ => {
+                    return Err(format!(
+                        "request to {} failed: {error}",
+                        redact(&request.url)
+                    ))
+                }
+            },
+        };
 
         let status = response.status();
         let final_url = response.url().to_string();
@@ -366,6 +393,12 @@ fn normalized_hosts(allowed_hosts: &[String]) -> Vec<String> {
 /// Whether a plugin declaring `allowed_hosts` may reach `host`. An entry covers itself and any
 /// subdomain, mirroring what Deno's own `--allow-net=<entry>` flag allowed before requests were
 /// relayed through the host.
+/// Whether a failed attempt may be replayed: no body to resend, and a method whose repetition is
+/// defined not to change anything.
+fn is_bodyless_idempotent(method: &reqwest::Method, has_body: bool) -> bool {
+    !has_body && matches!(*method, reqwest::Method::GET | reqwest::Method::HEAD)
+}
+
 pub fn host_allowed(allowed_hosts: &[String], host: &str) -> bool {
     let host = host.to_ascii_lowercase();
     allowed_hosts.iter().any(|entry| {
@@ -433,6 +466,15 @@ fn redact(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_bodyless_get_and_head_may_be_replayed() {
+        assert!(is_bodyless_idempotent(&reqwest::Method::GET, false));
+        assert!(is_bodyless_idempotent(&reqwest::Method::HEAD, false));
+        assert!(!is_bodyless_idempotent(&reqwest::Method::GET, true));
+        assert!(!is_bodyless_idempotent(&reqwest::Method::POST, false));
+        assert!(!is_bodyless_idempotent(&reqwest::Method::PUT, false));
+    }
 
     fn request(method: &str, url: &str, body: Option<&str>) -> RelayRequest {
         RelayRequest {

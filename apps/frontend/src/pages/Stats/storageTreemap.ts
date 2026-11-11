@@ -11,13 +11,17 @@
 
 /** What the root level shows. `file` is the flat library (one box per archive), which is also what
  *  "group by path" or "group by title" would collapse to here: the content folder has no
- *  subdirectories, and every title is unique. */
-export type StorageDimension = "file" | "artist" | "category"
+ *  subdirectories, and every title is unique. `progress` groups the library by how far it has been
+ *  read — a storage map of attention rather than of disk, answering "what am I sitting on but not
+ *  finishing". */
+export type StorageDimension = "file" | "artist" | "category" | "progress"
 
-/** Which tag a tile's colour is taken from. Mirrors the dimension, except that the flat file view
- *  colours by artist — colouring by format would paint 214 of this library's 229 archives the same
- *  colour, and colour has to distinguish neighbours to be worth anything. */
-export type StorageColorKey = "artist" | "category"
+/** Which value a tile's colour is taken from. Mirrors the dimension, except that the flat file view
+ *  and the inside of a progress band both colour by artist — colouring by format would paint 214 of
+ *  this library's 229 archives the same colour, and colour has to distinguish neighbours to be
+ *  worth anything. `progress` colours the root level's 已读/未读 pair and the band tiles one click
+ *  below it; the archives inside a band are back to artist colours. */
+export type StorageColorKey = "artist" | "category" | "progress"
 
 export interface StorageArchive {
   id: string
@@ -29,6 +33,11 @@ export interface StorageArchive {
    *  an untagged archive is drawn in the neutral colour rather than being dropped. */
   artist: string
   category: string
+  /** Last-read page and the timestamp that flanks it on the server's own "has been opened" test
+   *  (`stats.rs`'s `is_read`). The progress bands are derived from these two integers rather than
+   *  from a pre-divided ratio so a 1-of-10 read is exactly 10%, not 10.000000000000002%. */
+  lastReadPage: number
+  lastReadTime: number
 }
 
 export interface StorageGroup {
@@ -42,6 +51,10 @@ export interface StorageGroup {
   bytes: number
   /** Descending by size, which every consumer here relies on. */
   archives: StorageArchive[]
+  /** Set when this group opens a further grouping instead of its archive list — only "已读" has
+   *  one, holding the ten-point bands it is made of, so a click on 已读 zooms into the bands rather
+   *  than dumping every read archive onto one canvas. */
+  bands?: StorageGroup[]
 }
 
 /** A group smaller than this cannot carry a readable label, so its bytes move into the level's
@@ -63,6 +76,46 @@ export const MAX_ARCHIVES = 600
 export type StorageLevel =
   | { kind: "groups"; title: string; groups: StorageGroup[]; colorBy: StorageColorKey }
   | { kind: "archives"; title: string; archives: StorageArchive[]; colorBy: StorageColorKey }
+
+/** Rungs of the progress view, in reading order. `unread` is "never opened" and `finished` is the
+ *  archive's last page — the two states that are not a percentage, separated exactly as the
+ *  server's own progress ladder separates them. Everything between is a ten-point band whose upper
+ *  bound is inclusive, so the bands tile the whole range without a gap. In the treemap the bands
+ *  are not siblings of `unread`: all of the percentage bands (including `finished`) sit inside the
+ *  已读 group. */
+export const PROGRESS_BAND_KEYS = [
+  "unread",
+  "1_10",
+  "11_20",
+  "21_30",
+  "31_40",
+  "41_50",
+  "51_60",
+  "61_70",
+  "71_80",
+  "81_90",
+  "91_99",
+  "finished",
+] as const
+
+export type ProgressBandKey = (typeof PROGRESS_BAND_KEYS)[number]
+
+/** Which band an archive sits in, mirroring `stats.rs`'s `is_read`/`is_finished`/
+ *  `completion_ratio` so this view and the reading histogram cannot disagree about what "unread"
+ *  or "finished" means. The percentage is taken from whole pages rather than a pre-divided ratio:
+ *  `0.1 * 100` is 10.000000000000002 in floating point, which would file a one-of-ten read under
+ *  11-20%. */
+export function progressBandKey(archive: StorageArchive): ProgressBandKey {
+  if (archive.lastReadPage <= 0 && archive.lastReadTime <= 0) return "unread"
+  if (archive.pages > 0 && archive.lastReadPage >= archive.pages) return "finished"
+  // The server reads an opened archive with no page count as half done; matching that keeps one
+  // archive from landing in a band the histogram would not put it in.
+  const percent = archive.pages > 0 ? (archive.lastReadPage * 100) / archive.pages : 50
+  for (const upper of [10, 20, 30, 40, 50, 60, 70, 80, 90]) {
+    if (percent <= upper) return `${upper - 9}_${upper}` as ProgressBandKey
+  }
+  return "91_99"
+}
 
 /** One rectangle. `value` is bytes for leaves; recharts sums children for a parent, so a group's
  *  children must add up to the group's own bytes exactly (they do: the folded tail is one extra
@@ -127,8 +180,16 @@ export function splitVisible<T>(
 export function buildGroups(
   archives: readonly StorageArchive[],
   dimension: Exclude<StorageDimension, "file">,
-  labels: { unknownArtist: string; unknownCategory: string },
+  labels: {
+    unknownArtist: string
+    unknownCategory: string
+    /** Display label for one progress band key (`unread`, `read`, `1_10`, … `finished`); the
+     *  caller owns translation, this module owns which band an archive is in. */
+    progressBand: (key: string) => string
+  },
 ): StorageGroup[] {
+  if (dimension === "progress") return buildProgressGroups(archives, labels.progressBand)
+
   const byKey = new Map<string, StorageGroup>()
   for (const archive of archives) {
     const value = dimension === "artist" ? archive.artist : archive.category
@@ -148,13 +209,76 @@ export function buildGroups(
   return groups
 }
 
+/** The progress view's root is the state, not the band: an archive is either 已读 or 未读, and the
+ *  percentages are how the read pile is spread out rather than siblings of it. Hence two root
+ *  groups, with the ten-point bands hanging off 已读 (100% as its own band, not as the label of the
+ *  whole read pile). */
+function buildProgressGroups(
+  archives: readonly StorageArchive[],
+  progressBand: (key: string) => string,
+): StorageGroup[] {
+  const unread: StorageGroup = {
+    key: "progress:unread",
+    label: progressBand("unread"),
+    colorKey: "unread",
+    bytes: 0,
+    archives: [],
+  }
+  const read: StorageGroup = {
+    key: "progress:read",
+    label: progressBand("read"),
+    colorKey: "",
+    bytes: 0,
+    archives: [],
+    bands: [],
+  }
+  const bands = new Map<string, StorageGroup>()
+  for (const archive of archives) {
+    const band = progressBandKey(archive)
+    if (band === "unread") {
+      unread.bytes += archive.bytes
+      unread.archives.push(archive)
+      continue
+    }
+    read.bytes += archive.bytes
+    read.archives.push(archive)
+    let group = bands.get(band)
+    if (!group) {
+      group = {
+        key: `progress:read:${band}`,
+        label: progressBand(band),
+        colorKey: band,
+        bytes: 0,
+        archives: [],
+      }
+      bands.set(band, group)
+    }
+    group.bytes += archive.bytes
+    group.archives.push(archive)
+  }
+  for (const group of [unread, read, ...bands.values()]) {
+    group.archives.sort((a, b) => b.bytes - a.bytes)
+  }
+  read.bands = [...bands.values()].sort((a, b) => b.bytes - a.bytes)
+  // The read pile is drawn in the colour of whichever band holds most of it: the palette has
+  // entries for bands, not for "read" as a whole, and a made-up colour would not match the tile
+  // the reader is about to see one click down.
+  read.colorKey = read.bands[0]?.colorKey ?? ""
+  return [read, unread].filter((group) => group.archives.length > 0).sort((a, b) => b.bytes - a.bytes)
+}
+
 function archiveTile(archive: StorageArchive, colorBy: StorageColorKey): StorageTile {
   return {
     name: archive.title,
     value: archive.bytes,
     tileKey: `archive:${archive.id}`,
     tileKind: "archive",
-    colorKey: colorBy === "artist" ? archive.artist : archive.category,
+    colorKey:
+      colorBy === "artist"
+        ? archive.artist
+        : colorBy === "category"
+          ? archive.category
+          : progressBandKey(archive),
     select: archive,
   }
 }
@@ -194,18 +318,25 @@ export function buildTiles(
     MIN_GROUP_AREA_PX,
     MAX_GROUPS,
   )
+  // A progress band holds individual archives, and colouring those by the band would paint the
+  // whole drill-down one colour; they keep the artist colouring the flat view uses instead.
+  const innerColorBy: StorageColorKey = level.colorBy === "progress" ? "artist" : level.colorBy
   const tiles: StorageTile[] = visible.map((group) => ({
     name: group.label,
     value: group.bytes,
     tileKey: group.key,
     tileKind: "group" as const,
     colorKey: group.colorKey,
-    drillTo: {
-      kind: "archives" as const,
-      title: group.label,
-      archives: group.archives,
-      colorBy: level.colorBy,
-    },
+    drillTo: group.bands
+      ? // A group with bands keeps the progress colouring one level further down (已读 → its
+        // bands); only the archives inside a band fall back to artist colours.
+        { kind: "groups" as const, title: group.label, groups: group.bands, colorBy: "progress" as const }
+      : {
+          kind: "archives" as const,
+          title: group.label,
+          archives: group.archives,
+          colorBy: innerColorBy,
+        },
   }))
   if (rest.length > 0) {
     const restBytes = rest.reduce((sum, group) => sum + group.bytes, 0)
@@ -222,16 +353,21 @@ export function buildTiles(
   return tiles
 }
 
-/** Node name → colour, ranked by bytes so the library's biggest artists (or categories) get the
- *  first palette entries and the assignment is stable across drill levels. Untagged archives are
- *  deliberately absent: they take the neutral fill. */
+/** Node name → colour, ranked by bytes so the library's biggest artists (or categories, or
+ *  progress bands) get the first palette entries and the assignment is stable across drill levels.
+ *  Untagged archives are deliberately absent: they take the neutral fill. */
 export function rankColorKeys(
   archives: readonly StorageArchive[],
   colorBy: StorageColorKey,
 ): { key: string; bytes: number }[] {
   const totals = new Map<string, number>()
   for (const archive of archives) {
-    const key = colorBy === "artist" ? archive.artist : archive.category
+    const key =
+      colorBy === "artist"
+        ? archive.artist
+        : colorBy === "category"
+          ? archive.category
+          : progressBandKey(archive)
     if (!key) continue
     totals.set(key, (totals.get(key) ?? 0) + archive.bytes)
   }

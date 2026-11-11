@@ -112,6 +112,17 @@ pub fn write(library: &Path, sidecar: &Sidecar) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Removes the sidecar for `id` (a no-op when there is none). Callers use this when the archive
+/// leaves the library — a permanent delete or a move into the recycle bin — so the snapshot does
+/// not outlive the bytes it describes.
+pub fn remove(library: &Path, id: &str) -> std::io::Result<()> {
+    match std::fs::remove_file(paths::sidecar_path(library, id)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 /// Reads and parses the sidecar without insisting that the `id` inside matches `id`. The rebuild
 /// audit uses this to tell "a sidecar for a different archive is sitting here" apart from "there is
 /// no readable sidecar at all"; nothing else should.

@@ -6,7 +6,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
-import { useEffect, useState, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
 
 import { clearDiagnosticsDevice } from "@/diagnostics/device"
 import { startDiagnostics } from "@/diagnostics/sdk"
@@ -820,15 +820,106 @@ export interface AiGroupSuggestion {
   review?: GroupReview
 }
 
-/** Whole-library grouping suggestions; local-model-only (503 `model_not_ready` if not ready). */
+/** What the server currently knows about the whole-library grouping pass. The pass is a detached
+ * run on the server, so this is a state rather than the result of one request: `running` carries
+ * its phase and progress, `ready` means a cached answer is available. */
+export type AiGroupSuggestionsState =
+  | { status: "idle" }
+  | {
+      status: "running"
+      run_id?: string
+      phase?: string
+      done?: number
+      total?: number
+      elapsed_secs?: number
+      /** The graph-only result, present once the grouping scan has finished. */
+      suggestions?: AiGroupSuggestion[]
+    }
+  | {
+      status: "ready"
+      suggestions: AiGroupSuggestion[]
+      reviewed?: boolean
+      computed_at?: number
+      duration_ms?: number
+    }
+  | { status: "error"; code?: string; message?: string; run_id?: string }
+
+const AI_GROUP_SUGGESTIONS_KEY = ["tankoubons", "ai-group-suggestions", "state"] as const
+
+/** Starts (or joins) the grouping run and follows it over SSE.
+ *
+ * This used to be a `useMutation` POSTing to an endpoint that ran the whole pass inside the
+ * request. On a large library that pass outlives Cloudflare's ~100s origin limit, so the browser
+ * only ever got a 524 while the server discarded the work along with the dropped request — and
+ * since the cache was written at the very end, every retry started from zero. The POST now only
+ * starts or joins the run; the answer arrives as `full`/`status`/`partial`/`done` events, and a
+ * dropped connection costs nothing because re-mounting re-subscribes to the same run. */
 export function useAiGroupSuggestions() {
-  return useMutation({
-    mutationFn: (includeIgnored?: boolean) =>
-      sendJson<{ suggestions: AiGroupSuggestion[] }>(
-        "POST",
-        `/tankoubons/ai-group-suggestions${includeIgnored ? "?include_ignored=true" : ""}`,
-      ),
+  const queryClient = useQueryClient()
+  const query = useQuery({
+    queryKey: AI_GROUP_SUGGESTIONS_KEY,
+    // The stream is authoritative; this exists so a blocked EventSource still has a way in.
+    queryFn: () => fetchJson<AiGroupSuggestionsState>("/tankoubons/ai-group-suggestions/result"),
+    enabled: false,
+    staleTime: Infinity,
+    gcTime: Infinity,
+    retry: false,
   })
+
+  useEffect(() => {
+    const set = (state: AiGroupSuggestionsState) =>
+      queryClient.setQueryData<AiGroupSuggestionsState>(AI_GROUP_SUGGESTIONS_KEY, state)
+
+    const source = new EventSource("/api/tankoubons/ai-group-suggestions/stream")
+    const onEvent = (event: Event) => {
+      const raw = (event as MessageEvent<string>).data
+      // A native connection failure fires `error` with no data; EventSource reconnects by itself
+      // and the server answers every (re)connect with a fresh `full`, so nothing to do here.
+      if (!raw) return
+      const data = JSON.parse(raw) as Record<string, unknown>
+      switch (event.type) {
+        case "full":
+          set(data as unknown as AiGroupSuggestionsState)
+          break
+        case "status":
+          set((data.status ?? {}) as AiGroupSuggestionsState)
+          break
+        case "partial":
+        case "done":
+          set({
+            status: "ready",
+            suggestions: (data.suggestions as AiGroupSuggestion[] | undefined) ?? [],
+            reviewed: data.reviewed as boolean | undefined,
+          })
+          break
+        case "error":
+          set({
+            status: "error",
+            code: data.code as string | undefined,
+            message: data.message as string | undefined,
+            run_id: data.run_id as string | undefined,
+          })
+          break
+        // `cancelled` needs no handling: it only happens when a newer run supersedes this one, and
+        // that run's own `status`/`full` follows immediately.
+      }
+    }
+    for (const name of ["full", "status", "partial", "done", "error", "cancelled"]) {
+      source.addEventListener(name, onEvent)
+    }
+    return () => source.close()
+  }, [queryClient])
+
+  const start = useCallback(async () => {
+    const state = await sendJson<AiGroupSuggestionsState>(
+      "POST",
+      "/tankoubons/ai-group-suggestions/run",
+    )
+    queryClient.setQueryData<AiGroupSuggestionsState>(AI_GROUP_SUGGESTIONS_KEY, state)
+    return state
+  }, [queryClient])
+
+  return { state: query.data, start }
 }
 
 export interface IgnoredGroupSuggestion {
@@ -2036,6 +2127,11 @@ export function useStartQueueItem() {
       queryClient.invalidateQueries({ queryKey: ["download-queue"] })
       queryClient.invalidateQueries({ queryKey: ["jobs"] })
     },
+    // A refused start (source already imported, same source already downloading) still rewrites
+    // the item into its blocked/error state server-side. Refetching here keeps the row honest
+    // even when the SSE delta is missed or the server predates it — otherwise the click just
+    // looks dead.
+    onError: () => queryClient.invalidateQueries({ queryKey: ["download-queue"] }),
   })
 }
 
@@ -2050,6 +2146,7 @@ export function useForceDownloadQueueItem() {
       queryClient.invalidateQueries({ queryKey: ["download-queue"] })
       queryClient.invalidateQueries({ queryKey: ["jobs"] })
     },
+    onError: () => queryClient.invalidateQueries({ queryKey: ["download-queue"] }),
   })
 }
 
@@ -2067,6 +2164,7 @@ export function useReingestQueueItem() {
       queryClient.invalidateQueries({ queryKey: ["jobs"] })
       queryClient.invalidateQueries({ queryKey: ["archives"] })
     },
+    onError: () => queryClient.invalidateQueries({ queryKey: ["download-queue"] }),
   })
 }
 

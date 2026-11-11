@@ -129,7 +129,12 @@ function hostnameOf(url: string): string {
 export function matchesDomain(plugin: PluginInfo, url: string): boolean {
   const needle = normalizeDomain(hostnameOf(url))
   if (plugin.domain_match.length > 0) {
-    return plugin.domain_match.some((d) => normalizeDomain(d) === needle)
+    // A declared domain owns its subdomains too: Chaika's `chaika.moe` entry has to cover
+    // `panda.chaika.moe`, and E-Hentai's `e-hentai.org` has to cover `g.e-hentai.org`.
+    return plugin.domain_match.some((d) => {
+      const domain = normalizeDomain(d)
+      return needle === domain || needle.endsWith(`.${domain}`)
+    })
   }
   return matchesPattern(plugin, url)
 }

@@ -8,13 +8,13 @@ import { useServerInfo } from "@/api/hooks";
 import { Modal, Tooltip } from "@/components/common-ui/Display";
 import { Input, Switch } from "@/components/common-ui/Form";
 import { CollapsibleSection, DateTimeStack } from "@/components/Display";
+import { copyWithToast } from "@/lib/clipboard";
 import {
   useRotateNode,
   useSaveShareSettings,
   useShares,
   useShareSettings,
 } from "@/share/api";
-import { copyWithToast } from "@/share/clipboard";
 import { normalizeNodeCode, sameNode } from "@/share/nodeCode";
 import {
   type SettingField,

@@ -104,6 +104,7 @@ async fn test_app() -> Option<axum::Router> {
         translation_telemetry: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
+        grouping: Default::default(),
         refresh_tokens,
         api_tokens,
         api_token_last_touch: Default::default(),

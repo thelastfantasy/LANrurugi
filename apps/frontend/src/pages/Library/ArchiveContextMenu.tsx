@@ -11,11 +11,11 @@ import {
 } from "@/components/common-ui/Display";
 import { RatingWidget } from "@/components/common-ui/Form";
 import { useMenuPalette } from "@/hooks/useMenuPalette";
+import { copyWithToast } from "@/lib/clipboard";
 import { routes } from "@/lib/routes";
 import { splitTagsByNamespace } from "@/lib/tagFormat";
 import { isTankoubonId } from "@/lib/utils/isTankoubonId";
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme";
-import { toast } from "@/toast";
 
 import { type ContextMenuState } from "./types";
 
@@ -177,21 +177,14 @@ export function ArchiveContextMenu({
 
   function copyLink() {
     const url = `${window.location.origin}${routes.reader(archive.arcid)}`;
-    navigator.clipboard
-      .writeText(url)
-      .then(() =>
-        toast({
-          heading: t("library.linkCopiedToClipboard") ?? undefined,
-          icon: "info",
-          hideAfter: 3000,
-        }),
-      )
-      .catch(() =>
-        toast({
-          heading: t("library.failedToCopyLink") ?? undefined,
-          icon: "error",
-        }),
-      );
+    // `copyWithToast` falls back to a selection-based copy: the async clipboard API needs a secure
+    // context, and a home instance is usually reached over plain HTTP, where this used to throw
+    // before even the failure toast could appear.
+    void copyWithToast(
+      url,
+      t("library.linkCopiedToClipboard") ?? "",
+      t("library.failedToCopyLink") ?? "",
+    );
   }
 
   return (

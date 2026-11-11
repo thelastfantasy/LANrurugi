@@ -2,8 +2,8 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { CheckboxField, Input, Switch } from "@/components/common-ui/Form"
+import { copyWithToast } from "@/lib/clipboard"
 import { useSaveShareSettings, useShareSettings } from "@/share/api"
-import { copyWithToast } from "@/share/clipboard"
 import type { ShareEndpointStatus, ShareServiceStatus, ShareSettings } from "@/share/types"
 import { toast } from "@/toast"
 

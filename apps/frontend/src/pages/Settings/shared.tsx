@@ -4,8 +4,8 @@ import { FaCopy } from "react-icons/fa6"
 
 import { Tooltip } from "@/components/common-ui/Display"
 import { Switch } from "@/components/common-ui/Form/Switch"
+import { copyWithToast } from "@/lib/clipboard"
 import type { ImageFormatSupport } from "@/lib/utils/imageFormatSupport"
-import { copyWithToast } from "@/share/clipboard"
 
 export function Row({
   label,

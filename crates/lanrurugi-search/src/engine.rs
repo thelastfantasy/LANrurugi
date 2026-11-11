@@ -1304,6 +1304,15 @@ fn tag_index_variants(tag: &str, source_equivalences: &[Vec<String>]) -> Vec<Str
             Some((host, path)) => (host, Some(path)),
             None => (bare, None),
         };
+        // `source:*.example.com` asks for "any host under example.com"; the apex itself is part of
+        // that answer, and plugins do store a bare `source:example.com/...`. The glob alone would
+        // require a dot before the domain, so the apex spelling is added here as well.
+        if let Some(base) = host.strip_prefix("*.") {
+            match path {
+                Some(path) => push_bare(&format!("{base}/{path}")),
+                None => push_bare(base),
+            }
+        }
         for equivalent in equivalent_hosts(&host.to_ascii_lowercase(), source_equivalences) {
             match path {
                 Some(path) => {
@@ -1312,8 +1321,19 @@ fn tag_index_variants(tag: &str, source_equivalences: &[Vec<String>]) -> Vec<Str
                     if let Some(trimmed) = combined.strip_suffix('/') {
                         push_bare(trimmed);
                     }
+                    // The apex rule applies to mapped wildcard hosts too: `*.e-hentai.org` is
+                    // equivalent to `*.exhentai.org`, and `exhentai.org/...` itself is part of
+                    // that second family.
+                    if let Some(base) = equivalent.strip_prefix("*.") {
+                        push_bare(&format!("{base}/{path}"));
+                    }
                 }
-                None => push_bare(&equivalent),
+                None => {
+                    push_bare(&equivalent);
+                    if let Some(base) = equivalent.strip_prefix("*.") {
+                        push_bare(base);
+                    }
+                }
             }
         }
     }
@@ -1345,6 +1365,29 @@ fn match_host_pattern<'h>(host: &'h str, pattern: &str) -> Option<HostMatch<'h>>
 /// subdomain to carry and `*.b.com` does not cover the apex `b.com`.
 fn equivalent_hosts(host: &str, equivalences: &[Vec<String>]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
+    // A wildcard host asks about a whole family, so its equivalents are wildcards of the same
+    // family: `*.e-hentai.org` also covers `*.exhentai.org` (the caller adds the apex spellings).
+    // Matching the group by its *base* is what lets the default literal group
+    // (`e-hentai.org` ≡ `exhentai.org`) answer a wildcard query at all.
+    if let Some(base) = host.strip_prefix("*.") {
+        for group in equivalences {
+            let related = group
+                .iter()
+                .any(|pattern| pattern == base || pattern.strip_prefix("*.") == Some(base));
+            if !related {
+                continue;
+            }
+            for pattern in group {
+                let other = pattern.strip_prefix("*.").unwrap_or(pattern);
+                if other != base {
+                    out.push(format!("*.{other}"));
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        return out;
+    }
     for group in equivalences {
         let Some(matched) = group
             .iter()
@@ -1429,9 +1472,22 @@ async fn collect_tag_variants(
     }
 
     if let Some(namespace) = shared_namespace(variants) {
-        let prefixes: Vec<String> = variants.iter().map(|v| format!("INDEX_{v}")).collect();
-        let pattern = format!("INDEX_{namespace}:*");
-        return collect_index_keys(conn, &pattern, Some(&prefixes), ids).await;
+        // A variant carrying a glob (`source:*.chaika.moe`, `source:foo?.jpg`) cannot be expressed
+        // as a literal `starts_with` prefix, so the one-scan path would silently match nothing —
+        // exactly how wildcard source queries regressed. Literal variants keep the cheap shared
+        // scan; globbed ones go back through their own `SCAN MATCH` pattern.
+        let (globs, literals): (Vec<&String>, Vec<&String>) = variants
+            .iter()
+            .partition(|variant| variant.contains(['*', '?']));
+        if !literals.is_empty() {
+            let prefixes: Vec<String> = literals.iter().map(|v| format!("INDEX_{v}")).collect();
+            let pattern = format!("INDEX_{namespace}:*");
+            collect_index_keys(conn, &pattern, Some(&prefixes), ids).await?;
+        }
+        for variant in globs {
+            collect_tag_index(conn, variant, isexact, ids).await?;
+        }
+        return Ok(());
     }
 
     for variant in variants {
@@ -2711,6 +2767,102 @@ mod tests {
                 vec![
                     "source scheme a\0".to_string() + &id_a,
                     "source scheme b\0".to_string() + &id_b,
+                ],
+            )
+            .await
+            .unwrap();
+    }
+
+    /// `source:*.example.com` is a glob over the host half of a stored tag: it must find
+    /// `source:sub.example.com/...` without also demanding the apex. The shared-scan fast path
+    /// expresses its variants as literal `starts_with` prefixes, which a `*` can never satisfy —
+    /// that turned these queries into silent zero results. This pins the glob fallback.
+    #[tokio::test]
+    async fn wildcard_source_tag_matches_subdomains() {
+        let Some((archive_pool, search_pool, bookmarks)) = test_pools().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let eq = test_eq();
+        let id_c = "c".repeat(40);
+        let id_d = "d".repeat(40);
+        let id_e = "e".repeat(40);
+        let id_f = "f".repeat(40);
+        let id_g = "g".repeat(40);
+        let chaika = "source:panda.chaika.moe/archive/65070";
+        let eht = "source:www.e-hentai.org/g/1/abc";
+        let apex = "source:e-hentai.org/g/2/def";
+        let ex_sub = "source:g.exhentai.org/g/4/ghi";
+        let ex_apex = "source:exhentai.org/g/5/jkl";
+
+        let mut aconn = archive_pool.get().await.unwrap();
+        for (id, tag, title) in [
+            (&id_c, chaika, "wildcard source chaika"),
+            (&id_d, eht, "wildcard source eht"),
+            (&id_e, apex, "wildcard source apex"),
+            (&id_f, ex_sub, "wildcard source ex sub"),
+            (&id_g, ex_apex, "wildcard source ex apex"),
+        ] {
+            let _: () = aconn
+                .hset_multiple(id, &[("tags", tag), ("pagecount", "1"), ("progress", "0")])
+                .await
+                .unwrap();
+            crate::indexer::index_new_archive(&search_pool, &eq, id, title)
+                .await
+                .unwrap();
+            crate::indexer::update_tag_indexes(&search_pool, &eq, id, "", tag)
+                .await
+                .unwrap();
+        }
+
+        let scope: HashSet<lanrurugi_core::ids::ArchiveId> = [&id_c, &id_d, &id_e, &id_f, &id_g]
+            .into_iter()
+            .map(|id| lanrurugi_core::ids::ArchiveId(id.clone()))
+            .collect();
+        for (filter, expected) in [
+            ("source:*.chaika.moe", &id_c),
+            ("source:*.e-hentai.org/g/1/abc", &id_d),
+            ("source:https://*.e-hentai.org/g/1/abc", &id_d),
+            // The apex is part of "any host under this domain", and plugins store it bare.
+            ("source:*.e-hentai.org/g/2/def", &id_e),
+            // The default equivalence group also answers wildcard queries: subdomains map to the
+            // equivalent host's subdomains, and its apex is included the same way.
+            ("source:*.e-hentai.org/g/4/ghi", &id_f),
+            ("source:*.e-hentai.org/g/5/jkl", &id_g),
+        ] {
+            let params = SearchParams {
+                filter: filter.to_string(),
+                groupby_tanks: true,
+                restrict_to_archive_ids: Some(scope.clone()),
+                ..Default::default()
+            };
+            let result = search(&archive_pool, &search_pool, &eq, &bookmarks, &params)
+                .await
+                .unwrap();
+            assert_eq!(result.ids, vec![expected.clone()], "filter {filter:?}");
+        }
+
+        for id in [&id_c, &id_d, &id_e, &id_f, &id_g] {
+            let _: () = aconn.del(id).await.unwrap();
+        }
+        let mut sconn = search_pool.get().await.unwrap();
+        for tag in [chaika, eht, apex, ex_sub, ex_apex] {
+            let _: () = sconn.del(format!("INDEX_{tag}")).await.unwrap();
+        }
+        for id in [&id_c, &id_d, &id_e, &id_f, &id_g] {
+            let _: () = sconn.srem(UNTAGGED_KEY, id).await.unwrap();
+            let _: () = sconn.srem(NEW_KEY, id).await.unwrap();
+            let _: () = sconn.srem(TANKGROUPED_KEY, id).await.unwrap();
+        }
+        let _: () = sconn
+            .zrem(
+                TITLES_KEY,
+                vec![
+                    "wildcard source chaika\0".to_string() + &id_c,
+                    "wildcard source eht\0".to_string() + &id_d,
+                    "wildcard source apex\0".to_string() + &id_e,
+                    "wildcard source ex sub\0".to_string() + &id_f,
+                    "wildcard source ex apex\0".to_string() + &id_g,
                 ],
             )
             .await

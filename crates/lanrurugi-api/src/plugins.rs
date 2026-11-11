@@ -2835,6 +2835,13 @@ const MAX_DOWNLOAD_RETRIES: u32 = 4;
                         if let Some((repo, item_id)) = &queue_link {
                             // Fetch/cache metadata before Done so the frontend sees it.
                             if let Ok(Some(mut item)) = repo.get(item_id).await {
+                                // The archive exists as of this moment — exactly what
+                                // `ensure_metadata_cached`'s apply step needs. It was left unset
+                                // here before, so a preview fetched during the download never
+                                // reached the archive; when the post-ingest auto-run also failed
+                                // (no enabled plugin understands the archive), a finished
+                                // download landed with no tags at all.
+                                item.archive_ids = Some(ids.clone());
                                 if item.auto_fetch_metadata || item.title.is_none() {
                                     ensure_metadata_cached(&state_for_task, &mut item).await;
                                 }
@@ -3484,6 +3491,22 @@ pub(crate) async fn ensure_metadata_cached(
     // Cache hit — still within the 10-min window.
     if let Some(at) = item.metadata_preview_at {
         if now - at < METADATA_CACHE_TTL_MS {
+            // Still owes the archive its tags: this preview may have been fetched at start time,
+            // before there was an archive, and the caller is the one that now supplies
+            // `archive_ids`.
+            if item.auto_fetch_metadata {
+                if let (Some(tags), Some(archive_ids)) = (
+                    item.metadata_preview
+                        .as_ref()
+                        .and_then(|p| p.get("tags"))
+                        .and_then(|v| v.as_str()),
+                    item.archive_ids.as_ref(),
+                ) {
+                    for aid in archive_ids {
+                        apply_metadata_tags(state, aid, tags).await;
+                    }
+                }
+            }
             return item.metadata_preview.clone();
         }
     }
@@ -4633,6 +4656,7 @@ pub(crate) mod tests {
         translation_telemetry: Default::default(),
             filename_locks: Default::default(),
             download_queue_tx: None,
+            grouping: Default::default(),
             refresh_tokens: Arc::new(lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(
                 redis.config.clone(),
             )),
