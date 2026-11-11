@@ -1661,3 +1661,12 @@ textarea {
     color: #f1f1f1;
     text-shadow: 0 1px 2px #34353b, 0 0 6px #34353b, 0 0 12px #34353b;
 }
+
+/* Touch screens keep `:hover` on a button after a tap until something else is tapped, and
+   `.favtag-btn:hover` is more specific than `.toggled`, so an unselected category button stayed
+   painted exactly like a selected one. Without hover, only `.toggled` may paint. */
+@media (hover: none) {
+    .favtag-btn:hover:not(.toggled) {
+        background: #4f5052 !important;
+    }
+}
