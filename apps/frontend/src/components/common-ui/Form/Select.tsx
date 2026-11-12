@@ -88,7 +88,7 @@ export function Select<Value extends string>({
             return selected ? selected.label : String(value ?? "")
           }}
         </BaseSelect.Value>
-        <BaseSelect.Icon>
+        <BaseSelect.Icon style={{ display: "flex", alignItems: "center" }}>
           <FaCaretDown aria-hidden="true" />
         </BaseSelect.Icon>
       </BaseSelect.Trigger>

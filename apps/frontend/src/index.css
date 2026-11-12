@@ -2270,6 +2270,33 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   animation: preview-skeleton-pulse 1.4s ease-in-out infinite;
 }
 
+/* Page-image placeholder in the reader's page lightbox: a block roughly the size the page will
+   take, pulsing on the same rhythm. Absolute so swapping it for the image never moves the frame. */
+.reader-lightbox-skeleton {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  height: 82%;
+  aspect-ratio: 3 / 4;
+  max-width: 86%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px dashed color-mix(in srgb, currentColor 22%, transparent);
+  opacity: 0.55;
+}
+
+/* Filmstrip thumbnails in the same lightbox — a pulsing block until each thumbnail arrives. */
+.reader-thumb-skeleton {
+  position: absolute;
+  inset: 0;
+  background-color: currentColor;
+  opacity: 0.1;
+  animation: preview-skeleton-pulse 1.4s ease-in-out infinite;
+}
+
 .preview-skeleton-row:nth-child(even) .preview-skeleton-bar,
 .subscriptions-skeleton-row:nth-child(even) .skeleton-bar,
 .usage-skeleton-row:nth-child(even) .skeleton-bar {
@@ -2289,7 +2316,8 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 
 @media (prefers-reduced-motion: reduce) {
   .preview-skeleton-bar,
-  .skeleton-bar {
+  .skeleton-bar,
+  .reader-thumb-skeleton {
     animation: none;
   }
 }

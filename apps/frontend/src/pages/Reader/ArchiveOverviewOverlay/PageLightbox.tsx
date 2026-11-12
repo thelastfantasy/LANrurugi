@@ -43,6 +43,7 @@ function LightboxFilmstripFrame({
   onHover: () => void
   onClick: () => void
 }) {
+  const [loaded, setLoaded] = useState(false)
   return (
     <div data-filmstrip-page={page} style={{ flex: "0 0 auto", width: 90, display: "flex", flexDirection: "column", gap: 2 }}>
       <div
@@ -57,11 +58,13 @@ function LightboxFilmstripFrame({
           outlineOffset: -1,
         }}
       >
+        {!loaded && <div className="reader-thumb-skeleton" aria-hidden="true" />}
         <img
           src={`/api/archives/${archiveId}/thumbnail?page=${page}`}
           alt={`${page}`}
           loading="lazy"
-          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          onLoad={() => setLoaded(true)}
+          style={{ width: "100%", height: "100%", objectFit: "cover", opacity: loaded ? 1 : 0 }}
         />
       </div>
       {chapter && (
@@ -153,6 +156,8 @@ export function PageLightbox({
   const [editTocMenuAt, setEditTocMenuAt] = useState<DOMRect | null>(null)
   const [removeTocMenuAt, setRemoveTocMenuAt] = useState<DOMRect | null>(null)
   const [measured, setMeasured] = useState<{ page: number; width: number; height: number; sizeKb: number | null } | null>(null)
+  /** URL of the page image currently painted — anything else still needs its skeleton. */
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null)
   const filmstripRef = useRef<HTMLDivElement>(null)
   const lenisRef = useHorizontalScroll(filmstripRef)
   const scrollFilmstripOnNextPage = useRef(false)
@@ -274,16 +279,29 @@ export function PageLightbox({
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ flex: "1 1 auto", display: "flex", flexDirection: "column", minHeight: 0, padding: 16 }}>
-          <div style={{ flex: "1 1 auto", minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ position: "relative", flex: "1 1 auto", minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {loadedUrl !== pageUrl && (
+              <div className="reader-lightbox-skeleton" aria-hidden="true">
+                <i className="fa fa-circle-notch fa-spin" />
+              </div>
+            )}
             {pageUrl && (
               <img
                 key={pageUrl}
                 src={pageUrl}
                 alt={t("common.pageN", { n: previewPage }) ?? undefined}
-                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+                style={{
+                  maxWidth: "100%",
+                  maxHeight: "100%",
+                  objectFit: "contain",
+                  // Keep the loaded image out of sight until it has painted, so the skeleton — not a
+                  // half-rendered frame — is what fills the switch between pages.
+                  visibility: loadedUrl === pageUrl ? "visible" : "hidden",
+                }}
                 onLoad={(e) => {
                   const img = e.currentTarget
                   const page = previewPage
+                  setLoadedUrl(pageUrl)
                   setMeasured({ page, width: img.naturalWidth, height: img.naturalHeight, sizeKb: null })
                   void fetchContentLengthKb(img.src).then((kb) => {
                     if (kb !== null) setMeasured((prev) => (prev?.page === page ? { ...prev, sizeKb: kb } : prev))
