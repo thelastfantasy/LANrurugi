@@ -95,7 +95,7 @@ jobs:
       # GitHub's release CDN answered 504 on every retry of two consecutive runs (2026-11-09), so
       # the download is cached: the key changes only when the pin changes.
       - name: Cache PDFium
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .pdfium/linux-x64
           key: pdfium-${{ runner.os }}-7543
