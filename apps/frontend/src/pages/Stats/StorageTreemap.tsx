@@ -18,6 +18,7 @@ import {
   fitText,
   progressBandKey,
   rankColorKeys,
+  ratingBandKey,
   type StorageArchive,
   type StorageColorKey,
   type StorageDimension,
@@ -43,6 +44,7 @@ const DIMENSIONS: { value: StorageDimension; labelKey: string }[] = [
   { value: "artist", labelKey: "stats.storageTreemapByArtist" },
   { value: "category", labelKey: "stats.storageTreemapByCategory" },
   { value: "progress", labelKey: "stats.storageTreemapByProgress" },
+  { value: "rating", labelKey: "stats.storageTreemapByRating" },
 ]
 
 /** `ResizeObserver`-measured box of the chart frame. The treemap needs real pixel area to decide
@@ -106,6 +108,9 @@ export function StorageTreemap({ archives }: { archives: ArchiveMetadata[] | und
             category: tags.category?.[0] ?? "",
             lastReadPage: archive.progress,
             lastReadTime: archive.lastreadtime,
+            // Ratings live as a `rating:N` tag rather than a field on the archive, so they come
+            // out of the same namespace split the artist/category colours already use.
+            rating: Number(tags.rating?.[0] ?? 0) || 0,
           }
         })
         // Biggest first: recharts lays tiles out in array order, and the file level wants its
@@ -126,7 +131,12 @@ export function StorageTreemap({ archives }: { archives: ArchiveMetadata[] | und
       })
       return colors
     }
-    return { artist: build("artist"), category: build("category"), progress: build("progress") }
+    return {
+      artist: build("artist"),
+      category: build("category"),
+      progress: build("progress"),
+      rating: build("rating"),
+    }
   }, [entries, series])
 
   const colorFor = (colorBy: StorageColorKey, key: string) => colorMaps[colorBy].get(key) ?? NEUTRAL_FILL
@@ -141,6 +151,14 @@ export function StorageTreemap({ archives }: { archives: ArchiveMetadata[] | und
         unknownArtist: t("stats.storageTreemapNoArtist"),
         unknownCategory: t("stats.storageTreemapNoCategory"),
         progressBand: (key) => t(`stats.storageTreemapProgress.${key}`),
+        ratingBand: (key) =>
+          key === "rated"
+            ? t("stats.storageTreemapRating.rated")
+            : key === "unrated"
+              ? t("stats.unrated")
+              : // Half stars are first-class here: the band key is the rating itself, so it goes
+                // through the same "{{count}} 星" string the reading histogram uses.
+                t("stats.starsValue", { count: key }),
       }),
       colorBy: dimension,
     }
@@ -270,7 +288,9 @@ export function StorageTreemap({ archives }: { archives: ArchiveMetadata[] | und
       ? selected.category
       : level.colorBy === "artist"
         ? selected.artist
-        : progressBandKey(selected)
+        : level.colorBy === "rating"
+          ? ratingBandKey(selected)
+          : progressBandKey(selected)
     : undefined
   const selectedShare = selected ? percentOf(selected.bytes, totalBytes) : 0
   const crumbs = [
@@ -440,7 +460,9 @@ export function StorageTreemap({ archives }: { archives: ArchiveMetadata[] | und
           ? t("stats.storageTreemapColorsByArtist")
           : level.colorBy === "category"
             ? t("stats.storageTreemapColorsByCategory")
-            : t("stats.storageTreemapColorsByProgress")}
+            : level.colorBy === "rating"
+              ? t("stats.storageTreemapColorsByRating")
+              : t("stats.storageTreemapColorsByProgress")}
       </p>
     </StatsSection>
   )

@@ -13,15 +13,16 @@
  *  "group by path" or "group by title" would collapse to here: the content folder has no
  *  subdirectories, and every title is unique. `progress` groups the library by how far it has been
  *  read — a storage map of attention rather than of disk, answering "what am I sitting on but not
- *  finishing". */
-export type StorageDimension = "file" | "artist" | "category" | "progress"
+ *  finishing". `rating` is the same kind of map for opinions: 已评分/未评分 at the root, then one
+ *  band per star value. */
+export type StorageDimension = "file" | "artist" | "category" | "progress" | "rating"
 
 /** Which value a tile's colour is taken from. Mirrors the dimension, except that the flat file view
  *  and the inside of a progress band both colour by artist — colouring by format would paint 214 of
  *  this library's 229 archives the same colour, and colour has to distinguish neighbours to be
- *  worth anything. `progress` colours the root level's 已读/未读 pair and the band tiles one click
- *  below it; the archives inside a band are back to artist colours. */
-export type StorageColorKey = "artist" | "category" | "progress"
+ *  worth anything. `progress`/`rating` colour the root level's own pair (已读/未读, 已评分/未评分)
+ *  and the band tiles one click below; the archives inside a band are back to artist colours. */
+export type StorageColorKey = "artist" | "category" | "progress" | "rating"
 
 export interface StorageArchive {
   id: string
@@ -29,6 +30,10 @@ export interface StorageArchive {
   bytes: number
   extension: string
   pages: number
+  /** Star rating 0–5, in halves (`rating:4.5` is how the star widget writes one). `0` means
+   *  unrated, which is why the rating view's root splits into 已评分/未评分 instead of showing a
+   *  zero-star band. */
+  rating: number
   /** Raw tag values this archive's colour and grouping are read from. `""` when the tag is absent —
    *  an untagged archive is drawn in the neutral colour rather than being dropped. */
   artist: string
@@ -117,6 +122,18 @@ export function progressBandKey(archive: StorageArchive): ProgressBandKey {
   return "91_99"
 }
 
+/** Which star band an archive sits in: the rating itself, formatted without trailing zeros, so
+ *  `rating:4.5` becomes "4.5" rather than being rounded into the whole-star band next to it.
+ *
+ *  Bands are the distinct ratings present rather than a fixed 1–5 ladder, because the widget
+ *  writes halves and a directly edited tag can carry finer precision — a fixed ladder would have
+ *  to round (4.5 → 4 or 5), which is precisely the information the rating view exists to show.
+ *  `unrated` is not a band: it is the other root group, the way `unread` is for progress. */
+export function ratingBandKey(archive: StorageArchive): string {
+  if (!Number.isFinite(archive.rating) || archive.rating <= 0) return "unrated"
+  return String(Math.round(Math.min(5, archive.rating) * 100) / 100)
+}
+
 /** One rectangle. `value` is bytes for leaves; recharts sums children for a parent, so a group's
  *  children must add up to the group's own bytes exactly (they do: the folded tail is one extra
  *  child, never a silent omission). */
@@ -186,9 +203,12 @@ export function buildGroups(
     /** Display label for one progress band key (`unread`, `read`, `1_10`, … `finished`); the
      *  caller owns translation, this module owns which band an archive is in. */
     progressBand: (key: string) => string
+    /** Display label for one rating key (`unrated`, `rated`, `1` … `5`). */
+    ratingBand: (key: string) => string
   },
 ): StorageGroup[] {
   if (dimension === "progress") return buildProgressGroups(archives, labels.progressBand)
+  if (dimension === "rating") return buildRatingGroups(archives, labels.ratingBand)
 
   const byKey = new Map<string, StorageGroup>()
   for (const archive of archives) {
@@ -267,6 +287,62 @@ function buildProgressGroups(
   return [read, unread].filter((group) => group.archives.length > 0).sort((a, b) => b.bytes - a.bytes)
 }
 
+/** The rating view's root is 已评分/未评分; the five star values hang off 已评分, biggest band
+ *  first. Same shape as the progress view, and for the same reason: "has a rating" is the state,
+ *  the stars are how that pile is spread out. */
+function buildRatingGroups(
+  archives: readonly StorageArchive[],
+  ratingBand: (key: string) => string,
+): StorageGroup[] {
+  const unrated: StorageGroup = {
+    key: "rating:unrated",
+    label: ratingBand("unrated"),
+    colorKey: "unrated",
+    bytes: 0,
+    archives: [],
+  }
+  const rated: StorageGroup = {
+    key: "rating:rated",
+    label: ratingBand("rated"),
+    colorKey: "",
+    bytes: 0,
+    archives: [],
+    bands: [],
+  }
+  const bands = new Map<string, StorageGroup>()
+  for (const archive of archives) {
+    const band = ratingBandKey(archive)
+    if (band === "unrated") {
+      unrated.bytes += archive.bytes
+      unrated.archives.push(archive)
+      continue
+    }
+    rated.bytes += archive.bytes
+    rated.archives.push(archive)
+    let group = bands.get(band)
+    if (!group) {
+      group = {
+        key: `rating:rated:${band}`,
+        label: ratingBand(band),
+        colorKey: band,
+        bytes: 0,
+        archives: [],
+      }
+      bands.set(band, group)
+    }
+    group.bytes += archive.bytes
+    group.archives.push(archive)
+  }
+  for (const group of [unrated, rated, ...bands.values()]) {
+    group.archives.sort((a, b) => b.bytes - a.bytes)
+  }
+  // Highest rating first: unlike progress, the order of the bands is meaningful, so they are sorted
+  // by value (5, 4.5, 4, …, 0.5) rather than by bytes.
+  rated.bands = [...bands.values()].sort((a, b) => Number(b.colorKey) - Number(a.colorKey))
+  rated.colorKey = rated.bands[0]?.colorKey ?? ""
+  return [rated, unrated].filter((group) => group.archives.length > 0).sort((a, b) => b.bytes - a.bytes)
+}
+
 function archiveTile(archive: StorageArchive, colorBy: StorageColorKey): StorageTile {
   return {
     name: archive.title,
@@ -278,7 +354,9 @@ function archiveTile(archive: StorageArchive, colorBy: StorageColorKey): Storage
         ? archive.artist
         : colorBy === "category"
           ? archive.category
-          : progressBandKey(archive),
+          : colorBy === "rating"
+            ? ratingBandKey(archive)
+            : progressBandKey(archive),
     select: archive,
   }
 }
@@ -311,16 +389,20 @@ export function buildTiles(
     return tiles
   }
 
+  // The rating view's five star bands are a fixed set the reader explicitly asked to see, not a long
+  // tail, so they are never folded into "other" for being small. (Progress keeps the area test: its
+  // twelve bands span a library whose tail can genuinely be one archive.)
   const { visible, rest } = splitVisible(
     level.groups,
     (group) => group.bytes,
     areaPx,
-    MIN_GROUP_AREA_PX,
+    level.colorBy === "rating" ? 0 : MIN_GROUP_AREA_PX,
     MAX_GROUPS,
   )
   // A progress band holds individual archives, and colouring those by the band would paint the
   // whole drill-down one colour; they keep the artist colouring the flat view uses instead.
-  const innerColorBy: StorageColorKey = level.colorBy === "progress" ? "artist" : level.colorBy
+  const innerColorBy: StorageColorKey =
+    level.colorBy === "progress" || level.colorBy === "rating" ? "artist" : level.colorBy
   const tiles: StorageTile[] = visible.map((group) => ({
     name: group.label,
     value: group.bytes,
@@ -328,9 +410,14 @@ export function buildTiles(
     tileKind: "group" as const,
     colorKey: group.colorKey,
     drillTo: group.bands
-      ? // A group with bands keeps the progress colouring one level further down (已读 → its
-        // bands); only the archives inside a band fall back to artist colours.
-        { kind: "groups" as const, title: group.label, groups: group.bands, colorBy: "progress" as const }
+      ? // A group with bands keeps its own grouping colouring one level further down (已读 → its
+        // bands, 已评分 → its stars); only the archives inside a band fall back to artist colours.
+        {
+          kind: "groups" as const,
+          title: group.label,
+          groups: group.bands,
+          colorBy: level.colorBy === "rating" ? ("rating" as const) : ("progress" as const),
+        }
       : {
           kind: "archives" as const,
           title: group.label,
@@ -367,7 +454,9 @@ export function rankColorKeys(
         ? archive.artist
         : colorBy === "category"
           ? archive.category
-          : progressBandKey(archive)
+          : colorBy === "rating"
+            ? ratingBandKey(archive)
+            : progressBandKey(archive)
     if (!key) continue
     totals.set(key, (totals.get(key) ?? 0) + archive.bytes)
   }
