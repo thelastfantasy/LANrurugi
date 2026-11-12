@@ -72,7 +72,7 @@ import {
 import { isTankoubonId } from "@/lib/utils/isTankoubonId";
 import { displayTocName } from "@/lib/utils/tocValidation";
 import { useSession } from "@/session/SessionProvider";
-import { FONT_SIZE_XS, useApplyTheme } from "@/theme";
+import { useApplyTheme } from "@/theme";
 import { toast } from "@/toast";
 import { TranslationOverlay } from "@/translation/components/TranslationOverlay";
 // Phase 2 on-page translation (`specs/004-ocr-manga-translation`). Rendered as an overlay layer so
@@ -142,7 +142,7 @@ function wipeDuration(renderedHeight: number): number {
   return Math.min(WIPE_MAX_MS, Math.max(WIPE_MIN_MS, Math.round(renderedHeight / WIPE_SPEED_PX_PER_MS)));
 }
 
-type OverlayKind = "archive" | "settings" | "help" | null;
+type OverlayKind = "archive" | "settings" | "help" | "chapters" | null;
 
 interface WakeLockSentinelLike {
   release(): Promise<void>;
@@ -181,16 +181,76 @@ function usesLocalReaderProgress(
 /** Inline key-cap styling for the help panel's keyboard shortcuts. */
 function Key({ children }: { children: React.ReactNode }) {
   return (
-    <code
-      style={{
-        padding: "1px 5px",
-        background: "rgba(0,0,0,0.08)",
-        borderRadius: 3,
-        fontWeight: "bold",
-      }}
-    >
-      {children}
+    <code className="reader-keycap">
+      <span className="reader-keycap-face">{children}</span>
     </code>
+  );
+}
+
+/** Looping demo of a two-finger swipe, drawn inline: `up` enters fullscreen, `down` leaves it. */
+function TouchSwipeDemo({ direction }: { direction: "up" | "down" }) {
+  return (
+    <svg
+      className={`reader-touch-gesture is-${direction}`}
+      viewBox="0 0 64 48"
+      role="img"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <rect className="reader-touch-gesture-screen" x="14" y="5" width="44" height="42" rx="7" />
+      <g className="reader-touch-gesture-corners">
+        <path d="M21 16v-5h5" />
+        <path d="M51 16v-5h-5" />
+        <path d="M21 36v5h5" />
+        <path d="M51 36v5h-5" />
+      </g>
+      <g className="reader-touch-gesture-fingers">
+        <circle cx="31" cy="38" r="4.2" />
+        <circle cx="41" cy="38" r="4.2" />
+      </g>
+    </svg>
+  );
+}
+
+/** Looping demo of the press-and-hold that leaves headless mode on a touch screen. */
+function LongPressDemo() {
+  return (
+    <svg
+      className="reader-longpress-demo"
+      viewBox="0 0 64 48"
+      role="img"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <rect className="reader-touch-gesture-screen" x="14" y="5" width="44" height="42" rx="7" />
+      <circle className="reader-longpress-ring" cx="36" cy="28" r="8" />
+      <circle className="reader-longpress-dot" cx="36" cy="28" r="4.2" />
+    </svg>
+  );
+}
+
+/** Looping demo of tapping the left/right side of the page, drawn inline like the gesture demo. */
+function TapSidesDemo() {
+  return (
+    <svg
+      className="reader-tap-demo"
+      viewBox="0 0 64 48"
+      role="img"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <rect className="reader-tap-demo-page" x="24" y="6" width="16" height="36" rx="2.5" />
+      <g className="reader-tap-demo-side is-left">
+        <path className="reader-tap-demo-chevron" d="M12 18l-6 6 6 6" />
+        <circle className="reader-tap-demo-ring" cx="15" cy="24" r="5.5" />
+        <circle className="reader-tap-demo-dot" cx="15" cy="24" r="2.2" />
+      </g>
+      <g className="reader-tap-demo-side is-right">
+        <path className="reader-tap-demo-chevron" d="M52 18l6 6-6 6" />
+        <circle className="reader-tap-demo-ring" cx="49" cy="24" r="5.5" />
+        <circle className="reader-tap-demo-dot" cx="49" cy="24" r="2.2" />
+      </g>
+    </svg>
   );
 }
 
@@ -281,6 +341,41 @@ export function Reader() {
     }
     return entry ? { title: displayTocName(entry.name, t), startPage: entry.page } : null;
   }, [currentPage, isTank, tankReading.chapters, metadata.data?.toc, t]);
+  // Chapters for the headless jump OSD (`t`). A Tankoubon's members are the top level and each
+  // member's own ToC entries hang under it; a plain archive's ToC is a flat list.
+  const chapterGroups = useMemo(() => {
+    const entries = metadata.data?.toc ?? [];
+    if (!isTank) {
+      return entries.map((entry) => ({
+        title: displayTocName(entry.name, t),
+        page: entry.page,
+        children: [] as { title: string; page: number }[],
+      }));
+    }
+    const groups: {
+      title: string;
+      page: number;
+      children: { title: string; page: number }[];
+    }[] = [];
+    for (const entry of entries) {
+      const title = displayTocName(entry.name, t);
+      const last = groups[groups.length - 1];
+      if (entry.synthetic || !last) groups.push({ title, page: entry.page, children: [] });
+      else last.children.push({ title, page: entry.page });
+    }
+    return groups;
+  }, [isTank, metadata.data?.toc, t]);
+  // The deepest entry at or before the current page, so the OSD can mark where the reader is.
+  const activeChapterPage = useMemo(() => {
+    let page = -1;
+    for (const group of chapterGroups) {
+      if (group.page <= currentPage && group.page > page) page = group.page;
+      for (const child of group.children) {
+        if (child.page <= currentPage && child.page > page) page = child.page;
+      }
+    }
+    return page;
+  }, [chapterGroups, currentPage]);
   // `null` whenever translation is off, unconfigured, or the settings fetch failed — the overlay
   // renders nothing in all three cases (`specs/004-ocr-manga-translation` FR-007).
   const [translationSettings, translationScope, toggleTranslationEnabled, setTranslationTargetLanguage] =
@@ -336,6 +431,29 @@ export function Reader() {
   const [overlay, setOverlay] = useState<OverlayKind>(
     readerSettings.showOverlayByDefault || startWithOverview ? "archive" : null,
   );
+  // The chapter OSD's own scroll container, so opening it can centre the current chapter.
+  const chapterOsdRef = useRef<HTMLDivElement | null>(null);
+  // Opening the OSD should land on the chapter being read, not at the top of the list — the same
+  // "bring the current item into view" behaviour the archive overview's grid has.
+  useEffect(() => {
+    if (overlay !== "chapters") return;
+    const frame = requestAnimationFrame(() => {
+      const panel = chapterOsdRef.current;
+      if (!panel) return;
+      const target = panel.querySelector<HTMLElement>(
+        ".reader-chapter-osd-card.is-active, .reader-chapter-osd-child.is-active",
+      );
+      if (!target) {
+        panel.scrollTop = 0;
+        return;
+      }
+      panel.scrollTop = Math.max(
+        0,
+        target.offsetTop - (panel.clientHeight - target.offsetHeight) / 2,
+      );
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [overlay, activeChapterPage]);
 
   useEffect(() => {
     if (!startPage && !startWithOverview) return;
@@ -793,6 +911,20 @@ export function Reader() {
       // Deliberately no `priority` parameter: the prefetch and the visible `<img>` have to request
       // the *same* URL or the browser cannot reuse the warmed cache entry. Speculative requests are
       // marked with the `X-LRR-Priority` header instead, which the server reads too.
+      return parsed.toString();
+    },
+    [pages.data],
+  );
+
+  /** A tiny page image for the chapter OSD rows. Same address as `pageStreamUrl` but capped to a
+   * thumbnail-sized short edge, so a long chapter list costs a few KB per row, not a page each. */
+  const chapterThumbUrl = useCallback(
+    (page: number) => {
+      const url = pages.data?.pages[page - 1]?.url;
+      if (!url) return undefined;
+      const parsed = new URL(url, window.location.origin);
+      parsed.searchParams.set("max_short_edge", "160");
+      parsed.searchParams.set("format", getImageCapabilityHeader());
       return parsed.toString();
     },
     [pages.data],
@@ -1716,6 +1848,34 @@ export function Reader() {
     function onKeyDown(e: KeyboardEvent) {
       if ((e.target as HTMLElement)?.tagName === "INPUT") return;
 
+      // The chapter OSD owns the keyboard while it is open: arrows/space must not fall through to
+      // the page-turning shortcuts on the reader behind it.
+      if (overlay === "chapters") {
+        e.preventDefault();
+        if (e.key === "Escape" || e.key === "t" || e.key === "T") {
+          setOverlay(null);
+          return;
+        }
+        if (e.key === "ArrowDown" || e.key === "j" || e.key === "ArrowUp" || e.key === "k") {
+          // Scroll the list itself; the page behind must not move while the OSD is open.
+          const panel = chapterOsdRef.current;
+          if (panel) {
+            const direction = e.key === "ArrowDown" || e.key === "j" ? 1 : -1;
+            panel.scrollBy({
+              top: direction * Math.max(64, Math.round(panel.clientHeight * 0.6)),
+              behavior: "smooth",
+            });
+          }
+          return;
+        }
+        if (/^[0-9]$/.test(e.key)) {
+          // 0 is the first chapter, matching the keycaps the OSD shows.
+          const target = chapterGroups[Number(e.key)];
+          if (target) selectPage(target.page);
+        }
+        return;
+      }
+
       // While the boundary overlay is open, only Escape (cancel) acts — navigation shortcuts
       // firing on the locked page behind it were a live bug.
       if (archiveTransition) {
@@ -1847,6 +2007,7 @@ export function Reader() {
           return;
         }
         case "h":
+        case "?":
           setOverlay((prev) => (prev === "help" ? null : "help"));
           return;
         case "m":
@@ -1873,6 +2034,11 @@ export function Reader() {
           if (!readerSettings.infiniteScroll && loggedIn)
             setMarkerPlacementMode(true);
           return;
+        case "t":
+          // Headless only: with the chrome visible the overview already offers the chapter list.
+          if (!headless) return;
+          setOverlay((prev) => (prev === "chapters" ? null : "chapters"));
+          return;
         default:
       }
     }
@@ -1898,6 +2064,7 @@ export function Reader() {
     headless,
     toggleHeadless,
     overlay,
+    chapterGroups,
   ]);
 
   useEffect(() => {
@@ -2195,85 +2362,201 @@ export function Reader() {
     : imageStyle;
 
   const helpContent = (
-    <div style={{ fontSize: FONT_SIZE_XS }}>
-      <p style={{ margin: "0 0 4px" }}>
-        {t("reader.youCanNavigateBetweenPages")}
+    <div className="reader-help-body">
+      <div className="reader-help-sections">
+        <section className="reader-help-section">
+          <h5 className="reader-help-section-title">{t("reader.helpSectionPaging")}</h5>
+          <p className="reader-help-lead">{t("reader.youCanNavigateBetweenPages")}</p>
+          <ul className="reader-help-list">
+            <li>
+              <span className="reader-help-keys">
+                <Key>←</Key>
+                <Key>→</Key>
+              </span>
+              <span>{t("reader.helpKeyArrows")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Space</Key>
+              </span>
+              <span>{t("reader.helpSpaceScrolls")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>A</Key>
+                <Key>D</Key>
+              </span>
+              <span>{t("reader.helpADKeys")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>J</Key>
+              </span>
+              <span>{t("reader.jScrollsDownThenAdvancesAtTheBottom")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>K</Key>
+              </span>
+              <span>{t("reader.kGoesToThePreviousPage")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>,</Key>
+                <Key>.</Key>
+              </span>
+              <span>{t("reader.readingPastTheFirstLast")}</span>
+            </li>
+          </ul>
+        </section>
+
+        <section className="reader-help-section">
+          <h5 className="reader-help-section-title">{t("reader.helpSectionTouch")}</h5>
+          <ul className="reader-help-gesture-grid">
+            <li className="reader-help-gesture-tile">
+              <TouchSwipeDemo direction="up" />
+              <span>{t("reader.twoFingerSwipeUp")}</span>
+            </li>
+            <li className="reader-help-gesture-tile">
+              <TouchSwipeDemo direction="down" />
+              <span>{t("reader.twoFingerSwipeDown")}</span>
+            </li>
+            <li className="reader-help-gesture-tile">
+              <TapSidesDemo />
+              <span>{t("reader.helpTapSides")}</span>
+            </li>
+            <li className="reader-help-gesture-tile">
+              <LongPressDemo />
+              <span>{t("reader.longPressExitsHeadless")}</span>
+            </li>
+          </ul>
+        </section>
+
+        <section className="reader-help-section">
+          <h5 className="reader-help-section-title">{t("reader.helpSectionDisplay")}</h5>
+          <ul className="reader-help-list">
+            <li>
+              <span className="reader-help-keys">
+                <Key>M</Key>
+              </span>
+              <span>{t("reader.mToggleMangaModeRighttoleft")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>P</Key>
+              </span>
+              <span>{t("reader.pToggleDoublePageMode")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>O</Key>
+              </span>
+              <span>{t("reader.oShowAdvancedReaderOptions")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>F</Key>
+              </span>
+              <span>{t("reader.fToggleFullscreenMode")}</span>
+            </li>
+            {loggedIn && (
+              <li>
+                <span className="reader-help-keys">
+                  <Key>S</Key>
+                </span>
+                <span>{t("reader.sSetAStamp")}</span>
+              </li>
+            )}
+          </ul>
+        </section>
+
+        <section className="reader-help-section">
+          <h5 className="reader-help-section-title">{t("reader.helpSectionNavigation")}</h5>
+          <ul className="reader-help-list">
+            <li>
+              <span className="reader-help-keys">
+                <Key>G</Key>
+              </span>
+              <span>{t("reader.gGoToPageNumber")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>T</Key>
+              </span>
+              <span>{t("reader.tJumpToChapter")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Home</Key>
+                <Key>End</Key>
+              </span>
+              <span>{t("reader.homeEndInHeadless")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Shift</Key>
+                <Key>←/→</Key>
+              </span>
+              <span>{t("reader.shiftleftRightGoToFirst")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Q</Key>
+              </span>
+              <span>{t("reader.qBringUpTheThumbnail")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>R</Key>
+              </span>
+              <span>{t("reader.rOpenARandomArchive")}</span>
+            </li>
+          </ul>
+        </section>
+
+        <section className="reader-help-section">
+          <h5 className="reader-help-section-title">{t("reader.helpSectionBookmarks")}</h5>
+          <ul className="reader-help-list">
+            {loggedIn && (
+              <li>
+                <span className="reader-help-keys">
+                  <Key>B</Key>
+                </span>
+                <span>{t("reader.bToggleBookmarkThisPage")}</span>
+              </li>
+            )}
+            <li>
+              <span className="reader-help-keys">
+                <Key>N</Key>
+              </span>
+              <span>{t("reader.nToggleAutoNextPage")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>?</Key>
+                <Key>H</Key>
+              </span>
+              <span>{t("reader.helpToggleShortcut")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Esc</Key>
+              </span>
+              <span>{t("reader.escapeInHeadless")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Backspace</Key>
+              </span>
+              <span>{t("reader.backspaceReturnsToTheLibrary")}</span>
+            </li>
+          </ul>
+        </section>
+      </div>
+
+      <p className="reader-help-lead" style={{ marginTop: 12 }}>
+        {t("reader.toReturnToTheArchive")}
       </p>
-      <ul style={{ margin: "0 0 8px", paddingLeft: 18 }}>
-        <li>{t("reader.theArrowIcons")}</li>
-        <li>
-          {t("reader.the")} <Key>A</Key>/<Key>D</Key> {t("reader.keys")}
-        </li>
-        <li>{t("reader.yourKeyboardArrowsAndThe")}</li>
-        <li>{t("reader.touchingTheLeftRightSide")}</li>
-        <li>
-          <Key>J</Key> {t("reader.jScrollsDownThenAdvancesAtTheBottom")}
-        </li>
-        <li>
-          <Key>K</Key> {t("reader.kGoesToThePreviousPage")}
-        </li>
-      </ul>
-      <p style={{ margin: "0 0 4px" }}>
-        {t("reader.whenReadingAnArchiveFrom")}
-      </p>
-      <ul style={{ margin: "0 0 8px", paddingLeft: 18 }}>
-        <li>
-          <Key>,</Key> {t("reader.and")} <Key>.</Key> {t("reader.keys")}
-        </li>
-        <li>{t("reader.readingPastTheFirstLast")}</li>
-      </ul>
-      <p style={{ margin: "0 0 4px" }}>{t("reader.otherKeyboardShortcuts")}</p>
-      <ul style={{ margin: "0 0 8px", paddingLeft: 18 }}>
-        <li>
-          <Key>M</Key> {t("reader.mToggleMangaModeRighttoleft")}
-        </li>
-        <li>
-          <Key>O</Key> {t("reader.oShowAdvancedReaderOptions")}
-        </li>
-        <li>
-          <Key>P</Key> {t("reader.pToggleDoublePageMode")}
-        </li>
-        <li>
-          <Key>Q</Key> {t("reader.qBringUpTheThumbnail")}
-        </li>
-        <li>
-          <Key>R</Key> {t("reader.rOpenARandomArchive")}
-        </li>
-        <li>
-          <Key>F</Key> {t("reader.fToggleFullscreenMode")}
-        </li>
-        {loggedIn && (
-          <li>
-            <Key>B</Key> {t("reader.bToggleBookmarkThisPage")}
-          </li>
-        )}
-        <li>
-          <Key>N</Key> {t("reader.nToggleAutoNextPage")}
-        </li>
-        <li>
-          <Key>Shift</Key>+<Key>←</Key>/<Key>→</Key>{" "}
-          {t("reader.shiftleftRightGoToFirst")}
-        </li>
-        <li>
-          <Key>G</Key> {t("reader.gGoToPageNumber")}
-        </li>
-        <li>
-          <Key>Backspace</Key> {t("reader.backspaceReturnsToTheLibrary")}
-        </li>
-        <li>
-          <Key>Home</Key>/<Key>End</Key> {t("reader.homeEndInHeadless")}
-        </li>
-        <li>
-          <Key>Esc</Key> {t("reader.escapeInHeadless")}
-        </li>
-        <li>{t("reader.twoFingerFullscreen")}</li>
-        {loggedIn && (
-          <li>
-            <Key>S</Key> {t("reader.sSetAStamp")}
-          </li>
-        )}
-      </ul>
-      <p style={{ margin: 0 }}>{t("reader.toReturnToTheArchive")}</p>
     </div>
   );
 
@@ -3300,8 +3583,96 @@ export function Reader() {
               style={{ display: "block", opacity: 0.6 }}
               onClick={() => setOverlay(null)}
             />
-            <div id="reader-help" className="id1 base-overlay small-overlay">
+            <div
+              id="reader-help"
+              className="id1 base-overlay small-overlay reader-help-panel"
+            >
               <div className="navigation-help-toast">{helpContent}</div>
+            </div>
+          </>
+        )}
+
+        {overlay === "chapters" && (
+          <>
+            <div
+              id="overlay-shade"
+              style={{ display: "block", opacity: 0.6, overscrollBehavior: "contain" }}
+              onClick={() => setOverlay(null)}
+            />
+            <div
+              id="reader-chapter-osd"
+              ref={chapterOsdRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label={t("reader.chapterJumpTitle")}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="reader-chapter-osd-head">
+                <span className="reader-chapter-osd-title">
+                  {t("reader.chapterJumpTitle")}
+                </span>
+                <span className="reader-chapter-osd-hint">
+                  {t("reader.chapterJumpHint")}
+                </span>
+              </div>
+              {chapterGroups.length === 0 ? (
+                <p className="reader-chapter-osd-empty">{t("reader.chapterJumpEmpty")}</p>
+              ) : (
+                <div className="reader-chapter-osd-grid">
+                  {chapterGroups.map((group, index) => (
+                    <div
+                      key={`${group.page}-${index}`}
+                      className={`reader-chapter-osd-card${
+                        group.page === activeChapterPage ? " is-active" : ""
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        className="reader-chapter-osd-card-main"
+                        onClick={() => selectPage(group.page)}
+                      >
+                        <span className="reader-chapter-osd-thumbwrap">
+                          <img
+                            className="reader-chapter-osd-thumb"
+                            src={chapterThumbUrl(group.page)}
+                            alt=""
+                            loading="lazy"
+                            decoding="async"
+                          />
+                        </span>
+                        <span className="reader-chapter-osd-meta">
+                          <span className="reader-chapter-osd-lines">
+                            <span className="reader-chapter-osd-name">{group.title}</span>
+                            <span className="reader-chapter-osd-page">{group.page}</span>
+                          </span>
+                          {index < 10 && (
+                            <span className="reader-chapter-osd-key">
+                              <span className="reader-chapter-osd-keycap">{index}</span>
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                      {group.children.length > 0 && (
+                        <div className="reader-chapter-osd-children">
+                          {group.children.map((child, childIndex) => (
+                            <button
+                              type="button"
+                              key={`${child.page}-${childIndex}`}
+                              className={`reader-chapter-osd-child${
+                                child.page === activeChapterPage ? " is-active" : ""
+                              }`}
+                              onClick={() => selectPage(child.page)}
+                            >
+                              <span className="reader-chapter-osd-name">{child.title}</span>
+                              <span className="reader-chapter-osd-page">{child.page}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </>
         )}

@@ -310,6 +310,624 @@ input[type="checkbox"].lrr-checkbox-bare::after {
   white-space: nowrap;
 }
 
+/* Chapter jump OSD (headless, `t`). Deliberately neutral: a grey translucent sheet over the
+ * artwork, not a themed card — it is an on-screen display, and a bright theme-coloured panel would
+ * sit on the page like a hole. Text carries its own light colour for the same reason. */
+#reader-chapter-osd {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 9000;
+  display: block;
+  width: min(620px, 92vw);
+  max-height: min(82vh, 760px);
+  margin: 0;
+  padding: 10px 0 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  color: #f2f2f2;
+  background: rgba(28, 28, 28, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+}
+
+.reader-chapter-osd-head {
+  padding: 0 14px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.reader-chapter-osd-title {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.reader-chapter-osd-hint {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.7rem;
+  color: rgba(242, 242, 242, 0.6);
+}
+
+/* Cover-first grid: the artwork is the fastest way to recognise a chapter, so the thumbnail is the
+ * card and the title sits under it. `auto-fill` keeps 2 columns on a phone and 4-5 on a desktop. */
+.reader-chapter-osd-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 12px 10px;
+  padding: 12px 14px 14px;
+}
+
+.reader-chapter-osd-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.reader-chapter-osd-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.reader-chapter-osd-thumbwrap {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  overflow: hidden;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  outline: 2px solid transparent;
+  outline-offset: 1px;
+  transition: outline-color 0.12s ease;
+}
+
+.reader-chapter-osd-card-main:hover .reader-chapter-osd-thumbwrap,
+.reader-chapter-osd-card-main:focus-visible .reader-chapter-osd-thumbwrap {
+  outline-color: rgba(255, 255, 255, 0.55);
+}
+
+.reader-chapter-osd-card.is-active .reader-chapter-osd-thumbwrap {
+  outline-color: #fff;
+}
+
+.reader-chapter-osd-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The footer: title + page on the left, the shortcut keycap on the right. The cap is sized to the
+ * two text lines beside it, so it reads as a key on a keyboard row rather than as an index badge. */
+.reader-chapter-osd-meta {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.reader-chapter-osd-lines {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+/* The shortcut list is an OSD too: same neutral sheet as the chapter jump panel, so the two
+ * overlays read as one family instead of one being a themed card and the other a dark sheet. */
+#reader-help.reader-help-panel {
+  top: 50%;
+  transform: translateY(-50%);
+  min-height: 0;
+  max-height: min(86vh, 720px);
+  background: rgba(28, 28, 28, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+}
+
+#reader-help.reader-help-panel {
+  width: min(1100px, 94vw) !important;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  box-sizing: border-box;
+  padding: 18px 24px;
+  text-align: left;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+#reader-help.reader-help-panel::-webkit-scrollbar {
+  display: none;
+}
+
+#reader-help.reader-help-panel .reader-help-body {
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+#reader-help.reader-help-panel .reader-help-sections {
+  column-count: 2;
+  column-gap: 48px;
+}
+
+@media (max-width: 1000px) {
+  #reader-help.reader-help-panel .reader-help-sections {
+    column-count: 2;
+  }
+}
+
+@media (max-width: 680px) {
+  #reader-help.reader-help-panel .reader-help-sections {
+    column-count: 1;
+  }
+}
+
+#reader-help.reader-help-panel .reader-help-section {
+  break-inside: avoid;
+  margin: 0 0 14px;
+}
+
+#reader-help.reader-help-panel .reader-help-section-title {
+  margin: 0 0 9px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+  text-align: left;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #ffffff;
+}
+
+#reader-help.reader-help-panel .reader-help-lead {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+  color: rgba(242, 242, 242, 0.72);
+}
+
+#reader-help.reader-help-panel .reader-help-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+#reader-help.reader-help-panel .reader-help-list li {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+
+#reader-help.reader-help-panel .reader-help-list li.reader-help-plain {
+  display: block;
+}
+
+#reader-help.reader-help-panel .reader-help-gesture-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (max-width: 680px) {
+  #reader-help.reader-help-panel .reader-help-gesture-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+#reader-help.reader-help-panel .reader-help-gesture-tile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+#reader-help.reader-help-panel .reader-help-gesture-tile > span {
+  font-size: 0.85rem;
+  line-height: 1.35;
+  color: rgba(242, 242, 242, 0.85);
+}
+
+.reader-touch-gesture,
+.reader-tap-demo,
+.reader-longpress-demo {
+  flex: 0 0 auto;
+  width: 64px;
+  height: 48px;
+  overflow: visible;
+}
+
+.reader-touch-gesture-screen {
+  fill: rgba(255, 255, 255, 0.04);
+  stroke: rgba(255, 255, 255, 0.35);
+  stroke-width: 1.5;
+}
+
+.reader-touch-gesture-fingers circle {
+  fill: rgba(255, 255, 255, 0.8);
+}
+
+.reader-touch-gesture.is-up .reader-touch-gesture-fingers {
+  animation: reader-touch-up 3.6s ease-in-out infinite;
+}
+
+.reader-touch-gesture.is-down .reader-touch-gesture-fingers {
+  animation: reader-touch-down 3.6s ease-in-out infinite;
+}
+
+.reader-touch-gesture.is-up .reader-touch-gesture-corners {
+  animation: reader-touch-corners-in 3.6s ease-in-out infinite;
+}
+
+.reader-touch-gesture.is-down .reader-touch-gesture-corners {
+  animation: reader-touch-corners-out 3.6s ease-in-out infinite;
+}
+
+.reader-touch-gesture-corners {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  opacity: 0;
+}
+
+@keyframes reader-touch-up {
+  0%,
+  10% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  40%,
+  78% {
+    transform: translateY(-18px);
+    opacity: 1;
+  }
+  86%,
+  100% {
+    transform: translateY(-18px);
+    opacity: 0;
+  }
+}
+
+@keyframes reader-touch-down {
+  0%,
+  10% {
+    transform: translateY(-18px);
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  40%,
+  78% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  86%,
+  100% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+}
+
+@keyframes reader-touch-corners-in {
+  0%,
+  30% {
+    opacity: 0;
+  }
+  42%,
+  78% {
+    opacity: 1;
+  }
+  86%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes reader-touch-corners-out {
+  0%,
+  12% {
+    opacity: 1;
+  }
+  38%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.reader-tap-demo-page {
+  fill: rgba(255, 255, 255, 0.04);
+  stroke: rgba(255, 255, 255, 0.32);
+  stroke-width: 1.4;
+}
+
+.reader-tap-demo-chevron {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.4);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.reader-tap-demo-dot {
+  fill: rgba(255, 255, 255, 0.75);
+}
+
+.reader-tap-demo-ring {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.55);
+  stroke-width: 1.2;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: reader-tap-ring 4s ease-out infinite;
+}
+
+.reader-tap-demo-side.is-right .reader-tap-demo-ring {
+  animation-delay: 2s;
+}
+
+.reader-tap-demo-side.is-left .reader-tap-demo-chevron {
+  animation: reader-tap-chevron 4s ease-in-out infinite;
+}
+
+.reader-tap-demo-side.is-right .reader-tap-demo-chevron {
+  animation: reader-tap-chevron 4s ease-in-out infinite 2s;
+}
+
+@keyframes reader-tap-ring {
+  0%,
+  8% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  14% {
+    opacity: 0.7;
+  }
+  34% {
+    opacity: 0;
+    transform: scale(1.7);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.7);
+  }
+}
+
+@keyframes reader-tap-chevron {
+  0%,
+  6% {
+    stroke: rgba(255, 255, 255, 0.4);
+    transform: translateX(0);
+  }
+  16%,
+  30% {
+    stroke: rgba(255, 255, 255, 0.9);
+    transform: translateX(-1.5px);
+  }
+  42%,
+  100% {
+    stroke: rgba(255, 255, 255, 0.4);
+    transform: translateX(0);
+  }
+}
+
+.reader-longpress-dot {
+  fill: rgba(255, 255, 255, 0.8);
+}
+
+.reader-longpress-ring {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.65);
+  stroke-width: 1.4;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: reader-longpress-ring 3.2s ease-out infinite;
+}
+
+@keyframes reader-longpress-ring {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  20% {
+    opacity: 0.9;
+  }
+  55% {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-touch-gesture-fingers,
+  .reader-touch-gesture-corners,
+  .reader-tap-demo-ring,
+  .reader-tap-demo-side.is-left .reader-tap-demo-chevron,
+  .reader-tap-demo-side.is-right .reader-tap-demo-chevron,
+  .reader-longpress-ring {
+    animation: none;
+  }
+  .reader-touch-gesture-corners {
+    opacity: 0.7;
+  }
+  .reader-tap-demo-ring,
+  .reader-longpress-ring {
+    opacity: 0;
+  }
+}
+
+#reader-help.reader-help-panel .reader-help-keys {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 3px;
+}
+
+#reader-help.reader-help-panel,
+#reader-help.reader-help-panel h4,
+#reader-help.reader-help-panel h5,
+#reader-help.reader-help-panel p,
+#reader-help.reader-help-panel li,
+#reader-help.reader-help-panel strong,
+#reader-help.reader-help-panel em {
+  color: #f2f2f2;
+}
+
+/* The help panel's shortcut keys use the same keycap language as the chapter OSD. */
+.reader-keycap {
+  display: inline-flex;
+  vertical-align: middle;
+  margin: 0 1px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #b4b4b4 0%, #969696 100%);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78em;
+}
+
+.reader-keycap-face {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  margin: 1px 1px 3px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #ffffff 0%, #e9e9e9 100%);
+  box-shadow: inset 0 1px 0 #ffffff;
+  font-weight: 700;
+  line-height: 1.4;
+  color: #2a2a2a;
+}
+
+/* A physical keycap, drawn in two layers like a real key: a darker base ("skirt") with a lighter
+ * cap sitting on top of it, offset upward so the base shows as a lip along the bottom edge. */
+.reader-chapter-osd-key {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 30px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #a8a8a8 0%, #8a8a8a 100%);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.55);
+}
+
+.reader-chapter-osd-keycap {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  margin: 1px 1px 4px;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: linear-gradient(180deg, #ffffff 0%, #f2f2f2 48%, #dedede 100%);
+  box-shadow:
+    inset 0 1px 0 #ffffff,
+    inset 0 -1px 0 rgba(0, 0, 0, 0.08);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1;
+  color: #2a2a2a;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition: transform 0.06s ease;
+}
+
+.reader-chapter-osd-card-main:hover .reader-chapter-osd-keycap,
+.reader-chapter-osd-card-main:focus-visible .reader-chapter-osd-keycap {
+  transform: translateY(1px);
+}
+
+.reader-chapter-osd-name {
+  font-size: 0.78rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.reader-chapter-osd-card.is-active .reader-chapter-osd-name {
+  font-weight: 700;
+}
+
+.reader-chapter-osd-page {
+  font-size: 0.68rem;
+  color: rgba(242, 242, 242, 0.55);
+}
+
+/* A member's own ToC: compact rows hanging under its card, so the hierarchy stays visible. */
+.reader-chapter-osd-children {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 6px;
+  border-left: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.reader-chapter-osd-child {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 3px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.7rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.reader-chapter-osd-child:hover,
+.reader-chapter-osd-child:focus-visible {
+  outline: none;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.reader-chapter-osd-child.is-active {
+  background: rgba(255, 255, 255, 0.16);
+  font-weight: 700;
+}
+
+.reader-chapter-osd-child .reader-chapter-osd-name {
+  font-size: 0.7rem;
+}
+
+.reader-chapter-osd-empty {
+  margin: 0;
+  padding: 14px;
+  font-size: 0.82rem;
+  color: rgba(242, 242, 242, 0.65);
+}
+
 .reader-headless-line {
   display: flex;
   align-items: baseline;
