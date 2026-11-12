@@ -14,7 +14,7 @@ LANrurugi 的后端是 Rust（`crates/` 下的 Cargo workspace），前端是 Re
 
 | 命令 | 作用 |
 |---|---|
-| `mise run check` | 提交/推送前必跑：clippy + fmt-check + 前端 tsc/eslint |
+| `mise run check` | 提交/推送前必跑：clippy + fmt-check + 前端语法检查（esbuild）/tsc/eslint |
 | `mise run test` | 全量 `cargo test --workspace`（带 `--no-fail-fast`） |
 | `mise run test-crate -- <crate>` | 只测某个 crate，迭代时用 |
 | `mise run clippy` / `mise run fmt` | 单独跑 lint / 格式化 |
