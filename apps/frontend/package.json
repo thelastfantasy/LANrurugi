@@ -70,6 +70,7 @@
     "@vitejs/plugin-react": "^6.2.1",
     "cldr-annotations-derived-full": "49.0.0",
     "cldr-annotations-full": "49.0.0",
+    "esbuild": "0.28.2",
     "eslint": "^10.14.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-simple-import-sort": "^14.0.0",

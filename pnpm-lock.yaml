@@ -186,6 +186,9 @@ importers:
       cldr-annotations-full:
         specifier: 49.0.0
         version: 49.0.0
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       eslint:
         specifier: ^10.14.0
         version: 10.14.0(jiti@2.7.0)(supports-color@10.2.2)
