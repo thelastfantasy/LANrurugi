@@ -33,6 +33,8 @@ export const ARCHIVE_EXTENSIONS: readonly string[] = [
   "bz2",
   "xz",
   "lzma",
+  // Pixiv's animated format: a ZIP the server composes into one animated WebP page.
+  "ugoira",
 ]
 
 /** `accept` value for a file picker offering every format the library can catalogue. */

@@ -26,8 +26,10 @@ pub fn router() -> Router<AppState> {
     )
 }
 
-/// Matches the cap the `localStorage` version kept, so the move changes nothing for a reader.
-const HISTORY_CAP: isize = 8;
+/// How many entries an account keeps. Deliberately far above what the panel shows: history is also
+/// the "what did I search before" record this feature exists to keep, so old-but-still-useful
+/// queries should survive longer than a single screenful. The UI shows the newest few.
+const HISTORY_CAP: isize = 100;
 
 fn history_key(owner: &str) -> String {
     format!("LANRURUGI_SEARCH_HISTORY_{owner}")

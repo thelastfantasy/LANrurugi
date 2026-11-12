@@ -3280,7 +3280,7 @@ fn warm_neighbours(
                             requested_short_edge,
                             client_support,
                             false,
-                            1,
+                            page_encode_threads(),
                         )
                         .await
                     }
@@ -3535,7 +3535,12 @@ pub(crate) async fn serve_page(
                         requested_short_edge,
                         client_support,
                         head_only,
-                        if prefetch || head_only || preview_variant {
+                        // A JXL preview is only worth its extra CPU when threaded (one thread
+                        // costs ~12 ms more than WebP for half the bytes); see the format choice
+                        // in `fetch_page`.
+                        if preview_variant {
+                            page_encode_threads()
+                        } else if prefetch || head_only {
                             1
                         } else {
                             page_encode_threads()
@@ -3955,13 +3960,16 @@ async fn fetch_page(
         return Ok(serve_original_page(archive_file, path, raw, content_type).await);
     }
 
-    // `None` means this client can decode neither WebP nor JXL; serve source bytes. For preview
-    // requests prefer WebP when both are available because the tiny placeholder should stay tiny.
+    // `None` means this client can decode neither WebP nor JXL; serve source bytes. Previews use
+    // JXL when the client can decode it: measured on a real page at the preview settings (600px,
+    // q35) JXL is 12 KB against WebP's 30 KB, for ~12 ms more encode time on one thread — and the
+    // preview is warmed off the critical path, then encoded with several threads (see the thread
+    // count chosen when `fetch_page` is called). WebP stays the fallback for JXL-less clients.
     let output_format = if preview {
-        if client_support.webp {
-            Some(EncodeFormat::Webp)
-        } else if client_support.jxl {
+        if client_support.jxl {
             Some(EncodeFormat::Jxl)
+        } else if client_support.webp {
+            Some(EncodeFormat::Webp)
         } else {
             None
         }

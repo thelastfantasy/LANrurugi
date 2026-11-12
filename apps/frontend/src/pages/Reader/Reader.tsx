@@ -27,6 +27,8 @@ import {
 } from "@/api/hooks";
 import type { TocEntry } from "@/api/types";
 import { Menu, MenuItem, MenuSeparator, Tooltip } from "@/components/common-ui/Display";
+import { Badge } from "@/components/common-ui/Display"
+import { Keycap as Key } from "@/components/common-ui/Display/Keycap";
 import { IconButton, ToggleButtonMenu } from "@/components/common-ui/Form";
 import { currentRating,RatingWidget } from "@/components/common-ui/Form/RatingWidget";
 import {
@@ -179,13 +181,6 @@ function usesLocalReaderProgress(
 }
 
 /** Inline key-cap styling for the help panel's keyboard shortcuts. */
-function Key({ children }: { children: React.ReactNode }) {
-  return (
-    <code className="reader-keycap">
-      <span className="reader-keycap-face">{children}</span>
-    </code>
-  );
-}
 
 /** Looping demo of a two-finger swipe, drawn inline: `up` enters fullscreen, `down` leaves it. */
 function TouchSwipeDemo({ direction }: { direction: "up" | "down" }) {
@@ -424,13 +419,19 @@ export function Reader() {
     if (newBadgeMode === "until_opened") clearArchiveNewRef.current(archiveId);
   }, [archiveId, isTank, newBadgeMode]);
 
-  const openedByDefaultSetting = useRef(
-    readerSettings.showOverlayByDefault || startWithOverview,
+  // Whether the next overview open scrolls to the page being read. The auto-open (a reader
+  // setting / "start with overview") and Shift+Esc deliberately do not: they are a browse-from-the-
+  // top gesture, while the toolbar button and plain Esc mean "show me where I am".
+  const overviewAutoScroll = useRef(
+    !(readerSettings.showOverlayByDefault || startWithOverview),
   );
   const [showTankSplit, setShowTankSplit] = useState(false)
   const [overlay, setOverlay] = useState<OverlayKind>(
     readerSettings.showOverlayByDefault || startWithOverview ? "archive" : null,
   );
+  // Headless only: the file line (name/size/format) normally lives in the toolbar, which headless
+  // hides. Tab brings it back over the artwork's top-left corner, on demand.
+  const [showHeadlessFileInfo, setShowHeadlessFileInfo] = useState(false);
   // The chapter OSD's own scroll container, so opening it can centre the current chapter.
   const chapterOsdRef = useRef<HTMLDivElement | null>(null);
   // Opening the OSD should land on the chapter being read, not at the top of the list — the same
@@ -517,6 +518,58 @@ export function Reader() {
     window.addEventListener("mousemove", onMove);
     return () => window.removeEventListener("mousemove", onMove);
   }, [headless, supportsHover]);
+  // The bottom-left title/line sits over the artwork when the page is wide enough to reach that
+  // corner. Rather than always painting it at full strength (or always hiding it), it fades out
+  // only while it actually overlaps an image, and the pointer entering the bottom-left corner
+  // brings it back — the mirror of the fit control's top-right corner behaviour above.
+  const headlessInfoRef = useRef<HTMLDivElement | null>(null);
+  const [headlessInfoOverImage, setHeadlessInfoOverImage] = useState(false);
+  const [headlessInfoRevealed, setHeadlessInfoRevealed] = useState(false);
+  useEffect(() => {
+    if (!headless) return;
+    function measure() {
+      const el = headlessInfoRef.current;
+      const root = containerRef.current;
+      if (!el || !root) return;
+      const r = el.getBoundingClientRect();
+      let overlaps = false;
+      // Only page artwork: `#i1` also holds the filmstrip and overview thumbnails, and
+      // measuring a hundred of those on every scroll event is pointless.
+      for (const img of root.querySelectorAll("img.reader-image")) {
+        const ir = img.getBoundingClientRect();
+        if (ir.width === 0 || ir.height === 0) continue;
+        if (ir.left < r.right && ir.right > r.left && ir.top < r.bottom && ir.bottom > r.top) {
+          overlaps = true;
+          break;
+        }
+      }
+      setHeadlessInfoOverImage(overlaps);
+    }
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, { passive: true });
+    // Pages finish loading after this effect ran for the page change; re-measuring on load is what
+    // notices an image that grew into the corner.
+    const onLoad = () => measure();
+    const root = containerRef.current;
+    root?.addEventListener("load", onLoad, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure);
+      root?.removeEventListener("load", onLoad, true);
+    };
+  }, [headless, currentPage]);
+  useEffect(() => {
+    if (!headless || !supportsHover) return;
+    function onMove(e: MouseEvent) {
+      setHeadlessInfoRevealed(
+        e.clientX < window.innerWidth * 0.2 && e.clientY > window.innerHeight * 0.8,
+      );
+    }
+    window.addEventListener("mousemove", onMove);
+    return () => window.removeEventListener("mousemove", onMove);
+  }, [headless, supportsHover]);
+
   // A touch screen has neither a pointer to reveal that corner nor a fit menu to walk back out
   // from, so headless is left by holding a finger on the page. The click that the release produces
   // must not also turn the page — it would land in the mode that just came back.
@@ -1233,15 +1286,27 @@ export function Reader() {
     }
   }, [archiveId, isTank, totalPages, currentPage, newBadgeMode]);
 
+  // A spread is two pages wide, so one page of lookahead only half-warms the next double-page
+  // spread. Treat double-page mode as a floor of two; the stored setting itself is untouched and
+  // comes back as-is when the user leaves double-page mode.
+  const effectivePreload = readerSettings.doublePageMode
+    ? Math.max(readerSettings.preloadCount, 2)
+    : readerSettings.preloadCount
+
   useEffect(() => {
     if (readerSettings.infiniteScroll) return;
-    if (!pages.data || readerSettings.preloadCount <= 0) return;
+    if (!pages.data || effectivePreload <= 0) return;
     // Only once the reader has settled: while pages are being flipped through, warming every
     // intermediate neighbour just competes with the page that is actually on screen.
     const timer = window.setTimeout(() => {
       const wanted = new Set<string>();
-      for (let offset = 1; offset <= readerSettings.preloadCount; offset++) {
-        for (const page of [currentPage + offset, currentPage - offset]) {
+      // Forward anchors on the right half (the next spread starts right after it), backward on the
+      // left half — anchoring both on the right would make offset 1 the left page already on
+      // screen. In single-page mode both halves are the current page.
+      const forwardAnchor = spread.right ?? spread.left;
+      const backwardAnchor = spread.left;
+      for (let offset = 1; offset <= effectivePreload; offset++) {
+        for (const page of [forwardAnchor + offset, backwardAnchor - offset]) {
           if (page < 1 || page > totalPages) continue;
           const url = pageStreamUrl(page);
           if (!url) continue;
@@ -1257,7 +1322,7 @@ export function Reader() {
       }
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [pages.data, currentPage, totalPages, readerSettings.preloadCount, readerSettings.infiniteScroll, pageStreamUrl, warmPage]);
+  }, [pages.data, spread.left, spread.right, totalPages, effectivePreload, readerSettings.infiniteScroll, pageStreamUrl, warmPage]);
 
   // Revoke preview Blob URLs when the reader unmounts.
   useEffect(() => {
@@ -1927,12 +1992,19 @@ export function Reader() {
           // An open overlay owns Escape first: it is something the reader just opened and expects
           // one keystroke to dismiss, whereas leaving headless changes the whole page.
           if (overlay !== null) {
+            // Firefox opens its own task manager on Shift+Esc; this keystroke is ours whenever the
+            // reader acts on it, so it must not also reach the browser.
+            e.preventDefault();
             setOverlay(null);
             return;
           }
           // Headless hides the toolbar, and with it the overview button, so Escape takes over that
-          // job there. Leaving headless is the fit menu's row (or a long press on touch).
+          // job there — scrolling to the current page like the button does, unless Shift asks for
+          // the plain top-of-the-list overview. Leaving headless is the fit menu's row (or a long
+          // press on touch).
           if (headless) {
+            e.preventDefault();
+            overviewAutoScroll.current = !e.shiftKey;
             setOverlay("archive");
             return;
           }
@@ -2007,6 +2079,8 @@ export function Reader() {
           return;
         }
         case "h":
+          toggleHeadless();
+          return;
         case "?":
           setOverlay((prev) => (prev === "help" ? null : "help"));
           return;
@@ -2020,11 +2094,20 @@ export function Reader() {
           setOverlay((prev) => (prev === "settings" ? null : "settings"));
           return;
         case "p":
+          // Ctrl/Cmd+P is the options panel (the browser's print dialog is not what a reader
+          // wants here); plain P keeps its double-page toggle.
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            setOverlay((prev) => (prev === "settings" ? null : "settings"));
+            return;
+          }
           updateReaderSettings({
             doublePageMode: !readerSettings.doublePageMode,
           });
           return;
         case "q":
+          // Same "show me where I am" intent as the toolbar button and Esc.
+          overviewAutoScroll.current = true;
           setOverlay((prev) => (prev === "archive" ? null : "archive"));
           return;
         case "r":
@@ -2033,6 +2116,12 @@ export function Reader() {
         case "s":
           if (!readerSettings.infiniteScroll && loggedIn)
             setMarkerPlacementMode(true);
+          return;
+        case "Tab":
+          // Headless only: the toolbar already carries this line when the chrome is visible.
+          if (!headless) return;
+          e.preventDefault();
+          setShowHeadlessFileInfo((prev) => !prev);
           return;
         case "t":
           // Headless only: with the chrome visible the overview already offers the chapter list.
@@ -2455,9 +2544,28 @@ export function Reader() {
             </li>
             <li>
               <span className="reader-help-keys">
+                <Key>Ctrl</Key>
+                <Key>P</Key>
+              </span>
+              <span>{t("reader.ctrlPReaderOptions")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
                 <Key>F</Key>
               </span>
               <span>{t("reader.fToggleFullscreenMode")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Tab</Key>
+              </span>
+              <span>{t("reader.tabTogglesFileInfo")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>H</Key>
+              </span>
+              <span>{t("reader.hToggleHeadless")}</span>
             </li>
             {loggedIn && (
               <li>
@@ -2534,7 +2642,6 @@ export function Reader() {
             <li>
               <span className="reader-help-keys">
                 <Key>?</Key>
-                <Key>H</Key>
               </span>
               <span>{t("reader.helpToggleShortcut")}</span>
             </li>
@@ -2543,6 +2650,13 @@ export function Reader() {
                 <Key>Esc</Key>
               </span>
               <span>{t("reader.escapeInHeadless")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Shift</Key>
+                <Key>Esc</Key>
+              </span>
+              <span>{t("reader.shiftEscapeOverview")}</span>
             </li>
             <li>
               <span className="reader-help-keys">
@@ -2680,7 +2794,7 @@ export function Reader() {
           size={32}
           style={{ marginRight: 13, borderRadius: "50%" }}
           onClick={() => {
-            openedByDefaultSetting.current = false;
+            overviewAutoScroll.current = true;
             setOverlay((prev) => (prev === "archive" ? null : "archive"));
           }}
         />
@@ -2935,7 +3049,7 @@ export function Reader() {
           size={32}
           style={{ borderRadius: "50%" }}
           onClick={() => {
-            openedByDefaultSetting.current = false;
+            overviewAutoScroll.current = true;
             setOverlay((prev) => (prev === "archive" ? null : "archive"));
           }}
         />
@@ -3053,6 +3167,80 @@ export function Reader() {
     </div>
   );
 
+  // Double-page mode puts two files behind one spread. The merged "a.jpg - b.jpg :: W x H :: KB"
+  // line adds the two pages' dimensions and sizes together, so it describes no real file and hides
+  // each page's own conversion savings. The headless readout gets one labelled row per page instead:
+  // L/R, then that page's own name, geometry, size and — when the server converted it — its served
+  // format and saved percentage, in the same green/red pair the toolbar uses.
+  const spreadPageNumbers =
+    spread.right === null ? [spread.left] : [spread.left, spread.right];
+  const spreadRows = spreadPageNumbers.map((page, index) => {
+    const entry = pages.data?.pages[page - 1];
+    const name = entry
+      ? (new URL(entry.url, window.location.origin).searchParams.get("path") ?? "")
+      : "";
+    const resize = resizedPageInfo[page];
+    const dims =
+      pageDimensions[page] ??
+      (resize && resize.origWidth > 0 && resize.origHeight > 0
+        ? { width: resize.origWidth, height: resize.origHeight }
+        : undefined);
+    const served = servedSizesKb[page] ?? servedInfoKb(resize);
+    let body: React.ReactNode;
+    if (resize && served !== undefined && dims) {
+      const origKb = resize.origSizeBytes / 1024;
+      const origSizeText =
+        origKb >= 1024 ? `${(origKb / 1024).toFixed(1)} MB` : `${Math.round(origKb)} KB`;
+      const savedPct = Math.max(
+        0,
+        Math.round((1 - (served * 1024) / resize.origSizeBytes) * 100),
+      );
+      body = (
+        <>
+          <span className="file-info-opt">
+            {name} → {resize.servedFormat.toUpperCase()} :: {dims.width} x {dims.height} ::{" "}
+            {served} KB
+          </span>
+          {" · "}
+          <span className="file-info-orig">
+            {t("reader.original")}: {name.split(".").pop()} {resize.origWidth} x{" "}
+            {resize.origHeight} :: {origSizeText} ·{" "}
+            {t("reader.savedPct", { pct: savedPct })}
+          </span>
+        </>
+      );
+    } else if (resize === undefined) {
+      // HEAD has not answered yet: the entry size would be the wrong number for a page the server
+      // is about to convert, so show just the name until the answer is in (same rule as the bar).
+      body = <span className="file-info-opt">{name}</span>;
+    } else {
+      const kb = pageSizesKb[page];
+      body = (
+        <span className="file-info-opt">
+          {name}
+          {dims ? ` :: ${dims.width} x ${dims.height}` : ""}
+          {kb !== undefined ? ` :: ${kb} KB` : ""}
+        </span>
+      );
+    }
+    return { page, label: index === 0 ? "L" : "R", body };
+  });
+  const headlessFileInfo =
+    spread.right === null ? (
+      fileinfo
+    ) : (
+      <div className="file-info reader-file-info-rows" title={displayedFileInfo}>
+        {spreadRows.map((row) => (
+          <div className="file-info-row" key={row.page}>
+            <span className="file-info-side">
+              <Badge>{row.label}</Badge>
+            </span>
+            <span className="file-info-row-text">{row.body}</span>
+          </div>
+        ))}
+      </div>
+    );
+
   // Every artist, not just the first: an anthology or a joint work lists several, and picking one
   // arbitrarily made the heading look like the others were missing (2026-11-10).
   const artists = Array.from(metadata.data.tags.matchAll(/artist:([^,]+)(?:,|$)/gi))
@@ -3146,7 +3334,14 @@ export function Reader() {
         {headless && (
           // Bottom-left, and deliberately `pointer-events: none`: it captions what is on screen
           // rather than being a control, and in this mode the whole viewport is a turn target.
-          <div className="reader-headless-info">
+          <div
+            ref={headlessInfoRef}
+            className={
+              "reader-headless-info" +
+              (supportsHover && headlessInfoOverImage ? " is-over-image" : "") +
+              (supportsHover && headlessInfoRevealed ? " is-revealed" : "")
+            }
+          >
             <div className="reader-headless-title">{metadata.data?.title}</div>
             <div className="reader-headless-line">
               <span>
@@ -3168,6 +3363,12 @@ export function Reader() {
                 </span>
               )}
             </div>
+          </div>
+        )}
+
+        {headless && showHeadlessFileInfo && (
+          <div className="reader-headless-file-info" title={displayedFileInfo}>
+            {headlessFileInfo}
           </div>
         )}
 
@@ -3543,7 +3744,7 @@ export function Reader() {
             currentPage={currentPage}
             onClose={() => setOverlay(null)}
             onSelectPage={selectPage}
-            autoFocus={!openedByDefaultSetting.current}
+            autoFocus={overviewAutoScroll.current}
             resolvePage={isTank ? tankReading.getArchiveForPage : undefined}
             tankChapters={isTank ? tankReading.chapters : undefined}
             tankPages={isTank ? pages.data.pages : undefined}

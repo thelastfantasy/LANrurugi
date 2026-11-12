@@ -1,4 +1,4 @@
-import { lazy, Suspense, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@/api/client";
 import { useLibrary } from "@/hooks/useLibrary";
@@ -11,6 +11,7 @@ import { ArchiveContextMenu } from "./ArchiveContextMenu";
 import { CategoryBar } from "./CategoryBar";
 import { CompactTable } from "./CompactTable";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
+import { LibraryShortcutsOverlay } from "./LibraryShortcutsOverlay";
 import { RecentlyAddedCarousel } from "./RecentlyAddedCarousel";
 import { ResultInfoAndPager } from "./ResultInfoAndPager";
 import { SearchBar } from "./SearchBar";
@@ -41,8 +42,39 @@ export function Library() {
   const deleteTarget = lib.deleteTarget;
   const [aiTankoubonDrawerOpen, setAiTankoubonDrawerOpen] = useState(false);
   const [shareIds, setShareIds] = useState<string[] | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // The bottom pager scrolls back up to this bar, so a new page is read from its top.
   const optionsRef = useRef<HTMLDivElement>(null);
+
+  // `?` opens the shortcut sheet everywhere except while typing in a field; the archive context
+  // menu's own Escape handling stays in useLibrary.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key === "?") {
+        e.preventDefault();
+        // The suggestion panel is a layer of its own; leaving it open under the sheet makes the
+        // next Escape close the wrong thing.
+        lib.setAutocompleteOpen(false);
+        setShortcutsOpen((prev) => !prev);
+        return;
+      }
+      if (e.key === "Escape" && shortcutsOpen) {
+        setShortcutsOpen(false);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [lib, shortcutsOpen]);
 
   if (lib.search.isError) {
     // 401 means the session just expired mid-view; RequireAuth is already navigating to /login.
@@ -382,6 +414,8 @@ export function Library() {
       )}
 
       <AiSmartTankoubonDrawer open={aiTankoubonDrawerOpen} onClose={() => setAiTankoubonDrawerOpen(false)} />
+
+      {shortcutsOpen && <LibraryShortcutsOverlay onClose={() => setShortcutsOpen(false)} />}
 
       {shareIds && (
         <Suspense fallback={null}>

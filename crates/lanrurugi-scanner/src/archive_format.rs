@@ -63,6 +63,8 @@ pub enum ArchiveFormatError {
     UnsupportedExtension(String),
     #[error("entry {0:?} not found in archive")]
     EntryNotFound(String),
+    #[error("ugoira error: {0}")]
+    Ugoira(String),
     #[error(transparent)]
     Book(#[from] lanrurugi_book::BookError),
 }
@@ -89,6 +91,9 @@ impl ArchiveFormatError {
             ArchiveFormatError::UnsupportedExtension(_) => true,
             // The requested entry does not exist: a page index past the end of a fixed page list.
             ArchiveFormatError::EntryNotFound(_) => true,
+            // A .ugoira whose frames or animation.json cannot be read is broken on disk, not
+            // momentarily unreadable.
+            ArchiveFormatError::Ugoira(_) => true,
             ArchiveFormatError::Book(e) => e.is_permanent(),
         }
     }
@@ -106,6 +111,9 @@ const IMAGE_EXTENSIONS: &[&str] = &[
 /// xz/lzma, lz4 — not zstd).
 const ARCHIVE_EXTENSIONS: &[&str] = &[
     "zip", "cbz", "rar", "cbr", "7z", "cb7", "lzh", "lha", "tar", "cbt", "gz", "bz2", "xz", "lzma",
+    // Pixiv's animated format. A ZIP, but listed here only so the scanner accepts it; its page
+    // list and page bytes are produced by `crate::ugoira`, never by libarchive.
+    "ugoira",
 ];
 
 fn is_image_name(name: &str) -> bool {
@@ -421,6 +429,11 @@ pub fn list_pages(path: &Path) -> Result<Vec<String>> {
     if is_book(path) {
         return book_page_names(path);
     }
+    // A .ugoira is a ZIP of animation frames, not a stack of pages: report the one synthetic page
+    // that [`crate::ugoira::compose`] knows how to produce.
+    if crate::ugoira::is_ugoira_path(path) {
+        return Ok(vec![crate::ugoira::PAGE_NAME.to_string()]);
+    }
     if !is_supported_archive(path) {
         return Err(ArchiveFormatError::UnsupportedExtension(extension_of(path)));
     }
@@ -555,6 +568,13 @@ fn read_entries_via_zip(path: &Path, entry_names: &[String]) -> Option<Vec<Optio
 pub fn read_entry(path: &Path, entry_name: &str) -> Result<Vec<u8>> {
     if is_book(path) {
         return book_read_page(path, entry_name);
+    }
+    if crate::ugoira::is_ugoira_path(path) {
+        if entry_name != crate::ugoira::PAGE_NAME {
+            return Err(ArchiveFormatError::EntryNotFound(entry_name.to_string()));
+        }
+        return crate::ugoira::compose(path)
+            .map_err(|error| ArchiveFormatError::Ugoira(error.to_string()));
     }
     if !is_supported_archive(path) {
         return Err(ArchiveFormatError::UnsupportedExtension(extension_of(path)));
@@ -1051,6 +1071,41 @@ mod tests {
             read_entry(f.path(), "page2.jpg").unwrap(),
             b"content of page2.jpg"
         );
+    }
+
+    #[test]
+    fn ugoira_is_one_synthetic_animated_page() {
+        let file = tempfile::NamedTempFile::with_suffix(".ugoira").unwrap();
+        let mut writer = zip::ZipWriter::new(file.reopen().unwrap());
+        let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
+        for (name, color) in [
+            ("000000.png", image::Rgba([255, 0, 0, 255])),
+            ("000001.png", image::Rgba([0, 255, 0, 255])),
+        ] {
+            writer.start_file(name, options).unwrap();
+            let frame = image::RgbaImage::from_pixel(4, 4, color);
+            let mut bytes = Vec::new();
+            image::DynamicImage::ImageRgba8(frame)
+                .write_to(
+                    &mut std::io::Cursor::new(&mut bytes),
+                    image::ImageFormat::Png,
+                )
+                .unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
+        writer.finish().unwrap();
+
+        assert_eq!(
+            list_pages(file.path()).unwrap(),
+            vec![crate::ugoira::PAGE_NAME.to_string()],
+            "a .ugoira must report one animated page, not its frames"
+        );
+        let bytes = read_entry(file.path(), crate::ugoira::PAGE_NAME).unwrap();
+        assert_eq!(&bytes[8..12], b"WEBP");
+        assert!(matches!(
+            read_entry(file.path(), "000000.png"),
+            Err(ArchiveFormatError::EntryNotFound(_))
+        ));
     }
 
     #[test]

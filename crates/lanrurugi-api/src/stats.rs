@@ -1167,7 +1167,7 @@ fn format_breakdown(archives: &[Archive]) -> Vec<FormatStat> {
 /// `application/octet-stream` rather than guessed at.
 fn mime_for_extension(extension: &str) -> &'static str {
     match extension {
-        "zip" | "cbz" => "application/zip",
+        "zip" | "cbz" | "ugoira" => "application/zip",
         "rar" | "cbr" => "application/vnd.rar",
         "7z" | "cb7" => "application/x-7z-compressed",
         "tar" | "cbt" => "application/x-tar",
@@ -1765,8 +1765,8 @@ mod tests {
     #[test]
     fn mime_mapping_covers_every_scanner_extension() {
         for ext in [
-            "zip", "cbz", "rar", "cbr", "7z", "cb7", "tar", "gz", "lzma", "xz", "zst", "epub",
-            "pdf",
+            "zip", "cbz", "ugoira", "rar", "cbr", "7z", "cb7", "tar", "gz", "lzma", "xz", "zst",
+            "epub", "pdf",
         ] {
             assert_ne!(
                 mime_for_extension(ext),

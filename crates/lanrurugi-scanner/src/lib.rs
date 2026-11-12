@@ -13,6 +13,7 @@ pub mod relocate;
 pub mod resize;
 pub mod sidecar_audit;
 pub mod thumbnail;
+pub mod ugoira;
 pub mod verify;
 pub mod watcher;
 pub mod webp_convert;

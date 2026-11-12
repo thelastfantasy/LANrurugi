@@ -296,6 +296,19 @@ input[type="checkbox"].lrr-checkbox-bare::after {
 /* Hovering a link in the page — the page image is itself a link — puts the browser's own link
    preview in the bottom-left corner, on top of this block's last line (reported 2026-11-11).
    Touch devices have no such preview, so they keep the corner to themselves. */
+/* Wide pages reach the bottom-left corner, where the title/progress block would sit on the
+ * artwork. It stays readable over empty margin, fades to a ghost only while it actually overlaps an
+ * image, and the pointer entering that corner (the mirror of the fit control's top-right corner)
+ * brings it fully back. Touch devices have no corner to hover, so they keep the readable version. */
+.reader-headless-info.is-over-image {
+  opacity: 0.1;
+  transition: opacity 0.15s ease;
+}
+
+.reader-headless-info.is-revealed {
+  opacity: 1;
+}
+
 @media (hover: hover) and (pointer: fine) {
   .reader-headless-info {
     bottom: 26px;
@@ -792,6 +805,104 @@ input[type="checkbox"].lrr-checkbox-bare::after {
   gap: 3px;
 }
 
+/* The library's shortcut sheet uses the same sheet language as the reader's help panel. */
+.shortcut-sheet-shade {
+  position: fixed;
+  inset: 0;
+  z-index: 8999;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.shortcut-sheet {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 9000;
+  width: min(780px, 92vw);
+  max-height: min(86vh, 720px);
+  overflow-y: auto;
+  scrollbar-width: none;
+  box-sizing: border-box;
+  padding: 20px 24px;
+  text-align: left;
+  background: rgba(28, 28, 28, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+  color: #f2f2f2;
+}
+
+.shortcut-sheet::-webkit-scrollbar {
+  display: none;
+}
+
+.shortcut-sheet-title {
+  margin: 0 0 14px;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.shortcut-sheet .reader-help-sections {
+  column-count: 2;
+  column-gap: 40px;
+}
+
+.shortcut-sheet .reader-help-section {
+  break-inside: avoid;
+  margin: 0 0 16px;
+}
+
+.shortcut-sheet .reader-help-section-title {
+  margin: 0 0 9px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+  text-align: left;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.shortcut-sheet .reader-help-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.shortcut-sheet .reader-help-list li {
+  display: grid;
+  /* Wide enough for `Ctrl` + `Delete` on one line; a narrower gutter made the keycaps spill into
+   * the description. */
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+
+.shortcut-sheet .reader-help-list li.reader-help-plain {
+  display: block;
+  color: rgba(242, 242, 242, 0.72);
+}
+
+.shortcut-sheet .reader-help-keys {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 3px;
+}
+
+@media (max-width: 680px) {
+  .shortcut-sheet .reader-help-sections {
+    column-count: 1;
+  }
+}
+
 #reader-help.reader-help-panel,
 #reader-help.reader-help-panel h4,
 #reader-help.reader-help-panel h5,
@@ -1230,6 +1341,23 @@ input[type="checkbox"].lrr-checkbox-bare::after {
     min-height: 2rem;
     white-space: normal;
   }
+}
+
+/* Shared pill label (common-ui/Display/Badge). Tinted from currentColor so the same component is
+   legible on a theme's light surface and on the reader's dark OSD sheet alike. */
+.ui-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.4em;
+  padding: 1px 0.45em;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  font-size: 0.8em;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 
 /* A page that has no decoded pixels yet. The `<img>` already carries the target page's
@@ -3560,4 +3688,90 @@ body div.ido {
 
 .ai-pager .number-input-stepper {
   display: none !important;
+}
+
+/* The first link of the desktop nav is the app mark rather than a word. The selector outranks
+ * `p#nb img` (legacy's 5x7 caret rule), which would otherwise squash the mark. */
+#nb .nav-home-link img {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  vertical-align: -2px;
+}
+
+#nb .nav-home-link:hover img {
+  filter: brightness(1.15);
+}
+
+/* Headless file line (Tab): the toolbar's `.file-info` bar, moved over the artwork's top-left
+ * corner and shown only on demand. Pointer-events stay off — it captions, it is not a control. */
+.reader-headless-file-info {
+  position: fixed;
+  top: 8px;
+  left: 14px;
+  z-index: 55;
+  max-width: min(78vw, 720px);
+  pointer-events: none;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  text-align: left;
+  /* It captions artwork, so it needs its own surface: over a busy page the bare text was
+     unreadable. Same neutral sheet as the reader's other OSD panels, so it reads as UI rather
+     than as part of the image. */
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(28, 28, 28, 0.86);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(6px);
+  color: #f2f2f2;
+  opacity: 0.95;
+}
+
+/* The toolbar's green/red pair is tuned for each theme's light bar; on this dark sheet the same
+   values lose the contrast that makes the pair readable, so brighten them (still one green/one
+   red, same meaning). */
+.reader-headless-file-info .file-info-opt {
+  color: #8fe3a1;
+}
+
+.reader-headless-file-info .file-info-orig {
+  color: #ff9b93;
+}
+
+.reader-headless-file-info .file-info {
+  min-height: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: none;
+  padding: 0;
+}
+
+/* Double-page spreads list one file per row (L/R) instead of one merged line: the merged line added
+ * both pages' sizes together and had no room for either page's conversion savings. */
+.reader-headless-file-info .reader-file-info-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  white-space: normal;
+}
+
+.reader-headless-file-info .file-info-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.reader-headless-file-info .file-info-side {
+  flex: 0 0 auto;
+}
+
+.reader-headless-file-info .file-info-row-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
