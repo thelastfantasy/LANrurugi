@@ -30,17 +30,21 @@
 
 ## Phase 5: US3 — 同系列卷序
 
-- [ ] T013 校验同系列加成在两条路径都生效：同系列未读卷（相似度 0.72–0.99）应稳定排在无关高分（0.88）之前；补一个 API 层测试断言顺序。（`reading.rs` 的单测已覆盖加成与同系列顺序，API 层断言未写。）
+- [x] T013 ~~校验同系列加成在两条路径都生效~~ — 不做。这条规则完全在 `reading::rank`（纯函数）里，`finished_candidates_are_dropped_and_series_unread_wins` 已用 0.99 已读完 / 0.96 同系列未读 / 0.88 无关高分断言了完全相同的场景；API 层只会把同一批候选喂给同一个函数，再断言一遍是重复。2026-11-12 决定，用户明确不希望堆积无用的测试。
 
 ## Phase 6: US4 — 无 LLM / 缓存一致性
 
-- [ ] T014 [P] API 测试（`crates/lanrurugi-api/src/recommend.rs` 的 `#[cfg(test)]` 或 `crates/lanrurugi-server/tests/`）：同一批档案分别走缓存命中（预写 Top-N）与未命中路径，断言 `id` 顺序完全一致；断言已读完被过滤；断言全读完返回 3 条。
+- [x] T014 ~~[P] API 测试：缓存命中与未命中顺序一致 / 已读完被过滤 / 全读完返回 3 条~~ — 不做，理由写在这里免得以后又被当成漏项：
+  - 三条断言里的「已读完被过滤」「全读完返回 3 条」「同分稳定」已经由 `reading.rs` 的单测覆盖；
+  - 「缓存命中 vs 未命中顺序一致」在 API 层无法构造：`recommendations_from_cache` 也要先 `self.embedder.embed(anchor)`，而 `test_state` 的 `RecommendService` 指向空的临时模型目录，两条路径都会在 ONNX 那一步失败。要让它可测就得给锚点向量加一个测试缝——那是新机制，不是测试。
+  - 顺序不依赖输入顺序这一点改在纯函数层验证（`the_order_does_not_depend_on_the_input_order`），这正是两条路径唯一可能分歧的地方。
+  - 接线本身（缓存路径从档案行构造 `ReadingState`、把锚点进度传给 LLM）在 dev 上做过实测：三个锚点各取 6 条，18 条全是 `is_read: false`，同系列未读卷排在最前。
 - [x] T015 [P] prompt 快照/单测：`llm_prompts` 的 v2 文案包含进度字段且不含旧 v1 的「只按相似度」措辞。
 
 ## Phase 7: Polish
 
 - [x] T016 `mise run fmt-check`、`mise run clippy`（workspace）、`mise run test-crate -- lanrurugi-recommend`、`mise run test-crate -- lanrurugi-api` 全绿。
-- [ ] T017 `mise run dev-rebuild && dev-down && dev-up` 后按 quickstart.md 场景 1–5 手测；记录实际顺序与 Redis 键。
+- [ ] T017 `mise run dev-rebuild && dev-down && dev-up` 后按 quickstart.md 场景 1–5 手测；记录实际顺序与 Redis 键。（2026-11-12 只做了接口级抽查：dev 镜像已含 `9e19c25`，三个锚点各取 6 条全部 `is_read: false`；五个场景未逐条走。）
 - [x] T018 更新 `specs/026-reading-aware-recommendations/tasks.md` 勾选、`docs/` 相关说明（已更新 `docs/comparison-with-lanraragi.md` 推荐引擎一条）；提交为 `9e19c25`，PR #258 正文已加第 19 节。
 
 ## Dependencies
