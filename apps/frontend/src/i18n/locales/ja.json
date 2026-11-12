@@ -2231,7 +2231,7 @@
   "stats.mimeType": "MIME タイプ",
   "stats.pages": "ページ数",
   "stats.ingestHistory": "取り込み履歴",
-  "stats.ingestHistoryHint": "ライブラリがいつ、どの経路で増えたか。",
+  "stats.ingestHistoryHint": "ライブラリがいつ、どの経路で、件数と容量の両面で増えたか。",
   "stats.ingested": "取り込み数",
   "stats.ingestSources": "取り込み元",
   "stats.noIngestRecords": "取り込み記録はまだありません。",
@@ -2850,5 +2850,6 @@
     "layout": {
       "ingestFailed": "ダウンロード済みですが、登録に失敗しました："
     }
-  }
+  },
+  "stats.addedCapacity": "増加容量"
 }

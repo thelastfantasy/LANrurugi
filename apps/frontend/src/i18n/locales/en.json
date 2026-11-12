@@ -2237,7 +2237,7 @@
   "stats.mimeType": "MIME type",
   "stats.pages": "Pages",
   "stats.ingestHistory": "Upload history",
-  "stats.ingestHistoryHint": "When the library grew, and through which ingestion path.",
+  "stats.ingestHistoryHint": "When the library grew, in archives and in bytes.",
   "stats.ingested": "Ingested",
   "stats.ingestSources": "Ingestion sources",
   "stats.noIngestRecords": "No ingestion records yet.",
@@ -3108,5 +3108,6 @@
     "layout": {
       "ingestFailed": "Downloaded, but could not be catalogued:"
     }
-  }
+  },
+  "stats.addedCapacity": "Added capacity"
 }

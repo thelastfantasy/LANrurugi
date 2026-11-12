@@ -828,7 +828,7 @@ export interface StatsTimelineResponse {
   available_to: string
   /** Reading only: the day the per-day page counter started recording. */
   pages_since?: string
-  points: { date: string; archives?: number; pages?: number; last_read?: number }[]
+  points: { date: string; archives?: number; bytes?: number; pages?: number; last_read?: number }[]
 }
 
 export interface StatsRecentRead {

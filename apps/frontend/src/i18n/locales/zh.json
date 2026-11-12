@@ -2237,7 +2237,7 @@
   "stats.mimeType": "MIME 类型",
   "stats.pages": "页数",
   "stats.ingestHistory": "入库记录",
-  "stats.ingestHistoryHint": "库在何时、通过哪种方式增长。",
+  "stats.ingestHistoryHint": "库在何时、通过哪种方式增长——数量与容量。",
   "stats.ingested": "入库数量",
   "stats.ingestSources": "入库来源",
   "stats.noIngestRecords": "暂无入库记录。",
@@ -3108,5 +3108,6 @@
     "layout": {
       "ingestFailed": "已下载完成，但入库失败："
     }
-  }
+  },
+  "stats.addedCapacity": "新增容量"
 }

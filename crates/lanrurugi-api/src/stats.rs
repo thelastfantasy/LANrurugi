@@ -555,6 +555,10 @@ pub struct TimelinePoint {
     /// `ingest` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub archives: Option<u64>,
+    /// `ingest` only: bytes those archives occupy, so the page can chart capacity growth next to
+    /// the count without a second request — both come from the same `date_added` day.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
     /// `reading` only: page turns recorded that day (zero before the counter existed).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pages: Option<u64>,
@@ -637,14 +641,17 @@ async fn timeline(
     let points: Vec<TimelinePoint> = match metric {
         "ingest" => {
             let mut tally: HashMap<String, u64> = HashMap::new();
+            let mut bytes: HashMap<String, u64> = HashMap::new();
             for archive in &archives {
                 if let Some(day) = archive.date_added().and_then(day_of) {
-                    *tally.entry(day).or_insert(0) += 1;
+                    *tally.entry(day.clone()).or_insert(0) += 1;
+                    *bytes.entry(day).or_insert(0) += archive.arcsize;
                 }
             }
             days.into_iter()
                 .map(|date| TimelinePoint {
                     archives: Some(tally.get(&date).copied().unwrap_or(0)),
+                    bytes: Some(bytes.get(&date).copied().unwrap_or(0)),
                     date,
                     pages: None,
                     last_read: None,
@@ -665,6 +672,7 @@ async fn timeline(
             days.into_iter()
                 .map(|date| TimelinePoint {
                     archives: None,
+                    bytes: None,
                     pages: Some(pages.get(&date).copied().unwrap_or(0)),
                     last_read: Some(last_read.get(&date).copied().unwrap_or(0)),
                     date,
