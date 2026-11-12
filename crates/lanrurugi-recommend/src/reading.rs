@@ -150,7 +150,10 @@ pub fn rank(anchor: &ArchiveMeta, candidates: &[RankedCandidate], limit: usize) 
                     0.0
                 };
             let boost = (state_boost + series).min(MAX_BOOST);
-            ((c.similarity + boost).clamp(0.0, 1.0), index)
+            // Sort on the raw sum, not a clamped one: two candidates that both overflow 1.0 must
+            // still be ordered by their similarity, not by their id (the tie-breaker). The clamp
+            // below only shapes the number the client displays.
+            (c.similarity + boost, index)
         })
         .collect();
 
@@ -199,7 +202,7 @@ pub fn rank(anchor: &ArchiveMeta, candidates: &[RankedCandidate], limit: usize) 
                 Recommendation {
                     id: c.meta.id.clone(),
                     title: c.meta.title.clone(),
-                    score,
+                    score: score.clamp(0.0, 1.0),
                 }
             })
             .collect(),
@@ -380,6 +383,49 @@ mod tests {
             out.items.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
             vec!["next", "other"]
         );
+    }
+
+    /// Two candidates can both exceed 1.0 after the boost (similarity ≥ 0.85 is common for
+    /// same-series volumes). The sort must still follow similarity; clamping the sort key first
+    /// would turn that into an id-alphabetical tie.
+    #[test]
+    fn a_boost_past_one_does_not_scramble_the_similarity_order() {
+        let anchor = meta("anchor", "x", "");
+        let candidates = vec![
+            cand("a", "a", "", 0.97, UNREAD),
+            cand("b", "b", "", 0.99, UNREAD),
+            cand("c", "c", "", 0.95, READING_25),
+        ];
+        let out = rank(&anchor, &candidates, 10);
+        assert_eq!(
+            out.items.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            vec!["b", "a", "c"]
+        );
+        // The reported score is still a percentage, i.e. never above 1.0.
+        assert!(out.items.iter().all(|r| r.score <= 1.0));
+    }
+
+    /// The cache-hit and the recompute paths hand `rank` the same candidates in different orders,
+    /// so the result must be independent of the input order.
+    #[test]
+    fn the_order_does_not_depend_on_the_input_order() {
+        let anchor = meta("anchor", "x", "");
+        let forward = vec![
+            cand("a", "a", "", 0.90, UNREAD),
+            cand("b", "b", "", 0.90, READING_25),
+            cand("c", "c", "", 0.70, UNKNOWN),
+            cand("d", "d", "", 0.70, UNREAD),
+        ];
+        let mut backward = forward.clone();
+        backward.reverse();
+        let ids = |cs: &[RankedCandidate]| {
+            rank(&anchor, cs, 10)
+                .items
+                .into_iter()
+                .map(|r| r.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&forward), ids(&backward));
     }
 
     #[test]
