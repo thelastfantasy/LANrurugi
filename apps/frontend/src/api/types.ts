@@ -1577,6 +1577,8 @@ export interface DuplicateMember {
   tags: string[]
   decision: "keep" | "discard" | "undecided"
   recommended: boolean
+  /** Pages this member's `.patch.zip` adds; already included in `pages`. */
+  patch_pages?: number
   /** The member that wins the most pairwise comparisons (FR-003's "best copy"). */
   best?: boolean
 }
@@ -1590,12 +1592,14 @@ export interface DuplicatePairEvidence {
 }
 
 export interface DuplicateReview {
-  verdict: "same_work" | "different_versions" | "adjacent_volumes" | "unrelated"
+  verdict: "same_work" | "different_versions" | "adjacent_volumes" | "unrelated" | "patched"
   keep: string[]
   discard: string[]
   reason: string
   confidence: number
   fallback: boolean
+  /** The model's one-line note per member, by archive id. */
+  notes?: Record<string, string>
 }
 
 export interface DuplicateGroupView {
@@ -1606,6 +1610,8 @@ export interface DuplicateGroupView {
   pairs: DuplicatePairEvidence[]
   review: DuplicateReview | null
   matrix?: number[][]
+  /** `target`'s patch was built from `source` (matched by the source file's CRC32). */
+  patch_links?: { target: string; source: string }[]
 }
 
 export interface DuplicateGroupsResponse {
@@ -1631,9 +1637,26 @@ export interface DuplicateCompareSample {
   a_height: number
   b_width: number
   b_height: number
+  /** The page's entry path inside its archive (what `/archives/{id}/page?path=` takes). */
   a_filename: string
   b_filename: string
+  a_file_size: number
+  b_file_size: number
+  crop_alignment: CropAlignment
+  /** The page comes from the archive's `.patch.zip` (served with `source=patch`). */
+  a_from_patch?: boolean
+  b_from_patch?: boolean
 }
+
+/** Maps a point in A to B in normalized per-dimension coordinates: `b_u = a_u * scale + offset_x`,
+ * `b_v = a_v * scale + offset_y`. Identity when no reliable alignment was found. */
+export interface CropAlignment {
+  scale: number
+  offset_x: number
+  offset_y: number
+}
+
+export type ComparisonSide = "a" | "b"
 
 export interface DuplicateCompare {
   a: { id: string; title: string; size: number; pages: number }
@@ -1642,6 +1665,27 @@ export interface DuplicateCompare {
   likely_different_language: boolean
   recommendation: "a" | "b" | null
   samples: DuplicateCompareSample[]
-  a_unmatched_pages: { page_index: number }[]
-  b_unmatched_pages: { page_index: number }[]
+  a_unmatched_pages: { page_index: number; default_insert_after: number | null }[]
+  b_unmatched_pages: { page_index: number; default_insert_after: number | null }[]
+  a_entries: ArchiveEntryInfo[]
+  b_entries: ArchiveEntryInfo[]
+  /** Indexes (into the patch-merged page list) that come from each side's `.patch.zip`. */
+  a_patch_pages?: number[]
+  b_patch_pages?: number[]
+  /** Every aligned `[a_page_index, b_page_index]` pair, in order. */
+  aligned?: [number, number][]
+}
+
+/** One page to copy into the target's patch; both indexes are patch-merged page indexes. */
+export interface DuplicatePatchPick {
+  source_page: number
+  /** Target position the page lands before; past the end appends. */
+  insert_before: number
+}
+
+export interface DuplicatePatchResult {
+  added: number
+  skipped: number
+  renamed: number
+  patch_pages: number
 }

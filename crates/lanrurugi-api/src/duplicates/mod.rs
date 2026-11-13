@@ -8,6 +8,7 @@ pub mod cover;
 pub mod decisions;
 pub mod detect;
 pub mod model;
+pub mod patching;
 pub mod review;
 
 use std::collections::{HashMap, HashSet};
@@ -38,6 +39,7 @@ pub fn router() -> Router<AppState> {
         .route("/database/duplicates/groups", get(list_groups))
         .route("/database/duplicates/groups/{key}", get(group_detail))
         .route("/database/duplicates/compare", get(compare_pair))
+        .route("/database/duplicates/patch", post(patching::create_patch))
         .route(
             "/database/duplicates/decisions",
             get(get_decisions).post(put_decisions),
@@ -104,7 +106,7 @@ async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, 
     // Only catalogued archives with a real file are candidates; an unfinished ingest has no cover,
     // and one still in its metadata run is not offered for deletion (spec 025).
     let pending = crate::visibility::pending_ids(state).await;
-    let metas: Vec<ArchiveMeta> = archives
+    let mut metas: Vec<ArchiveMeta> = archives
         .iter()
         .filter(|a| !a.file.trim().is_empty() && a.pagecount > 0)
         .filter(|a| !pending.contains(a.id.as_str()))
@@ -116,6 +118,32 @@ async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, 
             size: a.arcsize,
         })
         .collect();
+
+    // Members are compared as the reader shows them: a `.patch.zip` adds pages.
+    let files: HashMap<String, String> = archives
+        .iter()
+        .map(|a| (a.id.as_str().to_string(), a.file.clone()))
+        .collect();
+    let candidates: Vec<(String, String)> = metas
+        .iter()
+        .filter_map(|m| files.get(&m.id).map(|f| (m.id.clone(), f.clone())))
+        .collect();
+    let patch_states: HashMap<String, patching::PatchState> =
+        lanrurugi_core::concurrency::run_blocking(move || {
+            candidates
+                .iter()
+                .filter_map(|(id, file)| {
+                    patching::patch_state(std::path::Path::new(file)).map(|s| (id.clone(), s))
+                })
+                .collect()
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    for meta in metas.iter_mut() {
+        if let Some(patch) = patch_states.get(&meta.id) {
+            meta.pages += patch.pages;
+        }
+    }
     state.jobs.set_progress(job, 0.05).await;
 
     let ids: Vec<String> = metas.iter().map(|m| m.id.clone()).collect();
@@ -143,6 +171,7 @@ async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, 
         .iter()
         .flat_map(|group| detect::regroup_by_pairs(group, &hashes_for_regroup))
         .collect();
+    attach_patch_info(&mut groups, &patch_states, &files).await?;
 
     let mut conn = state.redis.config.get().await.map_err(|e| e.to_string())?;
     let _: Result<(), _> = conn.del(GROUPS_KEY).await;
@@ -164,11 +193,77 @@ async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, 
     // copy the read endpoints use.
     let mut reviews = review::load_all(state).await;
     for group in &groups {
-        review::ensure_with(state, group, &metas, &mut reviews).await;
+        if group.patch_links.is_empty() {
+            review::ensure_with(state, group, &metas, &mut reviews).await;
+        } else {
+            review::store_patched_verdict(state, group, &mut reviews).await;
+        }
     }
 
     state.jobs.set_progress(job, 1.0).await;
     Ok(groups.len())
+}
+
+/// Records each member's patch page count and which members' patches came from another member.
+/// Only groups with a patched member pay for the CRC32 of the others (a full read of each file).
+async fn attach_patch_info(
+    groups: &mut [GroupRecord],
+    patch_states: &HashMap<String, patching::PatchState>,
+    files: &HashMap<String, String>,
+) -> Result<(), String> {
+    let mut wanted: Vec<(String, String)> = Vec::new();
+    for group in groups.iter() {
+        if !group
+            .members
+            .iter()
+            .any(|id| patch_states.get(id).is_some_and(|p| !p.sources.is_empty()))
+        {
+            continue;
+        }
+        for id in &group.members {
+            if let Some(file) = files.get(id) {
+                if !wanted.iter().any(|(w, _)| w == id) {
+                    wanted.push((id.clone(), file.clone()));
+                }
+            }
+        }
+    }
+    let crcs: HashMap<String, String> = lanrurugi_core::concurrency::run_blocking(move || {
+        wanted
+            .iter()
+            .filter_map(|(id, file)| {
+                lanrurugi_scanner::patch::crc32_of_file(std::path::Path::new(file))
+                    .ok()
+                    .map(|crc| (id.clone(), crc.to_ascii_lowercase()))
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    for group in groups.iter_mut() {
+        for target in &group.members {
+            let Some(patch) = patch_states.get(target) else {
+                continue;
+            };
+            if patch.pages > 0 {
+                group.patch_pages.insert(target.clone(), patch.pages);
+            }
+            for source in &group.members {
+                if source != target
+                    && crcs
+                        .get(source)
+                        .is_some_and(|crc| patch.sources.contains(crc))
+                {
+                    group.patch_links.push(model::PatchLink {
+                        target: target.clone(),
+                        source: source.clone(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn group_key(members: &[String]) -> String {
@@ -235,7 +330,9 @@ async fn group_view(
             .ok()
             .flatten();
         let Some(archive) = archive else { continue };
-        pages_by_id.insert(id.clone(), archive.pagecount);
+        let patch_pages = group.patch_pages.get(id).copied().unwrap_or(0);
+        let pages = archive.pagecount + patch_pages;
+        pages_by_id.insert(id.clone(), pages);
         sizes_by_id.insert(id.clone(), archive.arcsize);
         let recommended = review
             .as_ref()
@@ -245,7 +342,8 @@ async fn group_view(
             "id": id,
             "title": archive.title,
             "size": archive.arcsize,
-            "pages": archive.pagecount,
+            "pages": pages,
+            "patch_pages": patch_pages,
             "cover": format!("/api/archives/{id}/thumbnail"),
             "tags": split_tags(&archive.tags),
             "decision": decision.state(id),
@@ -273,6 +371,7 @@ async fn group_view(
             "distance": p.distance, "title_similarity": p.title_similarity,
         })).collect::<Vec<_>>(),
         "review": review,
+        "patch_links": group.patch_links,
     })
 }
 

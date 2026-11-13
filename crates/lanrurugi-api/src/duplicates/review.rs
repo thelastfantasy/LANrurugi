@@ -98,6 +98,46 @@ pub async fn ensure_with(
     verdict
 }
 
+/// A group where one member's patch was built from another: the patched copy already holds what
+/// made the other worth keeping, so no model is asked. Stored under the group key only — the
+/// content-keyed cache stays for when the patch is removed.
+pub async fn store_patched_verdict(
+    state: &AppState,
+    group: &GroupRecord,
+    cache: &mut HashMap<String, ReviewVerdict>,
+) -> ReviewVerdict {
+    let key = super::group_key(&group.members);
+    let verdict = patched_verdict(group);
+    cache.insert(key.clone(), verdict.clone());
+    if let Ok(mut conn) = state.redis.config.get().await {
+        let value = serde_json::to_string(&verdict).unwrap_or_default();
+        let _: Result<(), _> = conn.hset(REVIEW_KEY, &key, &value).await;
+    }
+    verdict
+}
+
+fn patched_verdict(group: &GroupRecord) -> ReviewVerdict {
+    let sources: Vec<&String> = group.patch_links.iter().map(|l| &l.source).collect();
+    let (discard, keep): (Vec<String>, Vec<String>) = group
+        .members
+        .iter()
+        .cloned()
+        .partition(|id| sources.contains(&id));
+    ReviewVerdict {
+        verdict: "patched".to_string(),
+        keep,
+        discard,
+        // The UI words this from `patch_links`; the reason stays empty rather than English text.
+        reason: String::new(),
+        confidence: 1.0,
+        model: String::new(),
+        prompt_version: PROMPT_VERSION,
+        fallback: false,
+        created_at: super::now_secs(),
+        notes: HashMap::new(),
+    }
+}
+
 /// The one model call, returning a local fallback when the answer never arrives or fails validation.
 async fn ask_model(
     state: &AppState,
@@ -191,6 +231,7 @@ fn validate_answer(answer: &LlmAnswer, count: usize) -> Result<(), String> {
 fn verdict_from_answer(answer: LlmAnswer, members: &[&ArchiveMeta]) -> ReviewVerdict {
     let mut keep = Vec::new();
     let mut discard = Vec::new();
+    let mut notes = HashMap::new();
     let mut ordered = answer.members.clone();
     ordered.sort_by_key(|m| m.index);
     for member in ordered {
@@ -198,6 +239,10 @@ fn verdict_from_answer(answer: LlmAnswer, members: &[&ArchiveMeta]) -> ReviewVer
             continue;
         }
         let id = members[member.index].id.clone();
+        let why = member.why.trim();
+        if !why.is_empty() {
+            notes.insert(id.clone(), why.chars().take(120).collect());
+        }
         if member.keep {
             keep.push(id);
         } else {
@@ -214,6 +259,7 @@ fn verdict_from_answer(answer: LlmAnswer, members: &[&ArchiveMeta]) -> ReviewVer
         prompt_version: PROMPT_VERSION,
         fallback: false,
         created_at: super::now_secs(),
+        notes,
     }
 }
 
@@ -240,6 +286,7 @@ fn local_verdict(members: &[&ArchiveMeta], why: &str) -> ReviewVerdict {
         prompt_version: PROMPT_VERSION,
         fallback: true,
         created_at: super::now_secs(),
+        notes: HashMap::new(),
     }
 }
 
@@ -302,10 +349,13 @@ pub async fn compare(
         "b_unmatched_pages": result.b_unmatched_pages,
         "a_entries": result.a_entries,
         "b_entries": result.b_entries,
+        "a_patch_pages": result.a_patch_pages,
+        "b_patch_pages": result.b_patch_pages,
+        "aligned": result.aligned,
     }))
 }
 
-async fn load_archive(
+pub(super) async fn load_archive(
     state: &AppState,
     id: &str,
 ) -> Result<lanrurugi_core::entities::Archive, (StatusCode, String)> {
@@ -379,6 +429,22 @@ mod tests {
         let mut a = answer(&[(0, true), (1, false)]);
         a.confidence = 1.5;
         assert!(validate_answer(&a, 2).is_err());
+    }
+
+    #[test]
+    fn a_patched_copy_is_kept_and_its_source_discarded() {
+        let group = GroupRecord {
+            members: vec!["a".into(), "b".into(), "c".into()],
+            patch_links: vec![super::super::model::PatchLink {
+                target: "b".into(),
+                source: "a".into(),
+            }],
+            ..Default::default()
+        };
+        let verdict = patched_verdict(&group);
+        assert_eq!(verdict.keep, vec!["b".to_string(), "c".to_string()]);
+        assert_eq!(verdict.discard, vec!["a".to_string()]);
+        assert!(!verdict.fallback);
     }
 
     #[test]

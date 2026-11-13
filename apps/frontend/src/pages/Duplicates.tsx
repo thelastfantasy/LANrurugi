@@ -7,7 +7,6 @@ import { fetchJson } from "@/api/client"
 import {
   useClearDuplicates,
   useDeleteArchive,
-  useDuplicateCompare,
   useDuplicateGroups,
   useSaveDuplicateDecisions,
   useScanDuplicates,
@@ -23,6 +22,7 @@ import {
   MAX_DUPLICATES_COVER_PERCENT,
   MIN_DUPLICATES_COVER_PERCENT,
 } from "@/lib/storageKeys"
+import { SmartCompareModal } from "@/pages/DuplicateCompare/SmartCompareModal"
 
 /** The cover slider is stepped, not continuous: five preset widths read as "small → large" and
  *  are easy to hit on a phone, where a 35-step range is not. The stored value is the percentage,
@@ -72,7 +72,6 @@ export function Duplicates() {
     localStorage.setItem(DUPLICATES_COVER_PERCENT_KEY, String(coverPercent))
   }, [coverPercent])
   const [busy, setBusy] = useState(false)
-  const [compare, setCompare] = useState<[string, string] | null>(null)
 
   async function handleScan() {
     setBusy(true)
@@ -85,7 +84,8 @@ export function Duplicates() {
     }
   }
 
-  const list = groups.data?.groups ?? []
+  // A group whose other members were deleted since the scan has nothing left to compare.
+  const list = (groups.data?.groups ?? []).filter((group) => group.members.length >= 2)
 
   return (
     <div className="ido">
@@ -163,7 +163,6 @@ export function Duplicates() {
           <GroupCard
             key={group.key}
             group={group}
-            onCompare={setCompare}
             busy={busy}
             coverPercent={coverPercent}
           />
@@ -173,26 +172,16 @@ export function Duplicates() {
       <Button id="return" className="mt-4" onClick={() => navigate(routes.library())}>
         {t("common.returnToLibrary")}
       </Button>
-
-      {compare && (
-        <SmartCompareModal
-          a={compare[0]}
-          b={compare[1]}
-          onClose={() => setCompare(null)}
-        />
-      )}
     </div>
   )
 }
 
 function GroupCard({
   group,
-  onCompare,
   busy,
   coverPercent,
 }: {
   group: DuplicateGroupView
-  onCompare: (pair: [string, string]) => void
   busy: boolean
   coverPercent: number
 }) {
@@ -203,6 +192,20 @@ function GroupCard({
     () => new Set(group.members.filter((m) => m.decision !== "discard").map((m) => m.id)),
   )
   const [expanded, setExpanded] = useState(false)
+  const [compare, setCompare] = useState<[string, string] | null>(null)
+
+  // The modal records its own decision; mirror it into the checkboxes, which only read the saved
+  // decisions when the card mounts.
+  function applyCompareDecision(decisions: Record<string, "keep" | "discard">) {
+    setSelected((current) => {
+      const next = new Set(current)
+      for (const [id, state] of Object.entries(decisions)) {
+        if (state === "keep") next.add(id)
+        else next.delete(id)
+      }
+      return next
+    })
+  }
 
   const visible = expanded ? group.members : group.members.slice(0, 3)
   const hidden = group.members.length - visible.length
@@ -327,7 +330,15 @@ function GroupCard({
               <span className="font-normal opacity-70">{t("duplicates.localOnly")}</span>
             )}
           </div>
-          <div className="opacity-80">{group.review.reason}</div>
+          {group.review.reason && <div className="opacity-80">{group.review.reason}</div>}
+          {(group.patch_links ?? []).map((link) => (
+            <div key={`${link.target}-${link.source}`} className="opacity-80">
+              {t("duplicates.patchLinkNote", {
+                target: titleOf(group, link.target),
+                source: titleOf(group, link.source),
+              })}
+            </div>
+          ))}
         </div>
       )}
 
@@ -337,7 +348,7 @@ function GroupCard({
           disabled={busy || group.members.length < 2}
           onClick={() => {
             const pair = bestPair(group)
-            if (pair) onCompare(pair)
+            if (pair) setCompare(pair)
           }}
         >
           <i className="fa fa-columns mr-2" />
@@ -366,6 +377,14 @@ function GroupCard({
           </button>
         </div>
       </div>
+      {compare && (
+        <SmartCompareModal
+          group={group}
+          pair={compare}
+          onDecided={applyCompareDecision}
+          onClose={() => setCompare(null)}
+        />
+      )}
     </div>
   )
 }
@@ -393,12 +412,19 @@ async function describeImpact(members: DuplicateMember[]): Promise<string> {
   return rows.join("\n")
 }
 
+function titleOf(group: DuplicateGroupView, id: string): string {
+  return group.members.find((m) => m.id === id)?.title ?? id
+}
+
 function bestPair(group: DuplicateGroupView): [string, string] | null {
   const pair = group.pairs.reduce<null | { a: string; b: string; similarity: number }>(
     (best, p) => (best === null || p.similarity > best.similarity ? p : best),
     null,
   )
-  return pair ? [pair.a, pair.b] : null
+  if (!pair) return null
+  // The suggested keeper goes on side A, so the comparison reads "recommended vs. its closest copy".
+  const recommendedIsB = group.members.find((m) => m.id === pair.b)?.recommended
+  return recommendedIsB ? [pair.b, pair.a] : [pair.a, pair.b]
 }
 
 function MemberRow({
@@ -461,7 +487,15 @@ function MemberRow({
           {member.title}
         </span>
         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs opacity-75">
-          <span>{member.pages} {t("duplicates.pages")}</span>
+          <span>
+            {member.pages} {t("duplicates.pages")}
+            {(member.patch_pages ?? 0) > 0 && (
+              <span title={t("duplicates.patchPagesIncluded", { count: member.patch_pages })}>
+                {" "}
+                <i className="fa fa-puzzle-piece" aria-hidden="true" /> +{member.patch_pages}
+              </span>
+            )}
+          </span>
           <span>{humanSize(member.size)}</span>
           {language && <span>{language}</span>}
           {member.decision === "discard" && <span>{t("duplicates.markedDiscard")}</span>}
@@ -480,130 +514,4 @@ function humanSize(bytes: number): string {
     unit += 1
   }
   return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`
-}
-
-export function SmartCompareModal({
-  a,
-  b,
-  onClose,
-}: {
-  a: string
-  b: string
-  onClose: () => void
-}) {
-  const { t } = useTranslation()
-  const compare = useDuplicateCompare(a, b)
-  const [index, setIndex] = useState(0)
-  const data = compare.data
-  const samples = data?.samples ?? []
-  const sample = samples[Math.min(index, Math.max(0, samples.length - 1))]
-
-  return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-black/70 p-2 md:p-6" role="dialog">
-      <div className="mx-auto flex h-full w-full max-w-6xl flex-col overflow-hidden rounded bg-[var(--theme-bg,#f5efe8)]">
-        <div className="flex items-center justify-between border-b p-3">
-          <div className="text-sm">
-            {data ? (
-              <>
-                <span className="font-semibold">{data.a.title}</span> · {data.a.pages}{" "}
-                {t("duplicates.pages")} — <span className="font-semibold">{data.b.title}</span> ·{" "}
-                {data.b.pages} {t("duplicates.pages")}
-              </>
-            ) : (
-              t("duplicates.comparing")
-            )}
-          </div>
-          <button className="stdbtn" onClick={onClose}>
-            <i className="fa fa-times mr-1" />
-            {t("common.close")}
-          </button>
-        </div>
-
-        {data && (
-          <div className="flex flex-wrap items-center gap-3 border-b px-3 py-2 text-xs">
-            <span>{t("duplicates.aligned", { count: data.aligned_pairs })}</span>
-            {data.recommendation && (
-              <span className="rounded bg-black/10 px-1.5 py-0.5">
-                {t("duplicates.recommendKeep")}{" "}
-                {data.recommendation === "a" ? data.a.title : data.b.title}
-              </span>
-            )}
-            {data.likely_different_language && (
-              <span className="rounded bg-black/10 px-1.5 py-0.5">
-                {t("duplicates.differentLanguage")}
-              </span>
-            )}
-            {data.a_unmatched_pages.length > 0 && (
-              <span>{t("duplicates.onlyInA", { count: data.a_unmatched_pages.length })}</span>
-            )}
-            {data.b_unmatched_pages.length > 0 && (
-              <span>{t("duplicates.onlyInB", { count: data.b_unmatched_pages.length })}</span>
-            )}
-          </div>
-        )}
-
-        <div className="flex-1 overflow-auto p-3">
-          {compare.isLoading && (
-            <div id="processing">
-              <i className="fa fa-3x fa-compact-disc fa-spin"></i>
-            </div>
-          )}
-          {compare.isError && <p className="text-sm">{String(compare.error)}</p>}
-          {sample && data && (
-            <div className="grid grid-cols-2 gap-3">
-              <figure>
-                <img
-                  src={`/api/archives/${encodeURIComponent(a)}/thumbnail?page=${sample.a_page_index + 1}`}
-                  alt=""
-                  className="w-full object-contain"
-                />
-                <figcaption className="mt-1 text-xs opacity-75">
-                  {data.a.title} · p{sample.a_page_index + 1} ·{" "}
-                  {sample.a_sharpness.toFixed(0)} {t("duplicates.sharpness")}
-                </figcaption>
-              </figure>
-              <figure>
-                <img
-                  src={`/api/archives/${encodeURIComponent(b)}/thumbnail?page=${sample.b_page_index + 1}`}
-                  alt=""
-                  className="w-full object-contain"
-                />
-                <figcaption className="mt-1 text-xs opacity-75">
-                  {data.b.title} · p{sample.b_page_index + 1} ·{" "}
-                  {sample.b_sharpness.toFixed(0)} {t("duplicates.sharpness")}
-                </figcaption>
-              </figure>
-            </div>
-          )}
-        </div>
-
-        <div className="flex items-center justify-between gap-2 border-t p-3">
-          <button className="stdbtn" disabled={index <= 0} onClick={() => setIndex((i) => Math.max(0, i - 1))}>
-            <i className="fa fa-chevron-left" />
-          </button>
-          <span className="text-xs">
-            {samples.length === 0 ? "" : `${index + 1} / ${samples.length}`}
-          </span>
-          <button
-            className="stdbtn"
-            disabled={index >= samples.length - 1}
-            onClick={() => setIndex((i) => Math.min(samples.length - 1, i + 1))}
-          >
-            <i className="fa fa-chevron-right" />
-          </button>
-          <a
-            className="stdbtn ml-auto"
-            href={routes.reader(a)}
-            target="_blank"
-            rel="noreferrer"
-          >
-            {t("duplicates.openA")}
-          </a>
-          <a className="stdbtn" href={routes.reader(b)} target="_blank" rel="noreferrer">
-            {t("duplicates.openB")}
-          </a>
-        </div>
-      </div>
-    </div>
-  )
 }

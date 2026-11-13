@@ -24,6 +24,7 @@ use std::path::Path;
 use image::DynamicImage;
 use lanrurugi_core::concurrency::with_thread_pool;
 use lanrurugi_scanner::archive_format;
+use lanrurugi_scanner::patch::{self, EffectivePage};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -37,6 +38,8 @@ pub enum ImgCompareError {
         #[source]
         source: image::ImageError,
     },
+    #[error("patch read error: {0}")]
+    Patch(#[from] patch::PatchError),
     #[error("archive has no readable pages")]
     NoPages,
     #[error("comparison cancelled by caller")]
@@ -75,6 +78,12 @@ pub struct PageComparison {
     /// see `estimate_crop_alignment`'s own call site for why), so the frontend magnifier can sample
     /// the same underlying content on both sides instead of the same raw pixel coordinate.
     pub crop_alignment: crop_align::CropAlignment,
+    /// The page comes from the archive's sidecar `.patch.zip`, not the archive file itself: both
+    /// sides are compared as the reader shows them, patches included.
+    #[serde(default)]
+    pub a_from_patch: bool,
+    #[serde(default)]
+    pub b_from_patch: bool,
 }
 
 /// Which side an automatic or human judgment favors — deliberately symmetric (`A`/`B`, not
@@ -152,6 +161,15 @@ pub struct ComparisonResult {
     /// every other field is a placeholder. `#[serde(default)]` so old cache entries read as `false`.
     #[serde(default)]
     pub incomplete: bool,
+    /// Page indexes (into the patch-merged page list) that come from each side's `.patch.zip`.
+    #[serde(default)]
+    pub a_patch_pages: Vec<usize>,
+    #[serde(default)]
+    pub b_patch_pages: Vec<usize>,
+    /// Every aligned `(a_page_index, b_page_index)` pair, in order — what a caller needs to line up
+    /// the same page across several archives compared against one anchor.
+    #[serde(default)]
+    pub aligned: Vec<(usize, usize)>,
 }
 
 /// One unmatched page plus a ready-made, no-AI-needed default for where a patch inserting it
@@ -242,6 +260,9 @@ pub enum CompareEvent {
         b_file_size: u64,
         a_unmatched_pages: Vec<UnmatchedPage>,
         b_unmatched_pages: Vec<UnmatchedPage>,
+        a_patch_pages: Vec<usize>,
+        b_patch_pages: Vec<usize>,
+        aligned: Vec<(usize, usize)>,
     },
 }
 
@@ -321,6 +342,9 @@ pub fn compare_archives(
                     b_file_size,
                     a_unmatched_pages,
                     b_unmatched_pages,
+                    a_patch_pages,
+                    b_patch_pages,
+                    aligned,
                 } => {
                     done = Some(ComparisonResult {
                         aligned_pairs,
@@ -338,6 +362,9 @@ pub fn compare_archives(
                         a_unmatched_pages,
                         b_unmatched_pages,
                         incomplete: false,
+                        a_patch_pages,
+                        b_patch_pages,
+                        aligned,
                     });
                 }
             }
@@ -402,8 +429,8 @@ pub fn compare_archives_streaming(
     // any one of these stages dominating (or a stage's cost not matching its expected O(n) vs.
     // O(n²) shape) is otherwise invisible from outside a debugger.
     let t_list = std::time::Instant::now();
-    let a_pages = archive_format::list_pages(a_path)?;
-    let b_pages = archive_format::list_pages(b_path)?;
+    let a_pages = effective_page_list(a_path)?;
+    let b_pages = effective_page_list(b_path)?;
     if a_pages.is_empty() || b_pages.is_empty() {
         return Err(ImgCompareError::NoPages);
     }
@@ -472,8 +499,8 @@ pub fn compare_archives_streaming(
             PageComparison {
                 a_page_index: pair.a_index,
                 b_page_index: pair.b_index,
-                a_filename: a_pages[pair.a_index].clone(),
-                b_filename: b_pages[pair.b_index].clone(),
+                a_filename: a_pages[pair.a_index].entry_name().to_string(),
+                b_filename: b_pages[pair.b_index].entry_name().to_string(),
                 a_file_size: a.file_size,
                 b_file_size: b.file_size,
                 a_sharpness: a.sharpness,
@@ -486,6 +513,8 @@ pub fn compare_archives_streaming(
                 // call site's own docs for why running this for every aligned pair (which can be
                 // hundreds) isn't worth the cost.
                 crop_alignment: crop_align::CropAlignment::IDENTITY,
+                a_from_patch: is_patched(&a_pages[pair.a_index]),
+                b_from_patch: is_patched(&b_pages[pair.b_index]),
             }
         })
         .collect();
@@ -691,9 +720,46 @@ pub fn compare_archives_streaming(
         b_file_size,
         a_unmatched_pages,
         b_unmatched_pages,
+        a_patch_pages: patched_indexes(&a_pages),
+        b_patch_pages: patched_indexes(&b_pages),
+        aligned: pairs.iter().map(|p| (p.a_index, p.b_index)).collect(),
     });
 
     Ok(())
+}
+
+/// The page list the reader shows: the archive's own pages with its `.patch.zip` spliced in. A
+/// missing, unreadable or stale patch degrades to the plain list (`patch::effective_pages`).
+fn effective_page_list(path: &Path) -> Result<Vec<EffectivePage>> {
+    let original = archive_format::list_pages(path)?;
+    Ok(patch::effective_pages(path, &original))
+}
+
+fn is_patched(page: &EffectivePage) -> bool {
+    matches!(page, EffectivePage::Patched(_))
+}
+
+fn patched_indexes(pages: &[EffectivePage]) -> Vec<usize> {
+    pages
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| is_patched(p))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Reads the patch-sourced pages among `wanted` (indexes into `pages`) from the sidecar zip; the
+/// archive's own pages are read separately in bulk.
+fn read_patched(
+    path: &Path,
+    pages: &[EffectivePage],
+    wanted: &[usize],
+) -> Result<Vec<(usize, Vec<u8>)>> {
+    wanted
+        .iter()
+        .filter(|i| pages.get(**i).is_some_and(is_patched))
+        .map(|i| Ok((*i, patch::read_page(path, &pages[*i])?)))
+        .collect()
 }
 
 /// See [`LANGUAGE_EDITION_ALIGNMENT_RATIO`]'s own docs for the threshold reasoning. Requires equal
@@ -736,13 +802,14 @@ const FINGERPRINT_BATCH: usize = 16;
 /// random-access for ZIP and one pass otherwise), decode it in parallel on the shared capped pool,
 /// drop the bytes, continue. Also carries each page's compressed byte size (for
 /// `PageComparison::a_file_size`/`b_file_size`), free since the bytes are in hand.
-fn load_fingerprints(path: &Path, entries: &[String]) -> Result<Vec<PageFingerprint>> {
+fn load_fingerprints(path: &Path, pages: &[EffectivePage]) -> Result<Vec<PageFingerprint>> {
     let t_decode = std::time::Instant::now();
+    let entries: Vec<String> = pages.iter().map(|p| p.entry_name().to_string()).collect();
     let mut slots: Vec<Option<PageFingerprint>> = entries.iter().map(|_| None).collect();
     let mut failure: Option<ImgCompareError> = None;
 
-    archive_format::read_entries_batched(path, entries, FINGERPRINT_BATCH, |batch| {
-        let decoded: Vec<(usize, Result<PageFingerprint>)> = with_thread_pool(|| {
+    let decode_batch = |batch: Vec<(usize, Vec<u8>)>| -> Vec<(usize, Result<PageFingerprint>)> {
+        with_thread_pool(|| {
             use rayon::prelude::*;
             batch
                 .into_par_iter()
@@ -765,7 +832,9 @@ fn load_fingerprints(path: &Path, entries: &[String]) -> Result<Vec<PageFingerpr
                     (index, decoded)
                 })
                 .collect()
-        });
+        })
+    };
+    let mut store = |decoded: Vec<(usize, Result<PageFingerprint>)>| {
         for (index, fingerprint) in decoded {
             match fingerprint {
                 Ok(fingerprint) => slots[index] = Some(fingerprint),
@@ -776,8 +845,24 @@ fn load_fingerprints(path: &Path, entries: &[String]) -> Result<Vec<PageFingerpr
                 }
             }
         }
+    };
+
+    // The archive's own pages in bulk (random access for ZIP, one pass otherwise); `originals`
+    // maps each batch position back to its place in the merged list.
+    let originals: Vec<usize> = (0..pages.len())
+        .filter(|i| !is_patched(&pages[*i]))
+        .collect();
+    let original_names: Vec<String> = originals.iter().map(|i| entries[*i].clone()).collect();
+    archive_format::read_entries_batched(path, &original_names, FINGERPRINT_BATCH, |batch| {
+        let batch = batch
+            .into_iter()
+            .map(|(k, bytes)| (originals[k], bytes))
+            .collect();
+        store(decode_batch(batch));
         Ok(())
     })?;
+    let all: Vec<usize> = (0..pages.len()).collect();
+    store(decode_batch(read_patched(path, pages, &all)?));
 
     if let Some(error) = failure {
         return Err(error);
@@ -814,9 +899,9 @@ fn load_fingerprints(path: &Path, entries: &[String]) -> Result<Vec<PageFingerpr
 /// [`PageFingerprint`]s already.
 fn load_sample_images<'a>(
     a_path: &Path,
-    a_pages: &[String],
+    a_pages: &[EffectivePage],
     b_path: &Path,
-    b_pages: &[String],
+    b_pages: &[EffectivePage],
     padded: impl Iterator<Item = &'a PageComparison>,
 ) -> Result<(
     std::collections::HashMap<usize, DynamicImage>,
@@ -835,26 +920,34 @@ fn load_sample_images<'a>(
 
     fn decode_wanted(
         path: &Path,
-        pages: &[String],
+        pages: &[EffectivePage],
         wanted: &[usize],
     ) -> Result<std::collections::HashMap<usize, DynamicImage>> {
         let mut decoded = std::collections::HashMap::new();
         if wanted.is_empty() {
             return Ok(decoded);
         }
-        let names: Vec<String> = wanted
+        let originals: Vec<usize> = wanted
             .iter()
-            .filter_map(|index| pages.get(*index).cloned())
+            .copied()
+            .filter(|index| pages.get(*index).is_some_and(|p| !is_patched(p)))
+            .collect();
+        let names: Vec<String> = originals
+            .iter()
+            .map(|index| pages[*index].entry_name().to_string())
             .collect();
         let bytes = archive_format::read_entries(path, &names)?;
-        for (index, page_bytes) in wanted.iter().zip(bytes) {
-            let Some(page_bytes) = page_bytes else {
-                continue;
-            };
-            let entry = pages.get(*index).cloned().unwrap_or_default();
+        let mut found: Vec<(usize, Vec<u8>)> = originals
+            .iter()
+            .zip(bytes)
+            .filter_map(|(index, page_bytes)| page_bytes.map(|b| (*index, b)))
+            .collect();
+        found.extend(read_patched(path, pages, wanted)?);
+        for (index, page_bytes) in found {
+            let entry = pages[index].entry_name().to_string();
             let image = lanrurugi_scanner::image_decode::load_from_memory(&page_bytes)
                 .map_err(|source| ImgCompareError::Decode { entry, source })?;
-            decoded.insert(*index, image);
+            decoded.insert(index, image);
         }
         Ok(decoded)
     }
@@ -937,6 +1030,8 @@ mod tests {
             b_width: 0,
             b_height: 0,
             crop_alignment: crop_align::CropAlignment::IDENTITY,
+            a_from_patch: false,
+            b_from_patch: false,
         }
     }
 

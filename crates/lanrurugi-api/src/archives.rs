@@ -1855,6 +1855,7 @@ async fn delete_patch(
         }
     }
 
+    clear_page_thumbnails(&state, id.as_str()).await;
     crate::activity::record_manual(
         &state,
         auth.as_ref().map(|e| &e.0),
@@ -2088,6 +2089,20 @@ fn thumbnail_etag(bytes: &[u8]) -> String {
 /// straight from a URL path segment — so without the `is_valid_archive_id` check this would join
 /// `..`/absolute segments into `thumb_dir` and `&id[0..2]` would panic on a short or
 /// non-char-boundary string.
+/// Drops an archive's cached per-page thumbnails (the cover is kept). Needed whenever its merged
+/// page list changes — a patch added or removed shifts every later page index.
+pub(crate) async fn clear_page_thumbnails(state: &AppState, id: &str) {
+    if !is_valid_archive_id(id) {
+        return;
+    }
+    let pages_dir = state.library.thumb_dir.join(&id[0..2]).join(id);
+    if let Err(e) = tokio::fs::remove_dir_all(&pages_dir).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(%id, error = %e, "could not clear page thumbnails");
+        }
+    }
+}
+
 fn thumbnail_disk_path(
     state: &AppState,
     id: &str,

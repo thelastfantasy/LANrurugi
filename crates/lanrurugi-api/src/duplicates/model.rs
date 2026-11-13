@@ -16,7 +16,7 @@ pub struct PairEvidence {
     pub chained: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GroupRecord {
     pub algorithm: String,
     pub threshold: u32,
@@ -27,6 +27,19 @@ pub struct GroupRecord {
     pub chained: bool,
     #[serde(default)]
     pub middle: Option<String>,
+    /// Pages each member's `.patch.zip` adds (members without one are absent).
+    #[serde(default)]
+    pub patch_pages: std::collections::HashMap<String, u32>,
+    /// Members whose patch was built from another member of this group.
+    #[serde(default)]
+    pub patch_links: Vec<PatchLink>,
+}
+
+/// `target`'s patch holds pages taken from `source`, matched by the source file's CRC32.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PatchLink {
+    pub target: String,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -41,6 +54,9 @@ pub struct ReviewVerdict {
     #[serde(default)]
     pub fallback: bool,
     pub created_at: i64,
+    /// The model's one-line note on each member, by archive id (empty for local verdicts).
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub notes: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

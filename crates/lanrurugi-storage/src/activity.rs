@@ -57,6 +57,8 @@ pub mod action_types {
     /// edit — see `archives.rs::update_archive_metadata`'s own detection logic.
     pub const ARCHIVE_RATING_UPDATE: &str = "archive.rating_update";
     pub const ARCHIVE_PATCH_DELETE: &str = "archive.patch_delete";
+    /// Pages from another copy were merged into an archive's `.patch.zip` (duplicate review).
+    pub const ARCHIVE_PATCH_CREATE: &str = "archive.patch_create";
     pub const ARCHIVE_THUMB_REGEN: &str = "archive.thumb_regen";
     pub const ARCHIVE_UPLOAD: &str = "archive.upload";
     /// 019 recycle bin: an archive was moved into the bin (the user-visible delete).

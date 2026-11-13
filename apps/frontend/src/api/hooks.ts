@@ -52,6 +52,8 @@ import type {
   DuplicateCompare,
   DuplicateGroup,
   DuplicateGroupsResponse,
+  DuplicatePatchPick,
+  DuplicatePatchResult,
   EmptyBinResult,
   HistoryEntry,
   HoverPageOrderResponse,
@@ -667,7 +669,11 @@ export function useDeleteArchive() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => sendJson("DELETE", `/archives/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["archives"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["archives"] })
+      // A deleted member drops out of its duplicate group card.
+      queryClient.invalidateQueries({ queryKey: ["duplicates"] })
+    },
   })
 }
 
@@ -1893,15 +1899,19 @@ export function useDuplicateGroups() {
   })
 }
 
-export function useDuplicateCompare(a: string | null, b: string | null) {
-  return useQuery({
+/** Shared by the pair view and the anchor-vs-each multi view, so either reuses the other's result. */
+export function duplicateCompareQuery(a: string | null, b: string | null) {
+  return {
     queryKey: ["duplicates", "compare", a, b],
     queryFn: () =>
       fetchJson<DuplicateCompare>(
         `/database/duplicates/compare?a=${encodeURIComponent(a ?? "")}&b=${encodeURIComponent(b ?? "")}`,
       ),
-    enabled: a !== null && b !== null,
-  })
+  }
+}
+
+export function useDuplicateCompare(a: string | null, b: string | null) {
+  return useQuery({ ...duplicateCompareQuery(a, b), enabled: a !== null && b !== null })
 }
 
 export function useSaveDuplicateDecisions() {
@@ -1914,6 +1924,18 @@ export function useSaveDuplicateDecisions() {
     }) => sendJson("POST", "/database/duplicates/decisions", body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["duplicates"] })
+    },
+  })
+}
+
+export function useCreateDuplicatePatch() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { target: string; source: string; pages: DuplicatePatchPick[] }) =>
+      sendJson<{ result: DuplicatePatchResult }>("POST", "/database/duplicates/patch", body),
+    onSuccess: (_data, body) => {
+      queryClient.invalidateQueries({ queryKey: ["duplicates"] })
+      queryClient.invalidateQueries({ queryKey: ["archive-pages", body.target] })
     },
   })
 }

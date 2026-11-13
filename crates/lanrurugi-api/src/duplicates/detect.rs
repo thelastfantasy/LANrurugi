@@ -263,6 +263,7 @@ pub fn build_groups(
             pairs,
             chained,
             middle,
+            ..Default::default()
         });
     }
     groups.sort_by(|a, b| a.members.first().cmp(&b.members.first()));
@@ -418,6 +419,7 @@ pub fn regroup_by_pairs(
             pairs,
             chained,
             middle,
+            ..Default::default()
         });
     }
     out

@@ -66,7 +66,27 @@ pub struct PatchMetadata {
     /// conflict menu entirely rather than re-offering the same compare-and-resolve flow.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_crc32: Option<String>,
+    /// Every source archive whose pages were merged into this patch (CRC32, lowercase hex). A patch
+    /// merged from several sources cannot say that with `source_crc32` alone; that field keeps the
+    /// first source so older readers still see one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
     pub insertions: Vec<PatchInsertion>,
+}
+
+impl PatchMetadata {
+    /// `sources` plus the legacy single `source_crc32`, lowercased and deduplicated.
+    pub fn all_sources(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .sources
+            .iter()
+            .chain(self.source_crc32.iter())
+            .map(|s| s.to_ascii_lowercase())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
 }
 
 /// One page in an [`effective_pages`] result — either a plain passthrough to the target archive's
@@ -301,10 +321,20 @@ pub fn build_patch_zip(
 ) -> Result<Vec<u8>> {
     let metadata = PatchMetadata {
         source_crc32: source_crc32.map(|s| s.to_string()),
+        sources: Vec::new(),
         target_crc32: target_crc32.to_string(),
         insertions,
     };
-    let metadata_json = serde_json::to_vec_pretty(&metadata)?;
+    build_patch_zip_from(&metadata, pages)
+}
+
+/// [`build_patch_zip`] for a caller that assembled the whole [`PatchMetadata`] itself (a merge
+/// keeps `sources` from the existing patch).
+pub fn build_patch_zip_from(
+    metadata: &PatchMetadata,
+    pages: &[(String, Vec<u8>)],
+) -> Result<Vec<u8>> {
+    let metadata_json = serde_json::to_vec_pretty(metadata)?;
 
     let mut buf = std::io::Cursor::new(Vec::new());
     let mut writer = zip::ZipWriter::new(&mut buf);
@@ -414,6 +444,7 @@ mod tests {
         ];
         let metadata = PatchMetadata {
             source_crc32: None,
+            sources: Vec::new(),
             target_crc32: String::new(),
             insertions: vec![PatchInsertion {
                 after_filename: Some("a.jpg".to_string()),
@@ -435,6 +466,7 @@ mod tests {
         let original = vec!["a.jpg".to_string(), "b.jpg".to_string()];
         let metadata = PatchMetadata {
             source_crc32: None,
+            sources: Vec::new(),
             target_crc32: String::new(),
             insertions: vec![PatchInsertion {
                 after_filename: None,
@@ -456,6 +488,7 @@ mod tests {
         ];
         let metadata = PatchMetadata {
             source_crc32: None,
+            sources: Vec::new(),
             target_crc32: String::new(),
             insertions: vec![PatchInsertion {
                 after_filename: Some("a.jpg".to_string()),
@@ -475,6 +508,7 @@ mod tests {
         let original = vec!["a.jpg".to_string()];
         let metadata = PatchMetadata {
             source_crc32: None,
+            sources: Vec::new(),
             target_crc32: String::new(),
             insertions: vec![PatchInsertion {
                 after_filename: None,
@@ -492,6 +526,7 @@ mod tests {
         let original = vec!["a.jpg".to_string()];
         let metadata = PatchMetadata {
             source_crc32: None,
+            sources: Vec::new(),
             target_crc32: String::new(),
             insertions: vec![PatchInsertion {
                 after_filename: Some("does-not-exist.jpg".to_string()),

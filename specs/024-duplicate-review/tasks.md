@@ -42,8 +42,8 @@
 
 - [x] T021 `apps/frontend/src/api/types.ts` + `hooks.ts`：四个新接口的 hook 与类型。
 - [x] T022 重写 `pages/Duplicates.tsx` 为 grid 卡片页（`GroupCard.tsx`）：组头、成员行（多选勾选、推荐角标、`+N`）、动作区（整宽「智能对比」、「保留勾选的 N 个」、「只保留推荐的」、溢出菜单）。
-- [ ] T023 从删除前的提交恢复 `OverlayPage` / `MagnifierOverlay` / `AlignmentBandOverlay` / `PageItem` / `SourceItem`（`git log --diff-filter=D` 定位），改为接收新对比形状。
-- [ ] T024 `SmartCompareModal.tsx`：顶部固定建议与两个按钮、并排同步翻页、放大镜、对齐带（点格跳页）、`N 本一览`。
+- [x] T023 从删除前的提交恢复 `OverlayPage` / `MagnifierOverlay` / `AlignmentBandOverlay` / `PageItem` / `SourceItem`（`git log --diff-filter=D` 定位），改为接收新对比形状。
+- [x] T024 `SmartCompareModal.tsx`：顶部固定建议与两个按钮、并排同步翻页、放大镜、对齐带（点格跳页）、`N 本一览`。
 - [x] T025 i18n：en / zh / zh_Hant / ja 四份补齐全部新键；颜色只进 5 个主题文件（如需新类）。
 - [x] T026 空态、扫描中（进度条 + 取消）、错误态（档案被删、入库中）。
 
@@ -68,17 +68,20 @@ T001–T011 + T018–T024 + T029：扫描、卡片、对比、决定、删除。
 
 ## Implementation Record
 
-**Done**: T001–T022, T025–T027, T029, T030. The scan, grouping, review, decisions, compare endpoint,
+**Done**: T001–T027, T029, T030. The scan, grouping, review, decisions, compare endpoint,
 frontend card page and the docs page are on `feat/share-bind-interface`.
 
 **Partial**
 
-- **T023/T024** — the comparison modal was rebuilt from scratch rather than restoring the deleted
-  `OverlayPage`/`MagnifierOverlay`/`AlignmentBandOverlay` components. It shows the sampled pairs
-  side by side with sharpness, the aligned count and the one-sided pages, but has no magnifier and
-  no click-an-aligned-cell-to-jump behaviour. Pages come from the per-page thumbnail endpoint
-  (`/api/archives/{id}/thumbnail?page=N`), not full-size page bytes, so it is a comparison aid rather
-  than a pixel-inspection tool.
+- **T023/T024** — done in a second pass (verified by the user in the dev container). The old
+  `OverlayPage`/`MagnifierOverlay`/`CropPad` were restored under `pages/DuplicateCompare/`, with
+  original page bytes, the alignment band (drag to scrub, click to jump), one-sided pages with a
+  lightbox, and the drag-and-drop patch dialog (`POST /database/duplicates/patch`, merged into an
+  existing `.patch.zip`, BLAKE3-deduplicated). Keeping one copy recycles the other. Groups of three
+  or more open in an all-copies view instead (`MultiCompare.tsx`): pages stacked per sample, hold a
+  member's button or digit key to show it, keep boxes and one execute. Comparison and duplicate
+  scans read the patch-merged page list, and a patched copy plus its source is reviewed as
+  `patched` without a model call.
 - **T028** — `quickstart.md` was not run: the dev instance needs a password this session did not
   have (same blocker as 020's T027), and the three intended fixture archives were not built.
 

@@ -8,7 +8,7 @@ import { useHorizontalScroll } from "@/hooks"
 import { splitTagsByNamespace } from "@/lib/tagFormat"
 import { FONT_SIZE_XS } from "@/theme"
 
-/* ─── PatchAssignmentView 共享常量 + ScrollRow ─── */
+/* ─── Horizontal page strip (duplicate review patch assignment) ─── */
 
 export const ROW_GAP_PX = 6
 
