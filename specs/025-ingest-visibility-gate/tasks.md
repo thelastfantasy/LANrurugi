@@ -9,7 +9,7 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 确认基线：`/api/archives` 与 `/api/search` 在 dev 库上的可见 id 集合存档到 `specs/025-ingest-visibility-gate/baseline-ids.txt`（SC-004 对比用；dev 容器不可用时在 Implementation Record 说明并以单测替代）
+- [x] T001 确认基线：`/api/archives` 与 `/api/search` 在 dev 库上的可见 id 集合存档到 `specs/025-ingest-visibility-gate/baseline-ids.txt`（SC-004 对比用；dev 容器不可用时在 Implementation Record 说明并以单测替代）
 
 ## Phase 2: Foundational（所有故事的前置）
 
@@ -76,8 +76,8 @@
 
 - [x] T026 全仓 grep `PENDING_VISIBILITY_TTL_SECS|pending_visibility_key|mark_pending_visibility|clear_pending_visibility|KEYS LANRURUGI_PENDING` 无残留
 - [x] T027 `mise run fmt` / `mise run check-crate -- lanrurugi-storage lanrurugi-search lanrurugi-api lanrurugi-server` / `mise run clippy`
-- [x] T028 `mise run test-crate -- lanrurugi-search lanrurugi-api`（detached，真实 Redis），再 `mise run test` 全量
-- [ ] T029 quickstart.md 场景（dev 容器）：能跑就跑并记录；不能跑的写明原因，以单测覆盖说明替代
+- [x] T028 `LANRURUGI_TEST_REDIS_URL=… mise run test-crate -- lanrurugi-search` 与 `-- lanrurugi-api`（detached，真实 Redis）。全 workspace `mise run test` 不作为本 feature 的任务：按仓库约定由用户在需要时运行，合入 `main` 时 CI 跑全量
+- [x] T029 quickstart.md 场景（dev 容器）：能跑就跑并记录；不能跑的写明原因，以单测覆盖说明替代
 - [x] T030 `docs/api/sidecar/` 若有对上述端点的说明，补「入库未完成时返回 404」；`mise run docs-api -- --check`
 - [x] T031 在本文件末尾写 Implementation Record：每个 D1–D8 的修复点与对应测试名、哪些只在单测里验证、与 plan 的偏差
 
@@ -127,5 +127,18 @@ plan Addendum 的补充：重复扫描跳过 pending（`duplicates/mod.rs::run_s
 - `mise run check-crate -- lanrurugi-storage lanrurugi-search lanrurugi-api lanrurugi-server` 通过。
 - `mise run test-crate -- lanrurugi-search`（59 passed）、`-- lanrurugi-api`（678 + 7 passed），新增 6 个测试全部实际执行（未因缺 Redis 跳过）。
 - 第一次合跑三个 crate 时被 systemd-oomd 以内存压力杀掉（exit 137，非代码问题），改为逐个 crate、等 PSI 回落后跑。
-- **未做**：T001 基线 id 集合存档、T029 dev 容器 quickstart 手测（需要重建 dev 镜像并配慢插件）、全 workspace `mise run test`。这三项留给发版前的验收；SC-001/SC-002 目前由单测覆盖而非真实下载窗口。
+- **dev 容器验收（2026-11-13，镜像由 `88438ed` 重建）**：见下节。全 workspace `mise run test` 未跑（见 T028）。
 - T030：受影响端点没有 `docs/api/sidecar/` 条目（来自 legacy OpenAPI），无需改文档。
+
+### dev 容器验收（T001、T029）
+
+用一枚 2 小时过期的临时管理员令牌（验收后删除）对 `127.0.0.1:3001` 操作。
+
+- **T001 / SC-004 基线对比**：重建前（旧镜像）与重建后各取一次可见 id 集合，6 组完全一致：`/api/archives` 348、`/api/archives/untagged` 31、管理员搜索 grouped 338 / ungrouped 348、访客搜索 grouped 6 / ungrouped 5。id 列表只存在本机临时目录，没有提交（都是本地书库的档案 id，没有复查价值）。
+- **quickstart A（读侧）**：选一个访客可见、且属于单行本 `TANK_1787832758` 的档案，`SADD` 进 pending 集合后：管理员与访客的 `/search`（grouped/ungrouped）、`/search/archives`、`/search/ids`、`/search/suggest` 命中全部为 0（grouped 下所在单行本也不出现，D8）；metadata、files、page、thumbnail、page-dimensions、download、download-link 全部 404；`/archives` 与 `/archives/untagged` 不列出。`SREM` 后所有入口的结果与对照组逐行相同。
+- **quickstart B（写侧，真实上传 + 慢插件）**：临时插件 `metadata/slowgate` 睡 20 秒后加 `slowgate:done`（另外 dev 已启用 chaika、mems）。上传请求 47 秒内每 3 秒采样一次，pending 集合始终含该 id、按文件名搜索 0 命中、metadata 404；请求返回后立即可搜、metadata 200、标签含 `slowgate:done`、已不在集合中。第一次用 30 秒睡眠时插件撞上 30 秒的 worker 超时，两轮都失败，档案在第二轮结束后照常发布（日志：hidden 03:34:19 → 第二轮结束 03:35:26 → published 03:35:26.997），同时验证了 FR-006（插件失败也发布）与 D7（等第二轮 pass）。
+- **quickstart C（崩溃恢复）**：上传进行到第 10 秒时 `podman kill -s KILL lrr-dev`，集合里留下该 id；`dev-up` 重启后日志 `published archives a crash left hidden count=1`，集合为空，metadata 200、可搜。
+- 旧实现写在 DB 0 / DB 2 的 `LANRURUGI_PENDING_VISIBILITY:*` 单键在重启后均为 0。
+- 清理：删除 `plugins/metadata/slowgate.ts` 与其启用键；三个测试档案经 `DELETE /api/archives/{id}` 进入回收站。
+- 顺带观察（非本 feature 引入）：入库窗口内 scanner 的 watcher 对同一文件报 `ingestion timed out … timeout=30s`，是它在等同一把 content lock；插件跑完后正常收敛，未产生重复档案。
+
