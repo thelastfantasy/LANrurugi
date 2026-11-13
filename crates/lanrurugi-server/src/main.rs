@@ -746,6 +746,11 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // get repaired or dropped so hash-based dedup stops matching ghost bytes.
     repair_zombie_archives(&state).await;
 
+    // An ingest a crash interrupted can no longer finish its metadata run: publish it now (with
+    // whatever tags it has) rather than leave it hidden. Before the download queue resumes, so a
+    // resumed ingest's own marker is not swept away.
+    lanrurugi_api::visibility::clear_all_pending(&state).await;
+
     // One-time reader-recommendation-cache rebuilds, covering two independent reasons a cache can
     // be stale against a pre-existing library: (a) the archive was never cached at all (issue
     // #70 — its archives never trigger `precompute_one` on their own, since nothing about them

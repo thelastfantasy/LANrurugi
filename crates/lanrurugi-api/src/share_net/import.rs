@@ -1081,7 +1081,7 @@ async fn ingest(run: &Run, sharer_archive_id: &str, part: &Path, root: [u8; 32])
             lanrurugi_scanner::pipeline::DuplicatePolicy::Reject
         };
         match crate::download_manager::ingest::catalogue_staged_file(
-            &run.state, &staging, &name, None, policy, false, false,
+            &run.state, &staging, &name, None, policy, false, false, false,
         )
         .await
         {

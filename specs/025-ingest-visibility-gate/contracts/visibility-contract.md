@@ -2,11 +2,11 @@
 
 **Feature**: [spec.md](../spec.md) | **Plan**: [plan.md](../plan.md) | **Data model**: [data-model.md](../data-model.md)
 
-本 feature 不新增端点、不改变任何既有响应结构。它给既有端点增加一条**前置状态**：当 `LANRURUGI_PENDING_VISIBILITY:<id>` 存在时，该档案视为尚未发布。下面的表是该状态对客户端可观察行为的完整契约。
+本 feature 不新增端点、不改变任何既有响应结构。它给既有端点增加一条**前置状态**：当 id 是 SET `LANRURUGI_PENDING_VISIBILITY` 的成员时，该档案视为尚未发布。下面的表是该状态对客户端可观察行为的完整契约。
 
 ## 通用
 
-- pending 判定键：archive 逻辑库（DB 0）里的 `LANRURUGI_PENDING_VISIBILITY:<id>`。
+- pending 判定：archive 逻辑库（DB 0）里 SET `LANRURUGI_PENDING_VISIBILITY` 的成员（2026-11-13 由单键改为 SET，见 research R8）。
 - pending 与 published 的区分对客户端**不可见**：pending 档案的响应与「不存在的档案」完全一致。
 - 404 响应体沿用既有 `OperationResponse` 形状：
 

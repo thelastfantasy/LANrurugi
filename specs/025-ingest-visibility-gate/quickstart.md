@@ -32,9 +32,9 @@ curl -s "http://127.0.0.1:3001/api/archives/$ID/metadata" | jq '{arcid, title, p
 
 ```sh
 docker exec lrr-test-redis redis-cli -p "$REDIS_PORT" -n 0 \
-  SET "LANRURUGI_PENDING_VISIBILITY:$ID" "$(date +%s%3N)"
+  SADD LANRURUGI_PENDING_VISIBILITY "$ID"
 docker exec lrr-test-redis redis-cli -p "$REDIS_PORT" -n 0 \
-  EXISTS "LANRURUGI_PENDING_VISIBILITY:$ID"   # 期望 1
+  SISMEMBER LANRURUGI_PENDING_VISIBILITY "$ID"   # 期望 1
 ```
 
 3. 断言隐藏（**当前代码在 3a 会失败**，这正是缺陷）：
@@ -58,7 +58,7 @@ done
 4. 删除标记，确认恢复（发布即时性）：
 
 ```sh
-docker exec lrr-test-redis redis-cli -p "$REDIS_PORT" -n 0 DEL "LANRURUGI_PENDING_VISIBILITY:$ID"
+docker exec lrr-test-redis redis-cli -p "$REDIS_PORT" -n 0 SREM LANRURUGI_PENDING_VISIBILITY "$ID"
 curl -s "http://127.0.0.1:3001/api/search?filter=source:e-hentai.org/g/4141895/6b1b9778ca" | jq --arg id "$ID" '[.data[].arcid] | index($id)'
 curl -s -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:3001/api/archives/$ID/metadata"   # 期望 200
 ```
@@ -101,7 +101,7 @@ docker exec lrr-test-redis redis-cli -p "$REDIS_PORT" -n 2 \
 
 ```sh
 # 标记必须已经存在，且档案还搜不到
-docker exec lrr-test-redis redis-cli -p "$REDIS_PORT" -n 0 --scan --pattern 'LANRURUGI_PENDING_VISIBILITY:*'
+docker exec lrr-test-redis redis-cli -p "$REDIS_PORT" -n 0 SMEMBERS LANRURUGI_PENDING_VISIBILITY
 curl -s "http://127.0.0.1:3001/api/search?filter=title:<上传文件名片段>" | jq '.data | length'   # 0
 ```
 
@@ -110,7 +110,7 @@ curl -s "http://127.0.0.1:3001/api/search?filter=title:<上传文件名片段>" 
 ```sh
 curl -s "http://127.0.0.1:3001/api/archives/$ID/metadata" | jq '{title, tags}'   # tags 含 slowgate:done
 curl -s "http://127.0.0.1:3001/api/search?filter=title:<片段>" | jq '.data | length'  # ≥1
-docker exec lrr-test-redis redis-cli -p "$REDIS_PORT" -n 0 EXISTS "LANRURUGI_PENDING_VISIBILITY:$ID"  # 0
+docker exec lrr-test-redis redis-cli -p "$REDIS_PORT" -n 0 SISMEMBER LANRURUGI_PENDING_VISIBILITY "$ID"  # 0
 ```
 
 5. 清理：删除 fixture、`HDEL LRR_PLUGIN_METADATA/SLOWGATE enabled`、删除残留键。
@@ -120,7 +120,7 @@ docker exec lrr-test-redis redis-cli -p "$REDIS_PORT" -n 0 EXISTS "LANRURUGI_PEN
 在 B 的 30 秒窗口内 `docker kill -s KILL lrr-dev`（或 `kill -9` server），重启后：
 
 ```sh
-docker exec lrr-test-redis redis-cli -p "$REDIS_PORT" -n 0 --scan --pattern 'LANRURUGI_PENDING_VISIBILITY:*'  # 空
+docker exec lrr-test-redis redis-cli -p "$REDIS_PORT" -n 0 SMEMBERS LANRURUGI_PENDING_VISIBILITY  # 空
 ```
 
 并在 60 秒内确认该档案可搜、metadata 200（带崩溃前已有的标签）。

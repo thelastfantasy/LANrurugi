@@ -81,3 +81,13 @@
 - 实机：dev 容器 `lrr-dev`（host network，Redis `127.0.0.1:16379`），未登录请求走 `guest_visitor`（`LRR_CONFIG guestmode=1`，`procedure.rs:146`），分类 `SET_1787832596`/`SET_1784896712` 对访客可见。
 - 对照实验：同一 `source:` 过滤在无标记时命中 `fd3043…`；写入 DB 2 无效果；写入 DB 0 后 grouped 仍命中、ungrouped 为空；metadata/files/page 全 200。
 - 反例排除：`filter=zzzznonexistentzzz` 无标记时 grouped 为空、`recordsFiltered=0`，排除「分组结果钉住首条」；ID2/ID3 的早先对照因过滤本身未命中而作废。
+
+## R8. 标记的存储形状：每档案一个键，还是一个 SET（2026-11-13 补）
+
+**Decision**: 一个 SET `LANRURUGI_PENDING_VISIBILITY`（DB 0）。
+
+**Why**: 搜索每次都要拿到全部 pending id。每档案一个键时只能 `KEYS`/`SCAN MATCH` 前缀，而这两者都要遍历 DB 0 的整个键空间（每个档案一个 hash，数万量级）；`KEYS` 还会阻塞 Redis。去掉 TTL 后单键已无理由，SET 的 `SMEMBERS`/`SISMEMBER` 只与 pending 数量相关。
+
+**Alternatives considered**:
+- 保留单键 + `SCAN`：仍是每次搜索 O(档案数)。
+- 进程内 `HashSet`：搜索 crate 拿不到 `AppState`，且崩溃后无法收敛；否。

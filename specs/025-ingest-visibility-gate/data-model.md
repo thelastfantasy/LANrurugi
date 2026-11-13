@@ -6,18 +6,23 @@
 
 ## Entity: Publication Marker（发布标记）
 
+> 2026-11-13 修订（plan Addendum 第 1 条）：由「每档案一个键」改为**一个 SET**，避免每次搜索对 DB 0 全键空间做 `KEYS`/`SCAN`。
+
 | 属性 | 说明 |
 |------|------|
-| key | `LANRURUGI_PENDING_VISIBILITY:<archive_id>`，位于 **archive 逻辑库（DB 0）** |
-| archive_id | 40 位十六进制内容 id；与档案记录、搜索索引使用同一个 id |
-| value | 写入时的 Unix 毫秒（十进制字符串）。只用于排查「这本书从什么时候开始等」，不参与任何判断 |
+| key | `LANRURUGI_PENDING_VISIBILITY`（SET），位于 **archive 逻辑库（DB 0）** |
+| member | 40 位十六进制内容 id；与档案记录、搜索索引使用同一个 id |
+| 操作 | `SADD`（mark）/ `SREM`（publish）/ `SISMEMBER`（is_pending）/ `SMEMBERS`（pending_ids）/ `DEL`（启动收敛） |
 | TTL | 无。只能由显式 publish 或启动收敛删除 |
 | cardinality | 通常 0–数个；等于「此刻正在入库且插件未跑完」的档案数 |
+| 遗留键 | beta5 之后写入的 `LANRURUGI_PENDING_VISIBILITY:<id>`（DB 2）从未生效；启动收敛时对 DB 0、DB 2 各 `SCAN` 一次清掉 `LANRURUGI_PENDING_VISIBILITY:*` |
+
+pending 开始时间不再存储（原 value 只用于排查），改由 FR-014 的 mark/publish 日志提供。
 
 衍生状态（不单独存储）：
 
-- **Pending**：键存在。
-- **Published**：键不存在。包括从未进过 pending 的历史档案。
+- **Pending**：id 是该 SET 的成员。
+- **Published**：id 不在 SET 中。包括从未进过 pending 的历史档案。
 
 ## State Transitions
 
@@ -34,9 +39,9 @@
 
 | 转换 | 触发 | 前置条件 | 失败处理 |
 |------|------|----------|----------|
-| `mark` | `catalogue_staged_file` 在拿到 content lock、确认不是 `Unchanged` 之后、rename 进最终路径之前 | id 已由 `size_aware_id` 算出；键不存在（存在则覆盖，值刷新） | 返回错误，整次入库失败（fail closed） |
-| `publish` | 本次 ingest 触发的最后一个 metadata 插件返回之后；或 cataloguing/IO 失败；或 `Rejected` | 键存在 | 重试 3 次（短退避）；仍失败则 error 日志，等启动收敛 |
-| `clear_all` | 服务启动，`repair_zombie_archives` 之后、队列恢复之前 | 无 | 单键删除失败只记日志，继续处理其余键 |
+| `mark` | `catalogue_staged_file` 在拿到 content lock、确认不是 `Unchanged` 之后、rename 进最终路径之前 | id 已由 `size_aware_id` 算出（已是成员时 `SADD` 无副作用） | 返回错误，整次入库失败（fail closed） |
+| `publish` | 本次 ingest 触发的最后一个 metadata 插件返回之后；或 cataloguing/IO 失败；或 `Rejected` | id 是成员 | 重试 3 次（短退避）；仍失败则 error 日志，等启动收敛 |
+| `clear_all` | 服务启动，`repair_zombie_archives` 之后、队列恢复之前 | 无 | `DEL` 失败只记日志并继续启动；遗留单键逐个删除，失败同样只记日志 |
 
 ## Per-path Lifecycle
 
@@ -51,7 +56,7 @@
 
 ## Invariants
 
-- **I1（隐藏）**：只要键存在，该 id 不得出现在任何搜索/枚举结果中，也不得通过阅读页只读接口返回内容（404）。
+- **I1（隐藏）**：只要 id 在 SET 中，该 id 不得出现在任何搜索/枚举结果中，也不得通过阅读页只读接口返回内容（404）。
 - **I2（先标记后索引）**：`mark` 必须先于任何把该 id 写进搜索索引/档案记录的动作。
 - **I3（发布时机）**：`publish` 只能发生在「本次 ingest 触发的所有 metadata 插件 pass 都已返回」之后；插件失败也算返回。
 - **I4（只隐藏新档案）**：只对本次 ingest 新建/重键的 id 写标记；已发布档案不因重复下载、重复入库、订阅再增强而被隐藏。
@@ -65,4 +70,4 @@
 - **插件进度/阶段**：门禁只关心「跑完没有」，不暴露「正在跑第几个插件」；需求是「不出现」，不是「灰显进度」。
 - **失败原因**：键的值只有时间戳；插件失败不会把档案留在 pending（I3），所以不需要失败状态。
 - **多实例租约/所有权**：单实例部署假设；若未来多实例，需要把「谁负责发布」升级为带租约的状态，本 feature 不做。
-- **历史 pending 键的迁移**：旧实现写在 DB 2 的键从未生效，不需要迁移；启动收敛只清 DB 0。
+- **历史 pending 键的迁移**：旧实现写在 DB 2 的单键从未生效，不迁移，启动收敛时删除即可（见上表「遗留键」）。

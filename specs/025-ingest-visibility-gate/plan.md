@@ -188,3 +188,12 @@ crates/
 ## Complexity Tracking
 
 无宪法违规需要豁免。唯一需要记录的行为变化：pending 期间 `GET /api/archives/{id}/metadata|files|page` 由「可能 200」变为 404——这是本 feature 的目的，且这些档案在完成前从未对客户端构成稳定契约。
+
+## Addendum 2026-11-13 — 按当前代码复核
+
+复核对象 `feat/share-bind-interface` @ `516e9c8`。D1、D2 仍在（`download_manager/ingest.rs:255` 仍写 `state.redis.config`；`lanrurugi-search/src/engine.rs:504` 的 `extend` 仍在 pending 过滤之后）。plan 里的行号已过期（原 `ingest.rs:458/528` 现为 `:478/:564`），tasks.md 以当前代码为准重新定位。对 plan 的修订：
+
+1. **pending 标记改为一个 Redis SET，不再是每档案一个键。** `SCAN MATCH prefix*` 在 DB 0 上仍要遍历整个档案库的键空间（每个档案一个 hash，数万量级），每次搜索都扫一遍不可接受；现在的 `KEYS` 更糟（阻塞 Redis）。去掉 TTL 之后单键已无必要：`LANRURUGI_PENDING_VISIBILITY`（SET，DB 0），`SADD`/`SREM`/`SISMEMBER`/`SMEMBERS` 都只与 pending 数量相关。M1 的 `pending_ids` 用 `SMEMBERS`，`is_pending` 用 `SISMEMBER`；启动收敛 `DEL` 整个键。旧的 `LANRURUGI_PENDING_VISIBILITY:<id>` 单键在启动收敛时一并清掉（`SCAN` 只在启动时做一次）。
+2. **重复检测要跳过 pending 档案。** `duplicates/mod.rs:101` 用 `list_all()` 聚组，pending 档案会进入重复页，管理员可能在插件还在写标签时把它删掉。M3 增加：重复扫描与重复页的组成员过滤 pending。
+3. **上传路径的推荐预计算。** `plugins.rs:1800` 在插件跑完后 `tokio::spawn` `precompute_one`，会把新档案写进其他档案的 Top-N。普通下载里它与 publish 几乎同时，窗口可忽略；但上传走 `defer_publication`，第二次插件 pass 期间档案仍 pending，此时其他档案的「接下来读什么」可能列出它。M3 增加：`recommend.rs` 读取 Top-N 后过滤 pending（与 `:347` 现有的「已删除 id」过滤放在一起）。
+4. **与 027 的顺序。** 025 与 027 都改 `catalogue_staged_file` 的步骤顺序（025：rename 前 mark；027：持久化改名、指纹比对、删源时机）。先做 025，027 的 M1–M3 在其后基于新的顺序实现。

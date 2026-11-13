@@ -128,6 +128,7 @@ pub async fn adopt_pending_conflict(
         DuplicatePolicy::Reject,
         true,
         false,
+        false,
     )
     .await
     {
@@ -227,6 +228,27 @@ pub async fn ingest_downloaded_file(
     source_url: Option<&str>,
     _queue_item_id: Option<&str>,
 ) -> Result<IngestedDownload, IngestDownloadError> {
+    ingest_staged_download(state, downloaded, overwrite, source_url, false).await
+}
+
+/// [`ingest_downloaded_file`] for an upload, which runs a second plugin pass for the user's own
+/// tags: the archive stays hidden, and the caller must [`crate::visibility::publish`] it after that
+/// pass, on every path (spec 025, D7).
+pub async fn ingest_uploaded_file(
+    state: &AppState,
+    downloaded: &DownloadedFile,
+    overwrite: bool,
+) -> Result<IngestedDownload, IngestDownloadError> {
+    ingest_staged_download(state, downloaded, overwrite, None, true).await
+}
+
+async fn ingest_staged_download(
+    state: &AppState,
+    downloaded: &DownloadedFile,
+    overwrite: bool,
+    source_url: Option<&str>,
+    defer_publication: bool,
+) -> Result<IngestedDownload, IngestDownloadError> {
     let duplicate_policy = if overwrite {
         DuplicatePolicy::Overwrite
     } else {
@@ -242,36 +264,9 @@ pub async fn ingest_downloaded_file(
         duplicate_policy,
         false,
         true,
+        defer_publication,
     )
     .await
-}
-
-/// Marks `archive_id` unpublished, so `lanrurugi_search` skips it until
-/// [`clear_pending_visibility`] runs. Best-effort: if Redis is unreachable the archive is simply
-/// visible a little early with partial metadata, which is the old behaviour — not worth failing an
-/// otherwise successful ingest over.
-async fn mark_pending_visibility(state: &AppState, archive_id: &str) {
-    use deadpool_redis::redis::AsyncCommands;
-    let Ok(mut conn) = state.redis.config.get().await else {
-        return;
-    };
-    let key = lanrurugi_storage::keys::pending_visibility_key(archive_id);
-    let _: Result<(), _> = conn
-        .set_ex(
-            &key,
-            "1",
-            lanrurugi_storage::keys::PENDING_VISIBILITY_TTL_SECS,
-        )
-        .await;
-}
-
-async fn clear_pending_visibility(state: &AppState, archive_id: &str) {
-    use deadpool_redis::redis::AsyncCommands;
-    let Ok(mut conn) = state.redis.config.get().await else {
-        return;
-    };
-    let key = lanrurugi_storage::keys::pending_visibility_key(archive_id);
-    let _: Result<(), _> = conn.del(&key).await;
 }
 
 /// Runs `ingest_file_with_policy` against `staging_path` with the given `intended_filename`/
@@ -284,6 +279,7 @@ async fn clear_pending_visibility(state: &AppState, archive_id: &str) {
 ///
 /// `keep_bytes_on_failure` keeps the copy when cataloguing fails and no record was written: a
 /// download can be fetched again, but a file adopted at startup is the user's only copy.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn catalogue_staged_file(
     state: &AppState,
     staging_path: &Path,
@@ -292,6 +288,7 @@ pub(crate) async fn catalogue_staged_file(
     duplicate_policy: DuplicatePolicy,
     keep_bytes_on_failure: bool,
     restore_staging_on_failure: bool,
+    defer_publication: bool,
 ) -> Result<IngestedDownload, IngestDownloadError> {
     // The destination is derived from the bytes, not from the name: the id is the content hash and
     // the file is `<bucket>/<id>.<ext>`, so two downloads can never want the same path for
@@ -379,15 +376,28 @@ pub(crate) async fn catalogue_staged_file(
         });
     }
 
+    // Hidden before the bytes reach their library path: from there the watcher or the pipeline
+    // below can index them at any moment, and nothing may find the archive until its metadata
+    // run has finished (spec 025). Failing to hide it fails the ingest rather than showing it early.
+    if let Err(e) = crate::visibility::mark_pending(state, id.as_str()).await {
+        put_bytes_back(&incoming, staging_path, restore_staging_on_failure).await;
+        return Err(IngestDownloadError::Io(std::io::Error::other(e)));
+    }
+    let hidden_id = id.clone();
+    let mut pending = crate::visibility::PendingGuard::new(state, id.as_str());
+
     if let Some(parent) = dest.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(IngestDownloadError::Io)?;
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            pending.publish().await;
+            put_bytes_back(&incoming, staging_path, restore_staging_on_failure).await;
+            return Err(IngestDownloadError::Io(e));
+        }
     }
     // `dest` can still exist without a record: an ingest killed between its rename and its save.
     // The bytes are identical by construction (the id is a hash of them), so replacing it is right;
     // a directory or other non-file in the way is a real error.
     if let Err(e) = tokio::fs::rename(&incoming, &dest).await {
+        pending.publish().await;
         put_bytes_back(&incoming, staging_path, restore_staging_on_failure).await;
         return Err(IngestDownloadError::Io(e));
     }
@@ -429,12 +439,16 @@ pub(crate) async fn catalogue_staged_file(
                 // download asks for the bytes back at its staging path instead.
                 put_bytes_back(&dest, staging_path, restore_staging_on_failure).await;
             }
+            // A record that did get written is better shown with no tags than hidden for good.
+            pending.publish().await;
             return Err(e.into());
         }
     };
 
     let (archive_id, is_new) = match outcome {
         IngestOutcome::Unchanged { id } => {
+            // An archive that was already in the library is never hidden by a repeat download.
+            pending.publish().await;
             // Same as the early-existing case above: the record is there, but its source tag may
             // never have been stamped if the watcher won the catalogue race.
             stamp_source_tag(state, &id, source_url).await;
@@ -454,6 +468,7 @@ pub(crate) async fn catalogue_staged_file(
             existing_id,
             reason,
         } => {
+            pending.publish().await;
             // A rejection means these exact bytes are already catalogued, but `dest` is only
             // *usually* that archive's file: a record living in `_byname/` (same content id, kept
             // by its own name) leaves this copy as a redundant duplicate in the hash layout. Drop
@@ -471,11 +486,17 @@ pub(crate) async fn catalogue_staged_file(
         }
     };
 
-    // The record exists and its bytes are complete, but its tags are not: the auto-metadata run
-    // below is what fills them in. Hide it from search until then, so a download never shows up in
-    // the library as an untagged, unrelated-looking card (the previous order made that window as
-    // long as the whole cross-filesystem copy).
-    mark_pending_visibility(state, archive_id.as_str()).await;
+    if archive_id != hidden_id {
+        // The pipeline derives the id from the same bytes, so this should not happen; if it does,
+        // nothing is left hidden under an id no record uses.
+        tracing::warn!(%archive_id, %hidden_id, "catalogued under a different id than the one hidden");
+        std::mem::replace(
+            &mut pending,
+            crate::visibility::PendingGuard::new(state, archive_id.as_str()),
+        )
+        .publish()
+        .await;
+    }
 
     // The record's `file` is already correct (catalogued from its final path), so what remains is
     // the `source:` tag. Written into the same save, retried — a Redis blip here would otherwise
@@ -560,8 +581,12 @@ pub(crate) async fn catalogue_staged_file(
     crate::plugins::run_enabled_metadata_plugins_on_archive(state, archive_id.as_str()).await;
 
     // Published: the archive now carries whatever the plugins found (a failure inside the run is
-    // already non-fatal and logged there), so make it visible in the library.
-    clear_pending_visibility(state, archive_id.as_str()).await;
+    // already non-fatal and logged there). An upload publishes after its own second plugin pass.
+    if defer_publication {
+        pending.hand_over();
+    } else {
+        pending.publish().await;
+    }
 
     if keep_bytes_on_failure {
         // The record exists now, so the copy the queue row pointed at is redundant.
@@ -738,6 +763,7 @@ pub async fn resolve_overwrite(
         DuplicatePolicy::Overwrite,
         false,
         false,
+        false,
     )
     .await
 }
@@ -761,6 +787,7 @@ pub async fn resolve_rename(
         new_filename,
         source_url,
         DuplicatePolicy::Reject,
+        false,
         false,
         false,
     )
@@ -832,6 +859,90 @@ mod tests {
         Some(state)
     }
 
+    /// Spec 025 (D4, FR-006, FR-010, D7): a download with no metadata plugins is published as soon
+    /// as it is catalogued; an upload stays hidden until its caller publishes after the second
+    /// plugin pass; ingesting the same bytes again never hides the archive that already exists.
+    #[tokio::test]
+    async fn ingest_publishes_at_the_right_moment_and_never_hides_an_existing_archive() {
+        let root = tempfile::tempdir().unwrap();
+        let Some(state) = state_with_temp_dirs(root.path()).await else {
+            return;
+        };
+        let lock = lanrurugi_storage::test_support::RedisTestLock::acquire(
+            &state.redis.archive,
+            "pending_visibility",
+        )
+        .await;
+
+        let download = staged_zip(root.path(), &format!("vis-{}", uuid::Uuid::new_v4()));
+        let done = catalogue_staged_file(
+            &state,
+            &download,
+            "Download.zip",
+            None,
+            DuplicatePolicy::Reject,
+            false,
+            false,
+            false,
+        )
+        .await
+        .expect("catalogued");
+        assert!(done.is_new);
+        assert!(
+            !crate::visibility::is_pending(&state, &done.archive_id).await,
+            "no plugins: published when the ingest returns"
+        );
+
+        let again = root.path().join("again.zip");
+        std::fs::copy(
+            lanrurugi_storage::paths::hash_layout_path(
+                &state.library.archive_dir,
+                &done.archive_id,
+                "zip",
+            ),
+            &again,
+        )
+        .unwrap();
+        let repeat = catalogue_staged_file(
+            &state,
+            &again,
+            "Again.zip",
+            None,
+            DuplicatePolicy::Reject,
+            false,
+            false,
+            false,
+        )
+        .await;
+        assert!(
+            !crate::visibility::is_pending(&state, &done.archive_id).await,
+            "a repeat ingest ({:?}) must not hide the existing archive",
+            repeat.as_ref().map(|r| r.is_new)
+        );
+
+        let upload = staged_zip(root.path(), &format!("vis-up-{}", uuid::Uuid::new_v4()));
+        let uploaded = catalogue_staged_file(
+            &state,
+            &upload,
+            "Upload.zip",
+            None,
+            DuplicatePolicy::Reject,
+            false,
+            false,
+            true,
+        )
+        .await
+        .expect("catalogued");
+        assert!(
+            crate::visibility::is_pending(&state, &uploaded.archive_id).await,
+            "deferred: still hidden for the caller's second plugin pass"
+        );
+        crate::visibility::publish(&state, &uploaded.archive_id).await;
+        assert!(!crate::visibility::is_pending(&state, &uploaded.archive_id).await);
+
+        lock.release().await;
+    }
+
     /// A file adopted at startup is the user's only copy: when cataloguing cannot finish, it must
     /// still be where the queue row points (review 应修 3). A destination that is already taken
     /// makes the ingest wait and then give up, which is the failure path without needing a Redis
@@ -893,6 +1004,7 @@ mod tests {
                 DuplicatePolicy::Reject,
                 false,
                 false,
+                false,
             ),
             catalogue_staged_file(
                 &state,
@@ -900,6 +1012,7 @@ mod tests {
                 "Second Copy.zip",
                 None,
                 DuplicatePolicy::Reject,
+                false,
                 false,
                 false,
             ),
@@ -945,6 +1058,7 @@ mod tests {
             "Some Title [DL版].zip",
             Some("https://example.org/file"),
             DuplicatePolicy::Reject,
+            false,
             false,
             false,
         )
@@ -997,6 +1111,7 @@ mod tests {
             &long,
             None,
             DuplicatePolicy::Reject,
+            false,
             false,
             false,
         )
@@ -1079,6 +1194,7 @@ mod tests {
             "[DL版] (中国翻訳).zip",
             None,
             DuplicatePolicy::Reject,
+            false,
             false,
             false,
         )

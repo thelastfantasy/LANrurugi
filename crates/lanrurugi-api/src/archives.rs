@@ -304,6 +304,8 @@ fn parse_date_added(tags: &str) -> Option<u64> {
 async fn list_archives(State(state): State<AppState>) -> Response {
     match state.repos.archives.list_all().await {
         Ok(mut archives) => {
+            let pending = crate::visibility::pending_ids(&state).await;
+            archives.retain(|a| !pending.contains(a.id.as_str()));
             // Ingestion order, newest first — same `sortby=date_added&order=desc` semantics the
             // Library homepage's own default search already uses (`lanrurugi_search::engine`'s
             // `sort_ids`), including that function's own explicit rule that an archive missing
@@ -331,8 +333,10 @@ async fn list_archives(State(state): State<AppState>) -> Response {
 async fn untagged_archives(State(state): State<AppState>) -> Response {
     match state.repos.archives.list_all().await {
         Ok(archives) => {
+            let pending = crate::visibility::pending_ids(&state).await;
             let untagged: Vec<String> = archives
                 .into_iter()
+                .filter(|a| !pending.contains(a.id.as_str()))
                 .filter(|a| !has_meaningful_tags(&a.tags))
                 .map(|a| a.id.into_string())
                 .collect();
@@ -370,6 +374,17 @@ fn has_meaningful_tags(tags: &str) -> bool {
         .any(|ns| t.starts_with(ns));
         !is_basic
     })
+}
+
+/// Read endpoints answer 404 both for an archive outside the guest's scope and for one whose
+/// ingest has not finished yet (spec 025) — the same answer as for an id that does not exist.
+pub(crate) async fn read_denied(
+    state: &AppState,
+    auth: Option<&crate::auth_context::AuthContext>,
+    id: &lanrurugi_core::ids::ArchiveId,
+) -> bool {
+    guest_scope_denies(state, auth, id).await
+        || crate::visibility::is_pending(state, id.as_str()).await
 }
 
 /// 007-guest-restricted-access: `true` when `auth` is a `GuestVisitor` whose scope excludes `id` —
@@ -410,7 +425,7 @@ async fn get_archive_metadata(
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
 ) -> Response {
-    if guest_scope_denies(&state, auth.as_deref(), &id).await {
+    if read_denied(&state, auth.as_deref(), &id).await {
         return not_found("get_archive_metadata", format!("{id} does not exist."));
     }
     match crate::search::resolve_search_entry(&state, id.as_str()).await {
@@ -965,6 +980,9 @@ async fn download_link(
     State(state): State<AppState>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
 ) -> Response {
+    if crate::visibility::is_pending(&state, id.as_str()).await {
+        return not_found("download_link", format!("{id} does not exist."));
+    }
     let url = crate::direct_download::link(
         &state,
         &format!("archives:{id}"),
@@ -981,6 +999,9 @@ async fn download_archive(
     Query(params): Query<DownloadParams>,
     headers: HeaderMap,
 ) -> Response {
+    if crate::visibility::is_pending(&state, id.as_str()).await {
+        return not_found("download_archive", format!("{id} does not exist."));
+    }
     let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
         Ok(None) => return not_found("download_archive", "No archive ID specified."),
@@ -1897,7 +1918,7 @@ pub(crate) async fn get_archive_thumbnail(
     // The same resource-level guest check every other per-archive read uses. Without this, an
     // out-of-scope archive's cover/per-page thumbnail (whose URL is exposed by the admin-only
     // bookmarks page and can be persisted in browser/image caches) remains reachable by a guest.
-    if guest_scope_denies(&state, auth.as_deref(), &id).await {
+    if read_denied(&state, auth.as_deref(), &id).await {
         return not_found("serve_thumbnail", format!("{id} does not exist."));
     }
     let page = params.page.unwrap_or(0);
@@ -3398,7 +3419,7 @@ pub(crate) async fn serve_page(
     headers: &HeaderMap,
     head_only: bool,
 ) -> Response {
-    if guest_scope_denies(state, auth, id).await {
+    if read_denied(state, auth, id).await {
         return not_found("serve_page", format!("{id} does not exist."));
     }
     let archive = match state.repos.archives.get(id).await {
@@ -4496,7 +4517,7 @@ pub(crate) async fn get_files(
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
 ) -> Response {
-    if guest_scope_denies(&state, auth.as_deref(), &id).await {
+    if read_denied(&state, auth.as_deref(), &id).await {
         return not_found("get_file_list", format!("{id} does not exist."));
     }
     let archive = match state.repos.archives.get(&id).await {
@@ -4574,7 +4595,7 @@ async fn get_page_dimensions(
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<PageDimensionsParams>,
 ) -> Response {
-    if guest_scope_denies(&state, auth.as_deref(), &id).await {
+    if read_denied(&state, auth.as_deref(), &id).await {
         return not_found("get_page_dimensions", format!("{id} does not exist."));
     }
     let archive = match state.repos.archives.get(&id).await {
@@ -4791,7 +4812,7 @@ async fn get_page_thumbnails(
         for member_id in &tank.archives {
             // A Tankoubon can contain a mix of guest-visible and admin-only members; a guest must
             // not get thumbnails (or even a page-count contribution) for the hidden ones.
-            if guest_scope_denies(&state, auth.as_deref(), member_id).await {
+            if read_denied(&state, auth.as_deref(), member_id).await {
                 continue;
             }
             if let Ok(Some(archive)) = state.repos.archives.get(member_id).await {
@@ -4837,7 +4858,7 @@ async fn get_page_thumbnails(
 
     // Regular archive
     let archive_id = ArchiveId(id);
-    if guest_scope_denies(&state, auth.as_deref(), &archive_id).await {
+    if read_denied(&state, auth.as_deref(), &archive_id).await {
         return not_found(
             "get_page_thumbnails",
             format!("{archive_id} does not exist."),
@@ -4989,6 +5010,68 @@ mod tests {
     #[test]
     fn served_page_filename_falls_back_to_the_verbatim_basename_for_unknown_formats() {
         assert_eq!(served_page_filename("dir/000.tif", "image/tiff"), "000.tif");
+    }
+
+    /// Spec 025 (D3, D5): while an archive is in the pending set every read endpoint answers 404
+    /// exactly as for an unknown id, and neither list endpoint includes it; publishing it makes
+    /// the same requests succeed at once.
+    #[tokio::test]
+    async fn a_pending_archive_is_unreadable_and_unlisted_until_published() {
+        let Some(state) = crate::plugins::tests::test_state().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let lock = lanrurugi_storage::test_support::RedisTestLock::acquire(
+            &state.redis.archive,
+            "pending_visibility",
+        )
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("book.zip");
+        std::fs::write(&file, b"not really a zip").unwrap();
+        let id = format!("{}00000000", uuid::Uuid::new_v4().simple());
+        let mut archive = archive_named(&file.to_string_lossy(), "book.zip", "Pending Gate");
+        archive.id = ArchiveId(id.clone());
+        archive.pagecount = 1;
+        state.repos.archives.save(&archive).await.unwrap();
+        crate::visibility::mark_pending(&state, &id).await.unwrap();
+
+        async fn body(resp: Response) -> String {
+            let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+        let metadata = |s: &AppState| {
+            get_archive_metadata(State(s.clone()), None, Path(ArchiveId(id.clone())))
+        };
+
+        let hidden = metadata(&state).await;
+        assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+        assert!(!body(hidden).await.contains("Pending Gate"));
+        let download = download_archive(
+            State(state.clone()),
+            Path(ArchiveId(id.clone())),
+            Query(DownloadParams { inline: false }),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(download.status(), StatusCode::NOT_FOUND);
+        assert!(!body(list_archives(State(state.clone())).await)
+            .await
+            .contains(&id));
+        assert!(!body(untagged_archives(State(state.clone())).await)
+            .await
+            .contains(&id));
+
+        crate::visibility::publish(&state, &id).await;
+        assert_eq!(metadata(&state).await.status(), StatusCode::OK);
+        assert!(body(list_archives(State(state.clone())).await)
+            .await
+            .contains(&id));
+
+        let _ = state.repos.archives.delete(&ArchiveId(id.clone())).await;
+        lock.release().await;
     }
 
     fn archive_named(file: &str, name: &str, title: &str) -> Archive {

@@ -26,7 +26,7 @@ use sha1::{Digest, Sha1};
 use crate::activity::record_manual;
 use crate::auth_context::AuthContext;
 use crate::common::error;
-use crate::download_manager::ingest::ingest_downloaded_file;
+use crate::download_manager::ingest::ingest_uploaded_file;
 use crate::download_manager::stream::DownloadedFile;
 use crate::plugins::update_queue_item_state;
 use crate::AppState;
@@ -857,13 +857,20 @@ async fn finalize_staged_upload(
     // `download_manager::ingest::record_ingest_result`'s own docs. The separate `archive.upload`
     // record below still captures the user-supplied title/tags and metadata-plugin summary this
     // path has that the download/scanner sources don't.
+    // Stays hidden until the second plugin pass below (spec 025, D7). The guard is taken before
+    // the next `.await`, so a cancelled request still publishes it.
+    let ingested = ingest_uploaded_file(state, &downloaded, false).await;
+    let pending = ingested
+        .as_ref()
+        .ok()
+        .map(|i| crate::visibility::PendingGuard::new(state, &i.archive_id));
     let ingest_result = crate::download_manager::ingest::record_ingest_result(
         state,
         auth,
         "upload",
         &file_name,
         json!({ "category": category.clone() }),
-        ingest_downloaded_file(state, &downloaded, false, None, Some(&queue_item.id)).await,
+        ingested,
     )
     .await;
     match ingest_result {
@@ -903,6 +910,9 @@ async fn finalize_staged_upload(
                 &ingested.archive_id,
             )
             .await;
+            if let Some(pending) = pending {
+                pending.publish().await;
+            }
 
             record_manual(
                 state,

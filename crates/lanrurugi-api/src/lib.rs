@@ -78,6 +78,7 @@ pub mod translation_pipeline;
 pub mod translation_settings;
 pub mod upload;
 pub mod version;
+pub mod visibility;
 
 pub use state::{AppState, AuthConfig, LibraryPaths, Repositories};
 

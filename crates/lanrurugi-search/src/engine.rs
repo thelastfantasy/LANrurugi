@@ -15,7 +15,7 @@ use lanrurugi_core::entities::Category;
 use lanrurugi_core::ids::ArchiveId;
 use lanrurugi_equivalence::Equivalence;
 use lanrurugi_storage::bookmarks::BookmarksRepository;
-use lanrurugi_storage::keys::PENDING_VISIBILITY_PREFIX;
+use lanrurugi_storage::keys::PENDING_VISIBILITY_SET;
 use thiserror::Error;
 
 use crate::grammar::{parse_query, Expr, Field, Token};
@@ -182,18 +182,10 @@ impl SearchEngine {
 
 const ARCHIVE_KEY_GLOB: &str = "????????????????????????????????????????";
 
-/// Archives that are catalogued but not published yet — see
-/// `lanrurugi_api::download_manager::ingest`. Excluded from every result so a download can't show
-/// up in the library (with no tags, half-copied) before its metadata run has finished.
+/// Archives that are catalogued but not published yet (spec 025, written by
+/// `lanrurugi_api::visibility`). Every result must be a subset of the published archives.
 async fn pending_visibility(conn: &mut deadpool_redis::Connection) -> Result<HashSet<String>> {
-    let keys: Vec<String> = conn.keys(format!("{PENDING_VISIBILITY_PREFIX}*")).await?;
-    Ok(keys
-        .into_iter()
-        .filter_map(|key| {
-            key.strip_prefix(PENDING_VISIBILITY_PREFIX)
-                .map(str::to_string)
-        })
-        .collect())
+    Ok(conn.smembers(PENDING_VISIBILITY_SET).await?)
 }
 
 /// `hidecompleted`'s own "counts as finished" threshold — matches legacy's
@@ -465,14 +457,6 @@ pub async fn search(
             .collect()
     };
 
-    // An archive is catalogued before its metadata run finishes (see
-    // `lanrurugi_api::download_manager::ingest`), and must stay out of search results until that
-    // run publishes it — otherwise it shows up in the library with no tags at all.
-    let unpublished = pending_visibility(&mut archive_conn).await?;
-    if !unpublished.is_empty() {
-        filtered.retain(|id| !unpublished.contains(id));
-    }
-
     let mut expr = parse_query(&params.filter);
 
     if let Some(category) = &params.category {
@@ -505,6 +489,14 @@ pub async fn search(
         }
         let allowed_set: HashSet<&str> = allowed.iter().map(ArchiveId::as_str).collect();
         filtered.retain(|id| allowed_set.contains(id.as_str()));
+    }
+
+    // Unpublished archives (spec 025) go only after every step that can add ids back — the guest
+    // `extend` above used to re-admit them. Applied again after evaluation below so the result,
+    // and the tank members it folds, stay a subset of the published archives.
+    let unpublished = pending_visibility(&mut archive_conn).await?;
+    if !unpublished.is_empty() {
+        filtered.retain(|id| !unpublished.contains(id));
     }
 
     if params.untaggedonly {
@@ -656,7 +648,9 @@ pub async fn search(
             category_depth: 0,
             source_equivalences: &params.source_equivalences,
         };
-        eval_expr(&mut ctx, &expr, filtered).await?
+        let mut matched = eval_expr(&mut ctx, &expr, filtered).await?;
+        matched.retain(|id| !unpublished.contains(id));
+        matched
     };
 
     let (filtered, member_matches) = if member_aware {
@@ -2506,6 +2500,116 @@ mod tests {
         for id in [&id_old, &member_new, &tank.to_string()] {
             let _: () = aconn.del(id).await.unwrap();
         }
+    }
+
+    /// Spec 025: an archive in the pending set is absent from every search shape — admin grouped
+    /// and ungrouped, and the guest-scoped grouped search whose `extend` used to re-admit it — and
+    /// a tank whose only matching member is pending does not appear either. Removing it from the
+    /// set makes it findable on the very next query.
+    #[tokio::test]
+    async fn pending_archives_are_hidden_from_every_search_shape() {
+        let Some((archive_pool, search_pool, bookmarks)) = test_pools().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        // The pending set is one shared key; `lanrurugi-api`'s visibility tests take this lock too.
+        let lock = lanrurugi_storage::test_support::RedisTestLock::acquire(
+            &archive_pool,
+            "pending_visibility",
+        )
+        .await;
+        let eq = test_eq();
+        let mut aconn = archive_pool.get().await.unwrap();
+        let mut sconn = search_pool.get().await.unwrap();
+
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let tag = format!("artist:pendgate{nonce}");
+        let pending = format!("{:0>40}", format!("{nonce}a"));
+        let published = format!("{:0>40}", format!("{nonce}b"));
+        let tank = format!("TANK_{:0>10}", nonce % 10_000_000_000);
+        for id in [&pending, &published] {
+            let _: () = aconn.hset(id, "tags", &tag).await.unwrap();
+            crate::indexer::index_new_archive(&search_pool, &eq, id, "pending gate")
+                .await
+                .unwrap();
+            crate::indexer::update_tag_indexes(&search_pool, &eq, id, "", &tag)
+                .await
+                .unwrap();
+        }
+        // The pending archive is folded into a tank; the published one stands alone.
+        let _: () = aconn
+            .zadd_multiple(&tank, &[(1, pending.as_str())])
+            .await
+            .unwrap();
+        let _: () = sconn.srem(TANKGROUPED_KEY, &pending).await.unwrap();
+        let _: () = sconn
+            .sadd(TANKGROUPED_KEY, &[tank.as_str(), published.as_str()])
+            .await
+            .unwrap();
+        let _: () = aconn.sadd(PENDING_VISIBILITY_SET, &pending).await.unwrap();
+
+        let scope: HashSet<lanrurugi_core::ids::ArchiveId> = [&pending, &published]
+            .into_iter()
+            .map(|id| lanrurugi_core::ids::ArchiveId(id.clone()))
+            .collect();
+        let shapes = [
+            ("admin grouped", true, None),
+            ("admin ungrouped", false, None),
+            ("guest grouped", true, Some(scope.clone())),
+            ("guest ungrouped", false, Some(scope.clone())),
+        ];
+        for (label, groupby_tanks, restrict) in &shapes {
+            let params = SearchParams {
+                filter: tag.clone(),
+                groupby_tanks: *groupby_tanks,
+                restrict_to_archive_ids: restrict.clone(),
+                ..Default::default()
+            };
+            let result = search(&archive_pool, &search_pool, &eq, &bookmarks, &params)
+                .await
+                .unwrap();
+            assert_eq!(result.ids, vec![published.clone()], "{label}");
+            assert!(
+                result
+                    .member_matches
+                    .values()
+                    .all(|m| !m.contains(&pending)),
+                "{label}: a pending member leaked into a tank card"
+            );
+        }
+        assert!(
+            search_exists(&archive_pool, &search_pool, &eq, &bookmarks, &tag, "UTC")
+                .await
+                .unwrap(),
+            "the published archive still answers an existence check"
+        );
+
+        let _: () = aconn.srem(PENDING_VISIBILITY_SET, &pending).await.unwrap();
+        let params = SearchParams {
+            filter: tag.clone(),
+            groupby_tanks: false,
+            ..Default::default()
+        };
+        let mut ids = search(&archive_pool, &search_pool, &eq, &bookmarks, &params)
+            .await
+            .unwrap()
+            .ids;
+        ids.sort();
+        let mut expected = vec![pending.clone(), published.clone()];
+        expected.sort();
+        assert_eq!(ids, expected, "published on the next query");
+
+        let _: () = sconn
+            .srem(TANKGROUPED_KEY, &[tank.as_str(), published.as_str()])
+            .await
+            .unwrap();
+        for id in [&pending, &published, &tank] {
+            let _: () = aconn.del(id).await.unwrap();
+        }
+        lock.release().await;
     }
 
     /// `source_equivalences`: e-hentai's two front ends are one site by default, so a Chaika or

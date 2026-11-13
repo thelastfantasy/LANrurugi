@@ -456,7 +456,7 @@ async fn get_recommendations(
     // Also exclude every other member of the same Tankoubon from the candidate pool — the
     // reader has already read all of them, so recommending a sibling volume back would just
     // point at something already finished instead of something new.
-    let (anchor_id, exclude_ids) = if id.starts_with("TANK_") {
+    let (anchor_id, mut exclude_ids) = if id.starts_with("TANK_") {
         match state
             .repos
             .groupings
@@ -488,6 +488,9 @@ async fn get_recommendations(
     } else {
         (id.clone(), Vec::new())
     };
+    // An archive whose ingest has not finished must not be suggested (spec 025); its id can
+    // already sit in other archives' cached Top-N while an upload's second plugin pass runs.
+    exclude_ids.extend(crate::visibility::pending_ids(&state).await);
 
     match state
         .recommender

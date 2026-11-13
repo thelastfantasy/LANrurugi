@@ -101,10 +101,13 @@ async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, 
         .list_all()
         .await
         .map_err(|e| e.to_string())?;
-    // Only catalogued archives with a real file are candidates; an unfinished ingest has no cover.
+    // Only catalogued archives with a real file are candidates; an unfinished ingest has no cover,
+    // and one still in its metadata run is not offered for deletion (spec 025).
+    let pending = crate::visibility::pending_ids(state).await;
     let metas: Vec<ArchiveMeta> = archives
         .iter()
         .filter(|a| !a.file.trim().is_empty() && a.pagecount > 0)
+        .filter(|a| !pending.contains(a.id.as_str()))
         .map(|a| ArchiveMeta {
             id: a.id.as_str().to_string(),
             title: a.title.clone(),
