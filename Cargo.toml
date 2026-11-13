@@ -199,7 +199,7 @@ iroh-mdns-address-lookup = "0.6.1"
 iroh-relay = { version = "1.4.1", features = ["server"] }
 # Signed packets only: publishing goes to pkarr relays over this project's own HTTP client, never
 # through pkarr's DHT client (research §15).
-pkarr = { version = "8.1.0", default-features = false, features = ["signed_packet"] }
+pkarr = { version = "9.0.0", default-features = false, features = ["signed_packet"] }
 # Synchronous encode/decode only; the tokio state machine is not used.
 bao-tree = { version = "0.17.0", default-features = false, features = ["validate", "fs"] }
 argon2 = "0.6.0"
