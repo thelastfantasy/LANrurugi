@@ -43,6 +43,8 @@ export interface ReaderSettings {
   preloadCount: number;
   autoNextPageInterval: number;
   infiniteScroll: boolean;
+  /** On a phone-width viewport, read in infinite scroll regardless of `infiniteScroll`. */
+  autoInfiniteScrollNarrow: boolean;
   jScrollUnit: JScrollUnit;
   jScrollAmount: number;
   kBehavior: KBehavior;
@@ -61,6 +63,7 @@ const DEFAULTS: ReaderSettings = {
   preloadCount: 2,
   autoNextPageInterval: 10,
   infiniteScroll: false,
+  autoInfiniteScrollNarrow: false,
   jScrollUnit: J_SCROLL_UNIT.PERCENT,
   jScrollAmount: 80,
   kBehavior: K_BEHAVIOR.BACK_BOTTOM,
@@ -97,6 +100,10 @@ function readFromLocalStorage(): ReaderSettings {
       Number(localStorage.getItem("AutoNextPageInterval")) ||
       DEFAULTS.autoNextPageInterval,
     infiniteScroll: readBool("infiniteScroll", DEFAULTS.infiniteScroll),
+    autoInfiniteScrollNarrow: readBool(
+      "autoInfiniteScrollNarrow",
+      DEFAULTS.autoInfiniteScrollNarrow,
+    ),
     jScrollUnit:
       localStorage.getItem("jScrollUnit") === J_SCROLL_UNIT.PX
         ? J_SCROLL_UNIT.PX
@@ -153,6 +160,12 @@ function writeToLocalStorage(partial: Partial<ReaderSettings>) {
   }
   if (partial.infiniteScroll !== undefined) {
     localStorage.setItem("infiniteScroll", String(partial.infiniteScroll));
+  }
+  if (partial.autoInfiniteScrollNarrow !== undefined) {
+    localStorage.setItem(
+      "autoInfiniteScrollNarrow",
+      String(partial.autoInfiniteScrollNarrow),
+    );
   }
   if (partial.jScrollUnit !== undefined) {
     localStorage.setItem("jScrollUnit", partial.jScrollUnit);

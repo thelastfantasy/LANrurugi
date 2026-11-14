@@ -754,5 +754,8 @@
   "upload.ingesting": "Lagrer i biblioteket…",
   "upload.ingestingHint": "Nedlastingen er ferdig – arkivet skrives inn i biblioteket og miniatyrbildet lages.",
   "upload.transferringCount": "{{n}} overfører",
-  "upload.transferringCountHint": "Oppgaver som overfører bytes nå (innskriving i biblioteket telles ikke)."
+  "upload.transferringCountHint": "Oppgaver som overfører bytes nå (innskriving i biblioteket telles ikke).",
+  "reader.autoInfiniteScrollNarrow": "Slå på automatisk på mobilbredde",
+  "reader.autoInfiniteScrollNarrowDesc": "Bruk alltid uendelig rulling når skjermen er 768px bred eller smalere (mobil i stående modus); bredere skjermer beholder valget over.",
+  "reader.infiniteScrollForcedByNarrow": "Mobilbredde: slått på av bryteren nedenfor."
 }

@@ -761,5 +761,8 @@
   "upload.ingesting": "Đang lưu vào thư viện…",
   "upload.ingestingHint": "Tải xuống đã xong — đang ghi tệp vào thư viện và tạo ảnh thu nhỏ.",
   "upload.transferringCount": "{{n}} đang truyền",
-  "upload.transferringCountHint": "Số tác vụ đang truyền byte (không tính giai đoạn ghi vào thư viện)."
+  "upload.transferringCountHint": "Số tác vụ đang truyền byte (không tính giai đoạn ghi vào thư viện).",
+  "reader.autoInfiniteScrollNarrow": "Tự bật ở chiều rộng điện thoại",
+  "reader.autoInfiniteScrollNarrowDesc": "Luôn dùng cuộn vô hạn khi màn hình rộng 768px trở xuống (điện thoại dọc); màn hình rộng hơn vẫn theo lựa chọn ở trên.",
+  "reader.infiniteScrollForcedByNarrow": "Chiều rộng điện thoại: đang được bật bởi công tắc bên dưới."
 }

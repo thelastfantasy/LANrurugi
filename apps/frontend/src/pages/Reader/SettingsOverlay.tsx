@@ -94,9 +94,12 @@ export function SettingsOverlay({
   stampAutoUnbookmark,
   onUpdateServerSetting,
   loggedIn,
+  infiniteScrollForced,
 }: {
   settings: ReaderSettings;
   update: (partial: Partial<ReaderSettings>) => void;
+  /** The narrow-viewport auto switch is overriding the infinite-scroll choice right now. */
+  infiniteScrollForced: boolean;
   onClose: () => void;
   /** The two server-backed (`LRR_CONFIG`) settings this overlay also surfaces. */
   stampAutoBookmark: boolean;
@@ -360,11 +363,16 @@ export function SettingsOverlay({
 
           <SettingSection
             title={t("reader.infiniteScrolling") ?? ""}
-            description={t("reader.displayAllImagesInA") ?? undefined}
+            description={
+              (infiniteScrollForced
+                ? t("reader.infiniteScrollForcedByNarrow")
+                : t("reader.displayAllImagesInA")) ?? undefined
+            }
           >
             <input
               className={btnClass(settings.infiniteScroll)}
               type="button"
+              disabled={infiniteScrollForced}
               style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
               value={t("reader.enabled") ?? undefined}
               onClick={() => update({ infiniteScroll: true })}
@@ -372,9 +380,21 @@ export function SettingsOverlay({
             <input
               className={btnClass(!settings.infiniteScroll)}
               type="button"
+              disabled={infiniteScrollForced}
               style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
               value={t("reader.disabled") ?? undefined}
               onClick={() => update({ infiniteScroll: false })}
+            />
+          </SettingSection>
+
+          <SettingSection
+            title={t("reader.autoInfiniteScrollNarrow") ?? ""}
+            description={t("reader.autoInfiniteScrollNarrowDesc") ?? undefined}
+            indent
+          >
+            <Switch
+              checked={settings.autoInfiniteScrollNarrow}
+              onCheckedChange={(v) => update({ autoInfiniteScrollNarrow: v })}
             />
           </SettingSection>
 

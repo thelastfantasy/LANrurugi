@@ -3245,5 +3245,8 @@
   "settings.blake3BackfillStop": "Stop",
   "settings.blake3BackfillStopped": "Fingerprinting will stop after the current batch.",
   "settings.blake3BackfillIdle": "Fingerprinting is not running.",
-  "activity.actionType.database.blake3_backfill": "Fingerprint archives"
+  "activity.actionType.database.blake3_backfill": "Fingerprint archives",
+  "reader.autoInfiniteScrollNarrow": "Auto-enable on phone width",
+  "reader.autoInfiniteScrollNarrowDesc": "Always use infinite scrolling when the screen is 768px wide or narrower (a phone in portrait); wider screens keep the choice above.",
+  "reader.infiniteScrollForcedByNarrow": "Phone width: turned on by the switch below."
 }

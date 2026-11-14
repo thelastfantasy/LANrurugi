@@ -814,5 +814,8 @@
   "upload.ingesting": "Menyimpan ke pustaka…",
   "upload.ingestingHint": "Unduhan selesai — arsip sedang ditulis ke pustaka dan thumbnail dibuat.",
   "upload.transferringCount": "{{n}} sedang transfer",
-  "upload.transferringCountHint": "Tugas yang sedang memindahkan byte (tahap penulisan ke pustaka tidak dihitung)."
+  "upload.transferringCountHint": "Tugas yang sedang memindahkan byte (tahap penulisan ke pustaka tidak dihitung).",
+  "reader.autoInfiniteScrollNarrow": "Aktifkan otomatis di lebar ponsel",
+  "reader.autoInfiniteScrollNarrowDesc": "Selalu gunakan gulir tanpa batas saat lebar layar 768px atau kurang (ponsel tegak); layar yang lebih lebar tetap mengikuti pilihan di atas.",
+  "reader.infiniteScrollForcedByNarrow": "Lebar ponsel: diaktifkan oleh sakelar di bawah."
 }

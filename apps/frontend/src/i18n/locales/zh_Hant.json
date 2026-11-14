@@ -1225,5 +1225,8 @@
   "settings.blake3BackfillStop": "停止",
   "settings.blake3BackfillStopped": "補算會在目前這一批完成後停止。",
   "settings.blake3BackfillIdle": "目前沒有在補算。",
-  "activity.actionType.database.blake3_backfill": "補算檔案指紋"
+  "activity.actionType.database.blake3_backfill": "補算檔案指紋",
+  "reader.autoInfiniteScrollNarrow": "手機寬度下自動啟用",
+  "reader.autoInfiniteScrollNarrowDesc": "螢幕寬度不超過 768px 時（手機直向）一律使用無限捲動，寬螢幕仍依上方的選擇。",
+  "reader.infiniteScrollForcedByNarrow": "目前為手機寬度，已由下方開關自動啟用。"
 }

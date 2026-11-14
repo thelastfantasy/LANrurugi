@@ -897,5 +897,8 @@
   "upload.ingesting": "라이브러리에 저장 중…",
   "upload.ingestingHint": "다운로드는 끝났고, 보관함에 기록하고 썸네일을 만드는 중입니다.",
   "upload.transferringCount": "{{n}}개 전송 중",
-  "upload.transferringCountHint": "현재 바이트를 전송 중인 작업 수(저장 단계 제외)."
+  "upload.transferringCountHint": "현재 바이트를 전송 중인 작업 수(저장 단계 제외).",
+  "reader.autoInfiniteScrollNarrow": "휴대폰 너비에서 자동 사용",
+  "reader.autoInfiniteScrollNarrowDesc": "화면 너비가 768px 이하(세로 모드 휴대폰)일 때는 항상 무한 스크롤을 사용합니다. 넓은 화면에서는 위 설정을 따릅니다.",
+  "reader.infiniteScrollForcedByNarrow": "휴대폰 너비이므로 아래 스위치에 의해 자동으로 켜져 있습니다."
 }

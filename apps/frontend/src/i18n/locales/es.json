@@ -743,5 +743,8 @@
   "upload.ingesting": "Guardando en la biblioteca…",
   "upload.ingestingHint": "La descarga terminó: se está escribiendo el archivo en la biblioteca y generando la miniatura.",
   "upload.transferringCount": "{{n}} en transferencia",
-  "upload.transferringCountHint": "Tareas que están moviendo bytes (sin contar la escritura en la biblioteca)."
+  "upload.transferringCountHint": "Tareas que están moviendo bytes (sin contar la escritura en la biblioteca).",
+  "reader.autoInfiniteScrollNarrow": "Activar automáticamente en móvil",
+  "reader.autoInfiniteScrollNarrowDesc": "Usar siempre el desplazamiento infinito cuando la pantalla mide 768px de ancho o menos (móvil en vertical); las pantallas más anchas mantienen la opción de arriba.",
+  "reader.infiniteScrollForcedByNarrow": "Ancho de móvil: activado por el interruptor de abajo."
 }

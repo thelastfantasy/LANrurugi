@@ -2946,5 +2946,8 @@
   "settings.blake3BackfillStop": "停止",
   "settings.blake3BackfillStopped": "現在のバッチが終わったら停止します。",
   "settings.blake3BackfillIdle": "指紋の計算は実行されていません。",
-  "activity.actionType.database.blake3_backfill": "アーカイブの指紋を計算"
+  "activity.actionType.database.blake3_backfill": "アーカイブの指紋を計算",
+  "reader.autoInfiniteScrollNarrow": "スマホ幅で自動的に有効化",
+  "reader.autoInfiniteScrollNarrowDesc": "画面幅が 768px 以下（縦向きのスマホ）のときは常に無限スクロールを使います。広い画面では上の設定に従います。",
+  "reader.infiniteScrollForcedByNarrow": "スマホ幅のため、下のスイッチにより自動で有効になっています。"
 }

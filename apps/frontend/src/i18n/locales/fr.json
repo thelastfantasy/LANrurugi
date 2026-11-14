@@ -809,5 +809,8 @@
   "upload.ingesting": "Enregistrement dans la bibliothèque…",
   "upload.ingestingHint": "Téléchargement terminé — écriture de l'archive dans la bibliothèque et génération de la vignette.",
   "upload.transferringCount": "{{n}} en transfert",
-  "upload.transferringCountHint": "Tâches en cours de transfert (hors enregistrement dans la bibliothèque)."
+  "upload.transferringCountHint": "Tâches en cours de transfert (hors enregistrement dans la bibliothèque).",
+  "reader.autoInfiniteScrollNarrow": "Activer automatiquement sur mobile",
+  "reader.autoInfiniteScrollNarrowDesc": "Toujours utiliser le défilement infini quand l'écran fait 768px de large ou moins (téléphone en portrait) ; les écrans plus larges gardent le choix ci-dessus.",
+  "reader.infiniteScrollForcedByNarrow": "Largeur mobile : activé par l'interrupteur ci-dessous."
 }

@@ -501,5 +501,8 @@
   "upload.ingesting": "Salvataggio nella libreria…",
   "upload.ingestingHint": "Download completato: scrittura dell'archivio nella libreria e generazione dell'anteprima.",
   "upload.transferringCount": "{{n}} in trasferimento",
-  "upload.transferringCountHint": "Attività che stanno trasferendo byte (esclusa la scrittura nella libreria)."
+  "upload.transferringCountHint": "Attività che stanno trasferendo byte (esclusa la scrittura nella libreria).",
+  "reader.autoInfiniteScrollNarrow": "Attiva automaticamente su smartphone",
+  "reader.autoInfiniteScrollNarrowDesc": "Usa sempre lo scorrimento infinito quando lo schermo è largo 768px o meno (telefono in verticale); gli schermi più larghi mantengono la scelta qui sopra.",
+  "reader.infiniteScrollForcedByNarrow": "Larghezza smartphone: attivato dall'interruttore qui sotto."
 }

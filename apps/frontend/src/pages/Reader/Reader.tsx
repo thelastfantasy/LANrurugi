@@ -282,7 +282,19 @@ export function Reader() {
     isTank ? "" : (archiveId ?? ""),
   );
   const generateThumbnailsForArchives = useGenerateThumbnailsForArchives();
-  const [readerSettings, updateReaderSettings] = useReaderSettings();
+  const [storedReaderSettings, updateReaderSettings] = useReaderSettings();
+  const isMobileToolbarViewport = useIsNarrowViewport("(max-width: 768px)");
+  // Everything below reads the mode actually in effect; the stored preference stays untouched so
+  // widening the window brings back whatever was chosen there.
+  const infiniteScrollForced =
+    storedReaderSettings.autoInfiniteScrollNarrow && isMobileToolbarViewport;
+  const readerSettings = useMemo(
+    () =>
+      infiniteScrollForced
+        ? { ...storedReaderSettings, infiniteScroll: true }
+        : storedReaderSettings,
+    [storedReaderSettings, infiniteScrollForced],
+  );
   const totalPages = pages.data?.pages.length ?? 0;
   // `startPage`/`startWithOverview` are also read further down (query-string cleanup effect,
   // overlay initial state) — declared here, ahead of everything below that needs `currentPage`,
@@ -489,6 +501,10 @@ export function Reader() {
 
   const [markerPlacementMode, setMarkerPlacementMode] = useState(false);
   const supportsHover = useSupportsHover();
+  // Touch infinite scroll: the page a long press brought the floating toolbar up on. The toolbar
+  // stays until that page has scrolled completely out of view.
+  const [infiniteToolbarPage, setInfiniteToolbarPage] = useState<number | null>(null);
+  const infiniteLongPressRef = useRef(false);
   // Shared by both toolbars, so changing the primary action in one updates the other too.
   const [fitAction, setFitAction] = useState<FitAction>(readStoredFitAction);
   /**
@@ -639,6 +655,76 @@ export function Reader() {
     document.addEventListener("contextmenu", onContextMenu);
     return () => document.removeEventListener("contextmenu", onContextMenu);
   }, [headless, supportsHover]);
+  // Touch infinite scroll: holding a finger on a page brings up the toolbar (taps scroll). Headless
+  // keeps its own long press, which leaves headless, and has no toolbar to show anyway.
+  const touchInfiniteToolbar =
+    readerSettings.infiniteScroll && !supportsHover && !headless;
+  useEffect(() => {
+    if (!touchInfiniteToolbar) return;
+    // Rendered only once the page list has loaded, hence `pages.data` below.
+    const root = infiniteScrollRootRef.current;
+    if (!root) return;
+    let timer: number | undefined;
+    let startX = 0;
+    let startY = 0;
+    const down = new Set<number>();
+    const cancel = () => window.clearTimeout(timer);
+    const startAt = (e: PointerEvent) => {
+      down.add(e.pointerId);
+      if (down.size > 1) {
+        cancel();
+        return;
+      }
+      const img = (e.target as HTMLElement).closest?.("img[data-page]");
+      if (!(img instanceof HTMLElement)) return;
+      infiniteLongPressRef.current = false;
+      startX = e.clientX;
+      startY = e.clientY;
+      cancel();
+      timer = window.setTimeout(() => {
+        infiniteLongPressRef.current = true;
+        setInfiniteToolbarPage(Number(img.dataset.page));
+      }, 550);
+    };
+    const lift = (e: PointerEvent) => {
+      down.delete(e.pointerId);
+      if (down.size === 0) cancel();
+    };
+    // As in headless: the browser claiming a held image fires `pointercancel` before the timer.
+    const forget = (e: PointerEvent) => down.delete(e.pointerId);
+    const moved = (e: PointerEvent) => {
+      if (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10) cancel();
+    };
+    // Android has no `-webkit-touch-callout`; its save-image menu would cover the toolbar.
+    const onContextMenu = (e: MouseEvent) => {
+      if ((e.target as HTMLElement).closest?.("img[data-page]")) e.preventDefault();
+    };
+    root.addEventListener("pointerdown", startAt);
+    document.addEventListener("pointermove", moved);
+    document.addEventListener("pointerup", lift);
+    document.addEventListener("pointercancel", forget);
+    root.addEventListener("contextmenu", onContextMenu);
+    return () => {
+      cancel();
+      root.removeEventListener("pointerdown", startAt);
+      document.removeEventListener("pointermove", moved);
+      document.removeEventListener("pointerup", lift);
+      document.removeEventListener("pointercancel", forget);
+      root.removeEventListener("contextmenu", onContextMenu);
+    };
+  }, [touchInfiniteToolbar, pages.data]);
+  useEffect(() => {
+    if (infiniteToolbarPage === null) return;
+    const img = infiniteScrollRootRef.current?.querySelector(
+      `img[data-page="${infiniteToolbarPage}"]`,
+    );
+    if (!img) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (!entry.isIntersecting) setInfiniteToolbarPage(null);
+    });
+    observer.observe(img);
+    return () => observer.disconnect();
+  }, [infiniteToolbarPage]);
   /**
    * Fit-height used to be a flat `90vh` (98vh with the header hidden), which ignores the reader's
    * own chrome — title, toolbar, the page-info line, the footer — so the page still ended up taller
@@ -651,7 +737,6 @@ export function Reader() {
   // Bumped when the real page paints: the image's own height feeds `box.top` for everything below
   // it, so the first measurement (taken while the area was still empty) is not final.
   const [measureTick, setMeasureTick] = useState(0);
-  const isMobileToolbarViewport = useIsNarrowViewport("(max-width: 768px)");
   // Keyboard-shortcut help is meaningless on a touch-only phone; `useHasPhysicalKeyboard`
   // explains what "has a keyboard" can actually mean in a browser.
   const hasPhysicalKeyboard = useHasPhysicalKeyboard();
@@ -940,10 +1025,19 @@ export function Reader() {
       ? !!pageTinyBlobs[spread.left]
       : !!pageTinyBlobs[spread.left] && !!pageTinyBlobs[spread.right]);
 
+  // A failed dimensions request still resumes (with estimated heights) rather than never: the
+  // column stays hidden until the resume happens, so "never" would mean a blank reader.
   const infiniteScrollResumeReady =
     infiniteScrollResumePageRef.current === null ||
     infiniteScrollResumePageRef.current <= 1 ||
-    infiniteScrollResumeDimensions.isSuccess;
+    infiniteScrollResumeDimensions.isSuccess ||
+    infiniteScrollResumeDimensions.isError;
+  // Resuming mid-archive: keep the column invisible until it has been scrolled to the saved page,
+  // so a refresh does not paint page 1 first and then jump.
+  const infiniteScrollResumeHidden =
+    readerSettings.infiniteScroll &&
+    (infiniteScrollResumePageRef.current ?? 0) > 1 &&
+    !infiniteScrollResumedRef.current;
 
   /** The URL a plain `<img>` should request for a page: the address `/files` generated (it carries
    * `optimize=1` and any patch marker) plus the variant the reader wants and the queue priority.
@@ -1398,6 +1492,25 @@ export function Reader() {
         window.scrollTo({ top: 0, behavior: "smooth" });
       }
     }
+  }
+
+  /** Touch infinite scroll reads vertically, so a tap on the lower half scrolls forward by the `j`
+   * step and one on the upper half back; the toolbar is a long press instead (see below). */
+  function onInfiniteScrollTap(clientY: number) {
+    const forward = clientY >= window.innerHeight / 2;
+    if (
+      forward &&
+      window.innerHeight + window.scrollY >=
+        document.documentElement.scrollHeight - 1
+    ) {
+      startArchiveTransition("next");
+      return;
+    }
+    const step =
+      readerSettings.jScrollUnit === J_SCROLL_UNIT.PX
+        ? readerSettings.jScrollAmount
+        : window.innerHeight * (readerSettings.jScrollAmount / 100);
+    window.scrollBy({ top: forward ? step : -step, behavior: "smooth" });
   }
 
   function goToInfiniteScrollPage(fromPage: number, target: "prev" | "next") {
@@ -2168,14 +2281,35 @@ export function Reader() {
     // One explicit resume scrollIntoView, only once every prior page has a real reserved height —
     // the tracker attaches after it fires so its first read doesn't stomp currentPage back to 1.
     const alreadyResumed = infiniteScrollResumedRef.current;
+    // Pages above the resumed one settle from their reserved to their real height a few pixels at
+    // a time; until the reader touches anything, every such change re-pins the resumed page.
+    let pinned: HTMLElement | null = null;
+    // Centred in the viewport; a page taller than the viewport starts at its top instead, so the
+    // reader is not dropped into its middle.
+    const pin = (el: HTMLElement) =>
+      el.scrollIntoView({
+        block: el.getBoundingClientRect().height > window.innerHeight ? "start" : "center",
+      });
     if (!alreadyResumed) {
       if (!infiniteScrollResumeReady) return;
       infiniteScrollResumedRef.current = true;
       infiniteScrollCurrentPageRef.current = currentPage;
-      root
-        .querySelector<HTMLElement>(`[data-page="${currentPage}"]`)
-        ?.scrollIntoView({ block: "start" });
+      pinned = root.querySelector<HTMLElement>(`[data-page="${currentPage}"]`);
+      if (pinned) pin(pinned);
+      // The resumed flag is a ref, so no render follows to drop `infiniteScrollResumeHidden`.
+      root.style.removeProperty("visibility");
     }
+    const PIN_EVENTS = ["pointerdown", "touchstart", "wheel", "keydown"] as const;
+    const unpin = () => {
+      pinned = null;
+      PIN_EVENTS.forEach((type) => window.removeEventListener(type, unpin, true));
+    };
+    if (pinned) {
+      PIN_EVENTS.forEach((type) =>
+        window.addEventListener(type, unpin, { capture: true, passive: true }),
+      );
+    }
+    const unpinTimer = window.setTimeout(unpin, 10_000);
     const REFLOW_GUARD_MS = 400;
     let reflowGuardUntil = performance.now() + REFLOW_GUARD_MS;
 
@@ -2206,14 +2340,18 @@ export function Reader() {
     }
     window.addEventListener("scroll", onScroll, { passive: true });
 
+    // Delivered after layout and before paint, so a re-pin here never shows the shifted frame.
     const resizeObserver = new ResizeObserver(() => {
       reflowGuardUntil = performance.now() + REFLOW_GUARD_MS;
+      if (pinned) pin(pinned);
     });
     root
       .querySelectorAll<HTMLElement>("[data-page]")
       .forEach((img) => resizeObserver.observe(img));
 
     return () => {
+      unpin();
+      window.clearTimeout(unpinTimer);
       window.removeEventListener("scroll", onScroll);
       if (rafId !== null) cancelAnimationFrame(rafId);
       resizeObserver.disconnect();
@@ -2943,9 +3081,29 @@ export function Reader() {
       </MenuItem>
     </Menu>
   );
-  const mobileToolbar = !readerSettings.infiniteScroll && (
+  const mobileToolbar = (!readerSettings.infiniteScroll ||
+    (touchInfiniteToolbar && infiniteToolbarPage !== null)) && (
     <div className="mobile-reader-toolbar">
       {arrows}
+      {readerSettings.infiniteScroll && infiniteToolbarPage !== null && (
+        // Infinite scroll has no paginator, so the page the toolbar was summoned on is named here.
+        <div
+          className="pagecount"
+          style={{
+            fontSize: PAGINATOR_PAGECOUNT_FONT_SIZE,
+            lineHeight: 1.3,
+            textAlign: "center",
+            maxWidth: "80vw",
+          }}
+        >
+          <div style={{ whiteSpace: "nowrap" }}>
+            {infiniteToolbarPage} / {totalPages}
+          </div>
+          <div style={{ fontSize: "0.75em", overflowWrap: "anywhere" }}>
+            {pageInfoBody(infiniteToolbarPage)}
+          </div>
+        </div>
+      )}
       <div className="mobile-reader-toolbar-icons">
         {translationSettings && translationScope && (
           <ToggleButtonMenu
@@ -3174,7 +3332,9 @@ export function Reader() {
   // format and saved percentage, in the same green/red pair the toolbar uses.
   const spreadPageNumbers =
     spread.right === null ? [spread.left] : [spread.left, spread.right];
-  const spreadRows = spreadPageNumbers.map((page, index) => {
+  /** One page's own file-info line: name, geometry, size and — when the server converted it —
+   * served format and saved percentage, as the green/red pair. */
+  function pageInfoBody(page: number): React.ReactNode {
     const entry = pages.data?.pages[page - 1];
     const name = entry
       ? (new URL(entry.url, window.location.origin).searchParams.get("path") ?? "")
@@ -3186,7 +3346,6 @@ export function Reader() {
         ? { width: resize.origWidth, height: resize.origHeight }
         : undefined);
     const served = servedSizesKb[page] ?? servedInfoKb(resize);
-    let body: React.ReactNode;
     if (resize && served !== undefined && dims) {
       const origKb = resize.origSizeBytes / 1024;
       const origSizeText =
@@ -3195,7 +3354,7 @@ export function Reader() {
         0,
         Math.round((1 - (served * 1024) / resize.origSizeBytes) * 100),
       );
-      body = (
+      return (
         <>
           <span className="file-info-opt">
             {name} → {resize.servedFormat.toUpperCase()} :: {dims.width} x {dims.height} ::{" "}
@@ -3212,10 +3371,10 @@ export function Reader() {
     } else if (resize === undefined) {
       // HEAD has not answered yet: the entry size would be the wrong number for a page the server
       // is about to convert, so show just the name until the answer is in (same rule as the bar).
-      body = <span className="file-info-opt">{name}</span>;
+      return <span className="file-info-opt">{name}</span>;
     } else {
       const kb = pageSizesKb[page];
-      body = (
+      return (
         <span className="file-info-opt">
           {name}
           {dims ? ` :: ${dims.width} x ${dims.height}` : ""}
@@ -3223,8 +3382,12 @@ export function Reader() {
         </span>
       );
     }
-    return { page, label: index === 0 ? "L" : "R", body };
-  });
+  }
+  const spreadRows = spreadPageNumbers.map((page, index) => ({
+    page,
+    label: index === 0 ? "L" : "R",
+    body: pageInfoBody(page),
+  }));
   const headlessFileInfo =
     spread.right === null ? (
       fileinfo
@@ -3409,7 +3572,12 @@ export function Reader() {
             </div>
           ) : null}
           {readerSettings.infiniteScroll ? (
-            <div id="display" className="infinite-scroll" ref={infiniteScrollRootRef}>
+            <div
+              id="display"
+              className="infinite-scroll"
+              ref={infiniteScrollRootRef}
+              style={infiniteScrollResumeHidden ? { visibility: "hidden" } : undefined}
+            >
               {pages.data.pages.map((url, i) => {
                 const hasRealHeight = pageDimensions[i + 1] !== undefined;
                 const resumeDim =
@@ -3438,6 +3606,16 @@ export function Reader() {
                     onLoad={(e) => onImageLoad(i + 1, e)}
                     onError={onImageError}
                     onClick={(e) => {
+                      // Headless also listens on the document; this tap is already handled.
+                      e.preventDefault();
+                      if (infiniteLongPressRef.current) {
+                        infiniteLongPressRef.current = false;
+                        return;
+                      }
+                      if (!supportsHover) {
+                        onInfiniteScrollTap(e.clientY);
+                        return;
+                      }
                       const isLeftHalf = e.clientX < window.innerWidth / 2;
                       goToInfiniteScrollPage(
                         i + 1,
@@ -3767,6 +3945,7 @@ export function Reader() {
           <SettingsOverlay
             settings={readerSettings}
             update={updateReaderSettings}
+            infiniteScrollForced={infiniteScrollForced}
             onClose={() => setOverlay(null)}
             stampAutoBookmark={settings.data?.stampautobookmark ?? true}
             stampAutoUnbookmark={settings.data?.stampautounbookmark ?? true}

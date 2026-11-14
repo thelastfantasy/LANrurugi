@@ -737,5 +737,8 @@
   "upload.ingesting": "Salvando na biblioteca…",
   "upload.ingestingHint": "O download terminou — gravando o arquivo na biblioteca e gerando a miniatura.",
   "upload.transferringCount": "{{n}} em transferência",
-  "upload.transferringCountHint": "Tarefas transferindo bytes agora (sem contar a gravação na biblioteca)."
+  "upload.transferringCountHint": "Tarefas transferindo bytes agora (sem contar a gravação na biblioteca).",
+  "reader.autoInfiniteScrollNarrow": "Ativar automaticamente no celular",
+  "reader.autoInfiniteScrollNarrowDesc": "Usar sempre a rolagem infinita quando a tela tiver 768px de largura ou menos (celular na vertical); telas mais largas mantêm a escolha acima.",
+  "reader.infiniteScrollForcedByNarrow": "Largura de celular: ativado pelo interruptor abaixo."
 }

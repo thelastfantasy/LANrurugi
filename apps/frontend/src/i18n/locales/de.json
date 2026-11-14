@@ -799,5 +799,8 @@
   "upload.ingesting": "Wird in die Bibliothek übernommen…",
   "upload.ingestingHint": "Download abgeschlossen – das Archiv wird in die Bibliothek geschrieben und das Vorschaubild erzeugt.",
   "upload.transferringCount": "{{n}} übertragen",
-  "upload.transferringCountHint": "Aufgaben, die gerade Bytes übertragen (ohne Übernahme in die Bibliothek)."
+  "upload.transferringCountHint": "Aufgaben, die gerade Bytes übertragen (ohne Übernahme in die Bibliothek).",
+  "reader.autoInfiniteScrollNarrow": "Auf Handybreite automatisch aktivieren",
+  "reader.autoInfiniteScrollNarrowDesc": "Bei einer Bildschirmbreite bis 768px (Handy im Hochformat) immer unendliches Scrollen verwenden; breitere Bildschirme behalten die Auswahl oben.",
+  "reader.infiniteScrollForcedByNarrow": "Handybreite: durch den Schalter unten aktiviert."
 }

@@ -3739,14 +3739,16 @@ body div.ido {
   opacity: 0.95;
 }
 
-/* The toolbar's green/red pair is tuned for each theme's light bar; on this dark sheet the same
-   values lose the contrast that makes the pair readable, so brighten them (still one green/one
-   red, same meaning). */
-.reader-headless-file-info .file-info-opt {
+/* The toolbar's green/red pair is tuned for each theme's light bar; on this dark sheet (and the
+   phone's floating dark toolbar) the same values lose the contrast that makes the pair readable,
+   so brighten them (still one green/one red, same meaning). */
+.reader-headless-file-info .file-info-opt,
+.mobile-reader-toolbar .file-info-opt {
   color: #8fe3a1;
 }
 
-.reader-headless-file-info .file-info-orig {
+.reader-headless-file-info .file-info-orig,
+.mobile-reader-toolbar .file-info-orig {
   color: #ff9b93;
 }
 
