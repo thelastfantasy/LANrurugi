@@ -1013,7 +1013,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     {
         let state = state.clone();
         tokio::spawn(async move {
-            match lanrurugi_api::share_net::start_services(&state).await {
+            match lanrurugi_api::share_net::start_services(&state.share_host()).await {
                 Ok(()) => {
                     // Once per process: the endpoint this call just created is what a resumed
                     // import dials through.
@@ -1022,7 +1022,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 Err(e) => tracing::warn!(error = %e, "sharing endpoint could not start"),
             }
             // A share pinned to a tunnel interface starts as soon as that interface exists.
-            lanrurugi_api::share_net::spawn_interface_watch(state.clone());
+            lanrurugi_api::share_net::spawn_interface_watch(state.share_host());
         });
     }
 
@@ -1205,7 +1205,7 @@ async fn shutdown_signal(state: AppState) {
         _ = terminate => {}
     }
     tracing::info!("stopping");
-    lanrurugi_api::share_net::helper::leave_all(&state).await;
+    lanrurugi_api::share_net::helper::leave_all(&state.share_host()).await;
 }
 
 /// `lanrurugi rebuild-index` (User Story 6, T077): runs the same two-step repair

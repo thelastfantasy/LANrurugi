@@ -164,6 +164,16 @@ jobs:
       - name: release image binary parity
         run: scripts/check-image-binaries.sh
 
+      # 023: the sharing engine talks to the application only through `ShareHost`. Comment lines
+      # may name what is kept out; code and manifest may not.
+      - name: sharing engine boundary
+        run: |
+          if grep -rnE '^\s*[^/[:space:]].*\b(AppState|lanrurugi_api|axum)\b' crates/lanrurugi-share/src \
+             || grep -nE '^(lanrurugi-api|axum)\b' crates/lanrurugi-share/Cargo.toml; then
+            echo "lanrurugi-share must not depend on lanrurugi-api, axum or AppState" >&2
+            exit 1
+          fi
+
       # PRs and `dev` merges: a compile-only check (`--all-targets` still covers every test and
       # bench target). `main`: the full lint gate, since that is the only place a lint can still
       # stop a release. The pre-commit hook runs clippy locally, so a warning usually never gets

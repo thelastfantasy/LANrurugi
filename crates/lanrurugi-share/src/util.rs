@@ -1,4 +1,4 @@
-//! Hex helpers shared by node strings, rendezvous packets and share codes.
+//! Hex and clock helpers shared by node strings, rendezvous packets and share codes.
 
 /// Lowercase hex, the spelling every wire string in this crate uses.
 pub fn hex(bytes: &[u8]) -> String {
@@ -14,6 +14,14 @@ pub fn unhex(text: &str) -> Option<Vec<u8>> {
         .step_by(2)
         .map(|i| u8::from_str_radix(&text[i..i + 2], 16).ok())
         .collect()
+}
+
+/// Seconds since the Unix epoch; 0 if the clock is before it.
+pub fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

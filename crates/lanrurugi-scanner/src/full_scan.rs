@@ -612,6 +612,13 @@ mod tests {
     // `hkeys` read it back. `db_offset` gives each of this module's 3 tests (and, by a
     // pre-arranged split with pipeline.rs's 2 tests, that module's own tests) a disjoint slice of
     // Redis's 16 logical databases, so no two tests ever share a `LRR_FILEMAP` key at all.
+    //
+    // Each slice is also flushed first: other crates' tests write the default layout (0 = archives,
+    // 3 = search, …) and `refresh_tokens` uses 6–15, and a `mise run test-crate` over several crates
+    // runs them against the same temporary Redis first. A leftover search key in db 3 made
+    // `list_all` fail there, so the relocation pass never ran and `already_tracked_…` failed —
+    // only when run together with `lanrurugi-storage`. Offsets below 16 are remapped to 48+ for
+    // the same reason (and so db 0 is not shared with `verify.rs`).
     async fn test_pools(
         db_offset: u8,
     ) -> Option<(
@@ -621,11 +628,23 @@ mod tests {
     )> {
         let base = std::env::var("LANRURUGI_TEST_REDIS_URL").ok()?;
         let url = |db: u8| format!("{}/{db}", base.trim_end_matches('/'));
+        let db_offset = if db_offset < 16 {
+            db_offset + 48
+        } else {
+            db_offset
+        };
         let archive = lanrurugi_storage::test_support::test_pool_for_url(&url(db_offset)).await?;
         let config =
             lanrurugi_storage::test_support::test_pool_for_url(&url(db_offset + 1)).await?;
         let search =
             lanrurugi_storage::test_support::test_pool_for_url(&url(db_offset + 2)).await?;
+        for pool in [&archive, &config, &search] {
+            let mut conn = pool.get().await.ok()?;
+            let _: () = deadpool_redis::redis::cmd("FLUSHDB")
+                .query_async(&mut conn)
+                .await
+                .ok()?;
+        }
         Some((archive, config, search))
     }
 

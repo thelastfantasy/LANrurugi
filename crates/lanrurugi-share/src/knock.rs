@@ -17,8 +17,8 @@ use lanrurugi_share_proto::derive::DerivedKeys;
 use lanrurugi_share_proto::record::{self, KnockV1};
 use lanrurugi_storage::shares::{Share, ShareStatus};
 
-use super::{endpoint_addr, parse_endpoint_hex, ShareNet, ShareNetError};
-use crate::AppState;
+use crate::host::{Host, ShareHost};
+use crate::runtime::{endpoint_addr, parse_endpoint_hex, ShareNet, ShareNetError};
 
 /// Republish interval; records live an hour at the relays.
 pub const REPUBLISH_EVERY: Duration = Duration::from_secs(60 * 60);
@@ -29,7 +29,7 @@ const LOOKUP_HEAD_START: Duration = Duration::from_secs(3);
 /// Code-derived keys are expensive (Argon2id), so each share's are derived once per process.
 static DERIVED: Mutex<Option<HashMap<ShareId, DerivedKeys>>> = Mutex::new(None);
 
-async fn derived_keys(state: &AppState, share: &Share) -> Option<DerivedKeys> {
+async fn derived_keys(host: &Host, share: &Share) -> Option<DerivedKeys> {
     if let Some(keys) = DERIVED
         .lock()
         .expect("derived lock")
@@ -38,7 +38,7 @@ async fn derived_keys(state: &AppState, share: &Share) -> Option<DerivedKeys> {
     {
         return Some(keys);
     }
-    let code = crate::shares::share_code(state, share).await?;
+    let code = crate::shares::share_code(&host.redis().config, share).await?;
     let keys = tokio::task::spawn_blocking(move || DerivedKeys::derive(&code))
         .await
         .ok()?;
@@ -78,25 +78,28 @@ async fn keys_for_code(code: &ShareCode) -> Result<DerivedKeys, ShareNetError> {
 
 /// Sends one request to a configured LANrurugi node.
 async fn ask_node(
-    state: &crate::AppState,
+    host: &Host,
     net: &ShareNet,
-    node: &super::nodes::NodeRef,
+    node: &crate::runtime::nodes::NodeRef,
     request: lanrurugi_share_proto::messages::Request,
 ) -> Option<lanrurugi_share_proto::messages::Response> {
-    let addr = super::nodes::node_addr(state, node).await?;
-    let conn = super::connect(net, addr).await.ok()?;
-    super::call(&conn, request).await.ok().map(|(r, _)| r)
+    let addr = crate::runtime::nodes::node_addr(host, node).await?;
+    let conn = crate::runtime::connect(net, addr).await.ok()?;
+    crate::runtime::call(&conn, request)
+        .await
+        .ok()
+        .map(|(r, _)| r)
 }
 
 /// Publishes one share's knock record to every configured rendezvous.
-pub async fn publish_share(state: &AppState, net: &ShareNet, share: &Share) {
-    let settings = crate::share_settings::load(state).await;
+pub async fn publish_share(host: &Host, net: &ShareNet, share: &Share) {
+    let settings = host.settings().await;
     let relays = pkarr_relays(&settings);
-    let nodes = super::nodes::configured_nodes(&settings);
+    let nodes = crate::runtime::nodes::configured_nodes(&settings);
     if relays.is_empty() && nodes.is_empty() {
         return;
     }
-    let Some(keys) = derived_keys(state, share).await else {
+    let Some(keys) = derived_keys(host, share).await else {
         return;
     };
     let knock = KnockV1 {
@@ -118,7 +121,7 @@ pub async fn publish_share(state: &AppState, net: &ShareNet, share: &Share) {
         async move {
             let ok = matches!(
                 ask_node(
-                    state,
+                    host,
                     net,
                     node,
                     lanrurugi_share_proto::messages::Request::RendezvousPut {
@@ -128,7 +131,7 @@ pub async fn publish_share(state: &AppState, net: &ShareNet, share: &Share) {
                 .await,
                 Some(lanrurugi_share_proto::messages::Response::Ok)
             );
-            super::status::record_rendezvous(&node_label(node), ok);
+            crate::runtime::status::record_rendezvous(&node_label(node), ok);
         }
     });
     futures_util::future::join_all(node_puts).await;
@@ -145,33 +148,33 @@ pub async fn publish_share(state: &AppState, net: &ShareNet, share: &Share) {
                 .send()
                 .await
                 .is_ok_and(|r| r.status().is_success());
-            super::status::record_rendezvous(relay, ok);
+            crate::runtime::status::record_rendezvous(relay, ok);
         }
     });
     futures_util::future::join_all(puts).await;
 }
 
 /// Publishes every active share. Called on start, hourly, and when the endpoint's relays change.
-pub async fn publish_all(state: &AppState, net: &ShareNet) {
-    let now = crate::shares::now_secs();
-    let shares = crate::shares::repo(state).list().await.unwrap_or_default();
+pub async fn publish_all(host: &Host, net: &ShareNet) {
+    let now = crate::util::now_secs();
+    let shares = crate::shares::repo(host).list().await.unwrap_or_default();
     for share in shares {
         if matches!(
             share.status(now),
             ShareStatus::Active | ShareStatus::Exhausted
         ) && share.permissions.import
         {
-            publish_share(state, net, &share).await;
+            publish_share(host, net, &share).await;
         }
     }
 }
 
 /// Runs the hourly republisher for as long as the process lives.
-pub fn spawn_republisher(state: AppState) {
+pub fn spawn_republisher(host: Host) {
     tokio::spawn(async move {
         loop {
-            if let Some(net) = super::handle().await {
-                publish_all(&state, &net).await;
+            if let Some(net) = crate::runtime::handle().await {
+                publish_all(&host, &net).await;
             }
             tokio::time::sleep(REPUBLISH_EVERY).await;
         }
@@ -198,7 +201,7 @@ async fn hinted_addr(via: &Via) -> Option<EndpointAddr> {
 /// service, and whatever the rendezvous know, for when the sharer's addresses have changed. The
 /// lookup starts after a short head start, so a code whose own route works never pays for it.
 pub async fn dial(
-    state: &AppState,
+    host: &Host,
     net: &ShareNet,
     reference: &ShareRef,
 ) -> Result<(EndpointId, Connection), ShareNetError> {
@@ -216,7 +219,7 @@ pub async fn dial(
             return Err(None);
         };
         let id = addr.id;
-        let dialled: Result<_, Option<ShareNetError>> = super::connect(net, addr)
+        let dialled: Result<_, Option<ShareNetError>> = crate::runtime::connect(net, addr)
             .await
             .map(|conn| (id, conn))
             .map_err(Some);
@@ -224,9 +227,11 @@ pub async fn dial(
     };
     let looked_up = async {
         tokio::time::sleep(head_start).await;
-        let addr = resolve(state, reference).await?;
+        let addr = resolve(host, reference).await?;
         let id = addr.id;
-        super::connect(net, addr).await.map(|conn| (id, conn))
+        crate::runtime::connect(net, addr)
+            .await
+            .map(|conn| (id, conn))
     };
     tokio::pin!(hinted, looked_up);
     let (mut hinted_failed, mut lookup_failed) = (None, None);
@@ -248,7 +253,7 @@ pub async fn dial(
 }
 
 /// The nodes a code names, with the code's relay on the node's own host as the node's relay.
-fn nodes_in_code(reference: &ShareRef) -> Vec<super::nodes::NodeRef> {
+fn nodes_in_code(reference: &ShareRef) -> Vec<crate::runtime::nodes::NodeRef> {
     let relays = reference
         .via
         .as_ref()
@@ -257,7 +262,7 @@ fn nodes_in_code(reference: &ShareRef) -> Vec<super::nodes::NodeRef> {
     reference
         .nodes
         .iter()
-        .filter_map(|text| super::nodes::parse_node(&format!("lrrg-node:{text}")))
+        .filter_map(|text| crate::runtime::nodes::parse_node(&format!("lrrg-node:{text}")))
         .map(|mut node| {
             let host = node
                 .addr
@@ -285,32 +290,31 @@ fn relay_host(relay: &str) -> Option<String> {
 }
 
 /// Finds where a code's sharer can be dialled through the rendezvous (FR-010, FR-029).
-pub async fn resolve(
-    state: &AppState,
-    reference: &ShareRef,
-) -> Result<EndpointAddr, ShareNetError> {
-    let settings = crate::share_settings::load(state).await;
+pub async fn resolve(host: &Host, reference: &ShareRef) -> Result<EndpointAddr, ShareNetError> {
+    let settings = host.settings().await;
     let relays = pkarr_relays(&settings);
-    let mut nodes = super::nodes::configured_nodes(&settings);
+    let mut nodes = crate::runtime::nodes::configured_nodes(&settings);
     for node in nodes_in_code(reference) {
         if !nodes.iter().any(|n| n.endpoint_id == node.endpoint_id) {
             nodes.push(node);
         }
     }
     let keys = keys_for_code(&reference.code).await?;
-    let net = super::handle().await.ok_or(ShareNetError::NotRunning)?;
+    let net = crate::runtime::handle()
+        .await
+        .ok_or(ShareNetError::NotRunning)?;
     let lookup_pubkey = keys.lookup_public();
     let node_gets = nodes.iter().map(|node| {
         let net = net.clone();
         async move {
             let answer = ask_node(
-                state,
+                host,
                 &net,
                 node,
                 lanrurugi_share_proto::messages::Request::RendezvousGet { lookup_pubkey },
             )
             .await;
-            super::status::record_rendezvous(&node_label(node), answer.is_some());
+            crate::runtime::status::record_rendezvous(&node_label(node), answer.is_some());
             match answer {
                 Some(lanrurugi_share_proto::messages::Response::Packet { signed_packet })
                     if signed_packet.len() > 32 =>
@@ -332,7 +336,7 @@ pub async fn resolve(
             let ok = response
                 .as_ref()
                 .is_ok_and(|r| r.status().is_success() || r.status() == 404);
-            super::status::record_rendezvous(&relay, ok);
+            crate::runtime::status::record_rendezvous(&relay, ok);
             let body: Bytes = response.ok()?.error_for_status().ok()?.bytes().await.ok()?;
             Some(body)
         }
@@ -378,8 +382,10 @@ async fn resolve_local(
     let asks = peers.into_iter().map(|peer| {
         let net = net.clone();
         async move {
-            let conn = super::connect(&net, EndpointAddr::new(peer)).await.ok()?;
-            match super::call(
+            let conn = crate::runtime::connect(&net, EndpointAddr::new(peer))
+                .await
+                .ok()?;
+            match crate::runtime::call(
                 &conn,
                 lanrurugi_share_proto::messages::Request::ResolveLocal { lookup_hash },
             )
@@ -401,16 +407,16 @@ async fn resolve_local(
 
 /// The `via` hint every code carries: this endpoint, the addresses a peer may dial (configured
 /// external ones, then public, then private) and the relays it is connected to.
-pub use lanrurugi_share::publish::{
+pub use crate::publish::{
     advertised_relays, pkarr_relays, relay_endpoint, relay_is_public, via_hint,
 };
 
-fn node_label(node: &lanrurugi_share::nodes::NodeRef) -> String {
+fn node_label(node: &crate::nodes::NodeRef) -> String {
     format!("lrrg-node:{}", node.addr)
 }
 
 fn http_client() -> reqwest::Client {
-    super::proxy::http_client(REQUEST_TIMEOUT)
+    crate::runtime::proxy::http_client(REQUEST_TIMEOUT)
 }
 
 #[cfg(test)]

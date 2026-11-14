@@ -153,6 +153,16 @@ for c in "$@"; do args+=(-p "$c"); done
 scripts/cargo-container-run.sh cargo check "${args[@]}"
 """
 
+[tasks.doc-crate]
+description = "cargo doc --no-deps -p <crate> inside the dev container with rustdoc warnings denied — the documentation gate for a crate's public surface. Usage: mise run doc-crate -- <crate-name> [<crate-name> ...]"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+args=()
+for c in "$@"; do args+=(-p "$c"); done
+scripts/cargo-container-run.sh env RUSTDOCFLAGS="-D warnings" cargo doc --no-deps "${args[@]}"
+"""
+
 [tasks.check]
 description = "tsc + eslint + clippy + fmt — must pass before committing"
 run = "npx lefthook run pre-push"

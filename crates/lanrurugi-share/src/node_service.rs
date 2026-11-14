@@ -14,42 +14,35 @@ use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::{Endpoint, EndpointAddr, RelayMode, SecretKey};
 use lanrurugi_share_proto::messages::{RefusalReason, Request, Response, ShareEngine};
 
-use super::{endpoint_hex, read_frame, write_frame, ALPN};
-use crate::share_settings::ShareSettings;
+use crate::host::Host;
+use crate::runtime::{endpoint_hex, read_frame, write_frame, ALPN};
+use crate::settings::ShareSettings;
 
-pub use lanrurugi_share::nodes::{
-    answer_rendezvous, RendezvousLimiter, RendezvousStore, RDV_PER_MINUTE,
-};
-pub use lanrurugi_share::nodes::{
-    configured_nodes, node_relay_url, own_relay_url, parse_node, NodeRef,
-};
-pub use lanrurugi_share::relay::{load_certs, parse_allow_entry, relay_allow_list, start_relay};
+pub use crate::nodes::{answer_rendezvous, RendezvousLimiter, RendezvousStore, RDV_PER_MINUTE};
+pub use crate::nodes::{configured_nodes, node_relay_url, own_relay_url, parse_node, NodeRef};
+pub use crate::relay::{load_certs, parse_allow_entry, relay_allow_list, start_relay};
 
 /// Publishes this instance's node record under its own code, so a peer holding the 16-character
 /// code can find the endpoint id and the relays to reach it through.
 pub async fn publish_node_record(
-    state: &crate::AppState,
-    net: &super::ShareNet,
+    host: &Host,
+    net: &crate::runtime::ShareNet,
     settings: &ShareSettings,
 ) {
-    lanrurugi_share::publish::publish_node_record(state, net, settings).await
+    crate::publish::publish_node_record(host, net, settings).await
 }
 
 /// Restarts this instance's relay role on the same endpoint: every connection being forwarded
 /// through it drops at once, while the endpoint itself (and therefore every direct session) keeps
 /// running. That is the split "destroy the node" needs — the relay is what a rotation invalidates.
-pub async fn restart_relay(
-    state: &crate::AppState,
-    settings: &ShareSettings,
-    net: &super::ShareNet,
-) {
+pub async fn restart_relay(host: &Host, settings: &ShareSettings, net: &crate::runtime::ShareNet) {
     if let Some(previous) = net.relay.lock().await.take() {
         let _ = previous.shutdown().await;
     }
     if !settings.flag("share_node_relay") {
         return;
     }
-    let dir = state.library.temp_dir.join("share");
+    let dir = host.temp_dir().join("share");
     match start_relay(settings, &dir, net.id()).await {
         Ok((server, port)) => {
             *net.relay.lock().await = Some(server);
@@ -59,60 +52,7 @@ pub async fn restart_relay(
     }
 }
 
-/// The `endpoint_id` a retracted record carries. Nothing can ever own it, so a peer that resolves
-/// a retired code learns "this node is gone" instead of dialling an address that no longer answers.
-pub const RETRACTED_ENDPOINT_ID: [u8; 32] = [0u8; 32];
-
-/// Overwrites the record behind a retired code, so every peer still holding that code stops
-/// resolving it at once rather than at the end of the relay's TTL (two hours). Called before the
-/// identity is replaced, while its code can still be read.
-pub async fn retract_node_record(
-    state: &crate::AppState,
-    code: &lanrurugi_share_proto::node_code::NodeCode,
-) {
-    let settings = crate::share_settings::load(state).await;
-    let relays = super::publish::pkarr_relays(&settings);
-    if relays.is_empty() {
-        return;
-    }
-    let keys = lanrurugi_share_proto::derive::DerivedKeys {
-        lookup_key: code.lookup_keypair(),
-        record_key: code.record_key(),
-    };
-    let knock = lanrurugi_share_proto::record::KnockV1 {
-        endpoint_id: RETRACTED_ENDPOINT_ID,
-        relay_urls: Vec::new(),
-        direct_addrs: Vec::new(),
-    };
-    let Ok(packet) = lanrurugi_share_proto::record::seal(&keys, &knock) else {
-        return;
-    };
-    let payload = packet.to_relay_payload();
-    let client = super::proxy::http_client(std::time::Duration::from_secs(20));
-    for relay in relays {
-        let url = node_relay_url(&relay, code);
-        // A retraction that does not land leaves the code pointing at this instance for the whole
-        // record TTL, so retry a couple of times before giving up loudly.
-        let mut ok = false;
-        for attempt in 0..3u32 {
-            ok = client
-                .put(&url)
-                .header("content-type", "application/pkarr.org/relays#payload")
-                .body(payload.clone())
-                .send()
-                .await
-                .is_ok_and(|r| r.status().is_success());
-            if ok {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(500 << attempt)).await;
-        }
-        if !ok {
-            tracing::warn!(relay = %relay, "the node record could not be retracted; it stays published until it expires");
-        }
-        crate::share_net::status::record_rendezvous(&relay, ok);
-    }
-}
+pub use crate::publish::{retract_node_record, RETRACTED_ENDPOINT_ID};
 
 /// How often the record behind a node code is refreshed. Well inside `RECORD_TTL_SECS` (3600) so
 /// a peer that looks the code up never lands on an expired copy.
@@ -121,7 +61,7 @@ const NODE_RECORD_REFRESH_SECS: u64 = 600;
 /// Keeps the record behind this node's code current for as long as this endpoint is the running
 /// one. Addresses move — a DHCP lease, a renewed NAT mapping, a different relay — while the code
 /// never changes, so republishing is the only thing that has to happen on a schedule.
-pub fn spawn_record_refresh(state: crate::AppState, net: std::sync::Arc<super::ShareNet>) {
+pub fn spawn_record_refresh(host: Host, net: std::sync::Arc<crate::runtime::ShareNet>) {
     // Identity is stable across endpoint rebuilds (same node secret), so comparing ids would leave
     // one refresh loop running per rebuild forever. The pointer tells them apart, and a weak one
     // does it without keeping the retired endpoint's memory alive.
@@ -132,7 +72,7 @@ pub fn spawn_record_refresh(state: crate::AppState, net: std::sync::Arc<super::S
         tick.tick().await; // the first tick is immediate; the caller already published
         loop {
             tick.tick().await;
-            let Some(current) = super::handle().await else {
+            let Some(current) = crate::runtime::handle().await else {
                 break;
             };
             let still_mine = mine
@@ -141,23 +81,23 @@ pub fn spawn_record_refresh(state: crate::AppState, net: std::sync::Arc<super::S
             if !still_mine {
                 break;
             }
-            let settings = crate::share_settings::load(&state).await;
-            publish_node_record(&state, &current, &settings).await;
+            let settings = host.settings().await;
+            publish_node_record(&host, &current, &settings).await;
         }
     });
 }
 
 /// Reads a node record back. `None` means "this code is not published anywhere I can see", which
 /// the caller reports as a failed connection rather than as a bad code.
-pub async fn resolve_node_code(state: &crate::AppState, code: &str) -> Option<EndpointAddr> {
-    let settings = crate::share_settings::load(state).await;
-    lanrurugi_share::nodes::resolve_node_code(&settings, code).await
+pub async fn resolve_node_code(host: &Host, code: &str) -> Option<EndpointAddr> {
+    let settings = host.settings().await;
+    crate::nodes::resolve_node_code(&settings, code).await
 }
 
 /// The endpoint address of a configured node, its port resolved by DNS.
-pub async fn node_addr(state: &crate::AppState, node: &NodeRef) -> Option<EndpointAddr> {
-    let settings = crate::share_settings::load(state).await;
-    lanrurugi_share::nodes::node_addr(&settings, node).await
+pub async fn node_addr(host: &Host, node: &NodeRef) -> Option<EndpointAddr> {
+    let settings = host.settings().await;
+    crate::nodes::node_addr(&settings, node).await
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -233,13 +173,13 @@ pub async fn run_standalone(options: NodeOptions) -> Result<(), String> {
     let key_path = options.data_dir.join("node.key");
     let secret = match std::fs::read_to_string(&key_path)
         .ok()
-        .and_then(|s| crate::shares::unhex(s.trim()))
+        .and_then(|s| crate::util::unhex(s.trim()))
         .and_then(|b| <[u8; 32]>::try_from(b).ok())
     {
         Some(secret) => secret,
         None => {
             let fresh: [u8; 32] = rand::random();
-            std::fs::write(&key_path, crate::shares::hex(&fresh)).map_err(|e| e.to_string())?;
+            std::fs::write(&key_path, crate::util::hex(&fresh)).map_err(|e| e.to_string())?;
             fresh
         }
     };
@@ -316,9 +256,9 @@ pub async fn run_standalone(options: NodeOptions) -> Result<(), String> {
         .relay_mode(relay_mode);
     if let Some(path) = &options.ca_file {
         let roots = load_certs(path)?;
-        builder = builder.ca_tls_config(super::relay_tls().with_extra_roots(roots));
+        builder = builder.ca_tls_config(crate::runtime::relay_tls().with_extra_roots(roots));
     } else {
-        builder = builder.ca_tls_config(super::relay_tls());
+        builder = builder.ca_tls_config(crate::runtime::relay_tls());
     }
     let endpoint = builder
         .bind_addr(SocketAddr::from(([0, 0, 0, 0], options.udp_port)))

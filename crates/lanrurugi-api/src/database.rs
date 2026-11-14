@@ -212,7 +212,7 @@ async fn restore_share_identity(state: &AppState, doc: &BackupDocument) {
         let _: Result<(), _> = conn
             .set(lanrurugi_storage::keys::SHARE_NODE_SECRET_KEY, secret)
             .await;
-        if let Err(e) = crate::share_net::start(state).await {
+        if let Err(e) = crate::share_net::start(&state.share_host()).await {
             tracing::warn!(error = %e, "sharing endpoint could not restart after restore");
         }
     }

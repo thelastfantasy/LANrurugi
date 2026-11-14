@@ -20,8 +20,8 @@ use lanrurugi_share_proto::messages::{
 use lanrurugi_storage::shares::{HelpState, ImportArchiveState, ShareImport};
 use tokio::sync::Notify;
 
-use super::{call, endpoint_hex, publish, ShareNet, ShareNetError};
-use crate::AppState;
+use crate::host::Host;
+use crate::runtime::{call, endpoint_hex, publish, ShareNet, ShareNetError};
 
 pub const HEARTBEAT_EVERY: Duration = Duration::from_secs(5 * 60);
 
@@ -63,10 +63,10 @@ pub fn count_served(import_id: &ShareImportId, bytes: u64) {
 }
 
 /// The helper loop, for as long as the process lives.
-pub fn spawn(state: AppState) {
+pub fn spawn(host: Host) {
     tokio::spawn(async move {
         loop {
-            round(&state).await;
+            round(&host).await;
             tokio::select! {
                 _ = tokio::time::sleep(HEARTBEAT_EVERY) => {}
                 _ = wake_signal().notified() => {}
@@ -93,22 +93,25 @@ fn helps(record: &ShareImport) -> bool {
         })
 }
 
-async fn round(state: &AppState) {
-    flush_served(state).await;
-    let Some(net) = super::handle().await else {
+async fn round(host: &Host) {
+    flush_served(host).await;
+    let Some(net) = crate::runtime::handle().await else {
         return;
     };
-    let imports = super::import::repo(state).list().await.unwrap_or_default();
+    let imports = crate::runtime::import::repo(host)
+        .list()
+        .await
+        .unwrap_or_default();
     for record in imports.into_iter().filter(helps) {
-        contact(state, &net, &record).await;
+        contact(host, &net, &record).await;
     }
 }
 
 /// Tells every peer this node currently helps that the help is ending, then returns how many
 /// were told. Called on shutdown: without it a helper that exits leaves the sharer handing out its
 /// address for up to 15 minutes, so importers keep dialing a node that is gone.
-pub async fn leave_all(state: &AppState) -> usize {
-    let Ok(imports) = super::import::repo(state).list().await else {
+pub async fn leave_all(host: &Host) -> usize {
+    let Ok(imports) = crate::runtime::import::repo(host).list().await else {
         return 0;
     };
     let records: Vec<ShareImport> = imports.into_iter().filter(helps).collect();
@@ -116,10 +119,10 @@ pub async fn leave_all(state: &AppState) -> usize {
     if count == 0 {
         return 0;
     }
-    flush_served(state).await;
+    flush_served(host).await;
     // Shutdown has a deadline (`docker stop` sends SIGKILL after 10s), and `leave` already retries
     // three times with a one-second pause. Run them together rather than serially.
-    let tells = records.iter().map(|record| leave(state, record));
+    let tells = records.iter().map(|record| leave(host, record));
     let _ = tokio::time::timeout(
         std::time::Duration::from_secs(8),
         futures_util::future::join_all(tells),
@@ -130,13 +133,13 @@ pub async fn leave_all(state: &AppState) -> usize {
 }
 
 /// Adds the bytes served since the last round to each record.
-async fn flush_served(state: &AppState) {
+async fn flush_served(host: &Host) {
     let pending: Vec<(String, u64)> = served().lock().expect("served lock").drain().collect();
     if pending.is_empty() {
         return;
     }
     let _guard = record_lock().lock().await;
-    let repo = super::import::repo(state);
+    let repo = crate::runtime::import::repo(host);
     for (id, bytes) in pending {
         if let Ok(Some(mut record)) = repo.get(&ShareImportId(id)).await {
             record.help_bytes_served += bytes;
@@ -155,14 +158,14 @@ fn own_addr(net: &ShareNet) -> (Vec<String>, Vec<String>) {
 }
 
 /// One register-or-heartbeat exchange with the sharer, its answer stored in the record.
-async fn contact(state: &AppState, net: &ShareNet, record: &ShareImport) {
+async fn contact(host: &Host, net: &ShareNet, record: &ShareImport) {
     let Some(code) = record.code.as_deref() else {
         return;
     };
     let Ok(reference) = ShareRef::parse(code) else {
         return;
     };
-    let conn = match publish::dial(state, net, &reference).await {
+    let conn = match publish::dial(host, net, &reference).await {
         Ok((id, conn)) if endpoint_hex(&id) == record.sharer_endpoint_id => Ok(conn),
         Ok(_) => Err(ShareNetError::Unreachable(
             "the code now points elsewhere".into(),
@@ -220,7 +223,7 @@ async fn contact(state: &AppState, net: &ShareNet, record: &ShareImport) {
             HelperStatus {
                 state: WireState::Ended,
                 reason: Some(HelpReason::HelpingDisabled),
-                at: crate::shares::now_secs() as u64,
+                at: crate::util::now_secs() as u64,
                 removed_archives: Vec::new(),
             }
         }
@@ -232,12 +235,12 @@ async fn contact(state: &AppState, net: &ShareNet, record: &ShareImport) {
     registered().lock().expect("registered lock").insert(key);
     if status.state == WireState::Active && first {
         // Outboards for the local copies, so the first importer's ranges need no hashing pass.
-        let state = state.clone();
+        let host = host.clone();
         tokio::spawn(async move {
-            super::blobs::prepare(&state, &local).await;
+            crate::runtime::blobs::prepare(&host, &local).await;
         });
     }
-    apply_status(state, &record.id, &status).await;
+    apply_status(host, &record.id, &status).await;
 }
 
 /// Tells the sharer this instance stopped helping, so it is dropped from the helper set at once
@@ -246,13 +249,13 @@ async fn contact(state: &AppState, net: &ShareNet, record: &ShareImport) {
 /// One failed dial is the common case (the sharer may be mid-reconnect when helping was turned
 /// off), so the leave is attempted a few times before giving up: a helper the sharer still
 /// advertises is handed to importers, which then fail to reach it.
-pub async fn leave(state: &AppState, record: &ShareImport) {
+pub async fn leave(host: &Host, record: &ShareImport) {
     const ATTEMPTS: usize = 3;
     for attempt in 0..ATTEMPTS {
         if attempt > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
-        if leave_once(state, record).await {
+        if leave_once(host, record).await {
             registered()
                 .lock()
                 .expect("registered lock")
@@ -267,17 +270,17 @@ pub async fn leave(state: &AppState, record: &ShareImport) {
 }
 
 /// One attempt at [`leave`]; `true` when the sharer acknowledged (or there is nothing to tell).
-async fn leave_once(state: &AppState, record: &ShareImport) -> bool {
+async fn leave_once(host: &Host, record: &ShareImport) -> bool {
     let Some(code) = record.code.as_deref() else {
         return true;
     };
     let Ok(reference) = ShareRef::parse(code) else {
         return true;
     };
-    let Some(net) = super::handle().await else {
+    let Some(net) = crate::runtime::handle().await else {
         return false;
     };
-    let Ok((id, conn)) = publish::dial(state, &net, &reference).await else {
+    let Ok((id, conn)) = publish::dial(host, &net, &reference).await else {
         return false;
     };
     if endpoint_hex(&id) != record.sharer_endpoint_id {
@@ -304,9 +307,9 @@ pub fn reason_code(reason: HelpReason) -> &'static str {
 
 /// Stores a `HelperStatus` answer (data-model.md "Help state transitions"). `ended` is final: the
 /// code is dropped, so nothing reconnects for this share again.
-pub async fn apply_status(state: &AppState, id: &ShareImportId, status: &HelperStatus) {
+pub async fn apply_status(host: &Host, id: &ShareImportId, status: &HelperStatus) {
     let _guard = record_lock().lock().await;
-    let repo = super::import::repo(state);
+    let repo = crate::runtime::import::repo(host);
     let Ok(Some(mut record)) = repo.get(id).await else {
         return;
     };
@@ -325,14 +328,14 @@ pub async fn apply_status(state: &AppState, id: &ShareImportId, status: &HelperS
         record.code = None;
     }
     record.help_state_at = Some(status.at as i64);
-    record.help_last_contact_at = Some(crate::shares::now_secs());
+    record.help_last_contact_at = Some(crate::util::now_secs());
     record.help_removed_archives = status.removed_archives.clone();
     let _ = repo.save(&record).await;
 }
 
 /// The import through which this instance helps deliver `share_id`, when it serves it now.
-pub async fn serving_import(state: &AppState, share_id: &str) -> Option<ShareImport> {
-    super::import::repo(state)
+pub async fn serving_import(host: &Host, share_id: &str) -> Option<ShareImport> {
+    crate::runtime::import::repo(host)
         .list()
         .await
         .ok()?

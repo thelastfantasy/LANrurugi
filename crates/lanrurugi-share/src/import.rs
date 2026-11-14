@@ -37,13 +37,13 @@ use lanrurugi_storage::shares::{
 use tokio::sync::{RwLock, Semaphore};
 use tokio_util::sync::CancellationToken;
 
-use super::{blobs, call, connect, publish, read_body, ShareNet, ShareNetError};
-use crate::AppState;
+use crate::host::{CatalogueRefusal, Host, ShareHost, SharedMetadata};
+use crate::runtime::{blobs, call, connect, publish, read_body, ShareNet, ShareNetError};
 
 /// One bao chunk: 1 KiB, the unit `ChunkNum`, `ChunkRanges` and therefore `BaoTree::chunks()` count
 /// in. `blobs::BLOCK_SIZE` (16 KiB) only groups chunks for hashing — using it here made every piece
 /// and every progress figure off by 16×.
-use lanrurugi_share::blobs::CHUNK_BYTES;
+use crate::blobs::CHUNK_BYTES;
 /// A failure writing on *this* instance's disk — as opposed to anything the peer did. The leading
 /// code is what the queue row localizes; the OS text after it stays for support.
 fn storage_error(e: &std::io::Error) -> String {
@@ -81,8 +81,8 @@ const RECONNECT_CAP: Duration = Duration::from_secs(5 * 60);
 const IN_FLIGHT_PER_SOURCE: usize = 4;
 const HELPER_DIAL_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub fn repo(state: &AppState) -> ShareImportRepository {
-    ShareImportRepository::new(state.redis.config.clone())
+pub fn repo(host: &dyn ShareHost) -> ShareImportRepository {
+    ShareImportRepository::new(host.redis().config.clone())
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -90,7 +90,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn unhex32(text: &str) -> Option<[u8; 32]> {
-    let bytes = crate::shares::unhex(text)?;
+    let bytes = crate::util::unhex(text)?;
     bytes.try_into().ok()
 }
 
@@ -104,10 +104,10 @@ pub struct Opened {
 }
 
 /// Resolves a code, dials the sharer and opens a session.
-pub async fn open(state: &AppState, net: &ShareNet, code: &str) -> Result<Opened, ShareNetError> {
+pub async fn open(host: &Host, net: &ShareNet, code: &str) -> Result<Opened, ShareNetError> {
     let reference =
         ShareRef::parse(code).map_err(|_| ShareNetError::Refused(RefusalReason::NotFound))?;
-    let (_, conn) = publish::dial(state, net, &reference).await?;
+    let (_, conn) = publish::dial(host, net, &reference).await?;
     let (response, _) = call(
         &conn,
         Request::Open {
@@ -227,7 +227,7 @@ type PushedStates = (ImportState, Option<i64>, Vec<ImportArchiveState>);
 
 /// Everything one running import shares between its archive transfers.
 struct Run {
-    state: AppState,
+    host: Host,
     import_id: ShareImportId,
     /// Swapped when the sharer restarts: a rebind or crash leaves every old connection dead, and
     /// an import must survive that rather than stall until its per-piece retries run out.
@@ -255,7 +255,7 @@ struct Run {
     verified: AtomicU64,
     /// The link the first connection used, refreshed whenever the sharer is re-dialled: the
     /// activity entry reports what actually carried the bytes, not what the settings intended.
-    link: std::sync::Mutex<super::link::Link>,
+    link: std::sync::Mutex<crate::runtime::link::Link>,
     /// Piece accounting for the one activity row this import writes: how many pieces arrived, how
     /// many had to be asked for again, and which ones never did.
     pieces: PieceStats,
@@ -293,13 +293,13 @@ impl Run {
 
     async fn save(&self) {
         let record = self.record.lock().await.clone();
-        let _ = repo(&self.state).save(&record).await;
+        let _ = repo(&self.host).save(&record).await;
         let (done, total): (u64, u64) = record
             .archives
             .iter()
             .fold((0, 0), |(d, t), a| (d + a.bytes_done, t + a.size));
-        self.state
-            .jobs
+        self.host
+            .jobs()
             .set_download_progress(&self.job_id, done, Some(total))
             .await;
         self.push(&record, done, total);
@@ -308,9 +308,6 @@ impl Run {
     /// Pushes progress over the download-queue stream: at once when a state changes, otherwise at
     /// most every 250 ms, since a fast transfer saves after every piece.
     fn push(&self, record: &ShareImport, done: u64, total: u64) {
-        let Some(tx) = &self.state.download_queue_tx else {
-            return;
-        };
         let states: PushedStates = (
             record.state,
             record.paused_until,
@@ -326,18 +323,9 @@ impl Run {
             }
             *pushed = (Some(std::time::Instant::now()), states);
         }
-        let _ = tx.send(serde_json::json!({
-            "kind": "progress",
-            "id": self.queue_item_id,
-            "job_id": self.job_id,
-            "downloaded_bytes": done,
-            "total_bytes": total,
-        }));
-        let _ = tx.send(serde_json::json!({
-            "kind": "share_import",
-            "id": self.queue_item_id,
-            "import": crate::share_imports::detail(record, false),
-        }));
+        self.host
+            .imports()
+            .import_progress(&self.queue_item_id, &self.job_id, record, done, total);
     }
 
     /// Whether this import has written past its share of `tempmaxsize`.
@@ -371,7 +359,9 @@ impl Run {
     /// running endpoint, and the handle captured when the import started then points at a closed
     /// router: every reconnect through it fails even though sharing is healthy again.
     async fn live_net(&self) -> Result<Arc<ShareNet>, ShareNetError> {
-        super::handle().await.ok_or(ShareNetError::NotRunning)
+        crate::runtime::handle()
+            .await
+            .ok_or(ShareNetError::NotRunning)
     }
 
     /// Re-dials the sharer after its endpoint went away, keeping the claim and re-renewing.
@@ -396,10 +386,10 @@ impl Run {
         let mut attempt: u32 = 0;
         loop {
             let net = self.live_net().await?;
-            match open(&self.state, &net, &code).await {
+            match open(&self.host, &net, &code).await {
                 Ok(opened) => {
                     if let Ok(mut link) = self.link.lock() {
-                        *link = super::link::of(&opened.conn);
+                        *link = crate::runtime::link::of(&opened.conn);
                     }
                     *self.session.write().await = opened.session.clone();
                     *self.conn.write().await = opened.conn;
@@ -468,14 +458,14 @@ impl Run {
                 .collect()
         };
         for helper in fresh {
-            let Some(addr) = super::helper::helper_endpoint_addr(&helper) else {
+            let Some(addr) = crate::runtime::helper::helper_endpoint_addr(&helper) else {
                 continue;
             };
             let list = self.helpers_handle();
             tokio::spawn(async move {
                 // The endpoint may have been rebuilt since this import started, so take it at dial
                 // time rather than holding the one captured back then.
-                let Some(net) = super::handle().await else {
+                let Some(net) = crate::runtime::handle().await else {
                     return;
                 };
                 let dialled = tokio::time::timeout(HELPER_DIAL_TIMEOUT, connect(&net, addr)).await;
@@ -561,7 +551,7 @@ impl Run {
     /// Waits out a sharer's upload pause, keeping every verified piece (FR-044): until the time it
     /// gave, or five minutes for a pause with no end. `false` when the import was stopped meanwhile.
     async fn wait_out_pause(&self, until: Option<u64>) -> bool {
-        let now = crate::shares::now_secs();
+        let now = crate::util::now_secs();
         let wake = until
             .map(|u| u as i64)
             .filter(|&u| u > now)
@@ -683,7 +673,7 @@ fn hash_file(path: &Path) -> std::io::Result<blake3::Hash> {
 
 /// Bytes under `<temp>/share` now: partial imports, merged patch copies and outboards. All three
 /// live in the temp tree, so all three count against `tempmaxsize`.
-async fn share_temp_bytes(state: &AppState) -> u64 {
+async fn share_temp_bytes(host: &Host) -> u64 {
     fn walk(dir: &Path) -> u64 {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return 0;
@@ -697,7 +687,7 @@ async fn share_temp_bytes(state: &AppState) -> u64 {
             })
             .sum()
     }
-    let dir = state.library.temp_dir.join("share");
+    let dir = host.temp_dir().join("share");
     tokio::task::spawn_blocking(move || walk(&dir))
         .await
         .unwrap_or(0)
@@ -719,23 +709,6 @@ fn dir_bytes(dir: &Path) -> u64 {
             .sum()
     }
     walk(dir)
-}
-
-/// `tempmaxsize` in bytes (the setting is in MB): the ceiling for the whole temp tree.
-async fn temp_quota_bytes(state: &AppState) -> Option<u64> {
-    let mut conn = state.redis.config.get().await.ok()?;
-    let megabytes: Option<String> = deadpool_redis::redis::AsyncCommands::hget(
-        &mut conn,
-        lanrurugi_storage::keys::CONFIG_KEY,
-        "tempmaxsize",
-    )
-    .await
-    .ok()?;
-    let megabytes = megabytes
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(crate::download_manager::ingest::DEFAULT_TEMP_MAX_SIZE_MB)
-        .max(0) as u64;
-    Some(megabytes * 1024 * 1024)
 }
 
 /// `book.zip`, `book (2).zip`, … for the n-th free-name attempt.
@@ -764,7 +737,7 @@ enum ArchiveOutcome {
 async fn transfer_archive(run: Arc<Run>, entry: ImportArchive) -> ArchiveOutcome {
     let id = entry.sharer_archive_id.clone();
     // Archive ids are content-derived, so the same id here means the same file (FR-020).
-    if let Ok(Some(_)) = run.state.repos.archives.get(&ArchiveId(id.clone())).await {
+    if run.host.archive(&ArchiveId(id.clone())).await.is_some() {
         return ArchiveOutcome::Reused(id);
     }
     let (root, size) = match entry.blake3.as_deref().and_then(unhex32) {
@@ -1011,7 +984,7 @@ async fn fetch_pieces(
 /// Whether an import error is the sharer's answer (terminal) rather than the network's failure
 /// (worth waiting out). 022 US2/FR-003: only an explicit refusal or a share that no longer exists
 /// ends an import; everything else is "the network is down, keep trying".
-pub(crate) fn terminal_import_error(error: &ShareNetError) -> bool {
+pub fn terminal_import_error(error: &ShareNetError) -> bool {
     matches!(
         error,
         ShareNetError::Protocol(_)
@@ -1076,44 +1049,23 @@ async fn ingest(run: &Run, sharer_archive_id: &str, part: &Path, root: [u8; 32])
         };
         // `Overwrite` applies to the first attempt only: it deletes whichever local archive owns
         // the name, which a retry under a different name must never repeat.
-        let policy = if attempt == 0 && run.filename_policy == FilenamePolicy::Overwrite {
-            lanrurugi_scanner::pipeline::DuplicatePolicy::Overwrite
-        } else {
-            lanrurugi_scanner::pipeline::DuplicatePolicy::Reject
-        };
-        match crate::download_manager::ingest::catalogue_staged_file(
-            &run.state,
-            &staging,
-            &name,
-            // The bao root the transfer verified is the file's own BLAKE3 (FR-022).
-            Some(root_hex.as_str()),
-            None,
-            policy,
-            false,
-            false,
-            false,
-        )
-        .await
+        let overwrite = attempt == 0 && run.filename_policy == FilenamePolicy::Overwrite;
+        match run
+            .host
+            .imports()
+            .catalogue_import(staging.clone(), name, root_hex.clone(), overwrite)
+            .await
         {
-            Ok(done) => break done.archive_id,
-            Err(crate::download_manager::ingest::IngestDownloadError::Duplicate {
-                existing_id,
-                reason: lanrurugi_scanner::pipeline::DuplicateReason::ContentHash,
-            }) => {
+            Ok(done) => break done.0,
+            Err(CatalogueRefusal::SameContent(existing)) => {
                 let _ = tokio::fs::remove_file(&staging).await;
-                return ArchiveOutcome::Reused(existing_id);
+                return ArchiveOutcome::Reused(existing.0);
             }
-            Err(crate::download_manager::ingest::IngestDownloadError::Duplicate {
-                reason: lanrurugi_scanner::pipeline::DuplicateReason::Filename,
-                ..
-            }) if run.filename_policy == FilenamePolicy::Skip => {
+            Err(CatalogueRefusal::NameTaken) if run.filename_policy == FilenamePolicy::Skip => {
                 let _ = tokio::fs::remove_file(&staging).await;
                 return ArchiveOutcome::Skipped;
             }
-            Err(crate::download_manager::ingest::IngestDownloadError::Duplicate {
-                reason: lanrurugi_scanner::pipeline::DuplicateReason::Filename,
-                ..
-            }) if attempt < MAX_RENAME_ATTEMPTS => {
+            Err(CatalogueRefusal::NameTaken) if attempt < MAX_RENAME_ATTEMPTS => {
                 attempt += 1;
                 let renamed = numbered_name(&filename, attempt);
                 run.update(sharer_archive_id, |a| {
@@ -1123,19 +1075,25 @@ async fn ingest(run: &Run, sharer_archive_id: &str, part: &Path, root: [u8; 32])
             }
             Err(e) => {
                 let _ = tokio::fs::remove_file(&staging).await;
-                return ArchiveOutcome::Failed(e.to_string());
+                return ArchiveOutcome::Failed(match e {
+                    CatalogueRefusal::Failed(message) => message,
+                    other => format!("{other:?}"),
+                });
             }
         }
     };
-    apply_shared_metadata(
-        &run.state,
-        &local_id,
-        &entry.title,
-        &entry.tags,
-        &entry.summary,
-        &entry.toc,
-    )
-    .await;
+    run.host
+        .imports()
+        .apply_shared_metadata(
+            ArchiveId(local_id.clone()),
+            SharedMetadata {
+                title: entry.title.clone(),
+                tags: shared_tags(&entry.tags),
+                summary: entry.summary.clone(),
+                toc: entry.toc.clone(),
+            },
+        )
+        .await;
     let (category, inherit) = {
         let record = run.record.lock().await;
         (record.category.clone(), record.inherit_categories)
@@ -1147,68 +1105,29 @@ async fn ingest(run: &Run, sharer_archive_id: &str, part: &Path, root: [u8; 32])
             .map(|n| n.trim())
             .filter(|n| !n.is_empty())
         {
-            match crate::categories::static_category_named(&run.state, name).await {
+            match run
+                .host
+                .imports()
+                .static_category_named(name.to_string())
+                .await
+            {
                 Ok(catid) => {
-                    let _ =
-                        crate::categories::add_archive_to_category(&run.state, &catid.0, &local_id)
-                            .await;
+                    run.host
+                        .imports()
+                        .add_to_category(ArchiveId(local_id.clone()), catid)
+                        .await;
                 }
                 Err(e) => tracing::warn!(error = %e, "could not keep a shared category"),
             }
         }
     }
     if let Some(category) = category.filter(|c| !c.is_empty()) {
-        let _ = crate::categories::add_archive_to_category(&run.state, &category, &local_id).await;
+        run.host
+            .imports()
+            .add_to_category(ArchiveId(local_id.clone()), category)
+            .await;
     }
     ArchiveOutcome::Done(local_id)
-}
-
-/// Title and summary replace the scanner's guesses; shared tags merge into the archive's own; the
-/// sharer's chapters fill an empty table of contents (one the book itself gave is kept), as a
-/// book's own outline does. Bookmarks and stamps are the sharer's own and are not carried.
-async fn apply_shared_metadata(
-    state: &AppState,
-    archive_id: &str,
-    title: &str,
-    tags: &str,
-    summary: &str,
-    toc: &[lanrurugi_share_proto::messages::Chapter],
-) {
-    if let Ok(Some(mut archive)) = state
-        .repos
-        .archives
-        .get(&ArchiveId(archive_id.to_string()))
-        .await
-    {
-        let old_title = archive.title.clone();
-        if !title.is_empty() {
-            archive.title = title.to_string();
-        }
-        if !summary.is_empty() {
-            archive.summary = summary.to_string();
-        }
-        if archive.toc.is_empty() {
-            archive.toc = toc
-                .iter()
-                .filter(|c| c.page >= 1 && c.page <= archive.pagecount.max(1))
-                .map(|c| lanrurugi_core::entities::TocEntry {
-                    page: c.page,
-                    name: c.name.clone(),
-                })
-                .collect();
-        }
-        if state.repos.archives.save(&archive).await.is_ok() && old_title != archive.title {
-            let _ = lanrurugi_search::indexer::update_title_index(
-                &state.redis.search,
-                &state.equivalence,
-                archive_id,
-                &old_title,
-                &archive.title,
-            )
-            .await;
-        }
-    }
-    crate::plugins::apply_metadata_tags(state, archive_id, &shared_tags(tags)).await;
 }
 
 /// The sharer's tags minus `date_added:`, which records when the *sharer* got the archive: the
@@ -1288,23 +1207,13 @@ async fn restamp_date_added(run: &Run) {
         .map_or(0, |d| d.as_secs());
     for (local, stamp) in import_stamps(&entries, now) {
         let id = ArchiveId(local.clone());
-        let Ok(Some(mut archive)) = run.state.repos.archives.get(&id).await else {
+        let Some(archive) = run.host.archive(&id).await else {
             continue;
         };
         let Some(tags) = with_date_added(&archive.tags, stamp) else {
             continue;
         };
-        let old_tags = std::mem::replace(&mut archive.tags, tags);
-        if run.state.repos.archives.save(&archive).await.is_ok() {
-            let _ = lanrurugi_search::indexer::update_tag_indexes(
-                &run.state.redis.search,
-                &run.state.equivalence,
-                &local,
-                &old_tags,
-                &archive.tags,
-            )
-            .await;
-        }
+        run.host.imports().set_archive_tags(id, tags).await;
     }
 }
 
@@ -1339,24 +1248,22 @@ async fn rebuild_tankoubons(run: &Run) {
         if local.is_empty() {
             continue;
         }
-        let existing = run
-            .state
-            .repos
-            .groupings
-            .list_all()
+        if run
+            .host
+            .imports()
+            .tankoubon_exists(name.clone(), local.clone())
             .await
-            .unwrap_or_default();
-        if existing
-            .iter()
-            .any(|g| g.name == *name && g.archives == local)
         {
             run.record.lock().await.warnings.push(format!(
                 "tankoubon \"{name}\" already exists with the same members; left as it was"
             ));
             continue;
         }
-        if let Err(e) =
-            crate::tankoubons::create_tankoubon_with(&run.state, name, summary, tags, local).await
+        if let Err(e) = run
+            .host
+            .imports()
+            .create_tankoubon(name.clone(), summary.clone(), tags.clone(), local)
+            .await
         {
             tracing::warn!(error = %e, "could not recreate a shared tankoubon");
         }
@@ -1364,84 +1271,58 @@ async fn rebuild_tankoubons(run: &Run) {
 }
 
 async fn set_queue_state(
-    state: &AppState,
+    host: &dyn ShareHost,
     queue_item_id: &str,
     to: DownloadQueueState,
     error: Option<String>,
 ) {
-    if let Ok(Some(mut item)) = state.download_queue.get(queue_item_id).await {
-        item.state = to;
-        if matches!(
-            to,
-            DownloadQueueState::Done | DownloadQueueState::Error | DownloadQueueState::Cancelled
-        ) {
-            item.finished_at = Some(crate::shares::now_secs() * 1000);
-        }
-        item.error =
-            error.map(|reason| lanrurugi_core::queue_error::QueueError::ShareImport { reason });
-        if state.download_queue.update(&item).await.is_ok() {
-            crate::download_queue::broadcast_item_update(state, &item);
-        }
-    }
+    host.imports()
+        .set_queue_state(queue_item_id.to_string(), to, error)
+        .await;
 }
 
 /// Starts (or resumes) an import for its queue item. Returns the job id.
-pub async fn start(state: &AppState, queue_item_id: &str, import_id: ShareImportId) -> String {
-    let job_id = state.jobs.create("share_import").await;
-    state.jobs.mark_active(&job_id).await;
+pub async fn start(host: &Host, queue_item_id: &str, import_id: ShareImportId) -> String {
+    let job_id = host.jobs().create("share_import").await;
+    host.jobs().mark_active(&job_id).await;
     // Recorded before the task starts, so its own state updates never race this write.
-    if let Ok(Some(mut item)) = state.download_queue.get(queue_item_id).await {
-        item.job_id = Some(job_id.clone());
-        if state.download_queue.update(&item).await.is_ok() {
-            crate::download_queue::broadcast_item_update(state, &item);
-        }
-    }
+    host.imports()
+        .set_queue_job(queue_item_id.to_string(), job_id.clone())
+        .await;
     let cancel = CancellationToken::new();
-    state
-        .download_cancellations
-        .lock()
-        .await
-        .insert(queue_item_id.to_string(), cancel.clone());
-    let state = state.clone();
+    host.imports()
+        .set_import_cancellation(queue_item_id.to_string(), Some(cancel.clone()))
+        .await;
+    let host = host.clone();
     let queue_item_id = queue_item_id.to_string();
     let job = job_id.clone();
     tokio::spawn(async move {
-        let outcome = run_import(&state, &queue_item_id, &import_id, &job, cancel.clone()).await;
-        state
-            .download_cancellations
-            .lock()
-            .await
-            .remove(&queue_item_id);
+        let outcome = run_import(&host, &queue_item_id, &import_id, &job, cancel.clone()).await;
+        host.imports()
+            .set_import_cancellation(queue_item_id.clone(), None)
+            .await;
         match outcome {
             Ok(()) => {
-                set_queue_state(&state, &queue_item_id, DownloadQueueState::Done, None).await;
-                state
-                    .jobs
+                set_queue_state(&*host, &queue_item_id, DownloadQueueState::Done, None).await;
+                host.jobs()
                     .finish(&job, serde_json::json!({ "import_id": import_id }))
                     .await;
             }
             Err(message) if cancel.is_cancelled() && message.is_empty() => {
                 // Pause and Stop cancel the same token; a pause already wrote `Paused`, which the
                 // retry/Start path can resume. Overwriting it with `Cancelled` would lose that.
-                let paused = state
-                    .download_queue
-                    .get(&queue_item_id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .is_some_and(|item| item.state == DownloadQueueState::Paused);
+                let paused = host.imports().queue_paused(queue_item_id.clone()).await;
                 if !paused {
-                    set_queue_state(&state, &queue_item_id, DownloadQueueState::Cancelled, None)
+                    set_queue_state(&*host, &queue_item_id, DownloadQueueState::Cancelled, None)
                         .await;
                 }
-                state
-                    .jobs
+                host.jobs()
                     .fail(&job, if paused { "paused" } else { "stopped" })
                     .await;
             }
             Err(message) => {
                 set_queue_state(
-                    &state,
+                    &*host,
                     &queue_item_id,
                     DownloadQueueState::Error,
                     Some(message.clone()),
@@ -1449,7 +1330,7 @@ pub async fn start(state: &AppState, queue_item_id: &str, import_id: ShareImport
                 .await;
                 // The record is what the settings page lists. A runner that gave up before it
                 // could build its own state left the row "transferring" forever.
-                if let Ok(Some(mut record)) = repo(&state).get(&import_id).await {
+                if let Ok(Some(mut record)) = repo(&*host).get(&import_id).await {
                     if record.error.is_none()
                         && matches!(
                             record.state,
@@ -1460,10 +1341,10 @@ pub async fn start(state: &AppState, queue_item_id: &str, import_id: ShareImport
                     {
                         record.state = ImportState::Failed;
                         record.error = Some(message.clone());
-                        let _ = repo(&state).save(&record).await;
+                        let _ = repo(&*host).save(&record).await;
                     }
                 }
-                state.jobs.fail(&job, message).await;
+                host.jobs().fail(&job, message).await;
             }
         }
     });
@@ -1471,17 +1352,13 @@ pub async fn start(state: &AppState, queue_item_id: &str, import_id: ShareImport
 }
 
 /// Connects to the sharer, retrying with backoff while the import is active (FR-029).
-async fn reconnect(
-    state: &AppState,
-    code: &str,
-    cancel: &CancellationToken,
-) -> Result<Opened, String> {
+async fn reconnect(host: &Host, code: &str, cancel: &CancellationToken) -> Result<Opened, String> {
     let mut delay = Duration::from_secs(5);
     loop {
-        let net = super::handle()
+        let net = crate::runtime::handle()
             .await
             .ok_or("sharing is not running on this instance")?;
-        match open(state, &net, code).await {
+        match open(host, &net, code).await {
             Ok(opened) => return Ok(opened),
             Err(ShareNetError::Refused(reason)) => return Err(reason.code().to_string()),
             Err(e) => tracing::info!(error = %e, "sharer unreachable; retrying"),
@@ -1495,23 +1372,23 @@ async fn reconnect(
 }
 
 async fn run_import(
-    state: &AppState,
+    host: &Host,
     queue_item_id: &str,
     import_id: &ShareImportId,
     job_id: &str,
     cancel: CancellationToken,
 ) -> Result<(), String> {
-    let mut record = repo(state)
+    let mut record = repo(host)
         .get(import_id)
         .await
         .map_err(|e| e.to_string())?
         .ok_or("the import record is gone")?;
-    set_queue_state(state, queue_item_id, DownloadQueueState::Downloading, None).await;
+    set_queue_state(host, queue_item_id, DownloadQueueState::Downloading, None).await;
     let code = record
         .code
         .clone()
         .ok_or("the import has no code left to reconnect with")?;
-    let opened = reconnect(state, &code, &cancel).await?;
+    let opened = reconnect(host, &code, &cancel).await?;
 
     // A claim lives 24 h after its last use; an import resumed later claims again.
     // Resuming a claim made in an earlier run: the verified total lives on the claim itself, so
@@ -1538,9 +1415,8 @@ async fn run_import(
         Err(e) => return Err(e.code().to_string()),
     };
     record.state = ImportState::Transferring;
-    let dir = state
-        .library
-        .temp_dir
+    let dir = host
+        .temp_dir()
         .join("share")
         .join("import")
         .join(import_id.as_str());
@@ -1549,14 +1425,14 @@ async fn run_import(
     // is bounded by `tempmaxsize` like every other temp consumer — announced sizes first (so a
     // share that obviously cannot fit is refused before it touches the disk), then the bytes
     // actually written, below.
-    let used = share_temp_bytes(state).await;
+    let used = share_temp_bytes(host).await;
     // This import's own directory counts toward `used`, but its `.part` is pre-sized to the whole
     // archive, so leaving it in double-counts a resume: an interrupted import then looks like it
     // needs twice its size and is refused for want of room it already occupies.
     let own = dir_bytes(&dir);
     let elsewhere = used.saturating_sub(own);
     let announced = record.archives.iter().map(|a| a.size).sum::<u64>();
-    let quota = temp_quota_bytes(state).await;
+    let quota = host.imports().temp_quota_bytes().await;
     let budget = match quota {
         Some(quota) if own == 0 && elsewhere.saturating_add(announced) > quota => {
             return Err(format!(
@@ -1568,7 +1444,7 @@ async fn run_import(
     };
     let filename_policy = record.filename_policy;
     let run = Arc::new(Run {
-        state: state.clone(),
+        host: host.clone(),
         import_id: import_id.clone(),
         conn: tokio::sync::RwLock::new(opened.conn.clone()),
         helper_list: Arc::new(RwLock::new(Vec::new())),
@@ -1584,7 +1460,7 @@ async fn run_import(
         budget,
         filename_policy,
         verified: AtomicU64::new(0),
-        link: std::sync::Mutex::new(super::link::of(&opened.conn)),
+        link: std::sync::Mutex::new(crate::runtime::link::of(&opened.conn)),
         pieces: PieceStats::default(),
         started: std::time::Instant::now(),
         reconnect: tokio::sync::Mutex::new(()),
@@ -1707,7 +1583,7 @@ async fn run_import(
                     "title": a.title,
                     "size": a.size,
                     "bytes": a.bytes_done,
-                    "state": a.state,
+                    "host": a.state,
                     "ratio": if a.size > 0 {
                         a.bytes_done as f64 / a.size as f64
                     } else {
@@ -1732,7 +1608,7 @@ async fn run_import(
             .link
             .lock()
             .map(|l| l.clone())
-            .unwrap_or_else(|_| super::link::unknown());
+            .unwrap_or_else(|_| crate::runtime::link::unknown());
         let failed = run
             .pieces
             .failed
@@ -1771,8 +1647,8 @@ async fn run_import(
             vpn = link.tunnel,
             "shared bytes received"
         );
-        super::note_transfer(
-            &run.state,
+        crate::runtime::note_transfer(
+            &run.host,
             false,
             share_id.as_str(),
             &title,
@@ -1786,7 +1662,7 @@ async fn run_import(
     let _ = &run.import_id;
     if failed == 0 {
         if run.record.lock().await.help_deliver {
-            super::helper::wake();
+            crate::runtime::helper::wake();
         }
         Ok(())
     } else {
@@ -1887,7 +1763,7 @@ mod retry_tests {
     /// loss, so it must not end the import. The error `read_body` raises is the one checked here.
     #[test]
     fn a_truncated_body_is_worth_retrying() {
-        let error = crate::share_net::truncated_body_error();
+        let error = crate::runtime::truncated_body_error();
         assert!(
             !terminal_import_error(&error),
             "a truncated body must wait for the network: {error:?}"

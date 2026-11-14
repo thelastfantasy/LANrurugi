@@ -117,7 +117,7 @@ with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_STORED) as z:
     podman run -d --name "$name" --cap-add NET_ADMIN \
         --network "$net:ip=$ip" \
         -v "$lib:/home/koyomi/lanrurugi/content:Z" \
-        -e RUST_LOG="${RUST_LOG:-info,lanrurugi_api::share_net=debug}" \
+        -e RUST_LOG="${RUST_LOG:-info,lanrurugi_share=debug}" \
         "$@" \
         --entrypoint sh "$SHARE_NET_IMAGE" -c "
             until [ -e /tmp/net-ready ]; do sleep 0.2; done

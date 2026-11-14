@@ -1189,7 +1189,7 @@ async fn start_one(
             .await
             .map_err(|e| StartError::Storage(e.to_string()))?;
         let job_id = crate::share_net::import::start(
-            state,
+            &state.share_host(),
             &item.id,
             lanrurugi_core::ids::ShareImportId(import_id),
         )

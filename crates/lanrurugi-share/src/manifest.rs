@@ -176,6 +176,18 @@ mod tests {
         fn add_import_bytes(&self, _share: &ShareId, _bytes: u64) -> BoxFuture<'_, ()> {
             Box::pin(async {})
         }
+        fn start_host_services(&self) {}
+        fn record_activity(
+            &self,
+            action: &'static str,
+            target: lanrurugi_storage::activity::ActivityTarget,
+            after: serde_json::Value,
+        ) -> BoxFuture<'_, ()> {
+            self.inner.record_activity(action, target, after)
+        }
+        fn imports(&self) -> &dyn crate::host::ImportHost {
+            &self.inner
+        }
     }
 
     fn archive(id: &str, title: &str, name: &str, file: &str) -> ShareArchive {

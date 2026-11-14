@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -12,12 +12,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use deadpool_redis::redis::AsyncCommands;
-use hkdf::Hkdf;
 use lanrurugi_core::ids::ShareId;
 use lanrurugi_share_proto::code::{ShareCode, ShareRef};
 use lanrurugi_share_proto::derive::{access_hash, DerivedKeys};
 use lanrurugi_share_proto::messages::{ManifestItem, Permissions, ShareManifest};
-use lanrurugi_share_proto::record::{open_bytes, seal_bytes};
+use lanrurugi_share_proto::record::seal_bytes;
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 use lanrurugi_storage::keys;
 use lanrurugi_storage::shares::{
@@ -25,7 +24,6 @@ use lanrurugi_storage::shares::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use sha2::Sha256;
 
 use crate::activity::record_manual;
 use crate::auth_context::AuthContext;
@@ -33,7 +31,7 @@ use crate::common::{error, not_found};
 use crate::share_settings::{self, ShareSettings};
 use crate::AppState;
 
-const CODE_ENC_AAD: &[u8] = b"lrrg-code-enc-v1";
+use lanrurugi_share::shares::CODE_ENC_AAD;
 /// Settings that the running endpoint is built from.
 const ENDPOINT_FIELDS: &[&str] = &[
     "share_public_services",
@@ -75,97 +73,31 @@ pub fn router() -> Router<AppState> {
         .route("/shares/{id}/code", get(get_code))
 }
 
-pub(crate) fn now_secs() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
+pub(crate) use lanrurugi_share::util::now_secs;
 
 pub(crate) fn repo(state: &AppState) -> ShareRepository {
-    ShareRepository::new(state.redis.config.clone())
+    lanrurugi_share::shares::repo(state)
 }
 
 pub(crate) use lanrurugi_share::util::hex;
 
-pub(crate) use lanrurugi_share::util::unhex;
-
-/// This instance's long-term secret (also its iroh key), created on first use and included in
-/// backups so the instance keeps its identity across restores.
-/// This instance's node code, created once and kept forever (like a share code) until the user
-/// rotates it.
+/// This instance's node code, created once and kept forever until the user rotates it.
 pub(crate) async fn node_code(
     state: &AppState,
 ) -> Result<lanrurugi_share_proto::node_code::NodeCode, String> {
-    use lanrurugi_share_proto::node_code::NodeCode;
-    let mut conn = state.redis.config.get().await.map_err(|e| e.to_string())?;
-    let existing: Option<String> = conn
-        .get(keys::SHARE_NODE_CODE_KEY)
-        .await
-        .map_err(|e| e.to_string())?;
-    if let Some(stored) = existing {
-        if let Ok(code) = NodeCode::parse(&stored) {
-            return Ok(code);
-        }
-        tracing::warn!("the stored node code is malformed; minting a new one");
-    }
-    let fresh = NodeCode::generate();
-    let _: bool = conn
-        .set_nx(keys::SHARE_NODE_CODE_KEY, fresh.as_str())
-        .await
-        .map_err(|e| e.to_string())?;
-    let stored: Option<String> = conn
-        .get(keys::SHARE_NODE_CODE_KEY)
-        .await
-        .map_err(|e| e.to_string())?;
-    let stored = stored.ok_or_else(|| "the node code could not be stored".to_string())?;
-    NodeCode::parse(&stored).map_err(|e| e.to_string())
-}
-
-pub(crate) async fn node_secret(state: &AppState) -> Result<[u8; 32], String> {
-    let mut conn = state.redis.config.get().await.map_err(|e| e.to_string())?;
-    let existing: Option<String> = conn
-        .get(keys::SHARE_NODE_SECRET_KEY)
-        .await
-        .map_err(|e| e.to_string())?;
-    let stored = match existing {
-        Some(s) => s,
-        None => {
-            let fresh: [u8; 32] = rand::random();
-            let _: bool = conn
-                .set_nx(keys::SHARE_NODE_SECRET_KEY, hex(&fresh))
-                .await
-                .map_err(|e| e.to_string())?;
-            conn.get(keys::SHARE_NODE_SECRET_KEY)
-                .await
-                .map_err(|e| e.to_string())?
-        }
-    };
-    unhex(&stored)
-        .and_then(|b| <[u8; 32]>::try_from(b).ok())
-        .ok_or_else(|| "the stored node secret is malformed".to_string())
+    lanrurugi_share::shares::node_code(&state.redis.config).await
 }
 
 async fn code_key(state: &AppState) -> Result<[u8; 32], String> {
-    let secret = node_secret(state).await?;
-    let mut key = [0u8; 32];
-    Hkdf::<Sha256>::new(None, &secret)
-        .expand(b"code-enc", &mut key)
-        .expect("32 bytes is a valid HKDF output length");
-    Ok(key)
+    lanrurugi_share::shares::code_key(&state.redis.config).await
 }
 
 /// The share's code, re-derived from `code_enc` (FR-006).
 pub(crate) async fn share_code(state: &AppState, share: &Share) -> Option<ShareCode> {
-    let key = code_key(state).await.ok()?;
-    share_code_with(&key, share)
+    lanrurugi_share::shares::share_code(&state.redis.config, share).await
 }
 
-/// `share_code` for a caller that already fetched the key (a list decrypting several shares).
-fn share_code_with(key: &[u8; 32], share: &Share) -> Option<ShareCode> {
-    let plain = open_bytes(key, &unhex(&share.code_enc)?, CODE_ENC_AAD)?;
-    ShareCode::parse(std::str::from_utf8(&plain).ok()?).ok()
-}
+use lanrurugi_share::shares::share_code_with;
 
 /// Parsed `share_trusted_proxies`, cached because every recipient request asks for the address.
 static TRUSTED_PROXIES: Mutex<Option<(Instant, Vec<ipnet::IpNet>)>> = Mutex::new(None);
@@ -873,7 +805,7 @@ fn publish_in_background(state: &AppState, share: &Share) {
     let share = share.clone();
     tokio::spawn(async move {
         if let Some(net) = crate::share_net::handle().await {
-            crate::share_net::publish::publish_share(&state, &net, &share).await;
+            crate::share_net::publish::publish_share(&state.share_host(), &net, &share).await;
         }
     });
 }
@@ -1255,7 +1187,7 @@ async fn rotate_node_secret(State(state): State<AppState>) -> Response {
     // gone nobody can overwrite it, and every peer still holding it would keep resolving the old
     // address until the relay's own TTL expired.
     if let Ok(old) = node_code(&state).await {
-        crate::share_net::nodes::retract_node_record(&state, &old).await;
+        crate::share_net::nodes::retract_node_record(&state.share_host(), &old).await;
     }
     let _: Result<i64, _> = conn.del(&[keys::SHARE_NODE_CODE_KEY]).await;
     // 022 US3: a new code alone is not a revocation. The endpoint keeps the identity it was bound
@@ -1266,7 +1198,7 @@ async fn rotate_node_secret(State(state): State<AppState>) -> Response {
     let settings = crate::share_settings::load(&state).await;
     // Rebuild the endpoint before publishing: the record must carry the new identity, not the old
     // one, or peers that resolve the fresh code reach the endpoint we just retired.
-    let net = match crate::share_net::start(&state).await {
+    let net = match crate::share_net::start(&state.share_host()).await {
         Ok(net) => net,
         Err(e) => return error(axum::http::StatusCode::INTERNAL_SERVER_ERROR, OP, e),
     };
@@ -1274,8 +1206,8 @@ async fn rotate_node_secret(State(state): State<AppState>) -> Response {
         Ok(code) => code.prefixed(),
         Err(e) => return error(axum::http::StatusCode::INTERNAL_SERVER_ERROR, OP, e),
     };
-    crate::share_net::nodes::publish_node_record(&state, &net, &settings).await;
-    crate::share_net::nodes::restart_relay(&state, &settings, &net).await;
+    crate::share_net::nodes::publish_node_record(&state.share_host(), &net, &settings).await;
+    crate::share_net::nodes::restart_relay(&state.share_host(), &settings, &net).await;
     axum::Json(json!({ "rotated": true, "node_code": fresh })).into_response()
 }
 
@@ -1299,8 +1231,10 @@ async fn put_share_settings(
             {
                 let state = state.clone();
                 tokio::spawn(async move {
-                    match crate::share_net::start(&state).await {
-                        Ok(net) => crate::share_net::publish::publish_all(&state, &net).await,
+                    match crate::share_net::start(&state.share_host()).await {
+                        Ok(net) => {
+                            crate::share_net::publish::publish_all(&state.share_host(), &net).await
+                        }
                         Err(e) => tracing::warn!(error = %e, "sharing endpoint could not restart"),
                     }
                 });
@@ -1581,11 +1515,5 @@ mod tests {
         };
         let value = serde_json::to_value(&summary).unwrap();
         assert_eq!(value["share_code"], "K7QM9-XRT2H");
-    }
-
-    #[test]
-    fn hex_round_trips() {
-        assert_eq!(unhex(&hex(&[0, 15, 255])).unwrap(), vec![0, 15, 255]);
-        assert!(unhex("abc").is_none());
     }
 }

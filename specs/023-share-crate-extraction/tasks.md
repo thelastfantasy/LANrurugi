@@ -47,13 +47,13 @@ commit must leave the workspace buildable and the observable behaviour unchanged
 **Goal**: `share_net/*` lives in `crates/lanrurugi-share`; the workspace builds and every test passes with the wire
 format, keys, records and settings unchanged.
 
-- [ ] T007 Move `crates/lanrurugi-api/src/share_net/` into `crates/lanrurugi-share/src/` mechanically (git mv, then
+- [x] T007 (2026-11-14: `server`, `import`, `helper` and `share_net/mod.rs` → `runtime` moved with `git mv`; `publish.rs` → `knock.rs` and `nodes.rs` → `node_service.rs`, beside the engine's existing `publish`/`nodes`; `share_attempts.rs` → `attempts.rs`. Tests moved with their modules.) Move `crates/lanrurugi-api/src/share_net/` into `crates/lanrurugi-share/src/` mechanically (git mv, then
   fix paths), module by module, keeping each module's tests next to it. No logic edits in this commit.
-- [ ] T008 Replace the moved code's `AppState` uses (56 call sites at baseline) with the host trait from Phase 4
+- [x] T008 (2026-11-14: every `&AppState` became `&Host`/`&dyn ShareHost`; `Arc<T>` forwards the trait so a `Host` goes wherever a host is asked for.) Replace the moved code's `AppState` uses (56 call sites at baseline) with the host trait from Phase 4
   *only where the compiler forces it*; where a narrow local handle suffices, pass that instead.
-- [ ] T009 Keep `crates/lanrurugi-api/src/share_recipient.rs`'s pure helpers in the new crate if they do not touch
+- [x] T009 (2026-11-14: nothing to move — every function left in `share_recipient.rs` reads a request or shapes a `Response`/JSON body.) Keep `crates/lanrurugi-api/src/share_recipient.rs`'s pure helpers in the new crate if they do not touch
   HTTP; anything that reads a request or writes a response stays in `lanrurugi-api`.
-- [ ] T010 Run the existing tests (`test-crate -- lanrurugi-share lanrurugi-api`) and `docs-api -- --check`; the
+- [x] T010 (2026-11-14: `test-crate -- lanrurugi-share lanrurugi-api lanrurugi-server lanrurugi-scanner` all green — share 45, api 673, server 30 + integration incl. `share_transfer` 3 / `share_recipient` 4, scanner 134; `docs-api -- --check` passes, 247 paths / 314 operations, the increase over T002 being routes added by 024–027, not by this move.) Run the existing tests (`test-crate -- lanrurugi-share lanrurugi-api`) and `docs-api -- --check`; the
   route table must be byte-identical to the baseline.
 
 ---
@@ -63,43 +63,43 @@ format, keys, records and settings unchanged.
 **Goal**: the engine asks `ShareHost` for archives, downloads, tankoubons, activity and settings; no `AppState`, no
 `lanrurugi_api` import.
 
-- [ ] T011 Define `pub trait ShareHost: Send + Sync + 'static` with the five grouped accessors from
+- [x] T011 (2026-11-14: one trait plus an `imports()` group (`ImportHost`) rather than five accessors — see contracts/host.md for the shape and why.) Define `pub trait ShareHost: Send + Sync + 'static` with the five grouped accessors from
   `contracts/host.md` (`archives()`, `downloads()`, `tankoubons()`, `activity()`, `settings()`) and their sub-traits;
   every method takes/returns owned or `&`-borrowed plain types, never an API type.
-- [ ] T012 Implement the trait in `crates/lanrurugi-api/src/share_host.rs` over `AppState`, one `impl` block per
+- [x] T012 (2026-11-14: `crates/lanrurugi-api/src/share_host.rs`, `impl ShareHost` + `impl ImportHost for AppState`; `AppState::share_host()` hands out the `Arc`.) Implement the trait in `crates/lanrurugi-api/src/share_host.rs` over `AppState`, one `impl` block per
   accessor, with `ShareError::Host` mapping failures opaquely (no API error types crossing the boundary).
-- [ ] T013 Change `ShareEngine::new(host)` and the background-task spawns to hold `Arc<dyn ShareHost>`; update
+- [x] T013 (2026-11-14: `ShareProtocol`, the import `Run`, every spawn and `runtime::start`/`start_services`/`bind` hold `Host`; the prepare worker starts through `ShareHost::start_host_services`, at the same point as before.) Change `ShareEngine::new(host)` and the background-task spawns to hold `Arc<dyn ShareHost>`; update
   `crates/lanrurugi-server/src/main.rs`'s construction and shutdown order (T014 keeps it identical).
-- [ ] T014 Add the test host (in-memory archives/downloads/tankoubons/activity/settings) in the crate's `tests/` or
+- [x] T014 (2026-11-14: `EmptyHost` is the test host; the moved unit tests needed no `AppState`. `manifest.rs`'s `StubHost` overrides only what it checks and hands `imports()` to `EmptyHost`. The end-to-end sharing tests stay in `lanrurugi-server/tests`, since they need a real library behind the host.) Add the test host (in-memory archives/downloads/tankoubons/activity/settings) in the crate's `tests/` or
   a `test_support` module behind `cfg(any(test, feature = "test-support"))`; port the sharing tests that used
   `AppState` fixtures onto it.
-- [ ] T014a [US1] Document the crate's public surface: crate-level docs on what the engine owns vs. what the host
+- [x] T014a (2026-11-14: crate docs say what the engine owns and what the host provides; every `ShareHost`/`ImportHost` method documented; new `mise run doc-crate -- lanrurugi-share` runs `cargo doc --no-deps` with `RUSTDOCFLAGS="-D warnings"` — clean.) [US1] Document the crate's public surface: crate-level docs on what the engine owns vs. what the host
   provides, a doc comment on every `ShareHost` method and every public type, and `cargo doc -p lanrurugi-share
   --no-deps` with `RUSTDOCFLAGS="-D warnings"` clean.
-- [ ] T014b [US3] Assert FR-010: `git diff` the startup log (task names, order, count) against T002's baseline; a
+- [x] T014b [US3] (2026-11-15: baseline taken from the dev image built 2026-11-13, before the move, against one from the moved tree; each started with its own Redis and no network, 40 s of `RUST_LOG=info` kept twice per image. Apart from mDNS send errors, whose count varies run to run, the line set is identical except that the target `lanrurugi_api::share_net` became `lanrurugi_share::runtime`. The order of the 17 remaining lines moves around in both images alike, since the loops are spawned concurrently.) Assert FR-010: `git diff` the startup log (task names, order, count) against T002's baseline; a
   changed task set or order is a finding, not an acceptable side effect.
 
-- [ ] T015 Grep gates: `AppState|lanrurugi_api` must be absent from `crates/lanrurugi-share/`; add a CI check for it
+- [x] T015 (2026-11-14: only `lib.rs`'s doc comment names them; CI step "sharing engine boundary" in `ci.yml` fails on any code or manifest line naming `AppState`, `lanrurugi_api` or `axum` — checked to pass now and to catch a planted `use lanrurugi_api::x;`.) Grep gates: `AppState|lanrurugi_api` must be absent from `crates/lanrurugi-share/`; add a CI check for it
   so the boundary cannot decay.
 
 ---
 
 ## Phase 5: User Story 4 — HTTP stays put (Priority: P2, commit 4)
 
-- [ ] T016 Verify every share route still lives in `lanrurugi-api` (`/api/shares`, `/api/share/imports`,
+- [x] T016 (2026-11-14: `lanrurugi-share` has no axum dependency, which the T015 gate keeps true; all share routes are still registered in `lanrurugi-api`.) Verify every share route still lives in `lanrurugi-api` (`/api/shares`, `/api/share/imports`,
   `/api/share/r/{token}/…`, `/api/share/settings`, `/api/share/status`, relay/knock routes) and that the handlers
   only call the engine; no handler moved into the new crate.
-- [ ] T017 Re-run `mise run docs-api -- --check`; the route scan must still find every share route (the docgen parses
+- [x] T017 (2026-11-14: passes, see T010.) Re-run `mise run docs-api -- --check`; the route scan must still find every share route (the docgen parses
   `crates/lanrurugi-api/src/**`, so a route that moved to the new crate would silently vanish from the docs).
-- [ ] T018 Run `scripts/share-network-matrix.sh` and record that it is unchanged from T002's baseline.
+- [x] T018 (2026-11-15: run twice back to back, once on the dev image built 2026-11-13 before the move and once on one built from the moved tree. Both runs finished all 18 rows (15 cases, case 15 in four variants) with `done`, and every row took the same route in both, e.g. case 2 `direct,relay`, 7/10/11 `direct`, the rest `relay` or `direct,relay` as before. First byte arrived within 0–4 s in both runs, differing by at most 1 s per row. The closing "N/18 imports landed" line always printed 0 because it counted `landed` where the import reports `done`; the counter was fixed. `RUST_LOG`'s debug target moved to `lanrurugi_share`.) Run `scripts/share-network-matrix.sh` and record that it is unchanged from T002's baseline.
 
 ---
 
 ## Phase 6: Polish
 
-- [ ] T019 [P] Update `README.md`/`CONTRIBUTING.md` if they name the crate layout, and `docs/` architecture notes if
+- [x] T019 (2026-11-14: README names no crate layout; `CONTRIBUTING.md` gained a line on `lanrurugi-share`/`-share-proto` and the `ShareHost` boundary.) [P] Update `README.md`/`CONTRIBUTING.md` if they name the crate layout, and `docs/` architecture notes if
   they describe `share_net` living in the API crate.
-- [ ] T020 Gates: `mise run fmt-check`, `mise run clippy`, `mise run check-crate -- lanrurugi-share lanrurugi-api`,
+- [x] T020 (2026-11-14: `fmt`, workspace `clippy`, `test-crate` (T010), `doc-crate`, `docs-api -- --check` all pass; `lanrurugi-share/Cargo.toml` has no `lanrurugi-api`.) Gates: `mise run fmt-check`, `mise run clippy`, `mise run check-crate -- lanrurugi-share lanrurugi-api`,
   `mise run test-crate -- lanrurugi-share lanrurugi-api`, `cargo tree -p lanrurugi-share | grep -c lanrurugi-api`
   must print 0, and `mise run docs-api -- --check`.
 
@@ -286,3 +286,21 @@ api 侧只剩 `NodeProtocol`（iroh 的 `ProtocolHandler`）与 `lanrurugi-serve
 
 `blobs::requested_ranges`/`encode_range` 连同 `CHUNK_BYTES = 1 KiB` 搬到 crate；请按这个常量理解
 span 单位，不要用 `BLOCK_SIZE`（16 KiB，只用于分块哈希）。
+
+
+### Implementation Record — 2026-11-14（引擎主体迁入，`AppState` 退出引擎）
+
+剩下的 `share_net/` 全部迁入 `crates/lanrurugi-share`：`runtime`（端点生命周期、端口轮换、接口监视、
+帧读写）、`server`、`import`、`helper`、`knock`（原 `publish.rs`）、`node_service`（原 `nodes.rs`）、
+`attempts`（原 `share_attempts.rs`），以及 `shares`（节点密钥、节点码、分享码的派生与解密）。
+`crates/lanrurugi-api/src/share_net/` 只剩一个 re-export 的 `mod.rs`、指纹准备 worker（`blobs.rs`，依赖
+`LoadThrottle`）和上限读数（`limits.rs`），调用方路径不变。
+
+**与计划不同之处**
+
+- 接口是一个 trait 加 `imports()` 一组，而不是五个分组访问器；原因与形状见 `contracts/host.md`。导入一侧
+  需要的是写资料库（入库、元数据、分类、单行本）和写下载队列，计划里的 `DownloadSource` 没覆盖到。
+- 指纹准备 worker 留在 API：它是宿主的负载退避循环，由 `ShareHost::start_host_services` 在原位置启动。
+- API 里一份与引擎 `publish::retract_node_record` 逐字相同的副本被删掉，改为复用引擎那份。
+
+**验证**：见 T010/T020。启动日志对比见 T014b，网络矩阵见 T018。

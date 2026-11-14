@@ -163,7 +163,7 @@ async fn resolve(State(state): State<AppState>, Json(body): Json<ResolveBody>) -
         Ok(n) => n,
         Err(r) => return r,
     };
-    let opened = match import::open(&state, &net, &body.code).await {
+    let opened = match import::open(&state.share_host(), &net, &body.code).await {
         Ok(o) => o,
         Err(e) => return net_error(e),
     };
@@ -289,7 +289,7 @@ async fn create_import(
     };
     let opened = match body.preview_id.as_deref().and_then(preview) {
         Some((opened, code)) if code == body.code => opened,
-        _ => match import::open(&state, &net, &body.code).await {
+        _ => match import::open(&state.share_host(), &net, &body.code).await {
             Ok(o) => Arc::new(o),
             Err(e) => return net_error(e),
         },
@@ -648,7 +648,7 @@ async fn update_import(
         let state = state.clone();
         let leaving = record.clone();
         tokio::spawn(async move {
-            share_net::helper::leave(&state, &leaving).await;
+            share_net::helper::leave(&state.share_host(), &leaving).await;
         });
     }
     match saved {

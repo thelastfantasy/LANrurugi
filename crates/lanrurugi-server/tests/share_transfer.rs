@@ -140,7 +140,7 @@ async fn an_archive_transfers_verified_and_revocation_stops_renewal() {
     shares.create(&share).await.unwrap();
 
     let settings = lanrurugi_api::share_settings::load(&state).await;
-    let sharer = share_net::bind(&state, &settings, rand::random(), 0)
+    let sharer = share_net::bind(&state.share_host(), &settings, rand::random(), 0)
         .await
         .unwrap();
     let client = importer().await;
@@ -471,10 +471,10 @@ async fn helpers_serve_verified_ranges_and_follow_the_share() {
     shares.create(&share).await.unwrap();
 
     let settings = lanrurugi_api::share_settings::load(&state).await;
-    let sharer = share_net::bind(&state, &settings, rand::random(), 0)
+    let sharer = share_net::bind(&state.share_host(), &settings, rand::random(), 0)
         .await
         .unwrap();
-    let helper = share_net::bind(&state, &settings, rand::random(), 0)
+    let helper = share_net::bind(&state.share_host(), &settings, rand::random(), 0)
         .await
         .unwrap();
     let helper_to_sharer = dial(helper.endpoint(), &sharer).await;
@@ -731,7 +731,7 @@ async fn helpers_serve_verified_ranges_and_follow_the_share() {
     .is_err());
 
     // The helper stores the answer and stops for good: no code is kept to reconnect with.
-    share_net::helper::apply_status(&state, &import.id, &status).await;
+    share_net::helper::apply_status(&state.share_host(), &import.id, &status).await;
     let stored = imports.get(&import.id).await.unwrap().unwrap();
     assert_eq!(stored.help_state, LocalHelpState::Ended);
     assert_eq!(stored.help_reason.as_deref(), Some("revoked"));
@@ -779,7 +779,7 @@ async fn a_rendezvous_node_stores_and_returns_knock_records() {
         .unwrap();
     drop(config);
     let settings = lanrurugi_api::share_settings::load(&state).await;
-    let node = share_net::bind(&state, &settings, rand::random(), 0)
+    let node = share_net::bind(&state.share_host(), &settings, rand::random(), 0)
         .await
         .unwrap();
 

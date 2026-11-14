@@ -348,7 +348,7 @@ printf '\n%-4s %-32s %-10s %-14s %s\n' '#' environment result route first-byte-s
 landed=0
 for r in "${results[@]}"; do
     IFS='|' read -r num name res route first extra <<<"$r"
-    [ "$res" = "landed" ] && landed=$((landed + 1))
+    [ "$res" = done ] && landed=$((landed + 1))
     printf '%-4s %-32s %-10s %-14s %s %s\n' "$num" "$name" "$res" "${route:--}" "$first" "${extra:-}"
 done
 

@@ -54,7 +54,7 @@ pub mod search;
 pub mod search_history;
 pub mod sessions;
 pub mod settings;
-pub mod share_attempts;
+pub use lanrurugi_share::attempts as share_attempts;
 pub mod share_host;
 pub mod share_imports;
 pub mod share_net;

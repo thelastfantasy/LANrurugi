@@ -6,12 +6,11 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use crate::blobs::encode_range;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use iroh::protocol::{AcceptError, ProtocolHandler};
 use iroh::EndpointId;
 use lanrurugi_core::ids::{ArchiveId, ClaimId, ShareId};
-use lanrurugi_share::blobs::encode_range;
-use lanrurugi_share::host::ShareHost;
 use lanrurugi_share_proto::messages::{
     ChunkSpan, HelpReason, HelpState, HelperAddr, HelperStatus, ManifestItem, RefusalReason,
     Request, Response, ShareEngine, ShareManifest,
@@ -22,13 +21,15 @@ use lanrurugi_storage::shares::{
 };
 use sha2::{Digest, Sha256};
 
-use super::{
+use crate::host::{Host, ShareHost};
+use crate::manifest::browse_manifest;
+use crate::runtime::RatioState;
+use crate::runtime::{
     blobs, direct_address, read_frame, wait_for_direct_address, write_frame, Session, Shared,
     DIRECT_PATH_WAIT,
 };
-use crate::share_net::RatioState;
-use crate::shares::{browse_manifest, hex, now_secs, repo};
-use crate::AppState;
+use crate::shares::repo;
+use crate::util::{hex, now_secs};
 
 /// Largest single `Range` answer, so one request never buffers more than this.
 /// Served import bytes are written back to Redis once this many have accumulated.
@@ -42,8 +43,8 @@ const MAX_HELPER_ARCHIVES: usize = 10_000;
 
 #[derive(Clone)]
 pub struct ShareProtocol {
-    pub(crate) state: AppState,
-    pub(crate) shared: Arc<Shared>,
+    pub host: Host,
+    pub shared: Arc<Shared>,
 }
 
 impl std::fmt::Debug for ShareProtocol {
@@ -55,7 +56,7 @@ impl std::fmt::Debug for ShareProtocol {
 impl ProtocolHandler for ShareProtocol {
     async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
         // Which route a peer used, for diagnosing NAT setups (T071); never the peer's content.
-        let peer = super::endpoint_hex(&connection.remote_id());
+        let peer = crate::runtime::endpoint_hex(&connection.remote_id());
         let route = if direct_address(&connection).is_some() {
             "direct"
         } else {
@@ -111,12 +112,12 @@ fn refusal(reason: ClaimRefusal) -> RefusalReason {
 
 /// Own-share uploads may be paused by the schedule (FR-042) or busy at their importer cap; the
 /// importer keeps its progress and comes back at `until` (FR-044).
-fn held(reason: super::limits::Held) -> RefusalReason {
+fn held(reason: crate::runtime::limits::Held) -> RefusalReason {
     match reason {
-        super::limits::Held::Paused { until } => RefusalReason::Paused {
+        crate::runtime::limits::Held::Paused { until } => RefusalReason::Paused {
             until: until.map(|t| t as u64),
         },
-        super::limits::Held::Busy => RefusalReason::Paused {
+        crate::runtime::limits::Held::Busy => RefusalReason::Paused {
             until: Some(unix_now() + 30),
         },
     }
@@ -149,7 +150,7 @@ impl ShareProtocol {
             if let Some(body) = body {
                 // Held while the bytes are on the wire, not just while they are encoded: a port
                 // rotation that tore the connection down here would cut a live transfer.
-                let _transfer = super::TransferGuard::begin();
+                let _transfer = crate::runtime::TransferGuard::begin();
                 let _ = send.write_all(&body).await;
             }
         }
@@ -232,7 +233,7 @@ impl ShareProtocol {
             return Err(RefusalReason::AddressUnverifiable);
         };
         let admitted = share.ip_allowed(ip)
-            && repo(&self.state)
+            && repo(&self.host)
                 .admit_address(share, ip)
                 .await
                 .unwrap_or(false);
@@ -252,7 +253,7 @@ impl ShareProtocol {
             .shared
             .session(session, remote)
             .ok_or(RefusalReason::NotFound)?;
-        let share = repo(&self.state)
+        let share = repo(&self.host)
             .get(&session.share_id)
             .await
             .ok()
@@ -267,18 +268,18 @@ impl ShareProtocol {
         remote: EndpointId,
         request: &Request,
     ) -> Result<(Response, Option<Vec<u8>>), RefusalReason> {
-        static LIMITER: std::sync::OnceLock<super::nodes::RendezvousLimiter> =
+        static LIMITER: std::sync::OnceLock<crate::runtime::nodes::RendezvousLimiter> =
             std::sync::OnceLock::new();
-        let settings = crate::share_settings::load(&self.state).await;
+        let settings = self.host.settings().await;
         if !settings.flag("share_node_rendezvous") {
             return Err(RefusalReason::NotFound);
         }
-        let store = super::nodes::RendezvousStore::Redis(self.state.redis.config.clone());
-        let limiter = LIMITER.get_or_init(super::nodes::RendezvousLimiter::new);
-        match super::nodes::answer_rendezvous(
+        let store = crate::runtime::nodes::RendezvousStore::Redis(self.host.redis().config.clone());
+        let limiter = LIMITER.get_or_init(crate::runtime::nodes::RendezvousLimiter::new);
+        match crate::runtime::nodes::answer_rendezvous(
             &store,
             limiter,
-            &super::endpoint_hex(&remote),
+            &crate::runtime::endpoint_hex(&remote),
             request,
         )
         .await
@@ -293,11 +294,11 @@ impl ShareProtocol {
         &self,
         lookup_hash: [u8; 32],
     ) -> Result<(Response, Option<Vec<u8>>), RefusalReason> {
-        let shares = repo(&self.state).list().await.unwrap_or_default();
+        let shares = repo(&self.host).list().await.unwrap_or_default();
         let now = now_secs();
         let found = shares.iter().find(|s| {
             matches!(s.status(now), ShareStatus::Active | ShareStatus::Exhausted)
-                && crate::shares::unhex(&s.lookup_pubkey)
+                && crate::util::unhex(&s.lookup_pubkey)
                     .is_some_and(|key| Sha256::digest(&key).as_slice() == lookup_hash)
         });
         Ok(match found {
@@ -317,12 +318,12 @@ impl ShareProtocol {
         remote: EndpointId,
         access_hash: [u8; 32],
     ) -> Result<(Response, Option<Vec<u8>>), RefusalReason> {
-        let limiter = crate::share_attempts::shared();
-        let source = super::endpoint_hex(&remote);
+        let limiter = crate::attempts::shared();
+        let source = crate::runtime::endpoint_hex(&remote);
         if !limiter.allowed(&source, Instant::now()) {
             return Err(RefusalReason::RateLimited);
         }
-        let share = repo(&self.state)
+        let share = repo(&self.host)
             .by_code_hash(&hex(&access_hash))
             .await
             .ok()
@@ -349,11 +350,11 @@ impl ShareProtocol {
                 created: Instant::now(),
             },
         );
-        let settings = crate::share_settings::load(&self.state).await;
+        let settings = self.host.settings().await;
         Ok((
             Response::Opened {
                 session: token,
-                manifest: browse_manifest(&self.state, &share).await,
+                manifest: browse_manifest(&self.host, &share).await,
                 public_url: settings.public_url(),
                 allow_helpers: share.allow_helpers,
             },
@@ -368,12 +369,12 @@ impl ShareProtocol {
         archive_id: String,
     ) -> Result<(Response, Option<Vec<u8>>), RefusalReason> {
         let (_, share) = self.share_for_session(remote, session).await?;
-        let manifest = browse_manifest(&self.state, &share).await;
+        let manifest = browse_manifest(&self.host, &share).await;
         if !manifest.archives().any(|a| a.archive_id == archive_id) {
             return Err(RefusalReason::NotFound);
         }
         let id = ArchiveId(archive_id);
-        let Some((content_type, bytes)) = self.state.thumbnail(&id, 0).await else {
+        let Some((content_type, bytes)) = self.host.thumbnail(&id, 0).await else {
             return Err(RefusalReason::NotFound);
         };
         Ok((
@@ -390,11 +391,11 @@ impl ShareProtocol {
     /// background job and listed without a fingerprint (research §13).
     async fn claim_manifest(&self, share: &Share) -> (ShareManifest, Vec<[u8; 32]>) {
         let (manifest, roots, pending) =
-            lanrurugi_share::manifest::claim_manifest(&self.state, &self.shared, share).await;
+            crate::manifest::claim_manifest(&self.host, &self.shared, share).await;
         if !pending.is_empty() {
-            let state = self.state.clone();
+            let state = self.host.clone();
             tokio::spawn(async move {
-                lanrurugi_share::blobs::prepare(&state, &pending).await;
+                crate::blobs::prepare(&state, &pending).await;
             });
         }
         (manifest, roots)
@@ -440,13 +441,13 @@ impl ShareProtocol {
         // Counting needs an address; a relayed peer of an unrestricted share is recorded by the
         // relay-only placeholder rather than by the relay's address.
         let address = address.unwrap_or(IpAddr::from([0, 0, 0, 0]));
-        let outcome = repo(&self.state)
+        let outcome = repo(&self.host)
             .claim(
                 &share,
                 ClaimKind::Import,
                 address,
                 None,
-                Some(&super::endpoint_hex(&remote)),
+                Some(&crate::runtime::endpoint_hex(&remote)),
                 now_secs(),
             )
             .await
@@ -477,20 +478,20 @@ impl ShareProtocol {
         archive_id: String,
     ) -> Result<(Response, Option<Vec<u8>>), RefusalReason> {
         let (_, share) = self.share_for_session(remote, session).await?;
-        if !repo(&self.state)
+        if !repo(&self.host)
             .claim_exists(&ClaimId::from(claim_id))
             .await
             .unwrap_or(false)
         {
             return Err(RefusalReason::NotFound);
         }
-        let manifest = browse_manifest(&self.state, &share).await;
+        let manifest = browse_manifest(&self.host, &share).await;
         if !manifest.archives().any(|a| a.archive_id == archive_id) {
             return Err(RefusalReason::NotFound);
         }
         self.uploads_open(remote).await?;
         let id = ArchiveId(archive_id);
-        let info = blobs::ensure_ready(&self.state, &id)
+        let info = blobs::ensure_ready(&self.host, &id)
             .await
             .ok_or(RefusalReason::NotFound)?;
         self.shared
@@ -522,7 +523,7 @@ impl ShareProtocol {
             .claim_share(&claim_id, remote)
             .await
             .ok_or(RefusalReason::NotFound)?;
-        let share = repo(&self.state)
+        let share = repo(&self.host)
             .get(&share_id)
             .await
             .ok()
@@ -541,7 +542,7 @@ impl ShareProtocol {
         // Only bytes the importer has decoded and hash-verified count toward the ratio; a dropped
         // response or a re-fetched piece must not inflate it, or a 1.0 target could stall.
         if verified_bytes > 0 {
-            if let Ok(delta) = repo(&self.state)
+            if let Ok(delta) = repo(&self.host)
                 .add_claim_verified(&claim_id, verified_bytes)
                 .await
             {
@@ -554,7 +555,7 @@ impl ShareProtocol {
             self.flush_import(&share_id).await;
             // One entry per finished import, never per piece: the detail panel gets the addresses
             // and the interface, the list gets a single row.
-            let link = super::link::of(conn);
+            let link = crate::runtime::link::of(conn);
             tracing::info!(
                 share = %share_id,
                 bytes = verified_bytes,
@@ -579,8 +580,8 @@ impl ShareProtocol {
                     },
                 },
             });
-            super::note_transfer(
-                &self.state,
+            crate::runtime::note_transfer(
+                &self.host,
                 true,
                 share_id.as_str(),
                 share.title.as_deref().unwrap_or(""),
@@ -603,12 +604,12 @@ impl ShareProtocol {
     /// The share of a live claim made by `remote`.
     async fn claim_share(&self, claim_id: &ClaimId, remote: EndpointId) -> Option<ShareId> {
         use deadpool_redis::redis::AsyncCommands;
-        let mut conn = self.state.redis.config.get().await.ok()?;
+        let mut conn = self.host.redis().config.get().await.ok()?;
         let fields: std::collections::HashMap<String, String> = conn
             .hgetall(lanrurugi_storage::keys::share_claim_key(claim_id))
             .await
             .ok()?;
-        if fields.get("endpoint_id")? != &super::endpoint_hex(&remote) {
+        if fields.get("endpoint_id")? != &crate::runtime::endpoint_hex(&remote) {
             return None;
         }
         Some(ShareId(fields.get("share_id")?.clone()))
@@ -634,7 +635,7 @@ impl ShareProtocol {
         if total == 0 {
             return;
         }
-        if let Err(e) = repo(&self.state).set_total_bytes(&share.id, total).await {
+        if let Err(e) = repo(&self.host).set_total_bytes(&share.id, total).await {
             tracing::warn!(error = %e, "could not record the share size for its ratio");
         }
         self.shared
@@ -668,7 +669,7 @@ impl ShareProtocol {
         {
             return Ok(state);
         }
-        let share = repo(&self.state)
+        let share = repo(&self.host)
             .get(share_id)
             .await
             .ok()
@@ -709,7 +710,7 @@ impl ShareProtocol {
             }
         };
         if let Some(delta) = pending {
-            if let Err(e) = repo(&self.state).add_import_bytes(share_id, delta).await {
+            if let Err(e) = repo(&self.host).add_import_bytes(share_id, delta).await {
                 tracing::warn!(error = %e, "could not record served import bytes");
             }
         }
@@ -732,7 +733,7 @@ impl ShareProtocol {
             })
         };
         if let Some(delta) = pending {
-            if let Err(e) = repo(&self.state).add_import_bytes(share_id, delta).await {
+            if let Err(e) = repo(&self.host).add_import_bytes(share_id, delta).await {
                 tracing::warn!(error = %e, "could not flush the final served import bytes");
             }
         }
@@ -773,13 +774,14 @@ impl ShareProtocol {
             return self.help_range(remote, ticket, blake3, spans).await;
         }
         let archive_id = self.verify_ticket(remote, ticket, &blake3)?;
-        let caps = super::limits::admit(
-            &self.state,
-            super::limits::Group::Own,
-            &super::endpoint_hex(&remote),
-        )
-        .await
-        .map_err(held)?;
+        let caps = self
+            .host
+            .admit_upload(
+                crate::runtime::limits::Group::Own,
+                crate::runtime::endpoint_hex(&remote),
+            )
+            .await
+            .map_err(held)?;
         // The share's ratio caps what importers get: either nothing more, or the reduced rate.
         let share_id = lanrurugi_core::ids::ShareId::from(ticket.ticket.share_id.clone());
         let ratio = self.ratio_state(&share_id).await?;
@@ -790,7 +792,7 @@ impl ShareProtocol {
                 }
                 lanrurugi_storage::shares::RatioAction::Throttle => {
                     let rate = ratio.rate.unwrap_or(0);
-                    super::limits::Caps {
+                    crate::runtime::limits::Caps {
                         rate: Some(caps.rate.map_or(rate, |own| own.min(rate))),
                         ..caps
                     }
@@ -798,7 +800,7 @@ impl ShareProtocol {
             },
             _ => caps,
         };
-        let info = blobs::ready(&self.state, &archive_id)
+        let info = blobs::ready(&self.host, &archive_id)
             .await
             .filter(|i| i.blake3 == blake3)
             .ok_or(RefusalReason::NotFound)?;
@@ -807,7 +809,12 @@ impl ShareProtocol {
         let body = encode_range(info, spans)
             .await
             .ok_or(RefusalReason::Internal)?;
-        super::limits::throttle(super::limits::Group::Own, caps, body.len() as u64).await;
+        crate::runtime::limits::throttle(
+            crate::runtime::limits::Group::Own,
+            caps,
+            body.len() as u64,
+        )
+        .await;
         Ok(bytes(body))
     }
 
@@ -820,32 +827,38 @@ impl ShareProtocol {
         blake3: [u8; 32],
         spans: &[ChunkSpan],
     ) -> Result<(Response, Option<Vec<u8>>), RefusalReason> {
-        let record = super::helper::serving_import(&self.state, &ticket.ticket.share_id)
+        let record = crate::runtime::helper::serving_import(&self.host, &ticket.ticket.share_id)
             .await
             .ok_or(RefusalReason::NotFound)?;
-        let sharer =
-            super::parse_endpoint_hex(&record.sharer_endpoint_id).ok_or(RefusalReason::NotFound)?;
+        let sharer = crate::runtime::parse_endpoint_hex(&record.sharer_endpoint_id)
+            .ok_or(RefusalReason::NotFound)?;
         ticket
             .verify_for(&sharer, remote.as_bytes(), &blake3, unix_now())
             .map_err(|_| RefusalReason::NotFound)?;
-        let local =
-            super::helper::local_archive(&record, &hex(&blake3)).ok_or(RefusalReason::NotFound)?;
-        let caps = super::limits::admit(
-            &self.state,
-            super::limits::Group::Helping,
-            &super::endpoint_hex(&remote),
-        )
-        .await
-        .map_err(held)?;
-        let info = blobs::ensure_ready(&self.state, &local)
+        let local = crate::runtime::helper::local_archive(&record, &hex(&blake3))
+            .ok_or(RefusalReason::NotFound)?;
+        let caps = self
+            .host
+            .admit_upload(
+                crate::runtime::limits::Group::Helping,
+                crate::runtime::endpoint_hex(&remote),
+            )
+            .await
+            .map_err(held)?;
+        let info = blobs::ensure_ready(&self.host, &local)
             .await
             .filter(|i| i.blake3 == blake3)
             .ok_or(RefusalReason::NotFound)?;
         let body = encode_range(info, spans)
             .await
             .ok_or(RefusalReason::Internal)?;
-        super::limits::throttle(super::limits::Group::Helping, caps, body.len() as u64).await;
-        super::helper::count_served(&record.id, body.len() as u64);
+        crate::runtime::limits::throttle(
+            crate::runtime::limits::Group::Helping,
+            caps,
+            body.len() as u64,
+        )
+        .await;
+        crate::runtime::helper::count_served(&record.id, body.len() as u64);
         Ok(bytes(body))
     }
 
@@ -860,8 +873,8 @@ impl ShareProtocol {
         {
             return Vec::new();
         }
-        let asker = super::endpoint_hex(&remote);
-        repo(&self.state)
+        let asker = crate::runtime::endpoint_hex(&remote);
+        repo(&self.host)
             .helpers(&share.id, now_secs() - HELP_OFFLINE_AFTER_SECS)
             .await
             .unwrap_or_default()
@@ -869,7 +882,7 @@ impl ShareProtocol {
             .filter(|h| h.endpoint_id != asker)
             .filter_map(|h| {
                 Some(HelperAddr {
-                    endpoint_id: super::parse_endpoint_hex(&h.endpoint_id)?,
+                    endpoint_id: crate::runtime::parse_endpoint_hex(&h.endpoint_id)?,
                     relay_urls: h.relay_urls,
                     addrs: h.addrs,
                 })
@@ -899,7 +912,7 @@ impl ShareProtocol {
                 at(share.helpers_disabled_at),
             ),
             ShareStatus::Exhausted => {
-                let last = repo(&self.state)
+                let last = repo(&self.host)
                     .claim_history(&share.id, 1)
                     .await
                     .ok()
@@ -908,7 +921,7 @@ impl ShareProtocol {
             }
             ShareStatus::Active => (HelpState::Active, None, at(Some(share.created_at))),
         };
-        let current: std::collections::HashSet<String> = browse_manifest(&self.state, share)
+        let current: std::collections::HashSet<String> = browse_manifest(&self.host, share)
             .await
             .archives()
             .map(|a| a.archive_id.clone())
@@ -935,14 +948,14 @@ impl ShareProtocol {
         relay_urls: Vec<String>,
         addrs: Vec<String>,
     ) -> Result<(Response, Option<Vec<u8>>), RefusalReason> {
-        let share = repo(&self.state)
+        let share = repo(&self.host)
             .get(&ShareId(share_id))
             .await
             .ok()
             .flatten()
             .ok_or(RefusalReason::NotFound)?;
-        let endpoint = super::endpoint_hex(&remote);
-        if !repo(&self.state)
+        let endpoint = crate::runtime::endpoint_hex(&remote);
+        if !repo(&self.host)
             .is_importer(&share.id, &endpoint)
             .await
             .unwrap_or(false)
@@ -970,7 +983,7 @@ impl ShareProtocol {
                 archives,
                 last_seen: now_secs(),
             };
-            repo(&self.state)
+            repo(&self.host)
                 .register_helper(&share.id, &info)
                 .await
                 .map_err(|_| RefusalReason::Internal)?;
@@ -983,14 +996,18 @@ impl ShareProtocol {
         remote: EndpointId,
         share_id: String,
     ) -> Result<(Response, Option<Vec<u8>>), RefusalReason> {
-        let share = repo(&self.state)
+        let share = repo(&self.host)
             .get(&ShareId(share_id))
             .await
             .ok()
             .flatten()
             .ok_or(RefusalReason::NotFound)?;
-        let info = repo(&self.state)
-            .helper_heartbeat(&share.id, &super::endpoint_hex(&remote), now_secs())
+        let info = repo(&self.host)
+            .helper_heartbeat(
+                &share.id,
+                &crate::runtime::endpoint_hex(&remote),
+                now_secs(),
+            )
             .await
             .ok()
             .flatten()
@@ -1008,14 +1025,14 @@ impl ShareProtocol {
         remote: EndpointId,
         share_id: String,
     ) -> Result<(Response, Option<Vec<u8>>), RefusalReason> {
-        let share = repo(&self.state)
+        let share = repo(&self.host)
             .get(&ShareId(share_id))
             .await
             .ok()
             .flatten()
             .ok_or(RefusalReason::NotFound)?;
-        repo(&self.state)
-            .forget_helper(&share.id, &super::endpoint_hex(&remote))
+        repo(&self.host)
+            .forget_helper(&share.id, &crate::runtime::endpoint_hex(&remote))
             .await
             .map_err(|_| RefusalReason::Internal)?;
         Ok((Response::Ok, None))
@@ -1023,14 +1040,14 @@ impl ShareProtocol {
 
     /// Refuses with `paused` while own-share uploads are paused or full.
     async fn uploads_open(&self, remote: EndpointId) -> Result<(), RefusalReason> {
-        super::limits::admit(
-            &self.state,
-            super::limits::Group::Own,
-            &super::endpoint_hex(&remote),
-        )
-        .await
-        .map(|_| ())
-        .map_err(held)
+        self.host
+            .admit_upload(
+                crate::runtime::limits::Group::Own,
+                crate::runtime::endpoint_hex(&remote),
+            )
+            .await
+            .map(|_| ())
+            .map_err(held)
     }
 
     async fn outboard(
@@ -1040,7 +1057,7 @@ impl ShareProtocol {
         blake3: [u8; 32],
     ) -> Result<(Response, Option<Vec<u8>>), RefusalReason> {
         let archive_id = self.verify_ticket(remote, ticket, &blake3)?;
-        let info = blobs::ready(&self.state, &archive_id)
+        let info = blobs::ready(&self.host, &archive_id)
             .await
             .ok_or(RefusalReason::NotFound)?;
         let body = tokio::fs::read(&info.outboard_path)
