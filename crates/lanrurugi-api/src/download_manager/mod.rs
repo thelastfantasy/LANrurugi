@@ -309,28 +309,43 @@ impl DownloadManager {
     }
 }
 
-/// Moves `from` to `to`, copying when a rename cannot cross filesystems (the usual NAS layout:
-/// temp on the container's own filesystem, library on another pool). `from` is removed only after
-/// the copy succeeds. The copy itself lives in `lanrurugi_core::io`, which also shrinks its reads
-/// as the tail approaches.
-pub(crate) async fn rename_or_copy(
-    from: &std::path::Path,
-    to: &std::path::Path,
-) -> std::io::Result<()> {
-    if tokio::fs::rename(from, to).await.is_ok() {
-        return Ok(());
-    }
-    lanrurugi_core::io::move_file(from, to).await?;
-    Ok(())
+/// How the bytes reached the library-side path.
+pub(crate) enum Placed {
+    /// Renamed on the same filesystem: the source path no longer exists.
+    Moved,
+    /// Copied across filesystems (or on request): the source is still there for the caller to
+    /// remove once the archive is recorded.
+    Copied(lanrurugi_core::io::CopyOutcome),
 }
 
-/// Buffered file copy — see [`lanrurugi_core::io::copy_buffer_bytes`] for why this is not
-/// `tokio::fs::copy`.
-pub(crate) async fn copy_file(
+/// Moves `from` to `to` durably (027): a same-filesystem rename flushed on both sides, otherwise a
+/// checked, flushed copy that leaves `from` in place. `force_copy` always copies (an adopted file
+/// is the user's only copy and must stay put until the record exists).
+pub(crate) async fn place_into_library(
     from: &std::path::Path,
     to: &std::path::Path,
-) -> std::io::Result<u64> {
-    lanrurugi_core::io::copy_file(from, to).await
+    force_copy: bool,
+    opts: &lanrurugi_core::io::CopyOptions,
+) -> Result<Placed, lanrurugi_core::io::CopyError> {
+    use lanrurugi_core::io::{copy_file, sync_dir, sync_file, CopyError};
+    if !force_copy {
+        let source = tokio::fs::File::open(from).await.map_err(CopyError::Io)?;
+        sync_file(&source).await.map_err(CopyError::Durability)?;
+        drop(source);
+        // Any refusal (EXDEV, or a mount that answers EPERM) falls back to the copy, which then
+        // reports a real problem with the destination itself.
+        if tokio::fs::rename(from, to).await.is_ok() {
+            if let Some(parent) = to.parent() {
+                if let Err(e) = sync_dir(parent).await {
+                    // Not durable yet: hand the bytes back so the failure leaves them where they were.
+                    let _ = tokio::fs::rename(to, from).await;
+                    return Err(CopyError::Durability(e));
+                }
+            }
+            return Ok(Placed::Moved);
+        }
+    }
+    copy_file(from, to, opts).await.map(Placed::Copied)
 }
 
 #[cfg(test)]

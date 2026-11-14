@@ -43,6 +43,8 @@
 | `_byname` 搬家 | `crates/lanrurugi-scanner/src/relocate.rs:393` | 书库内已有文件 |
 | 监视器直接发现的书库文件 | scanner 管线 | 用户直接放入 |
 
+> 2026-11-14 生成 tasks 时核对：「插件自行下载（`file_path` 旧契约）」在当前代码里已没有入库路径；「启动时接管」只剩 `adopt_pending_conflict`（`ingest.rs:118`）。
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - 移动档案时绝不丢失唯一的一份（Priority: P1）

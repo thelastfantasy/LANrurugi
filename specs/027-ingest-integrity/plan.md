@@ -16,7 +16,7 @@ P1（M1–M3）防丢数据，计划进 beta6；P2/P3（M4–M7）可以下一�
 
 **Primary Dependencies**: `tokio`、`blake3 1.8.7`（已有）、`libc 0.2`（已有，macOS `F_FULLFSYNC`/`F_NOCACHE`、Linux `O_DIRECT`、`statfs`）
 
-**Storage**: Redis（档案 hash 新字段 `blake3`；队列项 JSON 新字段 `staged_blake3`；`LRR_CONFIG` 新布尔 `ingest_strict_verify`），磁盘上 `.meta.json` 新字段 `confirmed_len`
+**Storage**: Redis（档案 hash 新字段 `blake3`；队列项 `staged.blake3`；`LRR_CONFIG` 新布尔 `ingest_strict_verify`），磁盘上 `.meta.json` 新字段 `confirmed_len`
 
 **Testing**: `mise run test-crate -- lanrurugi-core lanrurugi-api lanrurugi-scanner lanrurugi-storage`（Redis 依赖的用 `LANRURUGI_TEST_REDIS_URL`），vitest（设置页开关），quickstart 场景 A–G
 
@@ -40,7 +40,7 @@ P1（M1–M3）防丢数据，计划进 beta6；P2/P3（M4–M7）可以下一�
 | IV. 插件沙箱 | 不涉及（插件契约不变；`file_path` 产物在接手时计算指纹） |
 | V. 机密与网络边界 | 不涉及 |
 | VI. 分期 | 通过：P1 与 P2/P3 可独立交付 |
-| VII. 前端 | 设置开关与错误文案走现有组件与 14 个 locale；纯视觉部分交由用户验收 |
+| VII. 前端 | 设置开关与错误文案走现有组件与 4 个主维护 locale；纯视觉部分交由用户验收 |
 
 ## Project Structure
 
@@ -64,7 +64,7 @@ specs/027-ingest-integrity/
 crates/lanrurugi-core/src/io.rs                      # copy_file / durable_rename / sync_dir / 严格校验
 crates/lanrurugi-core/src/queue_error.rs             # 四个新错误变体
 crates/lanrurugi-core/src/entities.rs                # Archive.blake3
-crates/lanrurugi-storage/src/download_queue.rs       # staged_blake3、PendingFilenameConflict.blake3
+crates/lanrurugi-storage/src/download_queue.rs       # StagedDownload.blake3
 crates/lanrurugi-storage/src/repository.rs           # 只 HSET blake3 的写入口
 crates/lanrurugi-api/src/download_manager/stream.rs  # 写入时哈希、确认点、续传截断
 crates/lanrurugi-api/src/download_manager/bundle.rs  # 打包输出流哈希
@@ -118,7 +118,7 @@ docs/api/sidecar/                                    # metadata.blake3
 - `bundle.rs` 输出流包 hashing writer；`upload.rs` 接收时哈希（含分片上传：按块顺序 `update`，乱序/重传块以最终组装文件为准，在 `complete` 时读一遍）。
 - 插件 `file_path`、启动接管、旧队列收编：接手时读一遍。
 - 共享导入：沿用 iroh 已校验的文件哈希。
-- `DownloadQueueItem.staged_blake3` / `PendingFilenameConflict.blake3` 持久化；`catalogue_staged_file` 增加 `expected_blake3: Option<Hash>` 参数；跨文件系统时与 `CopyOutcome.blake3` 比对，同文件系统直接沿用。
+- `StagedDownload.blake3` 持久化（见 data-model）；`catalogue_staged_file` 增加 `expected_blake3: Option<Hash>` 参数；跨文件系统时与 `CopyOutcome.blake3` 比对，同文件系统直接沿用。
 - 记录写入 `Archive.blake3`；不一致按 R7 处理（`StagedContentCorrupted`，下载来源进入需要重新下载，接管来源只报错）。
 - 监视器直接发现的书库文件：扫描入库时读一遍算指纹（与缩略图生成同批，批量走受限 rayon）。
 - quickstart D。
@@ -138,7 +138,7 @@ docs/api/sidecar/                                    # metadata.blake3
 
 ### M7 — 测试、文档与验收
 
-- 全部 quickstart 场景；`mise run check`；`mise run test`（detached）。
+- 全部 quickstart 场景；`mise run check`；改动到的 crate 跑 `mise run test-crate`（detached），全量 `mise run test` 交给 GitHub CI。
 - `README.md`「能做什么」与 `docs/comparison-with-lanraragi.md` 视情况补一条「入库完整性」。
 - tasks.md 写 Implementation Record：哪些在真机上验证、哪些只在单测里验证。
 
@@ -150,7 +150,7 @@ docs/api/sidecar/                                    # metadata.blake3
 | `O_DIRECT` 对齐错误导致 EINVAL | 读缓冲按 4 KiB 对齐分配；EINVAL 归为「无法验证」并跳过，不让入库失败 |
 | 续传前缀重读增加续传开销 | 只在续传时发生；与「从头重下」相比仍省一半以上 |
 | 分片上传的乱序块无法流式哈希 | `complete` 时读一遍组装文件，接受一次额外读取 |
-| 新错误类型让旧前端显示原始代码 | 14 个 locale 同步补文案；未知变体回退通用错误文案 |
+| 新错误类型让旧前端显示原始代码 | en / zh / zh_Hant / ja 补文案，其余回退 en；未知变体回退通用错误文案 |
 | 漏改某个改写字节的路径，指纹过期 | M6 先 grep 列全写入书库文件的调用点；补算任务可修复，以后的巡检 spec 会以指纹不一致报出 |
 
 ## Complexity Tracking

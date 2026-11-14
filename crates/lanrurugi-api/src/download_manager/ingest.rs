@@ -28,6 +28,20 @@ pub enum IngestDownloadError {
     Pipeline(#[from] lanrurugi_scanner::pipeline::PipelineError),
     #[error("failed to move downloaded file into place: {0}")]
     Io(#[source] std::io::Error),
+    /// The copy into the library failed one of 027's checks; the source is kept.
+    #[error("copying {path} into the library failed: {source}")]
+    Copy {
+        path: String,
+        #[source]
+        source: lanrurugi_core::io::CopyError,
+    },
+    /// The copied bytes do not hash to the fingerprint taken when they arrived (027 FR-012).
+    #[error("staged file {path} is damaged: expected {expected}, got {actual}")]
+    StagedCorrupted {
+        path: String,
+        expected: String,
+        actual: String,
+    },
     #[error("a colliding archive already exists ({reason:?}): {existing_id}")]
     Duplicate {
         existing_id: String,
@@ -69,6 +83,48 @@ impl From<&IngestDownloadError> for lanrurugi_core::queue_error::QueueError {
                 tracing::warn!(error = %err, "failed to move downloaded file into place");
                 QueueError::IngestFailed {
                     reason: err.to_string(),
+                }
+            }
+            IngestDownloadError::Copy { path, source } => {
+                use lanrurugi_core::io::CopyError;
+                tracing::warn!(%path, error = %source, "copy into the library failed");
+                match source {
+                    CopyError::LengthMismatch {
+                        expected,
+                        copied,
+                        dest_len,
+                    } => QueueError::CopyLengthMismatch {
+                        path: path.clone(),
+                        expected: *expected,
+                        copied: *copied,
+                        dest_len: *dest_len,
+                    },
+                    CopyError::Durability(e) => QueueError::DurabilityFailed {
+                        path: path.clone(),
+                        os_error: e.to_string(),
+                    },
+                    CopyError::ReadbackMismatch { offset, len } => {
+                        QueueError::VerifyReadbackMismatch {
+                            path: path.clone(),
+                            offset: *offset,
+                            len: *len,
+                        }
+                    }
+                    CopyError::Io(e) => QueueError::IngestFailed {
+                        reason: e.to_string(),
+                    },
+                }
+            }
+            IngestDownloadError::StagedCorrupted {
+                path,
+                expected,
+                actual,
+            } => {
+                tracing::warn!(%path, %expected, %actual, "staged file no longer matches its fingerprint");
+                QueueError::StagedContentCorrupted {
+                    path: path.clone(),
+                    expected_blake3: expected.clone(),
+                    actual_blake3: actual.clone(),
                 }
             }
             IngestDownloadError::Duplicate {
@@ -124,6 +180,7 @@ pub async fn adopt_pending_conflict(
         state,
         staging,
         &conflict.original_filename,
+        None,
         None,
         DuplicatePolicy::Reject,
         true,
@@ -260,6 +317,7 @@ async fn ingest_staged_download(
         state,
         &downloaded.path,
         &downloaded.filename,
+        downloaded.blake3.as_deref(),
         source_url,
         duplicate_policy,
         false,
@@ -284,6 +342,7 @@ pub(crate) async fn catalogue_staged_file(
     state: &AppState,
     staging_path: &Path,
     filename: &str,
+    expected_blake3: Option<&str>,
     source_url: Option<&str>,
     duplicate_policy: DuplicatePolicy,
     keep_bytes_on_failure: bool,
@@ -304,21 +363,53 @@ pub(crate) async fn catalogue_staged_file(
         .library
         .archive_dir
         .join(format!(".ingest-{}", uuid::Uuid::new_v4().simple()));
-    if keep_bytes_on_failure {
-        // An adopted file is the user's only copy: leave it where the queue row points until a
-        // record exists for the bytes, and drop it only on success.
-        crate::download_manager::copy_file(staging_path, &incoming)
-            .await
-            .map_err(IngestDownloadError::Io)?;
-    } else {
-        crate::download_manager::rename_or_copy(staging_path, &incoming)
-            .await
-            .map_err(IngestDownloadError::Io)?;
-    }
+    // 027: the copy is checked and flushed, and the source stays until the record exists. A
+    // same-filesystem rename moves it instead; then failures put the bytes back (`put_bytes_back`).
+    // An adopted file is the user's only copy, so it is always copied.
+    let opts = lanrurugi_core::io::CopyOptions {
+        strict_verify: crate::settings::read_ingest_strict_verify(state).await,
+    };
+    let placed = crate::download_manager::place_into_library(
+        staging_path,
+        &incoming,
+        keep_bytes_on_failure,
+        &opts,
+    )
+    .await
+    .map_err(|source| IngestDownloadError::Copy {
+        path: staging_path.display().to_string(),
+        source,
+    })?;
+    let copied = matches!(placed, crate::download_manager::Placed::Copied(_));
+    let undo = Undo {
+        staging_path,
+        copied,
+        keep: keep_bytes_on_failure,
+        restore: restore_staging_on_failure,
+    };
+    // The whole-file fingerprint (027 FR-009–013): a copy hashed what it read, and must match the
+    // one taken when the bytes first arrived; a rename carries that one over unread.
+    let fingerprint = match &placed {
+        crate::download_manager::Placed::Copied(outcome) => {
+            let actual = outcome.blake3.to_hex().to_string();
+            if let Some(expected) = expected_blake3 {
+                if expected != actual {
+                    let _ = tokio::fs::remove_file(&incoming).await;
+                    return Err(IngestDownloadError::StagedCorrupted {
+                        path: staging_path.display().to_string(),
+                        expected: expected.to_string(),
+                        actual,
+                    });
+                }
+            }
+            Some(actual)
+        }
+        crate::download_manager::Placed::Moved => expected_blake3.map(str::to_string),
+    };
     let id = match lanrurugi_storage::id::size_aware_id(&incoming) {
         Ok(id) => ArchiveId(id),
         Err(e) => {
-            put_bytes_back(&incoming, staging_path, restore_staging_on_failure).await;
+            undo.failed(&incoming).await;
             return Err(IngestDownloadError::Io(std::io::Error::other(e)));
         }
     };
@@ -342,11 +433,9 @@ pub(crate) async fn catalogue_staged_file(
             // the record its download source: that URL is the one fact only the download knows.
             stamp_source_tag(state, &id, source_url).await;
             let _ = tokio::fs::remove_file(&incoming).await;
-            if keep_bytes_on_failure {
-                // The library already holds these bytes, so an adopted copy has nothing left to
-                // stand in for.
-                let _ = tokio::fs::remove_file(staging_path).await;
-            }
+            // The library already holds these bytes, so a source left by a copy has nothing left
+            // to stand in for.
+            undo.succeeded().await;
             return Ok(IngestedDownload {
                 archive_id: id.into_string(),
                 is_new: false,
@@ -359,17 +448,22 @@ pub(crate) async fn catalogue_staged_file(
                 .await
                 .map_err(IngestDownloadError::Io)?;
         }
-        tokio::fs::rename(&incoming, &dest)
-            .await
-            .map_err(IngestDownloadError::Io)?;
+        if let Err(e) = rename_into_bucket(&incoming, &dest).await {
+            undo.failed(&incoming).await;
+            return Err(e);
+        }
         let mut repaired = existing;
         repaired.file = dest.to_string_lossy().to_string();
+        if repaired.blake3.is_none() {
+            repaired.blake3 = fingerprint.clone();
+        }
         state
             .repos
             .archives
             .save(&repaired)
             .await
             .map_err(|e| IngestDownloadError::Io(std::io::Error::other(e)))?;
+        undo.succeeded().await;
         return Ok(IngestedDownload {
             archive_id: id.into_string(),
             is_new: false,
@@ -380,7 +474,7 @@ pub(crate) async fn catalogue_staged_file(
     // below can index them at any moment, and nothing may find the archive until its metadata
     // run has finished (spec 025). Failing to hide it fails the ingest rather than showing it early.
     if let Err(e) = crate::visibility::mark_pending(state, id.as_str()).await {
-        put_bytes_back(&incoming, staging_path, restore_staging_on_failure).await;
+        undo.failed(&incoming).await;
         return Err(IngestDownloadError::Io(std::io::Error::other(e)));
     }
     let hidden_id = id.clone();
@@ -389,17 +483,17 @@ pub(crate) async fn catalogue_staged_file(
     if let Some(parent) = dest.parent() {
         if let Err(e) = tokio::fs::create_dir_all(parent).await {
             pending.publish().await;
-            put_bytes_back(&incoming, staging_path, restore_staging_on_failure).await;
+            undo.failed(&incoming).await;
             return Err(IngestDownloadError::Io(e));
         }
     }
     // `dest` can still exist without a record: an ingest killed between its rename and its save.
     // The bytes are identical by construction (the id is a hash of them), so replacing it is right;
     // a directory or other non-file in the way is a real error.
-    if let Err(e) = tokio::fs::rename(&incoming, &dest).await {
+    if let Err(e) = rename_into_bucket(&incoming, &dest).await {
         pending.publish().await;
-        put_bytes_back(&incoming, staging_path, restore_staging_on_failure).await;
-        return Err(IngestDownloadError::Io(e));
+        undo.failed(&incoming).await;
+        return Err(e);
     }
 
     // `intended_filename: None` — the on-disk name is the id now, so the legacy "reject a second
@@ -414,6 +508,7 @@ pub(crate) async fn catalogue_staged_file(
         // so `ingest_file_with_policy` must not take it again — same mutex, same task, no
         // re-entrancy.
         locked: true,
+        blake3: fingerprint.as_deref(),
     };
     let outcome = match ingest_file_with_policy(
         &state.repos.archives,
@@ -434,10 +529,10 @@ pub(crate) async fn catalogue_staged_file(
             // exists for them.
             let recorded = matches!(state.repos.archives.get(&id).await, Ok(Some(_)));
             if !recorded {
-                // `dest` is the copy this call renamed in. An adopted file's original is a
-                // separate copy that was never moved, so dropping this one loses nothing; a
-                // download asks for the bytes back at its staging path instead.
-                put_bytes_back(&dest, staging_path, restore_staging_on_failure).await;
+                // `dest` is the copy this call renamed in. A copied source is still in place, so
+                // dropping this one loses nothing; a renamed download asks for the bytes back at
+                // its staging path instead.
+                undo.failed(&dest).await;
             }
             // A record that did get written is better shown with no tags than hidden for good.
             pending.publish().await;
@@ -454,9 +549,7 @@ pub(crate) async fn catalogue_staged_file(
             stamp_source_tag(state, &id, source_url).await;
             // The file at `dest` *is* this archive's bytes now (it was renamed into its canonical
             // path above) — removing it here would delete the only copy.
-            if keep_bytes_on_failure {
-                let _ = tokio::fs::remove_file(staging_path).await;
-            }
+            undo.succeeded().await;
             return Ok(IngestedDownload {
                 archive_id: id.into_string(),
                 is_new: false,
@@ -479,6 +572,8 @@ pub(crate) async fn catalogue_staged_file(
                     let _ = tokio::fs::remove_file(&dest).await;
                 }
             }
+            // As before 027, a rejected download leaves no staged bytes behind.
+            undo.rejected().await;
             return Err(IngestDownloadError::Duplicate {
                 existing_id: existing_id.into_string(),
                 reason,
@@ -588,10 +683,8 @@ pub(crate) async fn catalogue_staged_file(
         pending.publish().await;
     }
 
-    if keep_bytes_on_failure {
-        // The record exists now, so the copy the queue row pointed at is redundant.
-        let _ = tokio::fs::remove_file(staging_path).await;
-    }
+    // The record exists and its file is flushed, so a source left by a copy is redundant now.
+    undo.succeeded().await;
 
     Ok(IngestedDownload {
         archive_id: archive_id.into_string(),
@@ -759,6 +852,7 @@ pub async fn resolve_overwrite(
         state,
         Path::new(&conflict.temp_path),
         &conflict.original_filename,
+        None,
         source_url,
         DuplicatePolicy::Overwrite,
         false,
@@ -785,6 +879,7 @@ pub async fn resolve_rename(
         state,
         Path::new(&conflict.temp_path),
         new_filename,
+        None,
         source_url,
         DuplicatePolicy::Reject,
         false,
@@ -805,8 +900,14 @@ async fn put_bytes_back(file: &Path, staging_path: &Path, restore: bool) {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
     if tokio::fs::rename(file, staging_path).await.is_err() {
-        // The library and `temp_dir` can sit on different filesystems.
-        match tokio::fs::copy(file, staging_path).await {
+        // The library and `temp_dir` can sit on different filesystems. A failed copy keeps `file`.
+        match lanrurugi_core::io::copy_file(
+            file,
+            staging_path,
+            &lanrurugi_core::io::CopyOptions::default(),
+        )
+        .await
+        {
             Ok(_) => {
                 let _ = tokio::fs::remove_file(file).await;
             }
@@ -815,6 +916,68 @@ async fn put_bytes_back(file: &Path, staging_path: &Path, restore: bool) {
             }
         }
     }
+}
+
+/// What happens to the staged source once `catalogue_staged_file` knows how it ends (027): a
+/// copied source stays until the archive is recorded; a renamed one only exists again if a
+/// failure puts it back.
+struct Undo<'a> {
+    staging_path: &'a Path,
+    /// The bytes were copied, so `staging_path` still exists.
+    copied: bool,
+    /// An adopted file: the source is the user's only copy until a record exists.
+    keep: bool,
+    /// The caller wants the bytes back at `staging_path` on failure.
+    restore: bool,
+}
+
+impl Undo<'_> {
+    /// Drops the library-side bytes `file`. A renamed source goes back to `staging_path` when the
+    /// caller asked for that; a copied one is still there, and is only removed when the caller
+    /// wanted no bytes kept at all (as the pre-027 move would have left it).
+    async fn failed(&self, file: &Path) {
+        if self.copied {
+            let _ = tokio::fs::remove_file(file).await;
+            if !self.keep && !self.restore {
+                let _ = tokio::fs::remove_file(self.staging_path).await;
+            }
+        } else {
+            put_bytes_back(file, self.staging_path, self.restore).await;
+        }
+    }
+
+    /// The archive is recorded: a copied source is redundant.
+    async fn succeeded(&self) {
+        if self.copied {
+            let _ = tokio::fs::remove_file(self.staging_path).await;
+        }
+    }
+
+    /// A content-hash duplicate: the staged bytes are not wanted, except an adopted file, whose
+    /// caller decides.
+    async fn rejected(&self) {
+        if self.copied && !self.keep {
+            let _ = tokio::fs::remove_file(self.staging_path).await;
+        }
+    }
+}
+
+/// Renames the flushed `.ingest-*` copy into its bucket and flushes the bucket directory, so the
+/// record written next never points at a name a crash could lose (027 FR-003).
+async fn rename_into_bucket(incoming: &Path, dest: &Path) -> Result<(), IngestDownloadError> {
+    tokio::fs::rename(incoming, dest)
+        .await
+        .map_err(IngestDownloadError::Io)?;
+    if let Some(parent) = dest.parent() {
+        if let Err(e) = lanrurugi_core::io::sync_dir(parent).await {
+            let _ = tokio::fs::rename(dest, incoming).await;
+            return Err(IngestDownloadError::Copy {
+                path: dest.display().to_string(),
+                source: lanrurugi_core::io::CopyError::Durability(e),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// The extension to keep on the hash-layout file, lowercased. The name carries no meaning any
@@ -880,6 +1043,7 @@ mod tests {
             &download,
             "Download.zip",
             None,
+            None,
             DuplicatePolicy::Reject,
             false,
             false,
@@ -908,6 +1072,7 @@ mod tests {
             &again,
             "Again.zip",
             None,
+            None,
             DuplicatePolicy::Reject,
             false,
             false,
@@ -925,6 +1090,7 @@ mod tests {
             &state,
             &upload,
             "Upload.zip",
+            None,
             None,
             DuplicatePolicy::Reject,
             false,
@@ -982,6 +1148,181 @@ mod tests {
         );
     }
 
+    /// 027 US1: a copy that cannot be made leaves the source where it was and nothing in the library.
+    #[tokio::test]
+    async fn a_failed_copy_keeps_the_source_and_records_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let Some(mut state) = state_with_temp_dirs(root.path()).await else {
+            return;
+        };
+        let staged = staged_zip(&state.library.temp_dir, "027-failed-copy");
+        let bytes = std::fs::read(&staged).unwrap();
+        let id = lanrurugi_storage::id::size_aware_id(&staged).unwrap();
+        // A library "directory" that is a file: creating the `.ingest-*` copy fails for any user.
+        let blocked = root.path().join("not-a-dir");
+        std::fs::write(&blocked, b"x").unwrap();
+        state.library.archive_dir = blocked;
+
+        let outcome = catalogue_staged_file(
+            &state,
+            &staged,
+            "Failed Copy.zip",
+            None,
+            None,
+            DuplicatePolicy::Reject,
+            false,
+            true,
+            false,
+        )
+        .await;
+
+        assert!(outcome.is_err());
+        assert_eq!(
+            std::fs::read(&staged).unwrap(),
+            bytes,
+            "the source is intact"
+        );
+        assert!(state
+            .repos
+            .archives
+            .get(&ArchiveId(id))
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// 027 US3: a copied file is checked against the fingerprint taken when it arrived.
+    #[tokio::test]
+    async fn a_copy_that_does_not_match_its_fingerprint_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let Some(state) = state_with_temp_dirs(root.path()).await else {
+            return;
+        };
+        let staged = staged_zip(&state.library.temp_dir, "027-corrupted");
+        let id = lanrurugi_storage::id::size_aware_id(&staged).unwrap();
+        let wrong = "0".repeat(64);
+
+        // `keep_bytes_on_failure` forces the copy path, as across filesystems.
+        let outcome = catalogue_staged_file(
+            &state,
+            &staged,
+            "Corrupted.zip",
+            Some(&wrong),
+            None,
+            DuplicatePolicy::Reject,
+            true,
+            false,
+            false,
+        )
+        .await;
+
+        assert!(
+            matches!(outcome, Err(IngestDownloadError::StagedCorrupted { .. })),
+            "{:?}",
+            outcome.as_ref().err()
+        );
+        assert!(staged.exists(), "the source is kept");
+        assert!(state
+            .repos
+            .archives
+            .get(&ArchiveId(id))
+            .await
+            .unwrap()
+            .is_none());
+        let leftovers: Vec<_> = std::fs::read_dir(&state.library.archive_dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".ingest-"))
+            .collect();
+        assert!(leftovers.is_empty(), "no copy is left behind");
+    }
+
+    /// 027 US3: the record carries the whole-file BLAKE3, whether the caller supplied it or the
+    /// copy computed it.
+    #[tokio::test]
+    async fn a_catalogued_archive_records_its_fingerprint() {
+        let root = tempfile::tempdir().unwrap();
+        let Some(state) = state_with_temp_dirs(root.path()).await else {
+            return;
+        };
+        let staged = staged_zip(&state.library.temp_dir, "027-fingerprint");
+        let expected = blake3::hash(&std::fs::read(&staged).unwrap())
+            .to_hex()
+            .to_string();
+
+        let done = catalogue_staged_file(
+            &state,
+            &staged,
+            "Fingerprint.zip",
+            Some(&expected),
+            None,
+            DuplicatePolicy::Reject,
+            true,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+
+        let record = state
+            .repos
+            .archives
+            .get(&ArchiveId(done.archive_id.clone()))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.blake3.as_deref(), Some(expected.as_str()));
+        let on_disk = blake3::hash(&std::fs::read(&record.file).unwrap())
+            .to_hex()
+            .to_string();
+        assert_eq!(on_disk, expected);
+        assert!(
+            !staged.exists(),
+            "the copied source is removed once the archive is recorded"
+        );
+    }
+
+    /// 027 SC-001 case 3: an ingest that died after renaming into the bucket but before writing the
+    /// record leaves the bytes there; ingesting the same source again still ends with one record.
+    #[tokio::test]
+    async fn an_ingest_interrupted_before_its_record_completes_on_retry() {
+        let root = tempfile::tempdir().unwrap();
+        let Some(state) = state_with_temp_dirs(root.path()).await else {
+            return;
+        };
+        let staged = staged_zip(&state.library.temp_dir, "027-interrupted");
+        let id = lanrurugi_storage::id::size_aware_id(&staged).unwrap();
+        let dest =
+            lanrurugi_storage::paths::hash_layout_path(&state.library.archive_dir, &id, "zip");
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::copy(&staged, &dest).unwrap();
+
+        let done = catalogue_staged_file(
+            &state,
+            &staged,
+            "Interrupted.zip",
+            None,
+            None,
+            DuplicatePolicy::Reject,
+            true,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(done.archive_id, id);
+        let record = state
+            .repos
+            .archives
+            .get(&ArchiveId(id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(Path::new(&record.file), dest.as_path());
+        assert!(record.blake3.is_some());
+    }
+
     /// Two ingests of the same bytes must not race for the same destination (review 2026-11-10
     /// 应修 2): the second waits for the first, then reports the same archive, and neither leaves a
     /// `.ingest-` copy behind for the startup sweep to find hours later.
@@ -1001,6 +1342,7 @@ mod tests {
                 &first_staging,
                 "First Copy.zip",
                 None,
+                None,
                 DuplicatePolicy::Reject,
                 false,
                 false,
@@ -1010,6 +1352,7 @@ mod tests {
                 &state,
                 &second_staging,
                 "Second Copy.zip",
+                None,
                 None,
                 DuplicatePolicy::Reject,
                 false,
@@ -1056,6 +1399,7 @@ mod tests {
             &state,
             &staging,
             "Some Title [DL版].zip",
+            None,
             Some("https://example.org/file"),
             DuplicatePolicy::Reject,
             false,
@@ -1109,6 +1453,7 @@ mod tests {
             &state,
             &staging,
             &long,
+            None,
             None,
             DuplicatePolicy::Reject,
             false,
@@ -1192,6 +1537,7 @@ mod tests {
             &state,
             &staging,
             "[DL版] (中国翻訳).zip",
+            None,
             None,
             DuplicatePolicy::Reject,
             false,

@@ -242,7 +242,7 @@ pub fn decide(
                     if redecide {
                         reconsidered.push(source.clone());
                     }
-                    if subscription.auto_download {
+                    if downloads_automatically(subscription) {
                         CandidateVerdict::Queued
                     } else {
                         CandidateVerdict::AwaitingApproval
@@ -791,6 +791,12 @@ where
     })
 }
 
+/// Only an enabled subscription spends anything on its own. A manual check of a disabled or paused
+/// one still runs, but its matches wait for approval instead of entering the download queue.
+fn downloads_automatically(subscription: &Subscription) -> bool {
+    subscription.auto_download && subscription.state == SubscriptionState::Enabled
+}
+
 pub async fn run_check(state: &AppState, subscription_id: &str) {
     let Ok(Some(mut subscription)) = state.subscriptions.get(subscription_id).await else {
         return;
@@ -928,7 +934,7 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
         .unwrap_or_default();
 
     for source in &decision.actionable {
-        if !subscription.auto_download {
+        if !downloads_automatically(&subscription) {
             // Nothing is spent until the user approves. Recorded as its own addressable entry
             // rather than left in the cycle log: that log is bounded by age, so an unanswered
             // question would quietly expire out of it.
@@ -1450,6 +1456,27 @@ mod tests {
             vec!["a".to_string()],
             "still actionable, just not yet spent"
         );
+    }
+
+    /// A manual check of a subscription that is not enabled never queues a download, even with
+    /// auto-download on: switching it off has to mean nothing gets spent.
+    #[test]
+    fn a_subscription_that_is_not_enabled_never_queues_downloads() {
+        for state in [
+            SubscriptionState::Disabled,
+            SubscriptionState::Paused {
+                reason: lanrurugi_storage::subscriptions::PauseReason::InsufficientCredit,
+            },
+        ] {
+            let mut s = sub(true, Filters::default());
+            s.state = state;
+            let d = decide(
+                &s,
+                &result(vec![cand("a", &[])], false),
+                &ctx(&[], &[], &[], NO_CATS),
+            );
+            assert_eq!(d.records[0].verdict, CandidateVerdict::AwaitingApproval);
+        }
     }
 
     /// A work older than the window is not a candidate: a check drops it without a trace (history is

@@ -162,6 +162,8 @@ export interface Settings {
   archive_split_suggestions_enabled: boolean
   /** Whether a successful split deletes the original archive/record. */
   archive_split_delete_original_enabled: boolean
+  /** 027: read every block copied into the library back past the cache and compare. */
+  ingest_strict_verify?: boolean
   /** Site-wide guest-mode master switch; see `Category.visible_to_guest` for the per-category half. */
   guestmode: boolean
   /** Background scanning yields to interactive traffic (default on). */
@@ -958,6 +960,14 @@ export type QueueError =
   /** The bytes arrived but cataloguing them failed; the file is kept, so retrying can re-ingest
    *  it instead of downloading the archive again. */
   | { kind: "ingest_failed"; reason: string }
+  /** 027: copying into the library came out a different length; the source is kept. */
+  | { kind: "copy_length_mismatch"; path: string; expected: number; copied: number; dest_len: number }
+  /** 027: flushing the copy to disk failed; the source is kept. */
+  | { kind: "durability_failed"; path: string; os_error: string }
+  /** 027: the staged file no longer matches the fingerprint taken when it arrived. */
+  | { kind: "staged_content_corrupted"; path: string; expected_blake3: string; actual_blake3: string }
+  /** 027: strict verification read a block back that differs from what was written. */
+  | { kind: "verify_readback_mismatch"; path: string; offset: number; len: number }
 
 /** One raw archive entry (file or directory) from a header-only walk — powers the tree-structure
  * popover in the comparison modal. */

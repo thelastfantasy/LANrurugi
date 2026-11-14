@@ -12,17 +12,13 @@
 - 改写档案字节的操作（分卷拆分、补页、覆盖式重复处理）完成后必须同步更新（FR-017）。
 - legacy LANraragi 读同一个 Redis 时会忽略未知字段。
 
-## DownloadQueueItem（`crates/lanrurugi-storage/src/download_queue.rs:141`）
+## StagedDownload（`crates/lanrurugi-storage/src/download_queue.rs:135`，队列行的 `staged` 字段）
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `staged_blake3` | `Option<String>` | 入库基准指纹。下载/打包/接收完成时写入，入库成功后转存到 Archive 并清除；入库失败时保留供重试比对。`#[serde(default)]` |
+| `blake3` | `Option<String>` | 入库基准指纹。入库失败、字节被保留时，由 `note_ingest_failure` 写入；`reingest` 以它为比对基准。`#[serde(default)]` |
 
-## PendingFilenameConflict（同文件 `:99` 起）
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `blake3` | `Option<String>` | 与已有的 `crc32` 并存；冲突解决后的再入库以它为基准。`#[serde(default)]` |
+不在 `DownloadQueueItem` 上另加 `staged_blake3`：下载完成后在同一进程里立即入库，能跨重启保留下来的「已下载未入库」字节只有 `staged` 这一处。`PendingFilenameConflict` 是 020 之前的遗留数据，不再新建，接管时由复制现算指纹，不加字段。
 
 ## ResumeMetadata（`crates/lanrurugi-api/src/download_manager/stream.rs:54`，`.meta.json`）
 
@@ -41,7 +37,7 @@
 | `StagedContentCorrupted` | `path`, `expected_blake3`, `actual_blake3` | FR-012；下载来源的行据此提示「需要重新下载」 |
 | `VerifyReadbackMismatch` | `path`, `offset`, `len` | FR-014 严格校验 |
 
-每个变体在 `apps/frontend/src/i18n/locales/*.json` 有对应文案（14 个 locale）。
+每个变体在 en / zh / zh_Hant / ja 四个主维护 locale 有对应文案，其余 locale 回退 en。
 
 ## 设置
 
@@ -52,7 +48,7 @@
 ## 状态与顺序（复制路径）
 
 ```
-copy (hash every chunk) ─► len check ─► hash == staged_blake3? ─► sync_all(dest)
+copy (hash every chunk) ─► len check ─► hash == staged.blake3? ─► sync_all(dest)
    │ fail: remove .ingest-*, keep source         │ no: StagedContentCorrupted
    ▼                                              ▼
 rename .ingest-* → bucket ─► fsync(bucket dir) ─► remove source ─► save record (blake3)

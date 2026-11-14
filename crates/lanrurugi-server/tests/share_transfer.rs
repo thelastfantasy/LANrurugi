@@ -102,6 +102,7 @@ async fn an_archive_transfers_verified_and_revocation_stops_renewal() {
             heal_failed_at: None,
             corrupted_pages: vec![],
             has_patch: false,
+            blake3: None,
         })
         .await
         .unwrap();
@@ -329,6 +330,7 @@ fn archive_record(id: &str, file: &std::path::Path, size: u64) -> Archive {
         heal_failed_at: None,
         corrupted_pages: vec![],
         has_patch: false,
+        blake3: None,
     }
 }
 

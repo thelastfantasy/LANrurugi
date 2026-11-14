@@ -1670,12 +1670,39 @@ async fn remove_kept_bytes(item: Option<&lanrurugi_storage::download_queue::Down
     }
 }
 
+/// After a failed ingest of a fresh download: keeps the bytes on the row for a retry, unless they
+/// failed their fingerprint (027 R7), in which case they are dropped and the retry downloads again.
+pub(crate) async fn keep_failed_download<T>(
+    state: &AppState,
+    item_id: Option<&str>,
+    file: &crate::download_manager::stream::DownloadedFile,
+    result: &Result<T, crate::download_manager::ingest::IngestDownloadError>,
+) {
+    match result {
+        Ok(_) => {}
+        Err(crate::download_manager::ingest::IngestDownloadError::StagedCorrupted { .. }) => {
+            let _ = tokio::fs::remove_file(&file.path).await;
+        }
+        Err(_) => {
+            note_ingest_failure(
+                state,
+                item_id,
+                &file.path,
+                &file.filename,
+                file.blake3.as_deref(),
+            )
+            .await
+        }
+    }
+}
+
 /// Records, on the queue row, where its downloaded bytes were put back after cataloguing failed.
 pub(crate) async fn note_ingest_failure(
     state: &AppState,
     item_id: Option<&str>,
     path: &std::path::Path,
     filename: &str,
+    blake3: Option<&str>,
 ) {
     let Some(id) = item_id else { return };
     let Ok(Some(mut item)) = state.download_queue.get(id).await else {
@@ -1684,6 +1711,7 @@ pub(crate) async fn note_ingest_failure(
     item.staged = Some(lanrurugi_storage::download_queue::StagedDownload {
         path: path.display().to_string(),
         filename: filename.to_string(),
+        blake3: blake3.map(str::to_string),
     });
     if let Err(e) = state.download_queue.update(&item).await {
         tracing::warn!(%id, error = %e, "could not record the kept download");
@@ -1723,6 +1751,7 @@ async fn reingest(State(state): State<AppState>, Path(id): Path<String>) -> Resp
         path,
         filename: staged.filename,
         bytes_downloaded: item.file_size.unwrap_or(0),
+        blake3: staged.blake3,
     };
     match crate::download_manager::ingest::ingest_downloaded_file(
         &state,
@@ -1759,6 +1788,14 @@ async fn reingest(State(state): State<AppState>, Path(id): Path<String>) -> Resp
         }
         Err(e) => {
             let queue_error = lanrurugi_core::queue_error::QueueError::from(&e);
+            if matches!(
+                e,
+                crate::download_manager::ingest::IngestDownloadError::StagedCorrupted { .. }
+            ) {
+                // The kept bytes are damaged (027 R7): drop them, so the row's retry downloads again.
+                remove_kept_bytes(Some(&item)).await;
+                item.staged = None;
+            }
             item.error = Some(queue_error.clone());
             let _ = state.download_queue.update(&item).await;
             broadcast_item_update(&state, &item);
@@ -1880,6 +1917,7 @@ mod tests {
         row.staged = Some(StagedDownload {
             path: kept.display().to_string(),
             filename: "Kept [DL版].zip".to_string(),
+            blake3: None,
         });
         state.download_queue.update(&row).await.unwrap();
 
@@ -2066,6 +2104,7 @@ mod tests {
             heal_failed_at: None,
             corrupted_pages: vec![],
             has_patch: false,
+            blake3: None,
         };
         state.repos.archives.save(&archive).await.unwrap();
         crate::download_sources::record(&state, &url, &archive_id).await;

@@ -1879,6 +1879,20 @@ export function useTidyTags() {
   })
 }
 
+/** 027: fills in the whole-file fingerprint of archives catalogued before it was recorded. */
+export function useBlake3Backfill() {
+  return useMutation({
+    mutationFn: () =>
+      sendJson<{ job: string; already_running?: boolean }>("POST", "/database/blake3-backfill"),
+  })
+}
+
+export function useStopBlake3Backfill() {
+  return useMutation({
+    mutationFn: () => sendJson<{ stopped: boolean }>("DELETE", "/database/blake3-backfill"),
+  })
+}
+
 export function useDropDatabase() {
   return useMutation({
     mutationFn: () => sendJson("POST", "/database/drop"),

@@ -284,6 +284,10 @@ impl ArchiveRepository {
             ),
         ];
         let _: () = conn.hset_multiple(archive.id.as_str(), &fields).await?;
+        // Like `thumbhash`: written when known, never cleared by a save that did not carry it.
+        if let Some(blake3) = &archive.blake3 {
+            let _: () = conn.hset(archive.id.as_str(), "blake3", blake3).await?;
+        }
         if let Some(thumbhash) = &archive.thumbhash {
             let _: () = conn
                 .hset(archive.id.as_str(), "thumbhash", thumbhash)
@@ -304,6 +308,22 @@ impl ArchiveRepository {
             }
         }
         Ok(())
+    }
+
+    /// Writes only the whole-file fingerprint (027 backfill), so a concurrent edit of any other
+    /// field is never overwritten by a stale full record.
+    /// Only touches a record that still exists: an archive deleted while it was being hashed must
+    /// not come back as a hash holding nothing but this field.
+    pub async fn set_blake3(&self, id: &ArchiveId, blake3: &str) -> Result<bool> {
+        const SCRIPT: &str = "if redis.call('EXISTS', KEYS[1]) == 1 then \
+            redis.call('HSET', KEYS[1], 'blake3', ARGV[1]) return 1 end return 0";
+        let mut conn = self.pool.get().await?;
+        let written: i64 = deadpool_redis::redis::Script::new(SCRIPT)
+            .key(id.as_str())
+            .arg(blake3)
+            .invoke_async(&mut conn)
+            .await?;
+        Ok(written == 1)
     }
 
     pub async fn delete(&self, id: &ArchiveId) -> Result<()> {
@@ -480,6 +500,7 @@ fn archive_from_fields(
         heal_failed_at,
         corrupted_pages,
         has_patch,
+        blake3: fields.remove("blake3").filter(|v| !v.is_empty()),
     })
 }
 
@@ -1217,6 +1238,7 @@ mod tests {
             heal_failed_at: Some(1_700_000_500),
             corrupted_pages: vec!["page03.jpg".to_string(), "page07.jpg".to_string()],
             has_patch: true,
+            blake3: None,
         };
 
         repo.save(&archive).await.unwrap();
@@ -1224,6 +1246,49 @@ mod tests {
         assert_eq!(fetched, archive);
 
         repo.delete(&id).await.unwrap();
+        assert!(repo.get(&id).await.unwrap().is_none());
+    }
+
+    /// 027: the fingerprint survives a save that does not carry it (every whole-record writer that
+    /// predates it), and the backfill never resurrects a deleted record.
+    #[tokio::test]
+    async fn the_fingerprint_is_written_alone_and_never_cleared_by_a_save() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = ArchiveRepository::new(pool);
+        let id = ArchiveId("b3".repeat(20));
+        let mut archive = Archive {
+            id: id.clone(),
+            name: "n".into(),
+            title: "t".into(),
+            file: "/library/n.zip".into(),
+            tags: String::new(),
+            summary: String::new(),
+            arcsize: 1,
+            pagecount: 1,
+            isnew: false,
+            lastreadpage: 0,
+            lastreadtime: 0,
+            thumbhash: None,
+            toc: vec![],
+            stamp_ids: vec![],
+            heal_failed_at: None,
+            corrupted_pages: vec![],
+            has_patch: false,
+            blake3: None,
+        };
+        repo.save(&archive).await.unwrap();
+        assert!(repo.set_blake3(&id, &"ab".repeat(32)).await.unwrap());
+        archive.title = "edited".into();
+        repo.save(&archive).await.unwrap();
+        let fetched = repo.get(&id).await.unwrap().unwrap();
+        assert_eq!(fetched.title, "edited");
+        assert_eq!(fetched.blake3.as_deref(), Some("ab".repeat(32).as_str()));
+
+        repo.delete(&id).await.unwrap();
+        assert!(!repo.set_blake3(&id, &"cd".repeat(32)).await.unwrap());
         assert!(repo.get(&id).await.unwrap().is_none());
     }
 
@@ -1426,6 +1491,7 @@ mod tests {
             heal_failed_at: None,
             corrupted_pages: vec![],
             has_patch: false,
+            blake3: None,
         };
         archive_repo.save(&archive).await.unwrap();
 
@@ -1506,6 +1572,7 @@ mod tests {
             heal_failed_at: None,
             corrupted_pages: vec![],
             has_patch: false,
+            blake3: None,
         };
         archive_repo.save(&archive).await.unwrap();
 
@@ -1560,6 +1627,7 @@ mod tests {
             heal_failed_at: None,
             corrupted_pages: vec![],
             has_patch: false,
+            blake3: None,
         }
     }
 

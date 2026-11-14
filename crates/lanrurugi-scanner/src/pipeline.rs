@@ -50,6 +50,9 @@ pub enum PipelineError {
     Repository(#[from] lanrurugi_storage::repository::RepositoryError),
     #[error("timed out after {0:?} ingesting file")]
     Timeout(Duration),
+    /// 027: the whole-file fingerprint could not be read; no record is written without one.
+    #[error("could not fingerprint the file: {0}")]
+    Fingerprint(#[source] std::io::Error),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,6 +261,9 @@ pub struct IngestOptions<'a> {
     /// would deadlock on its own lock. Everything else leaves this `false` and gets serialized
     /// here.
     pub locked: bool,
+    /// The whole-file BLAKE3 (lowercase hex) when the caller already has it (027): taken when the
+    /// bytes arrived, or by the copy into the library. `None` reads the file once to compute it.
+    pub blake3: Option<&'a str>,
 }
 
 impl<'a> IngestOptions<'a> {
@@ -269,6 +275,7 @@ impl<'a> IngestOptions<'a> {
             title_filename: Some(name),
             defer_file_path: false,
             locked: false,
+            blake3: None,
         }
     }
 }
@@ -291,6 +298,7 @@ pub async fn ingest_file_with_policy(
         title_filename,
         defer_file_path,
         locked,
+        blake3,
     } = options;
 
     let id = ArchiveId(size_aware_id(path)?);
@@ -317,6 +325,9 @@ pub async fn ingest_file_with_policy(
         // exactly matching legacy's `change_archive_id` semantics for a rewritten file.
         match archives.rename_id(&previous_id, &id).await {
             Ok(()) => {
+                // New bytes under the old record: the carried-over fingerprint is stale (027).
+                let fingerprint = fingerprint(path, blake3).await?;
+                archives.set_blake3(&id, &fingerprint).await?;
                 let _: () = config_conn
                     .hset(FILEMAP_KEY, &path_str, id.as_str())
                     .await?;
@@ -388,6 +399,7 @@ pub async fn ingest_file_with_policy(
         date_added: read_date_added_settings(&mut config_conn).await,
         defer_file_path,
     };
+    let fingerprint = fingerprint(path, blake3).await?;
     catalogue_new_archive(
         archives,
         search_pool,
@@ -396,6 +408,7 @@ pub async fn ingest_file_with_policy(
         &id,
         path,
         title_filename,
+        &fingerprint,
         catalogue_settings,
     )
     .await?;
@@ -413,6 +426,19 @@ pub async fn ingest_file_with_policy(
 struct DateAddedSettings {
     enabled: bool,
     use_last_modified: bool,
+}
+
+/// The caller's fingerprint, or one read from `path` off the async reactor (027 FR-010).
+async fn fingerprint(path: &Path, known: Option<&str>) -> Result<String, PipelineError> {
+    if let Some(known) = known {
+        return Ok(known.to_string());
+    }
+    let path = path.to_path_buf();
+    lanrurugi_core::concurrency::run_blocking(move || lanrurugi_core::io::blake3_file(&path))
+        .await
+        .map_err(|e| PipelineError::Fingerprint(std::io::Error::other(e)))?
+        .map(|hash| hash.to_hex().to_string())
+        .map_err(PipelineError::Fingerprint)
 }
 
 /// The two independent settings groups `catalogue_new_archive` needs — bundled into one struct
@@ -512,6 +538,7 @@ async fn catalogue_new_archive(
     id: &ArchiveId,
     path: &Path,
     title_filename: Option<&str>,
+    blake3: &str,
     settings: CatalogueSettings,
 ) -> Result<(), PipelineError> {
     let CatalogueSettings {
@@ -635,6 +662,7 @@ async fn catalogue_new_archive(
         heal_failed_at: None,
         corrupted_pages: Vec::new(),
         has_patch,
+        blake3: Some(blake3.to_string()),
     };
     archives.save(&archive).await?;
     // The sidecar is written after the record exists and the bytes are final, never before: a
@@ -913,6 +941,16 @@ mod tests {
         // `upload.rs`/`ingest_downloaded_file`'s own logic, isn't exercised by this pipeline-level
         // function).
         assert_eq!(archive.file, staged_path.to_string_lossy());
+        // 027: no fingerprint was handed in, so the pipeline read the file for one.
+        assert_eq!(
+            archive.blake3,
+            Some(
+                lanrurugi_core::io::blake3_file(&staged_path)
+                    .unwrap()
+                    .to_hex()
+                    .to_string()
+            )
+        );
 
         archives.delete(&id).await.unwrap();
         let mut conn = config_pool.get().await.unwrap();

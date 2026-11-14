@@ -38,6 +38,29 @@ export function QueueErrorText({ error }: { error: QueueError }) {
           })}
         </span>
       )
+    case "copy_length_mismatch":
+      return (
+        <span title={error.path}>
+          {t("components.layout.copyLengthMismatch", {
+            expected: error.expected,
+            copied: error.copied,
+          })}
+        </span>
+      )
+    case "durability_failed":
+      return <span title={error.path}>{t("components.layout.durabilityFailed", { error: error.os_error })}</span>
+    case "staged_content_corrupted":
+      return (
+        <span title={`${error.path}\n${error.expected_blake3} ≠ ${error.actual_blake3}`}>
+          {t("components.layout.stagedContentCorrupted")}
+        </span>
+      )
+    case "verify_readback_mismatch":
+      return (
+        <span title={error.path}>
+          {t("components.layout.verifyReadbackMismatch", { offset: error.offset, len: error.len })}
+        </span>
+      )
     case "egress_unavailable":
       return (
         <span>{t("components.layout.egressInterfaceUnavailable", { interface: error.interface })}</span>

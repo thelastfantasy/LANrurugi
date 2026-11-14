@@ -385,18 +385,16 @@ async fn move_back(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// `rename`, falling back to copy + `fsync` + unlink across filesystems (`_byname/` is normally on
-/// the same one, but a library can be assembled from several mounts).
-/// Same buffered copy the download manager uses (`lanrurugi_core::io`): an 8 KiB fallback buffer
-/// turns a cross-dataset `_byname/` migration into a multi-minute stall per gigabyte.
-async fn copy_buffered(from: &Path, to: &Path) -> std::io::Result<u64> {
-    lanrurugi_core::io::copy_file(from, to).await
-}
-
+/// Durable `rename` (027 FR-005: flushed before and after), falling back across filesystems to
+/// the checked copy (`lanrurugi_core::io::copy_file`: length check, flush, buffered) under a
+/// temporary name, renamed into place and flushed before the source is removed. `_byname/` is
+/// normally on the same filesystem, but a library can be assembled from several mounts.
 async fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
-    match tokio::fs::rename(from, to).await {
+    match lanrurugi_core::io::durable_rename(from, to).await {
         Ok(()) => Ok(()),
-        Err(e) if e.kind() == ErrorKind::CrossesDevices || e.raw_os_error() == Some(18) => {
+        Err(e)
+            if e.kind() == ErrorKind::CrossesDevices || lanrurugi_core::io::is_cross_device(&e) =>
+        {
             // Copy under a temporary name and rename it into place: a copy straight to `to` that is
             // interrupted leaves a truncated file at the destination, which then looks "occupied"
             // forever and gets catalogued as an archive of its own.
@@ -408,14 +406,18 @@ async fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
                 uuid::Uuid::new_v4().simple()
             ));
             let copied = async {
-                copy_buffered(from, &staging).await?;
-                // `copy` is not durable; the rename path is, so match it here.
-                let file = tokio::fs::OpenOptions::new()
-                    .write(true)
-                    .open(&staging)
-                    .await?;
-                file.sync_all().await?;
-                tokio::fs::rename(&staging, to).await
+                lanrurugi_core::io::copy_file(
+                    from,
+                    &staging,
+                    &lanrurugi_core::io::CopyOptions::default(),
+                )
+                .await
+                .map_err(std::io::Error::other)?;
+                tokio::fs::rename(&staging, to).await?;
+                if let Some(parent) = to.parent() {
+                    lanrurugi_core::io::sync_dir(parent).await?;
+                }
+                Ok::<(), std::io::Error>(())
             }
             .await;
             if let Err(e) = copied {
@@ -581,6 +583,7 @@ mod tests {
             heal_failed_at: None,
             corrupted_pages: vec![],
             has_patch: false,
+            blake3: None,
         }
     }
 

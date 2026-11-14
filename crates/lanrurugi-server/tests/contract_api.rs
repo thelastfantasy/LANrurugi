@@ -281,6 +281,7 @@ async fn ungrouped_search_finds_archives_folded_into_tankoubons() {
         heal_failed_at: None,
         corrupted_pages: vec![],
         has_patch: false,
+        blake3: None,
     })
     .await
     .unwrap();
@@ -423,6 +424,7 @@ async fn bookmark_search_operators_see_bookmarks_where_the_router_stores_them() 
         heal_failed_at: None,
         corrupted_pages: vec![],
         has_patch: false,
+        blake3: None,
     })
     .await
     .unwrap();
@@ -671,6 +673,7 @@ async fn search_syntax_matrix_covers_every_operator_and_its_combinations() {
             heal_failed_at: None,
             corrupted_pages: vec![],
             has_patch: *has_patch,
+            blake3: None,
         })
         .await
         .unwrap();
@@ -1117,6 +1120,7 @@ async fn get_archives_matches_recorded_archive_metadata_shape() {
         heal_failed_at: None,
         corrupted_pages: vec![],
         has_patch: false,
+        blake3: None,
     })
     .await
     .unwrap();
@@ -1226,6 +1230,7 @@ async fn delete_archive_matches_recorded_response_shape() {
         heal_failed_at: None,
         corrupted_pages: vec![],
         has_patch: false,
+        blake3: None,
     })
     .await
     .unwrap();
@@ -1758,6 +1763,7 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
             heal_failed_at: None,
             corrupted_pages: vec![],
             has_patch: false,
+            blake3: None,
         })
         .await
         .unwrap();
@@ -1969,6 +1975,7 @@ async fn subfolders_to_tankoubons_creates_tankoubons_visible_in_list_all() {
                 heal_failed_at: None,
                 corrupted_pages: vec![],
                 has_patch: false,
+                blake3: None,
             })
             .await
             .unwrap();
@@ -2213,6 +2220,7 @@ async fn seed_real_archive(redis: &RedisDbs, dir: &std::path::Path, id: &str) ->
         heal_failed_at: None,
         corrupted_pages: vec![],
         has_patch: false,
+        blake3: None,
     };
     lanrurugi_storage::repository::ArchiveRepository::new(redis.archive.clone())
         .save(&archive)

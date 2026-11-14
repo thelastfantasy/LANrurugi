@@ -97,6 +97,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [subfoldersToTankoubons, setSubfoldersToTankoubons] = useState(settings.subfolders_to_tankoubons)
   const [archiveSplitSuggestionsEnabled, setArchiveSplitSuggestionsEnabled] = useState(settings.archive_split_suggestions_enabled)
   const [archiveSplitDeleteOriginalEnabled, setArchiveSplitDeleteOriginalEnabled] = useState(settings.archive_split_delete_original_enabled)
+  const [ingestStrictVerify, setIngestStrictVerify] = useState(settings.ingest_strict_verify ?? false)
   const [guestmode, setGuestmode] = useState(settings.guestmode)
   const [idlescan, setIdlescan] = useState(settings.idlescan)
   const [newbadgemode, setNewbadgemode] = useState(settings.newbadgemode)
@@ -194,6 +195,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       subfoldersToTankoubons !== settings.subfolders_to_tankoubons ||
       archiveSplitSuggestionsEnabled !== settings.archive_split_suggestions_enabled ||
       archiveSplitDeleteOriginalEnabled !== settings.archive_split_delete_original_enabled ||
+      ingestStrictVerify !== (settings.ingest_strict_verify ?? false) ||
       guestmode !== settings.guestmode ||
       idlescan !== settings.idlescan ||
       accessTokenLifetimeSecs !== settings.access_token_lifetime_secs ||
@@ -227,7 +229,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
     [
       htmltitle, language, pagesize, enableresize, sizethreshold, readerquality,
       localprogress, authprogress, stampautobookmark, stampautounbookmark, subfoldersToTankoubons,
-      archiveSplitSuggestionsEnabled, archiveSplitDeleteOriginalEnabled,
+      archiveSplitSuggestionsEnabled, archiveSplitDeleteOriginalEnabled, ingestStrictVerify,
       guestmode, idlescan, accessTokenLifetimeSecs,
       refreshTokenLifetimeSecs, refreshTokenIdleLifetimeSecs, maxLoginDevices,
       trustedOrigins, ssoAutoRedirect, enablecors, tempmaxsize,
@@ -269,6 +271,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         subfolders_to_tankoubons: subfoldersToTankoubons,
         archive_split_suggestions_enabled: archiveSplitSuggestionsEnabled,
         archive_split_delete_original_enabled: archiveSplitDeleteOriginalEnabled,
+        ingest_strict_verify: ingestStrictVerify,
         guestmode,
         idlescan,
         access_token_lifetime_secs: accessTokenLifetimeSecs,
@@ -471,6 +474,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             setArchiveSplitSuggestionsEnabled={setArchiveSplitSuggestionsEnabled}
             archiveSplitDeleteOriginalEnabled={archiveSplitDeleteOriginalEnabled}
             setArchiveSplitDeleteOriginalEnabled={setArchiveSplitDeleteOriginalEnabled}
+            ingestStrictVerify={ingestStrictVerify}
+            setIngestStrictVerify={setIngestStrictVerify}
             guestmode={guestmode}
             setGuestmode={setGuestmode}
             newbadgemode={newbadgemode}

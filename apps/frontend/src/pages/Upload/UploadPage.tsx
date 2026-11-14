@@ -24,6 +24,20 @@ import { ReservationGroup } from "./ReservationGroup"
 import { findMatchingPlugin, findPluginByDomain } from "./shared"
 import { SubscriptionStatus } from "./SubscriptionStatus"
 
+/** Splits pasted text into one URL per line (comma- or whitespace-separated if it has no newlines)
+ * and ends it with a newline, so the next paste starts on its own line. */
+function urlLinesForInsert(raw: string): string {
+  let insert: string
+  if (raw.includes("\n")) {
+    insert = raw
+  } else {
+    const sep = raw.includes(",") ? /,\s*/ : /\s+/
+    const lines = raw.trim().split(sep).filter(Boolean)
+    insert = lines.length <= 1 ? raw.trim() : lines.join("\n")
+  }
+  return insert.endsWith("\n\n") ? insert : insert.replace(/\n?$/, "\n")
+}
+
 // Loaded only when opened: it carries the QR decoder.
 const ImportShareModal = lazy(() =>
   import("@/share/ImportShareModal").then((m) => ({ default: m.ImportShareModal })),
@@ -49,6 +63,25 @@ export function Upload() {
   // Matches the stylesheet breakpoint that stacks these two columns (`@media (max-width: 768px)`).
   const narrow = useIsNarrowViewport("(max-width: 768px)")
   const [urls, setUrls] = useState("")
+  // Value before an IME composition began; the URL split waits until the composition ends.
+  const composingFrom = useRef<string | null>(null)
+  // Keyboard clipboard managers (Gboard) commit text through the IME, not a `paste` event, so a
+  // multi-character insertion carrying a URL gets the same one-per-line treatment as a paste.
+  function commitUrls(ta: HTMLTextAreaElement, before: string) {
+    const next = ta.value
+    let start = 0
+    while (start < before.length && start < next.length && before[start] === next[start]) start++
+    let end = 0
+    while (end < before.length - start && end < next.length - start && before[before.length - 1 - end] === next[next.length - 1 - end]) end++
+    const inserted = next.slice(start, next.length - end)
+    if (inserted.length > 1 && !inserted.includes("\n") && /https?:\/\//.test(inserted)) {
+      const insert = urlLinesForInsert(inserted)
+      setUrls(next.slice(0, start) + insert + next.slice(next.length - end))
+      requestAnimationFrame(() => ta.setSelectionRange(start + insert.length, start + insert.length))
+      return
+    }
+    setUrls(next)
+  }
   const [unmatchedUrls, setUnmatchedUrls] = useState<string[]>([])
   const [uploadingCount, setUploadingCount] = useState(0)
   const [uploadProgress, setUploadProgress] = useState<{ loaded: number; total: number } | null>(null)
@@ -298,19 +331,22 @@ export function Upload() {
       <textarea
         id="urlForm"
         value={urls}
-        onChange={(e) => setUrls(e.target.value)}
+        onChange={(e) => {
+          if (composingFrom.current !== null) setUrls(e.target.value)
+          else commitUrls(e.target, urls)
+        }}
+        onCompositionStart={() => {
+          composingFrom.current = urls
+        }}
+        onCompositionEnd={(e) => {
+          const before = composingFrom.current ?? urls
+          composingFrom.current = null
+          commitUrls(e.currentTarget, before)
+        }}
         onPaste={(e) => {
           const raw = e.clipboardData.getData("text")
           if (!raw.trim()) return
-          let insert: string
-          if (raw.includes("\n")) {
-            insert = raw
-          } else {
-            const sep = raw.includes(",") ? /,\s*/ : /\s+/
-            const lines = raw.trim().split(sep).filter(Boolean)
-            insert = lines.length <= 1 ? raw.trim() : lines.join("\n")
-          }
-          if (!insert.endsWith("\n\n")) insert = insert.replace(/\n?$/, "\n")
+          const insert = urlLinesForInsert(raw)
           e.preventDefault()
           const ta = e.target as HTMLTextAreaElement
           setUrls(urls.slice(0, ta.selectionStart) + insert + urls.slice(ta.selectionEnd))

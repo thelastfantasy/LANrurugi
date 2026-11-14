@@ -43,6 +43,7 @@ fn archive(id: &str, file: &std::path::Path) -> Archive {
         heal_failed_at: None,
         corrupted_pages: vec![],
         has_patch: false,
+        blake3: None,
     }
 }
 

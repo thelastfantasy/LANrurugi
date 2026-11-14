@@ -398,6 +398,19 @@ pub(crate) async fn read_archive_split_delete_original_enabled(state: &AppState)
     }
 }
 
+/// 027 FR-014: strict read-back verification when copying into the library. Defaults to `false`.
+pub(crate) async fn read_ingest_strict_verify(state: &AppState) -> bool {
+    match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "ingest_strict_verify")
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|v| v != "0"),
+        Err(_) => false,
+    }
+}
+
 /// issue #97: whether placing a stamp on a not-yet-bookmarked page should also bookmark it —
 /// read by `stamps.rs::add_stamp`. Same shape as [`read_new_badge_mode`] above.
 pub(crate) async fn read_stamp_autobookmark(state: &AppState) -> bool {
@@ -633,6 +646,9 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     // Whether a successful manual split deletes the original archive/record. Defaults to false:
     // by default keep the original and also create the split ZIPs.
     ("archive_split_delete_original_enabled", false),
+    // 027 FR-014: read every block copied into the library back past the cache and compare. Only
+    // useful when the library is a network mount; on local ZFS it cannot reach the disk at all.
+    ("ingest_strict_verify", false),
     // First-run wizard's own "handled, don't auto-open again" marker. Written by the wizard page
     // (`/welcome`) when the user finishes or skips it, never by the Settings page — the same
     // "stored in `LRR_CONFIG` but driven from a page other than Settings" precedent as

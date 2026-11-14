@@ -163,6 +163,7 @@ fn synthetic_archive(index: usize, templates: &[SeriesTemplate]) -> Archive {
         heal_failed_at: None,
         corrupted_pages: Vec::new(),
         has_patch: false,
+        blake3: None,
     }
 }
 

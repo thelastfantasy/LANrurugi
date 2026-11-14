@@ -1066,6 +1066,7 @@ async fn ingest(run: &Run, sharer_archive_id: &str, part: &Path, root: [u8; 32])
     // collision is not: two libraries both holding `001.zip` is ordinary, and treating that as
     // "already present" would point this import at a different, unrelated archive — so it gets a
     // free name and is catalogued like any other import.
+    let root_hex = hex(&root);
     let mut attempt = 0;
     let local_id = loop {
         let name = if attempt == 0 {
@@ -1081,7 +1082,16 @@ async fn ingest(run: &Run, sharer_archive_id: &str, part: &Path, root: [u8; 32])
             lanrurugi_scanner::pipeline::DuplicatePolicy::Reject
         };
         match crate::download_manager::ingest::catalogue_staged_file(
-            &run.state, &staging, &name, None, policy, false, false, false,
+            &run.state,
+            &staging,
+            &name,
+            // The bao root the transfer verified is the file's own BLAKE3 (FR-022).
+            Some(root_hex.as_str()),
+            None,
+            policy,
+            false,
+            false,
+            false,
         )
         .await
         {

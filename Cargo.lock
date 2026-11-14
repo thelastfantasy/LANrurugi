@@ -4277,8 +4277,10 @@ version = "1.0.0-beta.5"
 dependencies = [
  "base64 0.23.1",
  "bcrypt",
+ "blake3",
  "governor",
  "hmac",
+ "libc",
  "rayon",
  "reqwest",
  "serde",

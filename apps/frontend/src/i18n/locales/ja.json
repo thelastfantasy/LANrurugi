@@ -2932,5 +2932,19 @@
   "duplicates.multiLossWarn": "{{from}} には {{into}} にないページが {{count}} ページあります",
   "duplicates.multiPatchInto": "先に {{into}} へ補う",
   "duplicates.multiConfirmYes": "{{discard}} 冊をごみ箱へ",
-  "duplicates.multiRecycled": "{{keep}} 冊を残し、{{discard}} 冊をごみ箱へ移しました"
+  "duplicates.multiRecycled": "{{keep}} 冊を残し、{{discard}} 冊をごみ箱へ移しました",
+  "components.layout.copyLengthMismatch": "ライブラリへのコピーの長さが一致しません（{{copied}} / {{expected}} バイト）。元のファイルは残しています。再試行してください。",
+  "components.layout.durabilityFailed": "コピーをディスクへ書き出せませんでした（{{error}}）。元のファイルは残しています。空き容量を確認して再試行してください。",
+  "components.layout.stagedContentCorrupted": "ダウンロードした一時ファイルが登録前に壊れていました。もう一度ダウンロードしてください（取り込み元のファイルはそのまま残ります）。",
+  "components.layout.verifyReadbackMismatch": "厳密検証で読み戻したデータが一致しません（オフセット {{offset}}、{{len}} バイト）。元のファイルは残しています。ストレージを確認してください。",
+  "settings.ingestStrictVerify": "登録時の厳密検証",
+  "settings.ingestStrictVerifyDescription": "ダウンロードや取り込んだファイルをライブラリへコピーする際、キャッシュを経由せず各ブロックを読み戻して比較します。ネットワークストレージ（NFS/SMB）上のライブラリでのみ有効です。ローカルの ZFS ではディスクまで読めないためスキップされ、HDD では登録が遅くなります。",
+  "settings.blake3Backfill": "既存アーカイブの指紋を計算",
+  "settings.blake3BackfillDescription": "このバージョン以降に登録されたアーカイブにはファイル全体の BLAKE3 指紋が自動で付きます。ここでは以前のアーカイブを一度ずつ読んで計算します。進捗はジョブページで確認できます。",
+  "settings.blake3BackfillStarted": "指紋の計算を開始しました。ジョブページで進捗を確認できます。",
+  "settings.blake3BackfillRunning": "指紋の計算はすでに実行中です。ジョブページを確認してください。",
+  "settings.blake3BackfillStop": "停止",
+  "settings.blake3BackfillStopped": "現在のバッチが終わったら停止します。",
+  "settings.blake3BackfillIdle": "指紋の計算は実行されていません。",
+  "activity.actionType.database.blake3_backfill": "アーカイブの指紋を計算"
 }

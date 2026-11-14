@@ -3231,5 +3231,19 @@
   "duplicates.multiLossWarn": "{{from}} has {{count}} pages {{into}} lacks",
   "duplicates.multiPatchInto": "Patch into {{into}} first",
   "duplicates.multiConfirmYes": "Recycle {{discard}}",
-  "duplicates.multiRecycled": "Kept {{keep}}, moved {{discard}} to the recycle bin"
+  "duplicates.multiRecycled": "Kept {{keep}}, moved {{discard}} to the recycle bin",
+  "components.layout.copyLengthMismatch": "Copying into the library came out short ({{copied}} of {{expected}} bytes). The original file was kept; retry.",
+  "components.layout.durabilityFailed": "Could not flush the copy to disk ({{error}}). The original file was kept; check the library's free space and retry.",
+  "components.layout.stagedContentCorrupted": "The downloaded file was damaged before it reached the library. Download it again (an adopted file is left where it was).",
+  "components.layout.verifyReadbackMismatch": "Strict verification read back different data at byte {{offset}} ({{len}} bytes). The original file was kept; check the library storage.",
+  "settings.ingestStrictVerify": "Strict verification when adding to the library",
+  "settings.ingestStrictVerifyDescription": "While a downloaded or adopted file is copied into the library, read every block back past the cache and compare it. Only useful when the library is on a network mount (NFS/SMB). On local ZFS it cannot reach the disk and is skipped; on spinning disks it slows ingestion.",
+  "settings.blake3Backfill": "Fingerprint existing archives",
+  "settings.blake3BackfillDescription": "Archives added since this version get a whole-file BLAKE3 fingerprint automatically. This reads every older archive once to compute it; progress is on the Jobs page.",
+  "settings.blake3BackfillStarted": "Fingerprinting started; see the Jobs page.",
+  "settings.blake3BackfillRunning": "Fingerprinting is already running; see the Jobs page.",
+  "settings.blake3BackfillStop": "Stop",
+  "settings.blake3BackfillStopped": "Fingerprinting will stop after the current batch.",
+  "settings.blake3BackfillIdle": "Fingerprinting is not running.",
+  "activity.actionType.database.blake3_backfill": "Fingerprint archives"
 }

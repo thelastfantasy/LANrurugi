@@ -1126,6 +1126,16 @@ input[type="checkbox"].lrr-checkbox-bare::after {
 }
 
 @media all and (max-width: 1000px) {
+  /* Legacy's `.page-overlay { min-height: 100% !important }` makes the overlay (fixed at top: 40px)
+   * a full viewport tall, so its bottom edge — and the sticky scroll-to-top button — sits off screen.
+   * End it at the visible bottom instead; `dvh` accounts for the mobile browser's toolbar. The extra
+   * class outranks lrr.css's own `#archivePagesOverlay { height: 90vh }`, which loads after this file. */
+  #archivePagesOverlay.page-overlay {
+    min-height: 0 !important;
+    height: calc(100dvh - 40px);
+    max-height: none;
+  }
+
   .overview-archive-title {
     display: block;
     margin: -4px 0 16px;

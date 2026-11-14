@@ -179,6 +179,35 @@ pub enum QueueError {
     ShareImport {
         reason: String,
     },
+    /// 027 FR-001: a copy into the library ended with a different length than the source had when
+    /// it started (short read, or the source changed under the copy). The source is kept.
+    CopyLengthMismatch {
+        path: String,
+        expected: u64,
+        copied: u64,
+        dest_len: u64,
+    },
+    /// 027 FR-002/003: flushing the copy (or its directory) to disk failed — on NFS/SMB this is
+    /// where a full disk or a lost server first shows up. The source is kept.
+    DurabilityFailed {
+        path: String,
+        os_error: String,
+    },
+    /// 027 FR-012: the bytes copied into the library do not hash to the fingerprint taken when they
+    /// were first received, so the staged file itself is damaged. A download is fetched again; an
+    /// adopted file is kept where it was.
+    StagedContentCorrupted {
+        path: String,
+        expected_blake3: String,
+        actual_blake3: String,
+    },
+    /// 027 FR-014: strict verification read a block back from the library and it differed from
+    /// what was written. The source is kept.
+    VerifyReadbackMismatch {
+        path: String,
+        offset: u64,
+        len: u64,
+    },
 }
 
 impl QueueError {
@@ -209,6 +238,10 @@ impl QueueError {
             QueueError::SourceAlreadyImported { .. } => 1011,
             QueueError::SourceDownloadInProgress => 1012,
             QueueError::IngestFailed { .. } => 1013,
+            QueueError::CopyLengthMismatch { .. } => 1014,
+            QueueError::DurabilityFailed { .. } => 1015,
+            QueueError::StagedContentCorrupted { .. } => 1016,
+            QueueError::VerifyReadbackMismatch { .. } => 1017,
         }
     }
 }

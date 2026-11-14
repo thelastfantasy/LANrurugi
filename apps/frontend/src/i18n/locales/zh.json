@@ -3231,5 +3231,19 @@
   "duplicates.multiLossWarn": "{{from}} 有 {{count}} 页是 {{into}} 没有的",
   "duplicates.multiPatchInto": "先补进 {{into}}",
   "duplicates.multiConfirmYes": "确定，回收 {{discard}} 本",
-  "duplicates.multiRecycled": "已保留 {{keep}} 本，{{discard}} 本移到回收站"
+  "duplicates.multiRecycled": "已保留 {{keep}} 本，{{discard}} 本移到回收站",
+  "components.layout.copyLengthMismatch": "复制进书库的长度不对（{{copied}} / {{expected}} 字节），原文件已保留，请重试。",
+  "components.layout.durabilityFailed": "复制后写入磁盘失败（{{error}}），原文件已保留。请检查书库剩余空间后重试。",
+  "components.layout.stagedContentCorrupted": "下载的暂存文件在入库前已损坏，请重新下载（接管的已有文件会留在原处）。",
+  "components.layout.verifyReadbackMismatch": "严格校验读回的数据不一致（偏移 {{offset}}，{{len}} 字节），原文件已保留，请检查书库存储。",
+  "settings.ingestStrictVerify": "入库严格校验",
+  "settings.ingestStrictVerifyDescription": "把下载或接管的文件复制进书库时，绕过缓存把每一块读回来比对。只对放在网络存储（NFS/SMB）上的书库有用；本地 ZFS 上无法读到磁盘，会自动跳过；机械硬盘上会让入库变慢。",
+  "settings.blake3Backfill": "补算档案指纹",
+  "settings.blake3BackfillDescription": "本版本起新入库的档案会自动带上全文件 BLAKE3 指纹。这里会把较早的档案各读一遍补算指纹，进度在任务页查看。",
+  "settings.blake3BackfillStarted": "已开始补算指纹，进度见任务页。",
+  "settings.blake3BackfillRunning": "补算已在进行，进度见任务页。",
+  "settings.blake3BackfillStop": "停止",
+  "settings.blake3BackfillStopped": "补算会在当前这一批完成后停止。",
+  "settings.blake3BackfillIdle": "当前没有在补算。",
+  "activity.actionType.database.blake3_backfill": "补算档案指纹"
 }

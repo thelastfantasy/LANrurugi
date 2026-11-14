@@ -45,7 +45,7 @@ pub async fn bundle_into_one_archive(
 
     let bytes_downloaded: u64 = resources.iter().map(|r| r.bytes_downloaded).sum();
 
-    tokio::task::spawn_blocking(move || -> Result<(), BundleError> {
+    let fingerprint = tokio::task::spawn_blocking(move || -> Result<String, BundleError> {
         let file = std::fs::File::create(&bundle_path_for_blocking)?;
         // Buffered: `ZipWriter` hands the writer small fragments (per entry header and per
         // `io::copy` chunk), which would otherwise each be their own `write(2)`.
@@ -69,11 +69,16 @@ pub async fn bundle_into_one_archive(
         // tail surfaces instead of being dropped with the handle.
         let mut buffered = writer.finish()?;
         std::io::Write::flush(&mut buffered)?;
+        drop(buffered);
+        // The fingerprint (027 FR-010) is read back from the finished file rather than hashed
+        // while writing: `ZipWriter` seeks back to patch entry headers, so the stream it writes is
+        // not the file it leaves. The file was just written, so this read comes from the cache.
+        let fingerprint = lanrurugi_core::io::blake3_file(&bundle_path_for_blocking)?;
 
         for resource in &resources {
             let _ = std::fs::remove_file(&resource.path);
         }
-        Ok(())
+        Ok(fingerprint.to_hex().to_string())
     })
     .await??;
 
@@ -81,6 +86,7 @@ pub async fn bundle_into_one_archive(
         path: bundle_path,
         filename: bundle_filename,
         bytes_downloaded,
+        blake3: Some(fingerprint),
     })
 }
 
@@ -133,6 +139,7 @@ mod tests {
                 path,
                 filename: format!("page{i:03}.jpg"),
                 bytes_downloaded: format!("content-{i}").len() as u64,
+                blake3: None,
             });
         }
         let originals: Vec<PathBuf> = resources.iter().map(|r| r.path.clone()).collect();

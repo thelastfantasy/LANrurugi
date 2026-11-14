@@ -4024,15 +4024,13 @@ async fn run_managed_downloads(
         let ingest_result =
             ingest_downloaded_file(&state, &bundled, overwrite, Some(source_url), queue_item_id)
                 .await;
-        if ingest_result.is_err() {
-            crate::download_queue::note_ingest_failure(
-                &state,
-                queue_item_id,
-                &bundled.path,
-                &bundled.filename,
-            )
-            .await;
-        }
+        crate::download_queue::keep_failed_download(
+            &state,
+            queue_item_id,
+            &bundled,
+            &ingest_result,
+        )
+        .await;
         let ingested = crate::download_manager::ingest::record_ingest_result(
             &state,
             auth.as_ref(),
@@ -4062,15 +4060,13 @@ async fn run_managed_downloads(
                 queue_item_id,
             )
             .await;
-            if ingest_result.is_err() {
-                crate::download_queue::note_ingest_failure(
-                    &state,
-                    queue_item_id,
-                    &downloaded_result.path,
-                    &downloaded_result.filename,
-                )
-                .await;
-            }
+            crate::download_queue::keep_failed_download(
+                &state,
+                queue_item_id,
+                &downloaded_result,
+                &ingest_result,
+            )
+            .await;
             let ingested = crate::download_manager::ingest::record_ingest_result(
                 &state,
                 auth.as_ref(),

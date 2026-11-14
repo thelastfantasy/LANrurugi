@@ -2,7 +2,13 @@ import { useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { useCleanDatabase, useDropDatabase, useTidyTags } from "@/api/hooks"
+import {
+  useBlake3Backfill,
+  useCleanDatabase,
+  useDropDatabase,
+  useStopBlake3Backfill,
+  useTidyTags,
+} from "@/api/hooks"
 import { NumberInput } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
 import { confirmDialog } from "@/dialog"
@@ -40,6 +46,8 @@ export function GlobalSection({
   setArchiveSplitSuggestionsEnabled,
   archiveSplitDeleteOriginalEnabled,
   setArchiveSplitDeleteOriginalEnabled,
+  ingestStrictVerify,
+  setIngestStrictVerify,
   guestmode,
   setGuestmode,
   newbadgemode,
@@ -85,6 +93,8 @@ export function GlobalSection({
   setArchiveSplitSuggestionsEnabled: (v: boolean) => void
   archiveSplitDeleteOriginalEnabled: boolean
   setArchiveSplitDeleteOriginalEnabled: (v: boolean) => void
+  ingestStrictVerify: boolean
+  setIngestStrictVerify: (v: boolean) => void
   guestmode: boolean
   setGuestmode: (v: boolean) => void
   newbadgemode: string
@@ -120,6 +130,8 @@ export function GlobalSection({
   }, [interfaces, defaultInterface])
   const cleanDatabase = useCleanDatabase()
   const tidyTags = useTidyTags()
+  const blake3Backfill = useBlake3Backfill()
+  const stopBlake3Backfill = useStopBlake3Backfill()
   const dropDatabase = useDropDatabase()
 
   return (
@@ -382,6 +394,14 @@ export function GlobalSection({
           >
             {t("settings.archiveSplitDeleteOriginalDescription")}
           </CheckboxRow>
+          <CheckboxRow
+            id="ingest_strict_verify"
+            checked={ingestStrictVerify}
+            onChange={setIngestStrictVerify}
+            label={t("settings.ingestStrictVerify")}
+          >
+            {t("settings.ingestStrictVerifyDescription")}
+          </CheckboxRow>
           {/* Site-wide guest-mode switch (FR-003) — grants nothing alone; also needs a category
               marked visible to guests (Categories.tsx) to actually route guests in. */}
           <CheckboxRow
@@ -434,6 +454,28 @@ export function GlobalSection({
             }}
           >
             {t("settings.tidyTagsDescription")}
+          </ActionRow>
+          <ActionRow
+            id="blake3-backfill"
+            label={t("settings.blake3Backfill")}
+            onClick={async () => {
+              const result = await blake3Backfill.mutateAsync()
+              onStatus(
+                t(result.already_running ? "settings.blake3BackfillRunning" : "settings.blake3BackfillStarted"),
+              )
+            }}
+          >
+            {t("settings.blake3BackfillDescription")}{" "}
+            <button
+              type="button"
+              className="stdbtn"
+              onClick={async () => {
+                const result = await stopBlake3Backfill.mutateAsync()
+                onStatus(t(result.stopped ? "settings.blake3BackfillStopped" : "settings.blake3BackfillIdle"))
+              }}
+            >
+              {t("settings.blake3BackfillStop")}
+            </button>
           </ActionRow>
           <ActionRow
             id="clean-db"

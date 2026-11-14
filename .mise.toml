@@ -94,6 +94,15 @@ for c in "$@"; do args+=(-p "$c"); done
 scripts/cargo-container-run.sh cargo test --no-fail-fast --lib --bins --tests "${args[@]}"
 """
 
+[tasks.test-one]
+description = "cargo test -p <crate> --lib <name filter> inside the dev container — runs only the unit tests whose name contains the filter, e.g. `mise run test-one -- lanrurugi-api not_enabled_never_queues`"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+crate="$1"; filter="$2"
+scripts/cargo-container-run.sh cargo test -p "$crate" --lib "$filter"
+"""
+
 [tasks.bench]
 description = "Run lanrurugi-bench's criterion microbenchmarks (the only task that compiles criterion — see [tasks.test]'s own note). Pass criterion flags after `--`, e.g. `mise run bench -- --test` for a compile-and-run-each-once smoke pass"
 # Trailing `--` is deliberate: mise appends any extra args after this string, and criterion's own

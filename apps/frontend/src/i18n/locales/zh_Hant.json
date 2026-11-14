@@ -1211,5 +1211,19 @@
   "duplicates.multiLossWarn": "{{from}} 有 {{count}} 頁是 {{into}} 沒有的",
   "duplicates.multiPatchInto": "先補進 {{into}}",
   "duplicates.multiConfirmYes": "確定，回收 {{discard}} 本",
-  "duplicates.multiRecycled": "已保留 {{keep}} 本，{{discard}} 本移到回收站"
+  "duplicates.multiRecycled": "已保留 {{keep}} 本，{{discard}} 本移到回收站",
+  "components.layout.copyLengthMismatch": "複製進書庫的長度不對（{{copied}} / {{expected}} 位元組），原檔案已保留，請重試。",
+  "components.layout.durabilityFailed": "複製後寫入磁碟失敗（{{error}}），原檔案已保留。請檢查書庫剩餘空間後重試。",
+  "components.layout.stagedContentCorrupted": "下載的暫存檔案在入庫前已損壞，請重新下載（接管的既有檔案會留在原處）。",
+  "components.layout.verifyReadbackMismatch": "嚴格校驗讀回的資料不一致（偏移 {{offset}}，{{len}} 位元組），原檔案已保留，請檢查書庫儲存。",
+  "settings.ingestStrictVerify": "入庫嚴格校驗",
+  "settings.ingestStrictVerifyDescription": "把下載或接管的檔案複製進書庫時，繞過快取把每一塊讀回來比對。只對放在網路儲存（NFS/SMB）上的書庫有用；本機 ZFS 上無法讀到磁碟，會自動略過；機械硬碟上會讓入庫變慢。",
+  "settings.blake3Backfill": "補算檔案指紋",
+  "settings.blake3BackfillDescription": "本版本起新入庫的檔案會自動帶上全檔案 BLAKE3 指紋。這裡會把較早的檔案各讀一遍補算指紋，進度在任務頁查看。",
+  "settings.blake3BackfillStarted": "已開始補算指紋，進度見任務頁。",
+  "settings.blake3BackfillRunning": "補算已在進行，進度見任務頁。",
+  "settings.blake3BackfillStop": "停止",
+  "settings.blake3BackfillStopped": "補算會在目前這一批完成後停止。",
+  "settings.blake3BackfillIdle": "目前沒有在補算。",
+  "activity.actionType.database.blake3_backfill": "補算檔案指紋"
 }

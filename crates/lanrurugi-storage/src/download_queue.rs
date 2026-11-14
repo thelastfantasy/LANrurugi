@@ -135,6 +135,10 @@ pub struct PendingFilenameConflict {
 pub struct StagedDownload {
     pub path: String,
     pub filename: String,
+    /// The fingerprint taken when the bytes arrived (027 FR-011): a retry compares against this,
+    /// not against whatever the file holds by then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blake3: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

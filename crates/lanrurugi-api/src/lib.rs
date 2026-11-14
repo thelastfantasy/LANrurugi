@@ -29,6 +29,7 @@ pub mod geoip;
 pub mod gpu_worker_client;
 pub mod health;
 pub mod heartbeat;
+pub mod integrity_backfill;
 pub mod jobs;
 pub mod llm_prompts;
 pub mod llm_usage;
@@ -99,6 +100,7 @@ pub fn router() -> Router<AppState> {
         .merge(api_tokens::router())
         .merge(archive_split::router())
         .merge(archives::router())
+        .merge(integrity_backfill::router())
         .merge(direct_download::router())
         .merge(bench::router())
         .merge(bookmarks::router())
