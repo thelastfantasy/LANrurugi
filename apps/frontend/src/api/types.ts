@@ -117,8 +117,9 @@ export interface Settings {
   recycle_retention_days: number
   /** Recycle-bin size cap in GiB; `0` means unlimited. */
   recycle_max_size_gb: number
-  /** Absolute refresh-token lifetime in seconds — the hard cap anchored to the original login.
-   *  Silent refreshes never extend this. */
+  /** Absolute refresh-token lifetime in seconds — an optional hard cap anchored to the original
+   *  login; silent refreshes never extend it. `0` means no cap at all, so a session lives as long
+   *  as it is used at least once per `refresh_token_idle_lifetime_secs`. */
   refresh_token_lifetime_secs: number
   /** Sliding refresh-token idle window in seconds — each successful rotation renews this, but it
    *  is always capped by `refresh_token_lifetime_secs`. */
@@ -1502,8 +1503,9 @@ export interface LoginSession {
   last_seen_at: number
   /** Sliding idle deadline; renewed on every successful refresh. */
   idle_expires_at: number
-  /** Absolute hard deadline, anchored to the original login. */
-  expires_at: number
+  /** Absolute hard deadline, anchored to the original login, or `null` when the instance
+   *  configures no absolute cap (`refresh_token_lifetime_secs = 0`). */
+  expires_at: number | null
   /** Whether this is the family behind the browser's current access cookie. */
   current: boolean
 }

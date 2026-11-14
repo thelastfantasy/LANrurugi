@@ -56,16 +56,16 @@ impl CookieNames {
 /// setting (`lanrurugi_api::settings`); this constant is the fallback when that field has never
 /// been set, and the value `settings.rs`'s own default table uses.
 pub const DEFAULT_ACCESS_TOKEN_LIFETIME_SECS: u64 = 4 * 60 * 60;
-/// Default refresh-token lifetime — long, but real: exceeding it forces a full re-login even for
-/// a chain that's been actively rotating the whole time (see `refresh_tokens`' own rotation docs
-/// on why the absolute expiry is anchored to the original login, not extended per-rotation).
-/// Overridable via the `refresh_token_lifetime_secs` setting, same pattern as the access token.
-pub const DEFAULT_REFRESH_TOKEN_LIFETIME_SECS: u64 = 7 * 24 * 60 * 60;
-/// Default sliding idle window for refresh tokens, renewed on every successful rotation but never
-/// beyond `DEFAULT_REFRESH_TOKEN_LIFETIME_SECS`. Fourteen days is a common web-session idle
-/// timeout; the absolute default above is deliberately still 7 days, so a pre-dual-window install
-/// that never sets either value keeps its existing effective expiry.
-pub const DEFAULT_REFRESH_TOKEN_IDLE_LIFETIME_SECS: u64 = 14 * 24 * 60 * 60;
+/// Default *absolute* refresh-token cap, counted from the original login and never extended by
+/// rotation. `0` (the default) means no cap: the idle window alone decides, so a session lives as
+/// long as it keeps being used. Overridable via the `refresh_token_lifetime_secs` setting.
+pub const DEFAULT_REFRESH_TOKEN_LIFETIME_SECS: u64 = 0;
+/// Default sliding idle window for refresh tokens, renewed on every successful rotation. This is
+/// the rule that actually applies by default; a configured absolute cap is never allowed to be
+/// shorter than it (`lanrurugi_api::auth` clamps that), since a shorter cap would silently make
+/// the window meaningless — the beta.5 behaviour users hit as "password after 7 days despite
+/// daily use".
+pub const DEFAULT_REFRESH_TOKEN_IDLE_LIFETIME_SECS: u64 = 7 * 24 * 60 * 60;
 /// Default maximum simultaneously active login families (devices). `0` means unlimited; the
 /// login handler evicts the oldest-seen family when a new login would exceed this.
 pub const DEFAULT_MAX_LOGIN_DEVICES: u64 = 5;

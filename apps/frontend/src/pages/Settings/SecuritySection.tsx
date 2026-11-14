@@ -106,9 +106,9 @@ export function SecuritySection({
           <Row label={t("settings.sessionRefreshAbsoluteWindow")}>
             <NumberInput
               style={{ width: 80 }}
-              min={1}
+              min={0}
               value={Math.round(refreshTokenLifetimeSecs / SECS_PER_DAY)}
-              onValueChange={(v) => setRefreshTokenLifetimeSecs(Math.max(1, v) * SECS_PER_DAY)}
+              onValueChange={(v) => setRefreshTokenLifetimeSecs(Math.max(0, v) * SECS_PER_DAY)}
             />{" "}
             {t("settings.days")}
             <br />
@@ -272,7 +272,10 @@ function ActiveSessionsList() {
                 </div>
                 <div style={{ opacity: 0.65 }}>
                   {t("settings.sessionRefreshIdleWindow")}: {formatTimestamp(session.idle_expires_at)} ·{" "}
-                  {t("settings.sessionRefreshAbsoluteWindow")}: {formatTimestamp(session.expires_at)}
+                  {t("settings.sessionRefreshAbsoluteWindow")}:{" "}
+                  {session.expires_at === null
+                    ? t("settings.sessionNoAbsoluteLimit")
+                    : formatTimestamp(session.expires_at)}
                 </div>
                 <div>
                   <Button

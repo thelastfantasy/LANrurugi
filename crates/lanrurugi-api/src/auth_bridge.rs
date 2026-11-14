@@ -525,7 +525,9 @@ async fn start_bridge(
         // lands between the liveness check above and here.
         let family_is_fresh = matches!(
             state.refresh_tokens.get_family_meta(&family_id).await,
-            Ok(Some(meta)) if now <= meta.expires_at && now <= meta.idle_expires_at
+            Ok(Some(meta))
+                if now <= meta.expires_at_under(cfg.live.refresh_token_lifetime_secs as i64)
+                    && now <= meta.idle_expires_at
         );
         if family_is_fresh {
             let code = match state
@@ -662,6 +664,7 @@ async fn bridge_callback(
         .issue_handoff_token(
             &record.family_id,
             now,
+            cfg.live.refresh_token_lifetime_secs as i64,
             cfg.live.refresh_token_idle_lifetime_secs as i64,
             SessionContext {
                 device_info,
