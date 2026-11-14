@@ -28,9 +28,10 @@ impl FeatureId {
     pub const PROVIDER_PRICING: Self = Self("provider_pricing");
     pub const TRANSLATION: Self = Self("translation");
     pub const TANKOUBON_GROUPING_REVIEW: Self = Self("tankoubon_grouping_review");
+    pub const DUPLICATE_REVIEW: Self = Self("duplicate_review");
 
     /// Every feature, in the order the usage endpoint reports them.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::PLUGIN_GENERATION,
         Self::PLUGIN_LOGIN_ANALYSIS,
         Self::PLUGIN_TRIAL_ATTRIBUTION,
@@ -43,6 +44,7 @@ impl FeatureId {
         Self::PROVIDER_PRICING,
         Self::TRANSLATION,
         Self::TANKOUBON_GROUPING_REVIEW,
+        Self::DUPLICATE_REVIEW,
     ];
 
     pub fn as_str(self) -> &'static str {

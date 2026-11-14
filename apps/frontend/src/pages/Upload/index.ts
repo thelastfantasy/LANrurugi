@@ -1,6 +1,5 @@
 export * from "./DownloadQueuePanel"
 
-export * from "./FilenameTemplateEditor"
 
 export * from "./QueueItemRow"
 

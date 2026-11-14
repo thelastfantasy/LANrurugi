@@ -42,6 +42,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// HTTP moved host-side: a request for an unresolvable host used to be refused instantly by Deno's
 /// `--allow-net` flag, and became a multi-second stall once a real resolver was involved.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Pause before the single connect-failure retry. Long enough for a transient DNS/TCP reset to
+/// clear, short enough that a genuinely unreachable host still fails inside the plugin's budget.
+const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(300);
 
 /// One relayed request, as the dispatcher sends it.
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -78,6 +81,16 @@ struct Stored {
     last_modified: Option<String>,
 }
 
+/// Cache key for [`HostHttp::redirecting_clients`]: the redirect limit, the declared hosts, and the
+/// egress interface the client was built for — switching interfaces must not hand a plugin a client
+/// still pinned to the old one.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ClientKey {
+    redirect_limit: usize,
+    hosts: Vec<String>,
+    interface: Option<String>,
+}
+
 /// The relay itself: one per [`crate::pool::PluginPool`], so the revalidation store is shared by
 /// every plugin namespace this host runs.
 pub struct HostHttp {
@@ -86,7 +99,7 @@ pub struct HostHttp {
     /// client-level, and that policy now enforces the plugin's own declared hosts on **every** hop,
     /// so keying by limit alone would hand a plugin a client built from another plugin's allow-list
     /// (`0` = hand the 3xx back, which needs no client of its own).
-    redirecting_clients: Mutex<HashMap<(usize, Vec<String>), reqwest::Client>>,
+    redirecting_clients: Mutex<HashMap<ClientKey, reqwest::Client>>,
     store: Mutex<HashMap<String, Stored>>,
     inflight: Singleflight<String, Arc<Result<RelayResponse, String>>>,
     hosts: Mutex<HashMap<String, Arc<Semaphore>>>,
@@ -191,15 +204,39 @@ impl HostHttp {
                 builder = builder.header("If-Modified-Since", last_modified);
             }
         }
+        let has_body = request.body.is_some();
         if let Some(body) = request.body {
             builder = builder.body(body);
         }
 
+        // A connect failure never put a byte on the wire, so retrying once cannot duplicate work.
+        // Both E-Hentai's archiver and the Chaika API occasionally reset a fresh connection; before
+        // this, a single blip failed the whole queue item with no retry inside the plugin.
+        let retry = if is_bodyless_idempotent(&method, has_body) {
+            builder.try_clone()
+        } else {
+            None
+        };
+
         let _permit = self.host_permit(host).await;
-        let response = builder
-            .send()
-            .await
-            .map_err(|e| format!("request to {} failed: {e}", redact(&request.url)))?;
+        let response = match builder.send().await {
+            Ok(response) => response,
+            Err(error) => match retry {
+                Some(retry) if error.is_connect() => {
+                    tokio::time::sleep(CONNECT_RETRY_DELAY).await;
+                    retry
+                        .send()
+                        .await
+                        .map_err(|e| format!("request to {} failed: {e}", redact(&request.url)))?
+                }
+                _ => {
+                    return Err(format!(
+                        "request to {} failed: {error}",
+                        redact(&request.url)
+                    ))
+                }
+            },
+        };
 
         let status = response.status();
         let final_url = response.url().to_string();
@@ -263,43 +300,54 @@ impl HostHttp {
     }
 
     async fn client_for(&self, limit: usize, allowed_hosts: &[String]) -> reqwest::Client {
-        if limit == 0 {
-            return self.client.clone();
-        }
-        let allow_list = normalized_hosts(allowed_hosts);
+        // The configured outbound interface is part of the cache key: switching it must not hand a
+        // plugin a client still pinned to the old device. `limit == 0` (hand the 3xx back) needs no
+        // redirect policy of its own, but still has to leave through the chosen interface.
+        let interface = lanrurugi_core::http_client::outbound_interface();
+        let allow_list = if limit == 0 {
+            Vec::new()
+        } else {
+            normalized_hosts(allowed_hosts)
+        };
         let mut clients = self.redirecting_clients.lock().await;
         clients
-            .entry((limit, allow_list.clone()))
+            .entry(ClientKey {
+                redirect_limit: limit,
+                hosts: allow_list.clone(),
+                interface: interface.clone(),
+            })
             .or_insert_with(|| {
-                lanrurugi_core::http_client::with_roots(reqwest::Client::builder())
-                    .redirect(reqwest::redirect::Policy::custom(move |attempt| {
-                        // The declared-host check has to happen *per hop*: validating only the URL
-                        // the plugin asked for let any 3xx carry the request to a host the plugin
-                        // never declared, which is exactly what a plugin's `net` permission is
-                        // supposed to prevent.
-                        //
-                        // `previous` includes the initial URL, and `limited` compares with `>`
-                        // (reqwest 0.13's own `PolicyKind::Limit` arm), so the bound is checked
-                        // first and identically — an over-long chain must still fail as
-                        // "too many redirects" rather than silently becoming a stopped 3xx.
-                        if attempt.previous().len() > limit {
-                            attempt.error("too many redirects")
-                        } else if attempt
-                            .url()
-                            .host_str()
-                            .is_none_or(|host| !host_allowed(&allow_list, host))
-                        {
-                            // `stop()` hands the 3xx itself back, so the plugin can see it was not
-                            // followed; `storable()` keeps a non-2xx out of the revalidation store.
-                            attempt.stop()
-                        } else {
-                            attempt.follow()
-                        }
-                    }))
-                    .connect_timeout(CONNECT_TIMEOUT)
-                    .timeout(REQUEST_TIMEOUT)
-                    .build()
-                    .unwrap_or_else(|_| self.client.clone())
+                lanrurugi_core::http_client::bind_outbound(lanrurugi_core::http_client::with_roots(
+                    reqwest::Client::builder(),
+                ))
+                .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                    // The declared-host check has to happen *per hop*: validating only the URL
+                    // the plugin asked for let any 3xx carry the request to a host the plugin
+                    // never declared, which is exactly what a plugin's `net` permission is
+                    // supposed to prevent.
+                    //
+                    // `previous` includes the initial URL, and `limited` compares with `>`
+                    // (reqwest 0.13's own `PolicyKind::Limit` arm), so the bound is checked
+                    // first and identically — an over-long chain must still fail as
+                    // "too many redirects" rather than silently becoming a stopped 3xx.
+                    if attempt.previous().len() > limit {
+                        attempt.error("too many redirects")
+                    } else if attempt
+                        .url()
+                        .host_str()
+                        .is_none_or(|host| !host_allowed(&allow_list, host))
+                    {
+                        // `stop()` hands the 3xx itself back, so the plugin can see it was not
+                        // followed; `storable()` keeps a non-2xx out of the revalidation store.
+                        attempt.stop()
+                    } else {
+                        attempt.follow()
+                    }
+                }))
+                .connect_timeout(CONNECT_TIMEOUT)
+                .timeout(REQUEST_TIMEOUT)
+                .build()
+                .unwrap_or_else(|_| self.client.clone())
             })
             .clone()
     }
@@ -345,6 +393,12 @@ fn normalized_hosts(allowed_hosts: &[String]) -> Vec<String> {
 /// Whether a plugin declaring `allowed_hosts` may reach `host`. An entry covers itself and any
 /// subdomain, mirroring what Deno's own `--allow-net=<entry>` flag allowed before requests were
 /// relayed through the host.
+/// Whether a failed attempt may be replayed: no body to resend, and a method whose repetition is
+/// defined not to change anything.
+fn is_bodyless_idempotent(method: &reqwest::Method, has_body: bool) -> bool {
+    !has_body && matches!(*method, reqwest::Method::GET | reqwest::Method::HEAD)
+}
+
 pub fn host_allowed(allowed_hosts: &[String], host: &str) -> bool {
     let host = host.to_ascii_lowercase();
     allowed_hosts.iter().any(|entry| {
@@ -412,6 +466,15 @@ fn redact(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_bodyless_get_and_head_may_be_replayed() {
+        assert!(is_bodyless_idempotent(&reqwest::Method::GET, false));
+        assert!(is_bodyless_idempotent(&reqwest::Method::HEAD, false));
+        assert!(!is_bodyless_idempotent(&reqwest::Method::GET, true));
+        assert!(!is_bodyless_idempotent(&reqwest::Method::POST, false));
+        assert!(!is_bodyless_idempotent(&reqwest::Method::PUT, false));
+    }
 
     fn request(method: &str, url: &str, body: Option<&str>) -> RelayRequest {
         RelayRequest {

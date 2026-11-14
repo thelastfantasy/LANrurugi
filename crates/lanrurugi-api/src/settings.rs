@@ -142,6 +142,14 @@ pub async fn fetch_theme_for_html_injection(
 /// Raw `language` field lookup, same shape as [`fetch_theme`] — `None` only on an actual Redis
 /// failure, defaulting to `"auto"` (matching `STRING_FIELDS`'s own default) whenever the field
 /// itself was never set.
+/// The configured direct download host, if any — see [`crate::direct_download`].
+pub async fn direct_download_url(state: &AppState) -> Option<String> {
+    let mut conn = state.redis.config.get().await.ok()?;
+    let value: Option<String> = conn.hget(CONFIG_KEY, "direct_download_url").await.ok()?;
+    let value = value?.trim().trim_end_matches('/').to_string();
+    (!value.is_empty()).then_some(value)
+}
+
 async fn fetch_language(state: &AppState) -> Option<String> {
     let mut conn = state.redis.config.get().await.ok()?;
     let language: Option<String> = conn.hget(CONFIG_KEY, "language").await.ok()?;
@@ -252,6 +260,86 @@ pub(crate) async fn read_release_track(state: &AppState) -> String {
     }
 }
 
+/// The default `source_equivalences` value: e-hentai's two front ends. Both names are read from
+/// [`parse_source_equivalences`] at request time, never only here, so an unset field behaves the
+/// same through every entry point.
+pub(crate) const DEFAULT_SOURCE_EQUIVALENCES: &str = "e-hentai.org, exhentai.org";
+
+/// Parses `source_equivalences` into the groups the search engine matches against: one group per
+/// line, one `host` or `*.domain` pattern per comma-separated member. Blank lines are ignored; a
+/// malformed pattern, a line with fewer than two members, or a duplicate member within a line is an
+/// error rather than being silently dropped (a typo must not quietly narrow the equivalence).
+pub(crate) fn parse_source_equivalences(raw: &str) -> Result<Vec<Vec<String>>, String> {
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    for (index, line) in raw.lines().enumerate() {
+        let mut group: Vec<String> = Vec::new();
+        for entry in line
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+        {
+            let host = entry.to_ascii_lowercase();
+            if !is_valid_source_host_pattern(&host) {
+                return Err(format!(
+                    "line {} contains an invalid host pattern {entry:?} (expected `host` or `*.host`).",
+                    index + 1
+                ));
+            }
+            if group.contains(&host) {
+                return Err(format!(
+                    "line {} lists {entry:?} more than once.",
+                    index + 1
+                ));
+            }
+            group.push(host);
+        }
+        if group.is_empty() {
+            continue;
+        }
+        if group.len() < 2 {
+            return Err(format!(
+                "line {} needs at least two host patterns to describe an equivalence.",
+                index + 1
+            ));
+        }
+        groups.push(group);
+    }
+    Ok(groups)
+}
+
+fn is_valid_source_host_pattern(host: &str) -> bool {
+    let host = host.strip_prefix("*.").unwrap_or(host);
+    if host.is_empty() || host.len() > 253 || !host.contains('.') {
+        return false;
+    }
+    host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    })
+}
+
+/// Reads the configured `source_equivalences` groups for a search request, falling back to the
+/// default pair when the field is unset *or* malformed — a bad stored value must not make every
+/// `source:` search match nothing.
+pub(crate) async fn read_source_equivalences(state: &AppState) -> Vec<Vec<String>> {
+    let raw = match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "source_equivalences")
+            .await
+            .ok()
+            .flatten(),
+        Err(_) => None,
+    };
+    raw.as_deref()
+        .and_then(|raw| parse_source_equivalences(raw).ok())
+        .unwrap_or_else(lanrurugi_search::engine::default_source_equivalences)
+}
+
 pub(crate) async fn read_new_badge_mode(state: &AppState) -> String {
     match state.redis.config.get().await {
         Ok(mut conn) => conn
@@ -310,6 +398,19 @@ pub(crate) async fn read_archive_split_delete_original_enabled(state: &AppState)
     }
 }
 
+/// 027 FR-014: strict read-back verification when copying into the library. Defaults to `false`.
+pub(crate) async fn read_ingest_strict_verify(state: &AppState) -> bool {
+    match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "ingest_strict_verify")
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|v| v != "0"),
+        Err(_) => false,
+    }
+}
+
 /// issue #97: whether placing a stamp on a not-yet-bookmarked page should also bookmark it —
 /// read by `stamps.rs::add_stamp`. Same shape as [`read_new_badge_mode`] above.
 pub(crate) async fn read_stamp_autobookmark(state: &AppState) -> bool {
@@ -348,6 +449,10 @@ pub(crate) async fn read_stamp_autounbookmark(state: &AppState) -> bool {
 /// calls. Excludes `password` (see module docs) and `theme` (already had its own default before
 /// this table existed, kept as a named constant below for that reason).
 const STRING_FIELDS: &[(&str, &str)] = &[
+    // Where browser downloads (archive zips, tankoubon zips) should be fetched from when the
+    // site itself sits behind a proxy: a host name that does not go through it. Empty keeps them
+    // on the site's own origin. See `direct_download`.
+    ("direct_download_url", ""),
     ("theme", "modern.css"),
     // 007-guest-restricted-access follow-up: the theme an unauthenticated `guest_visitor` sees,
     // independent of whatever theme the admin has picked for their own session — `get_theme`
@@ -362,6 +467,10 @@ const STRING_FIELDS: &[(&str, &str)] = &[
     // aliases are recognized automatically. Auth cookies are always host-only; the former
     // `cookie_domain` field is only read to expire cookies it once widened (`auth::load`).
     ("trusted_origins", ""),
+    // Which network interface plugin traffic leaves through: empty means the kernel's own routing,
+    // a name (`tun0`) means the VPN. Covers every plugin request — metadata lookups, logins and the
+    // file download itself — because a site that refuses the host's address refuses all three.
+    ("plugin_bind_interface", ""),
     // An ordered preference list, comma-separated (`"zh,ja,en"`), not a single choice: the interface
     // takes the first language it has translations for, and a work's title takes the first its source
     // supplied. `"auto"` keeps deferring to the browser. Stored in the existing field rather than a
@@ -374,6 +483,12 @@ const STRING_FIELDS: &[(&str, &str)] = &[
     // (`STRING_FIELDS`) declares a field, and an older deployment simply reads the default.
     ("release_track", "stable"),
     ("excludednamespaces", "source, date_added"),
+    // Hosts that `source:` searches treat as the same site, so the same gallery is findable by
+    // whichever front-end domain a user has at hand. Blank-line-separated groups, comma-separated
+    // members; a member is a literal host or `*.domain` (any subdomain of it, not the apex). The
+    // default pairs e-hentai's two front ends, which index the same galleries under different
+    // hostnames. See `lanrurugi_search::engine::tag_index_variants`.
+    ("source_equivalences", DEFAULT_SOURCE_EQUIVALENCES),
     // IANA timezone identifier (e.g. `"Asia/Tokyo"`, `"UTC"` — anything `chrono_tz` accepts),
     // used by date display/search-range math (see `lanrurugi_search::engine`'s `date_added`
     // date-range handling) so that "the day an archive was added" is unambiguous regardless of
@@ -407,6 +522,25 @@ pub fn default_tagrules() -> &'static str {
         .find(|(key, _)| *key == "tagrules")
         .map(|(_, default)| *default)
         .expect("\"tagrules\" is a real STRING_FIELDS entry")
+}
+
+/// `BOOL_FIELDS`' declared default for one key.
+fn default_bool(key: &str) -> bool {
+    BOOL_FIELDS
+        .iter()
+        .find(|(name, _)| *name == key)
+        .map(|(_, default)| *default)
+        .expect("key is a real BOOL_FIELDS entry")
+}
+
+/// A boolean read straight from `LRR_CONFIG`, for call sites that skip the settings surface
+/// (`serve_page`'s resize switch, `/api/info`'s `server_resizes_images`).
+///
+/// A field that was never written means "never saved", not "off": it takes the declared default,
+/// which is the same value the Settings page renders. Reading it as `false` made a fresh install
+/// serve every page unoptimized while its Settings page said resizing was on.
+pub fn stored_bool(key: &str, raw: Option<&str>) -> bool {
+    raw.map_or_else(|| default_bool(key), |value| value != "0")
 }
 
 const NUMBER_FIELDS: &[(&str, i64)] = &[
@@ -472,6 +606,10 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     ("enablecors", false),
     ("localprogress", false),
     ("authprogress", false),
+    // Deliberate deviation from legacy, which stored "0": a fresh install converts pages for the
+    // reader (`readerquality`, the client's preferred codec) instead of serving multi-megabyte
+    // originals. An upgraded library therefore starts converting on demand — cached and capped by
+    // `conversion_slots`, so it shows up as the first page turn being slower, not as a load spike.
     ("enableresize", true),
     ("enablewebp", true),
     // Use JPEG XL as the generated thumbnail format. JXL > WebP > JPEG for clients that advertise
@@ -508,6 +646,9 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     // Whether a successful manual split deletes the original archive/record. Defaults to false:
     // by default keep the original and also create the split ZIPs.
     ("archive_split_delete_original_enabled", false),
+    // 027 FR-014: read every block copied into the library back past the cache and compare. Only
+    // useful when the library is a network mount; on local ZFS it cannot reach the disk at all.
+    ("ingest_strict_verify", false),
     // First-run wizard's own "handled, don't auto-open again" marker. Written by the wizard page
     // (`/welcome`) when the user finishes or skips it, never by the Settings page — the same
     // "stored in `LRR_CONFIG` but driven from a page other than Settings" precedent as
@@ -577,6 +718,14 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
             ));
         }
     }
+    if key == "direct_download_url" {
+        let text = value.as_str().unwrap_or("");
+        if !text.is_empty() && !(text.starts_with("http://") || text.starts_with("https://")) {
+            return Err(format!(
+                "Field \"direct_download_url\" must be an http(s) URL: {text}."
+            ));
+        }
+    }
     if matches!(
         key,
         "access_token_lifetime_secs"
@@ -610,6 +759,33 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
         if count < 0 {
             return Err("Field \"max_login_devices\" must be >= 0 (0 = unlimited).".to_string());
         }
+    }
+    if key == "plugin_bind_interface" {
+        let name = value.as_str().unwrap_or("").trim();
+        // On macOS only the requests this process makes itself are pinned (reqwest's
+        // `IP_BOUND_IF`); the Deno subprocess still takes the system route, and on FreeBSD
+        // nothing is pinned at all. Accepting the first case is deliberate (it does bind the
+        // downloads), but the settings UI says so instead of promising a full tunnel.
+        if !name.is_empty()
+            && lanrurugi_core::http_client::plugin_binding_scope()
+                == lanrurugi_core::http_client::BindingScope::None
+        {
+            return Err(
+                "Field \"plugin_bind_interface\": only Linux can bind plugin traffic to a named \
+                 interface (the egress shim); this platform cannot, so the setting is not \
+                 available here."
+                    .to_string(),
+            );
+        }
+        if !name.is_empty() && !crate::share_net::interfaces::exists(name) {
+            return Err(format!(
+                "Field \"plugin_bind_interface\" names no existing network interface: {name}."
+            ));
+        }
+    }
+    if key == "source_equivalences" {
+        parse_source_equivalences(value.as_str().unwrap_or(""))
+            .map_err(|message| format!("Field \"source_equivalences\": {message}"))?;
     }
     if key == "trusted_origins" {
         let raw = value.as_str().unwrap_or("");
@@ -813,6 +989,33 @@ async fn get_settings(State(state): State<AppState>, headers: axum::http::Header
             .map(|s| !s.trim().is_empty())
             .unwrap_or(false);
     body.insert("llm_api_key_set".to_string(), json!(key_set));
+    // The names the download client can be bound to, so the Settings page need not guess, plus
+    // which one the kernel actually routes internet traffic through right now — the picker shows
+    // it next to "system default" and next to that interface's own entry.
+    body.insert(
+        "interfaces".to_string(),
+        json!(crate::share_net::interfaces::list()
+            .into_iter()
+            .map(|iface| iface.name)
+            .collect::<Vec<_>>()),
+    );
+    body.insert(
+        "default_interface".to_string(),
+        json!(crate::share_net::interfaces::default_route()),
+    );
+    // 022 US4: whether plugin egress is actually pinned, in the same vocabulary the sharing
+    // endpoint reports. `failed` means a name is set but the shim is missing on this platform, so
+    // plugins fall back to the relay — worth showing instead of letting the setting look applied.
+    let egress_interface = lanrurugi_core::http_client::outbound_interface();
+    let egress_binding = match egress_interface.as_deref() {
+        None => "unpinned",
+        Some(name) if crate::share_net::interfaces::exists(name) => "bound",
+        Some(_) => "failed",
+    };
+    body.insert(
+        "egress_binding".to_string(),
+        json!({ "state": egress_binding, "interface": egress_interface }),
+    );
 
     axum::Json(Value::Object(body)).into_response()
 }
@@ -836,9 +1039,28 @@ const TOKEN_AUTH_FORBIDDEN_SETTINGS_FIELDS: &[&str] = &[
     "sso_auto_redirect",
 ];
 
+/// Applies the stored download-interface choice at startup, so a restart keeps downloads on the
+/// interface the operator picked instead of silently reverting to the kernel's own route.
+pub async fn apply_outbound_interface(state: &crate::AppState) {
+    let mut conn = match state.redis.config.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not read the download interface setting");
+            return;
+        }
+    };
+    let name: Option<String> = conn
+        .hget(CONFIG_KEY, "plugin_bind_interface")
+        .await
+        .ok()
+        .flatten();
+    crate::download_manager::outbound::set_outbound_interface(name);
+}
+
 async fn put_settings(
     State(state): State<AppState>,
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
+    headers: axum::http::HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Response {
     let Value::Object(mut fields) = body else {
@@ -952,6 +1174,23 @@ async fn put_settings(
     // check immediately below.
     let mut changed_fields: Vec<String> = Vec::new();
 
+    // The page's own scheme decides whether an `http://` download host is usable at all. A request
+    // that changes `share_public_url` in the same call must be judged by the *new* value, not the
+    // stored one, so that "switch the site to https and fix the download host in one save" works.
+    // When no public address has ever been configured, the request that carries the save is the
+    // only evidence of how this instance is reached — otherwise `http://` would be accepted
+    // unconditionally, which is the case the check exists to reject. A proxy's
+    // `X-Forwarded-Proto` is honoured because TLS often ends there.
+    let requested_page_origin = match fields.get("share_public_url").and_then(Value::as_str) {
+        Some(value) => {
+            Some(value.trim().trim_end_matches('/').to_string()).filter(|v| !v.is_empty())
+        }
+        None => crate::share_settings::load(&state)
+            .await
+            .public_url()
+            .or_else(|| request_page_origin(&headers)),
+    };
+
     for (key, value) in fields {
         if key == "password" || key == "session_secret" {
             // `password` has its own endpoint (needs hashing); `session_secret` is internal-only.
@@ -968,6 +1207,21 @@ async fn put_settings(
             Ok(s) => s,
             Err(msg) => return error(StatusCode::BAD_REQUEST, "put_settings", msg),
         };
+        // FR-001/FR-003 of specs/021: the shape gate above only checks "starts with http(s)"; the
+        // page scheme and the credential/query rules are checked here, where the page origin is
+        // known.
+        if key == crate::download_url::FIELD {
+            if let Err(e) = crate::download_url::validate(
+                value.as_str().unwrap_or(""),
+                requested_page_origin.as_deref(),
+            ) {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "put_settings",
+                    format!("Field \"{key}\": {}.", e.message()),
+                );
+            }
+        }
         changed_fields.push(key.clone());
         let _: () = match conn.hset(CONFIG_KEY, &key, stored).await {
             Ok(v) => v,
@@ -998,6 +1252,18 @@ async fn put_settings(
                 );
             }
         };
+    }
+
+    if changed_fields.iter().any(|f| f == "plugin_bind_interface") {
+        let name = conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "plugin_bind_interface")
+            .await
+            .ok()
+            .flatten();
+        crate::download_manager::outbound::set_outbound_interface(name);
+        // The interface reaches the plugin dispatcher through its environment, so running ones
+        // must go: the next plugin call spawns with the new binding.
+        state.plugins.restart_workers().await;
     }
 
     if !changed_fields.is_empty() {
@@ -1098,7 +1364,29 @@ async fn put_settings(
         });
     }
 
-    axum::Json(json!({ "operation": "put_settings", "success": 1 })).into_response()
+    // FR-004 of specs/021: a page-origin change can strand a stored download address that used to
+    // be acceptable (the usual case is a site moved from http to https while `direct_download_url`
+    // stayed http://). The save itself must succeed — the administrator may be mid-migration — but
+    // the response says which field is now wrong instead of leaving it for a broken download button.
+    let mut warnings: Vec<String> = Vec::new();
+    if let Some(stored_download) = direct_download_url(&state).await {
+        let stored_page_origin = crate::share_settings::load(&state).await.public_url();
+        if let Err(e) =
+            crate::download_url::validate(&stored_download, stored_page_origin.as_deref())
+        {
+            warnings.push(format!(
+                "Field \"{}\": {}.",
+                crate::download_url::FIELD,
+                e.message()
+            ));
+        }
+    }
+
+    let mut body = json!({ "operation": "put_settings", "success": 1 });
+    if !warnings.is_empty() {
+        body["warnings"] = json!(warnings);
+    }
+    axum::Json(body).into_response()
 }
 
 #[derive(Deserialize)]
@@ -1187,14 +1475,114 @@ async fn change_password(
     }
 }
 
+/// The origin this save request arrived on, used only when no public address is configured.
+fn request_page_origin(headers: &axum::http::HeaderMap) -> Option<String> {
+    if let Some(origin) = headers.get(axum::http::header::ORIGIN) {
+        let origin = origin
+            .to_str()
+            .ok()?
+            .trim()
+            .trim_end_matches('/')
+            .to_string();
+        if origin.starts_with("http://") || origin.starts_with("https://") {
+            return Some(origin);
+        }
+    }
+    let forwarded = headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|scheme| *scheme == "http" || *scheme == "https");
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|host| !host.is_empty())?;
+    Some(format!("{}://{host}", forwarded.unwrap_or("http")))
+}
+
 #[cfg(test)]
 mod validate_setting_field_tests {
     use super::*;
 
     #[test]
+    fn the_request_origin_answers_when_no_public_address_is_configured() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::ORIGIN,
+            "https://lrr.example.org".parse().unwrap(),
+        );
+        assert_eq!(
+            request_page_origin(&headers).as_deref(),
+            Some("https://lrr.example.org")
+        );
+
+        // A proxy that terminates TLS tells us the scheme; the Host header supplies the name.
+        let mut proxied = axum::http::HeaderMap::new();
+        proxied.insert(axum::http::header::HOST, "lrr.example.org".parse().unwrap());
+        proxied.insert("x-forwarded-proto", "https".parse().unwrap());
+        assert_eq!(
+            request_page_origin(&proxied).as_deref(),
+            Some("https://lrr.example.org")
+        );
+
+        // Nothing to go on is `None`, not a guess: the caller then skips the scheme check.
+        assert_eq!(request_page_origin(&axum::http::HeaderMap::new()), None);
+    }
+
+    #[test]
     fn rejects_an_unknown_key() {
         let err = validate_setting_field("not_a_real_field", &json!("value")).unwrap_err();
         assert!(err.contains("Unknown settings field"));
+    }
+
+    #[test]
+    fn source_equivalences_accepts_literal_and_wildcard_groups() {
+        assert_eq!(
+            parse_source_equivalences("e-hentai.org, exhentai.org").unwrap(),
+            vec![vec!["e-hentai.org".to_string(), "exhentai.org".to_string()]]
+        );
+        // Blank lines are separators, not errors; case is folded for matching.
+        assert_eq!(
+            parse_source_equivalences("\nE-Hentai.org, exhentai.org\n\n*.a.com, *.b.com\n")
+                .unwrap(),
+            vec![
+                vec!["e-hentai.org".to_string(), "exhentai.org".to_string()],
+                vec!["*.a.com".to_string(), "*.b.com".to_string()],
+            ]
+        );
+        assert_eq!(
+            validate_setting_field("source_equivalences", &json!("e-hentai.org, exhentai.org"))
+                .unwrap(),
+            "e-hentai.org, exhentai.org"
+        );
+        // The declared default must itself be a valid value.
+        assert!(parse_source_equivalences(DEFAULT_SOURCE_EQUIVALENCES).is_ok());
+    }
+
+    #[test]
+    fn source_equivalences_rejects_malformed_groups() {
+        for bad in [
+            // One member is not an equivalence.
+            "e-hentai.org",
+            // A URL is not a host pattern.
+            "e-hentai.org, https://exhentai.org",
+            "*.a.com, e-hentai.org/path",
+            // `*` must be the whole leading label.
+            "a.com, *b.com",
+            // A group member may not repeat.
+            "a.com, a.com",
+        ] {
+            assert!(
+                parse_source_equivalences(bad).is_err(),
+                "{bad:?} should be rejected"
+            );
+            assert!(
+                validate_setting_field("source_equivalences", &json!(bad)).is_err(),
+                "{bad:?} should be rejected by the write-side check"
+            );
+        }
     }
 
     #[test]
@@ -1215,6 +1603,32 @@ mod validate_setting_field_tests {
         assert!(!STRING_FIELDS.iter().any(|(k, _)| *k == "llm_api_key"));
         let stored = validate_setting_field("llm_api_key", &json!("sk-real-key")).unwrap();
         assert_eq!(stored, "sk-real-key");
+    }
+
+    /// A field nobody ever saved must resolve to the default the Settings page shows, not to
+    /// `false` — a fresh install served every page unoptimized while its Settings page reported
+    /// resizing as on.
+    #[test]
+    fn an_unwritten_bool_takes_its_declared_default() {
+        assert!(stored_bool("enableresize", None));
+        assert!(stored_bool("enableresize", Some("1")));
+        assert!(!stored_bool("enableresize", Some("0")));
+        // Declared `false`, and still `false` when absent.
+        assert!(!stored_bool("guestmode", None));
+        assert!(stored_bool("guestmode", Some("1")));
+    }
+
+    #[test]
+    fn the_download_interface_must_name_a_real_interface() {
+        // Empty is the unbound default and stays writable; a bogus name is rejected instead of
+        // producing a client that silently ignores the choice.
+        assert_eq!(
+            validate_setting_field("plugin_bind_interface", &json!("")).unwrap(),
+            ""
+        );
+        let err = validate_setting_field("plugin_bind_interface", &json!("no-such-if0"))
+            .expect_err("a name that does not exist must be refused");
+        assert!(err.contains("no-such-if0"), "got {err}");
     }
 
     #[test]

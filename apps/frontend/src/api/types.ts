@@ -93,6 +93,9 @@ export interface Settings {
   language: string
   htmltitle: string
   excludednamespaces: string
+  /** `source:` hosts treated as the same site, one equivalence group per line, members comma
+   * separated (`host` or `*.domain`). Defaults to `e-hentai.org, exhentai.org`. */
+  source_equivalences: string
   tagrules: string
   /** IANA timezone id (e.g. `"Asia/Tokyo"`) used to render date-tag values and build
    *  same-day search URLs. */
@@ -104,6 +107,16 @@ export interface Settings {
   /** Reader recommendation-cache precision (`"low"`/`"medium"`/`"high"`); changing it triggers
    *  a full background rebuild. */
   recommendprecision: string
+  /** Empty = the kernel's own routing; otherwise the interface plugin downloads are bound to. */
+  plugin_bind_interface: string
+  /** 022 US4: whether plugin egress is actually pinned (`failed` = the name is set but the shim or
+   * the interface is missing on this host). */
+  egress_binding?: { state: "unpinned" | "bound" | "failed"; interface: string | null }
+  direct_download_url: string
+  /** Interface names this host exposes, for the picker above. */
+  interfaces: string[]
+  /** Interface the kernel currently routes internet traffic through, when it reports one. */
+  default_interface?: string | null
   /** JWT access-token lifetime in seconds; an expired request transparently refreshes. */
   access_token_lifetime_secs: number
   /** Days a finished download-queue entry is kept; `0` keeps them all. Swept hourly by the
@@ -149,6 +162,8 @@ export interface Settings {
   archive_split_suggestions_enabled: boolean
   /** Whether a successful split deletes the original archive/record. */
   archive_split_delete_original_enabled: boolean
+  /** 027: read every block copied into the library back past the cache and compare. */
+  ingest_strict_verify?: boolean
   /** Site-wide guest-mode master switch; see `Category.visible_to_guest` for the per-category half. */
   guestmode: boolean
   /** Background scanning yields to interactive traffic (default on). */
@@ -215,6 +230,12 @@ export interface ServerInfo {
   total_archives: number
   cache_last_cleared: number
   excluded_namespaces: string[]
+  /** What the two interface settings can enforce on this host; the UI picks its wording from it. */
+  interface_binding: {
+    platform: string
+    plugin: "full" | "rust-only" | "none"
+    share: "full" | "none"
+  }
 }
 
 export interface VersionCheckResponse {
@@ -475,11 +496,6 @@ export interface SubscriptionFilters {
  * source exposes a balance to check beforehand, so the failure itself is the only trigger. */
 export type CreditPolicy = "pause" | "continue_and_reserve"
 
-/** What a subscription's downloads do when a filename collides with an archive the library already
- * has. A subscription downloads unattended, so the default (`ask`) can park bytes nobody is there
- * to decide about — see `PENDING_RENAME_TTL_HOURS`. */
-export type ConflictPolicy = "ask" | "auto_rename" | "overwrite" | "discard"
-
 /** What to do when a tracked work's title or tags change at the source.
  *
  * `refetch_metadata` re-runs the metadata capability rather than copying the listing's own tags onto
@@ -498,12 +514,28 @@ export type SubscriptionState =
    * which is the user's own choice. */
   | { state: "paused"; reason: "insufficient_credit" }
 
+/** How far a check reads before it stops.
+ *
+ * `pages` is a hard page budget; `days` bounds the scan by publication date instead and pages until
+ * the listing runs out, the date window closes, or it keeps meeting works it has already settled. */
+export type ScanWindow = { mode: "pages"; pages: number } | { mode: "days"; days: number }
+
+/** Live progress of a running subscription check, from `GET /subscriptions/stream`. */
+export interface SubscriptionCheckProgress {
+  subscription_id: string
+  name: string
+  pages_read: number
+  candidates: number
+  done: boolean
+}
+
 export interface Subscription {
   id: string
   name: string
   /** The extension namespace that discovers for this subscription. */
   source: string
   criteria: SubscriptionCriteria
+  scan: ScanWindow
   filters: SubscriptionFilters
   interval_secs: number
   target_category?: string | null
@@ -515,7 +547,6 @@ export interface Subscription {
    * when an over-broad rule would spend real credit unattended. */
   auto_download: boolean
   credit_policy: CreditPolicy
-  conflict_policy: ConflictPolicy
   on_source_changed: SourceChangePolicy
   on_source_removed: SourceRemovalPolicy
   state: SubscriptionState
@@ -548,6 +579,9 @@ export type CandidateVerdict =
    *  with that work — no download, and no round trip to the source to find out. */
   | { verdict: "superseded"; newer_source: string }
   | { verdict: "already_seen" }
+  /** Published before the subscription's time window. A check never acts on one; the preview keeps
+   *  it so the pane explains its own count, and renders it greyed out. */
+  | { verdict: "out_of_window" }
   /** Not settled yet. Deliberately not a rejection — it is reconsidered on a later check and is not
    *  recorded as seen, so it must never be shown as "already seen". `reason` is absent on records
    *  written before it existed. */
@@ -606,7 +640,6 @@ export interface SubscriptionPreview {
    *  less on purpose — fewer requests to the source — so the pane states the window instead of
    *  letting the shorter list look like everything the source has. */
   listing_pages?: number
-  check_listing_pages?: number
 }
 
 /** One candidate as some subscription's check saw it, for the cross-subscription history. */
@@ -669,6 +702,7 @@ export interface SubscriptionBody {
   name: string
   source: string
   criteria: SubscriptionCriteria
+  scan: ScanWindow
   filters: SubscriptionFilters
   interval_secs: number
   target_category?: string
@@ -676,8 +710,6 @@ export interface SubscriptionBody {
   enrich_metadata: boolean
   auto_download: boolean
   credit_policy: CreditPolicy
-  /** What this subscription's downloads do about a filename collision. */
-  conflict_policy: ConflictPolicy
   /** Whether it starts enabled. Defaults on — but a rule can be written now and switched on once its
    *  preview looks right. Only meaningful on create; an existing one is toggled from its row. */
   enabled?: boolean
@@ -727,7 +759,7 @@ export interface StatsTotals {
   bookmarks: number
 }
 
-/** `key` is the stable identifier the frontend localizes (`lt_1mb` … `gte_500mb`). */
+/** `key` is the stable identifier the frontend localizes (`lt_1mb` … `gte_2gb`). */
 export interface StatsSizeBucket {
   key: string
   min_bytes: number
@@ -798,7 +830,7 @@ export interface StatsTimelineResponse {
   available_to: string
   /** Reading only: the day the per-day page counter started recording. */
   pages_since?: string
-  points: { date: string; archives?: number; pages?: number; last_read?: number }[]
+  points: { date: string; archives?: number; bytes?: number; pages?: number; last_read?: number }[]
 }
 
 export interface StatsRecentRead {
@@ -922,51 +954,20 @@ export type QueueError =
   | { kind: "superseded_by_newer_revision"; archive_id: string }
   | { kind: "share_import"; reason: string }
   | { kind: "truncated_download"; expected: number; got: number }
-
-/** Set on a queue item whose download was blocked by a filename collision (content is new, only
- * the filename collides) and staged pending the user's overwrite/rename choice. */
-export interface PendingFilenameConflict {
-  temp_path: string
-  original_filename: string
-  existing_id: string
-  crc32: string
-  /** Unix ms when these bytes were staged, so the UI can show when the sweep reclaims them.
-   *  Absent on records written before the field existed. */
-  staged_at?: number
-}
-
-/** One aligned page pair's sharpness scores. `a`/`b` stay symmetric even though the only current
- * caller assigns `a` = staged download, `b` = existing library archive. */
-export interface PageComparison {
-  a_page_index: number
-  b_page_index: number
-  /** This page's own filename inside the archive, distinct from `ComparisonResult`'s archive-level
-   * filenames. */
-  a_filename: string
-  b_filename: string
-  /** This page's compressed byte size, distinct from `ComparisonResult`'s archive-level size. */
-  a_file_size: number
-  b_file_size: number
-  a_sharpness: number
-  b_sharpness: number
-  a_width: number
-  a_height: number
-  b_width: number
-  b_height: number
-  /** Maps a point in A's pixel space to B's, accounting for crop/resolution differences.
-   * Identity when no reliable alignment was found. */
-  crop_alignment: CropAlignment
-}
-
-/** Maps a point in A to B in normalized per-dimension coordinates: `b_u = a_u * scale + offset_x`,
- * `b_v = a_v * scale + offset_y`. */
-export interface CropAlignment {
-  scale: number
-  offset_x: number
-  offset_y: number
-}
-
-export type ComparisonSide = "a" | "b"
+  | { kind: "egress_unavailable"; interface: string }
+  | { kind: "source_already_imported"; existing_id: string }
+  | { kind: "source_download_in_progress" }
+  /** The bytes arrived but cataloguing them failed; the file is kept, so retrying can re-ingest
+   *  it instead of downloading the archive again. */
+  | { kind: "ingest_failed"; reason: string }
+  /** 027: copying into the library came out a different length; the source is kept. */
+  | { kind: "copy_length_mismatch"; path: string; expected: number; copied: number; dest_len: number }
+  /** 027: flushing the copy to disk failed; the source is kept. */
+  | { kind: "durability_failed"; path: string; os_error: string }
+  /** 027: the staged file no longer matches the fingerprint taken when it arrived. */
+  | { kind: "staged_content_corrupted"; path: string; expected_blake3: string; actual_blake3: string }
+  /** 027: strict verification read a block back that differs from what was written. */
+  | { kind: "verify_readback_mismatch"; path: string; offset: number; len: number }
 
 /** One raw archive entry (file or directory) from a header-only walk — powers the tree-structure
  * popover in the comparison modal. */
@@ -985,73 +986,13 @@ export interface ArchiveSplitTreeResponse {
   entries: ArchiveEntryInfo[]
 }
 
-/** One page with no counterpart on the other side, plus a default anchor for where a patch
- * inserting it should go. `default_insert_after: null` means insert at the start. */
-export interface UnmatchedPage {
-  page_index: number
-  default_insert_after: number | null
-}
-
-/** `likely_different_language` is a separate signal from `recommendation` being absent — "two
- * legitimate editions" and "genuine conflict" need different UI treatment. */
-export interface ComparisonResult {
-  aligned_pairs: number
-  a_total_pages: number
-  b_total_pages: number
-  likely_different_language: boolean
-  recommendation: ComparisonSide | null
-  samples: PageComparison[]
-  a_filename: string
-  b_filename: string
-  a_file_size: number
-  b_file_size: number
-  /** Every entry (files and directories) inside each archive. */
-  a_entries: ArchiveEntryInfo[]
-  b_entries: ArchiveEntryInfo[]
-  /** A's own pages with no counterpart in B — material for the "keep extra pages as patch" flow. */
-  a_unmatched_pages: UnmatchedPage[]
-  /** The B-side mirror of `a_unmatched_pages`. */
-  b_unmatched_pages: UnmatchedPage[]
-}
-
-/** Which pass produced a `CompareEvent::Sample` — `"coarse"` opens the result view immediately;
- * `"precise"` streams in a pixel-accurate replacement afterward. */
-export type ComparePhase = "coarse" | "precise"
-
-/** One compare-stream SSE message. `sample_index` lets a `"precise"` event replace its matching
- * `"coarse"` one in place; `done` fires once as the stream-end marker. */
-export type CompareEvent =
-  | { type: "sample"; sample_index: number; phase: ComparePhase; sample: PageComparison }
-  | {
-      type: "done"
-      aligned_pairs: number
-      a_total_pages: number
-      b_total_pages: number
-      a_entries: ArchiveEntryInfo[]
-      b_entries: ArchiveEntryInfo[]
-      likely_different_language: boolean
-      recommendation: ComparisonSide | null
-      a_filename: string
-      b_filename: string
-      a_file_size: number
-      b_file_size: number
-      a_unmatched_pages: UnmatchedPage[]
-      b_unmatched_pages: UnmatchedPage[]
-    }
-
-/** One insertion group for the patch/overwrite/keep-b endpoints. `after_filename`/`before_filename`
- * anchor into the target's page list; `page_indices` are the source side's unmatched pages to insert. */
-export interface ExportPatchInsertion {
-  after_filename?: string | null
-  before_filename?: string | null
-  page_indices: number[]
-}
-
 /** Absent on records written before this field existed, which always means `'download'`. */
 export type QueueItemOrigin = "download" | "local_upload" | "share_import"
 
 export interface DownloadQueueItem {
   id: string
+  /** A downloaded file kept after a failed cataloguing attempt — see `download_queue/{id}/reingest`. */
+  staged?: { path: string; filename: string } | null
   origin?: QueueItemOrigin
   /** Which subscription queued this item, when one did — absent for a manual add or an upload. */
   subscription_id?: string | null
@@ -1074,8 +1015,6 @@ export interface DownloadQueueItem {
   category: string | null
   auto_fetch_metadata: boolean
   overwrite_on_duplicate: boolean
-  /** The subscription's own pre-answered conflict policy; `ask` for anything else. */
-  conflict_policy?: ConflictPolicy
   state: DownloadQueueState
   /** When this item's download began and finished (epoch ms), persisted rather than only held on
    *  the job — a finished job is dropped when the process restarts, and a finished row still owes
@@ -1090,7 +1029,6 @@ export interface DownloadQueueItem {
   metadata_preview: Record<string, unknown> | null
   metadata_preview_at: number | null
   error: QueueError | null
-  pending_filename_conflict?: PendingFilenameConflict | null
   /** Set alongside state `awaiting_revision_confirmation` — which in-library archive is the newer
    * revision, so the row can name and link to it (issue #107). */
   pending_revision_confirmation?: PendingRevisionConfirmation | null
@@ -1098,6 +1036,11 @@ export interface DownloadQueueItem {
    * scoped to that single run; the UI has no reason to act on it, but the field is serialized so
    * the type reflects what the API actually sends. */
   revision_confirmed?: boolean
+  /** True only while this item's bytes are moving — cleared once the file is fully downloaded and
+   *  the backend moves on to bundling/cataloguing it. `downloading` covers both, so anything that
+   *  needs "actually transferring right now" (the per-group count in the queue header) reads this,
+   *  not the state alone. */
+  transferring?: boolean
   created_at: number
 }
 
@@ -1117,7 +1060,8 @@ export interface AddToQueueItem {
   plugin_namespace: string
   category?: string
   auto_fetch_metadata: boolean
-  overwrite_on_duplicate: boolean
+  /** Ignored since 020 (archives are addressed by content, never by name); kept for older clients. */
+  overwrite_on_duplicate?: boolean
 }
 
 export interface AddToQueueResponse {
@@ -1630,4 +1574,128 @@ export interface SafetyPasswordStatus {
   locked: boolean
   locked_until: number | null
   attempts_remaining: number | null
+}
+
+/** One member row of a duplicate group (spec 024). */
+export interface DuplicateMember {
+  id: string
+  title: string
+  size: number
+  pages: number
+  cover: string
+  /** Every tag on the archive, `language:…` included — the card shows that one as a chip. */
+  tags: string[]
+  decision: "keep" | "discard" | "undecided"
+  recommended: boolean
+  /** Pages this member's `.patch.zip` adds; already included in `pages`. */
+  patch_pages?: number
+  /** The member that wins the most pairwise comparisons (FR-003's "best copy"). */
+  best?: boolean
+}
+
+export interface DuplicatePairEvidence {
+  a: string
+  b: string
+  similarity: number
+  distance: number
+  title_similarity: number
+}
+
+export interface DuplicateReview {
+  verdict: "same_work" | "different_versions" | "adjacent_volumes" | "unrelated" | "patched"
+  keep: string[]
+  discard: string[]
+  reason: string
+  confidence: number
+  fallback: boolean
+  /** The model's one-line note per member, by archive id. */
+  notes?: Record<string, string>
+}
+
+export interface DuplicateGroupView {
+  key: string
+  chained: boolean
+  middle: string | null
+  members: DuplicateMember[]
+  pairs: DuplicatePairEvidence[]
+  review: DuplicateReview | null
+  matrix?: number[][]
+  /** `target`'s patch was built from `source` (matched by the source file's CRC32). */
+  patch_links?: { target: string; source: string }[]
+}
+
+export interface DuplicateGroupsResponse {
+  scanned_at: number
+  algorithm: string
+  chained_groups: number
+  groups: DuplicateGroupView[]
+}
+
+export interface DuplicateDecisions {
+  group_key: string
+  decisions: Record<string, "keep" | "discard" | "undecided">
+  not_duplicate_pairs: [string, string][]
+  updated_at: number
+}
+
+export interface DuplicateCompareSample {
+  a_page_index: number
+  b_page_index: number
+  a_sharpness: number
+  b_sharpness: number
+  a_width: number
+  a_height: number
+  b_width: number
+  b_height: number
+  /** The page's entry path inside its archive (what `/archives/{id}/page?path=` takes). */
+  a_filename: string
+  b_filename: string
+  a_file_size: number
+  b_file_size: number
+  crop_alignment: CropAlignment
+  /** The page comes from the archive's `.patch.zip` (served with `source=patch`). */
+  a_from_patch?: boolean
+  b_from_patch?: boolean
+}
+
+/** Maps a point in A to B in normalized per-dimension coordinates: `b_u = a_u * scale + offset_x`,
+ * `b_v = a_v * scale + offset_y`. Identity when no reliable alignment was found. */
+export interface CropAlignment {
+  scale: number
+  offset_x: number
+  offset_y: number
+}
+
+export type ComparisonSide = "a" | "b"
+
+export interface DuplicateCompare {
+  a: { id: string; title: string; size: number; pages: number }
+  b: { id: string; title: string; size: number; pages: number }
+  aligned_pairs: number
+  likely_different_language: boolean
+  recommendation: "a" | "b" | null
+  samples: DuplicateCompareSample[]
+  a_unmatched_pages: { page_index: number; default_insert_after: number | null }[]
+  b_unmatched_pages: { page_index: number; default_insert_after: number | null }[]
+  a_entries: ArchiveEntryInfo[]
+  b_entries: ArchiveEntryInfo[]
+  /** Indexes (into the patch-merged page list) that come from each side's `.patch.zip`. */
+  a_patch_pages?: number[]
+  b_patch_pages?: number[]
+  /** Every aligned `[a_page_index, b_page_index]` pair, in order. */
+  aligned?: [number, number][]
+}
+
+/** One page to copy into the target's patch; both indexes are patch-merged page indexes. */
+export interface DuplicatePatchPick {
+  source_page: number
+  /** Target position the page lands before; past the end appends. */
+  insert_before: number
+}
+
+export interface DuplicatePatchResult {
+  added: number
+  skipped: number
+  renamed: number
+  patch_pages: number
 }

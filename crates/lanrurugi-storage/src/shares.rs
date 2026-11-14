@@ -53,6 +53,34 @@ pub enum ShareStatus {
     Revoked,
 }
 
+/// What a share does once it has served its target ratio.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RatioAction {
+    /// Refuse further imports.
+    #[default]
+    Stop,
+    /// Keep serving, capped at `ratio_rate` bytes per second.
+    Throttle,
+}
+
+impl RatioAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stop => "stop",
+            Self::Throttle => "throttle",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "stop" => Some(Self::Stop),
+            "throttle" => Some(Self::Throttle),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Share {
     pub id: ShareId,
@@ -68,8 +96,18 @@ pub struct Share {
     pub record_key: String,
     pub items: Vec<ShareItem>,
     pub permissions: Permissions,
+    /// Counts browser downloads only (FR-015); imports are counted by `import_bytes`.
     pub download_limit: Option<u32>,
     pub downloads_used: u32,
+    /// Bytes served to importers: the ratio numerator.
+    pub import_bytes: u64,
+    /// Size of everything the share offers: the ratio denominator. Zero until first claimed.
+    pub total_bytes: u64,
+    /// Imported bytes divided by `total_bytes` at which `ratio_action` applies. Zero disables it.
+    pub target_ratio: Option<f32>,
+    pub ratio_action: RatioAction,
+    /// Bytes per second once throttled; `Some(0)` pauses.
+    pub ratio_rate: Option<u64>,
     pub ip_allow: Vec<String>,
     pub ip_first_n: Option<u32>,
     pub expires_at: Option<i64>,
@@ -167,6 +205,9 @@ impl Share {
             ("ip_allow", json(&self.ip_allow)),
             ("embed", bool_field(self.embed)),
             ("allow_helpers", bool_field(self.allow_helpers)),
+            ("import_bytes", self.import_bytes.to_string()),
+            ("total_bytes", self.total_bytes.to_string()),
+            ("ratio_action", self.ratio_action.as_str().to_string()),
             ("created_at", self.created_at.to_string()),
             ("created_by", self.created_by.clone()),
         ];
@@ -178,6 +219,8 @@ impl Share {
         optional("title", self.title.clone());
         optional("download_limit", self.download_limit.map(|v| v.to_string()));
         optional("ip_first_n", self.ip_first_n.map(|v| v.to_string()));
+        optional("target_ratio", self.target_ratio.map(|v| format!("{v:.2}")));
+        optional("ratio_rate", self.ratio_rate.map(|v| v.to_string()));
         optional("expires_at", self.expires_at.map(|v| v.to_string()));
         optional(
             "helpers_disabled_at",
@@ -217,6 +260,17 @@ impl Share {
                 .map_err(|_| bad("permissions"))?,
             download_limit: small("download_limit")?,
             downloads_used: small("downloads_used")?.unwrap_or(0),
+            import_bytes: num("import_bytes")?.unwrap_or(0).max(0) as u64,
+            total_bytes: num("total_bytes")?.unwrap_or(0).max(0) as u64,
+            target_ratio: f
+                .get("target_ratio")
+                .map(|v| v.parse::<f32>().map_err(|_| bad("target_ratio")))
+                .transpose()?,
+            ratio_action: f
+                .get("ratio_action")
+                .and_then(|v| RatioAction::parse(v))
+                .unwrap_or_default(),
+            ratio_rate: num("ratio_rate")?.map(|v| v.max(0) as u64),
             ip_allow: serde_json::from_value(parse_json("ip_allow")?)
                 .map_err(|_| bad("ip_allow"))?,
             ip_first_n: small("ip_first_n")?,
@@ -341,16 +395,23 @@ if first_n and redis.call('SISMEMBER', ips, addr) == 0
    and redis.call('SCARD', ips) >= tonumber(first_n) then
   return 'not_found'
 end
-local limit = redis.call('HGET', share, 'download_limit')
-local used = tonumber(redis.call('HGET', share, 'downloads_used') or '0')
-if limit and used >= tonumber(limit) then return 'exhausted' end
+-- `download_limit` governs downloads, not imports: an importer is limited by the share's ratio.
+if kind == 'browser_download' then
+  local limit = redis.call('HGET', share, 'download_limit')
+  local used = tonumber(redis.call('HGET', share, 'downloads_used') or '0')
+  if limit and used >= tonumber(limit) then return 'exhausted' end
+end
 if first_n then redis.call('SADD', ips, addr) end
 redis.call('HSET', claim, 'share_id', redis.call('HGET', share, 'id'), 'kind', kind,
   'addresses', cjson.encode({addr}), 'endpoint_id', endpoint,
   'started_at', now, 'last_active_at', now)
 redis.call('EXPIRE', claim, ttl)
 redis.call('ZADD', history, now, member)
-redis.call('HINCRBY', share, 'downloads_used', 1)
+if kind == 'browser_download' then
+  redis.call('HINCRBY', share, 'downloads_used', 1)
+else
+  redis.call('HINCRBY', share, 'imports_used', 1)
+end
 note_importer()
 return 'created'
 "#;
@@ -530,6 +591,41 @@ impl ShareRepository {
         })
     }
 
+    /// Records how much the share offers, the denominator of its ratio.
+    pub async fn set_total_bytes(&self, id: &ShareId, total: u64) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        conn.hset::<_, _, _, ()>(keys::share_key(id), "total_bytes", total)
+            .await?;
+        Ok(())
+    }
+
+    /// Adds served import bytes to the ratio numerator.
+    pub async fn add_import_bytes(&self, id: &ShareId, delta: u64) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        conn.hincr::<_, _, _, u64>(keys::share_key(id), "import_bytes", delta)
+            .await?;
+        Ok(())
+    }
+
+    /// Counts the bytes an importer reports as verified, returning how many are new. Reports are
+    /// cumulative and repeat after a reconnect, so the claim keeps the high-water mark.
+    pub async fn add_claim_verified(&self, claim_id: &ClaimId, reported: u64) -> Result<u64> {
+        const SCRIPT: &str = r#"
+local last = tonumber(redis.call('HGET', KEYS[1], 'verified_bytes') or '0')
+local reported = tonumber(ARGV[1])
+if reported <= last then return 0 end
+redis.call('HSET', KEYS[1], 'verified_bytes', reported)
+return reported - last
+"#;
+        let mut conn = self.pool.get().await?;
+        let delta: u64 = redis::Script::new(SCRIPT)
+            .key(keys::share_claim_key(claim_id))
+            .arg(reported)
+            .invoke_async(&mut conn)
+            .await?;
+        Ok(delta)
+    }
+
     /// Whether a claim is still alive (it expires 24 h after its last activity).
     pub async fn claim_exists(&self, claim_id: &ClaimId) -> Result<bool> {
         let mut conn = self.pool.get().await?;
@@ -595,6 +691,19 @@ impl ShareRepository {
     }
 
     /// Records a heartbeat; `None` when the endpoint never registered.
+    /// Drops a helper that said it stopped helping, without waiting for it to age out.
+    pub async fn forget_helper(&self, id: &ShareId, endpoint: &str) -> Result<()> {
+        let mut conn = self.pool.get().await?;
+        let mut pipe = redis::pipe();
+        pipe.atomic()
+            .zrem(keys::share_helpers_key(id), endpoint)
+            .ignore()
+            .hdel(keys::share_helper_info_key(id), endpoint)
+            .ignore();
+        pipe.query_async::<()>(&mut conn).await?;
+        Ok(())
+    }
+
     pub async fn helper_heartbeat(
         &self,
         id: &ShareId,
@@ -733,6 +842,11 @@ mod tests {
             permissions: Permissions::ALL,
             download_limit: None,
             downloads_used: 0,
+            import_bytes: 0,
+            total_bytes: 0,
+            target_ratio: None,
+            ratio_action: RatioAction::default(),
+            ratio_rate: None,
             ip_allow: vec![],
             ip_first_n: None,
             expires_at: None,

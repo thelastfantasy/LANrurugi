@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { ApiError } from "@/api/client";
 import {
+  Checkbox,
   Input,
   NullableNumberInput,
   Select,
@@ -20,16 +21,23 @@ export interface SettingField {
   /** For `choice`: the allowed values, labelled `${label}.${value}`. For `flags`: the individual
    *  values, stored as a comma-joined list and rendered as one checkbox each. */
   options?: string[];
-  /** Per-value i18n keys for `flags`, when the block's own label prefix does not fit them (the
-   *  permission names are shared with the share dialog's own checkboxes). */
+  /** Per-value i18n keys, when the block's own label prefix does not fit them (the permission
+   *  names are shared with the share dialog's own checkboxes). A key with no translation is
+   *  rendered as-is, which is what per-interface labels want. */
   optionLabels?: Record<string, string>;
+  /** Popup-only second line per option: the address and driver of a network interface. */
+  optionDescriptions?: Record<string, string>;
+  /** `"interfaces"`: the options are the host's network interfaces, filled in from the settings
+   *  payload at render time — they change while the app runs (a VPN tunnel appears). */
+  dynamic?: "interfaces";
   /** i18n key of the label; the hint, when present, is `${label}Hint`. */
   label: string;
   hint?: boolean;
   placeholder?: string;
   /** Render only while another field of the same block has this value — for settings that only
-   *  matter in one mode (the relay's own PEM files, which ACME mode does not use at all). */
-  onlyWhen?: { key: string; value: string };
+   *  matter in one mode (the relay's own PEM files, which ACME mode does not use at all).
+   *  `present` instead asks only that the other field be non-empty. */
+  onlyWhen?: { key: string; value?: string; present?: boolean };
   /** Hidden behind the block's "advanced" switch: a setting almost nobody needs to touch, whose
    *  default is already right. */
   advanced?: boolean;
@@ -47,10 +55,43 @@ export function ShareSettingsForm({ fields }: { fields: SettingField[] }) {
   return (
     <SettingsDraft
       key={settings.dataUpdatedAt}
-      fields={fields}
+      fields={fillDynamicOptions(fields, settings.data)}
       saved={settings.data}
     />
   );
+}
+
+/** Turns `dynamic: "interfaces"` fields into real choices: "any" first, then each interface with
+ *  the addresses it currently holds, so a wrong pick is visible before it is saved. */
+function fillDynamicOptions(
+  fields: SettingField[],
+  settings: Record<string, unknown>,
+): SettingField[] {
+  return fields.map((field) => {
+    if (field.dynamic !== "interfaces") return field;
+    const interfaces = (
+      Array.isArray(settings.interfaces) ? settings.interfaces : []
+    ) as { name: string; addrs: string[]; driver?: string | null }[];
+    const optionLabels: Record<string, string> = {
+      "": "share.network.interfaceAny",
+    };
+    const optionDescriptions: Record<string, string> = {};
+    for (const iface of interfaces) {
+      // The name is the option; the second line carries what tells two similar names apart. One
+      // IPv4 address and the driver are enough for that, and keeping them off the first line is
+      // what stops a long IPv6 list from making the popup wider than the screen.
+      optionLabels[iface.name] = iface.name;
+      const ipv4 = iface.addrs.find((a) => !a.includes(":"));
+      const description = [ipv4, iface.driver].filter(Boolean).join(" · ");
+      if (description) optionDescriptions[iface.name] = description;
+    }
+    return {
+      ...field,
+      options: ["", ...interfaces.map((i) => i.name)],
+      optionLabels,
+      optionDescriptions,
+    };
+  });
 }
 
 function SettingsDraft({
@@ -92,7 +133,9 @@ function SettingsDraft({
         .filter(
           (f) =>
             !f.onlyWhen ||
-            String(draft[f.onlyWhen.key] ?? "") === f.onlyWhen.value,
+            (f.onlyWhen.present
+              ? String(draft[f.onlyWhen.key] ?? "").trim() !== ""
+              : String(draft[f.onlyWhen.key] ?? "") === f.onlyWhen.value),
         )
         .map((f) => (
           <FieldRow
@@ -148,7 +191,8 @@ function FieldRow({
           align="start"
           items={(field.options ?? []).map((o) => ({
             value: o,
-            label: t(`${field.label}.${o}`),
+            label: t(field.optionLabels?.[o] ?? `${field.label}.${o}`),
+            description: field.optionDescriptions?.[o],
           }))}
         />
       );
@@ -177,12 +221,11 @@ function FieldRow({
               key={o}
               style={{ display: "flex", alignItems: "center", gap: 4 }}
             >
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={picked.has(o)}
-                onChange={(e) => {
+                onCheckedChange={(checked) => {
                   const next = new Set(picked);
-                  if (e.target.checked) next.add(o);
+                  if (checked) next.add(o);
                   else next.delete(o);
                   // Keep the server's own order rather than click order.
                   onChange(options.filter((x) => next.has(x)).join(","));
@@ -229,11 +272,43 @@ function FieldRow({
         />
       );
   }
+  const warning =
+    field.key === "share_public_url" ? publicUrlWarning(String(value ?? "")) : null;
   return (
     <>
       <label htmlFor={id}>{label}</label>
       {control}
       {children}
+      {warning ? (
+        <span className="share-settings-warning">
+          <i className="fa fa-triangle-exclamation" aria-hidden="true" /> {t(warning)}
+        </span>
+      ) : null}
     </>
   );
+}
+
+/** A public address that cannot be reached from outside: a private or loopback host, a `.local`
+ *  name, a bare address, or plain http. Saving one is allowed (a LAN-only instance is a real
+ *  setup) but it breaks share links, the advertised relay address and ACME, so it is said out
+ *  loud rather than discovered later. */
+function publicUrlWarning(text: string): string | null {
+  if (!text.trim()) return null;
+  let url: URL;
+  try {
+    url = new URL(text.trim());
+  } catch {
+    return "share.settings.publicUrlInvalid";
+  }
+  const host = url.hostname.toLowerCase();
+  const privateV4 =
+    /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.)/.test(host);
+  const ipv6Literal = host.includes(":");
+  if (url.protocol !== "https:" || privateV4 || ipv6Literal || host === "localhost" || host.endsWith(".local")) {
+    return "share.settings.publicUrlNotReachable";
+  }
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    return "share.settings.publicUrlBareAddress";
+  }
+  return null;
 }

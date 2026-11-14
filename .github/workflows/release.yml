@@ -232,7 +232,7 @@ jobs:
           curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis.gpg
           echo "deb [signed-by=/usr/share/keyrings/redis.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" \
             | sudo tee /etc/apt/sources.list.d/redis.list
-          sudo apt-get update
+          scripts/ci-apt-update.sh
           sudo apt-get install -y --no-install-recommends \
             cmake pkg-config nasm zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev \
             libxml2-dev libacl1-dev libssl-dev \

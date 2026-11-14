@@ -86,6 +86,32 @@ pub async fn resize_if_over_threshold(
     preview_full_short_edge: Option<u32>,
     format: EncodeFormat,
 ) -> Result<Option<(Vec<u8>, u32, u32)>, ResizeError> {
+    resize_if_over_threshold_with_jxl_threads(
+        content,
+        quality,
+        threshold_kb,
+        max_short_edge,
+        max_long_edge,
+        preview_full_short_edge,
+        format,
+        1,
+    )
+    .await
+}
+
+/// [`resize_if_over_threshold`] with an explicit JXL worker count — see
+/// [`convert_to_format_with_jxl_threads`].
+#[allow(clippy::too_many_arguments)]
+pub async fn resize_if_over_threshold_with_jxl_threads(
+    content: bytes::Bytes,
+    quality: u8,
+    threshold_kb: i64,
+    max_short_edge: u32,
+    max_long_edge: Option<u32>,
+    preview_full_short_edge: Option<u32>,
+    format: EncodeFormat,
+    jxl_threads: usize,
+) -> Result<Option<(Vec<u8>, u32, u32)>, ResizeError> {
     run_blocking(move || {
         let size_kb = (content.len() / 1024) as i64;
         // A zero threshold means "always re-encode" (preview output, and any page whose source
@@ -103,6 +129,7 @@ pub async fn resize_if_over_threshold(
             max_long_edge,
             preview_full_short_edge,
             format,
+            jxl_threads,
         )?;
         Ok(Some((out, orig_width, orig_height)))
     })
@@ -120,6 +147,29 @@ pub async fn convert_to_format(
     preview_full_short_edge: Option<u32>,
     format: EncodeFormat,
 ) -> Result<(Vec<u8>, u32, u32), ResizeError> {
+    convert_to_format_with_jxl_threads(
+        content,
+        quality,
+        max_short_edge,
+        max_long_edge,
+        preview_full_short_edge,
+        format,
+        1,
+    )
+    .await
+}
+
+/// [`convert_to_format`] for a request someone is waiting on: `jxl_threads` workers encode the
+/// JXL output instead of one (floor of 1). WebP output ignores it.
+pub async fn convert_to_format_with_jxl_threads(
+    content: bytes::Bytes,
+    quality: u8,
+    max_short_edge: u32,
+    max_long_edge: Option<u32>,
+    preview_full_short_edge: Option<u32>,
+    format: EncodeFormat,
+    jxl_threads: usize,
+) -> Result<(Vec<u8>, u32, u32), ResizeError> {
     run_blocking(move || {
         let img = crate::image_decode::load_from_memory(&content)?;
         let (orig_width, orig_height) = (img.width(), img.height());
@@ -130,6 +180,7 @@ pub async fn convert_to_format(
             max_long_edge,
             preview_full_short_edge,
             format,
+            jxl_threads,
         )?;
         Ok((out, orig_width, orig_height))
     })
@@ -143,6 +194,7 @@ fn resize_sync(
     max_long_edge: Option<u32>,
     preview_full_short_edge: Option<u32>,
     format: EncodeFormat,
+    jxl_threads: usize,
 ) -> Result<Vec<u8>, ResizeError> {
     let short_edge = img.width().min(img.height());
     let long_edge = img.width().max(img.height());
@@ -176,8 +228,8 @@ fn resize_sync(
     // case (every JPEG page). `to_rgb8()` would clone that whole buffer first, and for
     // `ImageRgb8` it is literally `x.clone()`, so the copy is pure waste.
     match final_image.as_rgb8() {
-        Some(rgb) => encode_rgb(rgb, quality, format),
-        None => encode_rgb(&final_image.to_rgb8(), quality, format),
+        Some(rgb) => encode_rgb_with_threads(rgb, quality, format, jxl_threads),
+        None => encode_rgb_with_threads(&final_image.to_rgb8(), quality, format, jxl_threads),
     }
 }
 
@@ -190,17 +242,21 @@ fn scaled_dims(img: &image::DynamicImage, ratio: f64) -> Option<(u32, u32)> {
     ((width, height) != (img.width(), img.height())).then_some((width, height))
 }
 
-fn encode_rgb(
+/// JXL accepts a thread count; WebP's encoder here is single-threaded regardless, so the count is
+/// only forwarded to the JXL path.
+fn encode_rgb_with_threads(
     rgb: &image::RgbImage,
     quality: u8,
     format: EncodeFormat,
+    jxl_threads: usize,
 ) -> Result<Vec<u8>, ResizeError> {
     match format {
         EncodeFormat::Webp => webpx::Encoder::new_rgb(rgb.as_raw(), rgb.width(), rgb.height())
             .quality(quality as f32)
             .encode(webpx::Unstoppable)
             .map_err(|error| ResizeError::Webp(error.to_string())),
-        EncodeFormat::Jxl => crate::jxl::encode_rgb(rgb, quality).map_err(ResizeError::from),
+        EncodeFormat::Jxl => crate::jxl::encode_rgb_with_threads(rgb, quality, jxl_threads)
+            .map_err(ResizeError::from),
     }
 }
 

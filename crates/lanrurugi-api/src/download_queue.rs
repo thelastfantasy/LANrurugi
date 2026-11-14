@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -15,7 +15,7 @@ use axum::routing::{get, patch, post};
 use axum::Router;
 use futures_util::StreamExt;
 use lanrurugi_plugin::protocol::PluginInfo;
-use lanrurugi_storage::download_queue::{DownloadQueueState, QueueItemOrigin};
+use lanrurugi_storage::download_queue::DownloadQueueState;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio_stream::wrappers::BroadcastStream;
@@ -42,34 +42,16 @@ pub fn router() -> Router<AppState> {
         .route("/download_queue/{id}/start", post(start_queue_item))
         .route("/download_queue/{id}/stop", post(stop_queue_item))
         .route("/download_queue/{id}/pause", post(pause_queue_item))
-        .route("/download_queue/{id}/overwrite", post(overwrite_queue_item))
-        .route("/download_queue/{id}/rename", post(rename_queue_item))
-        .route("/download_queue/{id}/compare", post(compare_queue_item))
         .route(
             "/download_queue/{id}/confirm-older",
             post(confirm_older_revision),
         )
-        .route(
-            "/download_queue/{id}/compare/stream",
-            get(compare_queue_item_stream),
-        )
-        .route(
-            "/download_queue/{id}/compare/page",
-            get(compare_queue_item_page),
-        )
-        .route(
-            "/download_queue/{id}/compare/pages",
-            get(list_compare_pages),
-        )
-        .route(
-            "/download_queue/{id}/compare/export-patch",
-            post(export_compare_patch),
-        )
-        .route("/download_queue/{id}/compare/keep-b", post(keep_side_b))
         .route("/download_queue/start_all", post(start_all))
         .route("/download_queue/start_selected", post(start_selected))
         .route("/download_queue/delete_selected", post(delete_selected))
         .route("/download_queue/clear_completed", post(clear_completed))
+        .route("/download_queue/{id}/force", post(force_start))
+        .route("/download_queue/{id}/reingest", post(reingest))
 }
 
 /// `GET /download_queue/stream` — SSE endpoint that pushes incremental queue-item state changes
@@ -191,6 +173,10 @@ struct AddQueueItem {
     #[serde(default)]
     metadata_tags: Vec<String>,
     auto_fetch_metadata: bool,
+    /// Accepted for wire compatibility with older clients; since 020 an archive is addressed by
+    /// its content, so a queued download cannot collide with an existing name and this flag has
+    /// no effect (`catalogue_staged_file` passes no `intended_filename`).
+    #[serde(default)]
     overwrite_on_duplicate: bool,
 }
 
@@ -312,7 +298,6 @@ async fn add_to_queue(
                 auto_fetch_metadata: item.auto_fetch_metadata,
                 overwrite_on_duplicate: item.overwrite_on_duplicate,
                 // A manual add answers its own conflicts in the UI, like it always has.
-                conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
                 state: DownloadQueueState::Queued,
             })
             .await
@@ -492,16 +477,12 @@ async fn delete_queue_item(
     // A `pending_filename_conflict`'s staged bytes (`temp_dir/temp_{crc32}_{filename}`, see that
     // type's own docs) belong to this queue item alone — nothing else references them, and once
     // this item's own Redis record is gone there's no other path back to them short of the 24h
-    // stale-file sweep eventually catching it. Deleting the item is the user's explicit call that
-    // they're done with this conflict entirely, so it cleans up its own staged file immediately
-    // rather than leaving an orphan for the periodic sweep to find later.
+    // a stale-file sweep eventually catching it. Deleting the item is the user's explicit call
+    // that they're done with this row entirely, so it removes its own staged file immediately.
     if let Some(item) = &item {
         if let Some(conflict) = &item.pending_filename_conflict {
             if let Err(e) = tokio::fs::remove_file(&conflict.temp_path).await {
                 tracing::warn!(%id, temp_path = %conflict.temp_path, error = %e, "failed to remove pending-rename temp file on queue item delete");
-            }
-            if let Err(e) = state.compare_cache.delete(&id).await {
-                tracing::warn!(%id, error = %e, "failed to clear cached comparison on queue item delete");
             }
         }
     }
@@ -656,6 +637,11 @@ async fn start_queue_item(
             "start_download_queue_item",
             format!("Another item for the same URL as {id} is already downloading."),
         ),
+        Err(StartError::SourceAlreadyImported(existing_id)) => error(
+            StatusCode::CONFLICT,
+            "start_download_queue_item",
+            format!("This URL already produced archive {existing_id}."),
+        ),
         Err(StartError::Storage(e)) => {
             // `start_one` itself hit a real Redis failure marking the item `Starting` — the
             // download attempt never even got to spawn, worth recording since the earlier
@@ -754,6 +740,11 @@ async fn confirm_older_revision(
         .as_ref()
         .map(|c| c.newer_archive_id.clone());
     item.pending_revision_confirmation = None;
+    // A fresh run supersedes the bytes a failed cataloguing attempt kept: leaving them would leak
+    // the file and keep offering a "re-ingest" choice that no longer matches the row.
+    if let Some(staged) = item.staged.take() {
+        let _ = tokio::fs::remove_file(&staged.path).await;
+    }
 
     if !body.proceed {
         item.state = DownloadQueueState::Cancelled;
@@ -844,6 +835,11 @@ async fn confirm_older_revision(
             StatusCode::CONFLICT,
             "confirm_older_revision",
             format!("Another item for the same URL as {id} is already downloading."),
+        ),
+        Err(StartError::SourceAlreadyImported(existing_id)) => error(
+            StatusCode::CONFLICT,
+            "confirm_older_revision",
+            format!("This URL already produced archive {existing_id}."),
         ),
         Err(StartError::NotQueued) => error(
             StatusCode::CONFLICT,
@@ -1035,6 +1031,7 @@ async fn delete_selected(
                 tracing::warn!(%id, temp_path = %conflict.temp_path, error = %e, "failed to remove pending-rename temp file on queue item delete");
             }
         }
+        remove_kept_bytes(item.as_ref()).await;
         if state.download_queue.delete(id).await.is_ok() {
             if let Some(tx) = &state.download_queue_tx {
                 let _ = tx.send(serde_json::json!({ "kind": "remove", "id": id }));
@@ -1061,12 +1058,15 @@ async fn delete_selected(
     axum::Json(json!({ "deleted": deleted })).into_response()
 }
 
+#[derive(Debug)]
 enum StartError {
     NotFound,
     NotQueued,
     PluginMissing,
     Storage(String),
     DuplicateInFlight,
+    /// The source URL already produced an archive; reported before any bytes are fetched again.
+    SourceAlreadyImported(String),
 }
 
 fn start_error_message(e: &StartError) -> String {
@@ -1077,6 +1077,9 @@ fn start_error_message(e: &StartError) -> String {
         StartError::Storage(msg) => msg.clone(),
         StartError::DuplicateInFlight => {
             "another item for this same URL is already downloading".to_string()
+        }
+        StartError::SourceAlreadyImported(id) => {
+            format!("this URL already produced archive {id}; download anyway to fetch it again")
         }
     }
 }
@@ -1135,8 +1138,37 @@ async fn start_one(
         .list_all()
         .await
         .map_err(|e| StartError::Storage(e.to_string()))?;
-    if has_running_duplicate(&item, &all_items) {
+    if !item.forced && has_running_duplicate(&item, &all_items) {
+        // Refuse on the row itself, not just as a 409: the row then shows the same
+        // "download anyway" action the already-imported block offers.
+        item.state = DownloadQueueState::Error;
+        item.error = Some(lanrurugi_core::queue_error::QueueError::SourceDownloadInProgress);
+        item.finished_at = Some(now_ms());
+        let _ = state.download_queue.update(&item).await;
+        // Persisting the refusal is not enough on its own: without this, an open Upload page
+        // keeps showing the row exactly as it was until something else refetches the list, so a
+        // single-row Start looks like it did nothing (reported live for a chaika item).
+        broadcast_item_update(state, &item);
         return Err(StartError::DuplicateInFlight);
+    }
+
+    // Content addressing would catch this *after* re-downloading and hashing the whole file; the
+    // registry exists to stop it here. Forced items already carry the user's explicit override.
+    if item.origin == lanrurugi_storage::download_queue::QueueItemOrigin::Download && !item.forced {
+        if let Some(existing_id) = crate::download_sources::lookup(state, &item.url).await {
+            item.state = DownloadQueueState::Error;
+            item.error = Some(
+                lanrurugi_core::queue_error::QueueError::SourceAlreadyImported {
+                    existing_id: existing_id.clone(),
+                },
+            );
+            item.finished_at = Some(now_ms());
+            let _ = state.download_queue.update(&item).await;
+            // Same reason as the duplicate-in-flight branch above: the row must flip to its
+            // blocked/error presentation immediately, not only after a manual refresh.
+            broadcast_item_update(state, &item);
+            return Err(StartError::SourceAlreadyImported(existing_id));
+        }
     }
 
     // 017: a share import runs its own transfer task, not a plugin; stopping and retrying go
@@ -1147,6 +1179,7 @@ async fn start_one(
             .clone()
             .ok_or_else(|| StartError::Storage("share import id missing".to_string()))?;
         item.state = DownloadQueueState::Starting;
+        item.transferring = false;
         item.started_at = Some(now_ms());
         item.finished_at = None;
         item.error = None;
@@ -1207,11 +1240,19 @@ async fn start_one(
     // Without this the row would keep rendering the old banner through the entire new attempt —
     // the same bug `pending_filename_conflict` had to be cleared here for.
     item.pending_revision_confirmation = None;
+    // A fresh run supersedes the bytes a failed cataloguing attempt kept: leaving them would leak
+    // the file and keep offering a "re-ingest" choice that no longer matches the row.
+    if let Some(staged) = item.staged.take() {
+        let _ = tokio::fs::remove_file(&staged.path).await;
+    }
     // Re-learned from the domain registry (and this run's own resume attempt): the previous run may
     // have used a different host, so its observation must not carry over.
     item.resume_support = None;
 
     item.state = DownloadQueueState::Starting;
+    // A previous attempt's transfer never survived its own end, so a retry starts out having no
+    // bytes in flight — the "transferring now" count must not inherit the old attempt's flag.
+    item.transferring = false;
     // Stamped here rather than read off the job: this is the moment the item actually left the
     // queue, and the row needs it even after the job that ran it is gone. A restart clears the
     // previous attempt's end stamp so a retry reports its own duration, not both runs'.
@@ -1466,1758 +1507,6 @@ async fn pause_one(state: &AppState, id: &str) -> Result<(), StopError> {
     Ok(())
 }
 
-/// `POST /download_queue/{id}/overwrite` — resolves a `PendingFilenameConflict` (see that type's
-/// own docs) by deleting the archive that already owns the colliding filename and cataloguing the
-/// staged download under its originally-intended filename.
-#[derive(Debug, Deserialize)]
-struct OverwriteQueueItemBody {
-    /// B's own unique pages (issue #77's own follow-on design — `ComparisonResult
-    /// .b_unmatched_pages`) the user chose to keep even though A is replacing B overall. Optional
-    /// — omitted (or empty) for every ordinary overwrite that never went through the AI
-    /// comparison flow at all, which is the overwhelming majority of calls to this endpoint.
-    #[serde(default)]
-    insertions: Vec<ExportPatchInsertion>,
-}
-
-/// `POST /download_queue/{id}/overwrite` — resolves a `PendingFilenameConflict` by deleting the
-/// existing archive (B) and cataloguing the staged download (A) under its originally-intended
-/// filename.
-///
-/// `body.insertions`, when given, packages B's own unique pages into a `.patch.zip` for the *new*
-/// A archive (issue #77's own follow-on design: even when A wins overall, some of B's pages might
-/// still be worth keeping) — this has to read B's pages and resolve B's own category/tag/progress
-/// metadata *before* calling `resolve_conflict`, since that call deletes B's file and record as
-/// part of cataloguing A (`pipeline.rs::delete_existing_archive`) — there's nothing left to read
-/// from afterward.
-async fn overwrite_queue_item(
-    State(state): State<AppState>,
-    auth: Option<axum::extract::Extension<AuthContext>>,
-    Path(id): Path<String>,
-    body: axum::Json<OverwriteQueueItemBody>,
-) -> Response {
-    let existing_before = match state.download_queue.get(&id).await {
-        Ok(Some(item)) => match &item.pending_filename_conflict {
-            Some(conflict) => state
-                .repos
-                .archives
-                .get(&lanrurugi_core::ids::ArchiveId(
-                    conflict.existing_id.clone(),
-                ))
-                .await
-                .ok()
-                .flatten()
-                .map(|archive| (conflict.temp_path.clone(), archive)),
-            None => None,
-        },
-        _ => None,
-    };
-
-    // Built from B's own pages BEFORE `resolve_conflict` runs — that call deletes B's file as
-    // part of cataloguing A (`pipeline.rs::delete_existing_archive`), so B's pages must be read
-    // and bundled into patch bytes now, held in memory, and only written to disk (under A's new
-    // path) after A exists. Reading B's pages after the fact isn't an option: there is no "after
-    // the fact" for B's own file.
-    //
-    // The patch's own `targetCrc32` is computed from the STAGED file (`a_temp_path`), not from
-    // whatever A's file path ends up being post-catalogue — cataloguing moves/renames the file but
-    // never transforms its bytes, so the staged file's crc32 already equals the final A's crc32.
-    // Computing it any other way would need A to already exist, which — same ordering problem as
-    // the page reads above — it doesn't yet at this point in the flow.
-    let pre_built_patch = match &existing_before {
-        Some((a_temp_path, b_before)) if !body.insertions.is_empty() => {
-            let a_temp_path = std::path::PathBuf::from(a_temp_path);
-            let b_path = std::path::PathBuf::from(&b_before.file);
-            let insertions = body.insertions.clone();
-            match tokio::task::spawn_blocking(move || {
-                build_patch_zip_bytes(&a_temp_path, &b_path, insertions)
-            })
-            .await
-            {
-                Ok(Ok(bytes)) => Some(bytes),
-                Ok(Err(e)) => {
-                    tracing::warn!(%id, error = %e, "failed to build post-overwrite patch from B's pages");
-                    None
-                }
-                Err(e) => {
-                    tracing::warn!(%id, error = %e, "failed to build post-overwrite patch from B's pages");
-                    None
-                }
-            }
-        }
-        _ => None,
-    };
-
-    match resolve_conflict(&state, &id, ResolveAction::Overwrite).await {
-        Ok(ingested) => {
-            let archive_id = ingested.archive_id;
-            if let Some((_, b_before)) = &existing_before {
-                migrate_archive_metadata(&state, b_before, &archive_id).await;
-            }
-            if let Some(bytes) = pre_built_patch {
-                write_prebuilt_patch(&state, &archive_id, bytes).await;
-            }
-            record_manual(
-                &state,
-                auth.as_ref().map(|e| &e.0),
-                action_types::DOWNLOAD_QUEUE_OVERWRITE,
-                ActivityTarget {
-                    id: Some(id.clone()),
-                    label: Some(archive_id.clone()),
-                    kind: Some("download_queue_item".to_string()),
-                },
-                Outcome::Success,
-                None,
-                None,
-            )
-            .await;
-            axum::Json(
-                json!({ "operation": "overwrite_download_queue_item", "success": 1, "archive_id": archive_id }),
-            )
-            .into_response()
-        }
-        // `Storage`/`Ingest` are a real attempted-and-failed re-catalogue (Redis or the actual
-        // ingest pipeline failed) — exactly the "did my download really succeed" signal this
-        // endpoint exists to answer. `NotFound`/`NoConflict` are precondition rejections handled
-        // inside `resolve_error_response` without a record.
-        Err(e @ (ResolveConflictError::Storage(_) | ResolveConflictError::Ingest(_))) => {
-            let reason = match &e {
-                ResolveConflictError::Storage(msg) | ResolveConflictError::Ingest(msg) => {
-                    msg.clone()
-                }
-                _ => unreachable!(),
-            };
-            record_manual(
-                &state,
-                auth.as_ref().map(|e| &e.0),
-                action_types::DOWNLOAD_QUEUE_OVERWRITE,
-                ActivityTarget {
-                    id: Some(id.clone()),
-                    label: None,
-                    kind: Some("download_queue_item".to_string()),
-                },
-                Outcome::Failure { reason },
-                None,
-                None,
-            )
-            .await;
-            resolve_error_response("overwrite_download_queue_item", &id, e)
-        }
-        Err(e) => resolve_error_response("overwrite_download_queue_item", &id, e),
-    }
-}
-
-/// Extracts just the `rating:`-namespaced tag(s) from `tags` (this app's flat-tag convention has
-/// no dedicated rating field — see [`migrate_archive_metadata`]'s own docs for why that tag alone
-/// still needs to survive an overwrite even though the rest of `tags` deliberately doesn't).
-fn extract_rating_tags(tags: &str) -> impl Iterator<Item = &str> {
-    tags.split(',')
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .filter(|t| t.split(':').next().unwrap_or(t) == "rating")
-}
-
-/// Whether `tags` has any real content tag — i.e. excluding `date_added:`, which every freshly
-/// catalogued archive carries regardless of whether any metadata plugin ever actually ran on it
-/// successfully (see `pipeline.rs::catalogue_new_archive`), so its presence alone can't be used to
-/// tell "A has real metadata" apart from "A is tag-less". Used by
-/// [`migrate_archive_metadata`]'s own no-content-tags fallback.
-fn has_any_content_tag(tags: &str) -> bool {
-    tags.split(',')
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .any(|t| t.split(':').next().unwrap_or(t) != "date_added")
-}
-
-/// `from`'s tags with `source:`/`uploader:` stripped — used by [`migrate_archive_metadata`]'s
-/// no-content-tags fallback: those two namespaces describe *where B itself was fetched from*, and
-/// A (being kept) has its own real provenance, so falling back to B's content tags as better than
-/// nothing must not also make A's record claim B's source/uploader as its own.
-fn strip_source_and_uploader_tags(tags: &str) -> String {
-    tags.split(',')
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .filter(|t| {
-            let namespace = t.split(':').next().unwrap_or(t);
-            namespace != "source" && namespace != "uploader"
-        })
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-/// Copies B's own user data onto the newly-catalogued A that replaced it — issue #77's own
-/// follow-on design ("category或评分数据阅读进度呢？" — confirmed: migrate, don't lose it). Tags,
-/// rating, and category membership are deliberately three SEPARATE decisions, not one blanket
-/// "copy B's metadata" — confirmed live after reproducing a real regression: content tags
-/// (Artist/Female/Male/Source/... — everything except `rating:`) must NOT be copied from B, since
-/// the archive being KEPT (A, `to`) is the one whose own tags should win, whether freshly
-/// re-scraped by `run_enabled_metadata_plugins_on_archive` (already applied by the time this runs
-/// — see `overwrite_queue_item`'s own docs on call order) or otherwise already correct; blindly
-/// stamping B's tags back on silently discarded whatever A's own metadata actually said. The one
-/// exception: if A ended up with NO real content tags at all (metadata plugins disabled/failed —
-/// see [`has_any_content_tag`]), B's content tags are used as a fallback (better than nothing) —
-/// but with `source:`/`uploader:` stripped first ([`strip_source_and_uploader_tags`]), since those
-/// two describe *where B itself came from*, not A's own real provenance. `rating:` is the one
-/// tag-shaped exception even outside the fallback case — it's the user's own manual rating of
-/// "this work" as a whole, not something either version's own metadata scrape produces, so it's
-/// always merged in on top of A's own tags (never overwriting a rating A might already carry).
-/// `summary` is likewise NOT copied, for the same reason as content tags (it's metadata about the
-/// work, from the same plugin-or-otherwise source as tags, not user data). `lastreadpage`/
-/// `lastreadtime`/`isnew` ARE copied straight — reading progress/new-status describe the reader's
-/// own relationship to "this work", independent of which version's bytes are kept. `toc`/
-/// `stamp_ids` are deliberately NOT copied — both are keyed by page position/entry name specific
-/// to B's own page layout, which the insertions this same overwrite is applying may have just
-/// changed, so carrying them over verbatim could point at the wrong pages in the new A;
-/// regenerating/re-adding either is a separate, explicit user action, not an automatic one this
-/// migration should silently guess at. Static category membership is migrated too (a category
-/// search over `list_all()` is the only way to discover which categories held B — no reverse
-/// index); a *dynamic* category needs no migration at all, since its own membership is
-/// search-derived and will naturally re-include A once A's real tags/title exist. Best-effort
-/// throughout (logged, never fails the overwrite itself) — matches every other post-resolve side
-/// effect in this file (the category-add above, the search-index cleanup in
-/// `archives.rs::delete_archive`).
-async fn migrate_archive_metadata(
-    state: &AppState,
-    from: &lanrurugi_core::entities::Archive,
-    to_id: &str,
-) {
-    let to_archive_id = lanrurugi_core::ids::ArchiveId(to_id.to_string());
-    if let Ok(Some(mut to)) = state.repos.archives.get(&to_archive_id).await {
-        if !has_any_content_tag(&to.tags) {
-            let fallback = strip_source_and_uploader_tags(&from.tags);
-            if !fallback.is_empty() {
-                to.tags = if to.tags.is_empty() {
-                    fallback
-                } else {
-                    format!("{},{fallback}", to.tags)
-                };
-            }
-        }
-        // Same shape as the category migration below: B's own rating tag(s), if any, are merged
-        // into A's — deduped, not blindly appended, since a fresh A could in principle already
-        // carry the same rating (e.g. re-scraped from a source that also encodes one).
-        let mut merged: Vec<String> = to
-            .tags
-            .split(',')
-            .map(str::trim)
-            .filter(|t| !t.is_empty())
-            .map(str::to_string)
-            .collect();
-        for rating in extract_rating_tags(&from.tags) {
-            if !merged.iter().any(|t| t == rating) {
-                merged.push(rating.to_string());
-            }
-        }
-        to.tags = merged.join(",");
-        to.lastreadpage = from.lastreadpage;
-        to.lastreadtime = from.lastreadtime;
-        to.isnew = from.isnew;
-        if let Err(e) = state.repos.archives.save(&to).await {
-            tracing::warn!(from = %from.id, to = %to_id, error = %e, "failed to migrate archive metadata after overwrite");
-        }
-    }
-
-    match state.repos.categories.list_all().await {
-        Ok(categories) => {
-            for mut category in categories {
-                if category.search.is_some() {
-                    continue;
-                }
-                if category
-                    .archives
-                    .iter()
-                    .any(|a| a.as_str() == from.id.as_str())
-                {
-                    category.archives.push(to_archive_id.clone());
-                    if let Err(e) = state.repos.categories.save(&category).await {
-                        tracing::warn!(from = %from.id, to = %to_id, category = %category.catid, error = %e, "failed to migrate category membership after overwrite");
-                    }
-                }
-            }
-        }
-        Err(e) => {
-            tracing::warn!(from = %from.id, to = %to_id, error = %e, "failed to list categories while migrating membership after overwrite");
-        }
-    }
-}
-
-/// Writes already-built patch bytes (from [`overwrite_queue_item`]'s own pre-`resolve_conflict`
-/// build — see that function's docs for why the bytes have to be built before this point rather
-/// than read fresh here) to the newly-catalogued A's own sidecar `.patch.zip` path. Resolves A's
-/// real file path fresh via a repository lookup rather than assuming anything about where
-/// `resolve_conflict` put it.
-async fn write_prebuilt_patch(state: &AppState, to_id: &str, bytes: Vec<u8>) {
-    let to_archive_id = lanrurugi_core::ids::ArchiveId(to_id.to_string());
-    let Ok(Some(mut to)) = state.repos.archives.get(&to_archive_id).await else {
-        tracing::warn!(to = %to_id, "cannot write post-overwrite patch: new archive record not found");
-        return;
-    };
-    let patch_path = lanrurugi_scanner::patch::patch_path_for(std::path::Path::new(&to.file));
-    if let Err(e) = tokio::fs::write(&patch_path, &bytes).await {
-        tracing::warn!(to = %to_id, error = %e, "failed to write post-overwrite patch");
-        return;
-    }
-    // Keeps the library grid's own patch badge (issue #77's own follow-on design) in sync — best-
-    // effort, matching every other side effect in this file; a failure here just means the badge
-    // lags until something else next re-saves this archive's record.
-    to.has_patch = true;
-    if let Err(e) = state.repos.archives.save(&to).await {
-        tracing::warn!(to = %to_id, error = %e, "failed to mark archive has_patch after writing post-overwrite patch");
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct RenameQueueItemBody {
-    filename: String,
-}
-
-/// `POST /download_queue/{id}/rename` — resolves a `PendingFilenameConflict` by cataloguing the
-/// staged download under `body.filename` instead, leaving the existing archive that owns the
-/// original filename untouched (a fresh, separate, coexisting archive). If `filename` itself also
-/// collides with some other archive, the item ends up with a *new* `PendingFilenameConflict`
-/// (still resolvable, just against a different existing archive/filename) rather than losing the
-/// already-downloaded bytes — see `ingest::resolve_rename`'s own docs.
-async fn rename_queue_item(
-    State(state): State<AppState>,
-    auth: Option<axum::extract::Extension<AuthContext>>,
-    Path(id): Path<String>,
-    body: axum::Json<RenameQueueItemBody>,
-) -> Response {
-    // Captured before `resolve_conflict` runs — that call consumes/clears the item's own
-    // `pending_filename_conflict` as part of resolving it, so `original_filename` (the "before"
-    // half of this rename) is only ever available to read here, ahead of time.
-    let old_filename = state
-        .download_queue
-        .get(&id)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|item| item.pending_filename_conflict)
-        .map(|conflict| conflict.original_filename);
-
-    match resolve_conflict(&state, &id, ResolveAction::Rename(body.filename.clone())).await {
-        Ok(ingested) => {
-            let archive_id = ingested.archive_id;
-            record_manual(
-                &state,
-                auth.as_ref().map(|e| &e.0),
-                action_types::DOWNLOAD_QUEUE_RENAME,
-                ActivityTarget {
-                    id: Some(id.clone()),
-                    label: Some(archive_id.clone()),
-                    kind: Some("download_queue_item".to_string()),
-                },
-                Outcome::Success,
-                // `name` — matches the field name every other rename-type action type uses (see
-                // `archives.rs::rename_archive`'s own docs on this unification).
-                old_filename.map(|name| json!({ "name": name })),
-                Some(json!({ "name": body.filename })),
-            )
-            .await;
-            axum::Json(
-                json!({ "operation": "rename_download_queue_item", "success": 1, "archive_id": archive_id }),
-            )
-            .into_response()
-        }
-        // Same reasoning as `overwrite_queue_item`'s own split — `Storage`/`Ingest` are a real
-        // attempted-and-failed re-catalogue, worth recording; `NotFound`/`NoConflict` aren't.
-        Err(e @ (ResolveConflictError::Storage(_) | ResolveConflictError::Ingest(_))) => {
-            let reason = match &e {
-                ResolveConflictError::Storage(msg) | ResolveConflictError::Ingest(msg) => {
-                    msg.clone()
-                }
-                _ => unreachable!(),
-            };
-            record_manual(
-                &state,
-                auth.as_ref().map(|e| &e.0),
-                action_types::DOWNLOAD_QUEUE_RENAME,
-                ActivityTarget {
-                    id: Some(id.clone()),
-                    label: None,
-                    kind: Some("download_queue_item".to_string()),
-                },
-                Outcome::Failure { reason },
-                None,
-                None,
-            )
-            .await;
-            resolve_error_response("rename_download_queue_item", &id, e)
-        }
-        Err(e) => resolve_error_response("rename_download_queue_item", &id, e),
-    }
-}
-
-/// The real on-disk paths + display metadata behind a `PendingFilenameConflict`'s two sides —
-/// shared by [`compare_queue_item`] and [`compare_queue_item_stream`] so the lookup/validation
-/// logic (queue item exists, has a pending conflict, the existing archive it conflicts with still
-/// exists, the staged download is still on disk) lives in exactly one place.
-struct ResolvedCompareConflict {
-    a_path: std::path::PathBuf,
-    b_path: std::path::PathBuf,
-    a_filename: String,
-    a_file_size: u64,
-    b_filename: String,
-    b_file_size: u64,
-}
-
-/// Either a resolved conflict ready to compare, or a terminal [`Response`] (a normal JSON error —
-/// callers turn this into the right shape for their own transport, an SSE handler wrapping it in
-/// one `error` event before closing the stream, same as [`compare_queue_item`]'s own plain-JSON
-/// error responses).
-enum ResolveOutcome {
-    Ready(ResolvedCompareConflict),
-    Err(Response),
-}
-
-async fn resolve_compare_conflict(state: &AppState, id: &str) -> ResolveOutcome {
-    let item = match state.download_queue.get(id).await {
-        Ok(Some(item)) => item,
-        Ok(None) => {
-            return ResolveOutcome::Err(not_found(
-                "compare_download_queue_item",
-                format!("{id} does not exist."),
-            ))
-        }
-        Err(e) => {
-            return ResolveOutcome::Err(error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "compare_download_queue_item",
-                e.to_string(),
-            ))
-        }
-    };
-    let Some(conflict) = item.pending_filename_conflict else {
-        return ResolveOutcome::Err(error(
-            StatusCode::BAD_REQUEST,
-            "compare_download_queue_item",
-            "This queue item has no pending filename conflict to compare.",
-        ));
-    };
-
-    let existing_archive = match state
-        .repos
-        .archives
-        .get(&lanrurugi_core::ids::ArchiveId(
-            conflict.existing_id.clone(),
-        ))
-        .await
-    {
-        Ok(Some(archive)) => archive,
-        Ok(None) => {
-            return ResolveOutcome::Err(not_found(
-                "compare_download_queue_item",
-                format!(
-                    "{} (the existing archive this conflict is against) no longer exists.",
-                    conflict.existing_id
-                ),
-            ))
-        }
-        Err(e) => {
-            return ResolveOutcome::Err(error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "compare_download_queue_item",
-                e.to_string(),
-            ))
-        }
-    };
-
-    let a_path = std::path::PathBuf::from(&conflict.temp_path);
-    let b_path = std::path::PathBuf::from(&existing_archive.file);
-    let a_filename = conflict.original_filename.clone();
-    // The existing archive's own on-disk filename (with extension), not `Archive.name` (that
-    // field is explicitly the decoded name *without* extension, and would read oddly next to
-    // `a_filename`, which is a real filename including one) — matches what the user actually
-    // sees when browsing their filesystem.
-    let b_filename = std::path::Path::new(&existing_archive.file)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| existing_archive.name.clone());
-    let b_file_size = existing_archive.arcsize;
-    let a_file_size = match tokio::fs::metadata(&a_path).await {
-        Ok(meta) => meta.len(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            // A real, distinguishable case (not just "some I/O error") — the staged download this
-            // conflict points at is gone from disk (e.g. the periodic temp-file sweep reclaimed
-            // it, or — in a dev container — the whole writable layer got wiped on a rebuild/
-            // recreate). Reported live: the previous generic 500 surfaced as an undifferentiated
-            // "Comparison failed" toast with no way to tell this apart from a real bug. A distinct
-            // `error` string here lets the frontend show "re-download and try again" instead.
-            return ResolveOutcome::Err(error(
-                StatusCode::BAD_REQUEST,
-                "compare_download_queue_item",
-                format!(
-                    "The staged download for this conflict no longer exists on disk ({}) — it may have been cleared by cleanup. Try downloading again to compare.",
-                    a_path.display()
-                ),
-            ));
-        }
-        Err(e) => {
-            return ResolveOutcome::Err(error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "compare_download_queue_item",
-                e.to_string(),
-            ))
-        }
-    };
-
-    ResolveOutcome::Ready(ResolvedCompareConflict {
-        a_path,
-        b_path,
-        a_filename,
-        a_file_size,
-        b_filename,
-        b_file_size,
-    })
-}
-
-/// `POST /download_queue/{id}/compare` — issue #77's AI quality-comparison judgment for a
-/// `PendingFilenameConflict`: page-aligns and sharpness-compares the freshly-staged download
-/// (`temp_path`, exposed to the response as [`imgcompare::Side::A`]) against the already-cataloged
-/// archive that owns the colliding filename (`existing_id`'s own file, exposed as
-/// [`imgcompare::Side::B`]) — read-only, resolves nothing on its own; the frontend still calls
-/// `.../overwrite` or `.../rename` afterward based on what the user (with or without this
-/// comparison's help) decides. `A`/`B` are deliberately not labeled "new"/"old" in the response
-/// itself (see [`lanrurugi_imgcompare::Side`]'s own docs) — this handler is what actually assigns
-/// that meaning for this specific caller.
-///
-/// Kept alongside the streaming [`compare_queue_item_stream`] below (not replaced by it) as a
-/// plain request/response fallback for any caller that doesn't want SSE — the frontend's own
-/// `ComparisonResultModal` flow now goes through the stream endpoint instead (see that handler's
-/// own docs for why).
-async fn compare_queue_item(
-    State(state): State<AppState>,
-    auth: Option<axum::extract::Extension<AuthContext>>,
-    Path(id): Path<String>,
-) -> Response {
-    // Re-opening a comparison the user already ran should be instant, not re-run the whole
-    // perceptual-hash/DP-alignment pipeline from scratch — reported live: "每次打开都要等待". The
-    // cached value is invalidated (deleted) the moment this conflict is actually resolved
-    // (`overwrite_queue_item`/`keep_side_b`/`rename_queue_item`) or the queue item itself is
-    // deleted, so a hit here is always for the *same* still-pending conflict, never stale data.
-    if let Ok(Some(cached_json)) = state.compare_cache.get(&id).await {
-        if let Ok(result) =
-            serde_json::from_str::<lanrurugi_imgcompare::ComparisonResult>(&cached_json)
-        {
-            return axum::Json(json!({ "result": result })).into_response();
-        }
-    }
-
-    let resolved = match resolve_compare_conflict(&state, &id).await {
-        ResolveOutcome::Ready(resolved) => resolved,
-        ResolveOutcome::Err(response) => return response,
-    };
-
-    // CPU/IO-bound (archive decompression + per-page image decode + perceptual hashing) — run off
-    // the async reactor, same reasoning `tankoubon_grouping.rs`'s own `spawn_blocking` use for its
-    // batch embedding work.
-    let result = match tokio::task::spawn_blocking(move || {
-        lanrurugi_imgcompare::compare_archives(
-            &resolved.a_path,
-            &resolved.b_path,
-            resolved.a_filename,
-            resolved.a_file_size,
-            resolved.b_filename,
-            resolved.b_file_size,
-        )
-    })
-    .await
-    {
-        Ok(Ok(result)) => result,
-        // The comparison itself genuinely ran (past the precondition checks in
-        // `resolve_compare_conflict`) and failed — a real perceptual-hash/decode error, worth
-        // recording since the user is left with no comparison result at all.
-        Ok(Err(e)) => {
-            record_manual(
-                &state,
-                auth.as_ref().map(|e| &e.0),
-                action_types::DOWNLOAD_QUEUE_COMPARE,
-                ActivityTarget {
-                    id: Some(id.clone()),
-                    label: None,
-                    kind: Some("download_queue_item".to_string()),
-                },
-                Outcome::Failure {
-                    reason: e.to_string(),
-                },
-                None,
-                None,
-            )
-            .await;
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "compare_download_queue_item",
-                e.to_string(),
-            );
-        }
-        Err(e) => {
-            record_manual(
-                &state,
-                auth.as_ref().map(|e| &e.0),
-                action_types::DOWNLOAD_QUEUE_COMPARE,
-                ActivityTarget {
-                    id: Some(id.clone()),
-                    label: None,
-                    kind: Some("download_queue_item".to_string()),
-                },
-                Outcome::Failure {
-                    reason: e.to_string(),
-                },
-                None,
-                None,
-            )
-            .await;
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "compare_download_queue_item",
-                e.to_string(),
-            );
-        }
-    };
-
-    if let Ok(result_json) = serde_json::to_string(&result) {
-        if let Err(e) = state.compare_cache.put(&id, &result_json).await {
-            tracing::warn!(%id, error = %e, "failed to cache comparison result");
-        }
-    }
-
-    record_manual(
-        &state,
-        auth.as_ref().map(|e| &e.0),
-        action_types::DOWNLOAD_QUEUE_COMPARE,
-        ActivityTarget {
-            id: Some(id.clone()),
-            label: None,
-            kind: Some("download_queue_item".to_string()),
-        },
-        Outcome::Success,
-        None,
-        None,
-    )
-    .await;
-
-    axum::Json(json!({ "result": result })).into_response()
-}
-
-/// `GET /download_queue/{id}/compare/stream` — the SSE-streaming twin of [`compare_queue_item`]
-/// above, per issue #77's own confirmed two-phase design (see
-/// `lanrurugi_imgcompare::compare_archives_streaming`'s own docs for the full phase-1/phase-2
-/// breakdown): opens an `EventSource`-compatible stream (GET, not POST — `EventSource` can't send
-/// a request body or use any other HTTP method) that emits one `event: sample` per
-/// `CompareEvent::Sample` (coarse first, precise replacements streamed in afterward) and a single
-/// terminal `event: done` carrying the rest of `ComparisonResult`'s own fields — never relies on
-/// connection-close/timeout as an implicit end signal ("并且sse要有结束标记"). The frontend opens
-/// its result view the moment the FIRST `sample` event arrives rather than waiting for the whole
-/// comparison, which for a ~200-page archive pair is otherwise several seconds of dead time
-/// ("假设有6对结果（粗加工），可以用sse分6次发，发第一对的时候就开始显示modal，这样是一个很大的提速").
-///
-/// A cache hit (same policy as `compare_queue_item`'s own) is replayed as a single burst of
-/// `sample` events (`phase: coarse` for all of them — a cached result has already gone through
-/// both phases, and the frontend only cares about "is this a display-final value", which `Coarse`
-/// vs `Precise` doesn't actually change once the value itself is final) immediately followed by
-/// `done`, so re-opening an already-computed comparison is still effectively instant.
-async fn compare_queue_item_stream(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Response {
-    use axum::response::sse::{Event, KeepAlive, Sse};
-    use futures_util::stream;
-
-    // A complete cache hit replays straight from the cached result — no real work to redo. An
-    // `incomplete` one (a prior run that got cancelled mid-stream) has no `Done` summary to replay,
-    // so it only seeds `resume_samples` below and the real pipeline still runs — see this
-    // function's own `resume_samples` handling for why that's still a net win (the frontend sees
-    // the old samples immediately, then the real run's own fresh events replace them in place).
-    let mut resume_samples: Vec<axum::response::sse::Event> = Vec::new();
-    if let Ok(Some(cached_json)) = state.compare_cache.get(&id).await {
-        if let Ok(result) =
-            serde_json::from_str::<lanrurugi_imgcompare::ComparisonResult>(&cached_json)
-        {
-            if result.incomplete {
-                resume_samples = sample_events(&result.samples);
-            } else {
-                let events = cached_result_to_events(result);
-                let stream =
-                    stream::iter(events.into_iter().map(Ok::<_, std::convert::Infallible>));
-                return Sse::new(stream)
-                    .keep_alive(KeepAlive::default())
-                    .into_response();
-            }
-        }
-    }
-
-    let resolved = match resolve_compare_conflict(&state, &id).await {
-        ResolveOutcome::Ready(resolved) => resolved,
-        ResolveOutcome::Err(response) => return response,
-    };
-
-    // `compare_archives_streaming` is synchronous and calls `on_event` from whatever thread runs
-    // it — bridged to the async SSE stream via an unbounded channel + `spawn_blocking`, same
-    // reasoning `compare_queue_item`'s own `spawn_blocking` use has (CPU/IO-bound work must not
-    // run on the async reactor), just with incremental sends instead of one final value.
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
-    // Seed the resumed samples from an `incomplete` cache hit (see above) before the real pipeline
-    // below sends anything — the frontend opens its modal on the first `sample` event, so this
-    // shows the last known result immediately while the real run recomputes it in the background.
-    for event in resume_samples {
-        let _ = tx.send(event);
-    }
-    let cache = state.compare_cache.clone();
-    // Cloned before `compare_archives_streaming` moves the originals — needed for the placeholder
-    // fields of an `incomplete` cache entry if the run gets cancelled (see that branch below).
-    let a_filename_for_cache = resolved.a_filename.clone();
-    let b_filename_for_cache = resolved.b_filename.clone();
-    let a_file_size_for_cache = resolved.a_file_size;
-    let b_file_size_for_cache = resolved.b_file_size;
-    tokio::task::spawn_blocking(move || {
-        let mut collected_samples: Vec<Option<lanrurugi_imgcompare::PageComparison>> = Vec::new();
-        let mut done_result: Option<lanrurugi_imgcompare::ComparisonResult> = None;
-        let run_result = lanrurugi_imgcompare::compare_archives_streaming(
-            &resolved.a_path,
-            &resolved.b_path,
-            resolved.a_filename,
-            resolved.a_file_size,
-            resolved.b_filename,
-            resolved.b_file_size,
-            |event| {
-                // Mirror every event into `collected_samples`/`done_result` so the whole run can
-                // still be assembled into one `ComparisonResult` for `compare_cache` at the end —
-                // the SSE stream and the cache must never drift apart, or a cache hit on the next
-                // open would silently serve a different (stale-shaped) result than what streaming
-                // just showed.
-                match &event {
-                    lanrurugi_imgcompare::CompareEvent::Sample {
-                        sample_index,
-                        sample,
-                        ..
-                    } => {
-                        if collected_samples.len() <= *sample_index {
-                            collected_samples.resize(*sample_index + 1, None);
-                        }
-                        collected_samples[*sample_index] = Some(sample.clone());
-                    }
-                    lanrurugi_imgcompare::CompareEvent::Done {
-                        aligned_pairs,
-                        a_total_pages,
-                        b_total_pages,
-                        a_entries,
-                        b_entries,
-                        likely_different_language,
-                        recommendation,
-                        a_filename,
-                        b_filename,
-                        a_file_size,
-                        b_file_size,
-                        a_unmatched_pages,
-                        b_unmatched_pages,
-                    } => {
-                        done_result = Some(lanrurugi_imgcompare::ComparisonResult {
-                            aligned_pairs: *aligned_pairs,
-                            a_total_pages: *a_total_pages,
-                            b_total_pages: *b_total_pages,
-                            a_entries: a_entries.clone(),
-                            b_entries: b_entries.clone(),
-                            likely_different_language: *likely_different_language,
-                            recommendation: *recommendation,
-                            samples: collected_samples.iter().flatten().cloned().collect(),
-                            a_filename: a_filename.clone(),
-                            b_filename: b_filename.clone(),
-                            a_file_size: *a_file_size,
-                            b_file_size: *b_file_size,
-                            a_unmatched_pages: a_unmatched_pages.clone(),
-                            b_unmatched_pages: b_unmatched_pages.clone(),
-                            incomplete: false,
-                        });
-                    }
-                }
-                if let Ok(json) = serde_json::to_string(&event) {
-                    let sse_event = match &event {
-                        lanrurugi_imgcompare::CompareEvent::Sample { .. } => {
-                            Event::default().event("sample").data(json)
-                        }
-                        lanrurugi_imgcompare::CompareEvent::Done { .. } => {
-                            Event::default().event("done").data(json)
-                        }
-                    };
-                    // `Err` means `rx`/`UnboundedReceiverStream` was already dropped — the client
-                    // disconnected (e.g. the comparison modal was closed mid-stream) and no one is
-                    // reading the channel anymore. Returning `false` here lets
-                    // `compare_archives_streaming` stop sampling further events instead of running
-                    // the rest of a multi-second CPU-bound comparison to completion for nobody —
-                    // confirmed live: closing the modal mid-stream previously left this
-                    // `spawn_blocking` task running unabated, tying up a blocking-pool thread.
-                    tx.send(sse_event).is_ok()
-                } else {
-                    true
-                }
-            },
-        );
-
-        match run_result {
-            Ok(()) => {
-                if let Some(result) = done_result {
-                    if let Ok(result_json) = serde_json::to_string(&result) {
-                        // `compare_cache.put` is async; this closure runs on a blocking thread, so
-                        // hand off to a `tokio::spawn`ed task rather than blocking here on an
-                        // async call.
-                        tokio::spawn(async move {
-                            if let Err(e) = cache.put(&id, &result_json).await {
-                                tracing::warn!(%id, error = %e, "failed to cache streamed comparison result");
-                            }
-                        });
-                    }
-                }
-            }
-            // The client disconnected mid-stream — cache whatever coarse/precise samples already
-            // arrived (`incomplete: true`) so re-opening this comparison can show them immediately
-            // instead of starting from a blank modal, even though the full pipeline still has to
-            // re-run to produce a real `Done` summary (see this crate's own `incomplete` field docs
-            // for why: the expensive stages run once over the whole page set regardless of sample
-            // count, so there's no cheaper way to finish this run than to redo it).
-            Err(lanrurugi_imgcompare::ImgCompareError::Cancelled) => {
-                tracing::debug!(%id, "comparison stream cancelled — client disconnected");
-                if collected_samples.iter().any(Option::is_some) {
-                    let partial = lanrurugi_imgcompare::ComparisonResult {
-                        aligned_pairs: 0,
-                        a_total_pages: 0,
-                        b_total_pages: 0,
-                        a_entries: Vec::new(),
-                        b_entries: Vec::new(),
-                        likely_different_language: false,
-                        recommendation: None,
-                        samples: collected_samples.into_iter().flatten().collect(),
-                        a_filename: a_filename_for_cache,
-                        b_filename: b_filename_for_cache,
-                        a_file_size: a_file_size_for_cache,
-                        b_file_size: b_file_size_for_cache,
-                        a_unmatched_pages: Vec::new(),
-                        b_unmatched_pages: Vec::new(),
-                        incomplete: true,
-                    };
-                    if let Ok(partial_json) = serde_json::to_string(&partial) {
-                        tokio::spawn(async move {
-                            if let Err(e) = cache.put(&id, &partial_json).await {
-                                tracing::warn!(%id, error = %e, "failed to cache partial comparison result");
-                            }
-                        });
-                    }
-                }
-            }
-            Err(e) => {
-                let _ = tx.send(Event::default().event("error").data(e.to_string()));
-            }
-        }
-    });
-
-    let stream = futures_util::StreamExt::map(
-        tokio_stream::wrappers::UnboundedReceiverStream::new(rx),
-        Ok::<_, std::convert::Infallible>,
-    );
-    Sse::new(stream)
-        .keep_alive(KeepAlive::default())
-        .into_response()
-}
-
-/// One `sample` SSE event per entry, all tagged `Coarse` — a cached result (complete or partial)
-/// has no meaningful coarse/precise distinction left, only "this is the last known value".
-fn sample_events(
-    samples: &[lanrurugi_imgcompare::PageComparison],
-) -> Vec<axum::response::sse::Event> {
-    use axum::response::sse::Event;
-
-    let mut events = Vec::with_capacity(samples.len());
-    for (sample_index, sample) in samples.iter().enumerate() {
-        let event = lanrurugi_imgcompare::CompareEvent::Sample {
-            sample_index,
-            phase: lanrurugi_imgcompare::ComparePhase::Coarse,
-            sample: sample.clone(),
-        };
-        if let Ok(json) = serde_json::to_string(&event) {
-            events.push(Event::default().event("sample").data(json));
-        }
-    }
-    events
-}
-
-/// Replays an already-cached [`lanrurugi_imgcompare::ComparisonResult`] as the same `sample`/`done`
-/// SSE event sequence a fresh streaming run would produce.
-fn cached_result_to_events(
-    result: lanrurugi_imgcompare::ComparisonResult,
-) -> Vec<axum::response::sse::Event> {
-    use axum::response::sse::Event;
-
-    let mut events = sample_events(&result.samples);
-    let done_event = lanrurugi_imgcompare::CompareEvent::Done {
-        aligned_pairs: result.aligned_pairs,
-        a_total_pages: result.a_total_pages,
-        b_total_pages: result.b_total_pages,
-        a_entries: result.a_entries,
-        b_entries: result.b_entries,
-        likely_different_language: result.likely_different_language,
-        recommendation: result.recommendation,
-        a_filename: result.a_filename,
-        b_filename: result.b_filename,
-        a_file_size: result.a_file_size,
-        b_file_size: result.b_file_size,
-        a_unmatched_pages: result.a_unmatched_pages,
-        b_unmatched_pages: result.b_unmatched_pages,
-    };
-    if let Ok(json) = serde_json::to_string(&done_event) {
-        events.push(Event::default().event("done").data(json));
-    }
-    events
-}
-
-/// Resolves `side` ("a"/"b") to the real on-disk path it reads from — `"a"` is the still-
-/// uncatalogued staged download (`conflict.temp_path`, no archive ID exists yet), `"b"` is the
-/// existing library archive this conflict is against. Shared by every `.../compare/*` endpoint
-/// that needs one side's own archive path (`compare_queue_item_page`, [`list_compare_pages`]),
-/// pulled out once those grew to two identical copies of the same match arm.
-// The `Err` type is axum's `Response` — the shape this module's own error helper produces
-// and its callers return directly — so boxing it would ripple through every `?` here for
-// no gain on a path that has already failed.
-#[allow(clippy::result_large_err)]
-async fn resolve_compare_side_path(
-    state: &AppState,
-    conflict: &lanrurugi_storage::download_queue::PendingFilenameConflict,
-    side: &str,
-) -> std::result::Result<std::path::PathBuf, Response> {
-    match side {
-        "a" => Ok(std::path::PathBuf::from(&conflict.temp_path)),
-        "b" => match state
-            .repos
-            .archives
-            .get(&lanrurugi_core::ids::ArchiveId(
-                conflict.existing_id.clone(),
-            ))
-            .await
-        {
-            Ok(Some(archive)) => Ok(std::path::PathBuf::from(archive.file)),
-            Ok(None) => Err(not_found(
-                "resolve_compare_side_path",
-                format!("{} no longer exists.", conflict.existing_id),
-            )),
-            Err(e) => Err(error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "resolve_compare_side_path",
-                e.to_string(),
-            )),
-        },
-        other => Err(error(
-            StatusCode::BAD_REQUEST,
-            "resolve_compare_side_path",
-            format!("side must be 'a' or 'b', got {other:?}"),
-        )),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct CompareQueueItemPageParams {
-    side: String,
-    index: usize,
-}
-
-/// Quality for a comparison image that had to be re-encoded. Higher than the reader's own default:
-/// this view exists to judge fine detail between two candidates, and the encode is on top of an
-/// already-published rendering, so compression artefacts here would be read as a difference in the
-/// works themselves. Still lossy — a side that could not be decoded at all would be worse.
-const COMPARISON_ENCODE_QUALITY: u8 = 92;
-
-/// Whether a source codec has to be re-encoded before this client can display it. JPEG/PNG/GIF/BMP
-/// (and anything unrecognized, which the browser will either decode or fail on identically either
-/// way) are left alone — only the codecs a browser can genuinely lack are considered.
-fn source_needs_conversion(detected: &str, support: crate::archives::ClientImageSupport) -> bool {
-    // Shared with the reader's own necessity rule (see `ClientImageSupport::can_decode`): convert
-    // only a codec the client cannot decode *and* this server can — the comparison overlay exists to
-    // be looked at, so a format we cannot decode must be left as-is rather than replaced by an
-    // error. The previous `image/avif => !support.webp` shorthand wrongly assumed AVIF support
-    // tracks WebP support.
-    !support.can_decode(detected, false)
-        && crate::archives::ClientImageSupport::server_can_decode_still(detected)
-}
-
-/// Re-encodes a comparison page when the client cannot decode its source codec, or `None` when no
-/// conversion is needed (or none is possible).
-///
-/// `u32::MAX` for the short-edge cap means "codec only, no downscale" — the overlay is read at
-/// pixel level, so changing the resolution would change what is being compared.
-async fn convert_unless_decodable(
-    bytes: &[u8],
-    detected: &'static str,
-    support: crate::archives::ClientImageSupport,
-) -> Option<(&'static str, Vec<u8>)> {
-    if !source_needs_conversion(detected, support) {
-        return None;
-    }
-    let format = if support.jxl {
-        lanrurugi_scanner::resize::EncodeFormat::Jxl
-    } else if support.webp {
-        lanrurugi_scanner::resize::EncodeFormat::Webp
-    } else {
-        // The client advertised neither codec: converting could not help it.
-        return None;
-    };
-    let converted = lanrurugi_scanner::resize::convert_to_format(
-        bytes::Bytes::copy_from_slice(bytes),
-        COMPARISON_ENCODE_QUALITY,
-        u32::MAX,
-        None,
-        None,
-        format,
-    )
-    .await
-    .inspect_err(|e| {
-        tracing::warn!(error = %e, "comparison page re-encode failed; serving the source bytes");
-    })
-    .ok()?;
-    Some((format.content_type(), converted.0))
-}
-
-/// `GET /download_queue/{id}/compare/page?side=a|b&index=N` — the actual page image behind one
-/// `PageComparison` sample from `.../compare`'s own response, for the frontend's
-/// overlay/shift-to-toggle comparison view. `side=a` reads from the still-uncatalogued staged
-/// download (`temp_path` — no archive ID exists yet, so this can't reuse `archives.rs`'s own
-/// `GET /archives/{id}/page`); `side=b` reads from the existing archive's own file. `index` is a
-/// natural-sort page position (matching `lanrurugi_imgcompare::PageComparison`'s own
-/// `a_page_index`/`b_page_index`), resolved to an entry name via `list_pages` fresh on every call
-/// rather than cached — this endpoint is only ever hit a handful of times per conflict (issue #77's
-/// own confirmed sample size of 3-5), so re-listing isn't worth adding a cache for.
-async fn compare_queue_item_page(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Query(params): Query<CompareQueueItemPageParams>,
-    headers: axum::http::HeaderMap,
-) -> Response {
-    let item = match state.download_queue.get(&id).await {
-        Ok(Some(item)) => item,
-        Ok(None) => {
-            return not_found(
-                "compare_download_queue_item_page",
-                format!("{id} does not exist."),
-            )
-        }
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "compare_download_queue_item_page",
-                e.to_string(),
-            )
-        }
-    };
-    let Some(conflict) = item.pending_filename_conflict else {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "compare_download_queue_item_page",
-            "This queue item has no pending filename conflict to compare.",
-        );
-    };
-
-    let archive_path = match resolve_compare_side_path(&state, &conflict, &params.side).await {
-        Ok(path) => path,
-        Err(resp) => return resp,
-    };
-
-    let index = params.index;
-    let result = tokio::task::spawn_blocking(move || {
-        let pages = lanrurugi_scanner::archive_format::list_pages(&archive_path)?;
-        let entry = pages.get(index).ok_or_else(|| {
-            lanrurugi_scanner::archive_format::ArchiveFormatError::EntryNotFound(format!(
-                "page index {index}"
-            ))
-        })?;
-        lanrurugi_scanner::archive_format::read_entry(&archive_path, entry)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(bytes)) => {
-            let support = crate::archives::ClientImageSupport::from_request(&headers, None);
-            let detected = crate::archives::image_content_type(&bytes);
-            // A source codec this browser cannot decode would arrive as a broken image — and a
-            // side-by-side *visual* answer is the entire point of this view. Both sides go through
-            // the identical conversion, so the comparison stays apples-to-apples; the verdicts shown
-            // alongside are computed server-side from the originals and are unaffected either way.
-            let (content_type, bytes) =
-                match convert_unless_decodable(&bytes, detected, support).await {
-                    Some(converted) => converted,
-                    // Conversion unavailable (no advertised codec, or the encode failed): the original is
-                    // still the best answer available, and never a 500 on a comparison view.
-                    None => (detected, bytes),
-                };
-            // The URL's own last segment is `page`, so without this every comparison image saves
-            // under that generic name — the side and page index are what identifies it.
-            let stem = format!(
-                "{}_{}_{}",
-                item.title.as_deref().unwrap_or(id.as_str()),
-                params.side,
-                params.index
-            );
-            // No `Cache-Control` at all meant the browser re-fetched this same page's bytes over
-            // the network every single time anything (StrictMode double-invoke, a re-render that
-            // recreates the preload `<img>`, a plain page reload) asked for it again — including,
-            // confirmed live via a DevTools network capture, races with the padded-side preload
-            // `<img>` in `OverlayPage.tsx` that made the user's first Shift press land while a
-            // redundant fetch was still in flight, reading as UI jank even though the actual
-            // render-side preload logic was already correct. `immutable` is safe: `index`/`side`
-            // are stable coordinates into an already-downloaded/cataloged archive, and this
-            // conflict's `compare_cache` entry (and the queue item itself) is invalidated the
-            // moment the conflict is actually resolved — the URL itself goes away, it never starts
-            // serving different bytes at the same URL.
-            (
-                [
-                    (
-                        axum::http::header::CONTENT_TYPE,
-                        axum::http::HeaderValue::from_static(content_type),
-                    ),
-                    (
-                        axum::http::header::CACHE_CONTROL,
-                        axum::http::HeaderValue::from_static("private, max-age=86400, immutable"),
-                    ),
-                    (
-                        axum::http::header::CONTENT_DISPOSITION,
-                        crate::archives::inline_disposition_for(&crate::archives::image_filename(
-                            &stem,
-                            content_type,
-                        )),
-                    ),
-                ],
-                bytes,
-            )
-                .into_response()
-        }
-        Ok(Err(e)) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "compare_download_queue_item_page",
-            e.to_string(),
-        ),
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "compare_download_queue_item_page",
-            e.to_string(),
-        ),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct ListComparePagesParams {
-    side: String,
-}
-
-/// `GET /download_queue/{id}/compare/pages?side=a|b` — the real entry-name list for one side of
-/// the comparison, in natural-sort (page) order. The frontend's own "pick where to insert an
-/// unmatched A page" UI (issue #77's own follow-on design) needs B's real entry names to send as
-/// `after_filename`/`before_filename` in `.../export-patch` — it otherwise only ever deals in
-/// numeric page indices (matching `PageComparison.a_page_index`/`b_page_index`), which
-/// `patch.rs`'s own JSON schema deliberately doesn't use (see that module's docs on why an entry
-/// name is the stable anchor, not an index that can drift if the archive is re-scanned).
-async fn list_compare_pages(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Query(params): Query<ListComparePagesParams>,
-) -> Response {
-    let item = match state.download_queue.get(&id).await {
-        Ok(Some(item)) => item,
-        Ok(None) => return not_found("list_compare_pages", format!("{id} does not exist.")),
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "list_compare_pages",
-                e.to_string(),
-            )
-        }
-    };
-    let Some(conflict) = item.pending_filename_conflict else {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "list_compare_pages",
-            "This queue item has no pending filename conflict to compare.",
-        );
-    };
-    let archive_path = match resolve_compare_side_path(&state, &conflict, &params.side).await {
-        Ok(path) => path,
-        Err(resp) => return resp,
-    };
-
-    let result = tokio::task::spawn_blocking(move || {
-        lanrurugi_scanner::archive_format::list_pages(&archive_path)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(pages)) => axum::Json(json!({ "pages": pages })).into_response(),
-        Ok(Err(e)) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "list_compare_pages",
-            e.to_string(),
-        ),
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "list_compare_pages",
-            e.to_string(),
-        ),
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ExportPatchInsertion {
-    #[serde(default)]
-    after_filename: Option<String>,
-    #[serde(default)]
-    before_filename: Option<String>,
-    /// The *source* side's own page indices (matching `PageComparison.a_page_index`/
-    /// `b_page_index`, or `ComparisonResult.a_unmatched_pages`/`b_unmatched_pages`) to insert at
-    /// this anchor, in the order the user wants them to appear. Which side is "source" depends on
-    /// the caller — [`export_compare_patch`] always reads from A (its own doc comment covers why);
-    /// [`keep_side_b`] reads from A too (A's unique pages get patched onto the B it's keeping).
-    page_indices: Vec<usize>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ExportPatchRequest {
-    insertions: Vec<ExportPatchInsertion>,
-}
-
-/// Builds a `.patch.zip`'s raw bytes for `target_path`, bundling pages read from `source_path` at
-/// the indices/anchors `insertions` describe. Shared by [`export_compare_patch`] (returns the
-/// bytes for the user to download and place themselves) and [`keep_side_b`] (writes the same
-/// bytes straight to `target_path`'s own sidecar path) — both need the exact same
-/// crc32-target + read-source-pages + `patch::build_patch_zip` sequence, just differing in what
-/// happens to the result afterward.
-fn build_patch_zip_bytes(
-    target_path: &std::path::Path,
-    source_path: &std::path::Path,
-    insertions: Vec<ExportPatchInsertion>,
-) -> std::result::Result<Vec<u8>, lanrurugi_scanner::archive_format::ArchiveFormatError> {
-    let target_crc32 = lanrurugi_scanner::patch::crc32_of_file(target_path)
-        .map_err(lanrurugi_scanner::archive_format::ArchiveFormatError::from)?;
-    let source_crc32 = lanrurugi_scanner::patch::crc32_of_file(source_path).ok();
-    let source_pages = lanrurugi_scanner::archive_format::list_pages(source_path)?;
-
-    let mut bundled_pages: Vec<(String, Vec<u8>)> = Vec::new();
-    let mut patch_insertions = Vec::new();
-    for insertion in insertions {
-        let mut files = Vec::new();
-        for index in insertion.page_indices {
-            let Some(entry_name) = source_pages.get(index) else {
-                continue;
-            };
-            let bytes = lanrurugi_scanner::archive_format::read_entry(source_path, entry_name)?;
-            // Bundled under a name distinct from the source's own entry name (issue #77's own
-            // confirmed design: a patch's own image filenames are a separate namespace from
-            // either source archive's — see `lanrurugi_scanner::patch`'s own module docs) so a
-            // collision with an existing target entry name, or between two patches from different
-            // sessions, can't happen.
-            let patch_entry_name = format!("patch_{:04}_{}", bundled_pages.len() + 1, entry_name);
-            files.push(patch_entry_name.clone());
-            bundled_pages.push((patch_entry_name, bytes));
-        }
-        if files.is_empty() {
-            continue;
-        }
-        patch_insertions.push(lanrurugi_scanner::patch::PatchInsertion {
-            after_filename: insertion.after_filename,
-            before_filename: insertion.before_filename,
-            files,
-        });
-    }
-
-    lanrurugi_scanner::patch::build_patch_zip(
-        &target_crc32,
-        source_crc32.as_deref(),
-        &bundled_pages,
-        patch_insertions,
-    )
-    .map_err(|e| lanrurugi_scanner::archive_format::ArchiveFormatError::Libarchive(e.to_string()))
-}
-
-/// `POST /download_queue/{id}/compare/export-patch` — builds a `.patch.zip` from a user-picked
-/// selection of A's own unique pages (`ComparisonResult.a_unmatched_pages`, issue #77's own
-/// follow-on design) and returns its raw bytes for download, ready to be dropped next to the
-/// target archive on disk as `<archive filename>.patch.zip` (`lanrurugi_scanner::patch`) — this
-/// endpoint doesn't write it there itself (confirmed design: "补丁不需要应用，只要放在漫画目录内"
-/// — a user-placed file, not one this server installs unprompted). The target is always B (the
-/// existing library archive this conflict is against) — a patch only ever adds A's own extra
-/// pages on top of the version the user is keeping, never the other way around.
-async fn export_compare_patch(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    axum::Json(body): axum::Json<ExportPatchRequest>,
-) -> Response {
-    let item = match state.download_queue.get(&id).await {
-        Ok(Some(item)) => item,
-        Ok(None) => return not_found("export_compare_patch", format!("{id} does not exist.")),
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "export_compare_patch",
-                e.to_string(),
-            )
-        }
-    };
-    let Some(conflict) = item.pending_filename_conflict else {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "export_compare_patch",
-            "This queue item has no pending filename conflict to compare.",
-        );
-    };
-    let existing_archive = match state
-        .repos
-        .archives
-        .get(&lanrurugi_core::ids::ArchiveId(
-            conflict.existing_id.clone(),
-        ))
-        .await
-    {
-        Ok(Some(archive)) => archive,
-        Ok(None) => {
-            return not_found(
-                "export_compare_patch",
-                format!("{} no longer exists.", conflict.existing_id),
-            )
-        }
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "export_compare_patch",
-                e.to_string(),
-            )
-        }
-    };
-
-    let a_path = std::path::PathBuf::from(&conflict.temp_path);
-    let b_path = std::path::PathBuf::from(&existing_archive.file);
-    let result = tokio::task::spawn_blocking(move || {
-        build_patch_zip_bytes(&b_path, &a_path, body.insertions)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(bytes)) => {
-            let filename = format!(
-                "{}.patch.zip",
-                std::path::Path::new(&existing_archive.file)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| existing_archive.name.clone())
-            );
-            (
-                [
-                    (
-                        axum::http::header::CONTENT_TYPE,
-                        axum::http::HeaderValue::from_static("application/zip"),
-                    ),
-                    (
-                        axum::http::header::CONTENT_DISPOSITION,
-                        crate::archives::attachment_header(&filename),
-                    ),
-                ],
-                bytes,
-            )
-                .into_response()
-        }
-        Ok(Err(e)) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "export_compare_patch",
-            e.to_string(),
-        ),
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "export_compare_patch",
-            e.to_string(),
-        ),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct KeepSideBRequest {
-    #[serde(default)]
-    insertions: Vec<ExportPatchInsertion>,
-}
-
-/// `POST /download_queue/{id}/compare/keep-b` — the "keep the existing library archive, discard
-/// this download" resolution (issue #77's own follow-on design). Distinct from every other
-/// resolve action in this file: those all catalogue the *staged* file (A) as some archive, either
-/// replacing B (`overwrite_queue_item`) or coexisting with it (`rename_queue_item`) — this one
-/// catalogues nothing at all. B is already in the library and stays exactly where it is; the only
-/// two things that happen are (1) `insertions`, if any, get written straight to B's own sidecar
-/// `.patch.zip` (not just returned for the user to place themselves, unlike
-/// [`export_compare_patch`] — this flow's own frontend already walked the user through picking
-/// insertion points as part of *choosing* to keep B, so there's no separate "now go place this
-/// file" step left for them to do), and (2) the queue item is deleted outright, same as a plain
-/// `DELETE /download_queue/{id}` — there's nothing left for it to track (confirmed design: a
-/// patch's own existence lives on disk next to B, not as a queue-item flag).
-async fn keep_side_b(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    axum::Json(body): axum::Json<KeepSideBRequest>,
-) -> Response {
-    let item = match state.download_queue.get(&id).await {
-        Ok(Some(item)) => item,
-        Ok(None) => return not_found("keep_side_b", format!("{id} does not exist.")),
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "keep_side_b",
-                e.to_string(),
-            )
-        }
-    };
-    let Some(conflict) = item.pending_filename_conflict else {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "keep_side_b",
-            "This queue item has no pending filename conflict to resolve.",
-        );
-    };
-    let existing_archive = match state
-        .repos
-        .archives
-        .get(&lanrurugi_core::ids::ArchiveId(
-            conflict.existing_id.clone(),
-        ))
-        .await
-    {
-        Ok(Some(archive)) => archive,
-        Ok(None) => {
-            return not_found(
-                "keep_side_b",
-                format!("{} no longer exists.", conflict.existing_id),
-            )
-        }
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "keep_side_b",
-                e.to_string(),
-            )
-        }
-    };
-
-    if !body.insertions.is_empty() {
-        let a_path = std::path::PathBuf::from(&conflict.temp_path);
-        let b_path = std::path::PathBuf::from(&existing_archive.file);
-        let patch_path = lanrurugi_scanner::patch::patch_path_for(&b_path);
-        let write_result = tokio::task::spawn_blocking(move || {
-            let bytes = build_patch_zip_bytes(&b_path, &a_path, body.insertions)?;
-            std::fs::write(&patch_path, &bytes)
-                .map_err(lanrurugi_scanner::archive_format::ArchiveFormatError::from)
-        })
-        .await;
-        match write_result {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                return error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "keep_side_b",
-                    e.to_string(),
-                )
-            }
-            Err(e) => {
-                return error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "keep_side_b",
-                    e.to_string(),
-                )
-            }
-        }
-        // Keeps the library grid's own patch badge (issue #77's own follow-on design) in sync —
-        // best-effort, same reasoning as `write_prebuilt_patch`'s own identical update.
-        let mut updated = existing_archive.clone();
-        updated.has_patch = true;
-        if let Err(e) = state.repos.archives.save(&updated).await {
-            tracing::warn!(%id, error = %e, "failed to mark archive has_patch after keep_side_b");
-        }
-    }
-
-    // Discard the staged download — B is being kept as-is, so the temp file A sat in has nothing
-    // left to become. Best-effort: a failure here shouldn't block the resolution itself (the
-    // periodic temp-file sweep — same one `WatcherError`'s own module docs mention — will
-    // eventually reclaim it if this leaves it behind).
-    if let Err(e) = tokio::fs::remove_file(&conflict.temp_path).await {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(%id, path = %conflict.temp_path, error = %e, "failed to remove discarded staged download");
-        }
-    }
-    if let Err(e) = state.compare_cache.delete(&id).await {
-        tracing::warn!(%id, error = %e, "failed to clear cached comparison after keep_side_b");
-    }
-
-    match state.download_queue.delete(&id).await {
-        Ok(()) => axum::Json(json!({ "operation": "keep_side_b", "success": 1 })).into_response(),
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "keep_side_b",
-            e.to_string(),
-        ),
-    }
-}
-
-enum ResolveAction {
-    Overwrite,
-    Rename(String),
-}
-
-#[derive(Debug, thiserror::Error)]
-enum ResolveConflictError {
-    #[error("no such queue item")]
-    NotFound,
-    #[error("this item has no pending filename conflict")]
-    NoConflict,
-    #[error("storage: {0}")]
-    Storage(String),
-    /// The re-attempted ingest itself failed (e.g. `NoConflict`'s opposite — there *was* a
-    /// conflict, but resolving it hit some other error) — plain-text summary only; the real
-    /// structured detail is already persisted onto the item's own `error` field by
-    /// `resolve_conflict` before this is returned, exactly like every other download-pipeline
-    /// failure in this app (the frontend picks it up via its next `GET /download_queue` poll,
-    /// not from this response body).
-    #[error("ingest: {0}")]
-    Ingest(String),
-}
-
-/// The filename `ConflictPolicy::AutoRename` catalogues a collision under — `{name}_{crc}.{ext}`,
-/// the same derived name the rename popover's own default template produces (see
-/// `FilenameTemplateEditor.tsx`), so an automatic and a manual resolution of one collision land on
-/// one filename rather than two subtly different ones. The crc is already computed at staging time
-/// and makes a second collision astronomically unlikely.
-fn auto_renamed_filename(
-    conflict: &lanrurugi_storage::download_queue::PendingFilenameConflict,
-) -> String {
-    let original = conflict.original_filename.as_str();
-    // `rsplit_once` rather than `file_stem`/`extension`: a name with no dot keeps its whole self as
-    // the stem (and gains none), and a leading-dot name like `.hidden` is not an extension either.
-    match original.rsplit_once('.') {
-        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => {
-            format!("{stem}_{}.{ext}", conflict.crc32)
-        }
-        _ => format!("{original}_{}", conflict.crc32),
-    }
-}
-
-/// Applies the subscription's own pre-answered conflict policy to a filename conflict that was just
-/// staged. `Some` when the policy resolved it into a catalogue-able archive; `None` when it is
-/// still the user's question to answer — the policy is `Ask`, the item belongs to nothing with an
-/// opinion, or the automatic resolution collided a second time (left staged, exactly as a manual
-/// rename that collides again is).
-///
-/// Runs *after* staging rather than instead of it, so the automatic path is literally the same code
-/// the two resolve endpoints drive. A second "resolve it automatically" implementation is how the
-/// two would eventually disagree about what an overwrite or a rename means.
-pub(crate) async fn apply_staged_conflict_policy(
-    state: &AppState,
-    item_id: &str,
-) -> Option<crate::download_manager::ingest::IngestedDownload> {
-    use lanrurugi_storage::subscriptions::ConflictPolicy;
-
-    let item = state.download_queue.get(item_id).await.ok().flatten()?;
-    let conflict = item.pending_filename_conflict.clone()?;
-    match item.conflict_policy {
-        ConflictPolicy::AutoRename => {
-            let filename = auto_renamed_filename(&conflict);
-            match resolve_conflict(state, item_id, ResolveAction::Rename(filename.clone())).await {
-                Ok(ingested) => {
-                    tracing::info!(
-                        item = %item_id,
-                        %filename,
-                        "subscription conflict policy renamed a colliding download"
-                    );
-                    Some(ingested)
-                }
-                Err(e) => {
-                    // The re-attempt staged its own fresh conflict (or failed otherwise) and is
-                    // already reflected on the item — nothing further to do here.
-                    tracing::warn!(item = %item_id, error = %e, "automatic conflict rename did not resolve the collision");
-                    None
-                }
-            }
-        }
-        ConflictPolicy::Discard => {
-            if let Err(e) = tokio::fs::remove_file(&conflict.temp_path).await {
-                tracing::warn!(item = %item_id, path = %conflict.temp_path, error = %e, "failed to delete a discarded staged download");
-            }
-            // Cleared, so the row stops offering overwrite/rename for bytes that are gone. The item
-            // itself stays in `Error`, marked by the caller's own error record — the download
-            // genuinely produced nothing, and a retry is still the right offer.
-            if let Ok(Some(mut fresh)) = state.download_queue.get(item_id).await {
-                fresh.pending_filename_conflict = None;
-                if let Err(e) = state.download_queue.update(&fresh).await {
-                    tracing::warn!(item = %item_id, error = %e, "failed to clear a discarded conflict");
-                } else if let Some(tx) = &state.download_queue_tx {
-                    let _ = tx.send(serde_json::json!({
-                        "kind": "update",
-                        "id": item_id,
-                        "pending_filename_conflict": null,
-                    }));
-                }
-            }
-            tracing::info!(
-                item = %item_id,
-                filename = %conflict.original_filename,
-                "subscription conflict policy discarded a colliding download"
-            );
-            None
-        }
-        // `Overwrite` never reaches here: it is applied at enqueue time as the item's own
-        // `overwrite_on_duplicate`, so the collision is overwritten during ingest and no conflict is
-        // ever staged to resolve.
-        ConflictPolicy::Ask | ConflictPolicy::Overwrite => None,
-    }
-}
-
-/// Shared by both resolve endpoints — looks up the item, requires a live
-/// `pending_filename_conflict`, delegates the actual (re-)cataloguing to `ingest::resolve_overwrite`/
-/// `ingest::resolve_rename`, then updates the item to reflect the outcome: `Done` + cleared
-/// `error`/`pending_filename_conflict` on success, or a refreshed `error` (state back to `Error`)
-/// on failure — mirroring `plugins.rs::start_download`'s own generic error-recording convention,
-/// just without a `JobRegistry` job involved (there's no new job for a resolve action; it reuses
-/// the original download's already-staged bytes rather than re-downloading).
-async fn resolve_conflict(
-    state: &AppState,
-    id: &str,
-    action: ResolveAction,
-) -> Result<crate::download_manager::ingest::IngestedDownload, ResolveConflictError> {
-    let item = state
-        .download_queue
-        .get(id)
-        .await
-        .map_err(|e| ResolveConflictError::Storage(e.to_string()))?
-        .ok_or(ResolveConflictError::NotFound)?;
-
-    let conflict = item
-        .pending_filename_conflict
-        .clone()
-        .ok_or(ResolveConflictError::NoConflict)?;
-
-    // A `LocalUpload` item's `url` field is just the uploaded file's own name (see
-    // `upload.rs::upload_archive`'s `NewQueueItem` construction), never a real external source —
-    // stamping it into `source:` would be the same fabricated-data bug `ingest_downloaded_file`'s
-    // own initial call already avoids for uploads (see that call site's docs).
-    let source_url = match item.origin {
-        QueueItemOrigin::Download => Some(item.url.as_str()),
-        QueueItemOrigin::LocalUpload | QueueItemOrigin::ShareImport => None,
-    };
-    let result = match &action {
-        ResolveAction::Overwrite => {
-            crate::download_manager::ingest::resolve_overwrite(state, &conflict, source_url).await
-        }
-        ResolveAction::Rename(new_filename) => {
-            crate::download_manager::ingest::resolve_rename(
-                state,
-                &conflict,
-                new_filename,
-                source_url,
-                Some(id),
-            )
-            .await
-        }
-    };
-
-    match result {
-        Ok(ingested) => {
-            if let Some(catid) = &item.category {
-                let _ =
-                    crate::categories::add_archive_to_category(state, catid, &ingested.archive_id)
-                        .await;
-            }
-            if let Ok(Some(mut fresh)) = state.download_queue.get(id).await {
-                // Cache metadata and apply tags before Done — this is the same path
-                // `plugins.rs`'s regular download uses (see `ensure_metadata_cached`),
-                // just reached through a different entry point (rename/overwrite vs.
-                // start-pipeline). The archive already exists at this point (catalogue
-                // succeeded above) so `archive_ids` is set first so the tag-applier
-                // can find it.
-                fresh.archive_ids = Some(vec![ingested.archive_id.clone()]);
-                if let Some(archive_ids) = &fresh.archive_ids {
-                    crate::plugins::apply_tag_list(state, archive_ids, &fresh.metadata_tags).await;
-                }
-                if fresh.auto_fetch_metadata || fresh.title.is_none() {
-                    crate::plugins::ensure_metadata_cached(state, &mut fresh).await;
-                }
-                fresh.state = DownloadQueueState::Done;
-                fresh.error = None;
-                fresh.pending_filename_conflict = None;
-                fresh.finished_at = Some(now_ms());
-                // Same reason as the managed-download path: the job's own byte count does not
-                // outlive the process, and this row still has to say how big the result was.
-                if let Some(job_id) = &fresh.job_id {
-                    if let Some(job) = state.jobs.get(job_id).await {
-                        if let Some(size) = job.total_bytes.or(job.downloaded_bytes) {
-                            fresh.file_size = Some(size);
-                        }
-                    }
-                }
-                if let Err(e) = state.download_queue.update(&fresh).await {
-                    tracing::warn!(%id, error = %e, "failed to update download-queue item after resolving filename conflict");
-                } else if let Some(tx) = &state.download_queue_tx {
-                    let _ = tx.send(serde_json::json!({
-                        "kind": "update",
-                        "id": id,
-                        "state": "done",
-                        "job_id": &fresh.job_id,
-                        "archive_ids": &fresh.archive_ids,
-                        "title": &fresh.title,
-                        "metadata_preview": &fresh.metadata_preview,
-                        "error": null,
-                    }));
-                }
-            }
-            // The conflict this cached comparison was for no longer exists (resolved either way —
-            // Overwrite or Rename) — the cache entry has nothing left to be re-opened against.
-            // Best-effort, matching every other cleanup side effect in this function.
-            if let Err(e) = state.compare_cache.delete(id).await {
-                tracing::warn!(%id, error = %e, "failed to clear cached comparison after resolving filename conflict");
-            }
-            Ok(ingested)
-        }
-        Err(e) => {
-            let queue_error = lanrurugi_core::queue_error::QueueError::from(&e);
-            // A repeat `Filename` collision under `ResolveAction::Rename` already re-persisted a
-            // *fresh* `pending_filename_conflict` onto the item itself (see
-            // `ingest::stage_pending_rename`'s own docs) — re-fetch rather than reusing the
-            // in-memory `item` from above so this only touches `state`/`error`/(conditionally)
-            // `pending_filename_conflict`, never stomping that fresh conflict info with a stale
-            // copy. Any *other* error — most importantly a `ContentHash` collision, which can
-            // surface here if the staged bytes turn out to be byte-identical to some archive the
-            // library already has under a different name (confirmed live: renaming around a
-            // `Filename` collision doesn't change what the content itself hashes to) — is
-            // unconditionally unresolvable by renaming again, so the stale `pending_filename_conflict`
-            // from the *original* conflict must be cleared here too; leaving it would keep
-            // offering "rename and catalog" for a conflict no filename could ever fix.
-            let is_fresh_filename_conflict = matches!(
-                queue_error,
-                lanrurugi_core::queue_error::QueueError::DuplicateFilename { .. }
-            );
-            if let Ok(Some(mut fresh)) = state.download_queue.get(id).await {
-                fresh.state = DownloadQueueState::Error;
-                fresh.error = Some(queue_error.clone());
-                if !is_fresh_filename_conflict {
-                    fresh.pending_filename_conflict = None;
-                }
-                let _ = state.download_queue.update(&fresh).await;
-            }
-            Err(ResolveConflictError::Ingest(format!("{e}")))
-        }
-    }
-}
-
-fn resolve_error_response(operation: &str, id: &str, e: ResolveConflictError) -> Response {
-    match e {
-        ResolveConflictError::NotFound => not_found(operation, format!("Item {id} not found.")),
-        ResolveConflictError::NoConflict => error(
-            StatusCode::CONFLICT,
-            operation,
-            format!("Item {id} has no pending filename conflict to resolve."),
-        ),
-        ResolveConflictError::Storage(msg) => {
-            error(StatusCode::INTERNAL_SERVER_ERROR, operation, msg)
-        }
-        ResolveConflictError::Ingest(msg) => {
-            error(StatusCode::INTERNAL_SERVER_ERROR, operation, msg)
-        }
-    }
-}
-
-/// `POST /download_queue/clear_completed` — deletes every `Done` item, returns the count removed.
 /// Deliberately excludes `Error` — unlike `Done`, an errored item is a restartable, still-
 /// actionable state (grouped with `Queued`/`Cancelled` everywhere else in this module: selectable,
 /// has a retry button, shows its own error text), not "completed" work a user is done looking at.
@@ -3225,6 +1514,73 @@ fn resolve_error_response(operation: &str, id: &str, e: ResolveConflictError) ->
 /// `DELETE /download_queue/{id}` (which does clean up a `pending_filename_conflict`'s own staged
 /// temp file — `Done` items never carry one, so this handler has nothing analogous to worry
 /// about).
+/// `POST /download_queue/{id}/force` — "download anyway" for a row stopped by the source-URL
+/// guard: mark it forced (bypassing the guard from then on, and keeping it out of "clear
+/// completed"), reset it to `Queued` and start it in the same request, so the button does what its
+/// label says instead of only flipping a flag.
+async fn force_start(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<AuthContext>>,
+    Path(id): Path<String>,
+) -> Response {
+    let mut item = match state.download_queue.get(&id).await {
+        Ok(Some(item)) => item,
+        Ok(None) => return not_found("force_start_download", format!("Item {id} not found.")),
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "force_start_download",
+                e.to_string(),
+            )
+        }
+    };
+    item.forced = true;
+    item.state = DownloadQueueState::Queued;
+    item.error = None;
+    item.finished_at = None;
+    if let Err(e) = state.download_queue.update(&item).await {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "force_start_download",
+            e.to_string(),
+        );
+    }
+    match start_one(&state, auth.as_ref().map(|e| &e.0), &id, None, false).await {
+        Ok(job_id) => axum::Json(json!({
+            "operation": "force_start_download",
+            "success": 1,
+            "job": job_id,
+        }))
+        .into_response(),
+        Err(StartError::NotFound) => {
+            not_found("force_start_download", format!("Item {id} not found."))
+        }
+        Err(StartError::NotQueued) => error(
+            StatusCode::CONFLICT,
+            "force_start_download",
+            format!("Item {id} is not in the Queued state."),
+        ),
+        Err(StartError::PluginMissing) => error(
+            StatusCode::BAD_REQUEST,
+            "force_start_download",
+            "The plugin this item was queued under is no longer installed.",
+        ),
+        Err(StartError::DuplicateInFlight) => error(
+            StatusCode::CONFLICT,
+            "force_start_download",
+            format!("Another item for the same URL as {id} is already downloading."),
+        ),
+        Err(StartError::Storage(e)) => {
+            error(StatusCode::INTERNAL_SERVER_ERROR, "force_start_download", e)
+        }
+        Err(StartError::SourceAlreadyImported(existing_id)) => error(
+            StatusCode::CONFLICT,
+            "force_start_download",
+            format!("This URL already produced archive {existing_id}."),
+        ),
+    }
+}
+
 async fn clear_completed(
     State(state): State<AppState>,
     auth: Option<axum::extract::Extension<AuthContext>>,
@@ -3239,11 +1595,14 @@ async fn clear_completed(
             )
         }
     };
-    let ids: Vec<String> = items
+    let cleared_items: Vec<_> = items
         .into_iter()
-        .filter(|i| i.state == DownloadQueueState::Done)
-        .map(|i| i.id)
+        .filter(|i| i.state == DownloadQueueState::Done && !i.forced)
         .collect();
+    let ids: Vec<String> = cleared_items.iter().map(|i| i.id.clone()).collect();
+    for item in &cleared_items {
+        remove_kept_bytes(Some(item)).await;
+    }
     let cleared = ids.len();
     if let Err(e) = state.download_queue.delete_many(&ids).await {
         // A real, attempted bulk-delete that hit a Redis failure (not just "nothing to do" —
@@ -3298,6 +1657,157 @@ async fn clear_completed(
     )
 }
 
+/// Deletes the downloaded file a failed cataloguing attempt kept — see
+/// [`lanrurugi_storage::download_queue::StagedDownload`].
+async fn remove_kept_bytes(item: Option<&lanrurugi_storage::download_queue::DownloadQueueItem>) {
+    let Some(staged) = item.and_then(|i| i.staged.as_ref()) else {
+        return;
+    };
+    if let Err(e) = tokio::fs::remove_file(&staged.path).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(path = %staged.path, error = %e, "failed to remove a kept download");
+        }
+    }
+}
+
+/// After a failed ingest of a fresh download: keeps the bytes on the row for a retry, unless they
+/// failed their fingerprint (027 R7), in which case they are dropped and the retry downloads again.
+pub(crate) async fn keep_failed_download<T>(
+    state: &AppState,
+    item_id: Option<&str>,
+    file: &crate::download_manager::stream::DownloadedFile,
+    result: &Result<T, crate::download_manager::ingest::IngestDownloadError>,
+) {
+    match result {
+        Ok(_) => {}
+        Err(crate::download_manager::ingest::IngestDownloadError::StagedCorrupted { .. }) => {
+            let _ = tokio::fs::remove_file(&file.path).await;
+        }
+        Err(_) => {
+            note_ingest_failure(
+                state,
+                item_id,
+                &file.path,
+                &file.filename,
+                file.blake3.as_deref(),
+            )
+            .await
+        }
+    }
+}
+
+/// Records, on the queue row, where its downloaded bytes were put back after cataloguing failed.
+pub(crate) async fn note_ingest_failure(
+    state: &AppState,
+    item_id: Option<&str>,
+    path: &std::path::Path,
+    filename: &str,
+    blake3: Option<&str>,
+) {
+    let Some(id) = item_id else { return };
+    let Ok(Some(mut item)) = state.download_queue.get(id).await else {
+        return;
+    };
+    item.staged = Some(lanrurugi_storage::download_queue::StagedDownload {
+        path: path.display().to_string(),
+        filename: filename.to_string(),
+        blake3: blake3.map(str::to_string),
+    });
+    if let Err(e) = state.download_queue.update(&item).await {
+        tracing::warn!(%id, error = %e, "could not record the kept download");
+    }
+}
+
+/// `POST /download_queue/{id}/reingest` — runs cataloguing again over the bytes a failed ingest
+/// kept on disk, instead of downloading the archive a second time.
+async fn reingest(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let mut item = match state.download_queue.get(&id).await {
+        Ok(Some(item)) => item,
+        Ok(None) => return not_found("reingest_download", format!("Item {id} not found.")),
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "reingest_download",
+                e.to_string(),
+            )
+        }
+    };
+    let Some(staged) = item.staged.clone() else {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "reingest_download",
+            format!("Item {id} has no kept download to ingest."),
+        );
+    };
+    let path = std::path::PathBuf::from(&staged.path);
+    if !path.is_file() {
+        return error(
+            StatusCode::GONE,
+            "reingest_download",
+            format!("The kept download for {id} is gone; start it again."),
+        );
+    }
+    let downloaded = crate::download_manager::stream::DownloadedFile {
+        path,
+        filename: staged.filename,
+        bytes_downloaded: item.file_size.unwrap_or(0),
+        blake3: staged.blake3,
+    };
+    match crate::download_manager::ingest::ingest_downloaded_file(
+        &state,
+        &downloaded,
+        item.overwrite_on_duplicate,
+        Some(&item.url),
+        Some(&id),
+    )
+    .await
+    {
+        Ok(ingested) => {
+            item.staged = None;
+            item.state = DownloadQueueState::Done;
+            item.archive_ids = Some(vec![ingested.archive_id.clone()]);
+            item.error = None;
+            item.finished_at = Some(now_ms());
+            if let Err(e) = state.download_queue.update(&item).await {
+                return error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "reingest_download",
+                    e.to_string(),
+                );
+            }
+            if let Some(tx) = &state.download_queue_tx {
+                let _ = tx.send(serde_json::json!({ "kind": "update", "id": id }));
+            }
+            crate::download_sources::record(&state, &item.url, &ingested.archive_id).await;
+            axum::Json(json!({
+                "operation": "reingest_download",
+                "success": 1,
+                "archive_ids": [ingested.archive_id],
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            let queue_error = lanrurugi_core::queue_error::QueueError::from(&e);
+            if matches!(
+                e,
+                crate::download_manager::ingest::IngestDownloadError::StagedCorrupted { .. }
+            ) {
+                // The kept bytes are damaged (027 R7): drop them, so the row's retry downloads again.
+                remove_kept_bytes(Some(&item)).await;
+                item.staged = None;
+            }
+            item.error = Some(queue_error.clone());
+            let _ = state.download_queue.update(&item).await;
+            broadcast_item_update(&state, &item);
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "reingest_download",
+                format!("{queue_error:?}"),
+            )
+        }
+    }
+}
+
 /// Wall-clock milliseconds — the unit every other timestamp on the wire uses (`created_at`,
 /// `metadata_preview_at`), and the one the queue row renders its elapsed time from.
 fn now_ms() -> i64 {
@@ -3309,7 +1819,7 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use lanrurugi_storage::download_queue::{DownloadQueueItem, PendingFilenameConflict};
+    use lanrurugi_storage::download_queue::DownloadQueueItem;
 
     use super::*;
 
@@ -3318,53 +1828,6 @@ mod tests {
         assert!(is_startable(DownloadQueueState::Paused));
         assert!(!is_in_flight(DownloadQueueState::Paused));
         assert!(!is_bulk_startable(DownloadQueueState::Paused));
-    }
-
-    /// The comparison overlay is a visual answer, so a source codec the requesting browser cannot
-    /// decode has to be re-encoded; nothing else may be touched (a lossy re-encode of a page the
-    /// browser could already read would degrade exactly the detail being compared).
-    #[test]
-    fn only_an_undecodable_source_codec_is_re_encoded_for_the_comparison_view() {
-        let both = crate::archives::ClientImageSupport {
-            jxl: true,
-            webp: true,
-            avif: true,
-            avif_anim: true,
-            jxl_anim: true,
-        };
-        let webp_only = crate::archives::ClientImageSupport {
-            jxl: false,
-            webp: true,
-            avif: false,
-            avif_anim: false,
-            jxl_anim: false,
-        };
-        let neither = crate::archives::ClientImageSupport {
-            jxl: false,
-            webp: false,
-            avif: false,
-            avif_anim: false,
-            jxl_anim: false,
-        };
-
-        assert!(!source_needs_conversion("image/jxl", both));
-        assert!(source_needs_conversion("image/jxl", webp_only));
-        assert!(source_needs_conversion("image/jxl", neither));
-        assert!(source_needs_conversion("image/webp", neither));
-        assert!(!source_needs_conversion("image/webp", webp_only));
-        // Universally readable: never re-encoded, whichever codecs were advertised.
-        for ct in [
-            "image/jpeg",
-            "image/png",
-            "image/gif",
-            "image/bmp",
-            "application/octet-stream",
-        ] {
-            assert!(
-                !source_needs_conversion(ct, neither),
-                "{ct} needs no conversion"
-            );
-        }
     }
 
     fn item(id: &str, url: &str, state: DownloadQueueState) -> DownloadQueueItem {
@@ -3382,8 +1845,8 @@ mod tests {
             metadata_tags: Vec::new(),
             auto_fetch_metadata: false,
             overwrite_on_duplicate: false,
-            conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
             state,
+            transferring: false,
             version_history: None,
             started_at: None,
             finished_at: None,
@@ -3396,44 +1859,93 @@ mod tests {
             pending_filename_conflict: None,
             pending_revision_confirmation: None,
             revision_confirmed: false,
+            forced: false,
+            staged: None,
             created_at: 0,
         }
     }
 
-    /// The automatic rename must land on the same filename the rename popover's own default
-    /// template (`{filename}_{crc}.{ext}`) produces — an automatic and a manual resolution of one
-    /// collision should not leave two subtly different names behind.
-    #[test]
-    fn an_auto_renamed_conflict_matches_the_rename_popover_default() {
-        let conflict = PendingFilenameConflict {
-            temp_path: "/tmp/temp_abc_x.zip".to_string(),
-            original_filename: "x.zip".to_string(),
-            existing_id: "id".to_string(),
-            crc32: "abc".to_string(),
-            staged_at: 0,
+    /// A download whose bytes arrived but whose cataloguing failed keeps the file; retrying must
+    /// re-ingest that file rather than downloading the archive again.
+    #[tokio::test]
+    async fn retrying_after_a_failed_catalog_ingests_the_kept_bytes() {
+        use lanrurugi_storage::download_queue::{NewQueueItem, QueueItemOrigin, StagedDownload};
+        let Some(mut state) = crate::plugins::tests::test_state().await else {
+            return;
         };
-        assert_eq!(auto_renamed_filename(&conflict), "x_abc.zip");
+        let root = tempfile::tempdir().unwrap();
+        state.library.archive_dir = root.path().join("content");
+        state.library.temp_dir = root.path().join("temp");
+        std::fs::create_dir_all(&state.library.archive_dir).unwrap();
+        std::fs::create_dir_all(&state.library.temp_dir).unwrap();
 
-        // No extension: nothing to put after the dot.
-        let dotless = PendingFilenameConflict {
-            original_filename: "x".to_string(),
-            ..conflict.clone()
-        };
-        assert_eq!(auto_renamed_filename(&dotless), "x_abc");
+        let kept = state.library.temp_dir.join("kept.zip");
+        {
+            use std::io::Write as _;
+            let mut writer = zip::ZipWriter::new(std::fs::File::create(&kept).unwrap());
+            writer
+                .start_file("0001.jpg", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(b"\xff\xd8\xff\xd9").unwrap();
+            writer
+                .start_file("note.txt", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(b"retry-after-failed-catalog").unwrap();
+            writer.finish().unwrap();
+        }
 
-        // A leading dot is part of the name, not an extension.
-        let hidden = PendingFilenameConflict {
-            original_filename: ".hidden".to_string(),
-            ..conflict.clone()
-        };
-        assert_eq!(auto_renamed_filename(&hidden), ".hidden_abc");
+        let created = state
+            .download_queue
+            .add(NewQueueItem {
+                origin: QueueItemOrigin::Download,
+                subscription_id: None,
+                url: "https://example.org/gallery/retry".to_string(),
+                plugin_namespace: "download/ehentai".to_string(),
+                file_size: Some(1234),
+                category: None,
+                metadata_tags: Vec::new(),
+                auto_fetch_metadata: false,
+                overwrite_on_duplicate: false,
+                state: DownloadQueueState::Error,
+            })
+            .await
+            .unwrap();
+        let mut row = created.clone();
+        row.error = Some(lanrurugi_core::queue_error::QueueError::IngestFailed {
+            reason: "the thumbnail could not be written".to_string(),
+        });
+        row.staged = Some(StagedDownload {
+            path: kept.display().to_string(),
+            filename: "Kept [DL版].zip".to_string(),
+            blake3: None,
+        });
+        state.download_queue.update(&row).await.unwrap();
 
-        // Dots inside the stem stay put.
-        let dotted = PendingFilenameConflict {
-            original_filename: "a.b.c.zip".to_string(),
-            ..conflict
-        };
-        assert_eq!(auto_renamed_filename(&dotted), "a.b.c_abc.zip");
+        let response = reingest(State(state.clone()), Path(created.id.clone())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let stored = state
+            .download_queue
+            .get(&created.id)
+            .await
+            .unwrap()
+            .expect("the row survives the retry");
+        assert_eq!(stored.state, DownloadQueueState::Done);
+        assert!(stored.error.is_none());
+        assert!(
+            stored.staged.is_none(),
+            "the kept file is consumed on success"
+        );
+        assert!(!kept.exists(), "the file moved into the library");
+        let archive_id = stored.archive_ids.expect("the archive id is recorded")[0].clone();
+        let archive = state
+            .repos
+            .archives
+            .get(&lanrurugi_core::ids::ArchiveId(archive_id))
+            .await
+            .unwrap()
+            .expect("the archive is catalogued");
+        assert_eq!(archive.title, "Kept");
     }
 
     #[test]
@@ -3488,6 +2000,169 @@ mod tests {
         assert_eq!(payload["overwrite_on_duplicate"], true);
     }
 
+    /// A second row for the same URL is refused while the first is still downloading, with the
+    /// block visible on the row (so "download anyway" is offered exactly like the imported case).
+    #[tokio::test]
+    async fn a_running_download_for_the_same_url_blocks_the_second_row_until_forced() {
+        let Some(state) = crate::plugins::tests::test_state().await else {
+            eprintln!("skipping: test Redis not reachable");
+            return;
+        };
+        let url = format!(
+            "https://example.com/gallery/{}",
+            uuid::Uuid::new_v4().simple()
+        );
+        let make = |state: &crate::AppState, url: String| {
+            let state = state.clone();
+            async move {
+                state
+                    .download_queue
+                    .add(lanrurugi_storage::download_queue::NewQueueItem {
+                        origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
+                        subscription_id: None,
+                        url,
+                        plugin_namespace: "download/this-plugin-does-not-exist".to_string(),
+                        file_size: None,
+                        category: None,
+                        metadata_tags: vec![],
+                        auto_fetch_metadata: false,
+                        overwrite_on_duplicate: false,
+                        state: DownloadQueueState::Queued,
+                    })
+                    .await
+                    .unwrap()
+            }
+        };
+        let mut first = make(&state, url.clone()).await;
+        first.state = DownloadQueueState::Downloading;
+        state.download_queue.update(&first).await.unwrap();
+        let second = make(&state, url.clone()).await;
+
+        let refused = start_one(&state, None, &second.id, None, false).await;
+        assert!(
+            matches!(refused, Err(StartError::DuplicateInFlight)),
+            "expected the in-flight block, got {refused:?}"
+        );
+        let row = state.download_queue.get(&second.id).await.unwrap().unwrap();
+        assert!(matches!(
+            row.error,
+            Some(lanrurugi_core::queue_error::QueueError::SourceDownloadInProgress)
+        ));
+
+        let mut forced = row;
+        forced.forced = true;
+        forced.state = DownloadQueueState::Queued;
+        forced.error = None;
+        state.download_queue.update(&forced).await.unwrap();
+        let after_force = start_one(&state, None, &second.id, None, false).await;
+        assert!(
+            !matches!(
+                after_force,
+                Err(StartError::DuplicateInFlight) | Err(StartError::SourceAlreadyImported(_))
+            ),
+            "forced row must pass both blocks, got {after_force:?}"
+        );
+
+        let _ = state.download_queue.delete(&first.id).await;
+        let _ = state.download_queue.delete(&second.id).await;
+    }
+
+    /// The registry exists to stop a second download of the same source *before* the bytes are
+    /// fetched (content addressing would only catch it after hashing the whole file), and
+    /// "download anyway" must get past it for that one row.
+    #[tokio::test]
+    async fn a_source_url_that_already_produced_an_archive_is_refused_before_the_plugin_runs() {
+        let Some(state) = crate::plugins::tests::test_state().await else {
+            eprintln!("skipping: test Redis not reachable");
+            return;
+        };
+        let url = format!(
+            "https://example.com/gallery/{}",
+            uuid::Uuid::new_v4().simple()
+        );
+        let archive_id = format!("srcguard{}", uuid::Uuid::new_v4().simple());
+        tokio::fs::create_dir_all(&state.library.archive_dir)
+            .await
+            .unwrap();
+        let file = state.library.archive_dir.join(format!("{archive_id}.zip"));
+        tokio::fs::write(&file, b"PK\x03\x04").await.unwrap();
+        let archive = lanrurugi_core::entities::Archive {
+            id: lanrurugi_core::ids::ArchiveId(archive_id.clone()),
+            name: archive_id.clone(),
+            title: archive_id.clone(),
+            file: file.to_string_lossy().into_owned(),
+            tags: String::new(),
+            summary: String::new(),
+            arcsize: 4,
+            pagecount: 1,
+            isnew: false,
+            lastreadpage: 0,
+            lastreadtime: 0,
+            thumbhash: None,
+            toc: vec![],
+            stamp_ids: vec![],
+            heal_failed_at: None,
+            corrupted_pages: vec![],
+            has_patch: false,
+            blake3: None,
+        };
+        state.repos.archives.save(&archive).await.unwrap();
+        crate::download_sources::record(&state, &url, &archive_id).await;
+
+        // `add` mints the row's id itself; keep what it returns rather than the placeholder.
+        let item_id = state
+            .download_queue
+            .add(lanrurugi_storage::download_queue::NewQueueItem {
+                origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
+                subscription_id: None,
+                url: url.clone(),
+                plugin_namespace: "download/this-plugin-does-not-exist".to_string(),
+                file_size: None,
+                category: None,
+                metadata_tags: vec![],
+                auto_fetch_metadata: false,
+                overwrite_on_duplicate: false,
+                state: DownloadQueueState::Queued,
+            })
+            .await
+            .unwrap()
+            .id;
+
+        let refused = start_one(&state, None, &item_id, None, false).await;
+        assert!(
+            matches!(refused, Err(StartError::SourceAlreadyImported(ref id)) if id == &archive_id),
+            "expected the source guard to refuse, got {refused:?}"
+        );
+        let row = state.download_queue.get(&item_id).await.unwrap().unwrap();
+        assert_eq!(row.state, DownloadQueueState::Error);
+        assert!(matches!(
+            row.error,
+            Some(lanrurugi_core::queue_error::QueueError::SourceAlreadyImported { ref existing_id })
+                if existing_id == &archive_id
+        ));
+
+        // "Download anyway" is the user's override: this row alone skips the guard, and the
+        // failure it reaches next is the (deliberately missing) plugin, not the registry.
+        let mut forced = row;
+        forced.forced = true;
+        forced.state = DownloadQueueState::Queued;
+        forced.error = None;
+        state.download_queue.update(&forced).await.unwrap();
+        let after_force = start_one(&state, None, &item_id, None, false).await;
+        assert!(
+            !matches!(after_force, Err(StartError::SourceAlreadyImported(_))),
+            "forced row must pass the source guard, got {after_force:?}"
+        );
+
+        let _ = state.download_queue.delete(&item_id).await;
+        let _ = state
+            .repos
+            .archives
+            .delete(&lanrurugi_core::ids::ArchiveId(archive_id))
+            .await;
+        let _ = tokio::fs::remove_file(&file).await;
+    }
+
     #[test]
     fn blocks_starting_when_another_item_with_the_same_url_is_downloading() {
         let target = item(
@@ -3540,54 +2215,6 @@ mod tests {
             ),
         ];
         assert!(!has_running_duplicate(&target, &all));
-    }
-
-    #[test]
-    fn extract_rating_tags_returns_only_the_rating_namespace() {
-        let got: Vec<&str> =
-            extract_rating_tags("artist:someone, rating:4.5, category:manga").collect();
-        assert_eq!(got, vec!["rating:4.5"]);
-    }
-
-    #[test]
-    fn extract_rating_tags_is_empty_when_no_rating_tag_is_present() {
-        let got: Vec<&str> = extract_rating_tags("artist:someone,category:manga").collect();
-        assert!(got.is_empty());
-    }
-
-    #[test]
-    fn extract_rating_tags_does_not_match_a_similarly_named_namespace() {
-        // A namespace like `top_rating:` or a bare tag containing the substring "rating" must
-        // NOT be treated as the rating tag — same edge case `tankoubons.rs::strip_rating_tag`'s
-        // own tests already guard against for its (inverse) use case.
-        let got: Vec<&str> = extract_rating_tags("top_rating:5,rating_note:high").collect();
-        assert!(got.is_empty());
-    }
-
-    #[test]
-    fn has_any_content_tag_is_false_for_empty_and_date_added_only_tags() {
-        assert!(!has_any_content_tag(""));
-        assert!(!has_any_content_tag("date_added:1738000000"));
-    }
-
-    #[test]
-    fn has_any_content_tag_is_true_when_a_real_tag_is_present() {
-        assert!(has_any_content_tag("date_added:1738000000,artist:someone"));
-        assert!(has_any_content_tag("category:manga"));
-    }
-
-    #[test]
-    fn strip_source_and_uploader_tags_removes_only_those_two_namespaces() {
-        let got = strip_source_and_uploader_tags(
-            "artist:someone,source:e-hentai.org/g/1/a,uploader:someone,category:manga",
-        );
-        assert_eq!(got, "artist:someone,category:manga");
-    }
-
-    #[test]
-    fn strip_source_and_uploader_tags_is_a_noop_when_neither_is_present() {
-        let got = strip_source_and_uploader_tags("artist:someone,category:manga");
-        assert_eq!(got, "artist:someone,category:manga");
     }
 
     #[test]

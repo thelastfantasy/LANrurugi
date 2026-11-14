@@ -172,13 +172,43 @@ input.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') convert();
 });
 
-copyButton.addEventListener('click', async () => {
+// The async Clipboard API only exists in a secure context, and a self-hosted instance is normally
+// opened over plain HTTP — fall back to a selection-based copy instead of only reporting failure.
+async function copyText(text) {
+  if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through to the selection-based copy.
+    }
+  }
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.top = '0';
+  area.style.left = '0';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.select();
+  area.setSelectionRange(0, text.length);
+  let ok = false;
   try {
-    await navigator.clipboard.writeText(output.textContent);
+    ok = document.execCommand('copy');
+  } catch {
+    ok = false;
+  }
+  area.remove();
+  return ok;
+}
+
+copyButton.addEventListener('click', async () => {
+  if (await copyText(output.textContent)) {
     copyStatus.textContent = 'Copied.';
     copyStatus.className = 'status';
-  } catch (e) {
-    copyStatus.textContent = `Copy failed: ${e}`;
+  } else {
+    copyStatus.textContent = 'Copy failed: select the text and press Ctrl+C.';
     copyStatus.className = 'status error';
   }
 });

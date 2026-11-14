@@ -613,6 +613,42 @@ if (!pluginsDir || !namespace) {
  * string — including one that merely mentions the key in prose (`"version_history: none found"`) —
  * is blanked as usual. Without the exception a quoted key is invisible to the scan; without the
  * `:` requirement any mention in any message would count. */
+/** Whether the `/` at `i` opens a regex literal rather than being a division operator.
+ *
+ * A regex literal may contain quotes (`/uploader\/([^"'<>]+)/`), and those quotes must not be read
+ * as string delimiters: a lone `"` inside one would pair with a real string's quote later in the
+ * file and blank everything between them — which is exactly how e-hentai's discovery plugin lost
+ * `posted_at`/`tags`/`uploader` from its reported fields. This scanner has no parser, so it decides
+ * from the previous significant character, the way JS engines' own lexers do. */
+function startsRegexLiteral(src: string, i: number): boolean {
+  let k = i - 1;
+  while (k >= 0 && (src[k] === " " || src[k] === "\t" || src[k] === "\n" || src[k] === "\r")) k--;
+  if (k < 0) return true;
+  const prev = src[k];
+  if ("([{,;:=!&|?+-*%^~<>".includes(prev)) return true;
+  if (/[A-Za-z_$]/.test(prev)) {
+    let s = k;
+    while (s >= 0 && /[\w$]/.test(src[s])) s--;
+    const word = src.slice(s + 1, k + 1);
+    return [
+      "return",
+      "typeof",
+      "case",
+      "in",
+      "of",
+      "new",
+      "delete",
+      "void",
+      "instanceof",
+      "do",
+      "else",
+      "yield",
+      "await",
+    ].includes(word);
+  }
+  return false;
+}
+
 function blankCommentsAndStrings(
   src: string,
   keepPropertyKeyStrings = false,
@@ -636,6 +672,28 @@ function blankCommentsAndStrings(
       const stop = end === -1 ? src.length : end + 2;
       blankTo(stop);
       i = stop;
+    } else if (c === "/" && startsRegexLiteral(src, i)) {
+      // Blank the literal whole: its quotes are regex syntax, its body is never a property key.
+      let j = i + 1;
+      let inClass = false;
+      while (j < src.length) {
+        const ch = src[j];
+        if (ch === "\\") {
+          j += 2;
+          continue;
+        }
+        if (ch === "\n") break;
+        if (ch === "[") inClass = true;
+        else if (ch === "]") inClass = false;
+        else if (ch === "/" && !inClass) {
+          j++;
+          break;
+        }
+        j++;
+      }
+      const stop = Math.min(j, src.length);
+      blankTo(stop);
+      i = stop;
     } else if (c === '"' || c === "'" || c === "`") {
       const quote = c;
       let j = i + 1;
@@ -648,11 +706,11 @@ function blankCommentsAndStrings(
         j++;
       }
       if (j >= src.length) {
-        // No closing quote anywhere: this was never a string. The usual culprit is a quote inside
-        // a regex literal (`/["']/`), which this scanner has no way to recognize as such. Blanking
-        // to EOF here would erase the rest of the file — including a real `version_history` key —
-        // and report the plugin as unsupported. Treating the character as ordinary code costs
-        // nothing by comparison: the worst case is one stray quote the regexes ignore anyway.
+        // No closing quote anywhere: this was never a string. Regex literals are handled above, so
+        // the usual remaining culprit is a quote this scanner's regex heuristic could not classify
+        // (e.g. after a `)`, where `/` is division). Blanking to EOF here would erase the rest of
+        // the file — including a real `version_history` key — and report the plugin as unsupported.
+        // Treating the character as ordinary code costs nothing by comparison.
         i++;
         continue;
       }
@@ -844,7 +902,130 @@ function relayFetch(input: string | URL | Request, init?: RequestInit): Promise<
   });
 }
 
-globalThis.fetch = relayFetch as unknown as typeof fetch;
+// The egress shim (`crates/lanrurugi-egress`, loaded with LD_PRELOAD by the host) binds every
+// outbound socket to the configured interface, so Deno's own fetch can stay: full Fetch API,
+// streams, binary bodies, redirects. Its constructor exports LANRURUGI_EGRESS_ACTIVE as proof it
+// actually loaded — a missing `.so` must never leave traffic unconstrained.
+//
+// Without that proof (non-Linux host, or the library was not shipped) the relay is the only path
+// that honours the interface, so install it and surrender the raw-socket grant the CLI handed us —
+// otherwise `Deno.connect`/`WebSocket` would bypass both the relay and the interface.
+/** A counting semaphore, so the plugin corpus cannot open more sockets than the host allows. */
+class Semaphore {
+  private free: number;
+  private readonly queue: (() => void)[] = [];
+
+  constructor(permits: number) {
+    this.free = permits;
+  }
+
+  async acquire(): Promise<() => void> {
+    if (this.free > 0) {
+      this.free -= 1;
+    } else {
+      await new Promise<void>((resolve) => this.queue.push(resolve));
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = this.queue.shift();
+      if (next) next();
+      else this.free += 1;
+    };
+  }
+}
+
+// The limits the host relay used to enforce on its own. Native fetch bypassed all of them, so a
+// plugin could open a hundred sockets at once, hang forever on a stalled server, or pull a
+// gigabyte into memory — the same corpus, the same defaults, whichever transport carries it.
+const MAX_BODY_BYTES = 32 * 1024 * 1024;
+const REQUEST_TIMEOUT_MS = 20_000;
+const PER_HOST = 6;
+const GLOBAL_LIMIT = 16;
+
+const globalSlots = new Semaphore(GLOBAL_LIMIT);
+const hostSlots = new Map<string, Semaphore>();
+const identical = new Map<string, Promise<Response>>();
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+function slotsFor(host: string): Semaphore {
+  let slots = hostSlots.get(host);
+  if (!slots) {
+    slots = new Semaphore(PER_HOST);
+    hostSlots.set(host, slots);
+  }
+  return slots;
+}
+
+/** What a plugin may do on the network, whoever carries the bytes. */
+function guardedFetch(base: typeof fetch): typeof fetch {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+    const host = hostOf(url);
+    // Two pages asking for the same gallery at once is one request, not two: the corpus does this
+    // whenever a listing primes several archives.
+    const key = method === "GET" ? `${method} ${url}` : "";
+    if (key) {
+      const inflight = identical.get(key);
+      if (inflight) return await inflight.then((response) => response.clone());
+    }
+    const releaseHost = await slotsFor(host).acquire();
+    const releaseGlobal = await globalSlots.acquire();
+    const run = async (): Promise<Response> => {
+      const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+      const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+      const response = await base(input as string | URL, { ...init, signal });
+      const declared = Number(response.headers.get("content-length") ?? "NaN");
+      if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+        throw new Error(`response is ${declared} bytes; the plugin limit is ${MAX_BODY_BYTES}`);
+      }
+      return response;
+    };
+    const promise = (async () => {
+      try {
+        return await run();
+      } finally {
+        releaseGlobal();
+        releaseHost();
+        if (key) identical.delete(key);
+      }
+    })();
+    if (key) identical.set(key, promise);
+    return await promise;
+  }) as typeof fetch;
+}
+
+// The egress shim (`crates/lanrurugi-egress`, loaded with LD_PRELOAD by the host) binds every
+// outbound socket to the configured interface, so Deno's own fetch can stay: full Fetch API,
+// streams, binary bodies, redirects. Its constructor exports LANRURUGI_EGRESS_ACTIVE as proof it
+// actually loaded — a missing `.so` must never leave traffic unconstrained.
+//
+// Without that proof (non-Linux host, or the library was not shipped) the relay is the only path
+// that honours the interface, so install it and surrender the raw-socket grant the CLI handed us —
+// otherwise `Deno.connect`/`WebSocket` would bypass both the relay and the interface.
+if (Deno.env.get("LANRURUGI_EGRESS_ACTIVE") === "1") {
+  console.error(
+    `plugin network: native fetch, egress interface ${Deno.env.get("LANRURUGI_EGRESS_IF") ?? "(none)"}`,
+  );
+  globalThis.fetch = guardedFetch(globalThis.fetch);
+} else {
+  console.error("plugin network: host relay (egress shim not loaded)");
+  globalThis.fetch = guardedFetch(relayFetch as unknown as typeof fetch);
+  try {
+    await Deno.permissions.revoke({ name: "net" });
+  } catch {
+    // Nothing was granted; the relay still enforces the declared hosts.
+  }
+}
 
 const modulePromise = import(`file://${pluginsDir}/${namespace}.ts`);
 

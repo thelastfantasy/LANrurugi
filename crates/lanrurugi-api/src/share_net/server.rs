@@ -6,13 +6,12 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use axum::extract::{Path, Query, State};
-use bao_tree::io::outboard::PreOrderOutboard;
-use bao_tree::{BaoTree, ChunkNum, ChunkRanges};
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use iroh::protocol::{AcceptError, ProtocolHandler};
 use iroh::EndpointId;
 use lanrurugi_core::ids::{ArchiveId, ClaimId, ShareId};
+use lanrurugi_share::blobs::encode_range;
+use lanrurugi_share::host::ShareHost;
 use lanrurugi_share_proto::messages::{
     ChunkSpan, HelpReason, HelpState, HelperAddr, HelperStatus, ManifestItem, RefusalReason,
     Request, Response, ShareEngine, ShareManifest,
@@ -27,16 +26,16 @@ use super::{
     blobs, direct_address, read_frame, wait_for_direct_address, write_frame, Session, Shared,
     DIRECT_PATH_WAIT,
 };
+use crate::share_net::RatioState;
 use crate::shares::{browse_manifest, hex, now_secs, repo};
 use crate::AppState;
 
 /// Largest single `Range` answer, so one request never buffers more than this.
-const MAX_RANGE_BYTES: u64 = 8 * 1024 * 1024;
+/// Served import bytes are written back to Redis once this many have accumulated.
+const RATIO_FLUSH_BYTES: u64 = 8 * 1024 * 1024;
 /// One bao chunk: the unit `ChunkNum`/`ChunkRanges` count in (bao-tree's fixed 1 KiB, independent of
 /// `blobs::BLOCK_SIZE`, which only groups chunks for hashing).
-const CHUNK_BYTES: u64 = 1024;
 /// Spans one `Range` may name. An importer asks for one piece at a time; this is only a bound.
-const MAX_RANGE_SPANS: usize = 64;
 /// Caps on what one helper registration may carry.
 const MAX_HELPER_ADDRS: usize = 8;
 const MAX_HELPER_ARCHIVES: usize = 10_000;
@@ -148,6 +147,9 @@ impl ShareProtocol {
         };
         if write_frame(&mut send, &header).await.is_ok() {
             if let Some(body) = body {
+                // Held while the bytes are on the wire, not just while they are encoded: a port
+                // rotation that tore the connection down here would cut a live transfer.
+                let _transfer = super::TransferGuard::begin();
                 let _ = send.write_all(&body).await;
             }
         }
@@ -164,6 +166,8 @@ impl ShareProtocol {
             Request::RendezvousPut { .. } | Request::RendezvousGet { .. } => request.clone(),
             _ => Request::Renew {
                 claim_id: String::new(),
+                verified_bytes: 0,
+                finished: false,
             },
         };
         match request {
@@ -179,7 +183,14 @@ impl ShareProtocol {
                 claim_id,
                 archive_id,
             } => self.prepare(remote, &session, &claim_id, archive_id).await,
-            Request::Renew { claim_id } => self.renew(conn, remote, &claim_id).await,
+            Request::Renew {
+                claim_id,
+                verified_bytes,
+                finished,
+            } => {
+                self.renew(conn, remote, &claim_id, verified_bytes, finished)
+                    .await
+            }
             Request::Range {
                 ticket,
                 blake3,
@@ -199,6 +210,7 @@ impl ShareProtocol {
                     .await
             }
             Request::HelperHeartbeat { share_id } => self.helper_heartbeat(remote, share_id).await,
+            Request::HelperLeave { share_id } => self.helper_leave(remote, share_id).await,
         }
     }
 
@@ -360,33 +372,16 @@ impl ShareProtocol {
         if !manifest.archives().any(|a| a.archive_id == archive_id) {
             return Err(RefusalReason::NotFound);
         }
-        let params: crate::archives::GetThumbnailParams =
-            serde_json::from_value(serde_json::json!({})).map_err(|_| RefusalReason::Internal)?;
-        let response = crate::archives::get_archive_thumbnail(
-            State(self.state.clone()),
-            None,
-            Path(ArchiveId(archive_id)),
-            Query(params),
-            axum::http::HeaderMap::new(),
-        )
-        .await;
-        if !response.status().is_success() {
+        let id = ArchiveId(archive_id);
+        let Some((content_type, bytes)) = self.state.thumbnail(&id, 0).await else {
             return Err(RefusalReason::NotFound);
-        }
-        let content_type = response
-            .headers()
-            .get(axum::http::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string);
-        let body = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024)
-            .await
-            .map_err(|_| RefusalReason::Internal)?;
+        };
         Ok((
             Response::Bytes {
-                content_type,
-                len: body.len() as u64,
+                content_type: Some(content_type),
+                len: bytes.len() as u64,
             },
-            Some(body.to_vec()),
+            Some(bytes),
         ))
     }
 
@@ -394,51 +389,14 @@ impl ShareProtocol {
     /// category names for "keep the sharer's categories". Unready archives are queued for the
     /// background job and listed without a fingerprint (research §13).
     async fn claim_manifest(&self, share: &Share) -> (ShareManifest, Vec<[u8; 32]>) {
-        let mut manifest = browse_manifest(&self.state, share).await;
-        let mut roots = Vec::new();
-        let mut pending = Vec::new();
-        for item in &mut manifest.items {
-            let entries: Vec<&mut lanrurugi_share_proto::messages::ArchiveEntry> = match item {
-                ManifestItem::Archive(a) => vec![a],
-                ManifestItem::Tankoubon { members, .. } => members.iter_mut().collect(),
-                ManifestItem::Unavailable { .. } => vec![],
-            };
-            for entry in entries {
-                let id = ArchiveId(entry.archive_id.clone());
-                entry.categories = self
-                    .state
-                    .repos
-                    .categories
-                    .for_archive(&id)
-                    .await
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|c| !c.is_dynamic())
-                    .map(|c| c.name)
-                    .collect();
-                match blobs::ready(&self.state, &id).await {
-                    Some(info) => {
-                        entry.blake3 = Some(info.blake3);
-                        entry.size = info.size;
-                        roots.push(info.blake3);
-                        self.shared
-                            .blobs
-                            .lock()
-                            .expect("blobs lock")
-                            .insert(info.blake3, id);
-                    }
-                    None => pending.push(id),
-                }
-            }
-        }
+        let (manifest, roots, pending) =
+            lanrurugi_share::manifest::claim_manifest(&self.state, &self.shared, share).await;
         if !pending.is_empty() {
             let state = self.state.clone();
             tokio::spawn(async move {
-                blobs::prepare(&state, &pending).await;
+                lanrurugi_share::blobs::prepare(&state, &pending).await;
             });
         }
-        roots.sort();
-        roots.dedup();
         (manifest, roots)
     }
 
@@ -469,6 +427,14 @@ impl ShareProtocol {
         if !share.permissions.import {
             return Err(RefusalReason::PermissionDenied);
         }
+        // A share that has reached its stop target takes no new importer: refusing the claim says
+        // so at once, instead of handing out a ticket and refusing every piece after it.
+        let ratio = self.ratio_state(&share.id).await?;
+        if ratio.limit().is_some_and(|limit| ratio.imported >= limit)
+            && matches!(ratio.action, lanrurugi_storage::shares::RatioAction::Stop)
+        {
+            return Err(RefusalReason::Exhausted);
+        }
         self.uploads_open(remote).await?;
         let address = self.admit(conn, &share).await?;
         // Counting needs an address; a relayed peer of an unrestricted share is recorded by the
@@ -490,6 +456,7 @@ impl ShareProtocol {
             ClaimOutcome::Refused(reason) => return Err(refusal(reason)),
         };
         let (manifest, roots) = self.claim_manifest(&share).await;
+        self.measure(&share, &manifest).await;
         let ticket = self.sign_ticket(&share, &claim_id, remote, roots);
         Ok((
             Response::Claimed {
@@ -547,6 +514,8 @@ impl ShareProtocol {
         conn: &Connection,
         remote: EndpointId,
         claim_id: &str,
+        verified_bytes: u64,
+        finished: bool,
     ) -> Result<(Response, Option<Vec<u8>>), RefusalReason> {
         let claim_id = ClaimId::from(claim_id);
         let share_id = self
@@ -562,7 +531,65 @@ impl ShareProtocol {
         if !share.permissions.import {
             return Err(RefusalReason::PermissionDenied);
         }
-        self.admit(conn, &share).await?;
+        // 022 US2/FR-013: the address gate ran when the claim was opened. Re-checking it here would
+        // kill a healthy import the moment the importer's address changes (a phone moving from
+        // Wi-Fi to cellular, a VPN rekey) and force a restart from the first missing piece.
+        match share.status(now_secs()) {
+            ShareStatus::Revoked | ShareStatus::Expired => return Err(RefusalReason::NotFound),
+            _ => {}
+        }
+        // Only bytes the importer has decoded and hash-verified count toward the ratio; a dropped
+        // response or a re-fetched piece must not inflate it, or a 1.0 target could stall.
+        if verified_bytes > 0 {
+            if let Ok(delta) = repo(&self.state)
+                .add_claim_verified(&claim_id, verified_bytes)
+                .await
+            {
+                if delta > 0 {
+                    self.record_import(&share_id, delta).await;
+                }
+            }
+        }
+        if finished {
+            self.flush_import(&share_id).await;
+            // One entry per finished import, never per piece: the detail panel gets the addresses
+            // and the interface, the list gets a single row.
+            let link = super::link::of(conn);
+            tracing::info!(
+                share = %share_id,
+                bytes = verified_bytes,
+                route = link.route,
+                local = %link.local,
+                remote = %link.remote,
+                interface = ?link.interface,
+                vpn = link.tunnel,
+                "shared bytes sent"
+            );
+            let ratio = self.ratio_state(&share_id).await.unwrap_or_default();
+            // The sharer never had the run's start instant (a claim is renewed, not opened), so the
+            // entry reports the share's ratio at the moment of the closing report instead.
+            let detail = serde_json::json!({
+                "share_ratio": {
+                    "imported": ratio.imported,
+                    "total": ratio.total,
+                    "ratio": if ratio.total > 0 {
+                        ratio.imported as f64 / ratio.total as f64
+                    } else {
+                        0.0
+                    },
+                },
+            });
+            super::note_transfer(
+                &self.state,
+                true,
+                share_id.as_str(),
+                share.title.as_deref().unwrap_or(""),
+                verified_bytes,
+                &link,
+                detail,
+            )
+            .await;
+        }
         let (_, roots) = self.claim_manifest(&share).await;
         Ok((
             Response::Renewed {
@@ -585,6 +612,130 @@ impl ShareProtocol {
             return None;
         }
         Some(ShareId(fields.get("share_id")?.clone()))
+    }
+
+    /// Records how much the share offers, the denominator of its ratio. Nothing a share contains
+    /// changes after creation, so this is measured once and then kept.
+    async fn measure(&self, share: &lanrurugi_storage::shares::Share, manifest: &ShareManifest) {
+        if share.total_bytes > 0 {
+            return;
+        }
+        let total: u64 = manifest
+            .items
+            .iter()
+            .flat_map(|item| match item {
+                ManifestItem::Archive(a) => vec![a],
+                ManifestItem::Tankoubon { members, .. } => members.iter().collect(),
+                ManifestItem::Unavailable { .. } => Vec::new(),
+            })
+            .filter(|entry| entry.blake3.is_some())
+            .map(|entry| entry.size)
+            .sum();
+        if total == 0 {
+            return;
+        }
+        if let Err(e) = repo(&self.state).set_total_bytes(&share.id, total).await {
+            tracing::warn!(error = %e, "could not record the share size for its ratio");
+        }
+        self.shared
+            .ratios
+            .lock()
+            .expect("ratios lock")
+            .entry(share.id.clone())
+            .and_modify(|state| state.total = total)
+            .or_insert(RatioState {
+                imported: share.import_bytes,
+                total,
+                target: share.target_ratio,
+                action: share.ratio_action,
+                rate: share.ratio_rate,
+                flushed: share.import_bytes,
+            });
+    }
+
+    /// The ratio state of a share, loaded from Redis the first time this process serves it.
+    async fn ratio_state(
+        &self,
+        share_id: &lanrurugi_core::ids::ShareId,
+    ) -> Result<RatioState, RefusalReason> {
+        if let Some(state) = self
+            .shared
+            .ratios
+            .lock()
+            .expect("ratios lock")
+            .get(share_id)
+            .cloned()
+        {
+            return Ok(state);
+        }
+        let share = repo(&self.state)
+            .get(share_id)
+            .await
+            .ok()
+            .flatten()
+            .ok_or(RefusalReason::NotFound)?;
+        let state = RatioState {
+            imported: share.import_bytes,
+            total: share.total_bytes,
+            target: share.target_ratio,
+            action: share.ratio_action,
+            rate: share.ratio_rate,
+            flushed: share.import_bytes,
+        };
+        self.shared
+            .ratios
+            .lock()
+            .expect("ratios lock")
+            .insert(share_id.clone(), state.clone());
+        Ok(state)
+    }
+
+    /// Counts served import bytes, writing back every few megabytes rather than per piece.
+    async fn record_import(&self, share_id: &lanrurugi_core::ids::ShareId, bytes: u64) {
+        let pending = {
+            let mut ratios = self.shared.ratios.lock().expect("ratios lock");
+            match ratios.get_mut(share_id) {
+                Some(state) => {
+                    state.imported += bytes;
+                    let pending = state.imported - state.flushed;
+                    if pending >= RATIO_FLUSH_BYTES {
+                        state.flushed = state.imported;
+                        Some(pending)
+                    } else {
+                        None
+                    }
+                }
+                None => Some(bytes),
+            }
+        };
+        if let Some(delta) = pending {
+            if let Err(e) = repo(&self.state).add_import_bytes(share_id, delta).await {
+                tracing::warn!(error = %e, "could not record served import bytes");
+            }
+        }
+    }
+
+    /// Writes whatever the ratio has not yet flushed. Called when an import says it is done,
+    /// because the tail under `RATIO_FLUSH_BYTES` would otherwise never reach Redis: a 1.0 target
+    /// would sit just short of complete forever.
+    async fn flush_import(&self, share_id: &lanrurugi_core::ids::ShareId) {
+        let pending = {
+            let mut ratios = self.shared.ratios.lock().expect("ratios lock");
+            ratios.get_mut(share_id).and_then(|state| {
+                let pending = state.imported.saturating_sub(state.flushed);
+                if pending > 0 {
+                    state.flushed = state.imported;
+                    Some(pending)
+                } else {
+                    None
+                }
+            })
+        };
+        if let Some(delta) = pending {
+            if let Err(e) = repo(&self.state).add_import_bytes(share_id, delta).await {
+                tracing::warn!(error = %e, "could not flush the final served import bytes");
+            }
+        }
     }
 
     fn verify_ticket(
@@ -629,11 +780,33 @@ impl ShareProtocol {
         )
         .await
         .map_err(held)?;
+        // The share's ratio caps what importers get: either nothing more, or the reduced rate.
+        let share_id = lanrurugi_core::ids::ShareId::from(ticket.ticket.share_id.clone());
+        let ratio = self.ratio_state(&share_id).await?;
+        let caps = match ratio.limit() {
+            Some(limit) if ratio.imported >= limit => match ratio.action {
+                lanrurugi_storage::shares::RatioAction::Stop => {
+                    return Err(RefusalReason::Exhausted)
+                }
+                lanrurugi_storage::shares::RatioAction::Throttle => {
+                    let rate = ratio.rate.unwrap_or(0);
+                    super::limits::Caps {
+                        rate: Some(caps.rate.map_or(rate, |own| own.min(rate))),
+                        ..caps
+                    }
+                }
+            },
+            _ => caps,
+        };
         let info = blobs::ready(&self.state, &archive_id)
             .await
             .filter(|i| i.blake3 == blake3)
             .ok_or(RefusalReason::NotFound)?;
-        let body = encode_range(info, spans).await?;
+        // Held for the duration of the send: port rotation waits for this to clear rather than
+        // tearing down a live transfer.
+        let body = encode_range(info, spans)
+            .await
+            .ok_or(RefusalReason::Internal)?;
         super::limits::throttle(super::limits::Group::Own, caps, body.len() as u64).await;
         Ok(bytes(body))
     }
@@ -668,7 +841,9 @@ impl ShareProtocol {
             .await
             .filter(|i| i.blake3 == blake3)
             .ok_or(RefusalReason::NotFound)?;
-        let body = encode_range(info, spans).await?;
+        let body = encode_range(info, spans)
+            .await
+            .ok_or(RefusalReason::Internal)?;
         super::limits::throttle(super::limits::Group::Helping, caps, body.len() as u64).await;
         super::helper::count_served(&record.id, body.len() as u64);
         Ok(bytes(body))
@@ -826,6 +1001,26 @@ impl ShareProtocol {
         ))
     }
 
+    /// A helper that switched helping off: it leaves the share's helper set now, so importers stop
+    /// being handed an address that no longer serves.
+    async fn helper_leave(
+        &self,
+        remote: EndpointId,
+        share_id: String,
+    ) -> Result<(Response, Option<Vec<u8>>), RefusalReason> {
+        let share = repo(&self.state)
+            .get(&ShareId(share_id))
+            .await
+            .ok()
+            .flatten()
+            .ok_or(RefusalReason::NotFound)?;
+        repo(&self.state)
+            .forget_helper(&share.id, &super::endpoint_hex(&remote))
+            .await
+            .map_err(|_| RefusalReason::Internal)?;
+        Ok((Response::Ok, None))
+    }
+
     /// Refuses with `paused` while own-share uploads are paused or full.
     async fn uploads_open(&self, remote: EndpointId) -> Result<(), RefusalReason> {
         super::limits::admit(
@@ -869,123 +1064,4 @@ fn bytes(body: Vec<u8>) -> (Response, Option<Vec<u8>>) {
         },
         Some(body),
     )
-}
-
-/// The chunk ranges a request asks for: each span clamped to the blob, the total capped, and the
-/// span count bounded. `None` means the request is over budget.
-///
-/// `ChunkNum` counts bao-tree's fixed 1 KiB chunks — `blobs::BLOCK_SIZE` only groups them for
-/// hashing — so the clamp and the byte estimate both use that unit, not the block size.
-///
-/// The arithmetic is saturating on purpose — a span pair is just two `u64`s from the peer, and a
-/// range that wrapped past the cap is what made a whole archive get encoded into memory.
-fn requested_ranges(spans: &[ChunkSpan], size: u64) -> Option<ChunkRanges> {
-    if spans.len() > MAX_RANGE_SPANS {
-        return None;
-    }
-    let chunk_bytes = CHUNK_BYTES;
-    let total_chunks = size.div_ceil(chunk_bytes);
-    let mut ranges = ChunkRanges::empty();
-    let mut requested = 0u64;
-    for span in spans {
-        let start = span.start.min(total_chunks);
-        let end = span.end.min(total_chunks);
-        if end <= start {
-            continue;
-        }
-        requested = requested.saturating_add((end - start).saturating_mul(chunk_bytes));
-        ranges |= ChunkRanges::from(ChunkNum(start)..ChunkNum(end));
-    }
-    (requested <= MAX_RANGE_BYTES).then_some(ranges)
-}
-
-/// The verified bao encoding of `spans` of a prepared blob.
-async fn encode_range(
-    info: blobs::BlobInfo,
-    spans: &[ChunkSpan],
-) -> Result<Vec<u8>, RefusalReason> {
-    let ranges = requested_ranges(spans, info.size).ok_or(RefusalReason::Internal)?;
-    tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
-        let data = std::fs::File::open(&info.data_path)?;
-        let outboard = PreOrderOutboard {
-            root: blake3::Hash::from_bytes(info.blake3),
-            tree: BaoTree::new(info.size, blobs::BLOCK_SIZE),
-            data: std::fs::File::open(&info.outboard_path)?,
-        };
-        let mut out = Vec::new();
-        bao_tree::io::sync::encode_ranges_validated(&data, &outboard, &ranges, &mut out)?;
-        Ok(out)
-    })
-    .await
-    .map_err(|_| RefusalReason::Internal)?
-    .map_err(|_| RefusalReason::NotFound)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_span_that_would_wrap_the_cap_is_refused() {
-        // `(end - start) * chunk_bytes` for this pair is 2^64, i.e. 0 in a wrapping u64.
-        let spans = [ChunkSpan {
-            start: 0,
-            end: 1 << 54,
-        }];
-        assert!(requested_ranges(&spans, 1 << 30).is_none());
-    }
-
-    #[test]
-    fn spans_are_clamped_to_the_blob_before_being_counted() {
-        // Spans are in 1 KiB chunks: a 1 MiB blob is 1024 of them.
-        let size = 1024 * 1024;
-        let ranges = requested_ranges(
-            &[ChunkSpan {
-                start: 0,
-                end: u64::MAX,
-            }],
-            size,
-        )
-        .expect("a whole small blob fits the cap");
-        assert_eq!(ranges, ChunkRanges::from(ChunkNum(0)..ChunkNum(1024)));
-    }
-
-    #[test]
-    fn too_many_spans_are_refused() {
-        let spans: Vec<ChunkSpan> = (0..=MAX_RANGE_SPANS as u64)
-            .map(|i| ChunkSpan {
-                start: i,
-                end: i + 1,
-            })
-            .collect();
-        assert!(requested_ranges(&spans, 1 << 30).is_none());
-    }
-
-    #[test]
-    fn a_normal_piece_is_accepted() {
-        let ranges = requested_ranges(&[ChunkSpan { start: 0, end: 64 }], 8 * 1024 * 1024).unwrap();
-        assert_eq!(ranges, ChunkRanges::from(ChunkNum(0)..ChunkNum(64)));
-    }
-
-    #[test]
-    fn a_cap_sized_request_is_accepted_and_one_chunk_more_is_not() {
-        let size = 16 * 1024 * 1024;
-        let cap_chunks = MAX_RANGE_BYTES / CHUNK_BYTES;
-        assert!(requested_ranges(
-            &[ChunkSpan {
-                start: 0,
-                end: cap_chunks
-            }],
-            size
-        )
-        .is_some());
-        assert!(requested_ranges(
-            &[ChunkSpan {
-                start: 0,
-                end: cap_chunks + 1
-            }],
-            size
-        )
-        .is_none());
-    }
 }

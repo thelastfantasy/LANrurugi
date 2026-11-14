@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 
+import en from "@/i18n/locales/en.json"
 import {
   appendToken,
   buildDateRangeToken,
@@ -207,8 +208,25 @@ describe("withoutFilterToken / toggleFilterToken", () => {
 
   it("offers the operators the search engine actually accepts", () => {
     // A chip for a value the engine does not recognize would silently match nothing.
-    for (const token of ["is:reading", "is:unread", "rating:>=4", "size:>=500M", "pages:>200"]) {
+    for (const token of [
+      "is:reading",
+      "is:unread",
+      "rating:>=4",
+      "size:>=500M",
+      "pages:>200",
+      // The exact-finish filter: percent form, since `is:completed` stops at 85%.
+      "read:>=100%",
+    ]) {
       expect(QUICK_FILTER_TOKENS).toContain(token)
+    }
+  })
+
+  it("explains every chip with a hint that actually exists", () => {
+    // The tooltip is the only place the chips' otherwise-indistinguishable boundaries are spelled
+    // out (`is:read` vs `is:completed`), so a new chip without one is a regression, not a style nit.
+    for (const chip of QUICK_FILTERS) {
+      expect(chip.hint, chip.token).toBeTruthy()
+      expect(en[chip.hint as keyof typeof en], chip.token).toBeTruthy()
     }
   })
 })
@@ -317,10 +335,12 @@ describe("QUICK_FILTER_TOKENS", () => {
     // — a typo like `is:nonsense`, or a namespace the engine has never heard of — still fails here,
     // which is the point of the guard.
     const families = [
-      /^(is|has|in):[a-z-]+$/,
+      // The one negated chip (`-has:source`) needs the optional leading minus; without it this
+      // guard rejected a token the engine does accept.
+      /^-?(is|has|in):[a-z-]+$/,
       /^rating:(>=|<=|>|<|=)\d(\.\d)?$/,
       /^size:(>=|<=|>|<)\d+[KMG]?$/,
-      /^(pages|read):(>=|<=|>|<)\d+$/,
+      /^(pages|read):(>=|<=|>|<)\d+%?$/,
       /^bookmark:"[^"]*"$/,
     ]
     for (const token of QUICK_FILTER_TOKENS) {

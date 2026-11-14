@@ -28,6 +28,7 @@ use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
 
+use lanrurugi_recommend::reading::{rank, RankedCandidate, ReadingState};
 use lanrurugi_recommend::recommend::{ArchiveMeta, Recommendation};
 
 use crate::common::{error, not_found};
@@ -187,10 +188,7 @@ impl RecommendService {
                 .collect::<Vec<_>>()
         };
 
-        // Rank on the blocking thread too (pure dot products, but keeps the handler thread free).
-        // Prefilter generously (the LLM rerank needs room to pick the true next volume even if
-        // embedding ranked it a few places down); the final `limit` is applied after reranking.
-        let prefilter_limit = limit.max(crate::recommend_llm::PREFILTER_COUNT);
+        // Pure dot products, ranked on the blocking thread so the handler thread stays free.
         // Beyond the anchor itself, exclude every other member of the same Tankoubon (if the
         // caller resolved a Tankoubon down to its last volume as the anchor) — the reader has
         // already read all of them, so recommending a sibling volume back would just point at
@@ -206,75 +204,88 @@ impl RecommendService {
                 &current_title,
             ))
             .await?;
-        // Two-tier: the embedding order above IS the pre-filter. If an LLM API key is
-        // configured, hand the top shortlist to the LLM for the "next volume first" rerank (the
-        // one thing embedding can't do); any LLM failure falls back to this embedding order.
-        let ranked: Vec<Recommendation> = tokio::task::spawn_blocking(move || {
-            let mut scored: Vec<Recommendation> = Vec::with_capacity(vectors_snapshot.len());
+        // Two-tier: the embedding order below is the pre-filter. Reading state is layered on
+        // afterwards (`lanrurugi_recommend::reading`) so a finished work never reaches the prompt
+        // and a same-series unread volume gets its boost even if embedding ranked it a few places
+        // down. No truncation here — the boost can move an item into the top-N.
+        let scored: Vec<(String, String, f32)> = tokio::task::spawn_blocking(move || {
+            let mut scored: Vec<(String, String, f32)> = Vec::with_capacity(vectors_snapshot.len());
             for (meta, vec) in &vectors_snapshot {
                 if exclude_set.contains(&meta.id) {
                     continue;
                 }
-                scored.push(Recommendation {
-                    id: meta.id.clone(),
-                    title: meta.title.clone(),
-                    score: lanrurugi_recommend::embedding::cosine_similarity(&current_vec, vec),
-                });
+                scored.push((
+                    meta.id.clone(),
+                    meta.title.clone(),
+                    lanrurugi_recommend::embedding::cosine_similarity(&current_vec, vec),
+                ));
             }
-            scored.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            scored.truncate(prefilter_limit);
             scored
         })
         .await
         .map_err(|e| RecommendServiceError::Embedding(embed_err_from_join(e)))?;
 
-        // LLM rerank of the shortlist (next-volume-first — the one thing embedding can't do).
-        // Any failure (no key, network, non-JSON) falls back to the embedding order above.
         let current_tags = current.tags.clone();
         let current_pagecount = current.pagecount;
-        // The prefiltered shortlist only carries title from the embedding layer; re-attach the
-        // tags and pagecount from the repository for the LLM prompt. `ranked` is only
-        // `prefilter_limit`-sized (a few dozen), but `all` is the whole library — indexing it
-        // into a *borrowing* map first turns each lookup below from an O(library size) linear
-        // `.find()` scan into O(1) (same as the cache-hit path, `recommendations_from_cache`,
-        // already does) without cloning every archive's tags up front — only the handful that
-        // `ranked` actually hits get their `tags` copied into the final `ArchiveMeta`.
-        let all_by_id: std::collections::HashMap<String, (&str, u32)> = all
+        let anchor = ArchiveMeta {
+            id: archive_id.to_string(),
+            title: current_title.clone(),
+            tags: current_tags,
+            pagecount: current_pagecount,
+        };
+        let all_by_id: std::collections::HashMap<String, (&str, u32, u32, u64)> = all
             .iter()
-            .map(|a| (a.id.to_string(), (a.tags.as_str(), a.pagecount)))
-            .collect();
-        let prefiltered: Vec<ArchiveMeta> = ranked
-            .iter()
-            .map(|r| {
-                let (tags, pagecount) = all_by_id
-                    .get(&r.id)
-                    .map(|&(tags, pagecount)| (tags.to_string(), pagecount))
-                    .unwrap_or_default();
-                ArchiveMeta {
-                    id: r.id.clone(),
-                    title: r.title.clone(),
-                    tags,
-                    pagecount,
-                }
+            .map(|a| {
+                (
+                    a.id.to_string(),
+                    (a.tags.as_str(), a.pagecount, a.lastreadpage, a.lastreadtime),
+                )
             })
             .collect();
-        let result: Vec<Recommendation> = match crate::recommend_llm::llm_rerank(
-            state,
-            archive_id,
-            &current_title,
-            &current_tags,
-            current_pagecount,
-            &prefiltered,
-            limit,
-        )
-        .await
-        {
-            Some(llm_ranked) => llm_ranked,
-            None => ranked.into_iter().take(limit).collect(),
+        let candidates: Vec<RankedCandidate> = scored
+            .into_iter()
+            .filter_map(|(id, title, similarity)| {
+                let &(tags, pagecount, last_read_page, last_read_time) = all_by_id.get(&id)?;
+                Some(RankedCandidate {
+                    meta: ArchiveMeta {
+                        id,
+                        title,
+                        tags: tags.to_string(),
+                        pagecount,
+                    },
+                    state: ReadingState::new(last_read_page, pagecount, last_read_time),
+                    similarity,
+                })
+            })
+            .collect();
+
+        let prefilter_limit = limit.max(crate::recommend_llm::PREFILTER_COUNT);
+        let outcome = rank(&anchor, &candidates, prefilter_limit);
+        let result: Vec<Recommendation> = if outcome.fallback_used {
+            tracing::debug!(
+                archive_id,
+                "every recommendation candidate is finished — returning the similarity top-3"
+            );
+            outcome.items
+        } else {
+            let ordered: Vec<RankedCandidate> = outcome
+                .order
+                .iter()
+                .map(|&i| candidates[i].clone())
+                .collect();
+            match crate::recommend_llm::llm_rerank(
+                state,
+                archive_id,
+                &anchor,
+                reading_state(&current),
+                &ordered,
+                limit,
+            )
+            .await
+            {
+                Some(llm_ranked) => llm_ranked,
+                None => outcome.items.into_iter().take(limit).collect(),
+            }
         };
 
         // Fire-and-forget: this request paid the O(n) embed-everything cost because the cache
@@ -337,7 +348,7 @@ impl RecommendService {
         // deliberately leaves behind rather than scrubbing every other archive's Top-N on every
         // delete — see that method's own docs) or excluded (Tankoubon sibling).
         let prefilter_limit = limit.max(crate::recommend_llm::PREFILTER_COUNT);
-        let mut scored: Vec<Recommendation> = Vec::with_capacity(cached_ids.len());
+        let mut candidates: Vec<RankedCandidate> = Vec::with_capacity(prefilter_limit);
         for id in cached_ids.iter().take(prefilter_limit * 2) {
             if exclude_set.contains(id) {
                 continue;
@@ -355,69 +366,61 @@ impl RecommendService {
             else {
                 continue;
             };
-            scored.push(Recommendation {
-                id: id.clone(),
-                title: meta.title,
-                score: lanrurugi_recommend::embedding::cosine_similarity(&current_vec, &vec),
+            let state = reading_state(&meta);
+            candidates.push(RankedCandidate {
+                meta: ArchiveMeta {
+                    id: id.clone(),
+                    title: meta.title,
+                    tags: meta.tags,
+                    pagecount: meta.pagecount,
+                },
+                state,
+                similarity: lanrurugi_recommend::embedding::cosine_similarity(&current_vec, &vec),
             });
-            if scored.len() >= prefilter_limit {
+            if candidates.len() >= prefilter_limit {
                 break;
             }
         }
-        if scored.is_empty() {
+        if candidates.is_empty() {
             return None;
         }
-        scored.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
+        let anchor = ArchiveMeta {
+            id: archive_id.to_string(),
+            title: current.title.clone(),
+            tags: current.tags.clone(),
+            pagecount: current.pagecount,
+        };
+        let outcome = rank(&anchor, &candidates, prefilter_limit);
+        if outcome.fallback_used {
+            tracing::debug!(
+                archive_id,
+                "every cached candidate is finished — returning the similarity top-3"
+            );
+            return Some(outcome.items);
+        }
+        let ordered: Vec<RankedCandidate> = outcome
+            .order
+            .iter()
+            .map(|&i| candidates[i].clone())
+            .collect();
         match crate::recommend_llm::llm_rerank(
             state,
             archive_id,
-            &current.title,
-            &current.tags,
-            current.pagecount,
-            &self.rehydrate_tags_and_pagecount(state, &scored).await,
+            &anchor,
+            reading_state(current),
+            &ordered,
             limit,
         )
         .await
         {
             Some(llm_ranked) => Some(llm_ranked),
-            None => Some(scored.into_iter().take(limit).collect()),
+            None => Some(outcome.items.into_iter().take(limit).collect()),
         }
     }
+}
 
-    /// Re-attaches `tags`/`pagecount` (not stored in the vector cache — see
-    /// `recommend_cache`'s own docs, only `title` rides alongside the vector) to a scored
-    /// shortlist for the LLM rerank prompt, which wants both fields (`recommend_llm.rs`'s prompt
-    /// format).
-    async fn rehydrate_tags_and_pagecount(
-        &self,
-        state: &AppState,
-        scored: &[Recommendation],
-    ) -> Vec<ArchiveMeta> {
-        let mut out = Vec::with_capacity(scored.len());
-        for r in scored {
-            let (tags, pagecount) = state
-                .repos
-                .archives
-                .get(&lanrurugi_core::ids::ArchiveId(r.id.clone()))
-                .await
-                .ok()
-                .flatten()
-                .map(|a| (a.tags, a.pagecount))
-                .unwrap_or_default();
-            out.push(ArchiveMeta {
-                id: r.id.clone(),
-                title: r.title.clone(),
-                tags,
-                pagecount,
-            });
-        }
-        out
-    }
+fn reading_state(a: &lanrurugi_core::entities::Archive) -> ReadingState {
+    ReadingState::new(a.lastreadpage, a.pagecount, a.lastreadtime)
 }
 
 fn embed_err_from_repo(e: impl std::fmt::Display) -> crate::embed_worker_client::EmbedWorkerError {
@@ -453,7 +456,7 @@ async fn get_recommendations(
     // Also exclude every other member of the same Tankoubon from the candidate pool — the
     // reader has already read all of them, so recommending a sibling volume back would just
     // point at something already finished instead of something new.
-    let (anchor_id, exclude_ids) = if id.starts_with("TANK_") {
+    let (anchor_id, mut exclude_ids) = if id.starts_with("TANK_") {
         match state
             .repos
             .groupings
@@ -485,6 +488,9 @@ async fn get_recommendations(
     } else {
         (id.clone(), Vec::new())
     };
+    // An archive whose ingest has not finished must not be suggested (spec 025); its id can
+    // already sit in other archives' cached Top-N while an upload's second plugin pass runs.
+    exclude_ids.extend(crate::visibility::pending_ids(&state).await);
 
     match state
         .recommender

@@ -57,6 +57,8 @@ pub mod action_types {
     /// edit — see `archives.rs::update_archive_metadata`'s own detection logic.
     pub const ARCHIVE_RATING_UPDATE: &str = "archive.rating_update";
     pub const ARCHIVE_PATCH_DELETE: &str = "archive.patch_delete";
+    /// Pages from another copy were merged into an archive's `.patch.zip` (duplicate review).
+    pub const ARCHIVE_PATCH_CREATE: &str = "archive.patch_create";
     pub const ARCHIVE_THUMB_REGEN: &str = "archive.thumb_regen";
     pub const ARCHIVE_UPLOAD: &str = "archive.upload";
     /// 019 recycle bin: an archive was moved into the bin (the user-visible delete).
@@ -91,6 +93,12 @@ pub mod action_types {
     pub const SHARE_ITEMS: &str = "share.items";
     pub const SHARE_REVOKE: &str = "share.revoke";
     pub const SHARE_SETTINGS_UPDATE: &str = "share.settings_update";
+    /// 017 sharing: one import finished, here (receive) or on a peer (send). Written once per
+    /// import, never per connection or piece — `after` carries the byte count, the route, the
+    /// local interface and whether it is a tunnel, so "did it go through the VPN" is a recorded
+    /// fact rather than an inference.
+    pub const SHARE_SEND: &str = "share.send";
+    pub const SHARE_RECEIVE: &str = "share.receive";
     pub const DOWNLOAD_QUEUE_ADD: &str = "download_queue.add";
     pub const DOWNLOAD_QUEUE_START: &str = "download_queue.start";
     /// One archive genuinely entering the library — the single, unified "入库" action every
@@ -142,6 +150,7 @@ pub mod action_types {
     pub const DATABASE_CLEAR_NEW_FLAGS: &str = "database.clear_new_flags";
     pub const DATABASE_CLEAN: &str = "database.clean";
     pub const DATABASE_REBUILD_INDEX: &str = "database.rebuild_index";
+    pub const DATABASE_BLAKE3_BACKFILL: &str = "database.blake3_backfill";
     pub const DATABASE_IMPORT_LEGACY: &str = "database.import_legacy";
     pub const PLUGIN_EXECUTE: &str = "plugin.execute";
     pub const PLUGIN_UPLOAD: &str = "plugin.upload";

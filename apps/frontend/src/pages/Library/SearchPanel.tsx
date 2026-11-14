@@ -3,6 +3,7 @@ import type { ReactNode } from "react"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
+import { Tooltip } from "@/components/common-ui/Display"
 import { DateTimeField } from "@/components/common-ui/Form/DateTimeField"
 import { useMenuPalette } from "@/hooks/useMenuPalette"
 import {
@@ -252,53 +253,71 @@ export function SearchPanel({
             const on = quickFilterActive(filter, chip)
             // A chip that inserts a placeholder says what to do next rather than just naming the
             // token: "add bookmark:"" " is not advice anyone can act on.
-            const hint =
+            const actionHint =
               chip.caret !== undefined
                 ? t("library.searchPanelValueFilter", { token: chip.namespace ?? chip.token })
                 : t(on ? "library.searchPanelRemoveFilter" : "library.searchPanelAddFilter", {
                     token: chip.token,
                   })
+            // Why the chip exists: the token alone does not tell `is:read` from `is:completed`, or
+            // `is:unread` from `is:incomplete`, which is exactly what people ask about.
+            const hint = chip.hint ? t(chip.hint) : undefined
             return (
-              <button
+              // A real tooltip rather than `title`: the native one is slow to appear, cannot be
+              // styled, and reading it means hovering long enough that the chip's own toggle looks
+              // inert in the meantime.
+              <Tooltip
                 key={chip.token}
-                type="button"
-                // The panel stays open on click, so the chip's own state (not a selection) is what
-                // `aria-pressed` describes.
-                aria-pressed={on}
-                title={hint}
-                onClick={() => onToggleToken(chip)}
-                // Layout only: the "on" fill/ink come from `.search-chip-on` (a real class per
-                // theme, so each one fills with its own accent — see those rules' own note), and
-                // the "off" look is the palette's plain outline. Emitting the border inline only
-                // when off keeps the class's `border-color` from being overridden by it.
-                className={on ? "search-chip-on" : undefined}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: "1px 6px",
-                  borderRadius: 4,
-                  cursor: "pointer",
-                  fontFamily: "monospace",
-                  fontSize: 11,
-                  lineHeight: "16px",
-                  ...(on
-                    ? { opacity: 1 }
-                    : {
-                        background: "transparent",
-                        color: palette.text,
-                        border: `1px solid ${palette.border}`,
-                        opacity: 0.75,
-                      }),
-                }}
+                label={
+                  <span style={{ display: "block", textAlign: "left" }}>
+                    <span style={{ fontFamily: "monospace", fontWeight: 600 }}>{chip.token}</span>
+                    {hint && <span style={{ display: "block", marginTop: 2 }}>{hint}</span>}
+                    <span style={{ display: "block", marginTop: 3, opacity: 0.7 }}>{actionHint}</span>
+                  </span>
+                }
               >
-                {chip.label ?? chip.token}
-                <i
-                  className={on ? "fa fa-minus" : "fa fa-plus"}
-                  aria-hidden="true"
-                  style={{ fontSize: 9, opacity: 0.85 }}
-                ></i>
-              </button>
+                <button
+                  type="button"
+                  // The panel stays open on click, so the chip's own state (not a selection) is
+                  // what `aria-pressed` describes.
+                  aria-pressed={on}
+                  // Carries the explanation to screen readers, which get nothing from the visual
+                  // tooltip. Keeps the visible label first so the accessible name still contains it.
+                  aria-label={hint ? `${chip.label ?? chip.token} — ${hint}` : undefined}
+                  onClick={() => onToggleToken(chip)}
+                  // Layout only: the "on" fill/ink come from `.search-chip-on` (a real class per
+                  // theme, so each one fills with its own accent — see those rules' own note), and
+                  // the "off" look is the palette's plain outline. Emitting the border inline only
+                  // when off keeps the class's `border-color` from being overridden by it.
+                  className={on ? "search-chip-on" : undefined}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "1px 6px",
+                    borderRadius: 4,
+                    cursor: "pointer",
+                    fontFamily: "monospace",
+                    fontSize: 11,
+                    lineHeight: "16px",
+                    ...(on
+                      ? { opacity: 1 }
+                      : {
+                          background: "transparent",
+                          color: palette.text,
+                          border: `1px solid ${palette.border}`,
+                          opacity: 0.75,
+                        }),
+                  }}
+                >
+                  {chip.label ?? chip.token}
+                  <i
+                    className={on ? "fa fa-minus" : "fa fa-plus"}
+                    aria-hidden="true"
+                    style={{ fontSize: 9, opacity: 0.85 }}
+                  ></i>
+                </button>
+              </Tooltip>
             )
           })}
         </div>

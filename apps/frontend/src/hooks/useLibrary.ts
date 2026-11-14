@@ -41,7 +41,7 @@ import {
   tagSuggestions,
   toggleQuickFilter,
 } from "@/lib/searchSuggestions";
-import { defaultSortDir, effectiveSortDir } from "@/lib/sortOrder";
+import { effectiveSortDir, nextSortDir } from "@/lib/sortOrder";
 import {
   COLUMN_COUNT_KEY,
   CROP_THUMBS_KEY,
@@ -73,7 +73,10 @@ let defaultPasswordToastShownThisPageLoad = false;
 let storageWarningToastShownThisPageLoad = false;
 
 export function useLibrary() {
-  const { t } = useTranslation();
+  /** Keep in step with the server's `HISTORY_CAP`: stored is 100, shown is this many. */
+const RECENT_SEARCHES_VISIBLE = 7;
+
+const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const info = useServerInfo();
@@ -184,9 +187,18 @@ export function useLibrary() {
     if (filter.trim()) rememberSearchMutation.mutate(filter.trim());
   }
 
-  /** Drops one entry — what the panel's `Delete` key calls on the highlighted history row. */
+  /** Drops one entry — what the panel's `Ctrl+Delete` calls on the highlighted history row. No
+   *  confirmation: the row disappears from the server history and the toast names what went, which
+   *  is the only feedback the interaction needs. */
   function removeRecentFilter(filter: string) {
-    forgetSearchMutation.mutate(filter);
+    forgetSearchMutation.mutate(filter, {
+      onSuccess: () => {
+        toast({
+          heading: t("library.recentSearchDeleted", { filter }) ?? undefined,
+          icon: "success",
+        });
+      },
+    });
   }
 
   function navigateSearch(overrides: {
@@ -199,9 +211,7 @@ export function useLibrary() {
     const nextSortby = overrides.sortby ?? sortby;
     // Switching fields resets to that field's own natural direction: relevance has no reverse,
     // dates are newest-first, title/tag namespaces are A→Z.
-    const nextOrder =
-      overrides.order ??
-      (overrides.sortby !== undefined ? defaultSortDir(overrides.sortby) : order);
+    const nextOrder = nextSortDir(order, overrides.sortby, overrides.order);
     if (overrides.sortby !== undefined) {
       localStorage.setItem(INDEX_SORT_KEY, overrides.sortby);
     }
@@ -220,7 +230,10 @@ export function useLibrary() {
     // Only a genuinely *applied* filter is history-worthy — paging, sorting and category clicks
     // all route through here without carrying an `appliedFilter`.
     if (overrides.appliedFilter !== undefined) rememberSearch(overrides.appliedFilter);
-    navigate({ search: buildSearch(overrides) });
+    // `nextOrder` has to be handed to `buildSearch` explicitly: it re-derives the direction from
+    // `overrides.order ?? order`, so leaving it out made a field switch fall back to the *previous*
+    // field's direction — relevance's forced `asc` turned "Date" into oldest-first.
+    navigate({ search: buildSearch({ ...overrides, order: nextOrder }) });
   }
   const [viewMode, setViewModeState] = useState<"thumbnail" | "compact">(() =>
     localStorage.getItem(INDEX_VIEW_MODE_KEY) === "0" ? "compact" : "thumbnail",
@@ -294,7 +307,6 @@ export function useLibrary() {
         icon: "warning",
         hideAfter: 25000,
         closeOnClick: false,
-        draggable: false,
       });
     }
   }, [usingDefaultPassword, firstRunWizardPending, t]);
@@ -308,7 +320,6 @@ export function useLibrary() {
       icon: "warning",
       hideAfter: 25000,
       closeOnClick: false,
-      draggable: false,
     });
   }, [storageWarnings, t]);
 
@@ -328,6 +339,9 @@ export function useLibrary() {
       if (e.key === "/" && (e.target as HTMLElement)?.tagName !== "INPUT") {
         e.preventDefault();
         searchInputRef.current?.focus();
+        // Focusing alone leaves the suggestion panel shut: the panel normally opens from a click
+        // (openOnInputClick) or a keystroke, and this shortcut is neither.
+        setAutocompleteOpen(true);
       }
       if (e.key === "Escape") {
         setContextMenu(null);
@@ -401,7 +415,9 @@ export function useLibrary() {
   // request per keystroke would be one per keystroke for a list that only changes as the reader
   // pauses anyway.
   const searchHistory = useSearchHistory(debouncedFilter, { enabled: loggedIn });
-  const recentSearches = searchHistory.data?.history ?? [];
+  // The account keeps 100 entries (the server's HISTORY_CAP); the panel only shows the newest few so
+  // history does not push the tag/title suggestions off the screen.
+  const recentSearches = (searchHistory.data?.history ?? []).slice(0, RECENT_SEARCHES_VISIBLE);
 
   const titleSuggest = useSearchSuggest(
     { ...searchContext, filter: [debouncedFilter, builtinFilter].filter(Boolean).join(" ") },

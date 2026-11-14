@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
+import { startDownload } from "@/api/download";
 import type { ArchiveMetadata } from "@/api/types";
 import {
   PopupMenu,
@@ -10,11 +11,11 @@ import {
 } from "@/components/common-ui/Display";
 import { RatingWidget } from "@/components/common-ui/Form";
 import { useMenuPalette } from "@/hooks/useMenuPalette";
+import { copyWithToast } from "@/lib/clipboard";
 import { routes } from "@/lib/routes";
 import { splitTagsByNamespace } from "@/lib/tagFormat";
 import { isTankoubonId } from "@/lib/utils/isTankoubonId";
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme";
-import { toast } from "@/toast";
 
 import { type ContextMenuState } from "./types";
 
@@ -75,7 +76,15 @@ export function ArchiveContextMenu({
   const palette = useMenuPalette();
   const menuRef = useRef<HTMLUListElement | null>(null);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
-  const [menuWidth, setMenuWidth] = useState(0);
+  // Geometry decided from the row's rect when the submenu opens: align with the row, then bound
+  // the panel to the room actually left on that side. No post-mount measurement, so the panel
+  // never renders at an overflowing position first.
+  const [submenuPlacement, setSubmenuPlacement] = useState<{
+    side: "left" | "right";
+    up: boolean;
+    maxHeight: number;
+    maxWidth: number;
+  } | null>(null);
 
   // `state.x/y` are document coordinates (clientX/Y + scroll), so keep `position: absolute` and
   // clamp against the *visual* viewport: on mobile `window.innerHeight` still counts the strip a
@@ -108,7 +117,6 @@ export function ArchiveContextMenu({
         Math.max(visibleTop + margin, top),
         Math.max(visibleTop + margin, visibleBottom - rect.height - margin),
       );
-      setMenuWidth(rect.width);
       setPosition({ left, top });
     }
     // Placed once, in document coordinates: the menu then scrolls with the page and keeps its
@@ -126,17 +134,38 @@ export function ArchiveContextMenu({
     return () => window.removeEventListener("resize", onResize);
   }, [x, y]);
 
-  // Open the category submenu towards whichever side actually has room.
-  const submenuOnLeft =
-    position !== null &&
-    menuWidth > 0 &&
-    position.left + menuWidth + 200 >
-      window.scrollX + (window.visualViewport?.offsetLeft ?? 0) + (window.visualViewport?.width ?? window.innerWidth);
-
   // Submenu opens on hover; a short close delay absorbs the mouse crossing the gap into it.
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  function openSubmenu(which: "category") {
+  /** Place the panel beside the parent menu so the two never overlap, then fit it to the room. */
+  function placeSubmenu(trigger: HTMLElement) {
+    const anchor = menuRef.current?.getBoundingClientRect();
+    const row = trigger.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const width = viewport?.width ?? window.innerWidth;
+    const height = viewport?.height ?? window.innerHeight;
+    const margin = 8;
+    const side_ = anchor ?? row;
+    const roomRight = width - margin - side_.right;
+    const roomLeft = side_.left - margin;
+    // Prefer the side with room beside the menu; never slide the panel over the menu itself.
+    const side = roomRight >= 180 || roomRight >= roomLeft ? "right" : "left";
+    const rows = Math.max(1, staticCategories.length);
+    const needed = Math.min(220, rows * 30 + 14);
+    const below = height - margin - row.bottom;
+    const above = row.top - margin;
+    // Vertical alignment is not required: open downwards when the list fits there, upwards when
+    // only that side does. The panel scrolls instead of running off the screen.
+    const up = below < needed && above > below;
+    setSubmenuPlacement({
+      side,
+      up,
+      maxWidth: Math.max(120, side === "right" ? roomRight : roomLeft),
+      maxHeight: Math.min(220, Math.max(72, up ? above : below)),
+    });
+  }
+  function openSubmenu(which: "category", trigger?: HTMLElement | null) {
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    if (trigger) placeSubmenu(trigger);
     setCategoryMenuOpen(which === "category");
   }
   function scheduleCloseSubmenus() {
@@ -148,21 +177,14 @@ export function ArchiveContextMenu({
 
   function copyLink() {
     const url = `${window.location.origin}${routes.reader(archive.arcid)}`;
-    navigator.clipboard
-      .writeText(url)
-      .then(() =>
-        toast({
-          heading: t("library.linkCopiedToClipboard") ?? undefined,
-          icon: "info",
-          hideAfter: 3000,
-        }),
-      )
-      .catch(() =>
-        toast({
-          heading: t("library.failedToCopyLink") ?? undefined,
-          icon: "error",
-        }),
-      );
+    // `copyWithToast` falls back to a selection-based copy: the async clipboard API needs a secure
+    // context, and a home instance is usually reached over plain HTTP, where this used to throw
+    // before even the failure toast could appear.
+    void copyWithToast(
+      url,
+      t("library.linkCopiedToClipboard") ?? "",
+      t("library.failedToCopyLink") ?? "",
+    );
   }
 
   return (
@@ -185,8 +207,11 @@ export function ArchiveContextMenu({
           // at the overflowing position first.
           visibility: position ? "visible" : "hidden",
           // Dynamic viewport height so a browser toolbar showing/hiding never re-creates overflow.
-          maxHeight: "calc(100dvh - 24px)",
-          overflowY: "auto",
+          // While the category submenu is open both are dropped: an `overflow` other than visible
+          // clips the absolutely-positioned submenu, which is what made it look like the entry
+          // simply refused to expand (and the scrollbar the user saw was this same box).
+          maxHeight: categoryMenuOpen ? undefined : "calc(100dvh - 24px)",
+          overflowY: categoryMenuOpen ? "visible" : "auto",
           zIndex: Z_OVERLAY_CONTENT,
         }}
       >
@@ -245,10 +270,10 @@ export function ArchiveContextMenu({
           <PopupMenuItem
             onClick={() => {
               onClose();
-              window.location.assign(
+              void startDownload(
                 isTank
-                  ? `/api/tankoubons/${archive.arcid}/download`
-                  : `/api/archives/${archive.arcid}/download`,
+                  ? `/api/tankoubons/${archive.arcid}`
+                  : `/api/archives/${archive.arcid}`,
               );
             }}
           >
@@ -307,8 +332,18 @@ export function ArchiveContextMenu({
             </PopupMenuItem>
             <PopupMenuItem
               style={{ position: "relative" }}
-              onMouseEnter={() => openSubmenu("category")}
+              onMouseEnter={(e) => openSubmenu("category", e.currentTarget)}
               onMouseLeave={scheduleCloseSubmenus}
+              // Hover is the only way this opened before, so on a touch screen (no hover) the
+              // submenu could never appear at all. A tap toggles it instead.
+              onClick={(e) => {
+                if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+                if (categoryMenuOpen) {
+                  setCategoryMenuOpen(false);
+                } else {
+                  openSubmenu("category", e.currentTarget);
+                }
+              }}
             >
               <i className="fa fa-search-plus" style={{ width: 18 }}></i>{" "}
               {t("library.addToCategory")}
@@ -317,10 +352,14 @@ export function ArchiveContextMenu({
                   portal={false}
                   style={{
                     position: "absolute",
-                    ...(submenuOnLeft ? { right: "100%" } : { left: "100%" }),
-                    top: 0,
-                    maxHeight: 220,
+                    ...(submenuPlacement?.side === "left"
+                      ? { right: "100%" }
+                      : { left: "100%" }),
+                    ...(submenuPlacement?.up ? { bottom: 0 } : { top: 0 }),
+                    maxHeight: submenuPlacement?.maxHeight ?? 220,
+                    maxWidth: submenuPlacement?.maxWidth ?? "calc(100vw - 16px)",
                     overflowY: "auto",
+                    overflowX: "hidden",
                   }}
                   onMouseEnter={() => openSubmenu("category")}
                   onMouseLeave={scheduleCloseSubmenus}

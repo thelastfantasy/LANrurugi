@@ -294,6 +294,33 @@ pub struct DiscoveryCriteria {
     /// of a tag search means tens of thousands of requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_pages: Option<u32>,
+    /// Where to resume, as returned by the previous call's `next_cursor`. Opaque to the host: only
+    /// the extension knows what its listing pages by (an id, an offset, a token).
+    ///
+    /// Present because the host, not the extension, decides when to stop paging: only the host can
+    /// see which works a subscription has already handled, and a long look-back must be broken into
+    /// calls short enough to stay within one request's timeout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_after: Option<String>,
+    /// Unix seconds. Candidates older than this are outside the scan's time window. An extension may
+    /// stop reading once a whole page predates it, rather than paging to the end of a tag search.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub posted_after: Option<i64>,
+    /// The extension must return no more than this many candidates across this call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_candidates: Option<u32>,
+}
+
+/// Why a `discover` call stopped before exhausting `max_pages`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryStop {
+    /// The listing had no further page.
+    End,
+    /// The next page would have been entirely older than `posted_after`.
+    Age,
+    /// `max_candidates` was reached.
+    Cap,
 }
 
 /// A work's titles, keyed by language tag, plus `"origin"` for the source's own wording.
@@ -374,6 +401,15 @@ pub struct DiscoveryResult {
     pub degraded: bool,
     #[serde(default)]
     pub error: Option<PluginError>,
+    /// Where the next call should resume; absent when the listing ended or the extension cannot page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    /// How many listing pages this call actually read.
+    #[serde(default)]
+    pub pages_read: u32,
+    /// Why reading stopped short, when the extension can tell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<DiscoveryStop>,
 }
 
 /// What a `plugin_introspect` dispatcher call reports about a plugin's *source code*, without

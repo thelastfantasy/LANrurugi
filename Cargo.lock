@@ -3394,6 +3394,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "if-addrs"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b2eeee38fef3aa9b4cc5f1beea8a2444fc00e7377cafae396de3f5c2065e24"
+dependencies = [
+ "libc",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "if_chain"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3753,8 +3763,6 @@ dependencies = [
 [[package]]
 name = "iroh-relay"
 version = "1.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e5589e7c1475700686603a970275687f760df853bc6525c7eb1347aa31d7230"
 dependencies = [
  "blake3",
  "bytes",
@@ -3794,6 +3802,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "simdutf8",
+ "socket2",
  "strum 0.28.0",
  "time",
  "tokio",
@@ -4106,6 +4115,8 @@ dependencies = [
  "futures-util",
  "governor",
  "hkdf",
+ "hmac",
+ "if-addrs",
  "image",
  "ipnet",
  "iroh",
@@ -4125,11 +4136,13 @@ dependencies = [
  "lanrurugi-recommend",
  "lanrurugi-scanner",
  "lanrurugi-search",
+ "lanrurugi-share",
  "lanrurugi-share-proto",
  "lanrurugi-storage",
  "lanrurugi-translate",
  "libc",
  "maxminddb",
+ "netwatch",
  "percent-encoding",
  "pkarr",
  "rand 0.10.3",
@@ -4264,7 +4277,10 @@ version = "1.0.0-beta.5"
 dependencies = [
  "base64 0.23.1",
  "bcrypt",
+ "blake3",
+ "governor",
  "hmac",
+ "libc",
  "rayon",
  "reqwest",
  "serde",
@@ -4275,6 +4291,13 @@ dependencies = [
  "tracing",
  "uuid",
  "webpki-root-certs",
+]
+
+[[package]]
+name = "lanrurugi-egress"
+version = "1.0.0-beta.5"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -4487,6 +4510,7 @@ dependencies = [
  "jxl-image-rs-integration",
  "lanrurugi-book",
  "lanrurugi-core",
+ "lanrurugi-recommend",
  "lanrurugi-search",
  "lanrurugi-storage",
  "libarchive2-sys",
@@ -4570,6 +4594,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "lanrurugi-share"
+version = "1.0.0-beta.5"
+dependencies = [
+ "bao-tree",
+ "blake3",
+ "bytes",
+ "chrono",
+ "chrono-tz",
+ "deadpool-redis",
+ "ed25519-dalek",
+ "futures-util",
+ "if-addrs",
+ "iroh",
+ "iroh-mdns-address-lookup",
+ "iroh-relay",
+ "lanrurugi-core",
+ "lanrurugi-scanner",
+ "lanrurugi-share-proto",
+ "lanrurugi-storage",
+ "netwatch",
+ "pkarr",
+ "rand 0.10.3",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-socks",
+ "tokio-util",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "lanrurugi-share-proto"
 version = "1.0.0-beta.5"
 dependencies = [
@@ -4591,6 +4652,7 @@ dependencies = [
 name = "lanrurugi-storage"
 version = "1.0.0-beta.5"
 dependencies = [
+ "chrono",
  "deadpool-redis",
  "ipnet",
  "lanrurugi-core",
@@ -5373,8 +5435,6 @@ dependencies = [
 [[package]]
 name = "netwatch"
 version = "0.19.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39da9cad5f23aa43401f09497d3b280e51b5feba115d9ffbf38ca35d6ff95e96"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -9946,6 +10006,15 @@ name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
+dependencies = [
+ "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "windows-sys"
+version = "0.59.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets 0.52.6",
 ]

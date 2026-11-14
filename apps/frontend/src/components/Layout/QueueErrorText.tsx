@@ -38,6 +38,33 @@ export function QueueErrorText({ error }: { error: QueueError }) {
           })}
         </span>
       )
+    case "copy_length_mismatch":
+      return (
+        <span title={error.path}>
+          {t("components.layout.copyLengthMismatch", {
+            expected: error.expected,
+            copied: error.copied,
+          })}
+        </span>
+      )
+    case "durability_failed":
+      return <span title={error.path}>{t("components.layout.durabilityFailed", { error: error.os_error })}</span>
+    case "staged_content_corrupted":
+      return (
+        <span title={`${error.path}\n${error.expected_blake3} ≠ ${error.actual_blake3}`}>
+          {t("components.layout.stagedContentCorrupted")}
+        </span>
+      )
+    case "verify_readback_mismatch":
+      return (
+        <span title={error.path}>
+          {t("components.layout.verifyReadbackMismatch", { offset: error.offset, len: error.len })}
+        </span>
+      )
+    case "egress_unavailable":
+      return (
+        <span>{t("components.layout.egressInterfaceUnavailable", { interface: error.interface })}</span>
+      )
     case "write_failed":
       return <span>{t("components.layout.failedToWriteTheDownloaded")}</span>
     case "bundle_failed":
@@ -97,6 +124,30 @@ export function QueueErrorText({ error }: { error: QueueError }) {
             }}
           >
             {error.archive_id}
+          </a>
+        </span>
+      )
+    case "ingest_failed":
+      return (
+        <span>
+          {t("components.layout.ingestFailed")}{" "}
+          <span style={{ opacity: 0.75 }}>{error.reason}</span>
+        </span>
+      )
+    case "source_download_in_progress":
+      return <span>{t("components.layout.thisSourceIsAlreadyDownloading")}</span>
+    case "source_already_imported":
+      return (
+        <span>
+          {t("components.layout.thisSourceWasAlreadyImported")}{" "}
+          <a
+            href={routes.reader(error.existing_id)}
+            onClick={(e) => {
+              e.preventDefault()
+              navigate(routes.reader(error.existing_id))
+            }}
+          >
+            {error.existing_id}
           </a>
         </span>
       )

@@ -5,7 +5,6 @@
 //! never speaks the DHT itself (FR-045).
 
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -18,8 +17,7 @@ use lanrurugi_share_proto::derive::DerivedKeys;
 use lanrurugi_share_proto::record::{self, KnockV1};
 use lanrurugi_storage::shares::{Share, ShareStatus};
 
-use super::{endpoint_addr, parse_endpoint_hex, ShareNet, ShareNetError, DEFAULT_PKARR_RELAYS};
-use crate::share_settings::ShareSettings;
+use super::{endpoint_addr, parse_endpoint_hex, ShareNet, ShareNetError};
 use crate::AppState;
 
 /// Republish interval; records live an hour at the relays.
@@ -27,8 +25,6 @@ pub const REPUBLISH_EVERY: Duration = Duration::from_secs(60 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long the routes a code carries run alone before the rendezvous are asked as well.
 const LOOKUP_HEAD_START: Duration = Duration::from_secs(3);
-/// Enough for a public IPv6, a mapped IPv4 and a LAN address or two, without a dense QR code.
-const MAX_HINT_ADDRS: usize = 6;
 
 /// Code-derived keys are expensive (Argon2id), so each share's are derived once per process.
 static DERIVED: Mutex<Option<HashMap<ShareId, DerivedKeys>>> = Mutex::new(None);
@@ -80,27 +76,6 @@ async fn keys_for_code(code: &ShareCode) -> Result<DerivedKeys, ShareNetError> {
     Ok(keys)
 }
 
-/// The pkarr relays in use: configured ones, else pkarr's defaults while public services are on.
-pub fn pkarr_relays(settings: &ShareSettings) -> Vec<String> {
-    let configured: Vec<String> = settings
-        .list("share_pkarr_relays")
-        .iter()
-        .filter_map(|r| crate::share_settings::canonical_https_url(r))
-        .collect();
-    if !configured.is_empty() {
-        return configured;
-    }
-    if settings.flag("share_public_services") {
-        DEFAULT_PKARR_RELAYS.iter().map(|s| s.to_string()).collect()
-    } else {
-        Vec::new()
-    }
-}
-
-fn http_client() -> reqwest::Client {
-    super::proxy::http_client(REQUEST_TIMEOUT)
-}
-
 /// Sends one request to a configured LANrurugi node.
 async fn ask_node(
     state: &crate::AppState,
@@ -111,41 +86,6 @@ async fn ask_node(
     let addr = super::nodes::node_addr(state, node).await?;
     let conn = super::connect(net, addr).await.ok()?;
     super::call(&conn, request).await.ok().map(|(r, _)| r)
-}
-
-fn node_label(node: &super::nodes::NodeRef) -> String {
-    format!("lrrg-node:{}", node.addr)
-}
-
-fn relay_endpoint(relay: &str, keys: &DerivedKeys) -> String {
-    format!(
-        "{}/{}",
-        relay.trim_end_matches('/'),
-        keys.lookup_key.public_key().to_z32()
-    )
-}
-
-/// The record's relay list: the relays this endpoint can currently be reached through.
-pub(super) fn advertised_relays(net: &ShareNet, settings: &ShareSettings) -> Vec<String> {
-    let mut relays: Vec<String> = net
-        .endpoint()
-        .addr()
-        .relay_urls()
-        .map(|u| u.to_string())
-        .collect();
-    let own = settings.text("share_self_relay_url");
-    if let Some(own) = crate::share_settings::canonical_https_url(own) {
-        relays.push(own);
-    }
-    if relays.is_empty() {
-        relays = super::relay_urls(settings)
-            .iter()
-            .map(|u| u.to_string())
-            .collect();
-    }
-    let mut seen = std::collections::HashSet::new();
-    relays.retain(|r| seen.insert(r.clone()));
-    relays
 }
 
 /// Publishes one share's knock record to every configured rendezvous.
@@ -162,6 +102,7 @@ pub async fn publish_share(state: &AppState, net: &ShareNet, share: &Share) {
     let knock = KnockV1 {
         endpoint_id: *net.id().as_bytes(),
         relay_urls: advertised_relays(net, &settings),
+        direct_addrs: Vec::new(),
     };
     let packet = match record::seal(&keys, &knock) {
         Ok(p) => p,
@@ -460,84 +401,21 @@ async fn resolve_local(
 
 /// The `via` hint every code carries: this endpoint, the addresses a peer may dial (configured
 /// external ones, then public, then private) and the relays it is connected to.
-pub fn via_hint(net: &ShareNet, settings: &ShareSettings) -> Option<Via> {
-    let endpoint = net.endpoint().addr();
-    let mut found: Vec<SocketAddr> = endpoint
-        .ip_addrs()
-        .copied()
-        .filter(|a| dialable(a.ip()))
-        .collect();
-    found.sort_by_key(|a| address_rank(a.ip()));
-    let mut addrs: Vec<String> = Vec::new();
-    for addr in settings.external_addrs().into_iter().chain(found) {
-        let text = addr.to_string();
-        if !addrs.contains(&text) && addrs.len() < MAX_HINT_ADDRS {
-            addrs.push(text);
-        }
-    }
-    let relays: Vec<String> = endpoint.relay_urls().map(|u| u.to_string()).collect();
-    if addrs.is_empty() && relays.is_empty() {
-        return None;
-    }
-    Some(Via {
-        endpoint_id: super::endpoint_hex(&net.id()),
-        addrs,
-        relays,
-    })
+pub use lanrurugi_share::publish::{
+    advertised_relays, pkarr_relays, relay_endpoint, relay_is_public, via_hint,
+};
+
+fn node_label(node: &lanrurugi_share::nodes::NodeRef) -> String {
+    format!("lrrg-node:{}", node.addr)
 }
 
-/// Whether another machine could ever reach `ip`: not loopback, unspecified or link-local.
-fn dialable(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => !(v4.is_loopback() || v4.is_unspecified() || v4.is_link_local()),
-        IpAddr::V6(v6) => {
-            !(v6.is_loopback() || v6.is_unspecified() || (v6.segments()[0] & 0xffc0) == 0xfe80)
-        }
-    }
-}
-
-fn is_shared(v4: std::net::Ipv4Addr) -> bool {
-    v4.octets()[0] == 100 && v4.octets()[1] & 0xc0 == 64
-}
-
-/// Public addresses first, then home LANs (`192.168/16`) ahead of the ranges container bridges
-/// tend to take.
-fn address_rank(ip: IpAddr) -> u8 {
-    match ip {
-        IpAddr::V4(v4) if v4.octets()[0] == 192 && v4.octets()[1] == 168 => 1,
-        // Private, or carrier-grade NAT's 100.64/10.
-        IpAddr::V4(v4) if v4.is_private() || is_shared(v4) => 2,
-        IpAddr::V6(v6) if (v6.segments()[0] & 0xfe00) == 0xfc00 => 2,
-        _ => 0,
-    }
+fn http_client() -> reqwest::Client {
+    super::proxy::http_client(REQUEST_TIMEOUT)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn hint_addresses_skip_unreachable_ones_and_put_public_first() {
-        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
-        for unreachable in ["127.0.0.1", "0.0.0.0", "169.254.1.2", "::1", "fe80::1"] {
-            assert!(!dialable(ip(unreachable)), "{unreachable}");
-        }
-        let mut found = [
-            "10.88.0.1",
-            "192.168.3.105",
-            "2001:db8::5",
-            "203.0.113.7",
-            "fd00::1",
-        ]
-        .map(ip)
-        .to_vec();
-        found.sort_by_key(|a| address_rank(*a));
-        assert_eq!(
-            found[..3],
-            [ip("2001:db8::5"), ip("203.0.113.7"), ip("192.168.3.105")]
-        );
-        assert_eq!(address_rank(ip("100.72.1.1")), 2);
-    }
 
     #[test]
     fn a_code_node_takes_the_code_relay_on_its_own_host() {

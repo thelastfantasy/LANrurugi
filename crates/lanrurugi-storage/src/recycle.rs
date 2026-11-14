@@ -71,6 +71,8 @@ pub struct RecycleSnapshot {
     pub toc: Vec<TocEntry>,
     #[serde(default)]
     pub has_patch: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blake3: Option<String>,
     #[serde(default)]
     pub corrupted_pages: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -458,6 +460,7 @@ mod tests {
                 thumbhash: None,
                 toc: vec![],
                 has_patch: false,
+                blake3: None,
                 corrupted_pages: vec![],
                 heal_failed_at: None,
                 version_history: vec![],

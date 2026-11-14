@@ -11,7 +11,6 @@ use lanrurugi_storage::activity::ActivityRepository;
 use lanrurugi_storage::activity_dedup::ActivityDedupGate;
 use lanrurugi_storage::api_tokens::ApiTokenRepository;
 use lanrurugi_storage::bookmarks::BookmarksRepository;
-use lanrurugi_storage::compare_cache::CompareCacheRepository;
 use lanrurugi_storage::download_queue::DownloadQueueRepository;
 use lanrurugi_storage::ignored_group_suggestions::IgnoredGroupSuggestionsRepository;
 use lanrurugi_storage::plugin_options::PluginOptionsRepository;
@@ -158,10 +157,6 @@ pub struct AppState {
     /// `tankoubon_grouping.rs`) — also on the `config` logical DB, same placement as
     /// `plugin_options`/`download_queue`/`recommend_cache`.
     pub ignored_group_suggestions: Arc<IgnoredGroupSuggestionsRepository>,
-    /// Cached `POST /download_queue/{id}/compare` results (issue #77) — also on the `config`
-    /// logical DB, same placement as the other additive caches above. See
-    /// `lanrurugi_storage::compare_cache` module docs for the capacity/lifecycle policy.
-    pub compare_cache: Arc<CompareCacheRepository>,
     /// Page-level reading bookmarks (`bookmarks.rs`) — also on the `config` logical DB, same
     /// placement as the other additive stores above.
     pub bookmarks: Arc<BookmarksRepository>,
@@ -227,6 +222,15 @@ pub struct AppState {
     /// write succeeds. `None` in test/bench contexts (no SSE subscribers); real `serve` always
     /// sets this.
     pub download_queue_tx: Option<tokio::sync::broadcast::Sender<serde_json::Value>>,
+    /// SSE fan-out for subscription checks in flight — same arrangement as `download_queue_tx`.
+    /// A day-window scan can run for minutes, and without a progress event the UI has nothing to
+    /// show between "check started" and the cycle record appearing.
+    pub subscription_check_tx: Option<tokio::sync::broadcast::Sender<serde_json::Value>>,
+    /// The AI grouping run in flight plus its SSE fan-out — same arrangement as
+    /// `download_queue_tx`, and for the same reason: the expensive pass must outlive the request
+    /// that started it. `POST .../ai-group-suggestions` used to do that pass inline, so a ~100s
+    /// Cloudflare timeout discarded it and nothing was cached (see `tankoubon_grouping/run.rs`).
+    pub grouping: Arc<crate::tankoubon_grouping::GroupingHub>,
     /// The SPA login flow's revocable refresh-token half (`lanrurugi_core::session` mints the
     /// paired stateless JWT access token) — on the `config` logical DB, same placement as
     /// `plugin_options`/`download_queue`/etc. See `lanrurugi_storage::refresh_tokens` module docs.
@@ -245,7 +249,7 @@ pub struct AppState {
     /// Operator activity log (issue #87) — a structured, persisted record of who did what,
     /// distinct from the unstructured `tracing`-based request log
     /// (`procedure::trace_request`). Also on the `config` logical DB, same placement as
-    /// `api_tokens`/`download_queue`/`compare_cache`. See `lanrurugi_storage::activity` module
+    /// `api_tokens`/`download_queue`. See `lanrurugi_storage::activity` module
     /// docs for the full data model/retention/query design.
     pub activity: Arc<ActivityRepository>,
     /// Short-TTL `(actor/caller, device)` dedup gate shared by `guest.access` and

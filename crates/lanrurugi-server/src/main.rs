@@ -302,6 +302,10 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     std::fs::create_dir_all(&args.library_path)?;
     std::fs::create_dir_all(&args.thumb_dir)?;
     std::fs::create_dir_all(&args.temp_dir)?;
+    // Repackaged downloads (patched archives, tankoubon zips) are cached here so a resumed
+    // download can be answered with a range; keeping them under the instance's own temp directory
+    // keeps them inside `tempmaxsize` accounting and the usual cleanup.
+    lanrurugi_api::archives::set_repack_dir(args.temp_dir.join("download-cache"));
     // Rendered e-book pages and inspection results live with the other conversion caches.
     lanrurugi_book::configure(lanrurugi_book::BookConfig {
         cache_dir: args.temp_dir.join("book"),
@@ -450,9 +454,6 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             redis.config.clone(),
         ),
     );
-    let compare_cache = Arc::new(
-        lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
-    );
     let bookmarks = Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
         redis.config.clone(),
     ));
@@ -551,7 +552,6 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         subscriptions_in_flight: Default::default(),
         recommend_cache,
         ignored_group_suggestions,
-        compare_cache,
         bookmarks,
         recommender: recommender.clone(),
         new_archive_tx: new_archive_tx.clone(),
@@ -563,6 +563,8 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         translation_telemetry: Default::default(),
         filename_locks: filename_locks.clone(),
         download_queue_tx: Some(tokio::sync::broadcast::channel(64).0),
+        subscription_check_tx: Some(tokio::sync::broadcast::channel(64).0),
+        grouping: Default::default(),
         refresh_tokens,
         api_tokens,
         api_token_last_touch: Default::default(),
@@ -629,6 +631,18 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // rather than as a spawned background job — it's a handful of Redis round trips and stat calls
     // at most, and every item should already be in its corrected state by the time the frontend's
     // first poll lands.
+    // 020: a crash between staging a copy and renaming it into its bucket leaves a dot-prefixed
+    // file in the library root that no scan will ever pick up. The copy lives for one call, so
+    // anything hours old is dead weight rather than an in-flight ingest.
+    let swept_ingest = lanrurugi_api::download_manager::ingest::sweep_stale_ingest_copies(
+        &state.library.archive_dir,
+        std::time::Duration::from_secs(6 * 60 * 60),
+    )
+    .await;
+    if swept_ingest > 0 {
+        tracing::info!(removed = swept_ingest, "removed abandoned ingestion copies");
+    }
+
     match state.download_queue.list_all().await {
         Ok(items) => {
             for mut item in items {
@@ -649,38 +663,70 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     }
                     continue;
                 }
-                if let Some(conflict) = &item.pending_filename_conflict {
+                if let Some(conflict) = item.pending_filename_conflict.clone() {
                     let temp_path_exists = tokio::fs::try_exists(&conflict.temp_path)
                         .await
                         .unwrap_or(false);
-                    if !temp_path_exists {
-                        tracing::info!(
-                            item_id = %item.id,
-                            temp_path = %conflict.temp_path,
-                            "clearing pending filename conflict whose staged file vanished across a restart"
-                        );
-                        item.pending_filename_conflict = None;
-                        item.state = lanrurugi_storage::download_queue::DownloadQueueState::Error;
-                        item.error =
-                            Some(lanrurugi_core::queue_error::QueueError::StaleAfterRestart);
+                    if temp_path_exists {
+                        // The bytes are still here, and since 020 the destination no longer
+                        // depends on the name: ingest them under their own id instead of leaving
+                        // the row asking the user a question whose answer stopped mattering.
+                        let item_id = item.id.clone();
+                        let outcome =
+                            lanrurugi_api::download_manager::ingest::adopt_pending_conflict(
+                                &state, &conflict,
+                            )
+                            .await;
+                        // Cleared only on success: on failure `adopt_pending_conflict` puts the
+                        // bytes back at `temp_path`, and keeping the field is what lets the next
+                        // start try again.
+                        match outcome {
+                            Ok(archive_id) => {
+                                tracing::info!(
+                                    item_id = %item_id,
+                                    archive_id = %archive_id,
+                                    "catalogued a pre-hash-layout download that was waiting for a filename decision"
+                                );
+                                item.pending_filename_conflict = None;
+                                item.state =
+                                    lanrurugi_storage::download_queue::DownloadQueueState::Done;
+                                item.archive_ids = Some(vec![archive_id]);
+                                item.error = None;
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    item_id = %item_id,
+                                    "could not catalogue a pre-hash-layout download that was waiting for a filename decision"
+                                );
+                                item.state =
+                                    lanrurugi_storage::download_queue::DownloadQueueState::Error;
+                                item.error = Some(error);
+                            }
+                        }
                         if let Err(e) = state.download_queue.update(&item).await {
                             tracing::warn!(
-                                item_id = %item.id,
+                                item_id = %item_id,
                                 error = %e,
-                                "failed to clear a restart-orphaned pending filename conflict"
+                                "failed to save a catalogued pre-hash-layout download"
                             );
                         }
-                        // Redis (unlike `temp_dir`) survives a container recreate, so a cached AI
-                        // comparison result for this same item — its sample-page images read live
-                        // from the very `temp_path` that just vanished — would otherwise keep
-                        // being served as a "successful" cached comparison whose images 404.
-                        if let Err(e) = state.compare_cache.delete(&item.id).await {
-                            tracing::warn!(
-                                item_id = %item.id,
-                                error = %e,
-                                "failed to clear compare_cache for a restart-orphaned pending filename conflict"
-                            );
-                        }
+                        continue;
+                    }
+
+                    tracing::info!(
+                        item_id = %item.id,
+                        temp_path = %conflict.temp_path,
+                        "clearing pending filename conflict whose staged file vanished across a restart"
+                    );
+                    item.pending_filename_conflict = None;
+                    item.state = lanrurugi_storage::download_queue::DownloadQueueState::Error;
+                    item.error = Some(lanrurugi_core::queue_error::QueueError::StaleAfterRestart);
+                    if let Err(e) = state.download_queue.update(&item).await {
+                        tracing::warn!(
+                            item_id = %item.id,
+                            error = %e,
+                            "failed to clear a restart-orphaned pending filename conflict"
+                        );
                     }
                 }
             }
@@ -699,6 +745,11 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // queue-orphan cleanup above — archive records whose `file` is empty/points at temp/vanished
     // get repaired or dropped so hash-based dedup stops matching ghost bytes.
     repair_zombie_archives(&state).await;
+
+    // An ingest a crash interrupted can no longer finish its metadata run: publish it now (with
+    // whatever tags it has) rather than leave it hidden. Before the download queue resumes, so a
+    // resumed ingest's own marker is not swept away.
+    lanrurugi_api::visibility::clear_all_pending(&state).await;
 
     // One-time reader-recommendation-cache rebuilds, covering two independent reasons a cache can
     // be stale against a pre-existing library: (a) the archive was never cached at all (issue
@@ -953,41 +1004,25 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         });
     }
 
+    // Which interface plugin downloads leave through, restored before anything can download.
+    lanrurugi_api::settings::apply_outbound_interface(&state).await;
+
     // Sharing (017): the instance's iroh endpoint, the helper heartbeats and the hourly knock-record
     // republisher. A bind
     // failure (the UDP port taken, say) leaves sharing off and logged; the rest of the server runs.
     {
         let state = state.clone();
         tokio::spawn(async move {
-            match lanrurugi_api::share_net::start(&state).await {
-                Ok(_) => {
-                    lanrurugi_api::share_net::blobs::spawn_prepare_worker(state.clone());
-                    lanrurugi_api::share_net::helper::spawn(state.clone());
-                    lanrurugi_api::share_net::publish::spawn_republisher(state);
+            match lanrurugi_api::share_net::start_services(&state).await {
+                Ok(()) => {
+                    // Once per process: the endpoint this call just created is what a resumed
+                    // import dials through.
+                    lanrurugi_api::share_imports::resume_interrupted_imports(&state).await;
                 }
                 Err(e) => tracing::warn!(error = %e, "sharing endpoint could not start"),
             }
-        });
-    }
-
-    // Hourly, not once every `PENDING_RENAME_MAX_AGE` itself — a coarser interval would let a
-    // conflict sit stale for up to another full 24h past its actual cutoff, depending on how the
-    // sweep's own schedule happens to line up against when it was staged.
-    {
-        let state = state.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
-            loop {
-                interval.tick().await;
-                let started = std::time::Instant::now();
-                lanrurugi_api::download_manager::ingest::sweep_stale_pending_renames(&state).await;
-                lanrurugi_api::diagnostics::cron::check_in(
-                    "lanrurugi-pending-rename-sweep",
-                    "ok",
-                    started.elapsed(),
-                    60,
-                );
-            }
+            // A share pinned to a tunnel interface starts as soon as that interface exists.
+            lanrurugi_api::share_net::spawn_interface_watch(state.clone());
         });
     }
 
@@ -1124,6 +1159,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         });
     }
 
+    let shutdown_state = state.clone();
     let app = app::build_app(state, args.static_dir, args.docs_dir);
     let listener = match args.bind.parse::<std::net::SocketAddr>() {
         Ok(addr) => tokio::net::TcpListener::from_std(lanrurugi_server::listen::bind(addr)?)?,
@@ -1139,8 +1175,37 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal(shutdown_state))
     .await?;
     Ok(())
+}
+
+/// Runs when the process is asked to stop. The only work that has to happen here is telling the
+/// peers this node currently helps to stop counting on it: everything else is either durable in
+/// Redis already or rebuilt on the next start. `docker stop` sends SIGKILL after ten seconds, so
+/// the leave path has its own bounded budget.
+async fn shutdown_signal(state: AppState) {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            // The handler could not be installed; the process still stops on ctrl_c.
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+    tracing::info!("stopping");
+    lanrurugi_api::share_net::helper::leave_all(&state).await;
 }
 
 /// `lanrurugi rebuild-index` (User Story 6, T077): runs the same two-step repair

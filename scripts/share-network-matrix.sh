@@ -345,8 +345,24 @@ for c in "${cases[@]}"; do
 done
 
 printf '\n%-4s %-32s %-10s %-14s %s\n' '#' environment result route first-byte-s
+landed=0
 for r in "${results[@]}"; do
     IFS='|' read -r num name res route first extra <<<"$r"
+    [ "$res" = "landed" ] && landed=$((landed + 1))
     printf '%-4s %-32s %-10s %-14s %s %s\n' "$num" "$name" "$res" "${route:--}" "$first" "${extra:-}"
 done
+
+# Machine-readable summary: what a reported penetration rate is derived from. One JSON object per
+# case, plus a one-line count in the same order a reader would quote it.
+json_str() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
+summary="$SHARE_NET_WORK/summary.jsonl"
+: >"$summary"
+for r in "${results[@]}"; do
+    IFS='|' read -r num name res route first extra <<<"$r"
+    printf '{"case":%s,"environment":%s,"result":%s,"route":%s,"first_byte_s":%s}\n' \
+        "$(json_str "$num")" "$(json_str "$name")" "$(json_str "$res")" \
+        "$(json_str "${route:--}")" "$(json_str "${first:-}")" >>"$summary"
+done
+echo "matrix: $landed/${#results[@]} imports landed"
+echo "summary: $summary"
 echo "work directory: $SHARE_NET_WORK"

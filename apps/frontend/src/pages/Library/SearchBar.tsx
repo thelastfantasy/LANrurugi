@@ -1,6 +1,6 @@
 import { Autocomplete } from "@base-ui/react/autocomplete"
 import type { RefObject } from "react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button, IconButtonWithTooltip } from "@/components/common-ui/Form";
@@ -68,6 +68,11 @@ export function SearchBar({
    *  quick-filter tokens (also a `string`, but never removable). */
   const [highlighted, setHighlighted] = useState<SearchSuggestion | string | null>(null);
   const palette = useMenuPalette();
+  /** Touch dismissal for the panel: it is its own scroll container, so an upward swipe that cannot
+   *  scroll any further (already at the bottom when the touch started) should close it instead of
+   *  being a dead gesture. Whether it started at the bottom is sampled on `touchstart`, because by
+   *  the first `touchmove` the list may already have scrolled. */
+  const touchDismiss = useRef<{ atBottom: boolean; y: number; x: number; done: boolean } | null>(null);
 
   /**
    * "The input text a picked row produces" → "what picking it should actually do".
@@ -267,6 +272,31 @@ export function SearchBar({
               style={{ zIndex: Z_OVERLAY_CONTENT }}
             >
               <Autocomplete.Popup
+                onTouchStart={(event) => {
+                  const el = event.currentTarget;
+                  const touch = event.touches[0];
+                  touchDismiss.current = {
+                    atBottom: el.scrollTop + el.clientHeight >= el.scrollHeight - 1,
+                    y: touch?.clientY ?? 0,
+                    x: touch?.clientX ?? 0,
+                    done: false,
+                  };
+                }}
+                onTouchMove={(event) => {
+                  const start = touchDismiss.current;
+                  const touch = event.touches[0];
+                  if (!start || start.done || !touch) return;
+                  const dy = touch.clientY - start.y;
+                  const dx = touch.clientX - start.x;
+                  // A deliberate upward swipe (not a tap that drifted): most of the movement is
+                  // vertical, and it is long enough not to fire on a sloppy click.
+                  if (!start.atBottom || dy > -12 || Math.abs(dy) <= Math.abs(dx)) return;
+                  start.done = true;
+                  onAutocompleteOpenChange(false);
+                  // Leaving the bar focused would keep the phone keyboard up over the page the
+                  // swipe was trying to get back to (only when it — not a date field — is focused).
+                  if (document.activeElement === searchInputRef.current) searchInputRef.current?.blur();
+                }}
                 // `hide-scrollbar` (index.css): the panel's own scrollbar runs up the right edge
                 // into the bar, which is 6px narrower than the panel on each side. Wheel/trackpad
                 // scrolling is unaffected; the reveal class is the same constant the other popups'

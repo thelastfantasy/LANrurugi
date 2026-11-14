@@ -22,6 +22,9 @@ use std::collections::HashMap;
 
 use lanrurugi_core::entities::{Category, Grouping, Stamp};
 use lanrurugi_core::ids::{ArchiveId, CategoryId, StampId, TankId};
+use lanrurugi_core::tags::{
+    collapse_duplicate_date_added, newest_date_added_tag, strip_date_added_tags,
+};
 use lanrurugi_storage::repository::{
     ArchiveRepository, CategoryRepository, GroupingRepository, RepositoryError, StampRepository,
 };
@@ -250,6 +253,20 @@ fn normalized_tags(tags: &str) -> HashMap<String, String> {
         .filter(|t| !t.is_empty())
         .map(|t| (t.to_ascii_lowercase(), t))
         .collect()
+}
+
+/// Appends this instance's own `date_added:` tag to `incoming` when the incoming tags have none
+/// — overwrite mode replaces the whole tag string with the legacy one, which Pass 1 has already
+/// stripped of its (foreign) `date_added:`. A no-op when either side has nothing to contribute.
+fn attach_newest_date_added(existing: &str, incoming: String) -> String {
+    if newest_date_added_tag(&incoming).is_some() {
+        return incoming;
+    }
+    match newest_date_added_tag(existing) {
+        Some(tag) if incoming.is_empty() => tag,
+        Some(tag) => format!("{incoming},{tag}"),
+        None => incoming,
+    }
 }
 
 /// Removes and returns the one `rating:` tag from a normalized tag map (there should only ever be
@@ -485,7 +502,11 @@ async fn import_from_legacy_inner(
         } else {
             tags
         };
-        archive.tags = Some(tags);
+        // `date_added` is this app's own ingestion timestamp, written by the scanner when an
+        // archive is catalogued — it is not importable metadata. Bringing a legacy value along
+        // either duplicates it against this instance's own (merge) or replaces it outright
+        // (overwrite); `Overwrite`'s write loop re-attaches this instance's own tag instead.
+        archive.tags = Some(strip_date_added_tags(&tags));
     }
     // Categories/tankoubons carry their own free-text `name` (and a tankoubon's own `tags`/
     // `summary`, mirroring an archive's own fields) that can be mojibake-corrupted exactly the
@@ -629,10 +650,13 @@ async fn import_from_legacy_inner(
                     }
                     let mut merged: Vec<String> = merged.into_values().collect();
                     merged.sort();
+                    // A current record that already carries two `date_added:` tags (imported
+                    // before the strip above existed) must not carry both through another merge.
+                    let merged = collapse_duplicate_date_added(&merged.join(","));
                     archives_to_write.push((
                         target_id,
                         current.title,
-                        merged.join(","),
+                        merged,
                         current.summary,
                         current.thumbhash,
                     ));
@@ -655,7 +679,13 @@ async fn import_from_legacy_inner(
                 filename: archive.name.clone(),
             });
             archive.title = title;
-            archive.tags = tags;
+            // Pass 1 strips the legacy `date_added:` from every mode; in overwrite mode that would
+            // otherwise leave the archive with none at all, so re-attach this instance's own.
+            archive.tags = if on_existing == ImportConflictMode::Overwrite {
+                attach_newest_date_added(&archive.tags, tags)
+            } else {
+                tags
+            };
             archive.summary = summary_text;
             archive.thumbhash = thumbhash;
             archives.save(&archive).await?;
@@ -1128,6 +1158,7 @@ mod tests {
             heal_failed_at: None,
             corrupted_pages: vec![],
             has_patch: false,
+            blake3: None,
         }
     }
 
@@ -1428,6 +1459,141 @@ mod tests {
         assert_eq!(tags, vec!["artist:current", "artist:legacy", "rating:4"]);
 
         archives.delete(&ArchiveId(id)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn merge_mode_never_brings_the_legacy_date_added_along() {
+        let _serial = TESTS.lock().await;
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let archives = ArchiveRepository::new(pool.clone());
+        let categories = CategoryRepository::new(pool.clone());
+        let groupings = GroupingRepository::new(pool.clone());
+        let stamps = StampRepository::new(pool.clone());
+
+        let id = "a".repeat(40);
+        archives
+            .save(&test_archive(
+                &id,
+                "x-merge-date-added",
+                "Current Title",
+                "date_added:1793928516,artist:current",
+                "/x-merge-date-added.zip",
+            ))
+            .await
+            .unwrap();
+
+        // The legacy library's own `date_added` predates this instance's scan; importing it used
+        // to leave both values side by side.
+        let doc = LegacyBackupDocument {
+            archives: vec![LegacyArchive {
+                arcid: "9".repeat(40),
+                title: Some("Legacy Title".into()),
+                tags: Some("date_added:1742054739,artist:legacy".into()),
+                summary: Some(String::new()),
+                thumbhash: None,
+                filename: Some("x-merge-date-added".into()),
+            }],
+            ..Default::default()
+        };
+
+        import_from_legacy(
+            doc,
+            ImportConflictMode::Merge,
+            false,
+            &archives,
+            &categories,
+            &groupings,
+            &stamps,
+        )
+        .await
+        .unwrap();
+
+        let updated = archives.get(&ArchiveId(id.clone())).await.unwrap().unwrap();
+        let mut tags: Vec<&str> = updated.tags.split(',').collect();
+        tags.sort();
+        assert_eq!(
+            tags,
+            vec!["artist:current", "artist:legacy", "date_added:1793928516"]
+        );
+
+        archives.delete(&ArchiveId(id)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn overwrite_mode_keeps_this_instances_date_added() {
+        let _serial = TESTS.lock().await;
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let archives = ArchiveRepository::new(pool.clone());
+        let categories = CategoryRepository::new(pool.clone());
+        let groupings = GroupingRepository::new(pool.clone());
+        let stamps = StampRepository::new(pool.clone());
+
+        let id = "b".repeat(40);
+        archives
+            .save(&test_archive(
+                &id,
+                "x-overwrite-date-added",
+                "Current Title",
+                "date_added:1793928516,artist:current",
+                "/x-overwrite-date-added.zip",
+            ))
+            .await
+            .unwrap();
+
+        let doc = LegacyBackupDocument {
+            archives: vec![LegacyArchive {
+                arcid: "9".repeat(40),
+                title: Some("Legacy Title".into()),
+                tags: Some("date_added:1742054739,artist:legacy".into()),
+                summary: Some(String::new()),
+                thumbhash: None,
+                filename: Some("x-overwrite-date-added".into()),
+            }],
+            ..Default::default()
+        };
+
+        import_from_legacy(
+            doc,
+            ImportConflictMode::Overwrite,
+            false,
+            &archives,
+            &categories,
+            &groupings,
+            &stamps,
+        )
+        .await
+        .unwrap();
+
+        let updated = archives.get(&ArchiveId(id.clone())).await.unwrap().unwrap();
+        assert_eq!(updated.title, "Legacy Title");
+        assert_eq!(updated.tags, "artist:legacy,date_added:1793928516");
+
+        archives.delete(&ArchiveId(id)).await.unwrap();
+    }
+
+    #[test]
+    fn attach_newest_date_added_only_fills_a_missing_tag() {
+        assert_eq!(
+            attach_newest_date_added("date_added:1742054739", "artist:a".into()),
+            "artist:a,date_added:1742054739"
+        );
+        assert_eq!(
+            attach_newest_date_added(
+                "date_added:1742054739",
+                "artist:a,date_added:1793928516".into()
+            ),
+            "artist:a,date_added:1793928516"
+        );
+        assert_eq!(
+            attach_newest_date_added("artist:b", "artist:a".into()),
+            "artist:a"
+        );
     }
 
     #[tokio::test]

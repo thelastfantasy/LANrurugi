@@ -6,6 +6,7 @@ import { Footer, MobileNav, type NavItem } from "@/components/Layout"
 import { ReleaseNotesOverlay } from "@/components/Layout"
 import { UpdateBanner } from "@/components/Layout"
 import { useIsNarrowViewport } from "@/hooks"
+import { routes } from "@/lib/routes"
 import { useSession } from "@/session/SessionProvider"
 
 import { useApplySettingsLanguage } from "./i18n"
@@ -45,6 +46,13 @@ export function Layout() {
         <MobileNav links={links} />
       ) : (
         <p id="nb">
+          {/* First item in the link line: the app mark as the "home" link, so the row keeps
+              legacy's centered caret+link layout. */}
+          <span>
+            <NavLink to={routes.library()} className="nav-home-link" aria-label={t("app.home")} title={t("app.home")}>
+              <img src="/favicon.svg" alt="" />
+            </NavLink>
+          </span>
           {links.map((link, i) => (
             <span key={link.to}>
               <i className="fa fa-caret-right"></i>

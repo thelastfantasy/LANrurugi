@@ -17,7 +17,7 @@ use lanrurugi_share_proto::code::ShareRef;
 use lanrurugi_share_proto::messages::{
     HelpReason, HelpState as WireState, HelperAddr, HelperStatus, RefusalReason, Request, Response,
 };
-use lanrurugi_storage::shares::{HelpState, ImportArchiveState, ImportState, ShareImport};
+use lanrurugi_storage::shares::{HelpState, ImportArchiveState, ShareImport};
 use tokio::sync::Notify;
 
 use super::{call, endpoint_hex, publish, ShareNet, ShareNetError};
@@ -75,11 +75,22 @@ pub fn spawn(state: AppState) {
     });
 }
 
+/// Whether this instance should be registered as a relay for the share right now.
+///
+/// Deliberately not "the whole import finished": a partial import already holds real pieces, and
+/// waiting for the last archive would delay every downloader behind it. The registration itself
+/// only advertises the archives that did finish, so the sharer never routes a request here for a
+/// piece this instance cannot answer.
 fn helps(record: &ShareImport) -> bool {
     record.help_deliver
         && !record.help_hidden
-        && record.state == ImportState::Done
         && record.help_state != HelpState::Ended
+        && record.archives.iter().any(|a| {
+            matches!(
+                a.state,
+                ImportArchiveState::Done | ImportArchiveState::Reused
+            )
+        })
 }
 
 async fn round(state: &AppState) {
@@ -91,6 +102,31 @@ async fn round(state: &AppState) {
     for record in imports.into_iter().filter(helps) {
         contact(state, &net, &record).await;
     }
+}
+
+/// Tells every peer this node currently helps that the help is ending, then returns how many
+/// were told. Called on shutdown: without it a helper that exits leaves the sharer handing out its
+/// address for up to 15 minutes, so importers keep dialing a node that is gone.
+pub async fn leave_all(state: &AppState) -> usize {
+    let Ok(imports) = super::import::repo(state).list().await else {
+        return 0;
+    };
+    let records: Vec<ShareImport> = imports.into_iter().filter(helps).collect();
+    let count = records.len();
+    if count == 0 {
+        return 0;
+    }
+    flush_served(state).await;
+    // Shutdown has a deadline (`docker stop` sends SIGKILL after 10s), and `leave` already retries
+    // three times with a one-second pause. Run them together rather than serially.
+    let tells = records.iter().map(|record| leave(state, record));
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        futures_util::future::join_all(tells),
+    )
+    .await;
+    tracing::info!(count, "told peers this node stopped helping");
+    count
 }
 
 /// Adds the bytes served since the last round to each record.
@@ -188,7 +224,10 @@ async fn contact(state: &AppState, net: &ShareNet, record: &ShareImport) {
                 removed_archives: Vec::new(),
             }
         }
-        Err(_) => return,
+        Err(e) => {
+            tracing::info!(error = %e, "helper registration failed; will retry");
+            return;
+        }
     };
     registered().lock().expect("registered lock").insert(key);
     if status.state == WireState::Active && first {
@@ -199,6 +238,59 @@ async fn contact(state: &AppState, net: &ShareNet, record: &ShareImport) {
         });
     }
     apply_status(state, &record.id, &status).await;
+}
+
+/// Tells the sharer this instance stopped helping, so it is dropped from the helper set at once
+/// rather than being offered to importers for the fifteen minutes an unreported helper survives.
+///
+/// One failed dial is the common case (the sharer may be mid-reconnect when helping was turned
+/// off), so the leave is attempted a few times before giving up: a helper the sharer still
+/// advertises is handed to importers, which then fail to reach it.
+pub async fn leave(state: &AppState, record: &ShareImport) {
+    const ATTEMPTS: usize = 3;
+    for attempt in 0..ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+        if leave_once(state, record).await {
+            registered()
+                .lock()
+                .expect("registered lock")
+                .remove(&record.id.to_string());
+            return;
+        }
+    }
+    tracing::warn!(
+        record = %record.id,
+        "could not tell the sharer we stopped helping; it will time the helper out"
+    );
+}
+
+/// One attempt at [`leave`]; `true` when the sharer acknowledged (or there is nothing to tell).
+async fn leave_once(state: &AppState, record: &ShareImport) -> bool {
+    let Some(code) = record.code.as_deref() else {
+        return true;
+    };
+    let Ok(reference) = ShareRef::parse(code) else {
+        return true;
+    };
+    let Some(net) = super::handle().await else {
+        return false;
+    };
+    let Ok((id, conn)) = publish::dial(state, &net, &reference).await else {
+        return false;
+    };
+    if endpoint_hex(&id) != record.sharer_endpoint_id {
+        return true;
+    }
+    call(
+        &conn,
+        Request::HelperLeave {
+            share_id: record.share_id.clone(),
+        },
+    )
+    .await
+    .is_ok()
 }
 
 pub fn reason_code(reason: HelpReason) -> &'static str {
@@ -279,7 +371,7 @@ pub fn helper_endpoint_addr(helper: &HelperAddr) -> Option<EndpointAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lanrurugi_storage::shares::{ImportArchive, HELP_OFFLINE_AFTER_SECS};
+    use lanrurugi_storage::shares::{ImportArchive, ImportState, HELP_OFFLINE_AFTER_SECS};
 
     fn record() -> ShareImport {
         let archive = |id: &str, hash: &str| ImportArchive {

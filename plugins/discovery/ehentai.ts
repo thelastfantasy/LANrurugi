@@ -249,85 +249,18 @@ async function addOriginalTitles(
   }
 }
 
-export async function discover(
-  criteria: DiscoveryCriteriaArgs,
-): Promise<DiscoveryResultShape> {
-  const logger = legacyCompat.getLogger("EH Discovery", "plugins");
-  const baseUrl = criteria.listing_url ?? searchUrl(criteria);
-  // One page is not enough: a gallery edited to carry one of this subscription's tags enters the
-  // result set at its *original* posting date, so it lands mid-list and is never visible from page
-  // one. The host caps how far to go — a tag search here can exceed 49,000 results.
-  const maxPages = Math.max(1, criteria.max_pages ?? 1);
-
-  const pages: string[] = [];
-  let next: string | undefined;
-  for (let page = 0; page < maxPages; page++) {
-    // E-Hentai pages by cursor (`next=<gid>`), not by page number: the id of the last gallery seen.
-    const url = next ? `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}next=${next}` : baseUrl;
-    logger.debug(`discovering from ${url}`);
-
-    let html: string;
-    try {
-      const response = await fetch(url, {
-        headers: { "User-Agent": "Mozilla/5.0", ...authHeaders(criteria) },
-      });
-      if (!response.ok) {
-        // A later page failing is not the same as never having looked: keep what earlier pages gave
-        // rather than discarding a partial but real answer.
-        if (pages.length > 0) {
-          logger.warn(`page ${page + 1} failed with ${response.status}; using earlier pages`);
-          break;
-        }
-        return {
-          error: {
-            error_code: "Discovery request failed",
-            data: { status: response.status },
-          },
-        };
-      }
-      html = await response.text();
-    } catch (e) {
-      if (pages.length > 0) {
-        logger.warn(`page ${page + 1} unreachable; using earlier pages`);
-        break;
-      }
-      // Could not look at all — distinct from having looked and found nothing.
-      return { error: { error_code: "Could not reach the source", data: { detail: String(e) } } };
-    }
-
-    if (looksLikeBotChallenge(html)) {
-      // Reported even mid-run: a challenge page parses to zero candidates, and treating that as "no
-      // more results" would silently truncate the listing.
-      return {
-        error: {
-          error_code: "Blocked by a bot challenge",
-          data: { detail: "Cloudflare answered with a challenge instead of a listing." },
-        },
-      };
-    }
-
-    pages.push(html);
-    next = html.match(/[?&]next=(\d+)/)?.[1];
-    // No cursor means this was the last page.
-    if (!next) break;
-  }
-
-  const html = pages.join("\n");
-
-  const degraded = looksSignedOut(html);
-
-  // Gallery links carry the gid/token pair that identifies a work; everything else on a listing page
-  // is navigation. Deduplicated because a listing links the same gallery from both its thumbnail and
-  // its title.
-  // Split per gallery row first, then read each row's own fields. Scanning the whole page for each
-  // field separately would pair the Nth title with the Mth rating as soon as any row omits one, and
-  // the host would then filter on another work's tags.
-  //
-  // E-Hentai renders two different listing layouts and the per-row container differs between them:
-  // the guest/25-per-page layout uses `gl2c` rows, while the member/100-per-page grid wraps each work
-  // in `gl1t`. Splitting only on `gl2c` matched nothing at all on the member page — which is how a
-  // signed-in check could report zero candidates while the page on screen was full of works.
-  const seen = new Set<string>();
+/** Parses the gallery rows of one listing page.
+ *
+ * Split per gallery row first, then read each row's own fields. Scanning the whole page for each
+ * field separately would pair the Nth title with the Mth rating as soon as any row omits one, and
+ * the host would then filter on another work's tags.
+ *
+ * E-Hentai renders two different listing layouts and the per-row container differs between them:
+ * the guest/25-per-page layout uses `gl2c` rows, while the member/100-per-page grid wraps each work
+ * in `gl1t`. Splitting only on `gl2c` matched nothing at all on the member page — which is how a
+ * signed-in check could report zero candidates while the page on screen was full of works.
+ */
+function parsePage(html: string, seen: Set<string>): DiscoveredCandidateResult[] {
   const candidates: DiscoveredCandidateResult[] = [];
   const linkPattern = /https:\/\/e(?:-|x)hentai\.org\/g\/(\d+)\/([0-9a-f]{10})\//;
   const rowSeparator = html.includes('class="gl2c"') ? 'class="gl2c"' : 'class="gl1t"';
@@ -376,13 +309,154 @@ export async function discover(
     });
   }
 
-  await addOriginalTitles(candidates, criteria, logger);
+  return candidates;
+}
+
+/** Unix seconds from a candidate's `posted_at`, whatever shape it currently has.
+ *
+ * The listing's own text is UTC with no zone suffix, so it is only a fallback for the rare case
+ * where `gdata` did not answer; `gdata`'s value (a Unix-seconds string) is what the age check
+ * normally sees. */
+function postedSeconds(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? (value > 1e12 ? Math.floor(value / 1000) : value) : undefined;
+  }
+  if (value instanceof Date) return Math.floor(value.getTime() / 1000);
+  const text = String(value ?? "").trim();
+  if (!text) return undefined;
+  if (/^\d+$/.test(text)) {
+    const seconds = Number(text);
+    return seconds > 1e12 ? Math.floor(seconds / 1000) : seconds;
+  }
+  // The listing prints UTC without a zone suffix, so it must be read as UTC: `Date.parse` would
+  // otherwise treat it as local time and shift both the age window and the displayed time by the
+  // browser's offset.
+  const iso = text.includes("T") ? text : text.replace(" ", "T");
+  const zoned = /([zZ]|[+-]\d{2}:?\d{2})$/.test(iso) ? iso : `${iso}Z`;
+  const parsed = Date.parse(zoned);
+  return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : undefined;
+}
+
+export async function discover(
+  criteria: DiscoveryCriteriaArgs,
+): Promise<DiscoveryResultShape> {
+  const logger = legacyCompat.getLogger("EH Discovery", "plugins");
+  const baseUrl = criteria.listing_url ?? searchUrl(criteria);
+  // One page is not enough: a gallery edited to carry one of this subscription's tags enters the
+  // result set at its *original* posting date, so it lands mid-list and is never visible from page
+  // one. The host caps how far to go — a tag search here can exceed 49,000 results.
+  const maxPages = Math.max(1, criteria.max_pages ?? 1);
+  const maxCandidates =
+    criteria.max_candidates && criteria.max_candidates > 0
+      ? criteria.max_candidates
+      : Number.MAX_SAFE_INTEGER;
+  // Unix seconds. The host turns the user's "last N days" into this; the listing rows carry the
+  // publication time themselves, so a page that is entirely outside the window ends the scan before
+  // the next request rather than after reading the rest of a tag search.
+  const cutoff = criteria.posted_after;
+
+  const seen = new Set<string>();
+  const candidates: DiscoveredCandidateResult[] = [];
+  let next: string | undefined = criteria.start_after?.trim() || undefined;
+  let pagesRead = 0;
+  let degraded = false;
+  let stop: DiscoveryResultShape["stop_reason"];
+
+  for (let page = 0; page < maxPages; page++) {
+    // E-Hentai pages by cursor (`next=<gid>`), not by page number: the id of the last gallery seen.
+    const url = next ? `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}next=${next}` : baseUrl;
+    logger.debug(`discovering from ${url}`);
+
+    let html: string;
+    try {
+      const response = await fetch(url, {
+        headers: { "User-Agent": "Mozilla/5.0", ...authHeaders(criteria) },
+      });
+      if (!response.ok) {
+        // A later page failing is not the same as never having looked: keep what earlier pages gave
+        // rather than discarding a partial but real answer.
+        if (pagesRead > 0) {
+          logger.warn(`page ${page + 1} failed with ${response.status}; using earlier pages`);
+          break;
+        }
+        return {
+          error: {
+            error_code: "Discovery request failed",
+            data: { status: response.status },
+          },
+        };
+      }
+      html = await response.text();
+    } catch (e) {
+      if (pagesRead > 0) {
+        logger.warn(`page ${page + 1} unreachable; using earlier pages`);
+        break;
+      }
+      // Could not look at all — distinct from having looked and found nothing.
+      return { error: { error_code: "Could not reach the source", data: { detail: String(e) } } };
+    }
+
+    if (looksLikeBotChallenge(html)) {
+      // Reported even mid-run: a challenge page parses to zero candidates, and treating that as "no
+      // more results" would silently truncate the listing.
+      return {
+        error: {
+          error_code: "Blocked by a bot challenge",
+          data: { detail: "Cloudflare answered with a challenge instead of a listing." },
+        },
+      };
+    }
+
+    if (looksSignedOut(html)) degraded = true;
+
+    const pageCandidates = parsePage(html, seen);
+    await addOriginalTitles(pageCandidates, criteria, logger);
+
+    // The window bounds what a check *acts on*, not what the pane may show: a page that straddles
+    // the boundary is returned whole, old rows included, so the preview can grey them out and
+    // explain its own count. A page that is entirely outside the window is a different case —
+    // nothing on it is worth showing, and the next page is older still — so it is dropped here
+    // instead of being handed to the host only to be discarded.
+    if (cutoff !== undefined) {
+      const dated = pageCandidates
+        .map((c) => postedSeconds(c.posted_at))
+        .filter((posted): posted is number => posted !== undefined);
+      // A whole page outside the window means the next one is older still: stop rather than paging
+      // through the rest of the result set for nothing.
+      if (dated.length > 0 && dated.every((posted) => posted < cutoff)) {
+        stop = "age";
+        break;
+      }
+    }
+    // Counted only once its rows are actually kept: a page whose rows are all outside the window
+    // ends the walk but contributes neither rows nor a page to the pane's totals.
+    pagesRead++;
+    candidates.push(...pageCandidates);
+    next = html.match(/[?&]next=(\d+)/)?.[1];
+    if (!next) {
+      stop = "end";
+      break;
+    }
+    if (candidates.length >= maxCandidates) {
+      stop = "cap";
+      break;
+    }
+  }
+
+  const trimmed = candidates.slice(0, maxCandidates);
+  if (candidates.length > maxCandidates) stop = "cap";
 
   if (degraded) {
     logger.warn(
-      `discovery ran without a usable login; reporting ${candidates.length} candidate(s) as incomplete`,
+      `discovery ran without a usable login; reporting ${trimmed.length} candidate(s) as incomplete`,
     );
   }
 
-  return { candidates, degraded };
+  return {
+    candidates: trimmed,
+    degraded,
+    next_cursor: next,
+    pages_read: pagesRead,
+    stop_reason: stop,
+  };
 }

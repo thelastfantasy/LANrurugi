@@ -248,6 +248,11 @@ async fn preview_thumbnail(Path((preview_id, archive_id)): Path<(String, String)
     }
 }
 
+/// Serde default for "this instance relays what it imports", which is on unless turned off.
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
 struct CreateBody {
     code: String,
@@ -255,7 +260,9 @@ struct CreateBody {
     preview_id: Option<String>,
     #[serde(default)]
     category: Option<String>,
-    #[serde(default)]
+    /// Defaults to on: importing any part of a share makes this instance a relay for it, which is
+    /// the behaviour the settings page documents. The client can still opt out per import.
+    #[serde(default = "default_true")]
     help_deliver: bool,
     #[serde(default)]
     inherit_categories: bool,
@@ -329,7 +336,6 @@ async fn create_import(
             metadata_tags: Vec::new(),
             auto_fetch_metadata: false,
             overwrite_on_duplicate: false,
-            conflict_policy: Default::default(),
             state: DownloadQueueState::Queued,
         })
         .await;
@@ -404,6 +410,73 @@ async fn create_import(
         .into_response()
 }
 
+/// Restarts the imports a restart cut in half. `main`'s startup sweep marks every orphaned queue
+/// item as an error, which is right for a plugin download — its bytes are gone — and wrong for an
+/// import: the partial file and its bao outboard survive, so the transfer resumes at the piece it
+/// stopped on and nothing is downloaded twice.
+pub async fn resume_interrupted_imports(state: &AppState) {
+    let imports = match import::repo(state).list().await {
+        Ok(imports) => imports,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to list share imports for restart recovery");
+            return;
+        }
+    };
+    // Directories of imports that are not coming back: a `.part` is pre-sized to the whole
+    // archive, so each abandoned one holds a whole share's worth of the temp quota.
+    let live: std::collections::HashSet<String> = imports
+        .iter()
+        .filter(|r| matches!(r.state, ImportState::Transferring | ImportState::Rebuilding))
+        .map(|r| r.id.to_string())
+        .collect();
+    let root = state.library.temp_dir.join("share").join("import");
+    if let Ok(mut entries) = tokio::fs::read_dir(&root).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if live.contains(&name) {
+                continue;
+            }
+            if let Err(e) = tokio::fs::remove_dir_all(entry.path()).await {
+                tracing::warn!(path = %entry.path().display(), error = %e, "failed to remove an abandoned import directory");
+            }
+        }
+    }
+    for mut record in imports {
+        if !matches!(
+            record.state,
+            ImportState::Transferring | ImportState::Rebuilding
+        ) {
+            continue;
+        }
+        let item_id = record.queue_item_id.clone();
+        match state.download_queue.get(&item_id).await {
+            Ok(Some(mut item)) => {
+                if item.state != DownloadQueueState::Queued {
+                    item.state = DownloadQueueState::Queued;
+                    item.error = None;
+                    if let Err(e) = state.download_queue.update(&item).await {
+                        tracing::warn!(error = %e, import = %record.id, "failed to requeue an interrupted import");
+                        continue;
+                    }
+                }
+            }
+            _ => {
+                // No runner left to resume: say so instead of leaving a row "transferring" forever.
+                record.state = ImportState::Failed;
+                record.error = Some("interrupted by a restart".to_string());
+                let _ = import::repo(state).save(&record).await;
+                continue;
+            }
+        }
+        match crate::download_queue::start_item_from_subscription(state, &item_id).await {
+            Ok(_) => tracing::info!(import = %record.id, "resumed an interrupted import"),
+            Err(e) => {
+                tracing::warn!(error = %e, import = %record.id, "failed to resume an interrupted import")
+            }
+        }
+    }
+}
+
 /// One import with every archive, as `GET /shares/imports/{id}` returns it. `with_code` adds the
 /// share code, which only that session-only route may carry: the queue stream is readable by
 /// read-only tokens.
@@ -437,6 +510,10 @@ fn summary(import: &ShareImport) -> Value {
     json!({
         "id": import.id,
         "title": import.title,
+        // Which share this row is: the code is what an admin recognises, the id is what the API
+        // uses. Null only for a record whose share was already gone when it was written.
+        "code": import.code,
+        "share_id": import.share_id,
         "queue_item_id": import.queue_item_id,
         "state": import.state,
         "error": import.error,
@@ -487,7 +564,13 @@ async fn list_imports(State(state): State<AppState>, Query(q): Query<ListQuery>)
                 .filter(|i| {
                     !helping
                         || (!i.help_hidden
-                            && (i.help_deliver || i.help_state != HelpState::Inactive))
+                            && i.help_deliver
+                            // Only what is relaying right now: a row that stopped serving has no
+                            // place in a table of current helpers.
+                            && !matches!(
+                                i.help_state,
+                                HelpState::Inactive | HelpState::Ended
+                            ))
                 })
                 .map(summary)
                 .collect::<Vec<_>>(),
@@ -541,6 +624,7 @@ async fn update_import(
         Ok(r) => r,
         Err(r) => return r,
     };
+    let was_helping = record.help_deliver;
     if let Some(on) = body.help_deliver {
         record.help_deliver = on;
     }
@@ -558,6 +642,14 @@ async fn update_import(
     drop(guard);
     if record.help_deliver {
         share_net::helper::wake();
+    } else if was_helping {
+        // Tell the sharer, or importers keep being handed an address that no longer serves for
+        // as long as an unreported helper survives (15 minutes).
+        let state = state.clone();
+        let leaving = record.clone();
+        tokio::spawn(async move {
+            share_net::helper::leave(&state, &leaving).await;
+        });
     }
     match saved {
         Ok(()) => Json(summary(&record)).into_response(),

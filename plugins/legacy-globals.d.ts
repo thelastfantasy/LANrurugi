@@ -498,6 +498,12 @@ interface DiscoveryCriteriaArgs {
    * enters the result set *in the middle*, ordered by its original publication date, so it is never
    * visible from page one. */
   max_pages?: number;
+  /** Opaque resume point returned as `next_cursor` by a previous call. */
+  start_after?: string;
+  /** Unix seconds; entries older than this are outside the scan's window. */
+  posted_after?: number;
+  /** Never return more than this many candidates in one call. */
+  max_candidates?: number;
 }
 
 /** One work a listing offered — mirrors `plugin-sdk.ts`'s `DiscoveredCandidate`. */
@@ -539,6 +545,12 @@ interface DiscoveryResultShape {
   /** Set whenever the sign-in was missing, expired, or rejected — even if the listing parsed fine. */
   degraded?: boolean;
   error?: PluginErrorResult;
+  /** Where the next call should resume; omit when the listing ended. */
+  next_cursor?: string;
+  /** Listing pages read by this call. */
+  pages_read?: number;
+  /** Why reading stopped short: `"end" | "age" | "cap"`. */
+  stop_reason?: string;
 }
 
 /** `execDownload`'s return shape — mirrors `plugin-sdk.ts`'s `DownloadResult` field-for-field.

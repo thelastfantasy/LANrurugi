@@ -1,8 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query"
-import { type CSSProperties, useEffect, useRef, useState } from "react"
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { ApiError, sendJson } from "@/api/client"
+import { sendJson } from "@/api/client"
 import {
   type AiGroupSuggestion,
   type GroupReview,
@@ -700,10 +700,12 @@ export function AiSmartTankoubonDrawer({ open, onClose }: { open: boolean; onClo
 function SuggestionsBody({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
   const archives = useArchives()
-  const aiGroupSuggestions = useAiGroupSuggestions()
-  const [suggestions, setSuggestions] = useState<AiGroupSuggestion[] | null>(() => cachedSuggestions())
+  const { state: aiGroupState, start: startGrouping } = useAiGroupSuggestions()
+  // The list handed over from a previous mount (module-level TTL cache), read once.
+  const [initialList] = useState<AiGroupSuggestion[] | null>(() => cachedSuggestions())
   // Read once: whether this mount already has a list from the cache (then it must not re-request).
-  const startedFromCache = useRef(suggestions !== null)
+  const startedFromCache = useRef(initialList !== null)
+  const [dismissed, setDismissed] = useState<string[]>([])
   const [page, setPage] = useState(0)
   const [showIgnored, setShowIgnored] = useState(false)
 
@@ -719,38 +721,60 @@ function SuggestionsBody({ onClose }: { onClose: () => void }) {
     tankoubonNameById.set(tank.id, tank.name)
   }
 
+  // The POST only starts (or joins) the server-side run — the answer itself arrives on the hook's
+  // SSE stream, which is what lets this drawer be closed and reopened without losing the work.
   // A `let cancelled` local (not a ref) so StrictMode's double-invoke in dev doesn't leave the
   // second, actually-mounted instance permanently stuck on the skeleton.
-  const { mutate: requestSuggestions } = aiGroupSuggestions
   useEffect(() => {
     if (startedFromCache.current) return
-    let cancelled = false
-    requestSuggestions(undefined, {
-      onSuccess: (data) => {
-        suggestionCache = { at: Date.now(), suggestions: data.suggestions }
-        if (!cancelled) setSuggestions(data.suggestions)
-      },
-      onError: (err) => {
-        if (cancelled) return
-        onClose()
-        // `embed_unavailable` means the local worker/model is missing — an environment problem the
-        // user can act on (install the model / fix the image), not a generic failure. Without this
-        // distinction the old behaviour was indistinguishable from "nothing to suggest".
-        const unavailable =
-          err instanceof ApiError &&
-          (err.body as { error?: string } | undefined)?.error === "embed_unavailable"
-        toast({
-          heading: t(unavailable ? "library.aiGroupingUnavailable" : "library.aiGroupingFailed") ?? undefined,
-          text: unavailable ? t("library.aiGroupingUnavailableHint") : String(err),
-          icon: "error",
-        })
-      },
+    startGrouping().catch((err) => {
+      onClose()
+      toast({
+        heading: t("library.aiGroupingFailed") ?? undefined,
+        text: String(err),
+        icon: "error",
+      })
     })
-    return () => {
-      cancelled = true
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Derived, never mirrored into state: `running` with suggestions is the graph-only result
+  // published before the (network-bound) record write, so the first cards appear seconds before
+  // the full run finishes, and a `done` event simply replaces them.
+  const serverList =
+    aiGroupState && (aiGroupState.status === "ready" || aiGroupState.status === "running")
+      ? aiGroupState.suggestions
+      : undefined
+  const suggestions = useMemo(() => {
+    const list = serverList ?? initialList
+    if (!list) return null
+    return list.filter((s) => !dismissed.includes(s.suggestion_id))
+  }, [serverList, initialList, dismissed])
+
+  // Keep the reopen cache current — an external store, so writing it from an effect is the
+  // intended use (unlike local state, which is derived above).
+  useEffect(() => {
+    if (serverList) suggestionCache = { at: Date.now(), suggestions: serverList }
+  }, [serverList])
+
+  // A run-level failure (as opposed to a request that never got off the ground) arrives as an
+  // `error` event. `embed_unavailable` means the local worker/model is missing — an environment
+  // problem the user can act on (install the model / fix the image), not a generic failure.
+  const reportedErrorRun = useRef<string | null>(null)
+  useEffect(() => {
+    if (aiGroupState?.status !== "error") return
+    const key = `${aiGroupState.run_id ?? ""}:${aiGroupState.code ?? ""}`
+    if (reportedErrorRun.current === key) return
+    reportedErrorRun.current = key
+    const unavailable = aiGroupState.code === "embed_unavailable"
+    onClose()
+    toast({
+      heading: t(unavailable ? "library.aiGroupingUnavailable" : "library.aiGroupingFailed") ?? undefined,
+      text: unavailable ? t("library.aiGroupingUnavailableHint") : (aiGroupState.message ?? ""),
+      icon: "error",
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiGroupState])
 
   useEffect(() => {
     if (!suggestions || suggestions.length <= 1 || showIgnored) return
@@ -780,7 +804,7 @@ function SuggestionsBody({ onClose }: { onClose: () => void }) {
 
   return (
     <div {...swipe} style={{ ...swipe.style, display: "flex", flexDirection: "column", gap: 12, minHeight: "100%" }}>
-        {aiGroupSuggestions.isPending || !suggestions ? (
+        {!suggestions ? (
           <AiSkeleton />
         ) : showIgnored ? (
           <IgnoredSuggestionsList
@@ -853,14 +877,9 @@ function SuggestionsBody({ onClose }: { onClose: () => void }) {
               style={{ marginTop: 6 }}
               onClick={() => {
                 suggestionCache = null
-                requestSuggestions(undefined, {
-                  onSuccess: (data) => {
-                    suggestionCache = { at: Date.now(), suggestions: data.suggestions }
-                    setSuggestions(data.suggestions)
-                  },
-                })
+                void startGrouping()
               }}
-              disabled={aiGroupSuggestions.isPending}
+              disabled={suggestions === null}
             >
               {t("library.aiGroupingRecheck")}
             </button>
@@ -877,7 +896,7 @@ function SuggestionsBody({ onClose }: { onClose: () => void }) {
             onNext={() => setPage((p) => Math.min(suggestions.length - 1, p + 1))}
             onJump={setPage}
             onDismissed={() => {
-              setSuggestions((prev) => (prev ?? []).filter((s) => s !== current))
+              setDismissed((prev) => [...prev, current.suggestion_id])
               setPage((p) => Math.max(0, Math.min(p, suggestions.length - 2)))
             }}
           />

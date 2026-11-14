@@ -154,3 +154,9 @@ Nginx Proxy Manager 默认已经转发 `Host`、`X-Forwarded-Proto` 与 `X-Forwa
 1. 打开 `https://manga.example.com`，能正常登录且刷新后仍保持登录。
 2. 在下载队列里添加一个任务，进度条应当连续推进，而不是在结束时才一次跳到 100%。
 3. 活动记录页（`/activity`）里，登录记录显示的是你的客户端 IP，而不是代理的地址。
+
+## Cloudflare 与独立下载域名
+
+站点挂在 Cloudflare 橙云后面、下载又要绕开它时，需要的是**两个域名**而不是一份通用配置：页面域名继续走橙云，下载域名用灰云（A/AAAA 直连）。完整的双域名 nginx 参考配置在
+[`/nginx/lanrurugi-dual-domain.conf`](/nginx/lanrurugi-dual-domain.conf)，设计说明见
+[分享 → 档案下载地址](/guide/sharing/#连接) 一节。

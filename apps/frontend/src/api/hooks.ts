@@ -6,7 +6,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
-import { useEffect, useState, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
 
 import { clearDiagnosticsDevice } from "@/diagnostics/device"
 import { startDiagnostics } from "@/diagnostics/sdk"
@@ -46,13 +46,15 @@ import type {
   CategoryMetadata,
   ChangelogRelease,
   CheckCycle,
-  ComparisonResult,
   Condition,
   DownloadQueueItem,
   DownloadQueueListResponse,
+  DuplicateCompare,
   DuplicateGroup,
+  DuplicateGroupsResponse,
+  DuplicatePatchPick,
+  DuplicatePatchResult,
   EmptyBinResult,
-  ExportPatchInsertion,
   HistoryEntry,
   HoverPageOrderResponse,
   ImportSnapshotMetadata,
@@ -91,6 +93,7 @@ import type {
   StatTag,
   Subscription,
   SubscriptionBody,
+  SubscriptionCheckProgress,
   SubscriptionPreview,
   SubscriptionSource,
   TankBookmarkedPageResponse,
@@ -522,18 +525,6 @@ export function useUpdateArchiveMetadata(id: string) {
 }
 
 /** Renames the archive file; `stem` is the basename without extension (extension is kept). */
-export function useRenameArchive(id: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (stem: string) =>
-      sendJson<{ filename: string }>("PUT", `/archives/${id}/rename`, { stem }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["archive", id] })
-      queryClient.invalidateQueries({ queryKey: ["archives"] })
-      queryClient.invalidateQueries({ queryKey: ["search"] })
-    },
-  })
-}
 
 /** Regenerates the archive's cover thumbnail from the given page. */
 export function useSetArchiveThumbnail(id: string) {
@@ -678,7 +669,11 @@ export function useDeleteArchive() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => sendJson("DELETE", `/archives/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["archives"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["archives"] })
+      // A deleted member drops out of its duplicate group card.
+      queryClient.invalidateQueries({ queryKey: ["duplicates"] })
+    },
   })
 }
 
@@ -832,15 +827,116 @@ export interface AiGroupSuggestion {
   review?: GroupReview
 }
 
-/** Whole-library grouping suggestions; local-model-only (503 `model_not_ready` if not ready). */
+/** What the server currently knows about the whole-library grouping pass. The pass is a detached
+ * run on the server, so this is a state rather than the result of one request: `running` carries
+ * its phase and progress, `ready` means a cached answer is available. */
+export type AiGroupSuggestionsState =
+  | { status: "idle" }
+  | {
+      status: "running"
+      run_id?: string
+      phase?: string
+      done?: number
+      total?: number
+      elapsed_secs?: number
+      /** The graph-only result, present once the grouping scan has finished. */
+      suggestions?: AiGroupSuggestion[]
+    }
+  | {
+      status: "ready"
+      suggestions: AiGroupSuggestion[]
+      reviewed?: boolean
+      computed_at?: number
+      duration_ms?: number
+    }
+  | { status: "error"; code?: string; message?: string; run_id?: string }
+
+const AI_GROUP_SUGGESTIONS_KEY = ["tankoubons", "ai-group-suggestions", "state"] as const
+
+/** Starts (or joins) the grouping run and follows it over SSE.
+ *
+ * This used to be a `useMutation` POSTing to an endpoint that ran the whole pass inside the
+ * request. On a large library that pass outlives Cloudflare's ~100s origin limit, so the browser
+ * only ever got a 524 while the server discarded the work along with the dropped request — and
+ * since the cache was written at the very end, every retry started from zero. The POST now only
+ * starts or joins the run; the answer arrives as `full`/`status`/`partial`/`done` events, and a
+ * dropped connection costs nothing because re-mounting re-subscribes to the same run. */
 export function useAiGroupSuggestions() {
-  return useMutation({
-    mutationFn: (includeIgnored?: boolean) =>
-      sendJson<{ suggestions: AiGroupSuggestion[] }>(
-        "POST",
-        `/tankoubons/ai-group-suggestions${includeIgnored ? "?include_ignored=true" : ""}`,
-      ),
+  const queryClient = useQueryClient()
+  const query = useQuery({
+    queryKey: AI_GROUP_SUGGESTIONS_KEY,
+    // The stream is authoritative; this exists so a blocked EventSource still has a way in.
+    queryFn: () => fetchJson<AiGroupSuggestionsState>("/tankoubons/ai-group-suggestions/result"),
+    enabled: false,
+    staleTime: Infinity,
+    gcTime: Infinity,
+    retry: false,
   })
+
+  useEffect(() => {
+    const set = (state: AiGroupSuggestionsState) =>
+      queryClient.setQueryData<AiGroupSuggestionsState>(AI_GROUP_SUGGESTIONS_KEY, state)
+
+    const source = new EventSource("/api/tankoubons/ai-group-suggestions/stream")
+    const onEvent = (event: Event) => {
+      const raw = (event as MessageEvent<string>).data
+      // A native connection failure fires `error` with no data; EventSource reconnects by itself
+      // and the server answers every (re)connect with a fresh `full`, so nothing to do here.
+      if (!raw) return
+      const data = JSON.parse(raw) as Record<string, unknown>
+      switch (event.type) {
+        case "full":
+          set(data as unknown as AiGroupSuggestionsState)
+          break
+        case "status":
+          set((data.status ?? {}) as AiGroupSuggestionsState)
+          break
+        case "partial":
+        case "done":
+          set({
+            status: "ready",
+            suggestions: (data.suggestions as AiGroupSuggestion[] | undefined) ?? [],
+            reviewed: data.reviewed as boolean | undefined,
+          })
+          break
+        case "error":
+          set({
+            status: "error",
+            code: data.code as string | undefined,
+            message: data.message as string | undefined,
+            run_id: data.run_id as string | undefined,
+          })
+          break
+        // `cancelled` needs no handling: it only happens when a newer run supersedes this one, and
+        // that run's own `status`/`full` follows immediately.
+      }
+    }
+    for (const name of ["full", "status", "partial", "done", "error", "cancelled"]) {
+      source.addEventListener(name, onEvent)
+    }
+    return () => source.close()
+  }, [queryClient])
+
+  // One POST in flight at a time: development StrictMode runs mount effects twice, which would
+  // otherwise start the same run twice and report the same failure twice. Cleared once settled, so
+  // "recheck" always sends a fresh one.
+  const startInFlight = useRef<Promise<AiGroupSuggestionsState> | null>(null)
+  const start = useCallback(() => {
+    startInFlight.current ??= sendJson<AiGroupSuggestionsState>(
+      "POST",
+      "/tankoubons/ai-group-suggestions/run",
+    )
+      .then((state) => {
+        queryClient.setQueryData<AiGroupSuggestionsState>(AI_GROUP_SUGGESTIONS_KEY, state)
+        return state
+      })
+      .finally(() => {
+        startInFlight.current = null
+      })
+    return startInFlight.current
+  }, [queryClient])
+
+  return { state: query.data, start }
 }
 
 export interface IgnoredGroupSuggestion {
@@ -1285,6 +1381,34 @@ export function useCheckSubscriptionNow() {
  *  by mistake or for works rejected under a rule that has since been widened. */
 /** The user's own "no" about a matched work: never downloaded by this subscription again, and only
  *  undoable on purpose (`useForgetSeen`). */
+/** Live progress of subscription checks in flight, keyed by subscription id.
+ *
+ * The stream is only a display aid: the cycle record a finished check writes is the authority, so
+ * a dropped connection (or a check started before this page opened) costs nothing.
+ */
+export function useSubscriptionCheckProgress() {
+  const [progress, setProgress] = useState<Record<string, SubscriptionCheckProgress>>({})
+  useEffect(() => {
+    const source = new EventSource("/api/subscriptions/stream")
+    source.addEventListener("progress", (e) => {
+      const raw = (e as MessageEvent<string>).data
+      if (!raw) return
+      const data = JSON.parse(raw) as SubscriptionCheckProgress
+      setProgress((old) => {
+        const next = { ...old }
+        // `done` removes the row rather than showing a finished counter; the history modal is
+        // where a finished check is read.
+        if (data.done) delete next[data.subscription_id]
+        else next[data.subscription_id] = data
+        return next
+      })
+    })
+    // A native connection failure fires `error` with no data; EventSource reconnects by itself.
+    return () => source.close()
+  }, [])
+  return progress
+}
+
 export function useBlockSubscriptionSources() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -1747,6 +1871,28 @@ export function useCleanDatabase() {
   })
 }
 
+/** Collapses duplicate tags across the whole library — idempotent, safe to run again any time. */
+export function useTidyTags() {
+  return useMutation({
+    mutationFn: () =>
+      sendJson<{ scanned: number; repaired: number }>("POST", "/database/tidy-tags"),
+  })
+}
+
+/** 027: fills in the whole-file fingerprint of archives catalogued before it was recorded. */
+export function useBlake3Backfill() {
+  return useMutation({
+    mutationFn: () =>
+      sendJson<{ job: string; already_running?: boolean }>("POST", "/database/blake3-backfill"),
+  })
+}
+
+export function useStopBlake3Backfill() {
+  return useMutation({
+    mutationFn: () => sendJson<{ stopped: boolean }>("DELETE", "/database/blake3-backfill"),
+  })
+}
+
 export function useDropDatabase() {
   return useMutation({
     mutationFn: () => sendJson("POST", "/database/drop"),
@@ -1757,6 +1903,54 @@ export function useDuplicates() {
   return useQuery({
     queryKey: ["duplicates"],
     queryFn: () => fetchJson<DuplicateGroup[]>("/database/duplicates"),
+  })
+}
+
+export function useDuplicateGroups() {
+  return useQuery({
+    queryKey: ["duplicates", "groups"],
+    queryFn: () => fetchJson<DuplicateGroupsResponse>("/database/duplicates/groups"),
+  })
+}
+
+/** Shared by the pair view and the anchor-vs-each multi view, so either reuses the other's result. */
+export function duplicateCompareQuery(a: string | null, b: string | null) {
+  return {
+    queryKey: ["duplicates", "compare", a, b],
+    queryFn: () =>
+      fetchJson<DuplicateCompare>(
+        `/database/duplicates/compare?a=${encodeURIComponent(a ?? "")}&b=${encodeURIComponent(b ?? "")}`,
+      ),
+  }
+}
+
+export function useDuplicateCompare(a: string | null, b: string | null) {
+  return useQuery({ ...duplicateCompareQuery(a, b), enabled: a !== null && b !== null })
+}
+
+export function useSaveDuplicateDecisions() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: {
+      group_key: string
+      decisions: Record<string, "keep" | "discard" | "undecided">
+      not_duplicate_pairs?: [string, string][]
+    }) => sendJson("POST", "/database/duplicates/decisions", body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["duplicates"] })
+    },
+  })
+}
+
+export function useCreateDuplicatePatch() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { target: string; source: string; pages: DuplicatePatchPick[] }) =>
+      sendJson<{ result: DuplicatePatchResult }>("POST", "/database/duplicates/patch", body),
+    onSuccess: (_data, body) => {
+      queryClient.invalidateQueries({ queryKey: ["duplicates"] })
+      queryClient.invalidateQueries({ queryKey: ["archive-pages", body.target] })
+    },
   })
 }
 
@@ -2008,6 +2202,44 @@ export function useStartQueueItem() {
       queryClient.invalidateQueries({ queryKey: ["download-queue"] })
       queryClient.invalidateQueries({ queryKey: ["jobs"] })
     },
+    // A refused start (source already imported, same source already downloading) still rewrites
+    // the item into its blocked/error state server-side. Refetching here keeps the row honest
+    // even when the SSE delta is missed or the server predates it — otherwise the click just
+    // looks dead.
+    onError: () => queryClient.invalidateQueries({ queryKey: ["download-queue"] }),
+  })
+}
+
+/** "Download anyway" for a row stopped by the source-URL guard: marks the item forced (so
+ * "clear completed" leaves it alone) and starts it in one request. */
+export function useForceDownloadQueueItem() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<{ job: string }>("POST", `/download_queue/${encodeURIComponent(id)}/force`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+      queryClient.invalidateQueries({ queryKey: ["jobs"] })
+    },
+    onError: () => queryClient.invalidateQueries({ queryKey: ["download-queue"] }),
+  })
+}
+
+/** Re-runs cataloguing over the bytes a failed ingest kept on disk. */
+export function useReingestQueueItem() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<{ archive_ids: string[] }>(
+        "POST",
+        `/download_queue/${encodeURIComponent(id)}/reingest`,
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+      queryClient.invalidateQueries({ queryKey: ["jobs"] })
+      queryClient.invalidateQueries({ queryKey: ["archives"] })
+    },
+    onError: () => queryClient.invalidateQueries({ queryKey: ["download-queue"] }),
   })
 }
 
@@ -2090,79 +2322,10 @@ export function usePauseQueueItem() {
   })
 }
 
-/** Overwrite B with the new download; `insertions` optionally packages B's unique pages into a
- * `.patch.zip` first. */
-export function useOverwriteQueueItem() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: ({ id, insertions }: { id: string; insertions?: ExportPatchInsertion[] }) =>
-      sendJson<{ archive_id: string }>("POST", `/download_queue/${encodeURIComponent(id)}/overwrite`, {
-        insertions: insertions ?? [],
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
-      queryClient.invalidateQueries({ queryKey: ["jobs"] })
-    },
-  })
-}
-
-export function useRenameQueueItem() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: ({ id, filename }: { id: string; filename: string }) =>
-      sendJson<{ archive_id: string }>("POST", `/download_queue/${encodeURIComponent(id)}/rename`, {
-        filename,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
-      queryClient.invalidateQueries({ queryKey: ["jobs"] })
-    },
-  })
-}
-
-/** Read-only comparison — resolves nothing, so no invalidation. */
-export function useCompareQueueItem() {
-  return useMutation({
-    mutationFn: (id: string) => sendJson<{ result: ComparisonResult }>("POST", `/download_queue/${encodeURIComponent(id)}/compare`),
-  })
-}
-
-/** Natural-sorted real entry names for one side — anchors are filenames, not indices. */
-export function useComparePages(id: string | null, side: "a" | "b") {
-  return useQuery({
-    queryKey: ["compare-pages", id, side],
-    queryFn: () => fetchJson<{ pages: string[] }>(`/download_queue/${encodeURIComponent(id ?? "")}/compare/pages?side=${side}`),
-    enabled: id !== null,
-  })
-}
-
-/** Builds a `.patch.zip` Blob for the user to place manually; installs nothing. */
-export function useExportComparePatch() {
-  return useMutation({
-    mutationFn: ({ id, insertions }: { id: string; insertions: ExportPatchInsertion[] }) =>
-      sendJsonForBlob("POST", `/download_queue/${encodeURIComponent(id)}/compare/export-patch`, { insertions }),
-  })
-}
-
 /** Packs several installed plugins' `.ts` files into one `.zip`. */
 export function useExportPluginsBatch() {
   return useMutation({
     mutationFn: (namespaces: string[]) => sendJsonForBlob("POST", "/plugins/export-batch", { namespaces }),
-  })
-}
-
-/** Keep library archive B, discard the download; always deletes the queue item on success. */
-export function useKeepSideB() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: ({ id, insertions }: { id: string; insertions?: ExportPatchInsertion[] }) =>
-      sendJson<{ success: number }>("POST", `/download_queue/${encodeURIComponent(id)}/compare/keep-b`, {
-        insertions: insertions ?? [],
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
-      queryClient.invalidateQueries({ queryKey: ["jobs"] })
-    },
   })
 }
 

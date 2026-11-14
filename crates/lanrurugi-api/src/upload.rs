@@ -26,7 +26,7 @@ use sha1::{Digest, Sha1};
 use crate::activity::record_manual;
 use crate::auth_context::AuthContext;
 use crate::common::error;
-use crate::download_manager::ingest::ingest_downloaded_file;
+use crate::download_manager::ingest::ingest_uploaded_file;
 use crate::download_manager::stream::DownloadedFile;
 use crate::plugins::update_queue_item_state;
 use crate::AppState;
@@ -262,13 +262,14 @@ pub(crate) fn sanitize_filename(name: &str) -> String {
 async fn stream_field_to_file(
     field: &mut axum::extract::multipart::Field<'_>,
     path: &Path,
-) -> Result<(u64, String), String> {
+) -> Result<(u64, String, String), String> {
     use tokio::io::AsyncWriteExt;
 
     let mut file = tokio::fs::File::create(path)
         .await
         .map_err(|e| format!("could not stage the upload: {e}"))?;
     let mut hasher = Sha1::new();
+    let mut fingerprint = blake3::Hasher::new();
     let mut written: u64 = 0;
     loop {
         let chunk = match field.chunk().await {
@@ -280,6 +281,7 @@ async fn stream_field_to_file(
         };
         let Some(chunk) = chunk else { break };
         hasher.update(&chunk);
+        fingerprint.update(&chunk);
         written += chunk.len() as u64;
         if let Err(e) = file.write_all(&chunk).await {
             let _ = tokio::fs::remove_file(path).await;
@@ -290,7 +292,11 @@ async fn stream_field_to_file(
         let _ = tokio::fs::remove_file(path).await;
         return Err(format!("could not stage the upload: {e}"));
     }
-    Ok((written, hex_encode(&hasher.finalize())))
+    Ok((
+        written,
+        hex_encode(&hasher.finalize()),
+        fingerprint.finalize().to_hex().to_string(),
+    ))
 }
 
 /// Staging path for an upload: `temp_dir` (never watched — `crate::watcher::watch` only recurses
@@ -319,6 +325,8 @@ pub(crate) struct StagedUpload {
     pub file_name: String,
     pub bytes: u64,
     pub sha1: String,
+    /// Whole-file BLAKE3, taken in the same pass as `sha1` (027 FR-010).
+    pub blake3: String,
 }
 
 /// The user-supplied metadata a client may attach to an upload. Names match the one-shot
@@ -341,13 +349,15 @@ pub(crate) struct UploadMetadata {
 /// trust it to stay in sync with the file" or "hash the finished file once". This is the second:
 /// self-healing by construction (no state that can desync from the bytes), at the cost of one
 /// sequential read of an already-local file.
-async fn sha1_of_file(path: &Path) -> Result<String, String> {
+/// SHA-1 (the client's checksum) and BLAKE3 (the archive's fingerprint) in one read.
+async fn hashes_of_file(path: &Path) -> Result<(String, String), String> {
     use tokio::io::AsyncReadExt;
 
     let mut file = tokio::fs::File::open(path)
         .await
         .map_err(|e| format!("could not read the staged upload: {e}"))?;
     let mut hasher = Sha1::new();
+    let mut fingerprint = blake3::Hasher::new();
     let mut buffer = vec![0u8; 1024 * 1024];
     loop {
         let read = file
@@ -358,8 +368,12 @@ async fn sha1_of_file(path: &Path) -> Result<String, String> {
             break;
         }
         hasher.update(&buffer[..read]);
+        fingerprint.update(&buffer[..read]);
     }
-    Ok(hex_encode(&hasher.finalize()))
+    Ok((
+        hex_encode(&hasher.finalize()),
+        fingerprint.finalize().to_hex().to_string(),
+    ))
 }
 
 /// The one-shot route: one multipart request carrying the whole file. Kept as-is for API clients
@@ -372,7 +386,7 @@ async fn upload_archive(
 ) -> Response {
     // `(staging path, bytes written, lowercase-hex SHA-1)` — the file streams to disk as it
     // arrives, so nothing larger than one network chunk is ever held in memory.
-    let mut staged: Option<(PathBuf, u64, String)> = None;
+    let mut staged: Option<(PathBuf, u64, String, String)> = None;
     let mut file_name: Option<String> = None;
     let mut checksum: Option<String> = None;
     let mut metadata = UploadMetadata::default();
@@ -389,7 +403,7 @@ async fn upload_archive(
                 // More than one `file` part is not a shape any caller sends; the old buffer-based
                 // code kept the last one and the earlier bytes simply became unreachable. Keep the
                 // same "last wins" behaviour without leaking the earlier part's staged file.
-                if let Some((previous, _, _)) = staged.take() {
+                if let Some((previous, _, _, _)) = staged.take() {
                     let _ = tokio::fs::remove_file(&previous).await;
                 }
                 file_name = field.file_name().map(sanitize_filename);
@@ -397,7 +411,7 @@ async fn upload_archive(
                 // upload's own extension — see `staging_path_for`'s docs.
                 let path = staging_path_for(&state, file_name.as_deref());
                 match stream_field_to_file(&mut field, &path).await {
-                    Ok((written, sha1)) => staged = Some((path, written, sha1)),
+                    Ok((written, sha1, blake3)) => staged = Some((path, written, sha1, blake3)),
                     Err(e) => return error(StatusCode::BAD_REQUEST, "upload", e),
                 }
             }
@@ -410,7 +424,7 @@ async fn upload_archive(
         }
     }
 
-    let Some((path, bytes, sha1)) = staged else {
+    let Some((path, bytes, sha1, blake3)) = staged else {
         return error(StatusCode::BAD_REQUEST, "upload", "No file provided.");
     };
     finalize_staged_upload(
@@ -421,6 +435,7 @@ async fn upload_archive(
             file_name: file_name.unwrap_or_else(|| "upload.zip".to_string()),
             bytes,
             sha1,
+            blake3,
         },
         metadata,
         checksum,
@@ -682,8 +697,8 @@ async fn complete_upload_session(
     }
 
     let path = session_data_path(&state.library.temp_dir, &id, &session.file_name);
-    let sha1 = match sha1_of_file(&path).await {
-        Ok(sha1) => sha1,
+    let (sha1, blake3) = match hashes_of_file(&path).await {
+        Ok(hashes) => hashes,
         Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, "upload", e),
     };
 
@@ -701,6 +716,7 @@ async fn complete_upload_session(
             file_name: session.file_name.clone(),
             bytes,
             sha1,
+            blake3,
         },
         body.metadata,
         body.file_checksum,
@@ -761,6 +777,7 @@ async fn finalize_staged_upload(
         file_name,
         bytes: bytes_written,
         sha1: actual_sha1,
+        blake3: fingerprint,
     } = staged;
     let UploadMetadata {
         catid: category,
@@ -808,7 +825,6 @@ async fn finalize_staged_upload(
             auto_fetch_metadata: false,
             overwrite_on_duplicate: false,
             // A local upload has no subscription behind it; its collisions are resolved by hand.
-            conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
             state: DownloadQueueState::Queued,
         })
         .await
@@ -842,6 +858,7 @@ async fn finalize_staged_upload(
         path: staging_path,
         filename: file_name.clone(),
         bytes_downloaded: bytes_written,
+        blake3: Some(fingerprint),
     };
 
     // Same overwrite/reject semantics as a download's own `overwrite_on_duplicate` checkbox
@@ -858,13 +875,20 @@ async fn finalize_staged_upload(
     // `download_manager::ingest::record_ingest_result`'s own docs. The separate `archive.upload`
     // record below still captures the user-supplied title/tags and metadata-plugin summary this
     // path has that the download/scanner sources don't.
+    // Stays hidden until the second plugin pass below (spec 025, D7). The guard is taken before
+    // the next `.await`, so a cancelled request still publishes it.
+    let ingested = ingest_uploaded_file(state, &downloaded, false).await;
+    let pending = ingested
+        .as_ref()
+        .ok()
+        .map(|i| crate::visibility::PendingGuard::new(state, &i.archive_id));
     let ingest_result = crate::download_manager::ingest::record_ingest_result(
         state,
         auth,
         "upload",
         &file_name,
         json!({ "category": category.clone() }),
-        ingest_downloaded_file(state, &downloaded, false, None, Some(&queue_item.id)).await,
+        ingested,
     )
     .await;
     match ingest_result {
@@ -904,6 +928,9 @@ async fn finalize_staged_upload(
                 &ingested.archive_id,
             )
             .await;
+            if let Some(pending) = pending {
+                pending.publish().await;
+            }
 
             record_manual(
                 state,

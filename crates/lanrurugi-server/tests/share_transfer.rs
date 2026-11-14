@@ -102,6 +102,7 @@ async fn an_archive_transfers_verified_and_revocation_stops_renewal() {
             heal_failed_at: None,
             corrupted_pages: vec![],
             has_patch: false,
+            blake3: None,
         })
         .await
         .unwrap();
@@ -120,6 +121,11 @@ async fn an_archive_transfers_verified_and_revocation_stops_renewal() {
         permissions: Permissions::ALL,
         download_limit: Some(1),
         downloads_used: 0,
+        import_bytes: 0,
+        total_bytes: 0,
+        target_ratio: None,
+        ratio_action: lanrurugi_storage::shares::RatioAction::Stop,
+        ratio_rate: None,
         ip_allow: vec![],
         ip_first_n: None,
         expires_at: None,
@@ -201,6 +207,8 @@ async fn an_archive_transfers_verified_and_revocation_stops_renewal() {
         &conn,
         Request::Renew {
             claim_id: claim_id.clone(),
+            verified_bytes: 0,
+            finished: false,
         },
     )
     .await
@@ -278,7 +286,15 @@ async fn an_archive_transfers_verified_and_revocation_stops_renewal() {
 
     // After revocation, renewal is refused, which stops every source.
     shares.revoke(&share.id, 2).await.unwrap();
-    let renewed = call(&conn, Request::Renew { claim_id }).await;
+    let renewed = call(
+        &conn,
+        Request::Renew {
+            claim_id,
+            verified_bytes: 0,
+            finished: false,
+        },
+    )
+    .await;
     assert!(matches!(
         renewed,
         Err(share_net::ShareNetError::Refused(RefusalReason::NotFound))
@@ -314,6 +330,7 @@ fn archive_record(id: &str, file: &std::path::Path, size: u64) -> Archive {
         heal_failed_at: None,
         corrupted_pages: vec![],
         has_patch: false,
+        blake3: None,
     }
 }
 
@@ -435,6 +452,11 @@ async fn helpers_serve_verified_ranges_and_follow_the_share() {
         permissions: Permissions::ALL,
         download_limit: None,
         downloads_used: 0,
+        import_bytes: 0,
+        total_bytes: 0,
+        target_ratio: None,
+        ratio_action: lanrurugi_storage::shares::RatioAction::Stop,
+        ratio_rate: None,
         ip_allow: vec![],
         ip_first_n: None,
         expires_at: None,
@@ -554,6 +576,8 @@ async fn helpers_serve_verified_ranges_and_follow_the_share() {
         &conn,
         Request::Renew {
             claim_id: claim_id.clone(),
+            verified_bytes: 0,
+            finished: false,
         },
     )
     .await
@@ -637,6 +661,8 @@ async fn helpers_serve_verified_ranges_and_follow_the_share() {
         &second_to_sharer,
         Request::Renew {
             claim_id: second_claim,
+            verified_bytes: 0,
+            finished: false,
         },
     )
     .await
@@ -693,7 +719,16 @@ async fn helpers_serve_verified_ranges_and_follow_the_share() {
         (status.state, status.reason, status.at),
         (HelpState::Ended, Some(HelpReason::Revoked), 4242)
     );
-    assert!(call(&conn, Request::Renew { claim_id }).await.is_err());
+    assert!(call(
+        &conn,
+        Request::Renew {
+            claim_id,
+            verified_bytes: 0,
+            finished: false,
+        },
+    )
+    .await
+    .is_err());
 
     // The helper stores the answer and stops for good: no code is kept to reconnect with.
     share_net::helper::apply_status(&state, &import.id, &status).await;
@@ -753,6 +788,7 @@ async fn a_rendezvous_node_stores_and_returns_knock_records() {
     let knock = KnockV1 {
         endpoint_id: [7; 32],
         relay_urls: vec!["https://relay.example.org/".into()],
+        direct_addrs: vec![],
     };
     let packet = record::seal(&keys, &knock).unwrap().as_bytes().to_vec();
 

@@ -193,6 +193,7 @@ export function ArchiveOverviewOverlay({
   hasTankSplitCandidates,
   onOpenTankSplit,
   onShare,
+  headless = false,
 }: {
   archive: ArchiveMetadata
   categories: CategoryMetadata[] | undefined
@@ -216,6 +217,9 @@ export function ArchiveOverviewOverlay({
   onOpenTankSplit?: () => void
   /** Opens the share dialog for this archive or tankoubon (017). */
   onShare?: () => void
+  /** Headless reading hides the reader's own header, which is what normally carries the title;
+   *  the overlay shows it itself then, exactly where narrow viewports already do. */
+  headless?: boolean
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -251,6 +255,14 @@ export function ArchiveOverviewOverlay({
   const currentChapter = chapters
     ? [...chapters].filter((c) => c.page <= currentPage).sort((a, b) => b.page - a.page)[0]
     : undefined
+
+  /** Chapter name per start page, for the badge `PageGridCell` paints on that page's thumbnail.
+   * Built over the whole ToC, not just the loaded slice: `pageMeta` decides what renders. Two
+   * chapters sharing a start page keep the first one, matching the selector's own ordering. */
+  const chapterNameByPage = new Map<number, string>()
+  for (const entry of chapters ?? []) {
+    if (!chapterNameByPage.has(entry.page)) chapterNameByPage.set(entry.page, displayTocName(entry.name, t))
+  }
 
   const setThumbnail = useSetArchiveThumbnail(isTank ? "" : archive.arcid)
   const setTankoubonThumbnail = useSetTankoubonThumbnail(archive.arcid)
@@ -468,6 +480,11 @@ export function ArchiveOverviewOverlay({
         <h2 className="ih" style={{ textAlign: "center" }}>
           {t("reader.archiveOverview")}
         </h2>
+        {/* The reader's own header (which carries the title) is hidden at <=1000px and in headless
+            mode — see `.overview-archive-title` in `index.css`. */}
+        <div className={headless ? "overview-archive-title is-shown" : "overview-archive-title"}>
+          {archive.title}
+        </div>
 
         <div id="tagContainer" className="caption caption-tags caption-reader" style={{ maxWidth: "100%", boxSizing: "border-box", overflow: "hidden" }}>
           <br />
@@ -1012,6 +1029,7 @@ export function ArchiveOverviewOverlay({
                   onOpenLightbox={setLightboxPage}
                   isTank={isTank}
                   isPatch={patchPageSet?.has(page) ?? false}
+                  chapterName={chapterNameByPage.get(page)}
                 />
               )
             }

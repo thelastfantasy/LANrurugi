@@ -11,7 +11,7 @@ import { SearchSyntaxHelp } from "@/components/Display"
 import { useStats } from "./api/hooks"
 import { useMenuPalette } from "./hooks/useMenuPalette"
 import { buildSearchToken } from "./lib/tagFormat"
-import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "./theme"
+import { Z_OVERLAY_ABOVE_DRAWER, Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "./theme"
 
 // Themed prompt/confirm replacements driven by module-level state, rendered by <DialogHost />.
 
@@ -191,11 +191,6 @@ export function newCategoryDialog(): Promise<NewCategoryResult | null> {
 
 /** Filename-rename dialog — the extension is a fixed non-editable suffix. Resolves the new stem
  * only, or null if cancelled. */
-export function renameArchiveDialog(currentStem: string, extension: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    setRequest({ kind: "renameArchive", currentStem, extension, resolve })
-  })
-}
 
 /** Stamp name field + emoji/icon grid, plus anchor/color pickers for a rect placement. */
 export function stampEditorDialog(
@@ -1194,7 +1189,7 @@ export function DialogHost() {
   if (request.kind === "newCategory") {
     return createPortal(
       <>
-        <div style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP, background: "rgba(0,0,0,0.4)" }} onClick={cancelNewCategory} />
+        <div style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_ABOVE_DRAWER, background: "rgba(0,0,0,0.4)" }} onClick={cancelNewCategory} />
         <div
           role="dialog"
           aria-modal="true"
@@ -1204,7 +1199,7 @@ export function DialogHost() {
             top: "50%",
             left: "50%",
             transform: "translate(-50%, -50%)",
-            zIndex: Z_OVERLAY_CONTENT,
+            zIndex: Z_OVERLAY_ABOVE_DRAWER + 1,
             display: "block",
             width: 360,
             padding: 20,

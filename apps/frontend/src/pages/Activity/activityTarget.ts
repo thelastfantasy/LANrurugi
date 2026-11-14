@@ -17,6 +17,7 @@ const ACTION_TYPE_NAMESPACE_ORDER = [
   "category",
   "token",
   "download_queue",
+  "share",
   "tankoubon",
   "database",
   "plugin",

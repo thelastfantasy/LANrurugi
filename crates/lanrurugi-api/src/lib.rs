@@ -16,8 +16,12 @@ pub mod database;
 pub mod device_info;
 pub mod diagnostics;
 pub mod diagnostics_settings;
+pub mod direct_download;
+pub mod download_host;
 pub mod download_manager;
 pub mod download_queue;
+pub mod download_sources;
+pub mod download_url;
 pub mod duplicates;
 pub mod embed_worker_client;
 pub mod font_pattern;
@@ -25,6 +29,7 @@ pub mod geoip;
 pub mod gpu_worker_client;
 pub mod health;
 pub mod heartbeat;
+pub mod integrity_backfill;
 pub mod jobs;
 pub mod llm_prompts;
 pub mod llm_usage;
@@ -50,6 +55,7 @@ pub mod search_history;
 pub mod sessions;
 pub mod settings;
 pub mod share_attempts;
+pub mod share_host;
 pub mod share_imports;
 pub mod share_net;
 pub mod share_recipient;
@@ -73,6 +79,7 @@ pub mod translation_pipeline;
 pub mod translation_settings;
 pub mod upload;
 pub mod version;
+pub mod visibility;
 
 pub use state::{AppState, AuthConfig, LibraryPaths, Repositories};
 
@@ -93,6 +100,8 @@ pub fn router() -> Router<AppState> {
         .merge(api_tokens::router())
         .merge(archive_split::router())
         .merge(archives::router())
+        .merge(integrity_backfill::router())
+        .merge(direct_download::router())
         .merge(bench::router())
         .merge(bookmarks::router())
         .merge(categories::router())

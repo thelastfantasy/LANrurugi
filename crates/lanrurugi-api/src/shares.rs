@@ -16,12 +16,12 @@ use hkdf::Hkdf;
 use lanrurugi_core::ids::ShareId;
 use lanrurugi_share_proto::code::{ShareCode, ShareRef};
 use lanrurugi_share_proto::derive::{access_hash, DerivedKeys};
-use lanrurugi_share_proto::messages::{ArchiveEntry, ManifestItem, Permissions, ShareManifest};
+use lanrurugi_share_proto::messages::{ManifestItem, Permissions, ShareManifest};
 use lanrurugi_share_proto::record::{open_bytes, seal_bytes};
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 use lanrurugi_storage::keys;
 use lanrurugi_storage::shares::{
-    Share, ShareItem, ShareRepository, ShareStatus, SHORT_CODE_MAX_LIFETIME_SECS,
+    RatioAction, Share, ShareItem, ShareRepository, ShareStatus, SHORT_CODE_MAX_LIFETIME_SECS,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -37,11 +37,14 @@ const CODE_ENC_AAD: &[u8] = b"lrrg-code-enc-v1";
 /// Settings that the running endpoint is built from.
 const ENDPOINT_FIELDS: &[&str] = &[
     "share_public_services",
+    // Publishing an address the portmapper cannot know (a router doing plain port forwarding) only
+    // takes effect on a rebuilt endpoint.
+    "share_external_addrs",
     "share_relay_urls",
     "share_nodes",
     "share_udp_port",
     "share_portmap",
-    "share_external_addrs",
+    "share_bind_interface",
     "share_self_relay_url",
     "share_node_relay",
     "share_node_relay_tls",
@@ -83,19 +86,9 @@ pub(crate) fn repo(state: &AppState) -> ShareRepository {
     ShareRepository::new(state.redis.config.clone())
 }
 
-pub(crate) fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
+pub(crate) use lanrurugi_share::util::hex;
 
-pub(crate) fn unhex(text: &str) -> Option<Vec<u8>> {
-    if !text.len().is_multiple_of(2) {
-        return None;
-    }
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).ok())
-        .collect()
-}
+pub(crate) use lanrurugi_share::util::unhex;
 
 /// This instance's long-term secret (also its iroh key), created on first use and included in
 /// backups so the instance keeps its identity across restores.
@@ -218,109 +211,118 @@ pub(crate) async fn recipient_address(
     forwarded_address(headers, peer.ip(), &trusted_proxies(state).await)
 }
 
+/// The edge ranges Cloudflare publishes at <https://www.cloudflare.com/ips-v4> and
+/// `ips-v6`. A peer inside them is a Cloudflare edge and nothing else: spoofing the source
+/// address of a TCP connection is not possible without completing its handshake, so trusting
+/// `CF-Connecting-IP` from these peers needs no configuration. Every other proxy still has to be
+/// named in `share_trusted_proxies`.
+const CLOUDFLARE_RANGES: &[&str] = &[
+    "173.245.48.0/20",
+    "103.21.244.0/22",
+    "103.22.200.0/22",
+    "103.31.4.0/22",
+    "141.101.64.0/18",
+    "108.162.192.0/18",
+    "190.93.240.0/20",
+    "188.114.96.0/20",
+    "197.234.240.0/22",
+    "198.41.128.0/17",
+    "162.158.0.0/15",
+    "104.16.0.0/13",
+    "104.24.0.0/14",
+    "172.64.0.0/13",
+    "131.0.72.0/22",
+    "2400:cb00::/32",
+    "2606:4700::/32",
+    "2803:f800::/32",
+    "2405:b500::/32",
+    "2405:8100::/32",
+    "2a06:98c0::/29",
+    "2c0f:f248::/32",
+];
+
+fn is_cloudflare_edge(ip: &IpAddr) -> bool {
+    CLOUDFLARE_RANGES.iter().any(|range| {
+        range
+            .parse::<ipnet::IpNet>()
+            .map(|net| net.contains(ip))
+            .unwrap_or(false)
+    })
+}
+
 /// The pure half of `recipient_address`, so the trust rule is unit-testable.
 fn forwarded_address(headers: &HeaderMap, peer: IpAddr, trusted: &[ipnet::IpNet]) -> IpAddr {
     let peer_ip = lanrurugi_storage::shares::canonical_ip(peer);
-    if !trusted.iter().any(|net| net.contains(&peer_ip)) {
+    // Cloudflare's edges count as trusted on their own: a share page in front of Cloudflare then
+    // works out of the box, and the address recorded for a visitor is the visitor, not an edge.
+    let is_trusted =
+        |ip: &IpAddr| trusted.iter().any(|net| net.contains(ip)) || is_cloudflare_edge(ip);
+    if !is_trusted(&peer_ip) {
         return peer_ip;
     }
-    headers
+    // Walk from the right, past every proxy this instance trusts: the first address that is not
+    // one of them is the client. Taking only the last hop would report the CDN edge (or the load
+    // balancer in front of it) as every visitor's address.
+    let hops: Vec<IpAddr> = headers
         .get_all("X-Forwarded-For")
         .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(','))
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
         .filter_map(|hop| hop.trim().parse::<IpAddr>().ok())
-        .next_back()
         .map(lanrurugi_storage::shares::canonical_ip)
+        .collect();
+    // `CF-Connecting-IP` is evidence only when Cloudflare is actually in this request's path. On a
+    // second, grey-cloud host name the direct peer is a local reverse proxy that counts as
+    // trusted, so a visitor could otherwise send this header themselves and pick their own
+    // address (dodging an IP allowlist, the first-N limit and the failure limiter). Requiring an
+    // edge in the chain keeps the orange path working — there the peer or the last hop is one.
+    // Only the hop nearest this instance counts. `X-Forwarded-For` is appended to by every proxy,
+    // so the rightmost address is the one the last trusted proxy actually saw; an edge name the
+    // visitor typed into the header themselves sits further left and must not unlock
+    // `CF-Connecting-IP`. Walking from the right past this instance's own proxies finds that hop.
+    // The nearest hop that is either a proxy this instance does not trust (so: the client) or a
+    // Cloudflare edge (so: the CDN). A configured `share_trusted_proxies` entry covering the edge
+    // ranges must not hide the edge — that is exactly the deployment this rule exists for.
+    let nearest_hop = hops
+        .iter()
+        .rev()
+        .find(|ip| !trusted.iter().any(|net| net.contains(*ip)) || is_cloudflare_edge(ip));
+    let cloudflare_in_path =
+        is_cloudflare_edge(&peer_ip) || nearest_hop.map(is_cloudflare_edge).unwrap_or(false);
+    if cloudflare_in_path {
+        if let Some(client) = headers
+            .get("CF-Connecting-IP")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<IpAddr>().ok())
+        {
+            return lanrurugi_storage::shares::canonical_ip(client);
+        }
+    }
+    hops.iter()
+        .rev()
+        .find(|ip| !is_trusted(ip))
+        .copied()
         .unwrap_or(peer_ip)
 }
 
 // ---------------------------------------------------------------------------------------------
 // Manifest
 
-fn archive_entry(a: &lanrurugi_core::entities::Archive) -> ArchiveEntry {
-    let filename = std::path::Path::new(&a.file)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_string();
-    ArchiveEntry {
-        archive_id: a.id.to_string(),
-        title: if a.title.trim().is_empty() {
-            a.name.clone()
-        } else {
-            a.title.clone()
-        },
-        tags: a.tags.clone(),
-        summary: a.summary.clone(),
-        pagecount: a.pagecount,
-        filename,
-        size: a.arcsize,
-        blake3: None,
-        categories: Vec::new(),
-        toc: a
-            .toc
-            .iter()
-            .map(|c| lanrurugi_share_proto::messages::Chapter {
-                page: c.page,
-                name: c.name.clone(),
-            })
-            .collect(),
-    }
-}
-
-/// The share's items as they are now in the library (browse form: no fingerprints). Tankoubons
-/// list their current members in order; deleted items become `Unavailable` (US2-4).
+/// The share's items as they are now in the library (browse form: no fingerprints).
 pub(crate) async fn browse_manifest(state: &AppState, share: &Share) -> ShareManifest {
-    let mut items = Vec::with_capacity(share.items.len());
-    for item in &share.items {
-        match item {
-            ShareItem::Archive { id } => match state.repos.archives.get(id).await {
-                Ok(Some(a)) => items.push(ManifestItem::Archive(archive_entry(&a))),
-                _ => items.push(ManifestItem::Unavailable { title: None }),
-            },
-            ShareItem::Tankoubon { id } => match state.repos.groupings.get(id).await {
-                Ok(Some(tank)) => {
-                    let records = futures_util::future::join_all(
-                        tank.archives.iter().map(|a| state.repos.archives.get(a)),
-                    )
-                    .await;
-                    let members = records
-                        .into_iter()
-                        .filter_map(|r| r.ok().flatten())
-                        .map(|a| archive_entry(&a))
-                        .collect();
-                    items.push(ManifestItem::Tankoubon {
-                        id: id.to_string(),
-                        name: tank.name,
-                        tags: tank.tags,
-                        summary: tank.summary,
-                        members,
-                    });
-                }
-                _ => items.push(ManifestItem::Unavailable { title: None }),
-            },
-        }
-    }
-    ShareManifest {
-        share_id: share.id.to_string(),
-        title: share.title.clone().unwrap_or_default(),
-        permissions: share.permissions,
-        items,
-    }
+    lanrurugi_share::manifest::browse_manifest(state, share).await
 }
 
 /// Default title: the first item's own name.
 async fn first_item_title(state: &AppState, items: &[ShareItem]) -> Option<String> {
     match items.first()? {
-        ShareItem::Archive { id } => state
-            .repos
-            .archives
-            .get(id)
-            .await
-            .ok()
-            .flatten()
-            .map(|a| archive_entry(&a).title),
+        ShareItem::Archive { id } => state.repos.archives.get(id).await.ok().flatten().map(|a| {
+            if a.title.trim().is_empty() {
+                a.name.clone()
+            } else {
+                a.title.clone()
+            }
+        }),
         ShareItem::Tankoubon { id } => state
             .repos
             .groupings
@@ -378,6 +380,12 @@ pub(crate) struct ShareSummary {
     permissions: Permissions,
     downloads_used: u32,
     download_limit: Option<u32>,
+    /// Served import bytes and the share's own size; their quotient is the ratio.
+    import_bytes: u64,
+    total_bytes: u64,
+    target_ratio: Option<f32>,
+    ratio_action: RatioAction,
+    ratio_rate: Option<u64>,
     item_count: usize,
     created_at: i64,
     expires_at: Option<i64>,
@@ -399,6 +407,11 @@ fn summary(share: &Share, now: i64) -> ShareSummary {
         permissions: share.permissions,
         downloads_used: share.downloads_used,
         download_limit: share.download_limit,
+        import_bytes: share.import_bytes,
+        total_bytes: share.total_bytes,
+        target_ratio: share.target_ratio,
+        ratio_action: share.ratio_action,
+        ratio_rate: share.ratio_rate,
         item_count: share.items.len(),
         created_at: share.created_at,
         expires_at: share.expires_at,
@@ -484,7 +497,7 @@ async fn code_json(state: &AppState, share: &Share, settings: &ShareSettings) ->
     // The code carries its own routes (addresses, relays, nodes), so it works with no rendezvous
     // or relay reachable, as long as one of them still leads to this instance.
     if let Some(net) = crate::share_net::handle().await {
-        reference.via = crate::share_net::publish::via_hint(&net, settings).map(|mut via| {
+        reference.via = crate::share_net::publish::via_hint(&net).map(|mut via| {
             // An own relay (a tunnel, or the relay role) reaches importers whose UDP cannot
             // reach any address.
             if let Some(own) = own_relay_hint(settings).filter(|r| !via.relays.contains(r)) {
@@ -557,6 +570,17 @@ fn apply_update(share: &mut Share, body: &Map<String, Value>, now: i64) -> Resul
                     .map_err(|_| "\"permissions\" must be {import, read, download}".to_string())?
             }
             "download_limit" => share.download_limit = optional_count(key, value)?,
+            "target_ratio" => share.target_ratio = optional_ratio(key, value)?,
+            "ratio_action" => {
+                share.ratio_action = match value {
+                    Value::Null => RatioAction::default(),
+                    v => v
+                        .as_str()
+                        .and_then(RatioAction::parse)
+                        .ok_or("\"ratio_action\" must be \"stop\" or \"throttle\"")?,
+                }
+            }
+            "ratio_rate" => share.ratio_rate = optional_bytes(key, value)?,
             "ip_first_n" => share.ip_first_n = optional_count(key, value)?,
             "ip_allow" => {
                 share.ip_allow = match value {
@@ -601,6 +625,34 @@ fn optional_count(key: &str, value: &Value) -> Result<Option<u32>, String> {
     }
 }
 
+/// A ratio such as `1.5`; `null`, an empty string or zero all mean "no target".
+fn optional_ratio(key: &str, value: &Value) -> Result<Option<f32>, String> {
+    let ratio = match value {
+        Value::Null => return Ok(None),
+        Value::String(s) if s.trim().is_empty() => return Ok(None),
+        v => v
+            .as_f64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+            .ok_or_else(|| format!("\"{key}\" must be a number"))?,
+    };
+    if !ratio.is_finite() || ratio < 0.0 {
+        return Err(format!("\"{key}\" must be a number"));
+    }
+    Ok((ratio > 0.0).then_some(ratio as f32))
+}
+
+fn optional_bytes(key: &str, value: &Value) -> Result<Option<u64>, String> {
+    match value {
+        Value::Null => Ok(None),
+        Value::String(s) if s.trim().is_empty() => Ok(None),
+        v => v
+            .as_u64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+            .map(Some)
+            .ok_or_else(|| format!("\"{key}\" must be a whole number")),
+    }
+}
+
 fn defaults_from(settings: &ShareSettings, now: i64) -> Map<String, Value> {
     let mut defaults = Map::new();
     defaults.insert(
@@ -619,6 +671,18 @@ fn defaults_from(settings: &ShareSettings, now: i64) -> Map<String, Value> {
     }
     if let Some(days) = settings.number("share_default_expiry_days") {
         defaults.insert("expires_at".into(), json!(now + days as i64 * 86_400));
+    }
+    if let Ok(ratio) = settings.text("share_default_target_ratio").parse::<f32>() {
+        if ratio > 0.0 && ratio.is_finite() {
+            defaults.insert("target_ratio".into(), json!(ratio));
+        }
+    }
+    let action = settings.text("share_default_ratio_action");
+    if !action.is_empty() {
+        defaults.insert("ratio_action".into(), json!(action));
+    }
+    if let Some(rate) = settings.number("share_default_ratio_rate") {
+        defaults.insert("ratio_rate".into(), json!(rate));
     }
     defaults.insert("embed".into(), json!(settings.flag("share_default_embed")));
     defaults.insert(
@@ -753,6 +817,11 @@ async fn create_share(
         permissions: Permissions::ALL,
         download_limit: None,
         downloads_used: 0,
+        import_bytes: 0,
+        total_bytes: 0,
+        target_ratio: None,
+        ratio_action: RatioAction::default(),
+        ratio_rate: None,
         ip_allow: Vec::new(),
         ip_first_n: None,
         expires_at: None,
@@ -1077,20 +1146,49 @@ async fn settings_with_status(state: &AppState) -> Value {
         &mut value,
         serde_json::to_value(mode).unwrap_or(Value::Null),
     );
+    // The node code is the only identity anyone else needs: it is minted whether or not the
+    // endpoint is running, and it never contains an address (the record published under it does,
+    // and that record is what changes when the address does).
+    let mine = node_code(state).await.ok().map(|c| c.prefixed());
+    // 022 US1: whether the endpoint is actually pinned, and to what. A name that is set but not
+    // currently present on the host is `missing` — the same state the endpoint refuses to start in,
+    // reported here so the settings page can explain why sharing is off instead of just showing a
+    // stopped endpoint.
+    let pinned = settings.text("share_bind_interface").trim().to_string();
+    let binding = if pinned.is_empty() {
+        "auto"
+    } else if crate::share_net::interfaces::list()
+        .iter()
+        .any(|i| i.name == pinned)
+    {
+        "pinned"
+    } else {
+        "missing"
+    };
     let endpoint = match crate::share_net::handle().await {
         Some(net) => {
             let addr = net.endpoint().addr();
             json!({
                 "running": true,
+                "bound_interface": if pinned.is_empty() { serde_json::Value::Null } else { json!(pinned) },
+                "binding": binding,
                 "endpoint_id": crate::share_net::endpoint_hex(&net.id()),
                 "relays": addr.relay_urls().map(|u| u.to_string()).collect::<Vec<_>>(),
                 "direct_addresses": addr.ip_addrs().map(|a| a.to_string()).collect::<Vec<_>>(),
                 "proxy": crate::share_net::followed_proxy(),
-                "node_string": crate::share_net::nodes::node_string(&net.id(), &settings),
-                "node_code": node_code(state).await.ok().map(|c| c.display()),
+                "node_code": mine,
+                // The ports in force right now: with an automatic setting these are drawn on every
+                // start (and rotation), so the configured value cannot answer this.
+                "udp_port": net.udp_port(),
+                "relay_port": net.relay_port().await,
             })
         }
-        None => json!({ "running": false }),
+        None => json!({
+            "running": false,
+            "node_code": mine,
+            "bound_interface": if pinned.is_empty() { serde_json::Value::Null } else { json!(pinned) },
+            "binding": binding,
+        }),
     };
     // Relays: the endpoint keeps a connection to its home relay only, so that one is known
     // reachable and the others are unknown rather than failed (FR-049).
@@ -1122,6 +1220,9 @@ async fn settings_with_status(state: &AppState) -> Value {
         json!({
             "endpoint": endpoint,
             "services": services,
+            // What the "network interface" picker offers; the setting itself is a plain name, so a
+            // tunnel that only exists after the VPN connects can still be typed in.
+            "interfaces": crate::share_net::interfaces::list(),
             "helpers_supported": true,
             // What an admin compares between two instances before an import works: the engine
             // object (protocol epoch + transport), not a single number.
@@ -1131,9 +1232,13 @@ async fn settings_with_status(state: &AppState) -> Value {
     value
 }
 
-/// Replaces this instance's sharing identity. Every `lrrg-node:` string handed out earlier stops
-/// working, which is the point: the string is permanent otherwise, exactly like a share code, and
-/// this is the only way to revoke it.
+/// Replaces the published node code. Every `lrrg-node:` string handed out earlier stops working,
+/// which is the point: the string is permanent otherwise, exactly like a share code, and this is
+/// the only way to revoke it.
+///
+/// The endpoint identity (and so the QUIC keypair) stays: a rotation invalidates the *code*, the
+/// record behind it, and everything being forwarded through this instance's relay role, while
+/// direct sessions and shares that are already open keep running.
 async fn rotate_node_secret(State(state): State<AppState>) -> Response {
     const OP: &str = "rotate_node_secret";
     let mut conn = match state.redis.config.get().await {
@@ -1146,18 +1251,32 @@ async fn rotate_node_secret(State(state): State<AppState>) -> Response {
             )
         }
     };
-    // The code is derived from the identity being replaced, so both go together.
-    let _: Result<i64, _> = conn
-        .del(&[keys::SHARE_NODE_SECRET_KEY, keys::SHARE_NODE_CODE_KEY])
-        .await;
-    match crate::share_net::start(&state).await {
-        Ok(_) => axum::Json(json!({ "rotated": true })).into_response(),
-        Err(e) => error(
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            OP,
-            e.to_string(),
-        ),
+    // Retire the record behind the old code first: it is signed by that code, so once the code is
+    // gone nobody can overwrite it, and every peer still holding it would keep resolving the old
+    // address until the relay's own TTL expired.
+    if let Ok(old) = node_code(&state).await {
+        crate::share_net::nodes::retract_node_record(&state, &old).await;
     }
+    let _: Result<i64, _> = conn.del(&[keys::SHARE_NODE_CODE_KEY]).await;
+    // 022 US3: a new code alone is not a revocation. The endpoint keeps the identity it was bound
+    // with, so anyone who learned its endpoint id (from an older `via` hint, a relay log, a peer's
+    // dial history) can still dial it directly and Open whatever is still shared. Replacing the
+    // secret is what makes the old identity a dead address; the code is minted fresh right after.
+    let _: Result<i64, _> = conn.del(&[keys::SHARE_NODE_SECRET_KEY]).await;
+    let settings = crate::share_settings::load(&state).await;
+    // Rebuild the endpoint before publishing: the record must carry the new identity, not the old
+    // one, or peers that resolve the fresh code reach the endpoint we just retired.
+    let net = match crate::share_net::start(&state).await {
+        Ok(net) => net,
+        Err(e) => return error(axum::http::StatusCode::INTERNAL_SERVER_ERROR, OP, e),
+    };
+    let fresh = match node_code(&state).await {
+        Ok(code) => code.prefixed(),
+        Err(e) => return error(axum::http::StatusCode::INTERNAL_SERVER_ERROR, OP, e),
+    };
+    crate::share_net::nodes::publish_node_record(&state, &net, &settings).await;
+    crate::share_net::nodes::restart_relay(&state, &settings, &net).await;
+    axum::Json(json!({ "rotated": true, "node_code": fresh })).into_response()
 }
 
 async fn put_share_settings(
@@ -1241,6 +1360,11 @@ mod tests {
             permissions: Permissions::ALL,
             download_limit: None,
             downloads_used: 0,
+            import_bytes: 0,
+            total_bytes: 0,
+            target_ratio: None,
+            ratio_action: RatioAction::default(),
+            ratio_rate: None,
             ip_allow: vec![],
             ip_first_n: None,
             expires_at: None,
@@ -1343,6 +1467,96 @@ mod tests {
     }
 
     #[test]
+    fn a_chain_of_trusted_proxies_reports_the_client_not_the_cdn_edge() {
+        let mut headers = HeaderMap::new();
+        // Cloudflare appends its edge to what the client sent; nginx appends nothing else.
+        headers.insert(
+            "X-Forwarded-For",
+            "203.0.113.9, 172.71.0.5".parse().unwrap(),
+        );
+        let cloudflare_and_loopback = parse_trusted_proxies("127.0.0.1/32, ::1/128, 172.71.0.0/16");
+        let loopback: IpAddr = "127.0.0.1".parse().unwrap();
+        assert_eq!(
+            forwarded_address(&headers, loopback, &cloudflare_and_loopback).to_string(),
+            "203.0.113.9"
+        );
+
+        // Cloudflare's own header wins where a proxy passes it on.
+        let mut cf = headers.clone();
+        cf.insert("CF-Connecting-IP", "198.51.100.7".parse().unwrap());
+        assert_eq!(
+            forwarded_address(&cf, loopback, &cloudflare_and_loopback).to_string(),
+            "198.51.100.7"
+        );
+        // ...but a peer nobody listed cannot use it.
+        let public: IpAddr = "198.51.100.4".parse().unwrap();
+        assert_eq!(
+            forwarded_address(&cf, public, &cloudflare_and_loopback).to_string(),
+            "198.51.100.4"
+        );
+    }
+
+    #[test]
+    fn a_typed_cloudflare_hop_does_not_unlock_cf_connecting_ip() {
+        let trusted: Vec<ipnet::IpNet> = vec!["127.0.0.1/32".parse().unwrap()];
+        let mut headers = HeaderMap::new();
+        // The visitor writes an edge address into `X-Forwarded-For`; the local proxy appends the
+        // address it actually saw, which is the visitor.
+        headers.insert(
+            "X-Forwarded-For",
+            "172.71.0.5, 198.51.100.7".parse().unwrap(),
+        );
+        headers.insert("CF-Connecting-IP", "203.0.113.99".parse().unwrap());
+        let peer: IpAddr = "127.0.0.1".parse().unwrap();
+        assert_eq!(
+            forwarded_address(&headers, peer, &trusted).to_string(),
+            "198.51.100.7",
+            "the header must not let a visitor pick an address on a grey-cloud host"
+        );
+    }
+
+    #[test]
+    fn a_cloudflare_edge_is_trusted_without_being_configured() {
+        let mut headers = HeaderMap::new();
+        headers.insert("CF-Connecting-IP", "198.51.100.7".parse().unwrap());
+        headers.insert("X-Forwarded-For", "198.51.100.7".parse().unwrap());
+        // A Cloudflare edge, with nothing listed in `share_trusted_proxies`.
+        let edge: IpAddr = "172.71.0.5".parse().unwrap();
+        assert_eq!(
+            forwarded_address(&headers, edge, &[]).to_string(),
+            "198.51.100.7"
+        );
+        // The same header from a peer outside those ranges is meaningless.
+        let stranger: IpAddr = "203.0.113.4".parse().unwrap();
+        assert_eq!(
+            forwarded_address(&headers, stranger, &[]).to_string(),
+            "203.0.113.4"
+        );
+    }
+
+    #[test]
+    fn ratio_fields_round_trip_through_an_edit() {
+        let mut s = share();
+        apply_update(
+            &mut s,
+            &body(json!({"target_ratio": 1.5, "ratio_action": "throttle", "ratio_rate": 1048576})),
+            1,
+        )
+        .unwrap();
+        assert_eq!(s.target_ratio, Some(1.5));
+        assert_eq!(s.ratio_action, RatioAction::Throttle);
+        assert_eq!(s.ratio_rate, Some(1_048_576));
+
+        // Zero means "no target"; the action and rate stay as they were set.
+        apply_update(&mut s, &body(json!({"target_ratio": 0})), 1).unwrap();
+        assert_eq!(s.target_ratio, None);
+        apply_update(&mut s, &body(json!({"ratio_action": "stop"})), 1).unwrap();
+        assert_eq!(s.ratio_action, RatioAction::Stop);
+        assert!(apply_update(&mut s, &body(json!({"ratio_action": "later"})), 1).is_err());
+        assert!(apply_update(&mut s, &body(json!({"target_ratio": -1})), 1).is_err());
+    }
+
+    #[test]
     fn the_list_summary_carries_the_share_code() {
         let summary = ShareSummary {
             id: "s".into(),
@@ -1351,6 +1565,11 @@ mod tests {
             permissions: lanrurugi_share_proto::messages::Permissions::ALL,
             downloads_used: 0,
             download_limit: None,
+            import_bytes: 0,
+            total_bytes: 0,
+            target_ratio: None,
+            ratio_action: RatioAction::default(),
+            ratio_rate: None,
             item_count: 1,
             created_at: 0,
             expires_at: None,

@@ -96,6 +96,13 @@ pub(crate) async fn resolve_search_entry_with_mode(
         .get(&lanrurugi_core::ids::ArchiveId(id.to_string()))
         .await
         .ok()??;
+    // A download or upload is catalogued before its bytes arrive (an empty `file` until the move
+    // finishes). Such a record has nothing to open, so it must not appear as a card: the reader
+    // would 409 and the thumbnail would fail. `download_manager::ingest` clears this by writing the
+    // real path, which makes the card appear on the next query.
+    if a.file.trim().is_empty() {
+        return None;
+    }
     search_entry_json(state, a, id, mode).await
 }
 
@@ -123,6 +130,10 @@ async fn search_entry_json(
     // follow-on design — the library-grid patch badge) goes here instead, same pattern
     // `archive_count` above already established for a LANrurugi-only addition.
     obj.insert("has_patch".into(), json!(a.has_patch));
+    // 027: the whole-file BLAKE3, when known. Same additive pattern as `has_patch`.
+    if let Some(blake3) = &a.blake3 {
+        obj.insert("blake3".into(), json!(blake3));
+    }
     let has_split_suggestion =
         lanrurugi_storage::archive_split_suggestions::ArchiveSplitSuggestionsRepository::new(
             state.redis.config.clone(),
@@ -405,6 +416,10 @@ async fn build_params(
         // build_params has no access to the request's AuthContext. See those two handlers' own
         // call sites.
         restrict_to_archive_ids: None,
+        // `source:` host equivalences (`e-hentai.org` ≡ `exhentai.org` out of the box) — a search
+        // setting rather than a per-query operator, so every entry point that funnels through this
+        // builder (search/suggest/random) honors the configured groups.
+        source_equivalences: crate::settings::read_source_equivalences(state).await,
     };
 
     // `has:split-suggestion` is the one operator whose data lives outside the pools the search

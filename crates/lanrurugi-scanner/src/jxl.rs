@@ -24,13 +24,25 @@ pub enum JxlEncodeError {
 }
 
 /// Encodes an 8-bit interleaved RGB image as a lossy JPEG XL codestream at `quality` (0..=100).
+///
+/// One worker: the caller (thumbnail rayon batch, background warming, …) already provides
+/// concurrency, and jixel's per-CPU default oversubscribed it (~215MB RSS versus ~139MB for a
+/// single 1440x2040 encode, same output size). A page the reader is *waiting on* instead uses
+/// [`encode_rgb_with_threads`] — that one page is worth the extra cores.
 pub fn encode_rgb(image: &RgbImage, quality: u8) -> Result<Vec<u8>, JxlEncodeError> {
+    encode_rgb_with_threads(image, quality, 1)
+}
+
+/// Same encoder, with an explicit worker count. Only for a request someone is blocked on: JXL
+/// encoding is the slow half of a cold page (measured 14.3 s at one worker versus 5.6 s for the
+/// WebP path on a 2121x3000 source), and it scales across workers.
+pub fn encode_rgb_with_threads(
+    image: &RgbImage,
+    quality: u8,
+    threads: usize,
+) -> Result<Vec<u8>, JxlEncodeError> {
     let mut config = EncodeConfig::default().with_quality(quality as f32);
-    // The caller (reader page singleflight, thumbnail rayon batch, ...) already provides
-    // concurrency. jixel defaults to one worker per logical CPU, which oversubscribes that outer
-    // scheduler and made a single 1440x2040 encode peak at ~215MB RSS in our benchmark vs ~139MB
-    // with one worker (same output size). Keep one worker here.
-    config.num_threads = 1;
+    config.num_threads = threads.max(1);
     let mut out = Vec::new();
     JixelEncoder::with_config(&mut out, config).write_image(
         image.as_raw(),

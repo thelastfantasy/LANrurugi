@@ -12,6 +12,7 @@ import {
   FaCheckDouble,
   FaChevronLeft,
   FaChevronRight,
+  FaClockRotateLeft,
   FaCompress,
   FaDice,
   FaEject,
@@ -104,6 +105,7 @@ function useCarouselOverflow(lenis: Lenis | null, itemsSignal: unknown) {
  * content). */
 const CAROUSEL_MODE_ICON: Record<CarouselMode, IconType> = {
   ondeck: FaBook,
+  recent: FaClockRotateLeft,
   random: FaDice,
   inbox: FaInbox,
   untagged: FaTag,
@@ -272,6 +274,13 @@ export function RecentlyAddedCarousel({
       modeParams.set("start", "-1");
       path = `/search?${modeParams.toString()}`;
       break;
+    case "recent":
+      // Reading history, newest first — unlike `ondeck` it keeps finished archives and drops the
+      // "hide completed" filter, and `lastread` itself already excludes never-opened archives.
+      modeParams.set("sortby", "lastread");
+      modeParams.set("order", "desc");
+      path = `/search?${modeParams.toString()}`;
+      break;
     case "bookmark":
       path = "";
       break;
@@ -324,6 +333,7 @@ export function RecentlyAddedCarousel({
 
   const modeLabel: Record<CarouselMode, string> = {
     ondeck: t("library.onDeck"),
+    recent: t("library.recentlyRead"),
     random: t("library.random"),
     inbox: t("library.newArchives"),
     untagged: t("library.untaggedArchives"),
@@ -443,8 +453,15 @@ export function RecentlyAddedCarousel({
               }
             >
               {(loggedIn
-                ? (["ondeck", "random", "inbox", "untagged", "bookmark"] as CarouselMode[])
-                : (["ondeck", "random", "inbox", "untagged"] as CarouselMode[])
+                ? ([
+                    "ondeck",
+                    "recent",
+                    "random",
+                    "inbox",
+                    "untagged",
+                    "bookmark",
+                  ] as CarouselMode[])
+                : (["ondeck", "recent", "random", "inbox", "untagged"] as CarouselMode[])
               ).map((m) => {
                 const ModeIcon = CAROUSEL_MODE_ICON[m]
                 return (

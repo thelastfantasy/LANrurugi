@@ -1,3 +1,5 @@
+export * from "./Badge"
+
 export * from "./BubbleActionMenu"
 
 export * from "./Drawer"

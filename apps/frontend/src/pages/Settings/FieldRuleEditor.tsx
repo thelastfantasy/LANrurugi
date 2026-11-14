@@ -7,6 +7,7 @@ import { Modal, Tooltip } from "@/components/common-ui/Display"
 import { NullableNumberInput } from "@/components/common-ui/Form/NumberInput"
 import { CodeBlock } from "@/components/Display"
 import { TagInput } from "@/components/Form"
+import { copyText } from "@/lib/clipboard"
 import { toast } from "@/toast"
 
 import { ICON_BUTTON_STYLE } from "../Upload/shared"
@@ -807,18 +808,15 @@ function ConditionViewerButton({ condition }: { condition?: Condition }) {
   const dslText = condition ? JSON.stringify(conditionToDsl(condition), null, 2) : ""
 
   function copySyntax() {
-    void navigator.clipboard
-      .writeText(dslText)
-      .then(() =>
-        toast({
-          text: t("Copied to clipboard!") ?? undefined,
-          icon: "info",
-          hideAfter: 3000,
-        }),
-      )
-      .catch(() =>
-        toast({ text: t("Failed to copy.") ?? undefined, icon: "error" }),
-      )
+    void copyText(dslText).then((ok) =>
+      ok
+        ? toast({
+            text: t("Copied to clipboard!") ?? undefined,
+            icon: "info",
+            hideAfter: 3000,
+          })
+        : toast({ text: t("Failed to copy.") ?? undefined, icon: "error" }),
+    )
   }
 
   return (

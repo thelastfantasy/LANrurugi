@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Path, Query, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
 use axum::Router;
@@ -88,6 +88,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/tankoubons/{id}/full", get(get_tankoubon_full))
         .route("/tankoubons/{id}/download", get(download_tankoubon))
+        .route("/tankoubons/{id}/download-link", get(download_link))
         .route(
             "/tankoubons/{id}/thumbnail",
             get(get_tankoubon_thumbnail).put(update_tankoubon_thumbnail),
@@ -180,8 +181,27 @@ pub(crate) async fn create_tankoubon_with(
 }
 
 /// `GET /tankoubons/{id}/download` — every member archive in one streamed zip (017 US3).
-async fn download_tankoubon(State(state): State<AppState>, Path(id): Path<TankId>) -> Response {
-    match tankoubon_zip_response(&state, &id).await {
+/// `GET /tankoubons/{id}/download-link` — where the browser should go to fetch the bytes.
+async fn download_link(State(state): State<AppState>, Path(id): Path<TankId>) -> Response {
+    let url = crate::direct_download::link(
+        &state,
+        &format!("tankoubons:{id}"),
+        &format!("/api/dl/tankoubons/{id}"),
+        &format!("/api/tankoubons/{id}/download"),
+    )
+    .await;
+    axum::Json(serde_json::json!({ "url": url })).into_response()
+}
+
+async fn download_tankoubon(
+    State(state): State<AppState>,
+    Path(id): Path<TankId>,
+    headers: HeaderMap,
+) -> Response {
+    let range = headers
+        .get(axum::http::header::RANGE)
+        .and_then(|v| v.to_str().ok());
+    match tankoubon_zip_response(&state, &id, range, crate::archives::if_range(&headers)).await {
         Some(response) => response,
         None => not_found("download_tankoubon", format!("{id} does not exist.")),
     }
@@ -189,10 +209,15 @@ async fn download_tankoubon(State(state): State<AppState>, Path(id): Path<TankId
 
 /// The streamed zip for one tankoubon, or `None` when it does not exist. Shared with the share
 /// recipient route, which applies its own permission and claim checks first.
-pub(crate) async fn tankoubon_zip_response(state: &AppState, id: &TankId) -> Option<Response> {
+pub(crate) async fn tankoubon_zip_response(
+    state: &AppState,
+    id: &TankId,
+    range: Option<&str>,
+    if_range: Option<&str>,
+) -> Option<Response> {
     let tank = state.repos.groupings.get(id).await.ok().flatten()?;
     let records = join_all(tank.archives.iter().map(|a| state.repos.archives.get(a))).await;
-    let members = tank
+    let members: Vec<crate::tankoubon_zip::MemberSource> = tank
         .archives
         .iter()
         .zip(records)
@@ -214,15 +239,44 @@ pub(crate) async fn tankoubon_zip_response(state: &AppState, id: &TankId) -> Opt
         "attachment; {}",
         crate::archives::disposition_filename(&format!("{}.zip", tank.name))
     );
+    // Built into a cache file named after the member set rather than streamed: a multi-gigabyte
+    // tankoubon that died halfway could only be restarted from zero before, and a range request
+    // has to know the final length up front.
+    let job = crate::archives::Repack::Tankoubon {
+        tank: id.to_string(),
+        members: members.clone(),
+    };
+    let cache =
+        crate::archives::repack_cache_path(&format!("tankoubon-{}", id.as_str()), &job.cache_key());
+    if !cache.is_file() {
+        // A range needs the final length, so it waits for the build instead of failing: a download
+        // manager that gets an error here restarts the whole file from zero. Without a range the
+        // answer streams the staging file while it is written, so the first byte leaves
+        // immediately rather than after the whole archive — that wait is what a gateway times out
+        // on.
+        if range.is_some() {
+            crate::archives::begin_repack(cache.clone(), job);
+            if !crate::archives::wait_repack(&cache, std::time::Duration::from_secs(600)).await {
+                return Some(crate::archives::repack_pending());
+            }
+        } else {
+            return Some(crate::archives::follow_repack(
+                cache,
+                job,
+                disposition,
+                "application/zip",
+            ));
+        }
+    }
     Some(
-        (
-            [
-                (header::CONTENT_TYPE, "application/zip".to_string()),
-                (header::CONTENT_DISPOSITION, disposition),
-            ],
-            axum::body::Body::from_stream(crate::tankoubon_zip::stream_tankoubon_zip(members)),
+        crate::archives::serve_download_file(
+            &cache,
+            disposition,
+            "application/zip",
+            range,
+            if_range,
         )
-            .into_response(),
+        .await,
     )
 }
 

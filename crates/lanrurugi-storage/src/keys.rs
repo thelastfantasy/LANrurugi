@@ -27,6 +27,16 @@ pub const TOTAL_PAGES_STAT_KEY: &str = "LRR_TOTALPAGESTAT";
 /// (which is itself part of what may not have been saved yet).
 pub const PENDING_RENAME_KEY: &str = "LANRURUGI_PENDING_RENAME";
 
+/// Set (archive DB) of ids that are catalogued but not published yet (spec 025): every search
+/// and read endpoint hides them until the ingest's metadata plugins have returned. A set rather
+/// than a key per archive so a search reads it with one `SMEMBERS` instead of scanning the
+/// keyspace; there is no TTL — startup clears whatever a crash left behind.
+pub const PENDING_VISIBILITY_SET: &str = "LANRURUGI_PENDING_VISIBILITY";
+
+/// Prefix of the per-archive marker keys the first attempt wrote (into the config DB, where
+/// nothing read them). Only the startup sweep still uses it, to delete leftovers.
+pub const LEGACY_PENDING_VISIBILITY_PREFIX: &str = "LANRURUGI_PENDING_VISIBILITY:";
+
 /// Additive, LANrurugi-only. Reverse index (a Redis Set) from one archive ID to every static
 /// category it's currently a member of — `SET_<id>` members are the *forward* direction (a
 /// category's own `archives` field), and until this index existed, answering "which categories is
@@ -137,15 +147,20 @@ pub fn thumbnail_retry_key(archive_id: &str, page: u32) -> String {
 /// currently unreadable, short enough that a worker that came back is picked up on the next visit.
 pub const THUMBNAIL_RETRY_TTL_SECS: i64 = 10 * 60;
 
-/// Additive, LANrurugi-only. One reader-recommendation LLM rerank, keyed by anchor, limit and
-/// prompt version: the ordered archive ids the model picked.
+/// Additive, LANrurugi-only. One reader-recommendation LLM rerank, keyed by anchor, limit, prompt
+/// version and the reading-progress digest: the ordered archive ids the model picked.
 ///
 /// The rerank is a synchronous DeepSeek call (observed 6–64 s); the candidate shortlist itself is
 /// already cached by `lanrurugi_storage::recommend_cache`, so without this every panel open paid
 /// the model call again for the same answer. A hit is re-validated against the live candidate list,
 /// so an id that has since been deleted simply falls through to a fresh call.
-pub fn recommend_rerank_key(archive_id: &str, limit: usize, prompt_version: &str) -> String {
-    format!("LANRURUGI_RECOMMEND_RERANK:{archive_id}:{limit}:{prompt_version}")
+pub fn recommend_rerank_key(
+    archive_id: &str,
+    limit: usize,
+    prompt_version: &str,
+    progress_digest: &str,
+) -> String {
+    format!("LANRURUGI_RECOMMEND_RERANK:{archive_id}:{limit}:{prompt_version}:{progress_digest}")
 }
 
 /// 6 hours: a library that does not change reuses one answer all day, while any new archive makes

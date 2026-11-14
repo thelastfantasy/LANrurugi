@@ -125,6 +125,7 @@ export function PageGridCell({
   onOpenLightbox,
   isTank,
   isPatch = false,
+  chapterName,
 }: {
   page: number
   isStamped: boolean
@@ -141,6 +142,9 @@ export function PageGridCell({
   onOpenLightbox: (page: number) => void
   /** True when this page came from a `.patch.zip` — gets a distinct green-tinted background. */
   isPatch?: boolean
+  /** Set only when this page starts a chapter — painted top-left, always visible (unlike the
+   * hover-only page-number label and action icons, a chapter start is worth seeing at a glance). */
+  chapterName?: string
 }) {
   const { t } = useTranslation()
   const [hovered, setHovered] = useState(false)
@@ -168,6 +172,32 @@ export function PageGridCell({
         onMouseLeave={() => setHovered(false)}
       >
         <PageNumberLabel hovered={hovered}>{t("common.pageN", { n: page })}</PageNumberLabel>
+        {chapterName && (
+          <span
+            title={chapterName}
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              maxWidth: "100%",
+              padding: "2px 6px",
+              fontSize: 13,
+              lineHeight: 1.4,
+              // Same treatment as the page-number label and patch badge: a dark chip over the
+              // thumbnail, so it stays legible on every theme without its own theme rule.
+              backgroundColor: "rgba(0,0,0,0.6)",
+              color: "lightskyblue",
+              borderRadius: "0 0 4px 0",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              pointerEvents: "none",
+              zIndex: 2,
+            }}
+          >
+            {chapterName}
+          </span>
+        )}
         <OverviewThumbnail src={thumbnailSrc} alt={t("common.pageN", { n: page }) ?? undefined} />
         {isPatch && (
           <Tooltip label={t("reader.patchPage")} wrapperStyle={{ position: "static" }}>

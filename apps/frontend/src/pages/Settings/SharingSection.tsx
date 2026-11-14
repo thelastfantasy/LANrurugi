@@ -1,24 +1,29 @@
 import "@/share/share.css";
 
-import { type MouseEvent, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { FaArrowsRotate, FaCopy } from "react-icons/fa6";
 
+import { useServerInfo } from "@/api/hooks";
 import { Modal, Tooltip } from "@/components/common-ui/Display";
 import { Input, Switch } from "@/components/common-ui/Form";
 import { CollapsibleSection, DateTimeStack } from "@/components/Display";
+import { copyWithToast } from "@/lib/clipboard";
 import {
   useRotateNode,
   useSaveShareSettings,
   useShares,
   useShareSettings,
 } from "@/share/api";
-import { copyWithToast } from "@/share/clipboard";
+import { normalizeNodeCode, sameNode } from "@/share/nodeCode";
 import {
   type SettingField,
   ShareSettingsForm,
 } from "@/share/ShareSettingsForm";
 import type { SharePermissions } from "@/share/types";
+import { toast } from "@/toast";
 
+import { ShareCodeText } from "./shared";
 import { ShareDetailPanel } from "./ShareDetailPanel";
 import { SharingHelping } from "./SharingHelping";
 import {
@@ -44,6 +49,32 @@ const DEFAULT_FIELDS: SettingField[] = [
     key: "share_default_download_limit",
     kind: "number",
     label: "share.form.downloadLimit",
+  },
+  {
+    key: "share_default_target_ratio",
+    kind: "text",
+    label: "share.form.targetRatio",
+    placeholder: "1.5",
+    hint: true,
+  },
+  {
+    key: "share_default_ratio_action",
+    kind: "choice",
+    // A target ratio is what makes "once reached" mean anything; without one it is dead UI.
+    onlyWhen: { key: "share_default_target_ratio", present: true },
+    options: ["stop", "throttle"],
+    optionLabels: {
+      stop: "share.ratio.stop",
+      throttle: "share.ratio.throttle",
+    },
+    label: "share.form.ratioAction",
+  },
+  {
+    key: "share_default_ratio_rate",
+    kind: "number",
+    label: "share.form.ratioRate",
+    hint: true,
+    onlyWhen: { key: "share_default_ratio_action", value: "throttle" },
   },
   { key: "share_default_ip_allow", kind: "lines", label: "share.form.ipAllow" },
   {
@@ -111,21 +142,25 @@ const LIMIT_FIELDS: SettingField[] = [
   },
 ];
 
-const NETWORK_FIELDS: SettingField[] = [
-  {
-    key: "share_external_addrs",
-    kind: "lines",
-    label: "share.network.externalAddrs",
-    hint: true,
-    placeholder: "203.0.113.7:443",
-  },
-  {
-    key: "share_portmap",
-    kind: "bool",
-    label: "share.network.portmap",
-    hint: true,
-  },
-];
+// The qBittorrent setting, for the same reason: send share traffic out of a VPN tunnel while the
+// library itself stays on the LAN. Written as a name so a tunnel that is not up yet can still be
+// chosen; the server refuses a name the host does not have.
+const BIND_INTERFACE_FIELD: SettingField = {
+  key: "share_bind_interface",
+  kind: "choice",
+  dynamic: "interfaces",
+  label: "share.network.bindInterface",
+  hint: true,
+};
+
+// Port mapping has nothing to do with which interface traffic leaves through, so it stays on every
+// platform even where the interface picker is hidden.
+const PORTMAP_FIELD: SettingField = {
+  key: "share_portmap",
+  kind: "bool",
+  label: "share.network.portmap",
+  hint: true,
+};
 
 const CONNECTIVITY_FIELDS: SettingField[] = [
   {
@@ -145,6 +180,12 @@ const CONNECTIVITY_FIELDS: SettingField[] = [
     key: "share_udp_port",
     kind: "number",
     label: "share.settings.udpPort",
+    hint: true,
+  },
+  {
+    key: "share_port_rotate",
+    kind: "number",
+    label: "share.settings.portRotate",
     hint: true,
   },
   { key: "share_relay_urls", kind: "lines", label: "share.settings.relayUrls" },
@@ -257,32 +298,9 @@ function HeaderWithHint({ label, hint }: { label: string; hint: string }) {
  *  instance accepts (`lrrg:…`, not the bare letters), and open its share page. */
 function ShareCodeCell({ code }: { code: string }) {
   const { t } = useTranslation();
-  const textForm = `lrrg:${code}`;
-  const copy = (e: MouseEvent) => {
-    e.stopPropagation();
-    void copyWithToast(
-      textForm,
-      t("share.settings.codeCopied"),
-      t("share.settings.copyFailed"),
-    );
-  };
   return (
-    <span className="share-code-cell">
-      <Tooltip label={t("share.settings.copyCode")}>
-        <button type="button" className="share-code" onClick={copy}>
-          {code}
-        </button>
-      </Tooltip>
-      <Tooltip label={t("share.settings.copyCode")}>
-        <button
-          type="button"
-          className="share-copy-code"
-          aria-label={t("share.settings.copyCode")}
-          onClick={copy}
-        >
-          <i className="fa fa-copy" aria-hidden="true" />
-        </button>
-      </Tooltip>
+    <span className="share-code-with-link">
+      <ShareCodeText code={code} />
       <Tooltip label={t("share.settings.openSharePage")}>
         <a
           className="share-open-page"
@@ -334,6 +352,11 @@ const PANELS: {
 
 function PanelBody({ panel }: { panel: Panel }) {
   const { t } = useTranslation();
+  const info = useServerInfo();
+  // iroh's sockets are pinned inside the vendored crates, and that fork only implements
+  // SO_BINDTODEVICE: everywhere else the endpoint always takes the system route, so the picker
+  // would be a setting that does nothing.
+  const shareBindingUnsupported = info.data?.interface_binding?.share === "none";
   switch (panel) {
     case "defaults":
       return <ShareSettingsForm fields={DEFAULT_FIELDS} />;
@@ -347,7 +370,20 @@ function PanelBody({ panel }: { panel: Panel }) {
         </>
       );
     case "network":
-      return <ShareSettingsForm fields={NETWORK_FIELDS} />;
+      return (
+        <>
+          {shareBindingUnsupported ? (
+            // Only the picker goes away: `share_portmap` and everything else in this panel still
+            // works on platforms where the sharing engine cannot pin its sockets.
+            <span className="share-form-hint">
+              {t("share.network.bindInterfaceUnsupported")}
+            </span>
+          ) : (
+            <ShareSettingsForm fields={[BIND_INTERFACE_FIELD]} />
+          )}
+          <ShareSettingsForm fields={[PORTMAP_FIELD]} />
+        </>
+      );
     case "limits":
       return (
         <>
@@ -373,57 +409,93 @@ function SharingNodeList() {
   const rotate = useRotateNode();
   const [draft, setDraft] = useState("");
   const endpoint = settings.data?.endpoint as
-    { node_string?: string | null; node_code?: string | null } | undefined;
-  const own = endpoint?.node_string;
+    { node_code?: string | null } | undefined;
   const code = endpoint?.node_code;
   const added = String(settings.data?.share_nodes ?? "");
-  const rows = added
+  const stored = added
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean);
+  // The list may predate both the duplicate check and the code form (an old full `lrrg-node:`
+  // string, or an entry that is really this instance), so what is shown is what is *meant*: this
+  // instance first, then each other node once.
+  const rows = stored
+    .filter(
+      (line, i) =>
+        !(code && sameNode(line, code)) &&
+        stored.findIndex((other) => sameNode(other, line)) === i,
+    );
+  const draftCode = normalizeNodeCode(draft);
 
   const write = (next: string[]) =>
     save.mutate({ share_nodes: next.join("\n") });
+
+  const add = () => {
+    const line = (draftCode ?? draft.trim());
+    if (!draftCode) {
+      toast({
+        heading: t("share.nodes.invalidCode"),
+        icon: "error",
+        hideAfter: 4000,
+      });
+      return;
+    }
+    if (code && sameNode(line, code)) {
+      toast({ heading: t("share.nodes.isOwn"), icon: "error", hideAfter: 4000 });
+      return;
+    }
+    if (rows.some((r) => sameNode(r, line))) {
+      toast({
+        heading: t("share.nodes.duplicate"),
+        icon: "error",
+        hideAfter: 4000,
+      });
+      setDraft("");
+      return;
+    }
+    write([...rows, line]);
+    setDraft("");
+  };
 
   return (
     <>
       <ul className="share-node-list">
         {code && (
-          <li>
-            <span className="share-node-tag">{t("share.nodes.code")}</span>
-            <code className="share-result-value share-node-code">{code}</code>
-            <button
-              type="button"
-              className="stdbtn"
-              onClick={() =>
-                void copyWithToast(
-                  code,
-                  t("share.result.copied"),
-                  t("share.result.copyFailed"),
-                )
-              }
-            >
-              {t("share.result.copy")}
-            </button>
-          </li>
-        )}
-        {own && (
-          <li>
+          <li className="share-node-own">
             <span className="share-node-tag">{t("share.nodes.own")}</span>
-            <code className="share-result-value">{own}</code>
-            <button
-              type="button"
-              className="stdbtn"
-              onClick={() =>
-                void copyWithToast(
-                  own,
-                  t("share.result.copied"),
-                  t("share.result.copyFailed"),
-                )
-              }
-            >
-              {t("share.result.copy")}
-            </button>
+            <code className="share-result-value share-node-code">{code}</code>
+            <span className="share-node-actions">
+              <Tooltip label={t("share.result.copy")}>
+                <button
+                  type="button"
+                  className="stdbtn share-node-icon"
+                  aria-label={t("share.result.copy")}
+                  onClick={() =>
+                    void copyWithToast(
+                      code,
+                      t("share.result.copied"),
+                      t("share.result.copyFailed"),
+                    )
+                  }
+                >
+                  <FaCopy aria-hidden="true" />
+                </button>
+              </Tooltip>
+              <Tooltip label={t("share.nodes.rotate")}>
+                <button
+                  type="button"
+                  className="stdbtn share-node-icon"
+                  aria-label={t("share.nodes.rotate")}
+                  disabled={rotate.isPending}
+                  onClick={() => {
+                    if (window.confirm(t("share.nodes.rotateConfirm")))
+                      rotate.mutate(undefined);
+                  }}
+                >
+                  <FaArrowsRotate aria-hidden="true" />
+                </button>
+              </Tooltip>
+            </span>
           </li>
         )}
         {rows.map((line) => (
@@ -440,37 +512,22 @@ function SharingNodeList() {
             </button>
           </li>
         ))}
-        {!own && rows.length === 0 && (
+        {!code && rows.length === 0 && (
           <li className="share-result-note">{t("share.nodes.none")}</li>
         )}
       </ul>
-      <button
-        type="button"
-        className="stdbtn share-node-rotate"
-        disabled={rotate.isPending}
-        onClick={() => {
-          if (window.confirm(t("share.nodes.rotateConfirm")))
-            rotate.mutate(undefined);
-        }}
-      >
-        {t("share.nodes.rotate")}
-      </button>
       <div className="share-node-add">
         <Input
-          rows={2}
           value={draft}
           onValueChange={setDraft}
           placeholder={t("share.nodes.addPlaceholder")}
+          aria-invalid={draft.trim() !== "" && !draftCode}
         />
         <button
           type="button"
           className="stdbtn"
-          disabled={!draft.trim().startsWith("lrrg-node:") || save.isPending}
-          onClick={() => {
-            const line = draft.trim();
-            if (!rows.includes(line)) write([...rows, line]);
-            setDraft("");
-          }}
+          disabled={!draft.trim() || save.isPending}
+          onClick={add}
         >
           {t("share.nodes.add")}
         </button>
@@ -638,13 +695,16 @@ export function SharingSection() {
                   )}
                 </div>
               </div>
-              <button
-                type="button"
-                className="stdbtn"
-                onClick={() => setPanel(p.id)}
-              >
-                {t("share.panel.edit")}
-              </button>
+              <Tooltip label={t("share.panel.edit")}>
+                <button
+                  type="button"
+                  className="stdbtn share-icon-btn"
+                  onClick={() => setPanel(p.id)}
+                  aria-label={t("share.panel.edit")}
+                >
+                  <i className="fa fa-cog" aria-hidden="true"></i>
+                </button>
+              </Tooltip>
             </div>
           ))}
         </div>

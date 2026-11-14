@@ -115,6 +115,19 @@ pub struct ScanSummary {
     pub rekeyed: usize,
     pub unchanged: usize,
     pub errors: usize,
+    /// Archives moved under `_byname/` by the relocation pass at the end of this scan (020).
+    pub relocated: usize,
+    /// Relocation candidates left in place for any reason other than failure: a destination that
+    /// already held a different file, a file that had not settled yet, and a record pointing
+    /// outside the library. Kept as the sum for compatibility; the two fields below split it so a
+    /// consumer can tell a conflict that needs a human from conditions that clear themselves.
+    pub relocation_skipped: usize,
+    /// Files too recently written to move safely; the next pass takes them.
+    pub relocation_settling: usize,
+    /// Records whose path is outside the library (an external mount); permanent by nature.
+    pub relocation_outside: usize,
+    pub relocation_repaired: usize,
+    pub relocation_failed: usize,
 }
 
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -372,6 +385,34 @@ pub async fn full_scan(
                     });
                 }
             }
+        }
+    }
+
+    // Everything catalogued by filename — pre-020 records and files dropped into the mount since the
+    // last scan — belongs under `_byname/`. One pass at the end covers both; a failure is counted,
+    // never fatal: a file left in place is still readable, it just sits outside the convention.
+    match crate::relocate::relocate_library(&archives, config_pool, library_path).await {
+        Ok(report) => {
+            summary.relocated = report.moved as usize;
+            summary.relocation_skipped =
+                (report.skipped_occupied + report.settling + report.outside) as usize;
+            summary.relocation_settling = report.settling as usize;
+            summary.relocation_outside = report.outside as usize;
+            summary.relocation_repaired = report.repaired as usize;
+            summary.relocation_failed = report.failed as usize;
+            if !report.is_empty() {
+                tracing::info!(
+                    moved = report.moved,
+                    skipped_occupied = report.skipped_occupied,
+                    settling = report.settling,
+                    outside = report.outside,
+                    failed = report.failed,
+                    "_byname relocation pass"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot list archives for the _byname relocation pass");
         }
     }
 
@@ -654,6 +695,7 @@ mod tests {
                 heal_failed_at: None,
                 corrupted_pages: vec![],
                 has_patch: false,
+                blake3: None,
             })
             .await
             .unwrap();
@@ -754,6 +796,15 @@ mod tests {
 
         let path = dir.path().join("known.zip");
         std::fs::write(&path, b"irrelevant content, never read by this test").unwrap();
+        // The relocation pass leaves files alone until they have settled, so a file written a
+        // moment ago would stay at the root and this test would be asserting the wrong path.
+        let aged = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(aged)
+            .unwrap();
         let path_str = path.to_string_lossy().to_string();
 
         let placeholder_id = "0000000000000000000000000000000000000000";
@@ -779,6 +830,7 @@ mod tests {
                 heal_failed_at: None,
                 corrupted_pages: vec![],
                 has_patch: false,
+                blake3: None,
             })
             .await
             .unwrap();
@@ -827,8 +879,18 @@ mod tests {
             .expect("the placeholder record is kept");
         assert_eq!(untouched.title, "Known");
 
-        let real_id =
-            lanrurugi_core::ids::ArchiveId(lanrurugi_storage::id::size_aware_id(&path).unwrap());
+        // The relocation pass moves every by-name archive under `_byname/`, known or not, so the
+        // file the test placed at the root is gone from there and lives one directory deeper.
+        assert_eq!(
+            untouched.file,
+            lanrurugi_storage::paths::byname_dir(dir.path())
+                .join(path.file_name().unwrap())
+                .to_string_lossy()
+        );
+        let moved_path = std::path::PathBuf::from(&untouched.file);
+        let real_id = lanrurugi_core::ids::ArchiveId(
+            lanrurugi_storage::id::size_aware_id(&moved_path).unwrap(),
+        );
         // Hermetic: an earlier run of this same test (before the filemap-pruning behaviour existed)
         // could have left a record under the size-aware id, and `size_aware_id` depends only on the
         // file's own size and mtime, not on the temp path.
@@ -838,7 +900,10 @@ mod tests {
             "the real content hash must never have been computed or catalogued either"
         );
 
-        let _: () = config_conn.hdel("LRR_FILEMAP", &path_str).await.unwrap();
+        let _: () = config_conn
+            .hdel("LRR_FILEMAP", untouched.file)
+            .await
+            .unwrap();
     }
 
     /// The other half of `update_filemap` parity: a filemap entry whose path no longer exists on
@@ -885,6 +950,192 @@ mod tests {
         );
     }
 
+    /// 020 T023/T019: a file that arrives behind the scanner's back (SMB, rsync, `cp`) is
+    /// catalogued under its own name first and then relocated into `_byname/` by the same pass —
+    /// once, not twice, and with its title still derived from the filename.
+    #[tokio::test]
+    async fn a_dropped_file_is_catalogued_then_relocated_into_byname() {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(36).await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let archives = ArchiveRepository::new(archive_pool.clone());
+        let pools = scanner_pools(&archive_pool, &config_pool, &search_pool);
+        let dir = tempfile::tempdir().unwrap();
+        let thumb_dir = tempfile::tempdir().unwrap();
+
+        let path = dir.path().join("Series/Dropped Book.zip");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"dropped over smb").unwrap();
+        let aged = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(aged)
+            .unwrap();
+
+        let jobs = lanrurugi_core::jobs::JobRegistry::new();
+        let job_id = jobs.create("scan").await;
+        let first = full_scan(
+            dir.path(),
+            &pools,
+            std::sync::Arc::new(Equivalence::default()),
+            thumb_dir.path(),
+            &jobs,
+            &job_id,
+            None,
+        )
+        .await;
+
+        assert_eq!(first.catalogued, 1, "the dropped file is catalogued once");
+        assert_eq!(first.relocated, 1, "and relocated in the same pass");
+
+        let records = archives.list_all().await.unwrap();
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        let expected = dir
+            .path()
+            .join("_byname/Series/Dropped Book.zip")
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(record.file, expected);
+        assert_eq!(record.name, "Dropped Book");
+        assert_eq!(record.title, "Dropped Book");
+        assert!(!path.exists(), "the original path no longer holds the file");
+
+        // The next scan sees it where it now lives and leaves it alone.
+        let job_id = jobs.create("scan").await;
+        let second = full_scan(
+            dir.path(),
+            &pools,
+            std::sync::Arc::new(Equivalence::default()),
+            thumb_dir.path(),
+            &jobs,
+            &job_id,
+            None,
+        )
+        .await;
+        assert_eq!(second.catalogued, 0);
+        assert_eq!(second.relocated, 0);
+        assert_eq!(archives.list_all().await.unwrap().len(), 1);
+
+        archives.delete(&record.id).await.unwrap();
+        let mut conn = config_pool.get().await.unwrap();
+        use deadpool_redis::redis::AsyncCommands;
+        let _: () = conn.hdel("LRR_FILEMAP", &expected).await.unwrap();
+    }
+
+    /// 020 T022: after the records are gone, a scan rebuilds titles for both layouts from what is
+    /// on disk — the sidecar for a hash-named archive, the filename for one under `_byname/`.
+    #[tokio::test]
+    async fn a_scan_recovers_titles_for_both_layouts_after_the_records_are_lost() {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(39).await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let archives = ArchiveRepository::new(archive_pool.clone());
+        let pools = scanner_pools(&archive_pool, &config_pool, &search_pool);
+        let dir = tempfile::tempdir().unwrap();
+        let thumb_dir = tempfile::tempdir().unwrap();
+
+        // This database slice is this test's own (offset 39), but a previous run that failed
+        // before its cleanup would leave records behind and make the next one see `unchanged`
+        // instead of a fresh catalogue.
+        for stale in archives.list_all().await.unwrap() {
+            archives.delete(&stale.id).await.unwrap();
+        }
+        let mut scratch = config_pool.get().await.unwrap();
+        use deadpool_redis::redis::AsyncCommands;
+        let _: () = scratch.del("LRR_FILEMAP").await.unwrap();
+
+        // Hash layout: the disk name is opaque, so the title can only come from the sidecar. The
+        // id is the content id, so the bytes are written first and moved into their bucket after.
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let staging = dir.path().join("incoming");
+        std::fs::write(&staging, format!("hash-layout bytes {nonce}")).unwrap();
+        let id = lanrurugi_storage::id::size_aware_id(&staging).unwrap();
+        let hashed = lanrurugi_storage::paths::hash_layout_path(dir.path(), &id, "zip");
+        std::fs::create_dir_all(hashed.parent().unwrap()).unwrap();
+        std::fs::rename(&staging, &hashed).unwrap();
+        let sidecar = lanrurugi_storage::sidecar::Sidecar::for_archive(
+            &id,
+            &hashed,
+            "[Group] The Book [DL版].zip",
+            "The Book",
+        )
+        .unwrap();
+        lanrurugi_storage::sidecar::write(dir.path(), &sidecar).unwrap();
+
+        // By-name layout: the filename already says everything, and it gets no sidecar.
+        let byname_dir = lanrurugi_storage::paths::byname_dir(dir.path()).join("Series");
+        std::fs::create_dir_all(&byname_dir).unwrap();
+        std::fs::write(
+            byname_dir.join("Old Book.zip"),
+            format!("by-name bytes {nonce}"),
+        )
+        .unwrap();
+
+        let jobs = lanrurugi_core::jobs::JobRegistry::new();
+        let job_id = jobs.create("scan").await;
+        let summary = full_scan(
+            dir.path(),
+            &pools,
+            std::sync::Arc::new(Equivalence::default()),
+            thumb_dir.path(),
+            &jobs,
+            &job_id,
+            None,
+        )
+        .await;
+        assert_eq!(summary.catalogued, 2, "{summary:?}");
+        assert_eq!(summary.relocated, 0, "both files are already in a layout");
+
+        let records = archives.list_all().await.unwrap();
+        assert_eq!(records.len(), 2);
+        let hashed_record = records.iter().find(|a| a.id.as_str() == id).unwrap();
+        assert_eq!(hashed_record.title, "The Book");
+        assert_eq!(hashed_record.name, "[Group] The Book [DL版]");
+        let byname_record = records
+            .iter()
+            .find(|a| a.file.contains("_byname"))
+            .expect("the by-name file is catalogued where it lives");
+        assert_eq!(byname_record.title, "Old Book");
+        assert_eq!(byname_record.name, "Old Book");
+        assert!(
+            !lanrurugi_storage::paths::sidecar_path(dir.path(), byname_record.id.as_str()).exists(),
+            "by-name archives get no sidecar"
+        );
+        // Cataloguing rewrites the sidecar with the record's title. The original filename has no
+        // other home — a rebuild must reuse it rather than fall back to `<id>.zip`.
+        let rewritten =
+            lanrurugi_storage::sidecar::read(dir.path(), &id).expect("the sidecar is still there");
+        assert_eq!(rewritten.original_filename, "[Group] The Book [DL版].zip");
+        assert_eq!(rewritten.title, "The Book");
+
+        for record in &records {
+            archives.delete(&record.id).await.unwrap();
+        }
+        let mut conn = config_pool.get().await.unwrap();
+        let _: () = conn
+            .hdel("LRR_FILEMAP", hashed.to_string_lossy().to_string())
+            .await
+            .unwrap();
+        let _: () = conn
+            .hdel(
+                "LRR_FILEMAP",
+                byname_dir
+                    .join("Old Book.zip")
+                    .to_string_lossy()
+                    .to_string(),
+            )
+            .await
+            .unwrap();
+    }
+
     fn make_zip_with_pages(dir: &std::path::Path, name: &str, n_pages: usize) -> PathBuf {
         let path = dir.join(name);
         let file = std::fs::File::create(&path).unwrap();
@@ -921,6 +1172,7 @@ mod tests {
             heal_failed_at: None,
             corrupted_pages: vec![],
             has_patch: false,
+            blake3: None,
         }
     }
 

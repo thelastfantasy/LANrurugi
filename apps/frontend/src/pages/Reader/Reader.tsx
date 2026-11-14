@@ -1,9 +1,10 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { ApiError } from "@/api/client";
+import { startDownload } from "@/api/download";
 import {
   fetchRandomArchiveId,
   useAddBookmark,
@@ -24,7 +25,10 @@ import {
   useUpdateSettings,
   useUpdateTankoubonProgress,
 } from "@/api/hooks";
+import type { TocEntry } from "@/api/types";
 import { Menu, MenuItem, MenuSeparator, Tooltip } from "@/components/common-ui/Display";
+import { Badge } from "@/components/common-ui/Display"
+import { Keycap as Key } from "@/components/common-ui/Display/Keycap";
 import { IconButton, ToggleButtonMenu } from "@/components/common-ui/Form";
 import { currentRating,RatingWidget } from "@/components/common-ui/Form/RatingWidget";
 import {
@@ -58,6 +62,7 @@ import { fileInfoText } from "@/lib/utils/fileInfoText";
 import {
   getImageCapabilityHeader,
   IMAGE_FORMAT_SUPPORT_HEADER,
+  markJxlUndecodable,
 } from "@/lib/utils/imageFormatSupport";
 import type { PageMeta } from "@/lib/utils/imageMeta";
 import {
@@ -67,8 +72,9 @@ import {
   type ResizedPageInfo,
 } from "@/lib/utils/imageMeta";
 import { isTankoubonId } from "@/lib/utils/isTankoubonId";
+import { displayTocName } from "@/lib/utils/tocValidation";
 import { useSession } from "@/session/SessionProvider";
-import { FONT_SIZE_XS, useApplyTheme } from "@/theme";
+import { useApplyTheme } from "@/theme";
 import { toast } from "@/toast";
 import { TranslationOverlay } from "@/translation/components/TranslationOverlay";
 // Phase 2 on-page translation (`specs/004-ocr-manga-translation`). Rendered as an overlay layer so
@@ -128,8 +134,17 @@ function servedInfoKb(info: ResizedPageInfo | null | undefined): number | undefi
 const PAGINATOR_PAGECOUNT_FONT_SIZE = "1.25rem";
 /** Matches `toast.tsx`'s own `AUTO_CLOSE_TIME.info` default. */
 const TOAST_DURATION_MS = 5000;
+/** The preview sweep moves at a constant speed; the clamp keeps tiny and poster-sized pages sane. */
+const WIPE_SPEED_PX_PER_MS = 1.6;
+const WIPE_MIN_MS = 200;
+const WIPE_MAX_MS = 760;
 
-type OverlayKind = "archive" | "settings" | "help" | null;
+function wipeDuration(renderedHeight: number): number {
+  if (!Number.isFinite(renderedHeight) || renderedHeight <= 0) return WIPE_MIN_MS;
+  return Math.min(WIPE_MAX_MS, Math.max(WIPE_MIN_MS, Math.round(renderedHeight / WIPE_SPEED_PX_PER_MS)));
+}
+
+type OverlayKind = "archive" | "settings" | "help" | "chapters" | null;
 
 interface WakeLockSentinelLike {
   release(): Promise<void>;
@@ -166,18 +181,71 @@ function usesLocalReaderProgress(
 }
 
 /** Inline key-cap styling for the help panel's keyboard shortcuts. */
-function Key({ children }: { children: React.ReactNode }) {
+
+/** Looping demo of a two-finger swipe, drawn inline: `up` enters fullscreen, `down` leaves it. */
+function TouchSwipeDemo({ direction }: { direction: "up" | "down" }) {
   return (
-    <code
-      style={{
-        padding: "1px 5px",
-        background: "rgba(0,0,0,0.08)",
-        borderRadius: 3,
-        fontWeight: "bold",
-      }}
+    <svg
+      className={`reader-touch-gesture is-${direction}`}
+      viewBox="0 0 64 48"
+      role="img"
+      aria-hidden="true"
+      focusable="false"
     >
-      {children}
-    </code>
+      <rect className="reader-touch-gesture-screen" x="14" y="5" width="44" height="42" rx="7" />
+      <g className="reader-touch-gesture-corners">
+        <path d="M21 16v-5h5" />
+        <path d="M51 16v-5h-5" />
+        <path d="M21 36v5h5" />
+        <path d="M51 36v5h-5" />
+      </g>
+      <g className="reader-touch-gesture-fingers">
+        <circle cx="31" cy="38" r="4.2" />
+        <circle cx="41" cy="38" r="4.2" />
+      </g>
+    </svg>
+  );
+}
+
+/** Looping demo of the press-and-hold that leaves headless mode on a touch screen. */
+function LongPressDemo() {
+  return (
+    <svg
+      className="reader-longpress-demo"
+      viewBox="0 0 64 48"
+      role="img"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <rect className="reader-touch-gesture-screen" x="14" y="5" width="44" height="42" rx="7" />
+      <circle className="reader-longpress-ring" cx="36" cy="28" r="8" />
+      <circle className="reader-longpress-dot" cx="36" cy="28" r="4.2" />
+    </svg>
+  );
+}
+
+/** Looping demo of tapping the left/right side of the page, drawn inline like the gesture demo. */
+function TapSidesDemo() {
+  return (
+    <svg
+      className="reader-tap-demo"
+      viewBox="0 0 64 48"
+      role="img"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <rect className="reader-tap-demo-page" x="24" y="6" width="16" height="36" rx="2.5" />
+      <g className="reader-tap-demo-side is-left">
+        <path className="reader-tap-demo-chevron" d="M12 18l-6 6 6 6" />
+        <circle className="reader-tap-demo-ring" cx="15" cy="24" r="5.5" />
+        <circle className="reader-tap-demo-dot" cx="15" cy="24" r="2.2" />
+      </g>
+      <g className="reader-tap-demo-side is-right">
+        <path className="reader-tap-demo-chevron" d="M52 18l6 6-6 6" />
+        <circle className="reader-tap-demo-ring" cx="49" cy="24" r="5.5" />
+        <circle className="reader-tap-demo-dot" cx="49" cy="24" r="2.2" />
+      </g>
+    </svg>
   );
 }
 
@@ -248,6 +316,61 @@ export function Reader() {
   const translationArchiveId = isTank
     ? tankReading.getArchiveForPage(currentPage)?.arcId ?? null
     : archiveId;
+  // The chapter the current page belongs to, for headless mode's bottom-left line. Chapters have
+  // two sources and both count: a Tankoubon's member archives, and a plain archive's own ToC.
+  const currentChapter = useMemo(() => {
+    if (isTank) {
+      const chapter = tankReading.chapters.find(
+        (c) => currentPage >= c.startPage && currentPage <= c.endPage,
+      );
+      return chapter
+        ? { title: displayTocName(chapter.title, t), startPage: chapter.startPage }
+        : null;
+    }
+    // The last ToC entry at or before the current page — the same "which chapter am I in"
+    // question the overview's chapter selector answers. First entry wins on a shared page.
+    let entry: TocEntry | undefined;
+    for (const candidate of metadata.data?.toc ?? []) {
+      if (candidate.page > currentPage) continue;
+      if (!entry || candidate.page > entry.page) entry = candidate;
+    }
+    return entry ? { title: displayTocName(entry.name, t), startPage: entry.page } : null;
+  }, [currentPage, isTank, tankReading.chapters, metadata.data?.toc, t]);
+  // Chapters for the headless jump OSD (`t`). A Tankoubon's members are the top level and each
+  // member's own ToC entries hang under it; a plain archive's ToC is a flat list.
+  const chapterGroups = useMemo(() => {
+    const entries = metadata.data?.toc ?? [];
+    if (!isTank) {
+      return entries.map((entry) => ({
+        title: displayTocName(entry.name, t),
+        page: entry.page,
+        children: [] as { title: string; page: number }[],
+      }));
+    }
+    const groups: {
+      title: string;
+      page: number;
+      children: { title: string; page: number }[];
+    }[] = [];
+    for (const entry of entries) {
+      const title = displayTocName(entry.name, t);
+      const last = groups[groups.length - 1];
+      if (entry.synthetic || !last) groups.push({ title, page: entry.page, children: [] });
+      else last.children.push({ title, page: entry.page });
+    }
+    return groups;
+  }, [isTank, metadata.data?.toc, t]);
+  // The deepest entry at or before the current page, so the OSD can mark where the reader is.
+  const activeChapterPage = useMemo(() => {
+    let page = -1;
+    for (const group of chapterGroups) {
+      if (group.page <= currentPage && group.page > page) page = group.page;
+      for (const child of group.children) {
+        if (child.page <= currentPage && child.page > page) page = child.page;
+      }
+    }
+    return page;
+  }, [chapterGroups, currentPage]);
   // `null` whenever translation is off, unconfigured, or the settings fetch failed — the overlay
   // renders nothing in all three cases (`specs/004-ocr-manga-translation` FR-007).
   const [translationSettings, translationScope, toggleTranslationEnabled, setTranslationTargetLanguage] =
@@ -296,13 +419,42 @@ export function Reader() {
     if (newBadgeMode === "until_opened") clearArchiveNewRef.current(archiveId);
   }, [archiveId, isTank, newBadgeMode]);
 
-  const openedByDefaultSetting = useRef(
-    readerSettings.showOverlayByDefault || startWithOverview,
+  // Whether the next overview open scrolls to the page being read. The auto-open (a reader
+  // setting / "start with overview") and Shift+Esc deliberately do not: they are a browse-from-the-
+  // top gesture, while the toolbar button and plain Esc mean "show me where I am".
+  const overviewAutoScroll = useRef(
+    !(readerSettings.showOverlayByDefault || startWithOverview),
   );
   const [showTankSplit, setShowTankSplit] = useState(false)
   const [overlay, setOverlay] = useState<OverlayKind>(
     readerSettings.showOverlayByDefault || startWithOverview ? "archive" : null,
   );
+  // Headless only: the file line (name/size/format) normally lives in the toolbar, which headless
+  // hides. Tab brings it back over the artwork's top-left corner, on demand.
+  const [showHeadlessFileInfo, setShowHeadlessFileInfo] = useState(false);
+  // The chapter OSD's own scroll container, so opening it can centre the current chapter.
+  const chapterOsdRef = useRef<HTMLDivElement | null>(null);
+  // Opening the OSD should land on the chapter being read, not at the top of the list — the same
+  // "bring the current item into view" behaviour the archive overview's grid has.
+  useEffect(() => {
+    if (overlay !== "chapters") return;
+    const frame = requestAnimationFrame(() => {
+      const panel = chapterOsdRef.current;
+      if (!panel) return;
+      const target = panel.querySelector<HTMLElement>(
+        ".reader-chapter-osd-card.is-active, .reader-chapter-osd-child.is-active",
+      );
+      if (!target) {
+        panel.scrollTop = 0;
+        return;
+      }
+      panel.scrollTop = Math.max(
+        0,
+        target.offsetTop - (panel.clientHeight - target.offsetHeight) / 2,
+      );
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [overlay, activeChapterPage]);
 
   useEffect(() => {
     if (!startPage && !startWithOverview) return;
@@ -339,6 +491,154 @@ export function Reader() {
   const supportsHover = useSupportsHover();
   // Shared by both toolbars, so changing the primary action in one updates the other too.
   const [fitAction, setFitAction] = useState<FitAction>(readStoredFitAction);
+  /**
+   * Headless reading: only the page and the fit control, everything else hidden. App-only (not one
+   * of legacy's reader settings) and persisted like `fitAction`, so reopening a tab keeps the mode —
+   * the control that leaves it is always on screen, so that is never a dead end.
+   */
+  const [headless, setHeadless] = useState(() => localStorage.getItem("readerHeadless") === "true");
+  const toggleHeadless = useCallback(() => {
+    setHeadless((prev) => {
+      const next = !prev;
+      localStorage.setItem("readerHeadless", String(next));
+      return next;
+    });
+  }, []);
+  // The one control headless leaves on screen would otherwise sit on the artwork all the time, so
+  // it stays at 10% and only comes back when the pointer reaches the corner it lives in (or when
+  // it is hovered/focused — CSS covers those two).
+  const [headlessControlsRevealed, setHeadlessControlsRevealed] = useState(false);
+  useEffect(() => {
+    if (!headless || !supportsHover) return;
+    function onMove(e: MouseEvent) {
+      setHeadlessControlsRevealed(
+        e.clientX > window.innerWidth * 0.8 && e.clientY < window.innerHeight * 0.2,
+      );
+    }
+    window.addEventListener("mousemove", onMove);
+    return () => window.removeEventListener("mousemove", onMove);
+  }, [headless, supportsHover]);
+  // The bottom-left title/line sits over the artwork when the page is wide enough to reach that
+  // corner. Rather than always painting it at full strength (or always hiding it), it fades out
+  // only while it actually overlaps an image, and the pointer entering the bottom-left corner
+  // brings it back — the mirror of the fit control's top-right corner behaviour above.
+  const headlessInfoRef = useRef<HTMLDivElement | null>(null);
+  const [headlessInfoOverImage, setHeadlessInfoOverImage] = useState(false);
+  const [headlessInfoRevealed, setHeadlessInfoRevealed] = useState(false);
+  useEffect(() => {
+    if (!headless) return;
+    function measure() {
+      const el = headlessInfoRef.current;
+      const root = containerRef.current;
+      if (!el || !root) return;
+      const r = el.getBoundingClientRect();
+      let overlaps = false;
+      // Only page artwork: `#i1` also holds the filmstrip and overview thumbnails, and
+      // measuring a hundred of those on every scroll event is pointless.
+      for (const img of root.querySelectorAll("img.reader-image")) {
+        const ir = img.getBoundingClientRect();
+        if (ir.width === 0 || ir.height === 0) continue;
+        if (ir.left < r.right && ir.right > r.left && ir.top < r.bottom && ir.bottom > r.top) {
+          overlaps = true;
+          break;
+        }
+      }
+      setHeadlessInfoOverImage(overlaps);
+    }
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, { passive: true });
+    // Pages finish loading after this effect ran for the page change; re-measuring on load is what
+    // notices an image that grew into the corner.
+    const onLoad = () => measure();
+    const root = containerRef.current;
+    root?.addEventListener("load", onLoad, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure);
+      root?.removeEventListener("load", onLoad, true);
+    };
+  }, [headless, currentPage]);
+  useEffect(() => {
+    if (!headless || !supportsHover) return;
+    function onMove(e: MouseEvent) {
+      setHeadlessInfoRevealed(
+        e.clientX < window.innerWidth * 0.2 && e.clientY > window.innerHeight * 0.8,
+      );
+    }
+    window.addEventListener("mousemove", onMove);
+    return () => window.removeEventListener("mousemove", onMove);
+  }, [headless, supportsHover]);
+
+  // A touch screen has neither a pointer to reveal that corner nor a fit menu to walk back out
+  // from, so headless is left by holding a finger on the page. The click that the release produces
+  // must not also turn the page — it would land in the mode that just came back.
+  const longPressRef = useRef(false);
+  useEffect(() => {
+    if (!headless || supportsHover) return;
+    let timer: number | undefined;
+    const start = () => {
+      // Cleared per gesture: a hold that ends without a click must not swallow the next tap.
+      longPressRef.current = false;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        longPressRef.current = true;
+        toggleHeadless();
+      }, 550);
+    };
+    const cancel = () => window.clearTimeout(timer);
+    // A hold that turns into a scroll is cancelled by movement. `pointercancel` alone is not a
+    // reliable cancel: a long press on the artwork makes the browser claim the gesture (the image
+    // callout), which fires it before the timer, and the press that was meant to leave headless
+    // then does nothing.
+    let startX = 0;
+    let startY = 0;
+    const down = new Set<number>();
+    const startAt = (e: PointerEvent) => {
+      down.add(e.pointerId);
+      // A second finger is a two-finger gesture, never a hold.
+      if (down.size > 1) {
+        cancel();
+        return;
+      }
+      startX = e.clientX;
+      startY = e.clientY;
+      start();
+    };
+    const lift = (e: PointerEvent) => {
+      down.delete(e.pointerId);
+      if (down.size === 0) cancel();
+    };
+    // The browser claiming the gesture (the image callout) fires `pointercancel` mid-hold. That is
+    // exactly the press this mode is waiting for, so only the bookkeeping is updated.
+    const forget = (e: PointerEvent) => {
+      down.delete(e.pointerId);
+    };
+    const moved = (e: PointerEvent) => {
+      if (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10) cancel();
+    };
+    document.addEventListener("pointerdown", startAt);
+    document.addEventListener("pointermove", moved);
+    document.addEventListener("pointerup", lift);
+    document.addEventListener("pointercancel", forget);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("pointerdown", startAt);
+      document.removeEventListener("pointermove", moved);
+      document.removeEventListener("pointerup", lift);
+      document.removeEventListener("pointercancel", forget);
+    };
+  }, [headless, supportsHover, toggleHeadless]);
+  // The browser's own long-press menu (save/open image, select text) would sit on top of headless
+  // reading and interrupt the gesture that leaves it, so it stays closed there.
+  useEffect(() => {
+    if (!headless || supportsHover) return;
+    function onContextMenu(e: MouseEvent) {
+      e.preventDefault();
+    }
+    document.addEventListener("contextmenu", onContextMenu);
+    return () => document.removeEventListener("contextmenu", onContextMenu);
+  }, [headless, supportsHover]);
   /**
    * Fit-height used to be a flat `90vh` (98vh with the header hidden), which ignores the reader's
    * own chrome — title, toolbar, the page-info line, the footer — so the page still ended up taller
@@ -401,7 +701,7 @@ export function Reader() {
    * the viewport. Neither depends on the image's own height, so the measurement cannot chase itself.
    */
   useEffect(() => {
-    if (readerSettings.fitMode !== FIT_MODE.FIT_HEIGHT || isFullscreen) {
+    if (readerSettings.fitMode !== FIT_MODE.FIT_HEIGHT) {
       return;
     }
     let frame = 0;
@@ -475,7 +775,15 @@ export function Reader() {
       window.removeEventListener("resize", schedule);
       observer.disconnect();
     };
-  }, [readerSettings.fitMode, readerSettings.hideHeader, readerSettings.infiniteScroll, isFullscreen, measureTick]);
+  }, [
+    readerSettings.fitMode,
+    readerSettings.hideHeader,
+    readerSettings.infiniteScroll,
+    isFullscreen,
+    measureTick,
+    // Leaving headless brings most of that chrome back, so the free height must be taken again.
+    headless,
+  ]);
 
   const lastSpreadHeightRef = useRef<number | null>(null);
   const lastFileInfoRef = useRef<string | null>(null);
@@ -485,12 +793,29 @@ export function Reader() {
   // page appear only after the whole large image had finished downloading).
   const prefetchedPageSizesRef = useRef<Set<number>>(new Set());
   const [pageTinyBlobs, setPageTinyBlobs] = useState<Record<number, string>>({});
+  // Pages whose preview is currently being erased to reveal the page underneath. Kept separate from
+  // `mainReady` because the sweep must start only once the full bitmap is *paintable* (after
+  // `decode()` and a paint), not the moment `onLoad` reports its dimensions.
+  const [wipeOn, setWipeOn] = useState<Record<number, boolean>>({});
+  // The sweep runs at a constant speed, so its duration follows the rendered page height: a fixed
+  // 260 ms is a lazy blur on a phone-sized page and a whip-fast snap on a tall one.
+  const [wipeMs, setWipeMs] = useState<Record<number, number>>({});
   // Per page: whether the visible `<img>` has decoded pixels yet. Until it has, the streaming
   // element keeps showing the *previous* page (or nothing, if its box is still unknown) — which on
   // a slow link looked like paging had stopped working. The tiny preview is stacked on top until
   // this flips, so the reader always sees the right page, just at preview resolution first.
   const [mainReady, setMainReady] = useState<Record<number, boolean>>({});
+  // Mirror of `mainReady` for code that runs outside render (the preview fetch): a blob that lands
+  // after the page is already painted must not be shown on top of it.
+  const mainReadyRef = useRef<Record<number, boolean>>({});
   const lastDimsRef = useRef<{ width: number; height: number } | null>(null);
+  /**
+   * Stand-in box for a page whose dimensions are not known yet. Without one, the wrapper shrinks to
+   * its 2px content (the `<img>` has neither a bitmap nor width/height attributes) and the reader
+   * paints as a dot at the edge of the screen — reported on mobile, on the first pages of a cold
+   * archive. A4-ish, portrait, because that is what a scan almost always is.
+   */
+  const UNKNOWN_PAGE_DIMS = { width: 1414, height: 2000 };
   const [pageTinyDims, setPageTinyDims] = useState<
     Record<number, { width: number; height: number }>
   >({});
@@ -501,6 +826,9 @@ export function Reader() {
   const warmImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
   /** Per page: the in-flight/resolved metadata HEAD (box + will-the-server-convert). */
   const pageMetaRef = useRef<Map<number, Promise<PageMeta | null>>>(new Map());
+  // Whether this archive hands pages back as-is. Once known, a preview would only cost a
+  // conversion the reader never needs — the page paints from its own bytes anyway.
+  const servedOriginalRef = useRef<boolean | null>(null);
   /** Pages whose served-size HEAD has already been re-asked after their bitmap painted. */
   const servedInfoReverifiedRef = useRef<Set<number>>(new Set());
   const pageTinyBlobsRef = useRef<Map<number, string>>(new Map());
@@ -577,17 +905,17 @@ export function Reader() {
   const [renderedSpreadKey, setRenderedSpreadKey] = useState(spreadKey);
   if (spreadKey !== renderedSpreadKey) {
     setRenderedSpreadKey(spreadKey);
+    mainReadyRef.current = {};
     setMainReady({});
   }
 
   /** The incoming page's known box (preview/full-size dimensions), used to size the placeholder. */
   const placeholderDims =
-    pageTinyDims[spread.left] ?? pageDimensions[spread.left] ?? lastDimsRef.current ?? null;
+    pageTinyDims[spread.left] ?? pageDimensions[spread.left] ?? lastDimsRef.current ?? UNKNOWN_PAGE_DIMS;
   /** Sizing for that placeholder, in the fit mode currently selected. */
-  const placeholderStyle: React.CSSProperties | null =
-    !placeholderDims || mainReady[spread.left]
-      ? null
-      : readerSettings.fitMode === FIT_MODE.FIT_HEIGHT && !isFullscreen
+  const placeholderStyle: React.CSSProperties | null = mainReady[spread.left]
+    ? null
+      : readerSettings.fitMode === FIT_MODE.FIT_HEIGHT
         ? {
             height: fitHeightPx !== null ? `${fitHeightPx}px` : "90vh",
             aspectRatio: `${placeholderDims.width} / ${placeholderDims.height}`,
@@ -629,9 +957,27 @@ export function Reader() {
       if (!url) return undefined;
       const parsed = new URL(url, window.location.origin);
       parsed.searchParams.set("max_short_edge", String(readerFullShortEdge()));
+      // Pin the codec list into the URL itself: an `<img>` can only carry it in the cookie, while
+      // the reader's HEADs used to send it as a header, so a tab whose probe disagreed with the
+      // cookie could show a converted page while its own info bar reported the other format.
+      parsed.searchParams.set("format", getImageCapabilityHeader());
       // Deliberately no `priority` parameter: the prefetch and the visible `<img>` have to request
       // the *same* URL or the browser cannot reuse the warmed cache entry. Speculative requests are
       // marked with the `X-LRR-Priority` header instead, which the server reads too.
+      return parsed.toString();
+    },
+    [pages.data],
+  );
+
+  /** A tiny page image for the chapter OSD rows. Same address as `pageStreamUrl` but capped to a
+   * thumbnail-sized short edge, so a long chapter list costs a few KB per row, not a page each. */
+  const chapterThumbUrl = useCallback(
+    (page: number) => {
+      const url = pages.data?.pages[page - 1]?.url;
+      if (!url) return undefined;
+      const parsed = new URL(url, window.location.origin);
+      parsed.searchParams.set("max_short_edge", "160");
+      parsed.searchParams.set("format", getImageCapabilityHeader());
       return parsed.toString();
     },
     [pages.data],
@@ -673,6 +1019,9 @@ export function Reader() {
       const url = pageStreamUrl(page);
       const promise = url
         ? fetchPageMeta(url).then((meta) => {
+            if (meta && meta.servedOriginal !== null) {
+              servedOriginalRef.current = meta.servedOriginal;
+            }
             if (meta && meta.width > 0 && meta.height > 0) {
               // The same box the preview reports, but without decoding the page.
               setPageTinyDims((prev) =>
@@ -730,6 +1079,13 @@ export function Reader() {
           if (pageTinyFetchesRef.current.get(page) !== controller) return;
           pageTinyFetchesRef.current.delete(page);
           const blobUrl = URL.createObjectURL(blob);
+          // The page painted first. Its preview arriving now has nothing to reveal and, stacked
+          // above the page, would leave the reader looking at the blurry copy for good — the wipe
+          // only ever starts from the page's own load event.
+          if (mainReadyRef.current[page]) {
+            URL.revokeObjectURL(blobUrl);
+            return;
+          }
           pageTinyBlobsRef.current.set(page, blobUrl);
           setPageTinyBlobs(Object.fromEntries(pageTinyBlobsRef.current));
         })
@@ -740,6 +1096,31 @@ export function Reader() {
     },
     [pages.data, setPageTinyBlobs, setPageTinyDims],
   );
+
+  // Releases the preview blob. Called from the wipe's `animationend`, with a timer as the fallback
+  // for the paths where no animation runs at all.
+  const releaseTiny = useCallback((page: number) => {
+    const tinyUrl = pageTinyBlobsRef.current.get(page);
+    if (!tinyUrl) return;
+    URL.revokeObjectURL(tinyUrl);
+    pageTinyBlobsRef.current.delete(page);
+    setPageTinyBlobs(Object.fromEntries(pageTinyBlobsRef.current));
+  }, [setPageTinyBlobs]);
+
+  useEffect(() => {
+    const timers: number[] = [];
+    for (const key of Object.keys(pageTinyBlobs)) {
+      const page = Number(key);
+      if (!wipeOn[page]) continue;
+      // Generous margin over the animation itself, so a page whose `animationend` never arrives
+      // (a dropped frame, a backgrounded tab) still releases its preview.
+      const wait = (wipeMs[page] ?? WIPE_MAX_MS) + 400;
+      timers.push(window.setTimeout(() => releaseTiny(page), wait));
+    }
+    return () => {
+      for (const timer of timers) window.clearTimeout(timer);
+    };
+  }, [pageTinyBlobs, wipeOn, wipeMs, releaseTiny]);
 
   useEffect(() => {
     document.body.classList.toggle(
@@ -779,8 +1160,10 @@ export function Reader() {
     if (readerSettings.infiniteScroll) return;
     const shown = spread.right === null ? [spread.left] : [spread.left, spread.right];
     let cancelled = false;
-    const markReady = (page: number) =>
+    const markReady = (page: number) => {
+      mainReadyRef.current[page] = true;
       setMainReady((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
+    };
     const elements = [leftImgRef.current, rightImgRef.current].filter(
       (el): el is HTMLImageElement => !!el,
     );
@@ -832,11 +1215,11 @@ export function Reader() {
     let cancelled = false;
     for (const page of pageNumbers) {
       if (page < 1) continue;
-      void ensurePageMeta(page).then((meta) => {
-        // `meta === null` (the HEAD failed) keeps the previous behaviour: a placeholder is cheap
-        // insurance when we cannot tell.
-        if (!cancelled && meta?.servedOriginal !== true) fetchTinyPreview(page);
-      });
+      // Requested straight away rather than after the HEAD: the preview is the underlay the reveal
+      // sweeps over, so it has to be *earlier* than the full page, and waiting for `ensurePageMeta`
+      // handed the full request a head start it never needed. Skipped once an earlier page has told
+      // us this archive serves pages as-is — then there is no conversion to hide.
+      if (!cancelled && servedOriginalRef.current !== true) fetchTinyPreview(page);
     }
     for (const [page, controller] of [...pageTinyFetchesRef.current]) {
       if (!pageNumbers.includes(page)) {
@@ -903,15 +1286,27 @@ export function Reader() {
     }
   }, [archiveId, isTank, totalPages, currentPage, newBadgeMode]);
 
+  // A spread is two pages wide, so one page of lookahead only half-warms the next double-page
+  // spread. Treat double-page mode as a floor of two; the stored setting itself is untouched and
+  // comes back as-is when the user leaves double-page mode.
+  const effectivePreload = readerSettings.doublePageMode
+    ? Math.max(readerSettings.preloadCount, 2)
+    : readerSettings.preloadCount
+
   useEffect(() => {
     if (readerSettings.infiniteScroll) return;
-    if (!pages.data || readerSettings.preloadCount <= 0) return;
+    if (!pages.data || effectivePreload <= 0) return;
     // Only once the reader has settled: while pages are being flipped through, warming every
     // intermediate neighbour just competes with the page that is actually on screen.
     const timer = window.setTimeout(() => {
       const wanted = new Set<string>();
-      for (let offset = 1; offset <= readerSettings.preloadCount; offset++) {
-        for (const page of [currentPage + offset, currentPage - offset]) {
+      // Forward anchors on the right half (the next spread starts right after it), backward on the
+      // left half — anchoring both on the right would make offset 1 the left page already on
+      // screen. In single-page mode both halves are the current page.
+      const forwardAnchor = spread.right ?? spread.left;
+      const backwardAnchor = spread.left;
+      for (let offset = 1; offset <= effectivePreload; offset++) {
+        for (const page of [forwardAnchor + offset, backwardAnchor - offset]) {
           if (page < 1 || page > totalPages) continue;
           const url = pageStreamUrl(page);
           if (!url) continue;
@@ -927,7 +1322,7 @@ export function Reader() {
       }
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [pages.data, currentPage, totalPages, readerSettings.preloadCount, readerSettings.infiniteScroll, pageStreamUrl, warmPage]);
+  }, [pages.data, spread.left, spread.right, totalPages, effectivePreload, readerSettings.infiniteScroll, pageStreamUrl, warmPage]);
 
   // Revoke preview Blob URLs when the reader unmounts.
   useEffect(() => {
@@ -1097,11 +1492,70 @@ export function Reader() {
       });
   }
 
-  async function readAdjacentArchive(direction: "prev" | "next") {
-    if (document.fullscreenElement) {
-      console.warn("Archive navigation not supported in fullscreen mode.");
-      return;
+  // Headless hides the chrome, so the page's own click surface no longer covers the screen: the
+  // whole viewport becomes the turn target, split down the middle like the page itself. The image
+  // link already turns pages and calls `preventDefault`, the loading placeholder does the same, and
+  // the floating fit control stays out of the exclusion list, so nothing turns twice or fights the
+  // mode menu. `goTo` closes over this render's page, hence the ref instead of re-subscribing.
+  const goToRef = useRef(goTo);
+  useEffect(() => {
+    goToRef.current = goTo;
+  });
+  // Where the gesture started decides whether it may turn a page. A backdrop that dismisses its
+  // modal on press deletes it before the click is dispatched, and the browser then delivers that
+  // click to whatever is under the pointer by then — the reading surface. So the click's own
+  // target cannot answer this question.
+  const turnBlockedRef = useRef(false);
+  useEffect(() => {
+    if (!headless) return;
+    /** True when the element belongs to a control or to an overlay/menu/dialog layer — the fixed
+     * ancestor walk catches the plain-div backdrops no selector can name. */
+    function inOtherLayer(target: HTMLElement | null): boolean {
+      if (
+        target?.closest?.(
+          '.reader-headless-controls,a,button,input,select,textarea,label,[role="menu"],[role="menuitem"],[role="menuitemcheckbox"],[role="dialog"]',
+        )
+      ) {
+        return true;
+      }
+      // Stops before the reader's own container: a fullscreen element is `position: fixed` by the
+      // user agent, and counting it would swallow every tap that is not on a link — including the
+      // blank margins above and below a headless page.
+      for (
+        let el: HTMLElement | null = target;
+        el && el !== document.body && el !== containerRef.current;
+        el = el.parentElement
+      ) {
+        if (getComputedStyle(el).position === "fixed") return true;
+      }
+      return false;
     }
+    function onPointerDown(e: PointerEvent) {
+      turnBlockedRef.current =
+        overlay !== null || inOtherLayer(e.target as HTMLElement | null);
+    }
+    function onClick(e: MouseEvent) {
+      const blocked = turnBlockedRef.current;
+      turnBlockedRef.current = false;
+      if (blocked) return;
+      if (longPressRef.current) {
+        longPressRef.current = false;
+        return;
+      }
+      if (overlay !== null) return;
+      if (e.defaultPrevented) return;
+      if (inOtherLayer(e.target as HTMLElement | null)) return;
+      goToRef.current(e.clientX < window.innerWidth / 2 ? "prev" : "next");
+    }
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("click", onClick);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("click", onClick);
+    };
+  }, [headless, overlay]);
+
+  async function readAdjacentArchive(direction: "prev" | "next") {
     const adjacentId = resolveAdjacentArchive(navState, direction);
     if (!adjacentId) {
       toast({
@@ -1133,7 +1587,31 @@ export function Reader() {
     // Do not leave the preview covering an image that failed: show the (browser-default) broken
     // state instead of pretending the page is still loading.
     const page = Number(img.dataset.page ?? "0");
-    if (page > 0) setMainReady((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
+    if (page > 0) {
+      mainReadyRef.current[page] = true;
+      setMainReady((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
+    }
+    // A failed JXL load means the capability probe lied (Firefox Android decodes some samples but
+    // not every page). Downgrade this tab to WebP and retry the same URL once, so the reader never
+    // leaves a page blank just because the better codec was chosen for it.
+    // Only a page this reader explicitly asked for as JXL can be a codec failure: the archive's
+    // own file name is nowhere in the URL, so matching on a name would downgrade the whole tab
+    // because some page happened to be called something-jxl.jpg.
+    const requestedFormat = (() => {
+      if (!img.src.includes("optimize=1")) return null;
+      try {
+        return new URL(img.src).searchParams.get("format");
+      } catch {
+        return null;
+      }
+    })();
+    if (requestedFormat === "jxl") {
+      markJxlUndecodable();
+      const retry = new URL(img.src);
+      retry.searchParams.set("format", getImageCapabilityHeader());
+      img.src = retry.toString();
+      return;
+    }
     if (img.src.includes("optimize=1")) return;
     const parsed = new URL(img.src);
     if (!parsed.searchParams.has("path")) return;
@@ -1155,21 +1633,30 @@ export function Reader() {
       prev[page] === isWide ? prev : { ...prev, [page]: isWide },
     );
     if (isPreview) return;
+    mainReadyRef.current[page] = true;
     setMainReady((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
-    if (readerSettings.fitMode === FIT_MODE.FIT_HEIGHT && !isFullscreen) {
+    if (readerSettings.fitMode === FIT_MODE.FIT_HEIGHT) {
       setMeasureTick((tick) => tick + 1);
     }
     if (img.naturalWidth > 0 && img.naturalHeight > 0) {
       lastDimsRef.current = { width: img.naturalWidth, height: img.naturalHeight };
     }
-    // The tiny preview has done its job once the real page is painted. Its Blob used to be released
-    // when the full Blob arrived, but the visible page now streams instead of being fetched, so
-    // release it here.
-    const tinyUrl = pageTinyBlobsRef.current.get(page);
-    if (tinyUrl) {
-      URL.revokeObjectURL(tinyUrl);
-      pageTinyBlobsRef.current.delete(page);
-      setPageTinyBlobs(Object.fromEntries(pageTinyBlobsRef.current));
+    // Start the sweep only once the page is genuinely paintable: `onLoad` reports dimensions while
+    // the decoder is still producing the bitmap, and erasing the preview over a half-decoded page
+    // was exactly the "flash" this animation exists to prevent. `decode()` resolves when the image
+    // is ready to paint; the double rAF then waits for the frame that actually contains it.
+    if (pageTinyBlobsRef.current.has(page)) {
+      const renderedHeight = img.getBoundingClientRect().height || img.naturalHeight;
+      const duration = wipeDuration(renderedHeight);
+      const beginWipe = () => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            setWipeMs((prev) => (prev[page] ? prev : { ...prev, [page]: duration }));
+            setWipeOn((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
+          });
+        });
+      };
+      void Promise.resolve(img.decode()).then(beginWipe, beginWipe);
     }
     setPageDimensions((prev) => ({
       ...prev,
@@ -1210,12 +1697,16 @@ export function Reader() {
     }
   }
 
-  function toggleFullScreen() {
-    if (!document.fullscreenElement) {
+  const setFullscreen = useCallback((on: boolean) => {
+    if (on && !document.fullscreenElement) {
       containerRef.current?.requestFullscreen?.().catch(() => undefined);
-    } else {
+    } else if (!on && document.fullscreenElement) {
       document.exitFullscreen?.().catch(() => undefined);
     }
+  }, []);
+
+  function toggleFullScreen() {
+    setFullscreen(!document.fullscreenElement);
   }
 
   useEffect(() => {
@@ -1226,6 +1717,43 @@ export function Reader() {
     return () =>
       document.removeEventListener("fullscreenchange", onFullscreenChange);
   }, []);
+
+  // Touch screens have no fullscreen button while headless, and no keyboard for `f`. Two fingers
+  // swiping up enter fullscreen, down leave it; the first movement past the threshold decides and
+  // nothing repeats until the fingers lift. The move listener is non-passive because otherwise the
+  // swipe scrolls the page out from under the gesture instead.
+  useEffect(() => {
+    if (supportsHover) return;
+    let startY: number | null = null;
+    let fired = false;
+    const midY = (touches: TouchList) => (touches[0].clientY + touches[1].clientY) / 2;
+    function onTouchStart(e: TouchEvent) {
+      fired = false;
+      startY = e.touches.length === 2 ? midY(e.touches) : null;
+    }
+    function onTouchMove(e: TouchEvent) {
+      if (startY === null || fired || e.touches.length !== 2) return;
+      const delta = midY(e.touches) - startY;
+      if (Math.abs(delta) < 60) return;
+      e.preventDefault();
+      fired = true;
+      setFullscreen(delta < 0);
+    }
+    function onTouchEnd() {
+      startY = null;
+      fired = false;
+    }
+    document.addEventListener("touchstart", onTouchStart, { passive: true });
+    document.addEventListener("touchmove", onTouchMove, { passive: false });
+    document.addEventListener("touchend", onTouchEnd);
+    document.addEventListener("touchcancel", onTouchEnd);
+    return () => {
+      document.removeEventListener("touchstart", onTouchStart);
+      document.removeEventListener("touchmove", onTouchMove);
+      document.removeEventListener("touchend", onTouchEnd);
+      document.removeEventListener("touchcancel", onTouchEnd);
+    };
+  }, [supportsHover, setFullscreen]);
 
   async function goRandom() {
     const id = await fetchRandomArchiveId();
@@ -1385,6 +1913,34 @@ export function Reader() {
     function onKeyDown(e: KeyboardEvent) {
       if ((e.target as HTMLElement)?.tagName === "INPUT") return;
 
+      // The chapter OSD owns the keyboard while it is open: arrows/space must not fall through to
+      // the page-turning shortcuts on the reader behind it.
+      if (overlay === "chapters") {
+        e.preventDefault();
+        if (e.key === "Escape" || e.key === "t" || e.key === "T") {
+          setOverlay(null);
+          return;
+        }
+        if (e.key === "ArrowDown" || e.key === "j" || e.key === "ArrowUp" || e.key === "k") {
+          // Scroll the list itself; the page behind must not move while the OSD is open.
+          const panel = chapterOsdRef.current;
+          if (panel) {
+            const direction = e.key === "ArrowDown" || e.key === "j" ? 1 : -1;
+            panel.scrollBy({
+              top: direction * Math.max(64, Math.round(panel.clientHeight * 0.6)),
+              behavior: "smooth",
+            });
+          }
+          return;
+        }
+        if (/^[0-9]$/.test(e.key)) {
+          // 0 is the first chapter, matching the keycaps the OSD shows.
+          const target = chapterGroups[Number(e.key)];
+          if (target) selectPage(target.page);
+        }
+        return;
+      }
+
       // While the boundary overlay is open, only Escape (cancel) acts — navigation shortcuts
       // firing on the locked page behind it were a live bug.
       if (archiveTransition) {
@@ -1407,12 +1963,51 @@ export function Reader() {
         case "Backspace":
           navigate(routes.library());
           return;
+        // Headless only: with the chrome visible, Home/End meaning "scroll the document" is what a
+        // reader expects, and there the toolbar already offers the first/last-page arrows.
+        case "Home":
+        case "End":
+          if (!headless) return;
+          e.preventDefault();
+          if (readerSettings.infiniteScroll) {
+            selectPage(e.key === "Home" ? 1 : totalPages);
+          } else {
+            goTo(e.key === "Home" ? "first" : "last");
+          }
+          return;
         case "Escape":
           if (markerPlacementMode) {
             setMarkerPlacementMode(false);
             return;
           }
-          setOverlay(null);
+          // A menu row owns Escape while it has focus: that keystroke is "close this menu", and
+          // letting it through exited headless mode as a side effect of dismissing the fit menu.
+          if (
+            (e.target as HTMLElement)?.closest?.(
+              '[role="menuitem"],[role="menuitemcheckbox"]',
+            )
+          ) {
+            return;
+          }
+          // An open overlay owns Escape first: it is something the reader just opened and expects
+          // one keystroke to dismiss, whereas leaving headless changes the whole page.
+          if (overlay !== null) {
+            // Firefox opens its own task manager on Shift+Esc; this keystroke is ours whenever the
+            // reader acts on it, so it must not also reach the browser.
+            e.preventDefault();
+            setOverlay(null);
+            return;
+          }
+          // Headless hides the toolbar, and with it the overview button, so Escape takes over that
+          // job there — scrolling to the current page like the button does, unless Shift asks for
+          // the plain top-of-the-list overview. Leaving headless is the fit menu's row (or a long
+          // press on touch).
+          if (headless) {
+            e.preventDefault();
+            overviewAutoScroll.current = !e.shiftKey;
+            setOverlay("archive");
+            return;
+          }
           return;
         case " ":
           window.scrollBy({
@@ -1484,6 +2079,9 @@ export function Reader() {
           return;
         }
         case "h":
+          toggleHeadless();
+          return;
+        case "?":
           setOverlay((prev) => (prev === "help" ? null : "help"));
           return;
         case "m":
@@ -1496,11 +2094,20 @@ export function Reader() {
           setOverlay((prev) => (prev === "settings" ? null : "settings"));
           return;
         case "p":
+          // Ctrl/Cmd+P is the options panel (the browser's print dialog is not what a reader
+          // wants here); plain P keeps its double-page toggle.
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            setOverlay((prev) => (prev === "settings" ? null : "settings"));
+            return;
+          }
           updateReaderSettings({
             doublePageMode: !readerSettings.doublePageMode,
           });
           return;
         case "q":
+          // Same "show me where I am" intent as the toolbar button and Esc.
+          overviewAutoScroll.current = true;
           setOverlay((prev) => (prev === "archive" ? null : "archive"));
           return;
         case "r":
@@ -1509,6 +2116,17 @@ export function Reader() {
         case "s":
           if (!readerSettings.infiniteScroll && loggedIn)
             setMarkerPlacementMode(true);
+          return;
+        case "Tab":
+          // Headless only: the toolbar already carries this line when the chrome is visible.
+          if (!headless) return;
+          e.preventDefault();
+          setShowHeadlessFileInfo((prev) => !prev);
+          return;
+        case "t":
+          // Headless only: with the chrome visible the overview already offers the chapter list.
+          if (!headless) return;
+          setOverlay((prev) => (prev === "chapters" ? null : "chapters"));
           return;
         default:
       }
@@ -1532,6 +2150,10 @@ export function Reader() {
     loggedIn,
     markerPlacementMode,
     archiveTransition,
+    headless,
+    toggleHeadless,
+    overlay,
+    chapterGroups,
   ]);
 
   useEffect(() => {
@@ -1755,33 +2377,33 @@ export function Reader() {
   // it back on top; `placementImageStyle` may raise its own z-index further for marker placement.
   imageStyle.position = "relative";
   imageStyle.zIndex = 1;
-  if (!isFullscreen) {
-    if (readerSettings.fitMode === FIT_MODE.FIT_HEIGHT) {
-      const heightVh =
-        readerSettings.hideHeader || readerSettings.infiniteScroll ? 98 : 90;
-      imageStyle.maxHeight =
-        fitHeightPx !== null ? `${fitHeightPx}px` : `${heightVh}vh`;
-      // On desktop the container hugs the page (legacy's shape), but not tighter than the toolbar
-      // needs: its two side icon groups are absolutely positioned (198px and 214px) and the paginator
-      // between them is ~224px, so ~676px is where they stop overlapping. Measuring that instead
-      // feeds back into itself (the side groups widen with the container), hence a constant. Phones
-      // keep the plain full-width container — their toolbar is a separate floating bar, and
-      // `fit-content` there overflowed by a few pixels.
-      if (!isMobileToolbarViewport) {
-        outerStyle.width = "fit-content";
-        outerStyle.minWidth = "min(680px, 100%)";
-      }
-    } else if (readerSettings.fitMode === FIT_MODE.FIT_WIDTH) {
-      imageStyle.width = "100%";
-      outerStyle.maxWidth = "98%";
-    } else if (readerSettings.containerWidth) {
-      outerStyle.maxWidth = readerSettings.containerWidth;
-      imageStyle.width = "100%";
-    } else if (isSpreadShowing) {
-      outerStyle.maxWidth = "90%";
-    } else {
-      outerStyle.maxWidth = "1200px";
+  if (readerSettings.fitMode === FIT_MODE.FIT_HEIGHT) {
+    const heightVh =
+      readerSettings.hideHeader || headless || readerSettings.infiniteScroll ? 98 : 90;
+    imageStyle.maxHeight =
+      fitHeightPx !== null ? `${fitHeightPx}px` : `${heightVh}vh`;
+    // On desktop the container hugs the page (legacy's shape), but not tighter than the toolbar
+    // needs: its two side icon groups are absolutely positioned (198px and 214px) and the paginator
+    // between them is ~224px — plus another 120px when the adjacent-archive arrows are shown, which
+    // is why 680px was not enough and the right-hand arrow landed on the "reading direction" button
+    // (real report). 800px leaves those arrows room. Measuring it instead feeds back into itself
+    // (the side groups widen with the container), hence a constant. Phones keep the plain
+    // full-width container — their toolbar is a separate floating bar, and `fit-content` there
+    // overflowed by a few pixels.
+    if (!isMobileToolbarViewport) {
+      outerStyle.width = "fit-content";
+      outerStyle.minWidth = "min(800px, 100%)";
     }
+  } else if (readerSettings.fitMode === FIT_MODE.FIT_WIDTH) {
+    imageStyle.width = "100%";
+    outerStyle.maxWidth = "98%";
+  } else if (readerSettings.containerWidth) {
+    outerStyle.maxWidth = readerSettings.containerWidth;
+    imageStyle.width = "100%";
+  } else if (isSpreadShowing) {
+    outerStyle.maxWidth = "90%";
+  } else {
+    outerStyle.maxWidth = "1200px";
   }
 
   /** The tiny preview, pinned under the streaming page in the same box: it costs ~10 KB and paints
@@ -1800,80 +2422,255 @@ export function Reader() {
     pointerEvents: "none",
   };
 
+  /**
+   * The preview fills the page's box, so it can only be absolutely positioned once that box exists.
+   * With no known dimensions the absolutely positioned preview contributes nothing to layout, the
+   * wrapper collapses to 0x0, and the image paints as a dot at the edge of the reader (reported on
+   * mobile, where the first page arrives before any dimensions are known). In that case let the
+   * preview take part in layout: it has its own aspect ratio, so it holds the reader's height open
+   * until the full page lands and the underlay goes back to absolute.
+   */
+  const tinyUnderlayFor = (page: number): React.CSSProperties =>
+    pageTinyDims[page] || pageDimensions[page]
+      ? tinyUnderlayStyle
+      : {
+          ...tinyUnderlayStyle,
+          position: "relative",
+          // `width: 100%` would resolve against the wrapper that is itself sized by this image —
+          // a circular dependency that collapses to 0 (the "dot at the edge of the screen" report).
+          // Fall back to the preview's own size, capped to the viewport.
+          width: "auto",
+          height: "auto",
+          maxWidth: "92vw",
+          maxHeight: "90vh",
+          margin: "0 auto",
+        };
+
   const placementImageStyle: React.CSSProperties = markerPlacementMode
     ? { ...imageStyle, zIndex: 22, cursor: "cell", touchAction: "none" }
     : imageStyle;
 
   const helpContent = (
-    <div style={{ fontSize: FONT_SIZE_XS }}>
-      <p style={{ margin: "0 0 4px" }}>
-        {t("reader.youCanNavigateBetweenPages")}
+    <div className="reader-help-body">
+      <div className="reader-help-sections">
+        <section className="reader-help-section">
+          <h5 className="reader-help-section-title">{t("reader.helpSectionPaging")}</h5>
+          <p className="reader-help-lead">{t("reader.youCanNavigateBetweenPages")}</p>
+          <ul className="reader-help-list">
+            <li>
+              <span className="reader-help-keys">
+                <Key>←</Key>
+                <Key>→</Key>
+              </span>
+              <span>{t("reader.helpKeyArrows")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Space</Key>
+              </span>
+              <span>{t("reader.helpSpaceScrolls")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>A</Key>
+                <Key>D</Key>
+              </span>
+              <span>{t("reader.helpADKeys")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>J</Key>
+              </span>
+              <span>{t("reader.jScrollsDownThenAdvancesAtTheBottom")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>K</Key>
+              </span>
+              <span>{t("reader.kGoesToThePreviousPage")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>,</Key>
+                <Key>.</Key>
+              </span>
+              <span>{t("reader.readingPastTheFirstLast")}</span>
+            </li>
+          </ul>
+        </section>
+
+        <section className="reader-help-section">
+          <h5 className="reader-help-section-title">{t("reader.helpSectionTouch")}</h5>
+          <ul className="reader-help-gesture-grid">
+            <li className="reader-help-gesture-tile">
+              <TouchSwipeDemo direction="up" />
+              <span>{t("reader.twoFingerSwipeUp")}</span>
+            </li>
+            <li className="reader-help-gesture-tile">
+              <TouchSwipeDemo direction="down" />
+              <span>{t("reader.twoFingerSwipeDown")}</span>
+            </li>
+            <li className="reader-help-gesture-tile">
+              <TapSidesDemo />
+              <span>{t("reader.helpTapSides")}</span>
+            </li>
+            <li className="reader-help-gesture-tile">
+              <LongPressDemo />
+              <span>{t("reader.longPressExitsHeadless")}</span>
+            </li>
+          </ul>
+        </section>
+
+        <section className="reader-help-section">
+          <h5 className="reader-help-section-title">{t("reader.helpSectionDisplay")}</h5>
+          <ul className="reader-help-list">
+            <li>
+              <span className="reader-help-keys">
+                <Key>M</Key>
+              </span>
+              <span>{t("reader.mToggleMangaModeRighttoleft")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>P</Key>
+              </span>
+              <span>{t("reader.pToggleDoublePageMode")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>O</Key>
+              </span>
+              <span>{t("reader.oShowAdvancedReaderOptions")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Ctrl</Key>
+                <Key>P</Key>
+              </span>
+              <span>{t("reader.ctrlPReaderOptions")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>F</Key>
+              </span>
+              <span>{t("reader.fToggleFullscreenMode")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Tab</Key>
+              </span>
+              <span>{t("reader.tabTogglesFileInfo")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>H</Key>
+              </span>
+              <span>{t("reader.hToggleHeadless")}</span>
+            </li>
+            {loggedIn && (
+              <li>
+                <span className="reader-help-keys">
+                  <Key>S</Key>
+                </span>
+                <span>{t("reader.sSetAStamp")}</span>
+              </li>
+            )}
+          </ul>
+        </section>
+
+        <section className="reader-help-section">
+          <h5 className="reader-help-section-title">{t("reader.helpSectionNavigation")}</h5>
+          <ul className="reader-help-list">
+            <li>
+              <span className="reader-help-keys">
+                <Key>G</Key>
+              </span>
+              <span>{t("reader.gGoToPageNumber")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>T</Key>
+              </span>
+              <span>{t("reader.tJumpToChapter")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Home</Key>
+                <Key>End</Key>
+              </span>
+              <span>{t("reader.homeEndInHeadless")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Shift</Key>
+                <Key>←/→</Key>
+              </span>
+              <span>{t("reader.shiftleftRightGoToFirst")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Q</Key>
+              </span>
+              <span>{t("reader.qBringUpTheThumbnail")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>R</Key>
+              </span>
+              <span>{t("reader.rOpenARandomArchive")}</span>
+            </li>
+          </ul>
+        </section>
+
+        <section className="reader-help-section">
+          <h5 className="reader-help-section-title">{t("reader.helpSectionBookmarks")}</h5>
+          <ul className="reader-help-list">
+            {loggedIn && (
+              <li>
+                <span className="reader-help-keys">
+                  <Key>B</Key>
+                </span>
+                <span>{t("reader.bToggleBookmarkThisPage")}</span>
+              </li>
+            )}
+            <li>
+              <span className="reader-help-keys">
+                <Key>N</Key>
+              </span>
+              <span>{t("reader.nToggleAutoNextPage")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>?</Key>
+              </span>
+              <span>{t("reader.helpToggleShortcut")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Esc</Key>
+              </span>
+              <span>{t("reader.escapeInHeadless")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Shift</Key>
+                <Key>Esc</Key>
+              </span>
+              <span>{t("reader.shiftEscapeOverview")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Backspace</Key>
+              </span>
+              <span>{t("reader.backspaceReturnsToTheLibrary")}</span>
+            </li>
+          </ul>
+        </section>
+      </div>
+
+      <p className="reader-help-lead" style={{ marginTop: 12 }}>
+        {t("reader.toReturnToTheArchive")}
       </p>
-      <ul style={{ margin: "0 0 8px", paddingLeft: 18 }}>
-        <li>{t("reader.theArrowIcons")}</li>
-        <li>
-          {t("reader.the")} <Key>A</Key>/<Key>D</Key> {t("reader.keys")}
-        </li>
-        <li>{t("reader.yourKeyboardArrowsAndThe")}</li>
-        <li>{t("reader.touchingTheLeftRightSide")}</li>
-        <li>
-          <Key>J</Key> {t("reader.jScrollsDownThenAdvancesAtTheBottom")}
-        </li>
-        <li>
-          <Key>K</Key> {t("reader.kGoesToThePreviousPage")}
-        </li>
-      </ul>
-      <p style={{ margin: "0 0 4px" }}>
-        {t("reader.whenReadingAnArchiveFrom")}
-      </p>
-      <ul style={{ margin: "0 0 8px", paddingLeft: 18 }}>
-        <li>
-          <Key>,</Key> {t("reader.and")} <Key>.</Key> {t("reader.keys")}
-        </li>
-        <li>{t("reader.readingPastTheFirstLast")}</li>
-      </ul>
-      <p style={{ margin: "0 0 4px" }}>{t("reader.otherKeyboardShortcuts")}</p>
-      <ul style={{ margin: "0 0 8px", paddingLeft: 18 }}>
-        <li>
-          <Key>M</Key> {t("reader.mToggleMangaModeRighttoleft")}
-        </li>
-        <li>
-          <Key>O</Key> {t("reader.oShowAdvancedReaderOptions")}
-        </li>
-        <li>
-          <Key>P</Key> {t("reader.pToggleDoublePageMode")}
-        </li>
-        <li>
-          <Key>Q</Key> {t("reader.qBringUpTheThumbnail")}
-        </li>
-        <li>
-          <Key>R</Key> {t("reader.rOpenARandomArchive")}
-        </li>
-        <li>
-          <Key>F</Key> {t("reader.fToggleFullscreenMode")}
-        </li>
-        {loggedIn && (
-          <li>
-            <Key>B</Key> {t("reader.bToggleBookmarkThisPage")}
-          </li>
-        )}
-        <li>
-          <Key>N</Key> {t("reader.nToggleAutoNextPage")}
-        </li>
-        <li>
-          <Key>Shift</Key>+<Key>←</Key>/<Key>→</Key>{" "}
-          {t("reader.shiftleftRightGoToFirst")}
-        </li>
-        <li>
-          <Key>G</Key> {t("reader.gGoToPageNumber")}
-        </li>
-        {loggedIn && (
-          <li>
-            <Key>S</Key> {t("reader.sSetAStamp")}
-          </li>
-        )}
-      </ul>
-      <p style={{ margin: 0 }}>{t("reader.toReturnToTheArchive")}</p>
     </div>
   );
 
@@ -1997,7 +2794,7 @@ export function Reader() {
           size={32}
           style={{ marginRight: 13, borderRadius: "50%" }}
           onClick={() => {
-            openedByDefaultSetting.current = false;
+            overviewAutoScroll.current = true;
             setOverlay((prev) => (prev === "archive" ? null : "archive"));
           }}
         />
@@ -2012,6 +2809,8 @@ export function Reader() {
             storeFitAction(action);
           }}
           compact={isMobileToolbarViewport}
+          headless={headless}
+          onToggleHeadless={toggleHeadless}
         />
       </div>
     </>
@@ -2120,7 +2919,7 @@ export function Reader() {
         {autoNextActive ? ` (${autoNextCountdown})` : ""}
       </MenuItem>
       {loggedIn && downloadArchiveId && (
-        <MenuItem onClick={() => window.location.assign(`/api/archives/${downloadArchiveId}/download`)}>
+        <MenuItem onClick={() => void startDownload(`/api/archives/${downloadArchiveId}`)}>
           <i className="fas fa-download" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
           {t("reader.downloadThisArchive")}
         </MenuItem>
@@ -2132,7 +2931,7 @@ export function Reader() {
         </MenuItem>
       )}
       {loggedIn && isTank && archiveId && (
-        <MenuItem onClick={() => window.location.assign(`/api/tankoubons/${archiveId}/download`)}>
+        <MenuItem onClick={() => void startDownload(`/api/tankoubons/${archiveId}`)}>
           <i className="fas fa-file-zipper" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
           {t("reader.downloadWholeTankoubon")}
         </MenuItem>
@@ -2176,6 +2975,16 @@ export function Reader() {
             }
           />
         )}
+        {/* The only way into headless on a phone: the fit menu that carries it on desktop is
+            reduced to a bare fullscreen button in the mobile toolbar. */}
+        <IconButton
+          variant="ghost-btn"
+          icon={`fas ${headless ? "fa-eye" : "fa-eye-slash"} fa-2x`}
+          title={t("reader.headlessMode") ?? undefined}
+          size={32}
+          style={{ borderRadius: "50%", opacity: 0.55 }}
+          onClick={toggleHeadless}
+        />
         {!supportsHover && loggedIn && (
           <IconButton
             variant="ghost-btn"
@@ -2240,7 +3049,7 @@ export function Reader() {
           size={32}
           style={{ borderRadius: "50%" }}
           onClick={() => {
-            openedByDefaultSetting.current = false;
+            overviewAutoScroll.current = true;
             setOverlay((prev) => (prev === "archive" ? null : "archive"));
           }}
         />
@@ -2255,6 +3064,8 @@ export function Reader() {
             storeFitAction(action);
           }}
           compact={isMobileToolbarViewport}
+          headless={headless}
+          onToggleHeadless={toggleHeadless}
         />
         {moreMenu}
       </div>
@@ -2356,35 +3167,208 @@ export function Reader() {
     </div>
   );
 
-  const artistMatch = metadata.data.tags.match(/artist:([^,]+)(?:,|$)/i);
+  // Double-page mode puts two files behind one spread. The merged "a.jpg - b.jpg :: W x H :: KB"
+  // line adds the two pages' dimensions and sizes together, so it describes no real file and hides
+  // each page's own conversion savings. The headless readout gets one labelled row per page instead:
+  // L/R, then that page's own name, geometry, size and — when the server converted it — its served
+  // format and saved percentage, in the same green/red pair the toolbar uses.
+  const spreadPageNumbers =
+    spread.right === null ? [spread.left] : [spread.left, spread.right];
+  const spreadRows = spreadPageNumbers.map((page, index) => {
+    const entry = pages.data?.pages[page - 1];
+    const name = entry
+      ? (new URL(entry.url, window.location.origin).searchParams.get("path") ?? "")
+      : "";
+    const resize = resizedPageInfo[page];
+    const dims =
+      pageDimensions[page] ??
+      (resize && resize.origWidth > 0 && resize.origHeight > 0
+        ? { width: resize.origWidth, height: resize.origHeight }
+        : undefined);
+    const served = servedSizesKb[page] ?? servedInfoKb(resize);
+    let body: React.ReactNode;
+    if (resize && served !== undefined && dims) {
+      const origKb = resize.origSizeBytes / 1024;
+      const origSizeText =
+        origKb >= 1024 ? `${(origKb / 1024).toFixed(1)} MB` : `${Math.round(origKb)} KB`;
+      const savedPct = Math.max(
+        0,
+        Math.round((1 - (served * 1024) / resize.origSizeBytes) * 100),
+      );
+      body = (
+        <>
+          <span className="file-info-opt">
+            {name} → {resize.servedFormat.toUpperCase()} :: {dims.width} x {dims.height} ::{" "}
+            {served} KB
+          </span>
+          {" · "}
+          <span className="file-info-orig">
+            {t("reader.original")}: {name.split(".").pop()} {resize.origWidth} x{" "}
+            {resize.origHeight} :: {origSizeText} ·{" "}
+            {t("reader.savedPct", { pct: savedPct })}
+          </span>
+        </>
+      );
+    } else if (resize === undefined) {
+      // HEAD has not answered yet: the entry size would be the wrong number for a page the server
+      // is about to convert, so show just the name until the answer is in (same rule as the bar).
+      body = <span className="file-info-opt">{name}</span>;
+    } else {
+      const kb = pageSizesKb[page];
+      body = (
+        <span className="file-info-opt">
+          {name}
+          {dims ? ` :: ${dims.width} x ${dims.height}` : ""}
+          {kb !== undefined ? ` :: ${kb} KB` : ""}
+        </span>
+      );
+    }
+    return { page, label: index === 0 ? "L" : "R", body };
+  });
+  const headlessFileInfo =
+    spread.right === null ? (
+      fileinfo
+    ) : (
+      <div className="file-info reader-file-info-rows" title={displayedFileInfo}>
+        {spreadRows.map((row) => (
+          <div className="file-info-row" key={row.page}>
+            <span className="file-info-side">
+              <Badge>{row.label}</Badge>
+            </span>
+            <span className="file-info-row-text">{row.body}</span>
+          </div>
+        ))}
+      </div>
+    );
+
+  // Every artist, not just the first: an anthology or a joint work lists several, and picking one
+  // arbitrarily made the heading look like the others were missing (2026-11-10).
+  const artists = Array.from(metadata.data.tags.matchAll(/artist:([^,]+)(?:,|$)/gi))
+    .map((match) => match[1].trim())
+    .filter(Boolean);
+  const primaryArtist = artists[0];
   const formatBadge = isBookExtension(metadata.data.extension) && (
     <>
       {" "}
       <FormatBadge extension={metadata.data.extension} />
     </>
   );
-  const archiveHeading = artistMatch ? (
-    <>
-      {metadata.data.title} by{" "}
-      <a href={getTagSearchURL("artist", artistMatch[1])}>{artistMatch[1]}</a>
-      {formatBadge}
-    </>
-  ) : (
+  const archiveHeading = (
     <>
       {metadata.data.title}
+      {primaryArtist && (
+        <>
+          {" by "}
+          <a href={getTagSearchURL("artist", primaryArtist)}>{primaryArtist}</a>
+        </>
+      )}
+      {artists.length > 1 && (
+        <Menu
+          side="bottom"
+          align="start"
+          trigger={
+            <button
+              type="button"
+              className="ml-1 cursor-pointer border-0 bg-transparent p-0 align-baseline"
+              title={t("reader.allAuthors", { count: artists.length })}
+              aria-label={t("reader.allAuthors", { count: artists.length })}
+            >
+              <i className="fa fa-caret-down" aria-hidden="true" />
+            </button>
+          }
+        >
+          {artists.map((artist) => (
+            <MenuItem key={artist} closeOnClick>
+              <a href={getTagSearchURL("artist", artist)}>{artist}</a>
+            </MenuItem>
+          ))}
+        </Menu>
+      )}
       {formatBadge}
     </>
   );
 
   return (
     <>
-      <div id="i1" className="sni" ref={containerRef} style={outerStyle}>
-        {!readerSettings.hideHeader && (
+      <div
+        id="i1"
+        className={headless ? "sni reader-headless" : "sni"}
+        ref={containerRef}
+        style={outerStyle}
+      >
+        {!headless && !readerSettings.hideHeader && (
           <div id="i2">
             <h1 id="archive-title">{archiveHeading}</h1>
             {pagesel}
             {arrows}
             {fileinfo}
+          </div>
+        )}
+
+        {headless && !supportsHover && (
+          // Touch headless has no toolbar, and the page never reaches the very top of a phone
+          // screen, so those two corners are the one place the jump-to-end buttons can sit
+          // without covering artwork.
+          <div className="reader-headless-jump">
+            <a
+              className="fas fa-angle-double-left page-link"
+              role="button"
+              title={t("reader.firstPage") ?? undefined}
+              onClick={() => {
+                if (readerSettings.infiniteScroll) selectPage(1);
+                else goTo("first");
+              }}
+            />
+            <a
+              className="fas fa-angle-double-right page-link"
+              role="button"
+              title={t("reader.lastPage") ?? undefined}
+              onClick={() => {
+                if (readerSettings.infiniteScroll) selectPage(totalPages);
+                else goTo("last");
+              }}
+            />
+          </div>
+        )}
+
+        {headless && (
+          // Bottom-left, and deliberately `pointer-events: none`: it captions what is on screen
+          // rather than being a control, and in this mode the whole viewport is a turn target.
+          <div
+            ref={headlessInfoRef}
+            className={
+              "reader-headless-info" +
+              (supportsHover && headlessInfoOverImage ? " is-over-image" : "") +
+              (supportsHover && headlessInfoRevealed ? " is-revealed" : "")
+            }
+          >
+            <div className="reader-headless-title">{metadata.data?.title}</div>
+            <div className="reader-headless-line">
+              <span>
+                {currentPage} / {totalPages}
+              </span>
+              {currentChapter && (
+                <span className="reader-headless-chapter">
+                  <i className="fas fa-bookmark" aria-hidden="true" />
+                  {/* The title truncates on its own: clipping the whole row (the obvious fix) used
+                      to push the chapter-start flag off the end, so the marker vanished exactly when
+                      a long chapter name needed it. */}
+                  <span className="reader-headless-chapter-title">{currentChapter.title}</span>
+                  {currentPage === currentChapter.startPage && (
+                    <i
+                      className="fas fa-flag reader-headless-chapter-start"
+                      title={t("reader.chapterStart")}
+                    />
+                  )}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {headless && showHeadlessFileInfo && (
+          <div className="reader-headless-file-info" title={displayedFileInfo}>
+            {headlessFileInfo}
           </div>
         )}
 
@@ -2474,24 +3458,39 @@ export function Reader() {
                   const isLeftHalf = x < window.innerWidth / 2;
                   e.preventDefault();
                   e.currentTarget.blur();
+                  // The stamp layer now lives inside this page link, so its own clicks would
+                  // otherwise bubble up here and turn the page.
+                  if ((e.target as HTMLElement).closest?.("[data-marker-layer]")) return;
                   goTo(isLeftHalf ? "prev" : "next");
                 }}
+                className="reader-page-frame"
                 style={{ position: "relative", display: "inline-flex" }}
               >
-                <span style={{ position: "relative", display: "inline-flex" }}>
-                  {pageTinyBlobs[spread.left] && !mainReady[spread.left] ? (
+                <span
+                  className="reader-page-frame-inner"
+                  style={{ position: "relative", display: "inline-flex" }}
+                >
+                  {pageTinyBlobs[spread.left] ? (
                     <img
-                      className="reader-image"
+                      className={
+                        wipeOn[spread.left]
+                          ? "reader-image reader-page-wipe"
+                          : "reader-image"
+                      }
                       key={`tiny-left-${spread.left}`}
                       src={pageTinyBlobs[spread.left]}
                       alt=""
                       aria-hidden="true"
                       draggable={false}
+                      onAnimationEnd={() => releaseTiny(spread.left)}
                       style={{
-                        ...tinyUnderlayStyle,
-                        // Above the page while it has nothing to draw (so the preview is what you
-                        // see), below it once the real bitmap is paintable.
-                        zIndex: mainReady[spread.left] ? 0 : 2,
+                        ...tinyUnderlayFor(spread.left),
+                        animationDuration: wipeMs[spread.left]
+                          ? `${wipeMs[spread.left]}ms`
+                          : undefined,
+                        // Always above the page: it is the layer being erased, so the page below it
+                        // is what the sweep uncovers.
+                        zIndex: 2,
                       }}
                     />
                   ) : null}
@@ -2517,12 +3516,14 @@ export function Reader() {
                     width={
                       pageTinyDims[spread.left]?.width ??
                       pageDimensions[spread.left]?.width ??
-                      lastDimsRef.current?.width
+                      lastDimsRef.current?.width ??
+                      UNKNOWN_PAGE_DIMS.width
                     }
                     height={
                       pageTinyDims[spread.left]?.height ??
                       pageDimensions[spread.left]?.height ??
-                      lastDimsRef.current?.height
+                      lastDimsRef.current?.height ??
+                      UNKNOWN_PAGE_DIMS.height
                     }
                     alt={`${t("reader.page")} ${spread.left}`}
                     fetchPriority="high"
@@ -2533,7 +3534,14 @@ export function Reader() {
                     onLoad={(e) => onImageLoad(spread.left, e)}
                     onError={onImageError}
                     draggable={false}
-                    style={placementImageStyle}
+                    // No bitmap yet: the element is still 2x2 (its box comes from the width/height
+                    // attributes only once the image decodes), and whatever it paints at that size
+                    // reads as a stray dot in the middle of the placeholder. The placeholder is the
+                    // honest picture of this state, so keep the image invisible until it has pixels.
+                    style={{
+                      ...placementImageStyle,
+                      visibility: mainReady[spread.left] ? undefined : "hidden",
+                    }}
                   />
                   {/* Phase 2 on-page translation. Absolutely positioned over the page above (the
                       wrapper is `position: relative`), so the original image's own load/error
@@ -2550,22 +3558,42 @@ export function Reader() {
                       refreshToken={translationRefreshToken}
                     />
                   )}
+                  {/* The stamp layer is positioned against this span (`inset: 0`), not against a
+                      JS-measured copy of the image's box: a stale measurement of that box used to
+                      sit far below the page and stretch the document into a huge blank area. */}
+                  {markerTarget && (
+                    <MarkerLayer
+                      archiveId={markerTarget.arcId}
+                      page={markerTarget.localPage}
+                      imageRef={leftImgRef}
+                      visible={readerSettings.markersVisible}
+                      placementMode={markerPlacementMode}
+                      onPlaced={() => setMarkerPlacementMode(false)}
+                      loggedIn={loggedIn}
+                    />
+                  )}
                 </span>
                 {rightUrl && (
                   <span style={{ position: "relative", display: "inline-flex" }}>
-                    {spread.right !== null &&
-                    pageTinyBlobs[spread.right] &&
-                    !mainReady[spread.right] ? (
+                    {spread.right !== null && pageTinyBlobs[spread.right] ? (
                       <img
-                        className="reader-image"
+                        className={
+                          wipeOn[spread.right]
+                            ? "reader-image reader-page-wipe"
+                            : "reader-image"
+                        }
                         key={`tiny-right-${spread.right}`}
                         src={pageTinyBlobs[spread.right]}
                         alt=""
                         aria-hidden="true"
                         draggable={false}
+                        onAnimationEnd={() => releaseTiny(spread.right as number)}
                         style={{
-                          ...tinyUnderlayStyle,
-                          zIndex: mainReady[spread.right] ? 0 : 2,
+                          ...tinyUnderlayFor(spread.right),
+                          animationDuration: wipeMs[spread.right]
+                            ? `${wipeMs[spread.right]}ms`
+                            : undefined,
+                          zIndex: 2,
                         }}
                       />
                     ) : null}
@@ -2610,72 +3638,92 @@ export function Reader() {
                   </span>
                 )}
               </a>
-              {markerTarget && (
-                <MarkerLayer
-                  archiveId={markerTarget.arcId}
-                  page={markerTarget.localPage}
-                  imageRef={leftImgRef}
-                  visible={readerSettings.markersVisible}
-                  placementMode={markerPlacementMode}
-                  onPlaced={() => setMarkerPlacementMode(false)}
-                  loggedIn={loggedIn}
-                />
-              )}
             </div>
           )}
         </div>
 
-        <div id="i4">
-          {fileinfo}
-          {isMobileToolbarViewport ? (
-            mobileToolbar
-          ) : (
-            <>
-              {pagesel}
-              {arrows}
-            </>
-          )}
-        </div>
-
-        <div id="i5">
-          <div className="sb">
-            <a
-              id="return-to-index"
-              style={{ cursor: "pointer" }}
-              title={t("reader.doneReadingGoBackTo") ?? undefined}
-              onClick={() => navigate(routes.library())}
-            >
-              <i className="fas fa-angle-down fa-3x"></i>
-            </a>
+        {/* Headless keeps exactly two things on screen: the page above, and this control — the fit
+            menu doubles as the way back out, so there is no state with no way to leave it. Touch
+            screens get no control at all: they enter from the toolbar and leave by long-pressing,
+            and a phone has no fit menu for this to open anyway. */}
+        {headless && supportsHover && (
+          <div
+            className={`reader-headless-controls${headlessControlsRevealed ? " is-revealed" : ""}`}
+          >
+            <FitMenuButton
+              isFullscreen={isFullscreen}
+              fullscreenHost={isFullscreen ? containerRef.current : null}
+              onToggleFullscreen={toggleFullScreen}
+              onSelectFitMode={(mode) => updateReaderSettings({ fitMode: mode })}
+              primary={fitAction}
+              onPrimaryChange={(action) => {
+                setFitAction(action);
+                storeFitAction(action);
+              }}
+              // The split control, even on a phone: this is the only chrome left, so it has to
+              // carry the whole fit menu rather than shrink to the bare fullscreen button.
+              compact={false}
+              headless
+              onToggleHeadless={toggleHeadless}
+            />
           </div>
-        </div>
+        )}
 
-        <div id="i7" className="if">
-          <i className="fas fa-caret-right fa-lg"></i>
-          <a href={originalLeftUrl} target="_blank" rel="noreferrer">
-            {t("reader.viewFullsizeImage")}
-          </a>
-          <i className="fas fa-caret-right fa-lg"></i>
-          <a style={{ cursor: "pointer" }} onClick={() => void goRandom()}>
-            {t("reader.switchToAnotherRandomArchive")}
-          </a>
-          {loggedIn && (
-            <>
-              <i className="fas fa-caret-right fa-lg"></i>
-              <a style={{ cursor: "pointer" }} onClick={cleanCache}>
-                {t("reader.cleanArchiveCache")}
-              </a>
-              {translationScope?.enabled && (
+        {!headless && (
+          <>
+            <div id="i4">
+              {fileinfo}
+              {isMobileToolbarViewport ? (
+                mobileToolbar
+              ) : (
                 <>
-                  <i className="fas fa-caret-right fa-lg"></i>
-                  <a style={{ cursor: "pointer" }} onClick={retranslatePage}>
-                    {t("reader.retranslatePage")}
-                  </a>
+                  {pagesel}
+                  {arrows}
                 </>
               )}
-            </>
-          )}
-        </div>
+            </div>
+
+            <div id="i5">
+              <div className="sb">
+                {/* A real link, not a button: middle-click / ctrl-click must open the library in a new tab. */}
+                <Link
+                  id="return-to-index"
+                  to={routes.library()}
+                  title={t("reader.doneReadingGoBackTo") ?? undefined}
+                >
+                  <i className="fas fa-angle-down fa-3x"></i>
+                </Link>
+              </div>
+            </div>
+
+            <div id="i7" className="if">
+              <i className="fas fa-caret-right fa-lg"></i>
+              <a href={originalLeftUrl} target="_blank" rel="noreferrer">
+                {t("reader.viewFullsizeImage")}
+              </a>
+              <i className="fas fa-caret-right fa-lg"></i>
+              <a style={{ cursor: "pointer" }} onClick={() => void goRandom()}>
+                {t("reader.switchToAnotherRandomArchive")}
+              </a>
+              {loggedIn && (
+                <>
+                  <i className="fas fa-caret-right fa-lg"></i>
+                  <a style={{ cursor: "pointer" }} onClick={cleanCache}>
+                    {t("reader.cleanArchiveCache")}
+                  </a>
+                  {translationScope?.enabled && (
+                    <>
+                      <i className="fas fa-caret-right fa-lg"></i>
+                      <a style={{ cursor: "pointer" }} onClick={retranslatePage}>
+                        {t("reader.retranslatePage")}
+                      </a>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          </>
+        )}
 
         {shareItem && (
           <Suspense fallback={null}>
@@ -2696,12 +3744,13 @@ export function Reader() {
             currentPage={currentPage}
             onClose={() => setOverlay(null)}
             onSelectPage={selectPage}
-            autoFocus={!openedByDefaultSetting.current}
+            autoFocus={overviewAutoScroll.current}
             resolvePage={isTank ? tankReading.getArchiveForPage : undefined}
             tankChapters={isTank ? tankReading.chapters : undefined}
             tankPages={isTank ? pages.data.pages : undefined}
             hasTankSplitCandidates={tankSplitCandidates.length > 0}
             onOpenTankSplit={() => setShowTankSplit(true)}
+            headless={headless}
             onShare={
               archiveId
                 ? () => {
@@ -2735,8 +3784,96 @@ export function Reader() {
               style={{ display: "block", opacity: 0.6 }}
               onClick={() => setOverlay(null)}
             />
-            <div id="reader-help" className="id1 base-overlay small-overlay">
+            <div
+              id="reader-help"
+              className="id1 base-overlay small-overlay reader-help-panel"
+            >
               <div className="navigation-help-toast">{helpContent}</div>
+            </div>
+          </>
+        )}
+
+        {overlay === "chapters" && (
+          <>
+            <div
+              id="overlay-shade"
+              style={{ display: "block", opacity: 0.6, overscrollBehavior: "contain" }}
+              onClick={() => setOverlay(null)}
+            />
+            <div
+              id="reader-chapter-osd"
+              ref={chapterOsdRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label={t("reader.chapterJumpTitle")}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="reader-chapter-osd-head">
+                <span className="reader-chapter-osd-title">
+                  {t("reader.chapterJumpTitle")}
+                </span>
+                <span className="reader-chapter-osd-hint">
+                  {t("reader.chapterJumpHint")}
+                </span>
+              </div>
+              {chapterGroups.length === 0 ? (
+                <p className="reader-chapter-osd-empty">{t("reader.chapterJumpEmpty")}</p>
+              ) : (
+                <div className="reader-chapter-osd-grid">
+                  {chapterGroups.map((group, index) => (
+                    <div
+                      key={`${group.page}-${index}`}
+                      className={`reader-chapter-osd-card${
+                        group.page === activeChapterPage ? " is-active" : ""
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        className="reader-chapter-osd-card-main"
+                        onClick={() => selectPage(group.page)}
+                      >
+                        <span className="reader-chapter-osd-thumbwrap">
+                          <img
+                            className="reader-chapter-osd-thumb"
+                            src={chapterThumbUrl(group.page)}
+                            alt=""
+                            loading="lazy"
+                            decoding="async"
+                          />
+                        </span>
+                        <span className="reader-chapter-osd-meta">
+                          <span className="reader-chapter-osd-lines">
+                            <span className="reader-chapter-osd-name">{group.title}</span>
+                            <span className="reader-chapter-osd-page">{group.page}</span>
+                          </span>
+                          {index < 10 && (
+                            <span className="reader-chapter-osd-key">
+                              <span className="reader-chapter-osd-keycap">{index}</span>
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                      {group.children.length > 0 && (
+                        <div className="reader-chapter-osd-children">
+                          {group.children.map((child, childIndex) => (
+                            <button
+                              type="button"
+                              key={`${child.page}-${childIndex}`}
+                              className={`reader-chapter-osd-child${
+                                child.page === activeChapterPage ? " is-active" : ""
+                              }`}
+                              onClick={() => selectPage(child.page)}
+                            >
+                              <span className="reader-chapter-osd-name">{child.title}</span>
+                              <span className="reader-chapter-osd-page">{child.page}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </>
         )}
@@ -2963,7 +4100,7 @@ export function Reader() {
           </>
         )}
       </div>
-      <Footer />
+      {!headless && <Footer />}
     </>
   );
 }

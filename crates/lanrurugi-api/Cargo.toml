@@ -45,6 +45,7 @@ flate2.workspace = true
 governor.workspace = true
 futures-util.workspace = true
 url.workspace = true
+lanrurugi-share.workspace = true
 lanrurugi-share-proto.workspace = true
 hkdf.workspace = true
 ipnet.workspace = true
@@ -55,6 +56,9 @@ bao-tree.workspace = true
 blake3.workspace = true
 ed25519-dalek.workspace = true
 iroh-relay.workspace = true
+# LANrurugi fork (022): pins the UDP sockets iroh's QUIC transport creates to the sharing
+# interface; see vendor/netwatch/FORK.md.
+netwatch = "0.19.3"
 sentry.workspace = true
 sentry-tower.workspace = true
 sentry-tracing.workspace = true
@@ -71,10 +75,13 @@ image.workspace = true
 casbin.workspace = true
 unicode-segmentation.workspace = true
 woothee.workspace = true
+hmac.workspace = true
 sha2.workspace = true
 maxminddb.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
+# Listing the host's network interfaces, so sharing can be pinned to one (a VPN tunnel, say).
+if-addrs = { workspace = true }
 
 [dev-dependencies]
 # Test-only. The `tests/gpu_worker_*.rs` integration tests drive a real `lanrurugi-gpu-worker`

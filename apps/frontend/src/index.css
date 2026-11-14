@@ -28,6 +28,83 @@
    as plain `html`/`html::-webkit-scrollbar` element selectors rather than reusing the
    `.thin-scrollbar` class itself, since `<html>` isn't a React-rendered element any component here
    can attach a className to. */
+/* react-toastify sets `touch-action: none` so a swipe never scrolls the page instead of dragging
+   the toast. `pan-y` keeps that guarantee for horizontal drags — the browser only claims vertical
+   pans — so a long page can still be scrolled from on top of a toast. */
+.Toastify__toast {
+  touch-action: pan-y;
+}
+
+/* Android-style dismissal animations for toasts (`AndroidToastTransition` in `src/toast.tsx`).
+   The exit starts at the exact transform/opacity the drag left the card at, so a swipe continues
+   from the finger instead of snapping back first; left and right mirror each other. */
+.lrr-toast-enter {
+  animation: lrr-toast-in 260ms cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+.lrr-toast-exit-right {
+  animation: lrr-toast-out-right 240ms cubic-bezier(0.32, 0, 0.75, 0.35) forwards;
+}
+.lrr-toast-exit-left {
+  animation: lrr-toast-out-left 240ms cubic-bezier(0.32, 0, 0.75, 0.35) forwards;
+}
+.lrr-toast-exit-fade {
+  animation: lrr-toast-out-fade 180ms ease-in forwards;
+}
+/* Overrides the drag's inline fade (which reaches 0 at the 30% dismissal threshold) so the card
+   stays readable under the finger; the fly-out keyframes do the fading instead. */
+.lrr-toast-dragging {
+  opacity: 1 !important;
+}
+
+@keyframes lrr-toast-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 16px, 0) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+@keyframes lrr-toast-out-right {
+  from {
+    opacity: 1;
+    transform: var(--lrr-exit-from, none);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(115%, -4px, 0) rotate(6deg) scale(0.97);
+  }
+}
+@keyframes lrr-toast-out-left {
+  from {
+    opacity: 1;
+    transform: var(--lrr-exit-from, none);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(-115%, -4px, 0) rotate(-6deg) scale(0.97);
+  }
+}
+@keyframes lrr-toast-out-fade {
+  from {
+    opacity: 1;
+    transform: var(--lrr-exit-from, none);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(0, -10px, 0) scale(0.98);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lrr-toast-enter,
+  .lrr-toast-exit-right,
+  .lrr-toast-exit-left,
+  .lrr-toast-exit-fade {
+    animation-duration: 1ms;
+  }
+}
+
 html {
   scrollbar-gutter: stable;
   scrollbar-width: thin;
@@ -122,6 +199,954 @@ input[type="checkbox"]:disabled {
   cursor: not-allowed;
 }
 
+/* Legacy's `config.css` stamps "ON"/"OFF" after every `input[type=checkbox]` via `::after`, painted
+ * outside the input's own box, while Font Awesome 7's `.fa` class pins that box to 1.25em — so the
+ * text spilled onto whatever came next: the label's own text (the subscriptions list and the delete
+ * dialog) or the neighbouring table cell (a checkbox alone in a column). Opting single inputs in
+ * left the rest broken, so every `.fa` toggle reserves the room; `.lrr-checkbox-bare` stays the
+ * opt-out for the compact rows that want just the glyph.
+ * 3.2em = glyph (20px) + `::after` margin (5px) + "OFF", with a few px of slack (measured). */
+input[type="checkbox"].fa:not(.lrr-checkbox-bare) {
+  width: 3.2em;
+  vertical-align: middle;
+}
+
+/* The `::after` text sits on the 20px glyph's baseline, so at 15px its optical center lands ~2px
+ * below the glyph's (measured in Firefox) — reported live as "ON/OFF 比左边的图标偏下". Raising the
+ * pseudo box by that much centres the pair; `em` so it follows the pseudo's own 15px size. */
+input[type="checkbox"]::after {
+  vertical-align: 0.13em;
+}
+
+/* Compact list rows (the duplicate card's per-member toggles) want just the themed glyph: legacy's
+ * `config.css` also stamps "ON"/"OFF" after every checkbox with a 5px margin, which inside a 20px box
+ * reads as an unexplained gap before the thumbnail (reported live 2026-11-10). Drop the text, shrink
+ * the glyph to the row's text size. */
+input[type="checkbox"].lrr-checkbox-bare {
+  font-size: 16px;
+  margin-left: 0;
+}
+
+input[type="checkbox"].lrr-checkbox-bare::after {
+  content: none;
+}
+
+/* Legacy's reader hides its own header at 1000px (`lrr.css:620-622` hides `#i2`, which carries
+ * `#archive-title`), so on a phone or tablet the overview overlay is the only place the title is
+ * still visible. Shown below that same breakpoint, hidden above it where the header already has it. */
+/* Hidden where the reader's own header already shows the title; `.is-shown` forces it back for
+ * headless reading, which hides that header at every width. */
+.overview-archive-title {
+  display: none;
+}
+
+.overview-archive-title.is-shown {
+  display: block;
+  margin: -4px 0 16px;
+  text-align: center;
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+/* Headless reading leaves only the page and the fit control. The control has to stay reachable but
+ * out of the way, so it sits in the corner at low opacity and comes up on hover or keyboard focus. */
+.reader-headless-controls {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 60;
+  display: flex;
+  gap: 6px;
+  /* Nearly invisible by default: it sits on the artwork, and a phone-sized hint of it is enough to
+     say "the corner is here". The pointer entering that corner (or hovering/focusing the control)
+     brings it fully back. */
+  opacity: 0.1;
+  transition: opacity 0.15s ease;
+}
+
+.reader-headless-controls.is-revealed,
+.reader-headless-controls:hover,
+.reader-headless-controls:focus-within {
+  opacity: 1;
+}
+
+/* Title / progress / chapter of a headless read, pinned bottom-left over the page. Never a target:
+ * the whole viewport turns pages in this mode, so it must not swallow a tap. The colour and halo
+ * come from each theme file — a fixed colour would be unreadable on one theme or the other. */
+.reader-headless-info {
+  position: fixed;
+  left: 14px;
+  bottom: 10px;
+  z-index: 55;
+  max-width: min(70vw, 620px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  pointer-events: none;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  opacity: 0.75;
+  /* This block lives on the artwork, not in a text column: the reader's own `sni` wrapper centres
+     text, which would otherwise centre the title over a left-aligned page/chapter row. */
+  text-align: left;
+}
+
+/* Hovering a link in the page — the page image is itself a link — puts the browser's own link
+   preview in the bottom-left corner, on top of this block's last line (reported 2026-11-11).
+   Touch devices have no such preview, so they keep the corner to themselves. */
+/* Wide pages reach the bottom-left corner, where the title/progress block would sit on the
+ * artwork. It stays readable over empty margin, fades to a ghost only while it actually overlaps an
+ * image, and the pointer entering that corner (the mirror of the fit control's top-right corner)
+ * brings it fully back. Touch devices have no corner to hover, so they keep the readable version. */
+.reader-headless-info.is-over-image {
+  opacity: 0.1;
+  transition: opacity 0.15s ease;
+}
+
+.reader-headless-info.is-revealed {
+  opacity: 1;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .reader-headless-info {
+    bottom: 26px;
+  }
+}
+
+.reader-headless-title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Chapter jump OSD (headless, `t`). Deliberately neutral: a grey translucent sheet over the
+ * artwork, not a themed card — it is an on-screen display, and a bright theme-coloured panel would
+ * sit on the page like a hole. Text carries its own light colour for the same reason. */
+#reader-chapter-osd {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 9000;
+  display: block;
+  width: min(620px, 92vw);
+  max-height: min(82vh, 760px);
+  margin: 0;
+  padding: 10px 0 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  color: #f2f2f2;
+  background: rgba(28, 28, 28, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+}
+
+.reader-chapter-osd-head {
+  padding: 0 14px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.reader-chapter-osd-title {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.reader-chapter-osd-hint {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.7rem;
+  color: rgba(242, 242, 242, 0.6);
+}
+
+/* Cover-first grid: the artwork is the fastest way to recognise a chapter, so the thumbnail is the
+ * card and the title sits under it. `auto-fill` keeps 2 columns on a phone and 4-5 on a desktop. */
+.reader-chapter-osd-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 12px 10px;
+  padding: 12px 14px 14px;
+}
+
+.reader-chapter-osd-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.reader-chapter-osd-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.reader-chapter-osd-thumbwrap {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  overflow: hidden;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  outline: 2px solid transparent;
+  outline-offset: 1px;
+  transition: outline-color 0.12s ease;
+}
+
+.reader-chapter-osd-card-main:hover .reader-chapter-osd-thumbwrap,
+.reader-chapter-osd-card-main:focus-visible .reader-chapter-osd-thumbwrap {
+  outline-color: rgba(255, 255, 255, 0.55);
+}
+
+.reader-chapter-osd-card.is-active .reader-chapter-osd-thumbwrap {
+  outline-color: #fff;
+}
+
+.reader-chapter-osd-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The footer: title + page on the left, the shortcut keycap on the right. The cap is sized to the
+ * two text lines beside it, so it reads as a key on a keyboard row rather than as an index badge. */
+.reader-chapter-osd-meta {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.reader-chapter-osd-lines {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+/* The shortcut list is an OSD too: same neutral sheet as the chapter jump panel, so the two
+ * overlays read as one family instead of one being a themed card and the other a dark sheet. */
+#reader-help.reader-help-panel {
+  top: 50%;
+  transform: translateY(-50%);
+  min-height: 0;
+  max-height: min(86vh, 720px);
+  background: rgba(28, 28, 28, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+}
+
+#reader-help.reader-help-panel {
+  width: min(1100px, 94vw) !important;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  box-sizing: border-box;
+  padding: 18px 24px;
+  text-align: left;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+#reader-help.reader-help-panel::-webkit-scrollbar {
+  display: none;
+}
+
+#reader-help.reader-help-panel .reader-help-body {
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+#reader-help.reader-help-panel .reader-help-sections {
+  column-count: 2;
+  column-gap: 48px;
+}
+
+@media (max-width: 1000px) {
+  #reader-help.reader-help-panel .reader-help-sections {
+    column-count: 2;
+  }
+}
+
+@media (max-width: 680px) {
+  #reader-help.reader-help-panel .reader-help-sections {
+    column-count: 1;
+  }
+}
+
+#reader-help.reader-help-panel .reader-help-section {
+  break-inside: avoid;
+  margin: 0 0 14px;
+}
+
+#reader-help.reader-help-panel .reader-help-section-title {
+  margin: 0 0 9px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+  text-align: left;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #ffffff;
+}
+
+#reader-help.reader-help-panel .reader-help-lead {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+  color: rgba(242, 242, 242, 0.72);
+}
+
+#reader-help.reader-help-panel .reader-help-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+#reader-help.reader-help-panel .reader-help-list li {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+
+#reader-help.reader-help-panel .reader-help-list li.reader-help-plain {
+  display: block;
+}
+
+#reader-help.reader-help-panel .reader-help-gesture-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (max-width: 680px) {
+  #reader-help.reader-help-panel .reader-help-gesture-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+#reader-help.reader-help-panel .reader-help-gesture-tile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+#reader-help.reader-help-panel .reader-help-gesture-tile > span {
+  font-size: 0.85rem;
+  line-height: 1.35;
+  color: rgba(242, 242, 242, 0.85);
+}
+
+.reader-touch-gesture,
+.reader-tap-demo,
+.reader-longpress-demo {
+  flex: 0 0 auto;
+  width: 64px;
+  height: 48px;
+  overflow: visible;
+}
+
+.reader-touch-gesture-screen {
+  fill: rgba(255, 255, 255, 0.04);
+  stroke: rgba(255, 255, 255, 0.35);
+  stroke-width: 1.5;
+}
+
+.reader-touch-gesture-fingers circle {
+  fill: rgba(255, 255, 255, 0.8);
+}
+
+.reader-touch-gesture.is-up .reader-touch-gesture-fingers {
+  animation: reader-touch-up 3.6s ease-in-out infinite;
+}
+
+.reader-touch-gesture.is-down .reader-touch-gesture-fingers {
+  animation: reader-touch-down 3.6s ease-in-out infinite;
+}
+
+.reader-touch-gesture.is-up .reader-touch-gesture-corners {
+  animation: reader-touch-corners-in 3.6s ease-in-out infinite;
+}
+
+.reader-touch-gesture.is-down .reader-touch-gesture-corners {
+  animation: reader-touch-corners-out 3.6s ease-in-out infinite;
+}
+
+.reader-touch-gesture-corners {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  opacity: 0;
+}
+
+@keyframes reader-touch-up {
+  0%,
+  10% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  40%,
+  78% {
+    transform: translateY(-18px);
+    opacity: 1;
+  }
+  86%,
+  100% {
+    transform: translateY(-18px);
+    opacity: 0;
+  }
+}
+
+@keyframes reader-touch-down {
+  0%,
+  10% {
+    transform: translateY(-18px);
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  40%,
+  78% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  86%,
+  100% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+}
+
+@keyframes reader-touch-corners-in {
+  0%,
+  30% {
+    opacity: 0;
+  }
+  42%,
+  78% {
+    opacity: 1;
+  }
+  86%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes reader-touch-corners-out {
+  0%,
+  12% {
+    opacity: 1;
+  }
+  38%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.reader-tap-demo-page {
+  fill: rgba(255, 255, 255, 0.04);
+  stroke: rgba(255, 255, 255, 0.32);
+  stroke-width: 1.4;
+}
+
+.reader-tap-demo-chevron {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.4);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.reader-tap-demo-dot {
+  fill: rgba(255, 255, 255, 0.75);
+}
+
+.reader-tap-demo-ring {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.55);
+  stroke-width: 1.2;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: reader-tap-ring 4s ease-out infinite;
+}
+
+.reader-tap-demo-side.is-right .reader-tap-demo-ring {
+  animation-delay: 2s;
+}
+
+.reader-tap-demo-side.is-left .reader-tap-demo-chevron {
+  animation: reader-tap-chevron 4s ease-in-out infinite;
+}
+
+.reader-tap-demo-side.is-right .reader-tap-demo-chevron {
+  animation: reader-tap-chevron 4s ease-in-out infinite 2s;
+}
+
+@keyframes reader-tap-ring {
+  0%,
+  8% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  14% {
+    opacity: 0.7;
+  }
+  34% {
+    opacity: 0;
+    transform: scale(1.7);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.7);
+  }
+}
+
+@keyframes reader-tap-chevron {
+  0%,
+  6% {
+    stroke: rgba(255, 255, 255, 0.4);
+    transform: translateX(0);
+  }
+  16%,
+  30% {
+    stroke: rgba(255, 255, 255, 0.9);
+    transform: translateX(-1.5px);
+  }
+  42%,
+  100% {
+    stroke: rgba(255, 255, 255, 0.4);
+    transform: translateX(0);
+  }
+}
+
+.reader-longpress-dot {
+  fill: rgba(255, 255, 255, 0.8);
+}
+
+.reader-longpress-ring {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.65);
+  stroke-width: 1.4;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: reader-longpress-ring 3.2s ease-out infinite;
+}
+
+@keyframes reader-longpress-ring {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  20% {
+    opacity: 0.9;
+  }
+  55% {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-touch-gesture-fingers,
+  .reader-touch-gesture-corners,
+  .reader-tap-demo-ring,
+  .reader-tap-demo-side.is-left .reader-tap-demo-chevron,
+  .reader-tap-demo-side.is-right .reader-tap-demo-chevron,
+  .reader-longpress-ring {
+    animation: none;
+  }
+  .reader-touch-gesture-corners {
+    opacity: 0.7;
+  }
+  .reader-tap-demo-ring,
+  .reader-longpress-ring {
+    opacity: 0;
+  }
+}
+
+#reader-help.reader-help-panel .reader-help-keys {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 3px;
+}
+
+/* The library's shortcut sheet uses the same sheet language as the reader's help panel. */
+.shortcut-sheet-shade {
+  position: fixed;
+  inset: 0;
+  z-index: 8999;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.shortcut-sheet {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 9000;
+  width: min(780px, 92vw);
+  max-height: min(86vh, 720px);
+  overflow-y: auto;
+  scrollbar-width: none;
+  box-sizing: border-box;
+  padding: 20px 24px;
+  text-align: left;
+  background: rgba(28, 28, 28, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+  color: #f2f2f2;
+}
+
+.shortcut-sheet::-webkit-scrollbar {
+  display: none;
+}
+
+.shortcut-sheet-title {
+  margin: 0 0 14px;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.shortcut-sheet .reader-help-sections {
+  column-count: 2;
+  column-gap: 40px;
+}
+
+.shortcut-sheet .reader-help-section {
+  break-inside: avoid;
+  margin: 0 0 16px;
+}
+
+.shortcut-sheet .reader-help-section-title {
+  margin: 0 0 9px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+  text-align: left;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.shortcut-sheet .reader-help-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.shortcut-sheet .reader-help-list li {
+  display: grid;
+  /* Wide enough for `Ctrl` + `Delete` on one line; a narrower gutter made the keycaps spill into
+   * the description. */
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+
+.shortcut-sheet .reader-help-list li.reader-help-plain {
+  display: block;
+  color: rgba(242, 242, 242, 0.72);
+}
+
+.shortcut-sheet .reader-help-keys {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 3px;
+}
+
+@media (max-width: 680px) {
+  .shortcut-sheet .reader-help-sections {
+    column-count: 1;
+  }
+}
+
+#reader-help.reader-help-panel,
+#reader-help.reader-help-panel h4,
+#reader-help.reader-help-panel h5,
+#reader-help.reader-help-panel p,
+#reader-help.reader-help-panel li,
+#reader-help.reader-help-panel strong,
+#reader-help.reader-help-panel em {
+  color: #f2f2f2;
+}
+
+/* The help panel's shortcut keys use the same keycap language as the chapter OSD. */
+.reader-keycap {
+  display: inline-flex;
+  vertical-align: middle;
+  margin: 0 1px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #b4b4b4 0%, #969696 100%);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78em;
+}
+
+.reader-keycap-face {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  margin: 1px 1px 3px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #ffffff 0%, #e9e9e9 100%);
+  box-shadow: inset 0 1px 0 #ffffff;
+  font-weight: 700;
+  line-height: 1.4;
+  color: #2a2a2a;
+}
+
+/* A physical keycap, drawn in two layers like a real key: a darker base ("skirt") with a lighter
+ * cap sitting on top of it, offset upward so the base shows as a lip along the bottom edge. */
+.reader-chapter-osd-key {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 30px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #a8a8a8 0%, #8a8a8a 100%);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.55);
+}
+
+.reader-chapter-osd-keycap {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  margin: 1px 1px 4px;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: linear-gradient(180deg, #ffffff 0%, #f2f2f2 48%, #dedede 100%);
+  box-shadow:
+    inset 0 1px 0 #ffffff,
+    inset 0 -1px 0 rgba(0, 0, 0, 0.08);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1;
+  color: #2a2a2a;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition: transform 0.06s ease;
+}
+
+.reader-chapter-osd-card-main:hover .reader-chapter-osd-keycap,
+.reader-chapter-osd-card-main:focus-visible .reader-chapter-osd-keycap {
+  transform: translateY(1px);
+}
+
+.reader-chapter-osd-name {
+  font-size: 0.78rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.reader-chapter-osd-card.is-active .reader-chapter-osd-name {
+  font-weight: 700;
+}
+
+.reader-chapter-osd-page {
+  font-size: 0.68rem;
+  color: rgba(242, 242, 242, 0.55);
+}
+
+/* A member's own ToC: compact rows hanging under its card, so the hierarchy stays visible. */
+.reader-chapter-osd-children {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 6px;
+  border-left: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.reader-chapter-osd-child {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 3px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.7rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.reader-chapter-osd-child:hover,
+.reader-chapter-osd-child:focus-visible {
+  outline: none;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.reader-chapter-osd-child.is-active {
+  background: rgba(255, 255, 255, 0.16);
+  font-weight: 700;
+}
+
+.reader-chapter-osd-child .reader-chapter-osd-name {
+  font-size: 0.7rem;
+}
+
+.reader-chapter-osd-empty {
+  margin: 0;
+  padding: 14px;
+  font-size: 0.82rem;
+  color: rgba(242, 242, 242, 0.65);
+}
+
+.reader-headless-line {
+  display: flex;
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 2px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.reader-headless-chapter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Icons keep their own width; only the name gives way when the row is narrow. */
+.reader-headless-chapter > i {
+  flex: none;
+}
+
+.reader-headless-chapter-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reader-headless-chapter-start {
+  opacity: 0.9;
+}
+
+/* Headless on a phone leaves nothing but the page, so it is centred in the viewport instead of
+ * hugging the top edge with the rest of the screen empty below it. */
+@media all and (max-width: 1000px) {
+  #i1.reader-headless {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    /* `div.sni` carries the legacy 2px/6px vertical margins and `body` a 2px padding; a 100dvh
+       box plus those pushes the container past the viewport and clips its bottom border, so the
+       height is measured against the body's content box and the margins are dropped. */
+    min-height: calc(100dvh - 4px);
+    box-sizing: border-box;
+    margin: 0;
+  }
+
+  #i1.reader-headless #display {
+    width: 100%;
+  }
+}
+
+/* Touch only: headless has no toolbar, and a phone's top edge is the one strip the page never
+ * reaches, so the jump-to-first/last buttons live there. */
+.reader-headless-jump {
+  position: fixed;
+  top: 2px;
+  left: 2px;
+  right: 2px;
+  z-index: 55;
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+  opacity: 0.55;
+}
+
+.reader-headless-jump .page-link {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  font-size: 1.25rem;
+}
+
+/* A long press is the touch gesture that leaves headless, so the browser must not claim it for the
+ * image callout mid-press. */
+.reader-headless .reader-image,
+.reader-headless #imgLink {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+@media all and (max-width: 1000px) {
+  /* Legacy's `.page-overlay { min-height: 100% !important }` makes the overlay (fixed at top: 40px)
+   * a full viewport tall, so its bottom edge — and the sticky scroll-to-top button — sits off screen.
+   * End it at the visible bottom instead; `dvh` accounts for the mobile browser's toolbar. The extra
+   * class outranks lrr.css's own `#archivePagesOverlay { height: 90vh }`, which loads after this file. */
+  #archivePagesOverlay.page-overlay {
+    min-height: 0 !important;
+    height: calc(100dvh - 40px);
+    max-height: none;
+  }
+
+  .overview-archive-title {
+    display: block;
+    margin: -4px 0 16px;
+    text-align: center;
+    font-size: 1.05rem;
+    font-weight: 600;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+}
+
 /* Additive: the reader overview overlay's page-grid briefly outlines whichever page it opened on
  * (`ArchiveOverviewOverlay.tsx`'s `PageGridCell`, `highlighted` prop) — a static outline alone is
  * easy to miss at a glance across a grid that can run into the hundreds of otherwise-identical
@@ -185,16 +1210,116 @@ input[type="checkbox"]:disabled {
   transition: opacity 150ms ease;
 }
 
+/* Absolutely positioned over the page area: the *image* now always reserves its box (it carries
+   width/height attributes from the moment it mounts), so this only has to paint the "not here yet"
+   tint and catch taps — it must not add height of its own, or the reserved box and the tint would
+   stack and double the area's height. */
 .reader-page-placeholder-row {
-  display: block;
-  width: 100%;
-  /* The page's own tap target while it has no bitmap; the visible box inside keeps the ratio. */
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
+  z-index: 1;
 }
 
 .reader-page-placeholder {
   display: block;
-  background: rgba(127, 127, 127, 0.12);
+  /* Same skeleton treatment as `.reader-image.loading-placeholder`: with only a flat tint on a dark
+     theme the reserved box is almost invisible, which the user reads as "nothing is happening". */
+  background: linear-gradient(
+    90deg,
+    rgba(127, 127, 127, 0.08) 25%,
+    rgba(127, 127, 127, 0.18) 37%,
+    rgba(127, 127, 127, 0.08) 63%
+  );
+  background-size: 400% 100%;
+  animation: reader-page-placeholder-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes reader-page-placeholder-pulse {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-page-placeholder {
+    animation: none;
+  }
+}
+
+/* Swap from the tiny preview to the full page by erasing the preview from the top down, revealing
+   the sharp page painted underneath it. Erasing the *preview* (rather than clipping the page in)
+   is what keeps the sweep continuous: the page is already fully decoded and painted when the
+   animation starts, so no partially drawn bitmap can be exposed mid-sweep — clipping the page in
+   meant the area below the sweep line showed whatever the decoder had produced so far. */
+@keyframes reader-page-wipe {
+  from {
+    clip-path: inset(0 0 0 0);
+  }
+  to {
+    clip-path: inset(100% 0 0 0);
+  }
+}
+
+#i3 .reader-page-wipe {
+  animation: reader-page-wipe 260ms cubic-bezier(0.2, 0, 0.2, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Keep the swap, drop the sweep: a 1ms run still fires `animationend`, which is what releases
+     the preview blob, so the pending state cannot outlive the frame. `!important` because the
+     duration is otherwise set per page height, inline. */
+  #i3 .reader-page-wipe {
+    animation: reader-page-wipe 1ms linear forwards !important;
+  }
+}
+
+/* The positioned ancestor for the placeholder above. */
+#i3 {
+  position: relative;
+}
+
+/* While the page has no bitmap, `#display` is a shrink-to-fit flex item whose child asks for
+   `width: 100%` — a percentage against an indefinite width, which Chrome resolves to zero and the
+   whole page area collapses to 2×2. The area's own width is definite (the viewport), so hand it
+   down for the loading window only; once the bitmap arrives the page sizes itself as usual. */
+#i3.loading #display {
+  width: 100%;
+}
+
+/* The same percentage problem one level deeper: `#display` is only the flex container, the page
+   itself lives in a shrink-to-fit `inline-flex` link (so the image can be sized by the theme's
+   `img { width: 100% }` and still sit centred). While the page has no bitmap that link has no
+   content to hug, so it is 0 wide and the tiny preview underneath — absolutely positioned to its
+   box — paints into 0×0 as well. Give the frame the area's width for the loading window only. */
+#i3.loading .reader-page-frame,
+#i3.loading .reader-page-frame-inner {
+  width: 100%;
+}
+
+/* `width: auto` on an `<img>` takes its *intrinsic* width, and a page that has not decoded has
+   none — the width/height attributes only supply an aspect ratio, so the element measured 0×0 and
+   the whole page area collapsed to 2px (the "dot in the middle"). Hand it the area's width for the
+   loading window; `height: auto` then follows the attribute ratio, which is exactly the box the
+   page will occupy once it paints. */
+#i3.loading #img,
+#i3.loading #img_doublepage {
+  width: 100%;
+}
+
+/* The preview is absolutely positioned against the page frame, so that frame must be exactly the
+   image's box. Themes put `margin: 1px` on the page image, which made the frame 2px larger than
+   the bitmap — the preview (and the reveal sweep) then sat 1px off on every edge, and the swap
+   visibly shifted. Margins belong to the frame's spacing, not between the two layers. */
+#i3 #img,
+#i3 #img_doublepage {
+  margin: 0;
 }
 
 /* Fallback band for the case where nothing about the incoming page is known yet (first visit, the
@@ -226,6 +1351,23 @@ input[type="checkbox"]:disabled {
     min-height: 2rem;
     white-space: normal;
   }
+}
+
+/* Shared pill label (common-ui/Display/Badge). Tinted from currentColor so the same component is
+   legible on a theme's light surface and on the reader's dark OSD sheet alike. */
+.ui-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.4em;
+  padding: 1px 0.45em;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  font-size: 0.8em;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 
 /* A page that has no decoded pixels yet. The `<img>` already carries the target page's
@@ -1884,6 +3026,33 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   animation: preview-skeleton-pulse 1.4s ease-in-out infinite;
 }
 
+/* Page-image placeholder in the reader's page lightbox: a block roughly the size the page will
+   take, pulsing on the same rhythm. Absolute so swapping it for the image never moves the frame. */
+.reader-lightbox-skeleton {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  height: 82%;
+  aspect-ratio: 3 / 4;
+  max-width: 86%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px dashed color-mix(in srgb, currentColor 22%, transparent);
+  opacity: 0.55;
+}
+
+/* Filmstrip thumbnails in the same lightbox — a pulsing block until each thumbnail arrives. */
+.reader-thumb-skeleton {
+  position: absolute;
+  inset: 0;
+  background-color: currentColor;
+  opacity: 0.1;
+  animation: preview-skeleton-pulse 1.4s ease-in-out infinite;
+}
+
 .preview-skeleton-row:nth-child(even) .preview-skeleton-bar,
 .subscriptions-skeleton-row:nth-child(even) .skeleton-bar,
 .usage-skeleton-row:nth-child(even) .skeleton-bar {
@@ -1903,7 +3072,8 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 
 @media (prefers-reduced-motion: reduce) {
   .preview-skeleton-bar,
-  .skeleton-bar {
+  .skeleton-bar,
+  .reader-thumb-skeleton {
     animation: none;
   }
 }
@@ -2310,14 +3480,15 @@ body div.ido {
   text-align: center;
   /* Tapping the page turns it. Without this, a quick double tap is a *browser* gesture instead:
      it selects the page filename/toolbar text (the selection highlight then follows the reader
-     around), and on some Android builds it zooms. `manipulation` keeps panning/pinch (which the
-     reader does want) and drops the double-tap-to-zoom; the selection/touch-callout rules cover
-     the rest. Scoped to the page area — the title, tooltips and dialogs keep their normal text
-     behaviour. */
+     around), and on some Android builds it zooms. Panning stays enabled in both directions,
+     which also rules out pinch-zoom: a two-finger vertical swipe is the fullscreen gesture here,
+     and the browser reading it as a pinch zoomed the page a little every time. The full-size
+     lightbox is its own element and still zooms. Scoped to the page area — the title, tooltips
+     and dialogs keep their normal text behaviour. */
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
-  touch-action: manipulation;
+  touch-action: pan-x pan-y;
   /* The page image is inline-level, so its line box adds leading/descender space below it — which
      the fit-height measurement (based on the image's own height) cannot account for, leaving the
      page a few pixels taller than the viewport. Zeroing the line height removes exactly that. */
@@ -2350,6 +3521,31 @@ body div.ido {
   display: block;
   height: 196px;
   margin: 0 auto;
+}
+
+/* The phone nav drawer's header: the app's own mark plus the library's name, linking home. Only
+ * layout, so it lives here rather than in the five theme files — the colours are inherited from the
+ * drawer's own text (themes already style `.id1`). */
+.nav-drawer-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.nav-drawer-brand-logo {
+  display: block;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+}
+
+.nav-drawer-brand-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* One maintenance script under the Plugins page's "维护脚本" section: an explanation and its single
@@ -2502,4 +3698,90 @@ body div.ido {
 
 .ai-pager .number-input-stepper {
   display: none !important;
+}
+
+/* The first link of the desktop nav is the app mark rather than a word. The selector outranks
+ * `p#nb img` (legacy's 5x7 caret rule), which would otherwise squash the mark. */
+#nb .nav-home-link img {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  vertical-align: -2px;
+}
+
+#nb .nav-home-link:hover img {
+  filter: brightness(1.15);
+}
+
+/* Headless file line (Tab): the toolbar's `.file-info` bar, moved over the artwork's top-left
+ * corner and shown only on demand. Pointer-events stay off — it captions, it is not a control. */
+.reader-headless-file-info {
+  position: fixed;
+  top: 8px;
+  left: 14px;
+  z-index: 55;
+  max-width: min(78vw, 720px);
+  pointer-events: none;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  text-align: left;
+  /* It captions artwork, so it needs its own surface: over a busy page the bare text was
+     unreadable. Same neutral sheet as the reader's other OSD panels, so it reads as UI rather
+     than as part of the image. */
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(28, 28, 28, 0.86);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(6px);
+  color: #f2f2f2;
+  opacity: 0.95;
+}
+
+/* The toolbar's green/red pair is tuned for each theme's light bar; on this dark sheet the same
+   values lose the contrast that makes the pair readable, so brighten them (still one green/one
+   red, same meaning). */
+.reader-headless-file-info .file-info-opt {
+  color: #8fe3a1;
+}
+
+.reader-headless-file-info .file-info-orig {
+  color: #ff9b93;
+}
+
+.reader-headless-file-info .file-info {
+  min-height: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: none;
+  padding: 0;
+}
+
+/* Double-page spreads list one file per row (L/R) instead of one merged line: the merged line added
+ * both pages' sizes together and had no room for either page's conversion savings. */
+.reader-headless-file-info .reader-file-info-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  white-space: normal;
+}
+
+.reader-headless-file-info .file-info-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.reader-headless-file-info .file-info-side {
+  flex: 0 0 auto;
+}
+
+.reader-headless-file-info .file-info-row-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

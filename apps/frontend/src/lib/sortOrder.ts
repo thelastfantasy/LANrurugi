@@ -11,7 +11,8 @@ export const RELEVANCE_SORT = "relevance"
  *  A→Z for everything else (title and tag namespaces). Carrying the previous field's direction
  *  over is what used to turn "Date" into oldest-first after sorting by Title descending. */
 export function defaultSortDir(sortby: string): "asc" | "desc" {
-  if (sortby === "date_added" || sortby === "lastread") return "desc"
+  if (sortby === "date_added" || sortby === "lastread" || sortby === "lastread_all")
+    return "desc"
   return "asc"
 }
 
@@ -24,4 +25,18 @@ export function effectiveSortDir(
 ): "asc" | "desc" {
   if (sortby === RELEVANCE_SORT) return "asc"
   return dir
+}
+
+/** The direction a sort change settles on: an explicit choice wins, switching to a field takes
+ *  that field's natural direction, otherwise the current direction carries over. Shared so the
+ *  request and the URL cannot disagree — computing it in one place and rebuilding the URL from the
+ *  other is what made "Date" come out oldest-first when the previous field was relevance. */
+export function nextSortDir(
+  current: "asc" | "desc",
+  switchedTo?: string,
+  explicit?: "asc" | "desc",
+): "asc" | "desc" {
+  if (explicit) return explicit
+  if (switchedTo !== undefined) return defaultSortDir(switchedTo)
+  return current
 }

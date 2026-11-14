@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 
 import { FONT_SIZE_MD, Z_OVERLAY_TOOLTIP } from "@/theme"
@@ -11,6 +11,10 @@ const GAP = 8
 /** Grace period before the tooltip closes after the pointer leaves — long enough to cross `GAP`
  * without closing out from under a cursor still headed toward the bubble's own content. */
 const CLOSE_DELAY_MS = 150
+
+/** The hover tooltip currently showing, module-wide. Opening another one closes this one right
+ * away instead of letting it sit next to the new bubble for the rest of its close delay. */
+let activeTooltip: { close: () => void } | null = null
 
 /** Hover/focus tooltip — a `title`-attribute replacement for icon-only buttons or richer content.
  * Debounces close, auto-flips to stay in viewport, and portals to `document.body`. */
@@ -29,8 +33,9 @@ export function Tooltip({
   /** Extra styles merged onto the trigger-wrapping `<span>`, e.g. flex sizing for a block-level
    * trigger. */
   wrapperStyle?: React.CSSProperties
-  /** Overrides the bubble's default 320px width cap. */
-  maxWidth?: number
+  /** Overrides the bubble's default 320px width cap; any CSS length, so a caller can widen it by a
+   *  character or two in `rem` without redoing the pixel arithmetic. */
+  maxWidth?: number | string
   /** Overrides the default `Z_OVERLAY_TOOLTIP` — needed when the trigger lives inside something
    * with an even higher z-index (e.g. `Modal.tsx`'s 9001), or the portaled bubble renders behind it. */
   zIndex?: number
@@ -41,6 +46,12 @@ export function Tooltip({
   const [visible, setVisible] = useState(false)
   const [style, setStyle] = useState<React.CSSProperties>({ position: "fixed", top: -9999, left: -9999, visibility: "hidden" })
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** This instance's entry in `activeTooltip`; `close` mirrors `cancelClose` + hide. */
+  const self = useRef<{ close: () => void }>({ close: () => {} })
+  self.current.close = () => {
+    cancelClose()
+    setVisible(false)
+  }
   const wrapperRef = useRef<HTMLSpanElement>(null)
   const bubbleRef = useRef<HTMLDivElement>(null)
   const cursorPos = useRef<{ x: number; y: number } | null>(null)
@@ -52,13 +63,27 @@ export function Tooltip({
     }
   }
 
+  function forgetActive() {
+    if (activeTooltip === self.current) activeTooltip = null
+  }
+
   function scheduleClose() {
     cancelClose()
-    closeTimer.current = setTimeout(() => setVisible(false), closeDelay)
+    closeTimer.current = setTimeout(() => {
+      closeTimer.current = null
+      forgetActive()
+      setVisible(false)
+    }, closeDelay)
   }
 
   function open() {
     cancelClose()
+    if (activeTooltip !== null && activeTooltip !== self.current) {
+      const previous = activeTooltip
+      activeTooltip = null
+      previous.close()
+    }
+    activeTooltip = self.current
     setVisible(true)
   }
 
@@ -119,6 +144,13 @@ export function Tooltip({
       ...(maxHeight !== undefined ? { maxHeight, overflowY: "auto" } : { maxHeight: undefined, overflowY: undefined }),
     })
   }
+
+  useEffect(
+    () => () => {
+      if (activeTooltip === self.current) activeTooltip = null
+    },
+    [],
+  )
 
   useLayoutEffect(() => {
     if (!visible) return

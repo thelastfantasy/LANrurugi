@@ -99,6 +99,13 @@
     "en": "Download Queue"
   },
   {
+    "key": "direct_download",
+    "zh": "直连下载",
+    "en": "Direct Download",
+    "description_zh": "绕开页面域名的限时签名下载链接（`/api/dl/`），供下载域名直接提供服务。",
+    "description_en": "Time-limited signed download links under `/api/dl/`, served by the dedicated download host."
+  },
+  {
     "key": "duplicates",
     "zh": "重复检测",
     "en": "Duplicate Detection"

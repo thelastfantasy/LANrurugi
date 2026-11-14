@@ -21,10 +21,16 @@ export function TagLine({
   const ratingTag = coded.find((tag) => tag.namespace === "rating")
   const otherTags = coded.filter((tag) => tag.namespace !== "rating")
 
+  // 21rem, one past the default 20rem: the common e-hentai source tag is about a character too
+  // long for 320px and used to wrap just before its last character. `closeDelay` is slower than the
+  // 150ms default because the pointer often dips into the bubble to click a tag; another tooltip
+  // opening still closes this one at once (`activeTooltip` in Tooltip.tsx).
   return (
     <Tooltip
       label={<TagTable tags={tags} onSearchTag={(ns, v) => onSearchTag(buildSearchToken(ns, v, !TIMESTAMP_NAMESPACE.test(ns)))} />}
       wrapperStyle={{ display: "block" }}
+      maxWidth="21rem"
+      closeDelay={350}
     >
       <span className="tags tag-tooltip">
         {ratingTag && (

@@ -31,6 +31,7 @@ export function CategoryBar({
       <button
         type="button"
         className={`favtag-btn${selectedCategory === NEW_ONLY ? " toggled" : ""}`}
+        aria-pressed={selectedCategory === NEW_ONLY}
         title={t("library.archivesAddedWithinTheLast") ?? undefined}
         onClick={() => onToggleCategory(NEW_ONLY)}
       >
@@ -39,6 +40,7 @@ export function CategoryBar({
       <button
         type="button"
         className={`favtag-btn${selectedCategory === UNTAGGED_ONLY ? " toggled" : ""}`}
+        aria-pressed={selectedCategory === UNTAGGED_ONLY}
         title={t("library.archivesWithNoTagsAt") ?? undefined}
         onClick={() => onToggleCategory(UNTAGGED_ONLY)}
       >
@@ -47,6 +49,7 @@ export function CategoryBar({
       <button
         type="button"
         className={`favtag-btn${selectedCategory === SOURCE_ONLY ? " toggled" : ""}`}
+        aria-pressed={selectedCategory === SOURCE_ONLY}
         title={t("library.archivesWithASourceTag") ?? undefined}
         onClick={() => onToggleCategory(SOURCE_ONLY)}
       >
@@ -55,6 +58,7 @@ export function CategoryBar({
       <button
         type="button"
         className={`favtag-btn${selectedCategory === NO_SOURCE_ONLY ? " toggled" : ""}`}
+        aria-pressed={selectedCategory === NO_SOURCE_ONLY}
         title={t("library.archivesWithoutASourceTag") ?? undefined}
         onClick={() => onToggleCategory(NO_SOURCE_ONLY)}
       >
@@ -64,6 +68,7 @@ export function CategoryBar({
         <button
           type="button"
           className={`favtag-btn${selectedCategory === TANKOUBON_ONLY ? " toggled" : ""}`}
+        aria-pressed={selectedCategory === TANKOUBON_ONLY}
           title={t("library.tankoubonVolumes") ?? undefined}
           onClick={() => onToggleCategory(TANKOUBON_ONLY)}
         >
@@ -75,6 +80,7 @@ export function CategoryBar({
           key={c.id}
           type="button"
           className={`favtag-btn${selectedCategory === c.id ? " toggled" : ""}`}
+        aria-pressed={selectedCategory === c.id}
           onClick={() => onToggleCategory(c.id)}
         >
           {c.pinned ? "📌 " : ""}

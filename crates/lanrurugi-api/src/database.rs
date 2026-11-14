@@ -40,6 +40,7 @@ pub fn router() -> Router<AppState> {
         .route("/database/restore", post(queue_restore))
         .route("/database/isnew", delete(clear_new_all))
         .route("/database/clean", post(clean_database))
+        .route("/database/tidy-tags", post(tidy_tags))
         .route("/database/rebuild-index", post(rebuild_index))
         .route(
             "/database/import-legacy",
@@ -519,6 +520,46 @@ async fn drop_database(
     axum::Json(json!({ "operation": "drop_database", "success": 1 })).into_response()
 }
 
+/// `POST /database/tidy-tags` — the settings page's "自动整理标签" button. An explicit, repeatable
+/// action rather than a startup migration: the duplicate tags it collapses can be reintroduced by
+/// another import or restore, and re-running it on a clean library is a read-only scan that writes
+/// nothing back. That matters more than the few seconds it costs on a large library.
+async fn tidy_tags(State(state): State<AppState>) -> Response {
+    let report = match lanrurugi_storage::tidy_tags::tidy_tags(&state.repos.archives).await {
+        Ok(report) => report,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "tidy_tags",
+                e.to_string(),
+            )
+        }
+    };
+
+    // Dropping an empty-value tag removes its `INDEX_<namespace>:` key; every other rewrite folds
+    // to the same key, so this is a no-op for them. Warnings rather than a failure: the archives
+    // are already written, and re-running the tidy does not repair a stale index.
+    for change in &report.changes {
+        if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
+            &state.redis.search,
+            &state.equivalence,
+            &change.id,
+            &change.old_tags,
+            &change.new_tags,
+        )
+        .await
+        {
+            tracing::warn!(id = %change.id, error = %e, "tidy tags: search index update failed");
+        }
+    }
+
+    axum::Json(json!({
+        "scanned": report.scanned,
+        "repaired": report.repaired,
+    }))
+    .into_response()
+}
+
 /// Two-phase cleanup matching the legacy contract's documented *effect* ("unlinked at first,
 /// deleted on a subsequent run"): an archive whose file is missing gets its `file` field cleared
 /// (unlinked) on the first pass; an archive that's *already* unlinked (empty `file`) is deleted
@@ -696,6 +737,36 @@ async fn run_rebuild_sequence(
 
     let heal_summary = lanrurugi_scanner::full_scan::heal_pagecounts(&repos.archives).await;
 
+    // 020 T021: sidecars are a derived snapshot, so a disagreement cannot fail the rebuild — it is
+    // reported, because "how much of this library could be rebuilt from disk alone" is exactly what
+    // an operator runs a rebuild to find out.
+    let sidecar_audit = lanrurugi_scanner::sidecar_audit::audit_sidecars(
+        &repos.archives,
+        &state.library.archive_dir,
+    )
+    .await
+    .unwrap_or_default();
+    if !sidecar_audit.is_clean() {
+        tracing::warn!(
+            missing = sidecar_audit.missing,
+            unreadable = sidecar_audit.unreadable,
+            mismatched = sidecar_audit.mismatched,
+            "some hash-named archives cannot be recovered from their sidecar"
+        );
+    }
+    // The other half of the same cleanup: snapshots whose archive is gone. Deletes used to remove
+    // the bytes but leave `<ab>/<id>.json` behind, and nothing ever read them back.
+    match lanrurugi_scanner::sidecar_audit::sweep_orphans(
+        &repos.archives,
+        &state.library.archive_dir,
+    )
+    .await
+    {
+        Ok(0) => {}
+        Ok(removed) => tracing::info!(removed, "removed orphaned sidecars"),
+        Err(e) => tracing::warn!(error = %e, "failed to sweep orphaned sidecars"),
+    }
+
     // Issue #67: unconditional, not gated behind `rekey_summary.rekeyed` being non-empty — a
     // Category/Grouping saved before the `archive_id -> [category_id]`/`[tankoubon_id]`
     // reverse index existed has never had its membership written into it at all, regardless of
@@ -730,6 +801,30 @@ async fn run_rebuild_sequence(
         "scanned": scan_summary.scanned,
         "newly_catalogued": scan_summary.catalogued,
         "errors": scan_summary.errors,
+        // How many by-name archives the scan moved under `_byname/` (020 US2). Surfaced here
+        // because the first scan after the upgrade is where a whole library moves at once.
+        "relocated": scan_summary.relocated,
+        "relocation_skipped": scan_summary.relocation_skipped,
+        "relocation_repaired": scan_summary.relocation_repaired,
+        // The three cases behind `relocation_skipped`, split so a client can say "needs a human"
+        // (occupied) versus "will clear itself" (settling) versus "outside the library" (outside).
+        "relocation_settling": scan_summary.relocation_settling,
+        "relocation_outside": scan_summary.relocation_outside,
+        "relocation_failed": scan_summary.relocation_failed,
+        // 020 T021: which hash-layout records could not be rebuilt from disk alone.
+        "sidecars": {
+            "checked": sidecar_audit.checked,
+            "missing": sidecar_audit.missing,
+            "unreadable": sidecar_audit.unreadable,
+            "mismatched": sidecar_audit.mismatched,
+            "repaired": sidecar_audit.repaired,
+            "details": sidecar_audit.details.iter().map(|issue| json!({
+                "id": issue.id,
+                "file": issue.file,
+                "reason": issue.reason,
+                "found": issue.found,
+            })).collect::<Vec<_>>(),
+        },
         "pagecount_heal": {
             "checked": heal_summary.checked,
             "healed": heal_summary.healed,

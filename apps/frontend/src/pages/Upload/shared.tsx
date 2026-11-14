@@ -8,7 +8,7 @@ import { useHorizontalScroll } from "@/hooks"
 import { splitTagsByNamespace } from "@/lib/tagFormat"
 import { FONT_SIZE_XS } from "@/theme"
 
-/* ─── PatchAssignmentView 共享常量 + ScrollRow ─── */
+/* ─── Horizontal page strip (duplicate review patch assignment) ─── */
 
 export const ROW_GAP_PX = 6
 
@@ -129,7 +129,12 @@ function hostnameOf(url: string): string {
 export function matchesDomain(plugin: PluginInfo, url: string): boolean {
   const needle = normalizeDomain(hostnameOf(url))
   if (plugin.domain_match.length > 0) {
-    return plugin.domain_match.some((d) => normalizeDomain(d) === needle)
+    // A declared domain owns its subdomains too: Chaika's `chaika.moe` entry has to cover
+    // `panda.chaika.moe`, and E-Hentai's `e-hentai.org` has to cover `g.e-hentai.org`.
+    return plugin.domain_match.some((d) => {
+      const domain = normalizeDomain(d)
+      return needle === domain || needle.endsWith(`.${domain}`)
+    })
   }
   return matchesPattern(plugin, url)
 }
@@ -173,32 +178,54 @@ export function partitionByOrigin(items: DownloadQueueItem[]) {
   return { manual, fromSubscriptions }
 }
 
-/** Whether an item is stopped waiting on the user — a filename or revision decision, or a failure.
+/** Whether an item is stopped waiting on the user — a revision decision, or a failure.
  * Flags the tab that would otherwise hide it: splitting a list must not bury the rows that need an
  * answer. */
 export function needsDecision(item: DownloadQueueItem): boolean {
   return (
     item.state === "error" ||
     item.state === "awaiting_revision_confirmation" ||
-    !!item.pending_filename_conflict ||
     !!item.pending_revision_confirmation
   )
 }
 
+/** Mirrors the server's `trim_url` (download source tag): no scheme, `www.`, query or trailing
+ * slash, so a preview tag can be compared with the URL the download was started from. */
+function trimSourceUrl(url: string): string {
+  return url
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/^www\./i, "")
+    .split("?")[0]
+    .replace(/\/+$/, "")
+}
+
 /** Renders a metadata plugin's `{tags?, title?, summary?}` response as a short tooltip body,
- * grouped by namespace. No separate "raw URL" line when a `source:` tag already covers it. */
+ * grouped by namespace. The URL the download was started from is shown as its own `source:` tag
+ * unless the plugin already reported it — a chaika download whose plugin adds the e-hentai
+ * `source:` therefore lists both, matching the two sources the finished archive ends up with. */
 export function MetadataPreviewTooltip({ preview, url }: { preview: Record<string, unknown>; url: string }) {
   const tags = typeof preview.tags === "string" ? preview.tags : ""
   const summary = typeof preview.summary === "string" ? preview.summary : undefined
-  const hasSourceTag = "source" in splitTagsByNamespace(tags)
+  const isUrl = /^https?:\/\//i.test(url.trim())
+  const ownSource = isUrl ? trimSourceUrl(url) : ""
+  const showsOwnSource =
+    ownSource === "" || (splitTagsByNamespace(tags).source ?? []).includes(ownSource)
+  const displayTags = showsOwnSource
+    ? tags
+    : tags
+      ? `${tags}, source:${ownSource}`
+      : `source:${ownSource}`
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       <div style={{ fontWeight: "bold", wordBreak: "break-word" }}>
         {typeof preview.title === "string" ? preview.title : url}
       </div>
-      {!hasSourceTag && <div style={{ wordBreak: "break-all", opacity: 0.8, fontSize: FONT_SIZE_XS }}>{url}</div>}
-      <TagTable tags={tags} />
+      {!showsOwnSource && !isUrl && (
+        <div style={{ wordBreak: "break-all", opacity: 0.8, fontSize: FONT_SIZE_XS }}>{url}</div>
+      )}
+      <TagTable tags={displayTags} />
       {summary && <div style={{ opacity: 0.8 }}>{summary}</div>}
     </div>
   )

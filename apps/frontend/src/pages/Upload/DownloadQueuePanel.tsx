@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { fetchJson, sendJson } from "@/api/client"
@@ -11,9 +11,11 @@ import {
   useStartSelectedQueue,
 } from "@/api/hooks"
 import type { ArchiveMetadata, DownloadQueueItem, JobRecord, PluginInfo } from "@/api/types"
-import { Tooltip } from "@/components/common-ui/Display"
+import { MenuItem, MenuSeparator, Tooltip } from "@/components/common-ui/Display"
+import { SplitButton } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
 import { useIsNarrowViewport } from "@/hooks"
+import { FONT_SIZE_XS } from "@/theme"
 
 import { QueueItemRow } from "./QueueItemRow"
 import { ShareImportRow } from "./ShareImportRow"
@@ -109,6 +111,16 @@ export function DownloadQueuePanel({
     [],
   )
 
+  /** One group's heading — the same string the split-button menu lists it under. */
+  const groupTitleFor = useCallback(
+    (namespace: string) => {
+      if (namespace === LOCAL_UPLOAD_NAMESPACE) return t("upload.fromYourComputer")
+      if (namespace === SHARE_IMPORT_NAMESPACE) return t("share.importRow.group")
+      return downloadPlugins?.find((p) => p.namespace === namespace)?.name ?? namespace
+    },
+    [downloadPlugins, t],
+  )
+
   const visibleItems = useMemo(() => {
     const out: DownloadQueueItem[] = []
     for (const [namespace, groupItems] of grouped) {
@@ -154,6 +166,24 @@ export function DownloadQueuePanel({
       ),
     [selected, itemIds, selectableItemIds, visibleIds],
   )
+
+  /** Per group, the selected ids the split button's menu offers. Both halves of the split button
+   * act on the checkbox selection — the caret only chooses *which* of the selected groups to
+   * start, never starts rows the user has not selected. */
+  const startableByGroup = useMemo(() => {
+    const byGroup = new Map<string, string[]>()
+    for (const item of visibleItems) {
+      if (!effectiveSelected.has(item.id)) continue
+      const list = byGroup.get(item.plugin_namespace) ?? []
+      list.push(item.id)
+      byGroup.set(item.plugin_namespace, list)
+    }
+    return [...byGroup.entries()].map(([namespace, ids]) => ({
+      namespace,
+      title: groupTitleFor(namespace),
+      ids,
+    }))
+  }, [visibleItems, effectiveSelected, groupTitleFor])
 
   const triggeredRef = useRef<Set<string>>(new Set())
   useEffect(() => {
@@ -217,6 +247,25 @@ export function DownloadQueuePanel({
     setSelected((prev) => new Set(selectableIds.filter((id) => !prev.has(id))))
   }
 
+  /** Start the whole checkbox selection (the split button's left half). */
+  async function startSelection() {
+    // Display order, not click order: the server starts them in the order given.
+    const selectedIds = visibleItems.filter((i) => effectiveSelected.has(i.id)).map((i) => i.id)
+    await startSelected.mutateAsync(selectedIds)
+    setSelected(new Set())
+  }
+
+  /** Start one group's rows; only those ids leave the selection, so other groups stay as ticked. */
+  async function startGroup(ids: string[]) {
+    if (ids.length === 0) return
+    await startSelected.mutateAsync(ids)
+    setSelected((prev) => {
+      const next = new Set(prev)
+      for (const id of ids) next.delete(id)
+      return next
+    })
+  }
+
   return (
     <div style={{ marginTop: 16, textAlign: "left" }}>
       <h2 className="ih" style={{ textAlign: "center" }}>
@@ -245,20 +294,29 @@ export function DownloadQueuePanel({
         >
           {t("upload.invertSelection")}
         </button>
-        <button
-          type="button"
-          className="stdbtn"
-          style={TOOLBAR_BUTTON_STYLE}
+        {/* Split button: the left half starts the selection, the caret starts one group's rows
+            instead. The caret stays visible-but-disabled until the selection spans two or more
+            groups, so the affordance does not appear and disappear as rows are ticked. */}
+        <SplitButton
+          label={t("upload.startN", { n: effectiveSelected.size })}
+          onClick={() => void startSelection()}
           disabled={effectiveSelected.size === 0 || startSelected.isPending}
-          onClick={async () => {
-            // Display order, not click order: the server starts them in the order given.
-            const selectedIds = visibleItems.filter((i) => effectiveSelected.has(i.id)).map((i) => i.id)
-            await startSelected.mutateAsync(selectedIds)
-            setSelected(new Set())
-          }}
+          caretDisabled={startableByGroup.length < 2}
+          menuLabel={t("upload.startByGroup")}
+          buttonStyle={TOOLBAR_BUTTON_STYLE}
         >
-          {t("upload.startN", { n: effectiveSelected.size })}
-        </button>
+          {startableByGroup.map((group, index) => (
+            <Fragment key={group.namespace}>
+              {index > 0 && <MenuSeparator />}
+              <MenuItem
+                disabled={group.ids.length === 0}
+                onClick={() => void startGroup(group.ids)}
+              >
+                {`${group.title} (${group.ids.length})`}
+              </MenuItem>
+            </Fragment>
+          ))}
+        </SplitButton>
         <button
           type="button"
           className="stdbtn"
@@ -296,14 +354,13 @@ export function DownloadQueuePanel({
           })
           .map(([namespace, groupItems]) => {
             const isLocalUpload = namespace === LOCAL_UPLOAD_NAMESPACE
-            const plugin = downloadPlugins?.find((p) => p.namespace === namespace)
             const isShareImport = namespace === SHARE_IMPORT_NAMESPACE
-            const groupTitle = isLocalUpload
-              ? t("upload.fromYourComputer")
-              : isShareImport
-                ? t("share.importRow.group")
-                : (plugin?.name ?? namespace)
+            const groupTitle = groupTitleFor(namespace)
             const { manual, fromSubscriptions, tabs } = tabsFor(groupItems)
+            // `downloading` also covers the cataloguing/writing phase that follows the transfer,
+            // so a raw count of those rows overstates how many are actually pulling bytes — this
+            // is the number the concurrency limit applies to.
+            const transferringCount = groupItems.filter((it) => it.transferring === true).length
             const tab: QueueTab = tabByGroup[namespace] ?? "manual"
             const shown = tabs ? (tab === "manual" ? manual : fromSubscriptions) : groupItems
             // Splitting a list must not bury the rows that need an answer, so whichever tab holds
@@ -319,6 +376,14 @@ export function DownloadQueuePanel({
                 title={
                   <span className="queue-group-title">
                     {`${groupTitle} (${groupItems.length})`}
+                    {transferringCount > 0 && (
+                      <span
+                        style={{ fontSize: FONT_SIZE_XS, opacity: 0.75, marginLeft: 8 }}
+                        title={t("upload.transferringCountHint")}
+                      >
+                        {t("upload.transferringCount", { n: transferringCount })}
+                      </span>
+                    )}
                     {tabs && (
                       // The heading itself toggles the section; a tab click must not also do that.
                       <span className="queue-group-tabs" onClick={(e) => e.stopPropagation()}>

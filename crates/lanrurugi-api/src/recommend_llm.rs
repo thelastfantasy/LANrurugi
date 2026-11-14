@@ -1,8 +1,9 @@
 //! LLM-based reranking of the embedding-prefiltered recommendation candidates.
 //!
-//! Two-tier architecture: the local ONNX embedding model pre-filters the library down to
-//! a ~100-candidate shortlist, then the DeepSeek LLM reranks them with an explicit
-//! "next volume first" instruction — the one thing embedding models cannot do.
+//! Two-tier architecture: the local ONNX embedding model pre-filters the library down to a
+//! ~150-candidate shortlist, reading progress filters/reorders it, then the DeepSeek LLM reranks
+//! the remainder with an explicit "next volume first" instruction — the one thing embedding
+//! models cannot do.
 //!
 //! Before the shortlist reaches the model it is collapsed by *work*: release/edition blocks
 //! (`[中国翻訳]`, `【完全版】`, `[DL版]`) are stripped and the remaining title is used as the
@@ -16,6 +17,7 @@
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
+use lanrurugi_recommend::reading::{progress_digest, RankedCandidate, ReadBucket, ReadingState};
 use lanrurugi_recommend::recommend::{ArchiveMeta, Recommendation};
 use lanrurugi_recommend::title::{split_title, TitleParts};
 
@@ -23,8 +25,9 @@ use crate::AppState;
 
 /// How many candidates the embedding pre-filter keeps per archive (`recommend_precompute`'s
 /// cached Top-N length floor). Deliberately wider than [`MAX_PROMPT_CANDIDATES`]: the cache is
-/// where Tankoubon sibling-exclusion headroom has to exist, since it happens before the prompt.
-pub const PREFILTER_COUNT: usize = 100;
+/// where Tankoubon sibling-exclusion and finished-work filtering headroom has to exist, since
+/// both happen after the Top-N list is built. 150 is the spec's 1.5× floor (FR-010).
+pub const PREFILTER_COUNT: usize = 150;
 
 /// How many candidates actually reach the prompt. The list handed in is cosine-ordered, so this
 /// is a plain "top N by similarity" cut — the same-series entry sits at ~0.97 against ~0.88 for
@@ -46,6 +49,7 @@ struct LlmPick {
 struct ShortlistEntry<'a> {
     meta: &'a ArchiveMeta,
     parts: TitleParts,
+    bucket: ReadBucket,
 }
 
 impl ShortlistEntry<'_> {
@@ -60,8 +64,10 @@ impl ShortlistEntry<'_> {
     }
 }
 
-/// Reranks `candidates` via DeepSeek's chat API with an explicit "next volume first"
-/// instruction. Returns `None` on any failure — the caller falls back to the embedding order.
+/// Reranks `ordered` via DeepSeek's chat API with an explicit "next volume first" instruction.
+/// `ordered` must already be reading-aware-ranked (finished works removed) by
+/// [`lanrurugi_recommend::reading::rank`]. Returns `None` on any failure — the caller falls back to
+/// that same reading-aware order, never to the raw embedding order.
 ///
 /// The answer is cached (`lanrurugi_storage::keys::recommend_rerank_key`) because this call sits
 /// on the request path of `GET /api/reader/recommendations/{id}`: it was observed taking 6–64 s,
@@ -73,30 +79,39 @@ impl ShortlistEntry<'_> {
 pub async fn llm_rerank(
     state: &AppState,
     archive_id: &str,
-    current_title: &str,
-    current_tags: &str,
-    current_pagecount: u32,
-    candidates: &[ArchiveMeta],
+    anchor: &ArchiveMeta,
+    anchor_state: ReadingState,
+    ordered: &[RankedCandidate],
     limit: usize,
 ) -> Option<Vec<Recommendation>> {
-    let current = split_title(current_title);
+    let current = split_title(&anchor.title);
     let current_display = if current.content.is_empty() {
-        current_title
+        anchor.title.as_str()
     } else {
         &current.content
     };
+    let anchor_bucket = anchor_state.bucket();
 
-    // `candidates` is already cosine-ordered by both callers, so the first entry of each work is
-    // its highest-scoring edition — exactly the one worth keeping — and the prompt cut below is a
-    // plain top-N by similarity.
-    let shortlist = dedupe_by_work(candidates);
+    // `ordered` is already reading-aware-ordered (finished works removed) by `reading::rank`,
+    // so the first entry of each work is its highest-scoring edition — exactly the one worth
+    // keeping — and the prompt cut below is a plain top-N by that order.
+    let shortlist = dedupe_by_work(ordered);
     let shortlist = &shortlist[..shortlist.len().min(MAX_PROMPT_CANDIDATES)];
 
     let by_id: std::collections::HashMap<&str, &ShortlistEntry> =
         shortlist.iter().map(|e| (e.meta.id.as_str(), e)).collect();
     let candidate_fingerprint = candidate_fingerprint(shortlist.iter().map(|e| e.meta.id.as_str()));
+    let digest = progress_digest(
+        anchor_bucket,
+        &shortlist
+            .iter()
+            .map(|e| (e.meta.id.as_str(), e.bucket))
+            .collect::<Vec<_>>(),
+    );
 
-    if let Some(picks) = cached_picks(state, archive_id, limit, &candidate_fingerprint).await {
+    if let Some(picks) =
+        cached_picks(state, archive_id, limit, &candidate_fingerprint, &digest).await
+    {
         let ranked = rank_picks(&picks, &by_id, shortlist, limit);
         if !ranked.is_empty() {
             return Some(ranked);
@@ -114,12 +129,13 @@ pub async fn llm_rerank(
                 format!(" | 版本: {}", entry.parts.release.join(" / "))
             };
             format!(
-                "{}. {}: {} | 标签: {} | 页数: {}页{}",
+                "{}. {}: {} | 标签: {} | 页数: {}页 | 阅读进度: {}{}",
                 i + 1,
                 entry.meta.id,
                 entry.display_title(),
                 entry.meta.tags,
                 entry.meta.pagecount,
+                entry.bucket.prompt_label(),
                 release
             )
         })
@@ -131,11 +147,12 @@ pub async fn llm_rerank(
     };
     let system = crate::llm_prompts::recommend_llm_system();
     let user = format!(
-        "当前漫画标题：{}\n{}当前漫画标签：{}\n当前漫画页数：{}页\n\n候选漫画：\n{}\n\n请推荐 {} 本。",
+        "当前漫画标题：{}\n{}当前漫画标签：{}\n当前漫画页数：{}页\n当前阅读进度：{}\n\n候选漫画：\n{}\n\n请推荐 {} 本。",
         current_display,
         current_release,
-        current_tags,
-        current_pagecount,
+        anchor.tags,
+        anchor.pagecount,
+        anchor_bucket.prompt_label(),
         candidate_list.join("\n"),
         limit
     );
@@ -172,6 +189,7 @@ pub async fn llm_rerank(
         archive_id,
         limit,
         &candidate_fingerprint,
+        &digest,
         &ranked.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
     )
     .await;
@@ -243,6 +261,7 @@ async fn cached_picks(
     archive_id: &str,
     limit: usize,
     candidate_fingerprint: &str,
+    progress_digest: &str,
 ) -> Option<Vec<String>> {
     use deadpool_redis::redis::AsyncCommands;
     let mut conn = state.redis.config.get().await.ok()?;
@@ -250,16 +269,22 @@ async fn cached_picks(
         archive_id,
         limit,
         crate::llm_prompts::RECOMMEND_RERANK_PROMPT_VERSION,
+        progress_digest,
     );
     let raw: String = conn.get(&key).await.ok().flatten()?;
     let cached: RerankCacheEntry = serde_json::from_str(&raw).ok()?;
-    (cached.candidates == candidate_fingerprint).then_some(cached.picks)
+    (cached.candidates == candidate_fingerprint && cached.progress_digest == progress_digest)
+        .then_some(cached.picks)
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct RerankCacheEntry {
     /// The shortlist digest this ordering was produced from.
     candidates: String,
+    /// The anchor/candidate reading-progress digest. Also part of the key; kept here so an entry
+    /// written under an older key layout can never be misread after a manual rename.
+    #[serde(default)]
+    progress_digest: String,
     /// Ordered archive ids, exactly as the model returned them (then filtered).
     picks: Vec<String>,
 }
@@ -269,6 +294,7 @@ async fn remember_picks(
     archive_id: &str,
     limit: usize,
     candidate_fingerprint: &str,
+    progress_digest: &str,
     picks: &[String],
 ) {
     use deadpool_redis::redis::AsyncCommands;
@@ -279,9 +305,11 @@ async fn remember_picks(
         archive_id,
         limit,
         crate::llm_prompts::RECOMMEND_RERANK_PROMPT_VERSION,
+        progress_digest,
     );
     let entry = RerankCacheEntry {
         candidates: candidate_fingerprint.to_string(),
+        progress_digest: progress_digest.to_string(),
         picks: picks.to_vec(),
     };
     let Ok(raw) = serde_json::to_string(&entry) else {
@@ -299,18 +327,22 @@ async fn remember_picks(
 /// One entry per *work*: collapses `[中国翻訳]`/`[DL版]` re-releases of something already in the
 /// list, keeping the first (highest-cosine) edition. Titles whose content is empty (nothing but
 /// release metadata) fall back to the raw title as their dedupe key.
-fn dedupe_by_work<'a>(candidates: &'a [ArchiveMeta]) -> Vec<ShortlistEntry<'a>> {
+fn dedupe_by_work<'a>(candidates: &'a [RankedCandidate]) -> Vec<ShortlistEntry<'a>> {
     let mut seen = std::collections::HashSet::new();
     let mut shortlist = Vec::with_capacity(candidates.len());
     for c in candidates {
-        let parts = split_title(&c.title);
+        let parts = split_title(&c.meta.title);
         let key = if parts.content.is_empty() {
-            c.title.trim().to_lowercase()
+            c.meta.title.trim().to_lowercase()
         } else {
             parts.content.to_lowercase()
         };
         if seen.insert(key) {
-            shortlist.push(ShortlistEntry { meta: c, parts });
+            shortlist.push(ShortlistEntry {
+                meta: &c.meta,
+                parts,
+                bucket: c.state.bucket(),
+            });
         }
     }
     shortlist
@@ -360,6 +392,14 @@ mod tests {
         }
     }
 
+    fn cand(id: &str, title: &str) -> RankedCandidate {
+        RankedCandidate {
+            meta: meta(id, title),
+            state: ReadingState::new(0, 0, 0),
+            similarity: 0.5,
+        }
+    }
+
     #[test]
     fn picks_must_be_known_unique_and_non_empty() {
         let known: std::collections::HashSet<&str> = ["a", "b"].into_iter().collect();
@@ -376,11 +416,11 @@ mod tests {
     #[test]
     fn shortlist_collapses_editions_and_keeps_subtitles() {
         let candidates = vec![
-            meta("a", "性欲モンスター三姉妹"),
-            meta("b", "性欲モンスター三姉妹 [中国翻訳]"),
-            meta("c", "サキュバシスターズ ～聖職姉妹の背徳～"),
-            meta("d", "サキュバシスターズ ～聖職姉妹の背徳～ [DL版]"),
-            meta("e", "サキュバシスターズ ～別の副題～"),
+            cand("a", "性欲モンスター三姉妹"),
+            cand("b", "性欲モンスター三姉妹 [中国翻訳]"),
+            cand("c", "サキュバシスターズ ～聖職姉妹の背徳～"),
+            cand("d", "サキュバシスターズ ～聖職姉妹の背徳～ [DL版]"),
+            cand("e", "サキュバシスターズ ～別の副題～"),
         ];
         let shortlist = dedupe_by_work(&candidates);
         let kept: Vec<&str> = shortlist.iter().map(|e| e.meta.id.as_str()).collect();
@@ -409,7 +449,7 @@ mod tests {
     /// produced it.
     #[test]
     fn a_remembered_ordering_ranks_the_same_way_as_the_fresh_answer() {
-        let candidates = vec![meta("a", "A巻"), meta("b", "B巻"), meta("c", "C巻")];
+        let candidates = vec![cand("a", "A巻"), cand("b", "B巻"), cand("c", "C巻")];
         let shortlist = dedupe_by_work(&candidates);
         let by_id: std::collections::HashMap<&str, &ShortlistEntry> =
             shortlist.iter().map(|e| (e.meta.id.as_str(), e)).collect();
@@ -426,7 +466,7 @@ mod tests {
     /// fresh-answer path.
     #[test]
     fn a_remembered_ordering_is_repaired_against_the_live_shortlist() {
-        let candidates = vec![meta("a", "A巻"), meta("b", "B巻"), meta("c", "C巻")];
+        let candidates = vec![cand("a", "A巻"), cand("b", "B巻"), cand("c", "C巻")];
         let shortlist = dedupe_by_work(&candidates);
         let by_id: std::collections::HashMap<&str, &ShortlistEntry> =
             shortlist.iter().map(|e| (e.meta.id.as_str(), e)).collect();

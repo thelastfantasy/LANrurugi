@@ -9,7 +9,8 @@ pub mod domain_rules;
 pub mod filename;
 pub mod ingest;
 pub mod live_rate;
-pub mod rate_limit;
+pub mod outbound;
+pub use lanrurugi_core::rate_limit;
 pub mod resume_support;
 pub mod settings;
 pub mod stream;
@@ -306,6 +307,45 @@ impl DownloadManager {
     pub fn rate_limiters(&self) -> &RateLimiterMap {
         &self.rate_limiters
     }
+}
+
+/// How the bytes reached the library-side path.
+pub(crate) enum Placed {
+    /// Renamed on the same filesystem: the source path no longer exists.
+    Moved,
+    /// Copied across filesystems (or on request): the source is still there for the caller to
+    /// remove once the archive is recorded.
+    Copied(lanrurugi_core::io::CopyOutcome),
+}
+
+/// Moves `from` to `to` durably (027): a same-filesystem rename flushed on both sides, otherwise a
+/// checked, flushed copy that leaves `from` in place. `force_copy` always copies (an adopted file
+/// is the user's only copy and must stay put until the record exists).
+pub(crate) async fn place_into_library(
+    from: &std::path::Path,
+    to: &std::path::Path,
+    force_copy: bool,
+    opts: &lanrurugi_core::io::CopyOptions,
+) -> Result<Placed, lanrurugi_core::io::CopyError> {
+    use lanrurugi_core::io::{copy_file, sync_dir, sync_file, CopyError};
+    if !force_copy {
+        let source = tokio::fs::File::open(from).await.map_err(CopyError::Io)?;
+        sync_file(&source).await.map_err(CopyError::Durability)?;
+        drop(source);
+        // Any refusal (EXDEV, or a mount that answers EPERM) falls back to the copy, which then
+        // reports a real problem with the destination itself.
+        if tokio::fs::rename(from, to).await.is_ok() {
+            if let Some(parent) = to.parent() {
+                if let Err(e) = sync_dir(parent).await {
+                    // Not durable yet: hand the bytes back so the failure leaves them where they were.
+                    let _ = tokio::fs::rename(to, from).await;
+                    return Err(CopyError::Durability(e));
+                }
+            }
+            return Ok(Placed::Moved);
+        }
+    }
+    copy_file(from, to, opts).await.map(Placed::Copied)
 }
 
 #[cfg(test)]

@@ -6,16 +6,20 @@
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::response::Response;
+use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use serde::Deserialize;
 use serde_json::json;
 
 use lanrurugi_storage::subscriptions::{
-    CreditPolicy, Criteria, Filters, ReservationStatus, SourceChangePolicy, SourceRemovalPolicy,
-    Subscription, SubscriptionState,
+    CreditPolicy, Criteria, Filters, ReservationStatus, ScanWindow, SourceChangePolicy,
+    SourceRemovalPolicy, Subscription, SubscriptionState, MAX_SCAN_DAYS, MAX_SCAN_PAGES,
 };
+
+use futures_util::StreamExt;
+use tokio_stream::wrappers::BroadcastStream;
 
 use crate::common::{error, not_found};
 
@@ -25,6 +29,7 @@ use crate::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/subscriptions", get(list).post(create))
+        .route("/subscriptions/stream", get(stream_progress))
         .route("/subscriptions/sources", get(list_sources))
         // Registered before the `{id}` routes so the literal segments are unambiguous to read, even
         // though the router would prefer them anyway.
@@ -61,6 +66,9 @@ pub struct SubscriptionBody {
     pub source: String,
     #[serde(default)]
     pub criteria: Criteria,
+    /// How far each check looks into the listing. Omitted means the historical four pages.
+    #[serde(default)]
+    pub scan: ScanWindow,
     #[serde(default)]
     pub filters: Filters,
     pub interval_secs: u64,
@@ -77,9 +85,6 @@ pub struct SubscriptionBody {
     pub auto_download: bool,
     #[serde(default)]
     pub credit_policy: CreditPolicy,
-    /// What this subscription's downloads do when a filename collides with an existing archive.
-    #[serde(default)]
-    pub conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy,
     /// What to do when a tracked work's title or tags change at the source. Defaults to the least
     /// destructive option (FR-012c).
     /// Whether it starts enabled. Defaults to on, which is what creating one usually means — but a
@@ -146,6 +151,27 @@ async fn validate(state: &AppState, body: &SubscriptionBody) -> Result<(), Respo
                 body.source
             ),
         ));
+    }
+    match body.scan {
+        ScanWindow::Pages { pages } if pages == 0 || pages > MAX_SCAN_PAGES => {
+            return Err(error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "create_subscription",
+                format!(
+                    "A page-window scan may read 1–{MAX_SCAN_PAGES} pages; {pages} is outside that range."
+                ),
+            ));
+        }
+        ScanWindow::Days { days } if days == 0 || days > MAX_SCAN_DAYS => {
+            return Err(error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "create_subscription",
+                format!(
+                    "A time-window scan may look back 1–{MAX_SCAN_DAYS} days; {days} is outside that range."
+                ),
+            ));
+        }
+        _ => {}
     }
     if let Some(minimum) = declared_minimum_interval(state, &body.source).await {
         if body.interval_secs < minimum {
@@ -258,6 +284,7 @@ async fn create(
         name: body.name,
         source: body.source,
         criteria: body.criteria,
+        scan: body.scan,
         filters: body.filters,
         interval_secs: body.interval_secs,
         target_category: body.target_category,
@@ -265,7 +292,6 @@ async fn create(
         enrich_metadata: body.enrich_metadata,
         auto_download: body.auto_download,
         credit_policy: body.credit_policy,
-        conflict_policy: body.conflict_policy,
         credentials: body.credentials,
         on_source_changed: body.on_source_changed,
         on_source_removed: body.on_source_removed,
@@ -323,6 +349,7 @@ async fn update(
         name: body.name,
         source: body.source,
         criteria: body.criteria,
+        scan: body.scan,
         filters: body.filters,
         interval_secs: body.interval_secs,
         target_category: body.target_category,
@@ -330,7 +357,6 @@ async fn update(
         enrich_metadata: body.enrich_metadata,
         auto_download: body.auto_download,
         credit_policy: body.credit_policy,
-        conflict_policy: body.conflict_policy,
         credentials: body.credentials,
         on_source_changed: body.on_source_changed,
         on_source_removed: body.on_source_removed,
@@ -690,12 +716,9 @@ async fn preview_judge(
     axum::Json(json!({
         "outcome": decision.outcome,
         "candidates": decision.records,
-        // A preview reads a narrower window than a scheduled check (see
-        // `runner::PREVIEW_LISTING_PAGES`), and the pane says so rather than letting the shorter
-        // list read as the whole result set. The data itself is always a live fetch — nothing
-        // here is replayed from a stored copy the source has not just confirmed.
-        "listing_pages": super::runner::PREVIEW_LISTING_PAGES,
-        "check_listing_pages": super::runner::MAX_LISTING_PAGES,
+        // Pages this preview actually read. The preview follows the subscription's own scan
+        // window now, so this is the same route a scheduled check takes, not a smaller sample.
+        "listing_pages": body.listing.pages_read,
         "would_act_on": decision.actionable.len(),
     }))
     .into_response_owned()
@@ -716,6 +739,7 @@ fn draft_subscription(body: SubscriptionBody) -> Subscription {
         name: body.name,
         source: body.source,
         criteria: body.criteria,
+        scan: body.scan,
         filters: body.filters,
         interval_secs: body.interval_secs,
         target_category: body.target_category,
@@ -723,7 +747,6 @@ fn draft_subscription(body: SubscriptionBody) -> Subscription {
         enrich_metadata: body.enrich_metadata,
         auto_download: body.auto_download,
         credit_policy: body.credit_policy,
-        conflict_policy: body.conflict_policy,
         credentials: body.credentials,
         on_source_changed: body.on_source_changed,
         on_source_removed: body.on_source_removed,
@@ -755,6 +778,7 @@ async fn preview_draft(
         name: body.name,
         source: body.source,
         criteria: body.criteria,
+        scan: body.scan,
         filters: body.filters,
         interval_secs: body.interval_secs,
         target_category: body.target_category,
@@ -762,7 +786,6 @@ async fn preview_draft(
         enrich_metadata: body.enrich_metadata,
         auto_download: body.auto_download,
         credit_policy: body.credit_policy,
-        conflict_policy: body.conflict_policy,
         credentials: body.credentials,
         on_source_changed: body.on_source_changed,
         on_source_removed: body.on_source_removed,
@@ -776,12 +799,9 @@ async fn preview_draft(
         Ok((decision, listing)) => axum::Json(json!({
             "outcome": decision.outcome,
             "candidates": decision.records,
-        // A preview reads a narrower window than a scheduled check (see
-        // `runner::PREVIEW_LISTING_PAGES`), and the pane says so rather than letting the shorter
-        // list read as the whole result set. The data itself is always a live fetch — nothing
-        // here is replayed from a stored copy the source has not just confirmed.
-        "listing_pages": super::runner::PREVIEW_LISTING_PAGES,
-        "check_listing_pages": super::runner::MAX_LISTING_PAGES,
+        // Pages this preview actually read. The preview follows the subscription's own scan
+        // window now, so this is the same route a scheduled check takes, not a smaller sample.
+        "listing_pages": listing.pages_read,
             "would_act_on": decision.actionable.len(),
             // Handed back so changing a *condition* can be re-judged against this same listing: only
             // `criteria` shapes the request, so a rule change should not fetch the source again.
@@ -813,6 +833,7 @@ async fn preview(
     let subscription = match body {
         Some(axum::Json(draft)) => Subscription {
             criteria: draft.criteria,
+            scan: draft.scan,
             filters: draft.filters,
             ..saved
         },
@@ -823,12 +844,9 @@ async fn preview(
         Ok((decision, listing)) => axum::Json(json!({
             "outcome": decision.outcome,
             "candidates": decision.records,
-        // A preview reads a narrower window than a scheduled check (see
-        // `runner::PREVIEW_LISTING_PAGES`), and the pane says so rather than letting the shorter
-        // list read as the whole result set. The data itself is always a live fetch — nothing
-        // here is replayed from a stored copy the source has not just confirmed.
-        "listing_pages": super::runner::PREVIEW_LISTING_PAGES,
-        "check_listing_pages": super::runner::MAX_LISTING_PAGES,
+        // Pages this preview actually read. The preview follows the subscription's own scan
+        // window now, so this is the same route a scheduled check takes, not a smaller sample.
+        "listing_pages": listing.pages_read,
             "would_act_on": decision.actionable.len(),
             // Handed back so changing a *condition* can be re-judged against this same listing: only
             // `criteria` shapes the request, so a rule change should not fetch the source again.
@@ -921,10 +939,8 @@ async fn approve_pending(
             }));
             continue;
         };
-        let overwrite_on_duplicate = super::overwrite_under_conflict_policy(
-            subscription.conflict_policy,
-            crate::plugins::resolve_queue_overwrite_on_duplicate(&state, &download_namespace).await,
-        );
+        let overwrite_on_duplicate =
+            crate::plugins::resolve_queue_overwrite_on_duplicate(&state, &download_namespace).await;
 
         let queued = state
             .download_queue
@@ -938,7 +954,6 @@ async fn approve_pending(
                 metadata_tags: subscription.metadata_tags.clone(),
                 auto_fetch_metadata: subscription.enrich_metadata,
                 overwrite_on_duplicate,
-                conflict_policy: subscription.conflict_policy,
                 // Enters the queue exactly as a manually added URL would, inheriting the existing
                 // start/stop/retry behaviour rather than getting a path of its own.
                 state: lanrurugi_storage::download_queue::DownloadQueueState::Queued,
@@ -1058,4 +1073,32 @@ impl<T: serde::Serialize> IntoResponseOwned for axum::Json<T> {
     fn into_response_owned(self) -> Response {
         axum::response::IntoResponse::into_response(self)
     }
+}
+
+/// `GET /subscriptions/stream` — live progress of subscription checks.
+///
+/// Only progress is sent here; the authoritative result is the cycle record the check writes when
+/// it finishes, so a client that misses events simply sees the next poll's answer.
+async fn stream_progress(State(state): State<AppState>) -> Response {
+    let Some(tx) = &state.subscription_check_tx else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "subscriptions_stream",
+            "SSE not available",
+        );
+    };
+    let rx = tx.subscribe();
+    let events = BroadcastStream::new(rx).filter_map(|result| async move {
+        match result {
+            Ok(value) => Some(Ok::<_, std::convert::Infallible>(
+                Event::default().event("progress").data(value.to_string()),
+            )),
+            // Lagged means this subscriber missed events; the next chunk's event carries the
+            // current totals, so there is nothing to rebuild.
+            Err(_) => None,
+        }
+    });
+    Sse::new(events)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }

@@ -64,37 +64,13 @@ export function MarkerLayer({
   const updateStamp = useUpdateStamp()
   const deleteStamp = useDeleteStamp()
   const supportsHover = useSupportsHover()
+  // No measured overlay box: this layer is rendered inside the page's own positioned frame
+  // (`Reader.tsx`'s `.reader-page-frame-inner`), so `inset: 0` is already the image's box. It used
+  // to measure `img.getBoundingClientRect()` against `offsetParent` instead, and a stale snapshot
+  // of that absolute box (image moved but not resized, so the ResizeObserver never fired) could
+  // sit far below the page and stretch the whole document — a real report of a huge blank area
+  // under the reader.
   const wrapperRef = useRef<HTMLDivElement>(null)
-  const [imgBounds, setImgBounds] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
-  useEffect(() => {
-    const img = imageRef.current
-    if (!img) return
-    function updateBounds() {
-      const wrapper = wrapperRef.current
-      if (!img || !wrapper) return
-      const imgRect = img.getBoundingClientRect()
-      const containingBlock = wrapper.offsetParent as HTMLElement | null
-      const parentRect = (containingBlock ?? document.documentElement).getBoundingClientRect()
-      setImgBounds({
-        left: imgRect.left - parentRect.left,
-        top: imgRect.top - parentRect.top,
-        width: imgRect.width,
-        height: imgRect.height,
-      })
-    }
-    updateBounds()
-    const rafId = requestAnimationFrame(updateBounds)
-    img.addEventListener("load", updateBounds)
-    const resizeObserver = new ResizeObserver(updateBounds)
-    resizeObserver.observe(img)
-    window.addEventListener("resize", updateBounds)
-    return () => {
-      cancelAnimationFrame(rafId)
-      img.removeEventListener("load", updateBounds)
-      resizeObserver.disconnect()
-      window.removeEventListener("resize", updateBounds)
-    }
-  }, [imageRef, page])
 
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
   const [drag, setDrag] = useState<DragState | null>(null)
@@ -669,6 +645,9 @@ export function MarkerLayer({
     <>
       {selectedStampId && (
         <div
+          // Same marker as the layer itself: this backdrop is rendered inside the page link, so a
+          // click that merely deselects a stamp must not also turn the page.
+          data-marker-layer=""
           style={{ position: "fixed", inset: 0, zIndex: 20, cursor: "default" }}
           onPointerDown={(e) => e.preventDefault()}
           onClick={() => setSelectedStampId(null)}
@@ -676,18 +655,15 @@ export function MarkerLayer({
       )}
       <div
         ref={wrapperRef}
+        data-marker-layer=""
         style={{
           position: "absolute",
-          left: imgBounds?.left ?? 0,
-          top: imgBounds?.top ?? 0,
-          width: imgBounds?.width ?? 0,
-          height: imgBounds?.height ?? 0,
+          inset: 0,
           pointerEvents: "none",
           zIndex: 23,
         }}
       >
-        {imgBounds &&
-          [...(stamps.data?.result ?? [])]
+        {[...(stamps.data?.result ?? [])]
             .sort((a, b) => (parseStampRect(a.rect)?.layer ?? 0) - (parseStampRect(b.rect)?.layer ?? 0))
             .map((stamp) => {
             const [xStr, yStr] = stamp.position.split(",")

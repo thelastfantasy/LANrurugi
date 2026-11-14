@@ -167,6 +167,24 @@ impl Worker {
         for flag in extra_flags {
             cmd.arg(flag);
         }
+        // The dispatcher decides between Deno's native fetch and the host relay by reading
+        // `LANRURUGI_EGRESS_ACTIVE`, which only this shim sets — hence the two-name env grant.
+        cmd.arg("--allow-env=LANRURUGI_EGRESS_ACTIVE,LANRURUGI_EGRESS_IF");
+        // Only when an egress interface is chosen: the shim switches the dispatcher to Deno's own
+        // fetch, which drops the host relay's per-host concurrency caps, request merging and
+        // timeouts. With no interface chosen those protections stay on.
+        if let Some(interface) = lanrurugi_core::http_client::outbound_interface() {
+            if let Some(library) = crate::egress::library() {
+                cmd.env(
+                    "LD_PRELOAD",
+                    crate::egress::preload_value(
+                        &library,
+                        std::env::var_os("LD_PRELOAD").as_deref(),
+                    ),
+                );
+                cmd.env("LANRURUGI_EGRESS_IF", interface);
+            }
+        }
         cmd.arg(dispatcher_path)
             .arg(plugins_dir)
             .arg(namespace)
@@ -312,6 +330,48 @@ impl PluginPool {
             workers: Arc::new(Mutex::new(HashMap::new())),
             http: Arc::new(HostHttp::new()),
         }
+    }
+
+    /// Drops every persistent dispatcher, so the next call spawns fresh ones.
+    ///
+    /// Needed when something the *spawn* reads changes — the plugin egress interface travels as an
+    /// environment variable (and the preloaded shim reads it once), so a dispatcher started before
+    /// the switch would keep the old binding forever. Dropping a [`Worker`] kills its child
+    /// (`kill_on_drop`), which is all a fresh spawn needs.
+    pub async fn restart_workers(&self) {
+        // 022 US4: clearing the map drops each worker, and `kill_on_drop` then kills a subprocess
+        // that may be in the middle of a login, a metadata fetch or `execDownload`. New calls
+        // already go to a freshly spawned worker; the old ones only have to be stopped once their
+        // current call answers, so an interface change no longer fails work in flight.
+        let drained: Vec<Worker> = {
+            let mut map = self.workers.lock().await;
+            map.drain().map(|(_, worker)| worker).collect()
+        };
+        if drained.is_empty() {
+            return;
+        }
+        tokio::spawn(async move {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+            let mut left = drained;
+            while !left.is_empty() && std::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                // `pending` is only held while the worker has requests in flight, so an unlockable
+                // or empty map means the call it was serving has finished.
+                left.retain(|worker| {
+                    !worker
+                        .pending
+                        .try_lock()
+                        .map(|pending| pending.is_empty())
+                        .unwrap_or(false)
+                });
+            }
+            if !left.is_empty() {
+                tracing::warn!(
+                    workers = left.len(),
+                    "plugin workers still busy after ten minutes; stopping them anyway"
+                );
+            }
+        });
     }
 
     /// The configured `deno` binary path/name (whatever was passed to `new` — a bare `"deno"`
@@ -813,6 +873,32 @@ mod tests {
         assert!(
             found,
             "a regex literal containing a quote must not swallow the rest of the file"
+        );
+    }
+
+    /// A regex literal whose quotes are unbalanced on their own (`[^"'<>]`) used to pair with the
+    /// next real string's opening quote, blanking every line between them — e-hentai's discovery
+    /// plugin lost `posted_at`/`tags`/`uploader` this way, so the preview showed no publish times
+    /// and the form offered only the one filter field left over.
+    #[tokio::test]
+    async fn a_regex_literal_with_quotes_does_not_hide_candidate_fields() {
+        let Some(found) = introspects_candidate_fields(
+            "regexcand",
+            r#"  const uploader = row.match(/uploader\/([^"'<>]+)/)?.[1];
+  return { candidates: [{ source: "s", posted_at: "2026-01-01 00:00", uploader, tags: [] }] };"#,
+        )
+        .await
+        else {
+            eprintln!("skipping: deno not available");
+            return;
+        };
+        assert_eq!(
+            found,
+            vec![
+                "posted_at".to_string(),
+                "tags".to_string(),
+                "uploader".to_string()
+            ],
         );
     }
 
