@@ -60,9 +60,13 @@ pub struct RefreshTokenRecord {
     pub family_id: String,
     pub issued_at: i64,
     /// Absolute expiry, anchored to the *original* login, not extended on each rotation — see
-    /// [`rotate`]'s own docs for why an actively-rotating chain must still expire.
+    /// [`rotate`]'s own docs for why an actively-rotating chain must still expire. A snapshot for
+    /// display/debugging only: liveness is decided from the family's `created_at` and the current
+    /// setting, and [`NO_ABSOLUTE_EXPIRY`] means the family has no cap at all.
     pub expires_at: i64,
-    /// Sliding idle expiry, renewed on every successful rotation and capped at `expires_at`.
+    /// Sliding idle expiry, renewed on every successful rotation. Independent of `expires_at`:
+    /// both are checked, and the cap itself is re-derived from the family's `created_at` under the
+    /// current setting.
     /// `None` for records written before this field existed; callers treat that as "idle window
     /// equals absolute expiry" so pre-migration sessions keep their old absolute-only behavior.
     #[serde(default)]
@@ -144,6 +148,19 @@ pub struct RefreshFamilyMeta {
 }
 
 impl RefreshFamilyMeta {
+    /// This family's absolute expiry under `absolute_lifetime_secs`, a setting that may have
+    /// changed since the session was created. Derived from `created_at` instead of trusting the
+    /// stored `expires_at` snapshot so that raising the cap also extends sessions that already
+    /// exist (and lowering it shortens them) — otherwise a settings change would only take effect
+    /// for future logins, leaving every current device on the old deadline.
+    pub fn expires_at_under(&self, absolute_lifetime_secs: i64) -> i64 {
+        if absolute_lifetime_secs <= 0 {
+            NO_ABSOLUTE_EXPIRY
+        } else {
+            self.created_at.saturating_add(absolute_lifetime_secs)
+        }
+    }
+
     /// Custom rename wins; otherwise derive a fresh best-effort label from the last-seen device
     /// info. A missing/legacy `device_info` reads as `"Unknown device"` rather than being hidden.
     pub fn device_name(&self) -> String {
@@ -249,16 +266,48 @@ fn is_forgivable_reuse(record: &RefreshTokenRecord, now: i64) -> bool {
     record.grace_reuse_count < MAX_GRACE_REUSES && now.saturating_sub(used_at) <= REUSE_GRACE_SECS
 }
 
-/// Effective idle expiry: `now + idle_lifetime_secs`, capped at the family's absolute expiry.
-/// A non-positive `idle_lifetime_secs` means "no separate idle limit" (legacy absolute-only
-/// behavior), so the idle deadline simply equals the absolute one.
+/// Effective idle expiry: `now + idle_lifetime_secs`. Deliberately *not* capped at the family's
+/// absolute expiry — the cap is a separate check (and a live, settings-driven policy), so clamping
+/// the window to it here would freeze that policy into the stored record. A non-positive
+/// `idle_lifetime_secs` means "no separate idle limit" (legacy absolute-only behavior), so the idle
+/// deadline simply equals the absolute one.
 fn idle_expiry(now: i64, idle_lifetime_secs: i64, absolute_expires_at: i64) -> i64 {
     if idle_lifetime_secs <= 0 {
         absolute_expires_at
     } else {
         now.saturating_add(idle_lifetime_secs)
-            .min(absolute_expires_at)
     }
+}
+
+/// `expires_at` value for a family with no absolute cap (`refresh_token_lifetime_secs = 0`, the
+/// default). A real timestamp is never anywhere near this, so ordinary `now > expires_at`
+/// comparisons keep working without a special case at every call site.
+pub const NO_ABSOLUTE_EXPIRY: i64 = i64::MAX;
+
+/// Absolute expiry for a family created at `created_at` under a cap of `lifetime_secs`; `<= 0`
+/// means no cap. See [`RefreshFamilyMeta::expires_at_under`] for why this is derived rather than
+/// stored once at login.
+fn absolute_expiry(created_at: i64, lifetime_secs: i64) -> i64 {
+    if lifetime_secs <= 0 {
+        NO_ABSOLUTE_EXPIRY
+    } else {
+        created_at.saturating_add(lifetime_secs)
+    }
+}
+
+/// Redis TTL for a session's token/meta keys. Governed by the idle window — the window that really
+/// expires a session — not by the absolute cap, which is a live policy: raising it has to be able
+/// to revive a session whose keys are still inside their idle window. Legacy absolute-only callers
+/// (`idle_lifetime_secs <= 0`) keep the old cap-derived TTL, and an uncapped session gets a finite
+/// ceiling so `SETEX` never sees an out-of-range value.
+fn session_ttl(now: i64, idle_lifetime_secs: i64, absolute_expires_at: i64) -> u64 {
+    const MAX_TTL_SECS: i64 = 10 * 365 * 24 * 60 * 60;
+    let secs = if idle_lifetime_secs > 0 {
+        idle_lifetime_secs
+    } else {
+        absolute_expires_at.saturating_sub(now)
+    };
+    secs.clamp(1, MAX_TTL_SECS) as u64
 }
 
 #[derive(Clone)]
@@ -297,11 +346,12 @@ impl RefreshTokenRepository {
         .await
     }
 
-    /// Dual-window variant used by the login handler: `absolute_lifetime_secs` anchors the hard
-    /// expiry to this login, while `idle_lifetime_secs` is the sliding window each successful
-    /// rotation renews. The effective idle expiry is always capped at the absolute one. A
-    /// non-positive idle value means "no separate idle limit" (same as the old absolute-only
-    /// behavior), which keeps pre-existing tests/older callers working unchanged.
+    /// Dual-window variant used by the login handler: `absolute_lifetime_secs` caps the hard
+    /// expiry at this login (a non-positive value means no hard cap at all — the default), while
+    /// `idle_lifetime_secs` is the sliding window each successful rotation renews. The effective
+    /// idle expiry is always capped at the absolute one. A non-positive idle value means "no
+    /// separate idle limit" (the old absolute-only behavior), which keeps pre-existing
+    /// tests/older callers working unchanged.
     pub async fn issue_new_family_with_idle(
         &self,
         now: i64,
@@ -351,7 +401,7 @@ impl RefreshTokenRepository {
 
         let token_id = uuid::Uuid::new_v4().to_string();
         let secret = random_hex();
-        let expires_at = now + absolute_lifetime_secs.max(1);
+        let expires_at = absolute_expiry(now, absolute_lifetime_secs);
         let idle_expires_at = idle_expiry(now, idle_lifetime_secs, expires_at);
         let record = RefreshTokenRecord {
             token_id: token_id.clone(),
@@ -377,7 +427,7 @@ impl RefreshTokenRepository {
             custom_name: inherited_name,
             device_id: context.device_id.clone(),
         };
-        let ttl_secs: u64 = (idle_expires_at - now).max(1) as u64;
+        let ttl_secs = session_ttl(now, idle_lifetime_secs, expires_at);
         let key = token_key(&token_id);
         let raw = serde_json::to_string(&record)
             .map_err(|e| RefreshTokenStorageError::Json(key.clone(), e))?;
@@ -421,8 +471,13 @@ impl RefreshTokenRepository {
 
     /// Active-family listing for the Settings device UI, newest `last_seen_at` first. Expired
     /// family metas/indices are pruned lazily here (and their token membership sets burned) so a
-    /// long-lived instance never leaks index entries forever.
-    pub async fn list_active_families(&self, now: i64) -> Result<Vec<RefreshFamilyMeta>> {
+    /// long-lived instance never leaks index entries forever. `absolute_lifetime_secs` is the
+    /// *current* configured cap (`<= 0` = none), evaluated against each family's `created_at`.
+    pub async fn list_active_families(
+        &self,
+        now: i64,
+        absolute_lifetime_secs: i64,
+    ) -> Result<Vec<RefreshFamilyMeta>> {
         let mut conn = self.pool.get().await?;
         let ids: Vec<String> = conn.zrevrange(FAMILY_INDEX_KEY, 0, -1).await?;
         let mut active = Vec::new();
@@ -442,7 +497,7 @@ impl RefreshTokenRepository {
                     continue;
                 }
             };
-            if now > meta.expires_at || now > meta.idle_expires_at {
+            if now > meta.expires_at_under(absolute_lifetime_secs) || now > meta.idle_expires_at {
                 let _: () = conn.del(&meta_key).await?;
                 let _: () = conn.zrem(FAMILY_INDEX_KEY, &family_id).await?;
                 self.burn_family(&family_id).await?;
@@ -460,11 +515,14 @@ impl RefreshTokenRepository {
         &self,
         now: i64,
         max_devices: i64,
+        absolute_lifetime_secs: i64,
     ) -> Result<Vec<RefreshFamilyMeta>> {
         if max_devices <= 0 {
             return Ok(Vec::new());
         }
-        let mut active = self.list_active_families(now).await?;
+        let mut active = self
+            .list_active_families(now, absolute_lifetime_secs)
+            .await?;
         let max = max_devices as usize;
         if active.len() <= max {
             return Ok(Vec::new());
@@ -486,8 +544,9 @@ impl RefreshTokenRepository {
         &self,
         now: i64,
         max_devices: i64,
+        absolute_lifetime_secs: i64,
     ) -> Result<Vec<RefreshFamilyMeta>> {
-        self.make_room_for_new_family_with_device(now, max_devices, None)
+        self.make_room_for_new_family_with_device(now, max_devices, absolute_lifetime_secs, None)
             .await
     }
 
@@ -499,12 +558,15 @@ impl RefreshTokenRepository {
         &self,
         now: i64,
         max_devices: i64,
+        absolute_lifetime_secs: i64,
         device_id: Option<&str>,
     ) -> Result<Vec<RefreshFamilyMeta>> {
         if max_devices <= 0 {
             return Ok(Vec::new());
         }
-        let mut active = self.list_active_families(now).await?;
+        let mut active = self
+            .list_active_families(now, absolute_lifetime_secs)
+            .await?;
         if let Some(device_id) = device_id {
             active.retain(|meta| meta.device_id.as_deref() != Some(device_id));
         }
@@ -648,18 +710,20 @@ impl RefreshTokenRepository {
         &self,
         family_id: &str,
         now: i64,
+        absolute_lifetime_secs: i64,
         idle_lifetime_secs: i64,
         context: SessionContext,
     ) -> Result<Option<IssuedRefreshToken>> {
         let Some(mut meta) = self.get_family_meta(family_id).await? else {
             return Ok(None);
         };
-        if now > meta.expires_at || now > meta.idle_expires_at {
+        let expires_at = meta.expires_at_under(absolute_lifetime_secs);
+        if now > expires_at || now > meta.idle_expires_at {
             return Ok(None);
         }
         let token_id = uuid::Uuid::new_v4().to_string();
         let secret = random_hex();
-        let idle_expires_at = idle_expiry(now, idle_lifetime_secs, meta.expires_at);
+        let idle_expires_at = idle_expiry(now, idle_lifetime_secs, expires_at);
         let device_info = context
             .device_info
             .clone()
@@ -669,20 +733,21 @@ impl RefreshTokenRepository {
             secret_hash: sha256_hex(&secret),
             family_id: family_id.to_string(),
             issued_at: now,
-            expires_at: meta.expires_at,
+            expires_at,
             idle_expires_at: Some(idle_expires_at),
             used: false,
             used_at: None,
             grace_reuse_count: 0,
             device_info: device_info.clone(),
         };
-        let ttl_secs: u64 = (idle_expires_at - now).max(1) as u64;
+        let ttl_secs = session_ttl(now, idle_lifetime_secs, expires_at);
         let token_key_str = token_key(&token_id);
         let raw = serde_json::to_string(&record)
             .map_err(|e| RefreshTokenStorageError::Json(token_key_str.clone(), e))?;
 
         let device_id = context.device_id.or_else(|| meta.device_id.clone());
         meta.last_seen_at = now;
+        meta.expires_at = expires_at;
         meta.idle_expires_at = idle_expires_at;
         meta.current_token_id = token_id.clone();
         meta.last_ip = context.client_ip.or(meta.last_ip);
@@ -751,13 +816,17 @@ impl RefreshTokenRepository {
     /// at all before this presentation raced with another, `burn_family` still fires exactly as
     /// before.
     pub async fn rotate(&self, token_id: &str, secret: &str, now: i64) -> Result<RotateOutcome> {
-        self.rotate_with_context(token_id, secret, now, 0, SessionContext::default())
+        // Legacy absolute-only behavior: honour the cap that was recorded when the family was
+        // issued instead of re-deriving it from a (possibly unset) setting.
+        self.rotate_inner(token_id, secret, now, None, 0, SessionContext::default())
             .await
     }
 
     /// Same rotation/reuse-detection semantics as before, plus the dual-window idle refresh and
-    /// the family-meta update that drives the active-device list. `idle_lifetime_secs <= 0` keeps
-    /// the caller's pre-dual-window absolute-only behavior (idle expiry follows the parent's
+    /// the family-meta update that drives the active-device list. `absolute_lifetime_secs` is the
+    /// *current* configured cap (`<= 0` = none), applied to the family's `created_at` — so a
+    /// settings change extends/shortens sessions that already exist. `idle_lifetime_secs <= 0`
+    /// keeps the caller's pre-dual-window absolute-only behavior (idle expiry follows the parent's
     /// absolute expiry). `context` updates the family's last-seen device/IP; the original
     /// login's `device_info` remains the fallback when a particular refresh request couldn't
     /// provide one.
@@ -766,6 +835,29 @@ impl RefreshTokenRepository {
         token_id: &str,
         secret: &str,
         now: i64,
+        absolute_lifetime_secs: i64,
+        idle_lifetime_secs: i64,
+        context: SessionContext,
+    ) -> Result<RotateOutcome> {
+        self.rotate_inner(
+            token_id,
+            secret,
+            now,
+            Some(absolute_lifetime_secs),
+            idle_lifetime_secs,
+            context,
+        )
+        .await
+    }
+
+    /// `absolute_lifetime_override: None` means "use the expiry stored on the record" (the
+    /// pre-settings-driven behavior); `Some(secs)` re-derives it from the family's `created_at`.
+    async fn rotate_inner(
+        &self,
+        token_id: &str,
+        secret: &str,
+        now: i64,
+        absolute_lifetime_override: Option<i64>,
         idle_lifetime_secs: i64,
         context: SessionContext,
     ) -> Result<RotateOutcome> {
@@ -775,8 +867,19 @@ impl RefreshTokenRepository {
         if !lanrurugi_core::crypto::constant_time_eq(&sha256_hex(secret), &record.secret_hash) {
             return Ok(RotateOutcome::NotFound); // wrong secret: treat identically to "no such token"
         }
+        let existing_meta = self.get_family_meta(&record.family_id).await.ok().flatten();
+        // Absolute expiry is re-derived from `created_at` under the current setting when the
+        // caller supplied one; otherwise (and when the meta is gone) the record's own value is
+        // authoritative, which is what an un-upgraded caller expects.
+        let absolute_expires_at = match absolute_lifetime_override {
+            Some(lifetime) => existing_meta
+                .as_ref()
+                .map(|meta| meta.expires_at_under(lifetime))
+                .unwrap_or(record.expires_at),
+            None => record.expires_at,
+        };
         let current_idle_expires_at = record.idle_expires_at.unwrap_or(record.expires_at);
-        if now > record.expires_at || now > current_idle_expires_at {
+        if now > absolute_expires_at || now > current_idle_expires_at {
             return Ok(RotateOutcome::NotFound); // absolute or idle expiry; TTL normally reaps it
                                                 // first, but a request racing the boundary must
                                                 // still get "gone" rather than a late refresh
@@ -786,7 +889,6 @@ impl RefreshTokenRepository {
             return Ok(RotateOutcome::ReuseDetected);
         }
 
-        let existing_meta = self.get_family_meta(&record.family_id).await.ok().flatten();
         let created_at = existing_meta
             .as_ref()
             .map(|meta| meta.created_at)
@@ -810,16 +912,16 @@ impl RefreshTokenRepository {
         let new_secret = random_hex();
         let secret_hash = record.secret_hash.clone();
         let family_id = record.family_id.clone();
-        let expires_at = record.expires_at;
+        let expires_at = absolute_expires_at;
         let new_idle_expires_at = idle_expiry(now, idle_lifetime_secs, expires_at);
         let new_record = RefreshTokenRecord {
             token_id: new_token_id.clone(),
             secret_hash: sha256_hex(&new_secret),
             family_id: family_id.clone(),
             issued_at: now,
-            // Absolute expiry inherited from the parent, NOT reset to `now + lifetime` — an
-            // actively-rotating chain must still expire on schedule from the original login,
-            // otherwise "N-day refresh lifetime" is meaningless (see this record's own field docs).
+            // Anchored to the family's original login, NOT reset to `now + lifetime` — an
+            // actively-rotating chain must still hit a configured cap on schedule, otherwise
+            // "N-day refresh lifetime" is meaningless (see this record's own field docs).
             expires_at,
             idle_expires_at: Some(new_idle_expires_at),
             used: false,
@@ -835,7 +937,7 @@ impl RefreshTokenRepository {
         let new_key = token_key(&new_token_id);
         let new_raw = serde_json::to_string(&new_record)
             .map_err(|e| RefreshTokenStorageError::Json(new_key.clone(), e))?;
-        let remaining_ttl: u64 = (new_idle_expires_at - now).max(1) as u64;
+        let remaining_ttl = session_ttl(now, idle_lifetime_secs, expires_at);
         let family_key_str = family_key(&family_id);
 
         // `transaction_async` requires an owned, `Clone` connection (it clones the connection
@@ -869,7 +971,10 @@ impl RefreshTokenRepository {
                         .filter(|current| current.secret_hash == secret_hash);
                     let still_valid = current.as_ref().is_some_and(|current| {
                         let current_idle = current.idle_expires_at.unwrap_or(current.expires_at);
-                        now <= current.expires_at
+                        // `absolute_expires_at` is computed outside from the family's `created_at`
+                        // and the current setting, so a racer that just bumped `expires_at` in the
+                        // record can't widen the window mid-flight.
+                        now <= absolute_expires_at
                             && now <= current_idle
                             && (!current.used || is_forgivable_reuse(current, now))
                     });
@@ -1404,6 +1509,7 @@ mod dual_window_tests {
                 &issued.record.token_id,
                 &issued.secret,
                 1_050,
+                1_000,
                 400,
                 SessionContext::default(),
             )
@@ -1425,6 +1531,7 @@ mod dual_window_tests {
                 &first_child.token_id,
                 &first_secret,
                 1_400,
+                1_000,
                 400,
                 SessionContext::default(),
             )
@@ -1439,13 +1546,15 @@ mod dual_window_tests {
         };
         assert_eq!(second_child.idle_expires_at, Some(1_800));
 
-        // Rotation at t=1750 (still inside the 1800 idle deadline) with a 400s idle window
-        // would be 2150, capped to absolute 2000.
+        // Rotation at t=1750 (still inside the 1800 idle deadline) renews idle to 2150 — past the
+        // absolute cap, which is fine: the window and the cap are independent checks, and the cap
+        // still rejects the t=2001 rotation below.
         let third = repo
             .rotate_with_context(
                 &second_child.token_id,
                 &second_secret,
                 1_750,
+                1_000,
                 400,
                 SessionContext::default(),
             )
@@ -1458,7 +1567,7 @@ mod dual_window_tests {
         else {
             panic!("expected Rotated");
         };
-        assert_eq!(third_child.idle_expires_at, Some(2_000));
+        assert_eq!(third_child.idle_expires_at, Some(2_150));
         assert_eq!(third_child.expires_at, 2_000);
 
         // One second past absolute expiry must fail.
@@ -1467,6 +1576,7 @@ mod dual_window_tests {
                 &third_child.token_id,
                 &third_secret,
                 2_001,
+                1_000,
                 400,
                 SessionContext::default(),
             )
@@ -1494,6 +1604,7 @@ mod dual_window_tests {
                 &issued.record.token_id,
                 &issued.secret,
                 1_101,
+                10_000,
                 100,
                 SessionContext::default(),
             )
@@ -1524,7 +1635,7 @@ mod dual_window_tests {
             .await
             .unwrap();
 
-        let evicted = repo.enforce_device_limit(1_003, 2).await.unwrap();
+        let evicted = repo.enforce_device_limit(1_003, 2, 10_000).await.unwrap();
         assert_eq!(evicted.len(), 1);
         assert_eq!(evicted[0].family_id, oldest.record.family_id);
         assert!(repo.get(&oldest.record.token_id).await.unwrap().is_none());
@@ -1558,7 +1669,10 @@ mod dual_window_tests {
 
         // Cap 3 with 3 already present: this login needs room for itself, so the oldest is evicted
         // before the new family would be created (leaving exactly 2 existing + the new one = 3).
-        let evicted = repo.make_room_for_new_family(1_003, 3).await.unwrap();
+        let evicted = repo
+            .make_room_for_new_family(1_003, 3, 10_000)
+            .await
+            .unwrap();
         assert_eq!(evicted.len(), 1);
         assert_eq!(evicted[0].family_id, families[0].record.family_id);
         assert!(repo
@@ -1578,7 +1692,10 @@ mod dual_window_tests {
             .is_some());
 
         // Cap 1 must clear every existing family so the next login becomes the sole one.
-        let evicted = repo.make_room_for_new_family(1_004, 1).await.unwrap();
+        let evicted = repo
+            .make_room_for_new_family(1_004, 1, 10_000)
+            .await
+            .unwrap();
         assert_eq!(evicted.len(), 2);
 
         repo.burn_family(&families[1].record.family_id)
@@ -1630,6 +1747,7 @@ mod dual_window_tests {
             .issue_handoff_token(
                 &issued.record.family_id,
                 1_200,
+                10_000,
                 5_000,
                 SessionContext::default(),
             )
@@ -1711,7 +1829,7 @@ mod dual_window_tests {
             .expect("family meta must exist");
         assert_eq!(renamed.device_name(), "My workstation");
 
-        let listed = repo.list_active_families(1_200).await.unwrap();
+        let listed = repo.list_active_families(1_200, 10_000).await.unwrap();
         assert!(listed
             .iter()
             .any(|meta| meta.family_id == issued.record.family_id
@@ -1724,5 +1842,111 @@ mod dual_window_tests {
             .unwrap()
             .is_none());
         assert!(!repo.revoke_family(&issued.record.family_id).await.unwrap());
+    }
+
+    /// The behaviour users expect from "stay logged in": with no absolute cap configured (the
+    /// default), a session that is used at least once per idle window never expires — no matter
+    /// how old it is. This is the regression guard for beta.5 asking for a password after 7 days
+    /// even though the site had been used every day.
+    #[tokio::test]
+    async fn active_session_outlives_beta5s_seven_day_hard_cap_when_no_cap_is_configured() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = RefreshTokenRepository::new(pool);
+        let issued = repo
+            .issue_new_family_with_idle(1_000, 0, 604_800, SessionContext::default())
+            .await
+            .unwrap();
+        assert_eq!(issued.record.expires_at, NO_ABSOLUTE_EXPIRY);
+
+        // Once a day for three weeks — well past the old 7-day cap.
+        let mut token_id = issued.record.token_id.clone();
+        let mut secret = issued.secret.clone();
+        let mut now = 1_000;
+        for _ in 0..21 {
+            now += 86_400;
+            let outcome = repo
+                .rotate_with_context(
+                    &token_id,
+                    &secret,
+                    now,
+                    0,
+                    604_800,
+                    SessionContext::default(),
+                )
+                .await
+                .unwrap();
+            let RotateOutcome::Rotated {
+                record,
+                secret: next_secret,
+            } = outcome
+            else {
+                panic!("an actively-used session must keep rotating");
+            };
+            token_id = record.token_id.clone();
+            secret = next_secret;
+        }
+
+        let active = repo.list_active_families(now, 0).await.unwrap();
+        assert_eq!(active.len(), 1, "session must still be listed as active");
+        repo.burn_family(&issued.record.family_id).await.unwrap();
+    }
+
+    /// The cap is a *policy*, evaluated against the family's original login time, not a snapshot
+    /// frozen at login: raising it revives a session that has not yet expired, and lowering it
+    /// takes effect immediately (rather than only for future logins).
+    #[tokio::test]
+    async fn changing_the_cap_applies_to_sessions_that_already_exist() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = RefreshTokenRepository::new(pool);
+
+        let issued = repo
+            .issue_new_family_with_idle(1_000, 1_000, 10_000, SessionContext::default())
+            .await
+            .unwrap();
+        assert_eq!(issued.record.expires_at, 2_000);
+        let raised = repo
+            .rotate_with_context(
+                &issued.record.token_id,
+                &issued.secret,
+                5_000,
+                10_000,
+                10_000,
+                SessionContext::default(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(raised, RotateOutcome::Rotated { .. }),
+            "raising the cap must apply to a session that already exists"
+        );
+
+        let uncapped = repo
+            .issue_new_family_with_idle(1_000, 0, 10_000, SessionContext::default())
+            .await
+            .unwrap();
+        let tightened = repo
+            .rotate_with_context(
+                &uncapped.record.token_id,
+                &uncapped.secret,
+                5_000,
+                1_000,
+                10_000,
+                SessionContext::default(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(tightened, RotateOutcome::NotFound),
+            "lowering the cap must take effect immediately"
+        );
+
+        repo.burn_family(&issued.record.family_id).await.unwrap();
+        repo.burn_family(&uncapped.record.family_id).await.unwrap();
     }
 }
