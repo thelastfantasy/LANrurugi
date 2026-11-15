@@ -26,7 +26,15 @@ import {
   useUpdateTankoubonProgress,
 } from "@/api/hooks";
 import type { TocEntry } from "@/api/types";
-import { Menu, MenuItem, MenuSeparator, Tooltip } from "@/components/common-ui/Display";
+import {
+  BottomSheet,
+  Menu,
+  MenuItem,
+  MenuSeparator,
+  SheetGrid,
+  SheetTile,
+  Tooltip,
+} from "@/components/common-ui/Display";
 import { Badge } from "@/components/common-ui/Display"
 import { Keycap as Key } from "@/components/common-ui/Display/Keycap";
 import { IconButton, ToggleButtonMenu } from "@/components/common-ui/Form";
@@ -42,6 +50,7 @@ import { confirmDialog, promptDialog } from "@/dialog";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useHasPhysicalKeyboard } from "@/hooks/useHasPhysicalKeyboard";
 import { useIsNarrowViewport } from "@/hooks/useIsNarrowViewport";
+import { useLongPress } from "@/hooks/useLongPress";
 import {
   clamp,
   computeNextPage,
@@ -54,6 +63,7 @@ import {
   useReaderSettings,
 } from "@/hooks/useReaderSettings";
 import { useSupportsHover } from "@/hooks/useSupportsHover";
+import { useSwipeDownToDismiss } from "@/hooks/useSwipeDownToDismiss";
 import { useTankoubonReading } from "@/hooks/useTankoubonReading";
 import { routes } from "@/lib/routes";
 import { getTagSearchURL } from "@/lib/tagFormat";
@@ -504,7 +514,8 @@ export function Reader() {
   // Touch infinite scroll: the page a long press brought the floating toolbar up on. The toolbar
   // stays until that page has scrolled completely out of view.
   const [infiniteToolbarPage, setInfiniteToolbarPage] = useState<number | null>(null);
-  const infiniteLongPressRef = useRef(false);
+  const [moreSheetOpen, setMoreSheetOpen] = useState(false);
+  const [infiniteToolbarEl, setInfiniteToolbarEl] = useState<HTMLDivElement | null>(null);
   // Shared by both toolbars, so changing the primary action in one updates the other too.
   const [fitAction, setFitAction] = useState<FitAction>(readStoredFitAction);
   /**
@@ -587,64 +598,9 @@ export function Reader() {
   }, [headless, supportsHover]);
 
   // A touch screen has neither a pointer to reveal that corner nor a fit menu to walk back out
-  // from, so headless is left by holding a finger on the page. The click that the release produces
-  // must not also turn the page — it would land in the mode that just came back.
-  const longPressRef = useRef(false);
-  useEffect(() => {
-    if (!headless || supportsHover) return;
-    let timer: number | undefined;
-    const start = () => {
-      // Cleared per gesture: a hold that ends without a click must not swallow the next tap.
-      longPressRef.current = false;
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        longPressRef.current = true;
-        toggleHeadless();
-      }, 550);
-    };
-    const cancel = () => window.clearTimeout(timer);
-    // A hold that turns into a scroll is cancelled by movement. `pointercancel` alone is not a
-    // reliable cancel: a long press on the artwork makes the browser claim the gesture (the image
-    // callout), which fires it before the timer, and the press that was meant to leave headless
-    // then does nothing.
-    let startX = 0;
-    let startY = 0;
-    const down = new Set<number>();
-    const startAt = (e: PointerEvent) => {
-      down.add(e.pointerId);
-      // A second finger is a two-finger gesture, never a hold.
-      if (down.size > 1) {
-        cancel();
-        return;
-      }
-      startX = e.clientX;
-      startY = e.clientY;
-      start();
-    };
-    const lift = (e: PointerEvent) => {
-      down.delete(e.pointerId);
-      if (down.size === 0) cancel();
-    };
-    // The browser claiming the gesture (the image callout) fires `pointercancel` mid-hold. That is
-    // exactly the press this mode is waiting for, so only the bookkeeping is updated.
-    const forget = (e: PointerEvent) => {
-      down.delete(e.pointerId);
-    };
-    const moved = (e: PointerEvent) => {
-      if (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10) cancel();
-    };
-    document.addEventListener("pointerdown", startAt);
-    document.addEventListener("pointermove", moved);
-    document.addEventListener("pointerup", lift);
-    document.addEventListener("pointercancel", forget);
-    return () => {
-      window.clearTimeout(timer);
-      document.removeEventListener("pointerdown", startAt);
-      document.removeEventListener("pointermove", moved);
-      document.removeEventListener("pointerup", lift);
-      document.removeEventListener("pointercancel", forget);
-    };
-  }, [headless, supportsHover, toggleHeadless]);
+  // from, so headless is left by holding a finger on the page. `useLongPress` swallows the click
+  // the release produces, which would otherwise turn the page in the mode that just came back.
+  useLongPress(document, toggleHeadless, { enabled: headless && !supportsHover });
   // The browser's own long-press menu (save/open image, select text) would sit on top of headless
   // reading and interrupt the gesture that leaves it, so it stays closed there.
   useEffect(() => {
@@ -659,60 +615,19 @@ export function Reader() {
   // keeps its own long press, which leaves headless, and has no toolbar to show anyway.
   const touchInfiniteToolbar =
     readerSettings.infiniteScroll && !supportsHover && !headless;
-  useEffect(() => {
-    if (!touchInfiniteToolbar) return;
-    // Rendered only once the page list has loaded, hence `pages.data` below.
-    const root = infiniteScrollRootRef.current;
-    if (!root) return;
-    let timer: number | undefined;
-    let startX = 0;
-    let startY = 0;
-    const down = new Set<number>();
-    const cancel = () => window.clearTimeout(timer);
-    const startAt = (e: PointerEvent) => {
-      down.add(e.pointerId);
-      if (down.size > 1) {
-        cancel();
-        return;
-      }
-      const img = (e.target as HTMLElement).closest?.("img[data-page]");
-      if (!(img instanceof HTMLElement)) return;
-      infiniteLongPressRef.current = false;
-      startX = e.clientX;
-      startY = e.clientY;
-      cancel();
-      timer = window.setTimeout(() => {
-        infiniteLongPressRef.current = true;
-        setInfiniteToolbarPage(Number(img.dataset.page));
-      }, 550);
-    };
-    const lift = (e: PointerEvent) => {
-      down.delete(e.pointerId);
-      if (down.size === 0) cancel();
-    };
-    // As in headless: the browser claiming a held image fires `pointercancel` before the timer.
-    const forget = (e: PointerEvent) => down.delete(e.pointerId);
-    const moved = (e: PointerEvent) => {
-      if (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10) cancel();
-    };
-    // Android has no `-webkit-touch-callout`; its save-image menu would cover the toolbar.
-    const onContextMenu = (e: MouseEvent) => {
-      if ((e.target as HTMLElement).closest?.("img[data-page]")) e.preventDefault();
-    };
-    root.addEventListener("pointerdown", startAt);
-    document.addEventListener("pointermove", moved);
-    document.addEventListener("pointerup", lift);
-    document.addEventListener("pointercancel", forget);
-    root.addEventListener("contextmenu", onContextMenu);
-    return () => {
-      cancel();
-      root.removeEventListener("pointerdown", startAt);
-      document.removeEventListener("pointermove", moved);
-      document.removeEventListener("pointerup", lift);
-      document.removeEventListener("pointercancel", forget);
-      root.removeEventListener("contextmenu", onContextMenu);
-    };
-  }, [touchInfiniteToolbar, pages.data]);
+  // On the document, narrowed to the page images: the scroll root renders only once the page list
+  // has loaded, after this hook first runs.
+  useLongPress(
+    document,
+    (img) => setInfiniteToolbarPage(Number((img as HTMLElement).dataset.page)),
+    {
+      enabled: touchInfiniteToolbar,
+      match: (el) => el.closest(".infinite-scroll img[data-page]"),
+      // Android has no `-webkit-touch-callout`; its save-image menu would cover the toolbar.
+      blockContextMenu: (el) => el.closest(".infinite-scroll img[data-page]") !== null,
+    },
+  );
+  useSwipeDownToDismiss(infiniteToolbarEl, () => setInfiniteToolbarPage(null));
   useEffect(() => {
     if (infiniteToolbarPage === null) return;
     const img = infiniteScrollRootRef.current?.querySelector(
@@ -1651,10 +1566,6 @@ export function Reader() {
       const blocked = turnBlockedRef.current;
       turnBlockedRef.current = false;
       if (blocked) return;
-      if (longPressRef.current) {
-        longPressRef.current = false;
-        return;
-      }
       if (overlay !== null) return;
       if (e.defaultPrevented) return;
       if (inOtherLayer(e.target as HTMLElement | null)) return;
@@ -1810,13 +1721,21 @@ export function Reader() {
     }
   }
 
-  const setFullscreen = useCallback((on: boolean) => {
-    if (on && !document.fullscreenElement) {
-      containerRef.current?.requestFullscreen?.().catch(() => undefined);
-    } else if (!on && document.fullscreenElement) {
-      document.exitFullscreen?.().catch(() => undefined);
-    }
-  }, []);
+  const infiniteScrollOn = readerSettings.infiniteScroll;
+  const setFullscreen = useCallback(
+    (on: boolean) => {
+      if (on && !document.fullscreenElement) {
+        // Infinite scroll scrolls the document, so the document goes fullscreen. A fullscreen
+        // element is pinned to the viewport and does not scroll: with the reader container
+        // there, the view jumped to the first page and stopped scrolling.
+        const target = infiniteScrollOn ? document.documentElement : containerRef.current;
+        target?.requestFullscreen?.().catch(() => undefined);
+      } else if (!on && document.fullscreenElement) {
+        document.exitFullscreen?.().catch(() => undefined);
+      }
+    },
+    [infiniteScrollOn],
+  );
 
   function toggleFullScreen() {
     setFullscreen(!document.fullscreenElement);
@@ -3036,54 +2955,94 @@ export function Reader() {
   // deserves to stay one tap away vs. what doesn't.
   // In tankoubon reading the route id is the tank; "this archive" is the member being shown.
   const downloadArchiveId = isTank ? markerTarget?.arcId : archiveId;
-  const moreMenuTrigger = (
-    <IconButton
-      variant="ghost-btn"
-      icon="fas fa-ellipsis-h fa-2x"
-      title={t("reader.moreOptions") ?? undefined}
-      size={32}
-      style={{ borderRadius: "50%" }}
-    />
-  );
+  // Phone toolbar only, so a bottom sheet rather than a popup anchored to the button.
+  const closeMoreSheetThen = (run: () => void) => () => {
+    setMoreSheetOpen(false);
+    run();
+  };
   const moreMenu = (
-    <Menu trigger={moreMenuTrigger} side="top" align="end">
-      <MenuItem onClick={() => updateReaderSettings({ mangaMode: !readerSettings.mangaMode })}>
-        <i className={`fas ${readerSettings.mangaMode ? "fa-arrow-left" : "fa-arrow-right"}`} style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
-        {t("reader.readingDirection")}
-      </MenuItem>
-      <MenuItem onClick={() => toggleAutoNextPage()} closeOnClick={false}>
-        <i className="fas fa-stopwatch" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
-        {t("reader.autoNextPage")}
-        {autoNextActive ? ` (${autoNextCountdown})` : ""}
-      </MenuItem>
-      {loggedIn && downloadArchiveId && (
-        <MenuItem onClick={() => void startDownload(`/api/archives/${downloadArchiveId}`)}>
-          <i className="fas fa-download" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
-          {t("reader.downloadThisArchive")}
-        </MenuItem>
-      )}
-      {loggedIn && isTank && archiveId && (
-        <MenuItem onClick={() => setShareItem({ kind: "tankoubon", id: archiveId })}>
-          <i className="fas fa-share-nodes" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
-          {t("reader.shareWholeTankoubon")}
-        </MenuItem>
-      )}
-      {loggedIn && isTank && archiveId && (
-        <MenuItem onClick={() => void startDownload(`/api/tankoubons/${archiveId}`)}>
-          <i className="fas fa-file-zipper" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
-          {t("reader.downloadWholeTankoubon")}
-        </MenuItem>
-      )}
-      <MenuSeparator />
-      <MenuItem onClick={() => setOverlay((prev) => (prev === "settings" ? null : "settings"))}>
-        <i className="fas fa-cog" style={{ marginRight: 8, width: 16 }} aria-hidden="true" />
-        {t("reader.readerOptions")}
-      </MenuItem>
-    </Menu>
+    <>
+      <IconButton
+        variant="ghost-btn"
+        icon="fas fa-ellipsis-h fa-2x"
+        title={t("reader.moreOptions") ?? undefined}
+        size={32}
+        style={{ borderRadius: "50%" }}
+        onClick={() => setMoreSheetOpen(true)}
+      />
+      <BottomSheet
+        open={moreSheetOpen}
+        onClose={() => setMoreSheetOpen(false)}
+        cancelLabel={t("common.cancel")}
+      >
+        <div style={{ paddingTop: 10 }}>
+          <SheetGrid>
+            <SheetTile
+              icon={readerSettings.mangaMode ? "fa-arrow-left" : "fa-arrow-right"}
+              onClick={closeMoreSheetThen(() =>
+                updateReaderSettings({ mangaMode: !readerSettings.mangaMode }),
+              )}
+            >
+              {t("reader.readingDirection")}
+            </SheetTile>
+            {/* Stays open, like the menu entry did: the countdown it starts shows on the tile. */}
+            <SheetTile icon="fa-stopwatch" onClick={() => toggleAutoNextPage()}>
+              {t("reader.autoNextPage")}
+              {autoNextActive ? ` (${autoNextCountdown})` : ""}
+            </SheetTile>
+            {loggedIn && downloadArchiveId && (
+              <SheetTile
+                icon="fa-download"
+                onClick={closeMoreSheetThen(
+                  () => void startDownload(`/api/archives/${downloadArchiveId}`),
+                )}
+              >
+                {t("reader.downloadThisArchive")}
+              </SheetTile>
+            )}
+            {loggedIn && isTank && archiveId && (
+              <SheetTile
+                icon="fa-share-nodes"
+                onClick={closeMoreSheetThen(() =>
+                  setShareItem({ kind: "tankoubon", id: archiveId }),
+                )}
+              >
+                {t("reader.shareWholeTankoubon")}
+              </SheetTile>
+            )}
+            {loggedIn && isTank && archiveId && (
+              <SheetTile
+                icon="fa-file-zipper"
+                onClick={closeMoreSheetThen(
+                  () => void startDownload(`/api/tankoubons/${archiveId}`),
+                )}
+              >
+                {t("reader.downloadWholeTankoubon")}
+              </SheetTile>
+            )}
+            <SheetTile
+              icon="fa-cog"
+              onClick={closeMoreSheetThen(() =>
+                setOverlay((prev) => (prev === "settings" ? null : "settings")),
+              )}
+            >
+              {t("reader.readerOptions")}
+            </SheetTile>
+          </SheetGrid>
+        </div>
+      </BottomSheet>
+    </>
   );
   const mobileToolbar = (!readerSettings.infiniteScroll ||
     (touchInfiniteToolbar && infiniteToolbarPage !== null)) && (
-    <div className="mobile-reader-toolbar">
+    <div
+      // Summoned by a long press in infinite scroll: a bottom panel, but no backdrop, so the page
+      // keeps scrolling under it (it hides once its page leaves the screen, or on a swipe down).
+      ref={readerSettings.infiniteScroll ? setInfiniteToolbarEl : undefined}
+      className={`mobile-reader-toolbar${
+        readerSettings.infiniteScroll ? " mobile-reader-toolbar--sheet" : ""
+      }`}
+    >
       {arrows}
       {readerSettings.infiniteScroll && infiniteToolbarPage !== null && (
         // Infinite scroll has no paginator, so the page the toolbar was summoned on is named here.
@@ -3092,8 +3051,8 @@ export function Reader() {
           style={{
             fontSize: PAGINATOR_PAGECOUNT_FONT_SIZE,
             lineHeight: 1.3,
-            textAlign: "center",
-            maxWidth: "80vw",
+            textAlign: "left",
+            alignSelf: "stretch",
           }}
         >
           <div style={{ whiteSpace: "nowrap" }}>
@@ -3143,7 +3102,8 @@ export function Reader() {
           style={{ borderRadius: "50%", opacity: 0.55 }}
           onClick={toggleHeadless}
         />
-        {!supportsHover && loggedIn && (
+        {/* Stamps are placed on the paged view only; infinite scroll has no stamp layer. */}
+        {!supportsHover && !readerSettings.infiniteScroll && loggedIn && (
           <IconButton
             variant="ghost-btn"
             icon="fas fa-stamp fa-2x"
@@ -3608,10 +3568,6 @@ export function Reader() {
                     onClick={(e) => {
                       // Headless also listens on the document; this tap is already handled.
                       e.preventDefault();
-                      if (infiniteLongPressRef.current) {
-                        infiniteLongPressRef.current = false;
-                        return;
-                      }
                       if (!supportsHover) {
                         onInfiniteScrollTap(e.clientY);
                         return;

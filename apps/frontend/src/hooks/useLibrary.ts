@@ -1,5 +1,4 @@
 import { useQueryClient } from "@tanstack/react-query";
-import type { MouseEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -62,7 +61,10 @@ import {
 } from "@/lib/tagFormat";
 import { isTankoubonId } from "@/lib/utils/isTankoubonId";
 import { sortCategories } from "@/lib/utils/sortCategories";
-import { type ContextMenuState } from "@/pages/Library/types";
+import {
+  type ContextMenuState,
+  type ContextMenuTrigger,
+} from "@/pages/Library/types";
 import { recordSearchNavigation } from "@/pages/Reader/crossArchiveNav";
 import { useSession } from "@/session/SessionProvider";
 import { toast } from "@/toast";
@@ -771,7 +773,7 @@ const { t } = useTranslation();
   }
 
   function handleContextMenu(
-    e: MouseEvent,
+    e: ContextMenuTrigger,
     archive: ArchiveMetadata,
     source: "grid" | "carousel" = "grid",
   ) {

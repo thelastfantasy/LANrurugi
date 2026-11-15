@@ -31,8 +31,9 @@ export function Drawer({
   title?: ReactNode
   children: ReactNode
   width?: number
-  /** `false` when the content uses horizontal swipes itself (e.g. paging), which would otherwise
-   * fight the drawer's swipe-right-to-close. Closing then stays on the button, backdrop and Escape. */
+  /** `false` while the content uses rightward swipes itself (e.g. paging back), which would
+   * otherwise fight the drawer's swipe-right-to-close. Only the content stops closing on a swipe:
+   * the title and bottom bars still do. */
   swipeToClose?: boolean
 }) {
   const [footer, setFooter] = useState<HTMLDivElement | null>(null)
@@ -46,7 +47,6 @@ export function Drawer({
         <BaseDrawer.Viewport
           className="fixed inset-0 flex items-stretch justify-end"
           style={{ zIndex: 9001 }}
-          data-base-ui-swipe-ignore={swipeToClose ? undefined : ""}
         >
           <BaseDrawer.Popup
             className="id1 overflow-hidden text-left outline-none [transform:translateX(var(--drawer-swipe-movement-x))] transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] data-[ending-style]:[transform:translateX(100%)] data-[starting-style]:[transform:translateX(100%)] data-[swiping]:select-none data-[swiping]:duration-0"
@@ -81,7 +81,11 @@ export function Drawer({
                 }
               />
             </div>
-            <BaseDrawer.Content className="min-h-0 flex-1 overflow-y-auto overscroll-contain" style={{ padding: "4px 20px 20px" }}>
+            <BaseDrawer.Content
+              className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+              style={{ padding: "4px 20px 20px" }}
+              data-base-ui-swipe-ignore={swipeToClose ? undefined : ""}
+            >
               <FooterSlot.Provider value={footer}>{children}</FooterSlot.Provider>
             </BaseDrawer.Content>
             {/* Hidden until a `DrawerFooter` renders into it. */}

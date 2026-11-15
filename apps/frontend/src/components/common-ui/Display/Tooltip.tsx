@@ -96,7 +96,8 @@ export function Tooltip({
   function recompute() {
     const bubble = bubbleRef.current
     if (!bubble) return
-    const bubbleRect = bubble.getBoundingClientRect()
+    // The outer popup, padding and border included: the inner box alone let it overrun the right edge.
+    const bubbleRect = (bubble.parentElement ?? bubble).getBoundingClientRect()
     // scrollHeight, not bubbleRect.height — a previous call's maxHeight cap would otherwise be measured back in.
     const naturalHeight = bubble.scrollHeight
 
@@ -176,7 +177,11 @@ export function Tooltip({
       onMouseEnter={open}
       onMouseMove={handleMouseMove}
       onMouseLeave={scheduleClose}
-      onFocus={open}
+      // Keyboard focus only: focus handed back by a closing drawer or dialog after a tap or click
+      // must not pop the bubble open on its own.
+      onFocus={(e) => {
+        if ((e.target as Element).matches?.(":focus-visible")) open()
+      }}
       onBlur={scheduleClose}
     >
       {children}
@@ -193,11 +198,15 @@ export function Tooltip({
               className="swal2-popup"
               style={{
                 display: "block",
-                padding: "6px 10px",
+                padding: "6px 10px", // + 1px border: 22px across, in the viewport cap below
                 fontSize: FONT_SIZE_MD,
                 lineHeight: 1.5,
                 whiteSpace: "normal",
-                maxWidth,
+                // Sized by its content, not by the room left of where it was last placed: a fixed
+                // box shrinks to fit the viewport from its `left`, so near the right edge it was
+                // measured squeezed and then kept that squeezed width once moved back into view.
+                width: "max-content",
+                maxWidth: `min(${typeof maxWidth === "number" ? `${maxWidth}px` : maxWidth}, calc(100vw - ${GAP * 2 + 22}px))`,
                 textAlign: "left",
                 borderRadius: 4,
                 boxShadow: "0 2px 8px rgba(0,0,0,0.3)",

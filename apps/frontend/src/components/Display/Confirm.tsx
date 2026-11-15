@@ -1,10 +1,13 @@
 import type { ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 
+import { ConfirmSheet } from "@/components/common-ui/Display"
+import { PHONE_WIDTH_QUERY, useIsNarrowViewport } from "@/hooks/useIsNarrowViewport"
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme"
 
-/** Generic confirm/warning dialog using `dialog.tsx`'s `.swal2-popup`/`.swal2-actions` styling.
- * Owns no business copy — `message`/`confirmLabel`/`danger` are all caller-supplied. */
+/** Generic confirm/warning dialog using `dialog.tsx`'s `.swal2-popup`/`.swal2-actions` styling, or
+ * a bottom sheet at phone width. Owns no business copy — `message`/`confirmLabel`/`danger` are all
+ * caller-supplied. */
 export function Confirm({
   message,
   icon = "fa-exclamation-triangle",
@@ -23,6 +26,20 @@ export function Confirm({
   danger?: boolean
 }) {
   const { t } = useTranslation()
+  const phone = useIsNarrowViewport(PHONE_WIDTH_QUERY)
+  if (phone) {
+    return (
+      <ConfirmSheet
+        message={message}
+        icon={icon}
+        danger={danger}
+        confirmLabel={confirmLabel ?? t("common.ok")}
+        cancelLabel={cancelLabel ?? t("common.cancel")}
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />
+    )
+  }
   return (
     <>
       <div

@@ -1,15 +1,27 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { startDownload } from "@/api/download";
 import type { ArchiveMetadata } from "@/api/types";
 import {
+  BottomSheet,
   PopupMenu,
   PopupMenuItem,
   PopupMenuSeparator,
+  SheetGrid,
+  SheetTile,
 } from "@/components/common-ui/Display";
 import { RatingWidget } from "@/components/common-ui/Form";
+import {
+  PHONE_WIDTH_QUERY,
+  useIsNarrowViewport,
+} from "@/hooks/useIsNarrowViewport";
 import { useMenuPalette } from "@/hooks/useMenuPalette";
 import { copyWithToast } from "@/lib/clipboard";
 import { routes } from "@/lib/routes";
@@ -73,7 +85,10 @@ export function ArchiveContextMenu({
   const isTank = isTankoubonId(archive.arcid);
   const staticCategories = (categories ?? []).filter((c) => !c.search);
   const [categoryMenuOpen, setCategoryMenuOpen] = useState(false);
+  const [categorySheetOpen, setCategorySheetOpen] = useState(false);
   const palette = useMenuPalette();
+  // Phone width gets a bottom action sheet instead of the floating menu.
+  const narrow = useIsNarrowViewport(PHONE_WIDTH_QUERY);
   const menuRef = useRef<HTMLUListElement | null>(null);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   // Geometry decided from the row's rect when the submenu opens: align with the row, then bound
@@ -187,6 +202,148 @@ export function ArchiveContextMenu({
     );
   }
 
+  type Action = { key: string; icon: string; label: ReactNode; run: () => void };
+  const act = (key: string, icon: string, label: ReactNode, run: () => void): Action => ({
+    key,
+    icon,
+    label,
+    run: () => {
+      onClose();
+      run();
+    },
+  });
+  const primaryActions: Action[] = [
+    act("read", "fa-book-open", t("common.read"), () => onOpen(archive.arcid)),
+    ...(loggedIn && !isTank && archive.pagecount > 0
+      ? [
+          act(
+            "progress",
+            archive.progress > 0 ? "fa-eye-slash" : "fa-eye",
+            archive.progress > 0 ? t("library.markAsUnread") : t("library.markAsRead"),
+            () => onSetProgress(archive.arcid, archive.progress > 0 ? 0 : archive.pagecount),
+          ),
+        ]
+      : []),
+    ...(loggedIn
+      ? [
+          act("download", "fa-download", t("library.download"), () => {
+            void startDownload(
+              isTank ? `/api/tankoubons/${archive.arcid}` : `/api/archives/${archive.arcid}`,
+            );
+          }),
+          act("share", "fa-share-nodes", t("share.action.share"), () => onShare(archive.arcid)),
+        ]
+      : []),
+    act("link", "fa-link", t("library.copyLink"), copyLink),
+    ...(loggedIn
+      ? [
+          act(
+            "select",
+            "fa-check-square",
+            isSelected ? t("library.removeFromSelection") : t("library.addToSelection"),
+            () => onToggleSelection(archive.arcid),
+          ),
+        ]
+      : []),
+  ];
+  const editAction = act(
+    "edit",
+    "fa-pen",
+    isTank ? t("common.editTankoubon") : t("library.editMetadata"),
+    () => navigate(isTank ? routes.tankoubonEdit(archive.arcid) : routes.edit(archive.arcid)),
+  );
+  const deleteAction = act("delete", "fa-trash", t("common.delete"), () =>
+    onDelete(archive.arcid, isTank),
+  );
+  const ratingWidget = (size: number) => (
+    <RatingWidget
+      archiveId={archive.arcid}
+      tags={archive.tags}
+      size={size}
+      onChange={(nextTags) => {
+        const tagsByNamespace = splitTagsByNamespace(nextTags);
+        const rating = tagsByNamespace.rating?.[0] ?? null;
+        onRatingChange(archive.arcid, isTank, rating);
+      }}
+    />
+  );
+
+  if (narrow) {
+    // Not through `act`: it opens a second sheet over this one instead of closing the menu.
+    const categoryAction: Action = {
+      key: "category",
+      icon: "fa-search-plus",
+      label: t("library.addToCategory"),
+      run: () => setCategorySheetOpen(true),
+    };
+    const sheetActions = loggedIn
+      ? [...primaryActions, editAction, categoryAction, deleteAction]
+      : primaryActions;
+    return (
+      <BottomSheet onClose={onClose} cancelLabel={t("common.cancel")}>
+        <div className="flex items-center gap-3" style={{ padding: "8px 0 12px", textAlign: "left" }}>
+          <img
+            src={
+              isTank
+                ? `/api/tankoubons/${archive.arcid}/thumbnail`
+                : `/api/archives/${archive.arcid}/thumbnail`
+            }
+            alt=""
+            className="shrink-0 rounded object-cover"
+            style={{ width: 48, height: 68 }}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="line-clamp-2 break-words" style={{ fontSize: 15, fontWeight: 600 }}>
+              {archive.title}
+            </div>
+            {loggedIn && <div style={{ marginTop: 8 }}>{ratingWidget(28)}</div>}
+          </div>
+        </div>
+        <SheetGrid separator={palette.separator}>
+          {sheetActions.map((a) => (
+            <SheetTile key={a.key} icon={a.icon} onClick={a.run} danger={a.key === "delete"}>
+              {a.label}
+            </SheetTile>
+          ))}
+        </SheetGrid>
+        {loggedIn && (
+          <BottomSheet
+            open={categorySheetOpen}
+            onClose={() => setCategorySheetOpen(false)}
+            cancelLabel={t("common.cancel")}
+          >
+            <div style={{ fontSize: 15, fontWeight: 600, padding: "8px 0 12px", textAlign: "left" }}>
+              {t("library.addToCategory")}
+            </div>
+            {staticCategories.length === 0 ? (
+              <div style={{ opacity: 0.6, paddingBottom: 6 }}>{t("library.noCategoriesFound")}</div>
+            ) : (
+              <SheetGrid>
+                {staticCategories.map((c) => {
+                  const currentlyIn = c.archives.includes(archive.arcid);
+                  return (
+                    <SheetTile
+                      key={c.id}
+                      onClick={() => onToggleCategory(c.id, archive.arcid, currentlyIn)}
+                      style={
+                        currentlyIn
+                          ? { background: palette.hoverBg, color: palette.hoverText }
+                          : undefined
+                      }
+                    >
+                      {currentlyIn && <i className="fa fa-check" style={{ marginRight: 6 }}></i>}
+                      {c.name}
+                    </SheetTile>
+                  );
+                })}
+              </SheetGrid>
+            )}
+          </BottomSheet>
+        )}
+      </BottomSheet>
+    );
+  }
+
   return (
     <>
       <div
@@ -225,110 +382,20 @@ export function ArchiveContextMenu({
                 marginBottom: ".35em",
               }}
             >
-              <RatingWidget
-                archiveId={archive.arcid}
-                tags={archive.tags}
-                size={16}
-                onChange={(nextTags) => {
-                  const tagsByNamespace = splitTagsByNamespace(nextTags);
-                  const rating = tagsByNamespace.rating?.[0] ?? null;
-                  onRatingChange(archive.arcid, isTank, rating);
-                }}
-              />
+              {ratingWidget(16)}
             </li>
           </>
         )}
-        <PopupMenuItem
-          onClick={() => {
-            onClose();
-            onOpen(archive.arcid);
-          }}
-        >
-          <i className="fa fa-book-open" style={{ width: 18 }}></i>{" "}
-          {t("common.read")}
-        </PopupMenuItem>
-        {loggedIn && !isTank && archive.pagecount > 0 && (
-          <PopupMenuItem
-            onClick={() => {
-              onClose();
-              onSetProgress(
-                archive.arcid,
-                archive.progress > 0 ? 0 : archive.pagecount,
-              );
-            }}
-          >
-            <i
-              className={`fa ${archive.progress > 0 ? "fa-eye-slash" : "fa-eye"}`}
-              style={{ width: 18 }}
-            ></i>{" "}
-            {archive.progress > 0
-              ? t("library.markAsUnread")
-              : t("library.markAsRead")}
+        {primaryActions.map((a) => (
+          <PopupMenuItem key={a.key} onClick={a.run}>
+            <i className={`fa ${a.icon}`} style={{ width: 18 }}></i> {a.label}
           </PopupMenuItem>
-        )}
-        {loggedIn && (
-          <PopupMenuItem
-            onClick={() => {
-              onClose();
-              void startDownload(
-                isTank
-                  ? `/api/tankoubons/${archive.arcid}`
-                  : `/api/archives/${archive.arcid}`,
-              );
-            }}
-          >
-            <i className="fa fa-download" style={{ width: 18 }}></i>{" "}
-            {t("library.download")}
-          </PopupMenuItem>
-        )}
-        {loggedIn && (
-          <PopupMenuItem
-            onClick={() => {
-              onClose();
-              onShare(archive.arcid);
-            }}
-          >
-            <i className="fa fa-share-nodes" style={{ width: 18 }}></i>{" "}
-            {t("share.action.share")}
-          </PopupMenuItem>
-        )}
-        <PopupMenuItem
-          onClick={() => {
-            onClose();
-            copyLink();
-          }}
-        >
-          <i className="fa fa-link" style={{ width: 18 }}></i>{" "}
-          {t("library.copyLink")}
-        </PopupMenuItem>
-        {loggedIn && (
-          <PopupMenuItem
-            onClick={() => {
-              onClose();
-              onToggleSelection(archive.arcid);
-            }}
-          >
-            <i className="fa fa-check-square" style={{ width: 18 }}></i>{" "}
-            {isSelected
-              ? t("library.removeFromSelection")
-              : t("library.addToSelection")}
-          </PopupMenuItem>
-        )}
+        ))}
         {loggedIn && (
           <>
             <PopupMenuSeparator />
-            <PopupMenuItem
-              onClick={() => {
-                onClose();
-                navigate(
-                  isTank
-                    ? routes.tankoubonEdit(archive.arcid)
-                    : routes.edit(archive.arcid),
-                );
-              }}
-            >
-              <i className="fa fa-pen" style={{ width: 18 }}></i>{" "}
-              {isTank ? t("common.editTankoubon") : t("library.editMetadata")}
+            <PopupMenuItem onClick={editAction.run}>
+              <i className={`fa ${editAction.icon}`} style={{ width: 18 }}></i> {editAction.label}
             </PopupMenuItem>
             <PopupMenuItem
               style={{ position: "relative" }}
@@ -392,14 +459,8 @@ export function ArchiveContextMenu({
               )}
             </PopupMenuItem>
             <PopupMenuSeparator />
-            <PopupMenuItem
-              onClick={() => {
-                onClose();
-                onDelete(archive.arcid, isTank);
-              }}
-            >
-              <i className="fa fa-trash" style={{ width: 18 }}></i>{" "}
-              {t("common.delete")}
+            <PopupMenuItem onClick={deleteAction.run}>
+              <i className={`fa ${deleteAction.icon}`} style={{ width: 18 }}></i> {deleteAction.label}
             </PopupMenuItem>
           </>
         )}
@@ -407,3 +468,4 @@ export function ArchiveContextMenu({
     </>
   );
 }
+

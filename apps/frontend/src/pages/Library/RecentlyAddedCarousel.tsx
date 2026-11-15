@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import Lenis from "lenis";
-import type { MouseEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { IconType } from "react-icons";
@@ -34,7 +33,7 @@ import { BookmarkedArchiveHoverCard } from "@/pages/Bookmarks/BookmarkedArchiveH
 
 import { CarouselCard } from "./CarouselCard";
 import { SelectedArchiveSlideContent } from "./SelectedArchiveSlideContent";
-import { type CarouselMode } from "./types";
+import { type CarouselMode, type ContextMenuTrigger } from "./types";
 
 /** A `Lenis` instance mirrored into both a ref (for event handlers — `onClick`'s own `scrollTo`
  * calls need a value that's always current without re-subscribing) and state (a plain ref write
@@ -143,7 +142,7 @@ export function RecentlyAddedCarousel({
   /** Gates the "Bookmarked" carousel mode — an unauthenticated guest has no personal bookmarks. */
   loggedIn: boolean;
   onContextMenu: (
-    e: MouseEvent,
+    e: ContextMenuTrigger,
     archive: ArchiveMetadata,
     source: "carousel",
   ) => void;

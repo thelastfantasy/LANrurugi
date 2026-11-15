@@ -150,8 +150,10 @@ export function SearchBar({
               // this element its own stacking context at `Z_OVERLAY_CONTENT + 1`; any page ancestor
               // that itself creates a stacking context would cap this — verified with
               // `elementFromPoint` at the bar's centre, which must resolve to the input.
+              // Only while the panel is open: kept permanently, it also lifted the bar above
+              // every dialog backdrop on the page.
               position: "relative",
-              zIndex: Z_OVERLAY_CONTENT + 1,
+              zIndex: autocompleteOpen ? Z_OVERLAY_CONTENT + 1 : undefined,
             }}
           >
             <Autocomplete.Input

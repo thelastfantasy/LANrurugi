@@ -1,9 +1,9 @@
-import type { MouseEvent } from "react"
 
 import { useArchiveMetadata } from "@/api/hooks"
 import type { ArchiveMetadata } from "@/api/types"
 
 import { CarouselCard } from "./CarouselCard"
+import type { ContextMenuTrigger } from "./types"
 
 export function SelectedArchiveSlideContent({
   id,
@@ -13,7 +13,7 @@ export function SelectedArchiveSlideContent({
 }: {
   id: string
   cropThumbs: boolean
-  onContextMenu: (e: MouseEvent, archive: ArchiveMetadata) => void
+  onContextMenu: (e: ContextMenuTrigger, archive: ArchiveMetadata) => void
   onRemove: (id: string) => void
 }) {
   const metadata = useArchiveMetadata(id)

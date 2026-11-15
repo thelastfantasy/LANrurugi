@@ -11,3 +11,7 @@ export function useIsNarrowViewport(query = "(max-width: 640px)"): boolean {
   }, [query])
   return narrow
 }
+
+/** Phone width, where menus and confirmations become bottom sheets (and the reader turns on
+ * infinite scroll when asked to). */
+export const PHONE_WIDTH_QUERY = "(max-width: 768px)"

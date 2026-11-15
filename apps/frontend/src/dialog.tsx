@@ -3,12 +3,13 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 
-import { PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
+import { ConfirmSheet, PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
 import { Tooltip } from "@/components/common-ui/Display"
 import { Checkbox, Input } from "@/components/common-ui/Form"
 import { SearchSyntaxHelp } from "@/components/Display"
 
 import { useStats } from "./api/hooks"
+import { PHONE_WIDTH_QUERY, useIsNarrowViewport } from "./hooks/useIsNarrowViewport"
 import { useMenuPalette } from "./hooks/useMenuPalette"
 import { buildSearchToken } from "./lib/tagFormat"
 import { Z_OVERLAY_ABOVE_DRAWER, Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "./theme"
@@ -149,6 +150,16 @@ type DialogRequest =
     }
 
 let currentRequest: DialogRequest | null = null
+const requestKeys = new WeakMap<DialogRequest, number>()
+let nextRequestKey = 0
+function requestKey(request: DialogRequest): number {
+  let key = requestKeys.get(request)
+  if (key === undefined) {
+    key = nextRequestKey++
+    requestKeys.set(request, key)
+  }
+  return key
+}
 let listeners: (() => void)[] = []
 
 function setRequest(request: DialogRequest | null) {
@@ -1088,6 +1099,7 @@ export function DialogHost() {
   const [, forceUpdate] = useState(0)
   const [typedConfirmation, setTypedConfirmation] = useState("")
   const [promptValue, setPromptValue] = useState("")
+  const phone = useIsNarrowViewport(PHONE_WIDTH_QUERY)
 
   useEffect(() => {
     const listener = () => forceUpdate((n) => n + 1)
@@ -1322,6 +1334,39 @@ export function DialogHost() {
   const onCancel = request.kind === "prompt" ? cancelPrompt : confirmNo
   const onConfirm = request.kind === "prompt" ? submitPrompt : confirmYes
   const confirmationBlocked = requiredConfirmationWord !== null && typedConfirmation !== requiredConfirmationWord
+
+  if (phone && request.kind === "confirm") {
+    return (
+      <ConfirmSheet
+        // A fresh sheet per request, so each one slides in on its own.
+        key={requestKey(request)}
+        message={request.message}
+        danger={request.danger}
+        confirmLabel={t("common.ok") ?? "OK"}
+        cancelLabel={t("common.cancel") ?? "Cancel"}
+        confirmDisabled={confirmationBlocked}
+        onConfirm={confirmYes}
+        onCancel={confirmNo}
+      >
+        {requiredConfirmationWord !== null && (
+          <div style={{ textAlign: "left", marginBottom: 12 }}>
+            <label htmlFor="dialog-typed-confirmation" style={{ display: "block", fontSize: 13, marginBottom: 4 }}>
+              {t("common.typeToConfirm", { word: requiredConfirmationWord }) ?? undefined}
+            </label>
+            <input
+              id="dialog-typed-confirmation"
+              type="text"
+              className="stdinput"
+              style={{ width: "100%", height: 32, boxSizing: "border-box" }}
+              value={typedConfirmation}
+              autoComplete="off"
+              onChange={(e) => setTypedConfirmation(e.target.value)}
+            />
+          </div>
+        )}
+      </ConfirmSheet>
+    )
+  }
 
   return createPortal(
     <>
