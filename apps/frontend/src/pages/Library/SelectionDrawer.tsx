@@ -244,8 +244,8 @@ function SelectedRow({
   )
 }
 
-/** Grid view: the cover at the column's width, title under it. The grip and the remove button sit
- * on the cover as round `.modal-close-btn` chips, which every theme already colors for that. */
+/** Grid view: the cover at the column's width, title under it. The grip (a corner tab) and the
+ * remove button (a round chip) use `.modal-close-btn`, which every theme already colors. */
 function SelectedTile({
   id,
   handle,
@@ -271,11 +271,20 @@ function SelectedTile({
           {...handle.listeners}
           data-base-ui-swipe-ignore=""
           aria-label={t("library.dragToReorder") ?? undefined}
-          className="modal-close-btn absolute flex items-center justify-center rounded-full"
+          className="modal-close-btn absolute flex items-center justify-center"
           style={{
-            ...TILE_CHIP,
-            left: 4,
-            top: 4,
+            left: 0,
+            top: 0,
+            width: 28,
+            height: 36,
+            margin: 0,
+            fontSize: 14,
+            // A tab folded over the cover's corner: square to the cover's own 4px radius there,
+            // rounded on the side that faces the picture.
+            borderRadius: "4px 0 10px 0",
+            boxShadow: "none",
+            // See-through, so the tab covers less of the cover; solid while it is being dragged.
+            opacity: handle.isDragging ? 1 : 0.75,
             cursor: handle.isDragging ? "grabbing" : "grab",
             touchAction: "none",
           }}
