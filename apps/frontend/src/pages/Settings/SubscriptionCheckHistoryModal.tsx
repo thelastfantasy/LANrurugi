@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next"
 import { useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -75,7 +76,7 @@ function Verdict({ record }: { record: CandidateRecord }) {
 }
 
 /** A cycle's outcome as plain text, for the `<option>` that names it. */
-function outcomeText(cycle: CheckCycle, t: (k: string, o?: Record<string, unknown>) => string | null) {
+function outcomeText(cycle: CheckCycle, t: TFunction) {
   const o = cycle.outcome
   if (o === "completed") return t("subscriptions.outcomeCompleted") ?? ""
   if ("failed" in o) return t("subscriptions.outcomeFailed", { reason: o.failed.reason }) ?? ""

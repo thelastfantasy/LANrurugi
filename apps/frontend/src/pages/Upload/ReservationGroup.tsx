@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
@@ -16,7 +17,7 @@ import { ICON_BUTTON_STYLE } from "./shared"
  * Reasons arrive as keys (`insufficient_credit`, `download_failed:<detail>`) rather than English
  * prose precisely so they can be translated; an unrecognised key falls back to showing itself,
  * which is more useful than an empty cell. */
-function reasonText(reason: string, t: (k: string, o?: Record<string, unknown>) => string | null) {
+function reasonText(reason: string, t: TFunction) {
   if (reason === "source_unreachable") return t("reservations.sourceUnreachable") ?? reason
   if (reason === "insufficient_credit") return t("reservations.insufficientCredit") ?? reason
   if (reason.startsWith("download_failed:")) {

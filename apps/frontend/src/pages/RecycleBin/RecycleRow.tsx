@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next"
 import type { CSSProperties } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -354,7 +355,7 @@ function TankMemberList({ members }: { members: RecycleEntry["members"] }) {
 
 function conflictText(
   conflict: NonNullable<RecycleEntry["conflict"]>,
-  t: (key: string) => string,
+  t: TFunction,
 ): string {
   switch (conflict) {
     case "identical_archive_exists":
@@ -370,7 +371,7 @@ function conflictText(
 
 function remainingLabel(
   entry: RecycleEntry,
-  t: (key: string, options?: Record<string, unknown>) => string,
+  t: TFunction,
 ): string {
   if (entry.remaining_seconds === null) return t("recycleBin.keptForever")
   const seconds = entry.remaining_seconds
@@ -381,6 +382,6 @@ function remainingLabel(
   return t("recycleBin.hoursLeft", { count: hours })
 }
 
-function conflictLabel(entry: RecycleEntry, t: (key: string) => string): string {
+function conflictLabel(entry: RecycleEntry, t: TFunction): string {
   return entry.conflict ? conflictText(entry.conflict, t) : ""
 }

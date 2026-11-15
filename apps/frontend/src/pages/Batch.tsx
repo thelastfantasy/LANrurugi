@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query"
+import type { TFunction } from "i18next"
 import { lazy, Suspense, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
@@ -28,7 +29,7 @@ type Operation = "plugin" | "clearnew" | "tagrules" | "addcat" | "share" | "dele
 
 /** Legacy's own progress line uses a DOM-id template, not `{{}}` interpolation — substituted the
  * same way rather than adding a second, differently-shaped key across all 14 locales. */
-function formatProgress(t: (key: string) => string, done: number, total: number): string {
+function formatProgress(t: TFunction, done: number, total: number): string {
   return t('Processed <span id="arcs"></span> out of <span id="totalarcs"></span>')
     .replace('<span id="arcs"></span>', String(done))
     .replace('<span id="totalarcs"></span>', String(total))

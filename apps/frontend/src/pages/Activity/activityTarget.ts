@@ -1,3 +1,5 @@
+import type { TFunction } from "i18next"
+
 import { routes } from "@/lib/routes"
 
 /** Turns `"archive.delete"` into a `("archive", "delete")` pair — shared by every place that needs
@@ -33,7 +35,7 @@ const ACTION_TYPE_NAMESPACE_ORDER = [
 /** Sort comparator for a list of `action_type` strings — namespace order first
  * (`ACTION_TYPE_NAMESPACE_ORDER`), then alphabetically by translated label within a namespace. */
 export function compareActionTypesForDisplay(
-  t: (key: string, opts?: Record<string, unknown>) => string | null,
+  t: TFunction,
   a: string,
   b: string,
 ): number {
@@ -50,7 +52,7 @@ export function compareActionTypesForDisplay(
 
 /** The one real label function for an `action_type` — every caller uses this instead of its own
  * inline `t(...)`, so a translation gap resolves to the same fallback everywhere. */
-export function actionTypeLabel(t: (key: string, opts?: Record<string, unknown>) => string | null, actionType: string): string {
+export function actionTypeLabel(t: TFunction, actionType: string): string {
   return t(`activity.actionType.${actionType}`, { defaultValue: splitActionTypeNamespace(actionType).leaf }) ?? actionType
 }
 
@@ -76,7 +78,7 @@ export function isDeletionActionType(actionType: string): boolean {
 
 /** `"success"` | `"failure"` → its i18n display label — same "one shared lookup" reasoning as
  * `actionTypeLabel` above. */
-export function outcomeLabel(t: (key: string) => string | null, status: string): string {
+export function outcomeLabel(t: TFunction, status: string): string {
   return (status === "failure" ? t("activity.outcomeFailure") : t("activity.outcomeSuccess")) ?? status
 }
 

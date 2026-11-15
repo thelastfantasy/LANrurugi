@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next"
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -221,7 +222,7 @@ export function RecycleBinSection({
   )
 }
 
-function passwordError(err: unknown, t: (key: string) => string): string {
+function passwordError(err: unknown, t: TFunction): string {
   if (err instanceof ApiError) {
     const body = err.body as { error?: string } | undefined
     if (body?.error === "safety_password_locked") return t("safetyPassword.locked")

@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next"
 import { useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
@@ -31,7 +32,7 @@ function maskToken(token: string): string {
   return `${token.slice(0, 8)}${"*".repeat(MASK_STAR_COUNT)}${token.slice(-4)}`
 }
 
-async function copyToClipboard(value: string, t: (key: string) => string | null) {
+async function copyToClipboard(value: string, t: TFunction) {
   if (await copyText(value)) {
     toast({ heading: t("Copied to clipboard!") ?? undefined, icon: "info", hideAfter: 3000 })
   } else {
@@ -40,7 +41,7 @@ async function copyToClipboard(value: string, t: (key: string) => string | null)
 }
 
 /** Marks a token's role inline in the Name column via icon + tooltip, instead of a separate column. */
-function RoleMarker({ role, t }: { role: TokenRole; t: (key: string) => string | null }) {
+function RoleMarker({ role, t }: { role: TokenRole; t: TFunction }) {
   const icon = role === "guest" ? "fa-eye" : "fa-user-shield"
   const label = role === "guest" ? t("Guest") : t("Admin")
   return (

@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next"
 import type { ReactNode } from "react"
 
 import type { ApiToken } from "@/api/types"
@@ -6,7 +7,7 @@ import type { ActivityEntry } from "@/api/types"
 import { actorKindColor } from "./activityColors"
 
 export function actorChipParts(
-  t: (key: string, opts?: Record<string, unknown>) => string | null,
+  t: TFunction,
   entry: ActivityEntry,
   token: ApiToken | undefined,
 ): { label: ReactNode; color: ReturnType<typeof actorKindColor>; tooltip: ReactNode | undefined } {

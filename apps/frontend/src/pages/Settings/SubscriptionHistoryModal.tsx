@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next"
 import { useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -87,7 +88,7 @@ const ROW_CLASS = {
 
 /** A queue item's own state in one word — the same vocabulary the subscription modal uses, so a
  *  state reads the same wherever it appears. */
-function stateLabel(state: string, t: (k: string) => string | null) {
+function stateLabel(state: string, t: TFunction) {
   switch (state) {
     case "done":
       return t("upload.done")

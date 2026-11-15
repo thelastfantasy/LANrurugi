@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query"
+import type { TFunction } from "i18next"
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -592,7 +593,7 @@ function AutoRenameToggle({
   autoRename,
   setAutoRename,
 }: {
-  t: (key: string) => string
+  t: TFunction
   autoRename: boolean
   setAutoRename: (value: boolean) => void
 }) {
@@ -613,7 +614,7 @@ function AutoRenameToggle({
   )
 }
 
-type ConfirmProps = { t: (key: string) => string; disabled: boolean; onConfirm: () => void }
+type ConfirmProps = { t: TFunction; disabled: boolean; onConfirm: () => void }
 
 /** Desktop "create Tankoubon": legacy shape — the label takes the slack, the toggle trails it. */
 function PcCreateButton({
