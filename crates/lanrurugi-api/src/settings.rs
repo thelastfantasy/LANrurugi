@@ -424,6 +424,8 @@ const NUMBER_FIELDS: &[(&str, i64)] = &[
         "access_token_lifetime_secs",
         lanrurugi_core::session::DEFAULT_ACCESS_TOKEN_LIFETIME_SECS as i64,
     ),
+    // Optional hard cap on a session's total age; `0` (the default) means none, so a session lives
+    // as long as it is used at least once per `refresh_token_idle_lifetime_secs`.
     (
         "refresh_token_lifetime_secs",
         lanrurugi_core::session::DEFAULT_REFRESH_TOKEN_LIFETIME_SECS as i64,
@@ -583,11 +585,19 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
             | "refresh_token_lifetime_secs"
             | "refresh_token_idle_lifetime_secs"
     ) {
-        let secs = value.as_i64();
-        if secs.is_none_or(|secs| secs < 60) {
-            return Err(format!(
-                "Field \"{key}\" must be a number of seconds >= 60."
-            ));
+        // `refresh_token_lifetime_secs` additionally accepts exactly `0`, meaning "no absolute
+        // cap": the session then lives as long as it keeps being used, bounded only by the idle
+        // window. Any other value still has to be a real duration.
+        let acceptable = |secs: i64| match key {
+            "refresh_token_lifetime_secs" => secs == 0 || secs >= 60,
+            _ => secs >= 60,
+        };
+        if !value.as_i64().is_some_and(acceptable) {
+            return Err(if key == "refresh_token_lifetime_secs" {
+                format!("Field \"{key}\" must be 0 (no absolute cap) or a number of seconds >= 60.")
+            } else {
+                format!("Field \"{key}\" must be a number of seconds >= 60.")
+            });
         }
     }
     if key == "recycle_retention_days" || key == "recycle_max_size_gb" {
@@ -1072,9 +1082,15 @@ async fn put_settings(
     // the newest configured number of active families and evict the oldest rest. `0` means
     // unlimited and the repository's own `enforce_device_limit` is a no-op for it.
     if let Some(max_login_devices) = new_max_login_devices {
+        // Eviction has to prune families against the same (just-written) cap the rest of the
+        // server uses, so read the config back rather than re-deriving the clamp here.
+        let absolute_lifetime_secs = crate::auth::load(&state)
+            .await
+            .map(|cfg| cfg.refresh_token_lifetime_secs as i64)
+            .unwrap_or(0);
         match state
             .refresh_tokens
-            .enforce_device_limit(now_secs(), max_login_devices)
+            .enforce_device_limit(now_secs(), max_login_devices, absolute_lifetime_secs)
             .await
         {
             Ok(evicted) if !evicted.is_empty() => {
@@ -1280,6 +1296,22 @@ mod validate_setting_field_tests {
     fn rejects_a_bogus_theme_value() {
         let err = validate_setting_field("theme", &json!("../../etc/passwd")).unwrap_err();
         assert!(err.contains("Invalid theme"));
+    }
+
+    #[test]
+    fn absolute_session_cap_accepts_zero_and_rejects_tiny_values() {
+        // `0` = no absolute cap at all, so an actively-used session never expires.
+        assert_eq!(
+            validate_setting_field("refresh_token_lifetime_secs", &json!(0)).unwrap(),
+            "0"
+        );
+        // Anything else must still be a real duration; a 30-second cap would log everyone out
+        // almost immediately, so the same >= 60 floor applies.
+        assert!(validate_setting_field("refresh_token_lifetime_secs", &json!(30)).is_err());
+        assert!(validate_setting_field("refresh_token_lifetime_secs", &json!(604_800)).is_ok());
+        // The idle window and access token lifetime have no "unlimited" meaning.
+        assert!(validate_setting_field("refresh_token_idle_lifetime_secs", &json!(0)).is_err());
+        assert!(validate_setting_field("access_token_lifetime_secs", &json!(0)).is_err());
     }
 
     #[test]
