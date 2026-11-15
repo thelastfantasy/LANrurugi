@@ -24,6 +24,13 @@
     "en": "Database API"
   },
   {
+    "key": "integrity_backfill",
+    "zh": "完整性回填 API",
+    "en": "Integrity Backfill API",
+    "description_zh": "为 027 之前入库的档案补算整文件 BLAKE3 指纹：启动与停止后台任务。",
+    "description_en": "Backfill the whole-file BLAKE3 fingerprint for archives catalogued before it was recorded: start and stop the background job."
+  },
+  {
     "key": "categories",
     "zh": "分类 API",
     "en": "Category API"
