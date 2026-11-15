@@ -562,7 +562,7 @@ checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1095,7 +1095,7 @@ checksum = "46d07918caa9eeaaf06b7873925c53a61daac173539b4f7715090745e44e4e69"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1115,7 +1115,7 @@ checksum = "6a1f896587b6f2c069c73d2f0913e2d590c3990285cd2f0b6aa02b786b4c679c"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1382,7 +1382,7 @@ dependencies = [
  "heck",
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1670,9 +1670,9 @@ dependencies = [
 
 [[package]]
 name = "crc32fast"
-version = "1.5.4"
+version = "1.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f97d3416d5337d15c4b0d78c8c91df922ca143f57ec20e2d1c188333047ef04"
+checksum = "2b929dd2a135771f40afabd1073f85eed59c800b7c61901e5c254270497dad64"
 dependencies = [
  "cfg-if",
 ]
@@ -1883,7 +1883,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "strsim",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1905,7 +1905,7 @@ checksum = "2ac7135c3ef02b2f7833bbeb1be5ba7f966dcde8a87c6b87f65a778d71a02785"
 dependencies = [
  "darling_core 0.24.1",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1954,7 +1954,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 3.0.9",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -2126,7 +2126,7 @@ checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -2255,7 +2255,7 @@ checksum = "0590c4a94da3372e83493b956755a6e2266830b6e4e3b101afe66e3f39477b91"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -2275,7 +2275,7 @@ checksum = "a65863d15a4ce2888bd2f0f543cc963d3879c3a022c8ee43f6141d479a3ac815"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -2320,7 +2320,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2442,9 +2442,9 @@ checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
 
 [[package]]
 name = "flate2"
-version = "1.1.10"
+version = "1.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
+checksum = "626d4928326b646e70f65ed36fc7cf9f206bdb68a0019ee7c6b4709da4e084c4"
 dependencies = [
  "crc32fast",
  "miniz_oxide 0.9.1",
@@ -2628,7 +2628,7 @@ checksum = "9fb9654ba8355388abeb8dcb4fc62f511300867002afc858860463bdd9fe0c44"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -3394,6 +3394,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "if-addrs"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b2eeee38fef3aa9b4cc5f1beea8a2444fc00e7377cafae396de3f5c2065e24"
+dependencies = [
+ "libc",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "if_chain"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3753,8 +3763,6 @@ dependencies = [
 [[package]]
 name = "iroh-relay"
 version = "1.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e5589e7c1475700686603a970275687f760df853bc6525c7eb1347aa31d7230"
 dependencies = [
  "blake3",
  "bytes",
@@ -3794,6 +3802,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "simdutf8",
+ "socket2",
  "strum 0.28.0",
  "time",
  "tokio",
@@ -3817,7 +3826,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4090,7 +4099,7 @@ checksum = "d4345964bb142484797b161f473a503a434de77149dd8c7427788c6e13379388"
 
 [[package]]
 name = "lanrurugi-api"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "axum",
  "bao-tree",
@@ -4106,6 +4115,8 @@ dependencies = [
  "futures-util",
  "governor",
  "hkdf",
+ "hmac",
+ "if-addrs",
  "image",
  "ipnet",
  "iroh",
@@ -4125,11 +4136,13 @@ dependencies = [
  "lanrurugi-recommend",
  "lanrurugi-scanner",
  "lanrurugi-search",
+ "lanrurugi-share",
  "lanrurugi-share-proto",
  "lanrurugi-storage",
  "lanrurugi-translate",
  "libc",
  "maxminddb",
+ "netwatch",
  "percent-encoding",
  "pkarr",
  "rand 0.10.3",
@@ -4164,12 +4177,12 @@ dependencies = [
  "url",
  "uuid",
  "woothee",
- "zip 9.4.1",
+ "zip 9.5.1",
 ]
 
 [[package]]
 name = "lanrurugi-api-docgen"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -4177,12 +4190,12 @@ dependencies = [
  "serde",
  "serde-saphyr",
  "serde_json",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
 name = "lanrurugi-backup"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "deadpool-redis",
  "lanrurugi-core",
@@ -4200,7 +4213,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-bench"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -4221,12 +4234,12 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
- "zip 9.4.1",
+ "zip 9.5.1",
 ]
 
 [[package]]
 name = "lanrurugi-book"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -4237,7 +4250,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-book-worker"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "base64 0.23.1",
  "chardetng",
@@ -4255,16 +4268,19 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "webpx",
- "zip 9.4.1",
+ "zip 9.5.1",
 ]
 
 [[package]]
 name = "lanrurugi-core"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "base64 0.23.1",
  "bcrypt",
+ "blake3",
+ "governor",
  "hmac",
+ "libc",
  "rayon",
  "reqwest",
  "serde",
@@ -4278,8 +4294,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lanrurugi-egress"
+version = "1.0.0-beta.6"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "lanrurugi-embed-ipc"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "serde",
  "tarpc",
@@ -4288,7 +4311,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-embed-worker"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "futures",
  "lanrurugi-embed-ipc",
@@ -4302,7 +4325,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-equivalence"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "ferrous-opencc",
  "serde",
@@ -4314,7 +4337,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-fontcache"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "deadpool-redis",
  "image",
@@ -4329,7 +4352,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-gpu-ipc"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "bincode 2.0.1",
  "serde",
@@ -4339,7 +4362,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-gpu-worker"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "futures",
  "image",
@@ -4354,7 +4377,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-imgcompare"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "image",
  "image_hasher",
@@ -4366,12 +4389,12 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",
- "zip 9.4.1",
+ "zip 9.5.1",
 ]
 
 [[package]]
 name = "lanrurugi-inpaint"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "image",
  "imageproc",
@@ -4384,7 +4407,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-llm"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "axum",
  "chrono",
@@ -4402,7 +4425,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-ocr"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "image",
  "imageproc",
@@ -4423,7 +4446,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-plugin"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "lanrurugi-core",
  "reqwest",
@@ -4438,7 +4461,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-plugin-converter"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "anyhow",
  "axum",
@@ -4452,7 +4475,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-recommend"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "futures-util",
  "lanrurugi-core",
@@ -4471,7 +4494,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-scanner"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "avif-decode",
  "bytes",
@@ -4487,6 +4510,7 @@ dependencies = [
  "jxl-image-rs-integration",
  "lanrurugi-book",
  "lanrurugi-core",
+ "lanrurugi-recommend",
  "lanrurugi-search",
  "lanrurugi-storage",
  "libarchive2-sys",
@@ -4504,12 +4528,12 @@ dependencies = [
  "tracing",
  "uuid",
  "webpx",
- "zip 9.4.1",
+ "zip 9.5.1",
 ]
 
 [[package]]
 name = "lanrurugi-search"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -4527,7 +4551,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-server"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "anyhow",
  "axum",
@@ -4570,8 +4594,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "lanrurugi-share"
+version = "1.0.0-beta.6"
+dependencies = [
+ "bao-tree",
+ "blake3",
+ "bytes",
+ "chrono",
+ "chrono-tz",
+ "deadpool-redis",
+ "ed25519-dalek",
+ "futures-util",
+ "hkdf",
+ "if-addrs",
+ "iroh",
+ "iroh-mdns-address-lookup",
+ "iroh-relay",
+ "lanrurugi-core",
+ "lanrurugi-scanner",
+ "lanrurugi-share-proto",
+ "lanrurugi-storage",
+ "netwatch",
+ "pkarr",
+ "rand 0.10.3",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-socks",
+ "tokio-util",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "lanrurugi-share-proto"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -4589,8 +4652,9 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-storage"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
+ "chrono",
  "deadpool-redis",
  "ipnet",
  "lanrurugi-core",
@@ -4610,7 +4674,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-translate"
-version = "1.0.0-beta.5"
+version = "1.0.0-beta.6"
 dependencies = [
  "ab_glyph",
  "chrono",
@@ -5053,7 +5117,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rustversion",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -5373,8 +5437,6 @@ dependencies = [
 [[package]]
 name = "netwatch"
 version = "0.19.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39da9cad5f23aa43401f09497d3b280e51b5feba115d9ffbf38ca35d6ff95e96"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -5546,9 +5608,9 @@ dependencies = [
 
 [[package]]
 name = "notify"
-version = "8.2.1"
+version = "8.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82f812702fbc75d35416d3f884e04925be7e9498f4eceea2e24ba34559284674"
+checksum = "c41a04a5f59df9322cc657286dd2d79f90816119b22c5f847607c850110205ab"
 dependencies = [
  "bitflags",
  "inotify",
@@ -5579,21 +5641,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3b335231dfd352ffb0f8017f3b6027a4917f7df785ea2143d8af2adc66980ae"
 dependencies = [
  "winapi",
-]
-
-[[package]]
-name = "ntimestamp"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c50f94c405726d3e0095e89e72f75ce7f6587b94a8bd8dc8054b73f65c0fd68c"
-dependencies = [
- "base32",
- "document-features",
- "getrandom 0.2.17",
- "httpdate",
- "js-sys",
- "once_cell",
- "serde",
 ]
 
 [[package]]
@@ -5783,7 +5830,7 @@ dependencies = [
  "darling 0.24.1",
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -6536,9 +6583,9 @@ checksum = "ad78bf43dcf80e8f950c92b84f938a0fc7590b7f6866fbcbeca781609c115590"
 
 [[package]]
 name = "pkarr"
-version = "8.1.0"
+version = "9.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fa6e085dac5eb00b309bfafd0fa0db088a7d3aaad4b5de75db4732e7c7f7595"
+checksum = "c5e60e8b1fb1417698295416b1b1b1bd457b425deab835d6871422012ab3a50b"
 dependencies = [
  "base32",
  "bytes",
@@ -6546,7 +6593,8 @@ dependencies = [
  "document-features",
  "ed25519-dalek",
  "getrandom 0.4.3",
- "ntimestamp",
+ "httpdate",
+ "js-sys",
  "self_cell",
  "serde",
  "simple-dns",
@@ -6864,7 +6912,7 @@ checksum = "1c8d9ca532f185d5d4db7a7c9d51420b452168ea1c2b913953281bd6fe1fcbd0"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -6989,7 +7037,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7338,7 +7386,7 @@ checksum = "92ecd8964f8453721699a1ed72037b0db49ce2f5a5138486ee89bed6f67cdf3a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -7528,7 +7576,7 @@ checksum = "1c25ef604ac7dd839d44d64648952ea23c97866f124ff671b0ed2cf3ad9bb06e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -7600,7 +7648,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7693,7 +7741,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7962,12 +8010,12 @@ dependencies = [
 
 [[package]]
 name = "serde-saphyr"
-version = "2.0.0"
+version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a253edfdea34032da21af84e16fcc94f4c7a6ba237f9f3bc2dbf43cea8535c44"
+checksum = "d43fb82d550b07e6f929a58d7d0935182602f48ddead875f5ee313c41c8f07fe"
 dependencies = [
  "annotate-snippets",
- "base64 0.23.1",
+ "base64 0.22.1",
  "encoding_rs_io",
  "granit-parser",
  "nohash-hasher",
@@ -8004,7 +8052,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -8519,9 +8567,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.9"
+version = "3.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d78c8dee4c7bf0e14673097256fed6142ce9d3b85a408189d07482442145823b"
+checksum = "4ae9ccbea3a7b0b09443036490c8f34a8b1b760fd345e5c0dae0aac718faea79"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8567,7 +8615,7 @@ checksum = "901704edd0dfe137f1987838ee4f259e4e063c31371bdb423f7ae38ec6f77f02"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -8659,7 +8707,7 @@ checksum = "57c1932595af3b23fc8635cc23c28c54fb658622e261ad7f8f026da70e69f350"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -8669,10 +8717,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8727,7 +8775,7 @@ checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -8885,7 +8933,7 @@ checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -9487,9 +9535,9 @@ checksum = "3a3b425286980a367278453f3b6d28cdcb134b574e5a35824a6ff5eebad50bb6"
 
 [[package]]
 name = "uuid"
-version = "1.29.0"
+version = "1.29.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a0e2d11620c50695fe12bbbfde96b3477fe606e7284c22d505c12ce51214514"
+checksum = "bed99139f7dac9b5cfe5f17be4d66dc7079a34dee1d74bcc77217119240e267c"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
@@ -9635,7 +9683,7 @@ dependencies = [
  "bumpalo",
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
  "wasm-bindgen-shared",
 ]
 
@@ -9678,7 +9726,7 @@ checksum = "3b84b5ac638bfb168196a1a461fcc8f46a294a18b1b6be52133b4e0db122cc9f"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -9811,7 +9859,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9946,6 +9994,15 @@ name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
+dependencies = [
+ "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "windows-sys"
+version = "0.59.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets 0.52.6",
 ]
@@ -10243,7 +10300,7 @@ checksum = "ec8ebde2db3681e8c9980cc27822030e68752690ddfa9473e739aeb4dbde6d71"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
  "synstructure 0.14.0",
 ]
 
@@ -10330,7 +10387,7 @@ checksum = "f75b4683f6c7f45248d4d64056a24298c6281e0993356d7d1b4a1a962ef10d4a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
  "synstructure 0.14.0",
 ]
 
@@ -10386,7 +10443,7 @@ checksum = "c3743ddbf47738d929cd1ae2e199d40d0162979dfe31aef8ae646d2bf00bf97a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.9",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -10404,9 +10461,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.4.1"
+version = "9.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23f17fbc870bfac28c6228aed7d6e6df352e26bf7015c4313727e16a7a01ce5e"
+checksum = "e3476fd497ac8af5b1ec7b51acab7bef380f7e8dd8e0487595bafd839417a302"
 dependencies = [
  "aes 0.9.3",
  "bzip2",

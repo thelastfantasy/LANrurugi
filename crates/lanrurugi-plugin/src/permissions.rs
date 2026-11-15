@@ -4,7 +4,12 @@
 use crate::protocol::DeclaredPermissions;
 
 /// Builds the `net`/`write` Deno CLI flags for a subprocess allowed to run exactly the declared
-/// permission set and nothing else. `read` is handled separately by
+/// permission set and nothing else. `net` is granted as the declared host list: the dispatcher
+/// keeps Deno's native `fetch` whenever the egress shim is loaded (`LD_PRELOAD`, see
+/// [`crate::pool::Worker::spawn`]), and Deno itself is then what enforces "only these hosts" —
+/// while the shim makes every socket leave through the chosen interface. When the shim is *not*
+/// loaded the dispatcher falls back to the host relay and revokes this grant, so the list is
+/// enforced either way. `read` is handled separately by
 /// [`crate::pool::Worker::spawn`]: the dispatcher mechanically needs to *read* the plugin's own
 /// `.ts` file to `import()` it regardless of what the plugin declares, so that baseline need is
 /// computed there (scoped to just the dispatcher + plugin file paths) rather than here, and is
@@ -13,6 +18,7 @@ use crate::protocol::DeclaredPermissions;
 pub fn build_flags(permissions: &DeclaredPermissions) -> Vec<String> {
     let mut flags = Vec::new();
     if !permissions.net.is_empty() {
+        // Deno accepts a comma-separated list; each entry is one declared host name.
         flags.push(format!("--allow-net={}", permissions.net.join(",")));
     }
     if permissions.write {
@@ -36,12 +42,14 @@ mod tests {
     }
 
     #[test]
-    fn net_permission_lists_only_declared_hosts() {
+    fn declared_hosts_become_the_net_grant() {
         let perms = DeclaredPermissions {
             net: vec!["api.example.com".to_string(), "cdn.example.com".to_string()],
             read: false,
             write: false,
         };
+        // Native `fetch` (shim loaded) needs the grant; the relay path revokes it at startup, so
+        // the list is never absent from enforcement.
         assert_eq!(
             build_flags(&perms),
             vec!["--allow-net=api.example.com,cdn.example.com".to_string()]

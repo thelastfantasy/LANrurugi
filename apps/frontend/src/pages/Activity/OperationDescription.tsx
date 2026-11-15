@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next"
 import { useTranslation } from "react-i18next"
 import { Link } from "react-router-dom"
 
@@ -65,7 +66,7 @@ const BOOKMARK_ACTION_TYPES = new Set(["bookmark.add", "bookmark.remove"])
 /** `translation.settings_update`'s own `after.{provider,targetLanguage,lookaheadPages}` — never
  * the stored credential itself (FR-006), just the non-secret fields worth surfacing. */
 function readTranslationSettingsSummary(
-  t: (key: string, opts?: Record<string, unknown>) => string | null,
+  t: TFunction,
   value: unknown,
 ): string | undefined {
   if (!value || typeof value !== "object") return undefined
@@ -110,7 +111,7 @@ export function readLlmCallAfter(value: unknown): LlmCallAfter | undefined {
 /** "deepseek · deepseek-v4-flash · en · 1,240 tokens (860 cached) · $0.0012" — every part is
  * independently optional since not every provider reports every field (see
  * `ActivityClientReportedInfo`'s own "not every provider reports the same shape" precedent). */
-function llmCallSummary(t: (key: string, opts?: Record<string, unknown>) => string | null, after: LlmCallAfter): string {
+function llmCallSummary(t: TFunction, after: LlmCallAfter): string {
   const parts: string[] = []
   if (after.provider) parts.push(after.model ? `${after.provider} · ${after.model}` : after.provider)
   if (after.targetLanguage) parts.push(after.targetLanguage)
@@ -140,7 +141,7 @@ function readRatingTag(value: unknown): string | null | undefined {
 /** Short single-line summary of a metadata-update's `after` (title change + tag counts) for the
  * "操作内容" column. `undefined` lets the caller fall back to just the title. */
 function metadataChangeSummary(
-  t: (key: string, opts?: Record<string, unknown>) => string | null,
+  t: TFunction,
   before: unknown,
   after: unknown,
 ): string | undefined {

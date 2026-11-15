@@ -60,8 +60,11 @@ pub struct LiveAuthConfig {
     /// Overridable via the `access_token_lifetime_secs` setting (`settings.rs::NUMBER_FIELDS`) —
     /// falls back to `lanrurugi_core::session::DEFAULT_ACCESS_TOKEN_LIFETIME_SECS` when unset.
     pub access_token_lifetime_secs: u64,
-    /// Overridable via the `refresh_token_lifetime_secs` setting, same pattern as above — falls
-    /// back to `lanrurugi_core::session::DEFAULT_REFRESH_TOKEN_LIFETIME_SECS`.
+    /// Hard cap on a session's total age, counted from the original login. `0` (the default) means
+    /// no cap. Never allowed to be shorter than `refresh_token_idle_lifetime_secs` (clamped in
+    /// [`load`]): a shorter cap would silently override the idle window, which is what made
+    /// beta.5 ask for a password after 7 days even though the site was used daily.
+    /// Overridable via the `refresh_token_lifetime_secs` setting.
     pub refresh_token_lifetime_secs: u64,
     /// Sliding idle window for refresh-token rotation, capped by `refresh_token_lifetime_secs`.
     /// Falls back to `lanrurugi_core::session::DEFAULT_REFRESH_TOKEN_IDLE_LIFETIME_SECS`; setting
@@ -130,6 +133,10 @@ pub async fn load(state: &AppState) -> Result<LiveAuthConfig, AuthConfigError> {
     let refresh_token_idle_lifetime_secs = refresh_token_idle_lifetime_secs
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(lanrurugi_core::session::DEFAULT_REFRESH_TOKEN_IDLE_LIFETIME_SECS);
+    let refresh_token_lifetime_secs = clamp_absolute_lifetime(
+        refresh_token_lifetime_secs,
+        refresh_token_idle_lifetime_secs,
+    );
     let max_login_devices = max_login_devices
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(lanrurugi_core::session::DEFAULT_MAX_LOGIN_DEVICES);
@@ -232,7 +239,13 @@ pub async fn session_is_live(
         .expect("system clock is after the Unix epoch")
         .as_secs() as i64;
     match state.refresh_tokens.get_family_meta(&family_id).await {
-        Ok(Some(meta)) => now <= meta.expires_at && now <= meta.idle_expires_at,
+        // The absolute cap is evaluated against the family's `created_at` under the *current*
+        // setting, not against the snapshot stored at login, so a settings change applies to
+        // sessions that already exist.
+        Ok(Some(meta)) => {
+            now <= meta.expires_at_under(cfg.refresh_token_lifetime_secs as i64)
+                && now <= meta.idle_expires_at
+        }
         Ok(None) => false,
         Err(e) => {
             tracing::warn!(error = %e, "refresh-token family liveness lookup failed; treating session as live");
@@ -263,6 +276,18 @@ pub(crate) fn find_cookie(cookie_header: &str, name: &str) -> Option<String> {
     None
 }
 
+/// A configured absolute cap may only ever be *looser* than the idle window; clamping here (rather
+/// than at write time) keeps the stored setting honest while making sure no combination can turn
+/// the idle window into dead weight again — `refresh_token_lifetime_secs = 7d` with
+/// `..._idle_lifetime_secs = 14d` did exactly that in beta.5. `0` means "no cap" and stays `0`.
+fn clamp_absolute_lifetime(absolute: u64, idle: u64) -> u64 {
+    if absolute == 0 {
+        0
+    } else {
+        absolute.max(idle)
+    }
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     use std::fmt::Write;
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -278,4 +303,19 @@ fn hex_decode(s: &str) -> Vec<u8> {
         .filter_map(|i| s.get(i..i + 2))
         .filter_map(|byte| u8::from_str_radix(byte, 16).ok())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_absolute_lifetime;
+
+    #[test]
+    fn absolute_cap_is_never_tighter_than_the_idle_window() {
+        // The beta.5 default pair: 7-day cap, 14-day idle. The cap must yield to the window.
+        assert_eq!(clamp_absolute_lifetime(604_800, 1_209_600), 1_209_600);
+        assert_eq!(clamp_absolute_lifetime(1_209_600, 604_800), 1_209_600);
+        // `0` means "no cap" and must not be confused with "shorter than everything".
+        assert_eq!(clamp_absolute_lifetime(0, 604_800), 0);
+        assert_eq!(clamp_absolute_lifetime(0, 0), 0);
+    }
 }

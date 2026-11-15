@@ -1,15 +1,17 @@
-import type { MouseEvent } from "react"
+import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import type { ArchiveMetadata } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
 import { FormatBadge, StatusIcon } from "@/components/Display"
+import { useLongPress } from "@/hooks/useLongPress"
 import { routes } from "@/lib/routes"
 import { isBookExtension } from "@/lib/utils/bookFormats"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 
 import { CustomColumnCell } from "./CustomColumnCell"
 import { TagLine } from "./TagLine"
+import type { ContextMenuTrigger } from "./types"
 
 export function CompactTableRow({
   archive,
@@ -27,12 +29,15 @@ export function CompactTableRow({
   multiSelect: boolean
   onToggleSelected: (id: string) => void
   onOpen: (id: string) => void
-  onContextMenu: (e: MouseEvent, archive: ArchiveMetadata) => void
+  onContextMenu: (e: ContextMenuTrigger, archive: ArchiveMetadata) => void
   onSearchTag: (namespacedTag: string) => void
 }) {
   const { t } = useTranslation()
+  const [rowEl, setRowEl] = useState<HTMLTableRowElement | null>(null)
+  useLongPress(rowEl, (_, e) => onContextMenu(e, archive), { blockContextMenu: () => true })
   return (
     <tr
+      ref={setRowEl}
       key={archive.arcid}
       className={selectedIds.includes(archive.arcid) ? "msm-selected" : undefined}
       onContextMenu={(e) => onContextMenu(e, archive)}

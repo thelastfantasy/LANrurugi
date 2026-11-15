@@ -144,6 +144,19 @@ p, token_guest, /api/activity/:id, DELETE, deny
 p, token_guest, /api/activity/retention, PUT, deny
 p, token_guest, /api/archives, DELETE, deny
 p, token_guest, /api/database/drop, POST, deny
+# Duplicate review groups archives across the whole library, so it is not a guest surface even
+# though every call is a GET.
+p, token_guest, /api/database/duplicates, GET, deny
+p, token_guest, /api/database/duplicates, DELETE, deny
+p, token_guest, /api/database/duplicates/scan, POST, deny
+p, token_guest, /api/database/duplicates/groups, GET, deny
+p, token_guest, /api/database/duplicates/groups/:key, GET, deny
+p, token_guest, /api/database/duplicates/compare, GET, deny
+p, token_guest, /api/database/duplicates/patch, POST, deny
+p, token_guest, /api/database/blake3-backfill, POST, deny
+p, token_guest, /api/database/blake3-backfill, DELETE, deny
+p, token_guest, /api/database/duplicates/decisions, GET, deny
+p, token_guest, /api/database/duplicates/decisions, POST, deny
 p, token_guest, /api/database/import-legacy, POST, deny
 p, token_guest, /api/database/import-legacy/count, GET, deny
 p, token_guest, /api/database/import-snapshots, GET, deny
@@ -177,6 +190,10 @@ p, token_guest, /api/plugin-wizard/save, POST, deny
 # 017 FR-040: a whole tankoubon is an administrator download; read-only tokens are refused. Guest
 # visitors never reach it (absent from their whitelist).
 p, token_guest, /api/tankoubons/:id/download, GET, deny
+# The signed-link mint is the same whole-tankoubon download one hop earlier: it answers `GET`, so the
+# generic token_guest GET allow would otherwise hand out a `/api/dl/tankoubons/:id` URL that the
+# anonymous `/api/dl/*` allow accepts. Denying only the direct route left this open.
+p, token_guest, /api/tankoubons/:id/download-link, GET, deny
 # 017 FR-007: share management is administrators only.
 p, token_guest, /api/shares, GET, deny
 p, token_guest, /api/shares/*, GET, deny
@@ -186,6 +203,12 @@ p, token_guest, /api/shares/*, GET, deny
 p, anonymous, /api/share/r/*, *, allow
 p, guest_visitor, /api/share/r/*, *, allow
 p, token_guest, /api/share/r/*, *, allow
+# Signed download links (`direct_download`): the URL itself carries an HMAC over the resource and
+# an expiry, checked in the handler, so no other credential is involved.
+p, anonymous, /api/dl/*, *, allow
+p, guest_visitor, /api/dl/*, *, allow
+p, token_guest, /api/dl/*, *, allow
+
 # The one recipient write: a read-only token never opens a share; recipients need no token at all.
 p, token_guest, /api/share/r/open, POST, deny
 

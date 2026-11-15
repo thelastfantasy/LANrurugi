@@ -306,37 +306,51 @@ export interface QuickFilter {
   insert?: string
   /** Caret offset inside the inserted text; defaults to the end of it. */
   caret?: number
+  /** i18n key for the tooltip that explains what the chip matches. Optional so ad-hoc chips in
+   *  tests still type-check, but every real chip below carries one. */
+  hint?: string
 }
 
 export const QUICK_FILTERS: readonly QuickFilter[] = [
-  // `is:` — reading state, in the order a reader moves through it.
-  { token: "is:new" },
-  { token: "is:reading" },
-  { token: "is:read" },
-  { token: "is:unread" },
-  { token: "is:completed" },
-  { token: "is:incomplete" },
-  { token: "is:untagged" },
+  // `is:` — reading state, in the order a reader moves through it. The hints spell out the exact
+  // boundary each token uses, because the neighbouring ones differ by a threshold or by whether a
+  // never-opened archive counts (`is:read` vs `is:completed`, `is:unread` vs `is:incomplete`).
+  { token: "is:new", hint: "library.quickFilterHintIsNew" },
+  { token: "is:reading", hint: "library.quickFilterHintIsReading" },
+  { token: "is:read", hint: "library.quickFilterHintIsRead" },
+  { token: "is:unread", hint: "library.quickFilterHintIsUnread" },
+  { token: "is:completed", hint: "library.quickFilterHintIsCompleted" },
+  // The exact-finish counterpart. `is:completed` stops at 85%, so this percentage form is the only
+  // chip that means "read to the very last page" — the same thing the stats page counts as finished.
+  { token: "read:>=100%", hint: "library.quickFilterHintReadAtLeast100" },
+  { token: "is:incomplete", hint: "library.quickFilterHintIsIncomplete" },
+  { token: "is:untagged", hint: "library.quickFilterHintIsUntagged" },
   // `has:` — associated state.
-  { token: "has:patch" },
-  { token: "has:bookmark" },
-  { token: "has:category" },
-  { token: "has:split-suggestion" },
-  { token: "has:source" },
+  { token: "has:patch", hint: "library.quickFilterHintHasPatch" },
+  { token: "has:bookmark", hint: "library.quickFilterHintHasBookmark" },
+  { token: "has:category", hint: "library.quickFilterHintHasCategory" },
+  { token: "has:split-suggestion", hint: "library.quickFilterHintHasSplitSuggestion" },
+  { token: "has:source", hint: "library.quickFilterHintHasSource" },
   // The one negated chip. "Which archives never got a source tag" is a real maintenance query that
   // nothing else answers, and typing the leading minus by hand is exactly the kind of thing a chip
   // exists to avoid. Negation is a whole-term operator, so it toggles independently of `has:source`.
-  { token: "-has:source" },
+  { token: "-has:source", hint: "library.quickFilterHintNotHasSource" },
   // Membership, size and length: the three non-state things worth a single click. `is:tank` is
   // deliberately absent — the Library's own selector already covers Tankoubon rows, and having
   // both it and `in:tank` (membership) in one row reads as two spellings of the same filter.
-  { token: "in:tank" },
-  { token: "size:>=500M" },
-  { token: "pages:>200" },
+  { token: "in:tank", hint: "library.quickFilterHintInTank" },
+  { token: "size:>=500M", hint: "library.quickFilterHintSizeOver500M" },
+  { token: "pages:>200", hint: "library.quickFilterHintPagesOver200" },
   // Values the reader supplies: the caret lands inside the quotes on insert.
-  { token: 'bookmark:""', label: 'bookmark:"…"', namespace: "bookmark", caret: 10 },
-  { token: "rating:<3" },
-  { token: "rating:>=4" },
+  {
+    token: 'bookmark:""',
+    label: 'bookmark:"…"',
+    namespace: "bookmark",
+    caret: 10,
+    hint: "library.quickFilterHintBookmarkName",
+  },
+  { token: "rating:<3", hint: "library.quickFilterHintRatingBelow3" },
+  { token: "rating:>=4", hint: "library.quickFilterHintRatingAtLeast4" },
 ]
 
 /** The chips' tokens as plain strings — what the search bar's Enter-action map needs. */

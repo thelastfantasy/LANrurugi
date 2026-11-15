@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { type ReactNode, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { usePendingApprovals, useReservations, useSubscriptions } from "@/api/hooks"
@@ -18,7 +18,7 @@ import { SubscriptionsModal } from "./SubscriptionsModal"
  *
  * Renders nothing at all when no subscription exists: a feature nobody has turned on should not
  * take up a line on the upload page. */
-export function SubscriptionStatus() {
+export function SubscriptionStatus({ leading }: { leading?: ReactNode } = {}) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   /** The cross-subscription match history — the same modal the settings section's own heading opens.
@@ -30,7 +30,10 @@ export function SubscriptionStatus() {
   const reservations = useReservations()
 
   const all = subscriptions.data ?? []
-  if (all.length === 0) return null
+  if (all.length === 0 && !leading) return null
+  // One height for the whole row: the text pill below sizes itself from its own line box, so icon
+  // controls pinned to a different height read as misaligned next to it.
+  const ROW_BUTTON_SIZE = 26
   const waiting = pending.data?.length ?? 0
   const reserved = reservations.data?.length ?? 0
 
@@ -53,6 +56,18 @@ export function SubscriptionStatus() {
         paddingRight: 9,
       }}
     >
+      {leading && (
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            // With no counts to push them apart, this is what keeps the pills on the right.
+            marginRight: waiting > 0 || reserved > 0 ? undefined : "auto",
+          }}
+        >
+          {leading}
+        </span>
+      )}
       {(waiting > 0 || reserved > 0) && (
         <span
           style={{
@@ -81,6 +96,7 @@ export function SubscriptionStatus() {
         <button
           type="button"
           className="stdbtn icon-pill-btn"
+          style={{ width: ROW_BUTTON_SIZE, height: ROW_BUTTON_SIZE }}
           aria-label={t("subscriptions.historyTitle") ?? "Subscription match history"}
           onClick={() => setHistoryOpen(true)}
         >
@@ -95,6 +111,7 @@ export function SubscriptionStatus() {
         <button
           type="button"
           className="stdbtn pill-btn"
+          style={{ height: ROW_BUTTON_SIZE }}
           aria-label={t("upload.manageSubscriptions") ?? "Manage subscriptions"}
           onClick={() => setOpen(true)}
         >

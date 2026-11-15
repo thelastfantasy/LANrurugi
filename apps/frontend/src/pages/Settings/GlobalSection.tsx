@@ -1,8 +1,14 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { useCleanDatabase, useDropDatabase } from "@/api/hooks"
+import {
+  useBlake3Backfill,
+  useCleanDatabase,
+  useDropDatabase,
+  useStopBlake3Backfill,
+  useTidyTags,
+} from "@/api/hooks"
 import { NumberInput } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
 import { confirmDialog } from "@/dialog"
@@ -40,6 +46,8 @@ export function GlobalSection({
   setArchiveSplitSuggestionsEnabled,
   archiveSplitDeleteOriginalEnabled,
   setArchiveSplitDeleteOriginalEnabled,
+  ingestStrictVerify,
+  setIngestStrictVerify,
   guestmode,
   setGuestmode,
   newbadgemode,
@@ -49,6 +57,14 @@ export function GlobalSection({
   setKeyInput,
   recommendprecision,
   setRecommendprecision,
+  pluginBindInterface,
+  egressBinding,
+  pluginBindingScope,
+  setPluginBindInterface,
+  directDownloadUrl,
+  onDirectDownloadUrlChange,
+  interfaces,
+  defaultInterface,
   onStatus,
 }: {
   htmltitle: string
@@ -77,6 +93,8 @@ export function GlobalSection({
   setArchiveSplitSuggestionsEnabled: (v: boolean) => void
   archiveSplitDeleteOriginalEnabled: boolean
   setArchiveSplitDeleteOriginalEnabled: (v: boolean) => void
+  ingestStrictVerify: boolean
+  setIngestStrictVerify: (v: boolean) => void
   guestmode: boolean
   setGuestmode: (v: boolean) => void
   newbadgemode: string
@@ -86,13 +104,34 @@ export function GlobalSection({
   setKeyInput: (v: string) => void
   recommendprecision: string
   setRecommendprecision: (v: string) => void
+  pluginBindInterface: string
+  egressBinding?: { state: "unpinned" | "bound" | "failed"; interface: string | null }
+  /** What this platform can actually pin; the hint text and the picker follow it. */
+  pluginBindingScope?: "full" | "rust-only" | "none"
+  setPluginBindInterface: (v: string) => void
+  directDownloadUrl: string
+  onDirectDownloadUrlChange: (v: string) => void
+  interfaces: string[]
+  /** The interface the kernel routes internet traffic through right now, when it can be told. */
+  defaultInterface: string | null
   onStatus: (status: string) => void
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const browserSupport = getImageFormatSupport()
   const [editingKey, setEditingKey] = useState(false)
+  // Default route first, then the rest in name order: the list comes from readdir, which has no
+  // meaning to a user looking for "the one I am already on".
+  const orderedInterfaces = useMemo(() => {
+    const rest = interfaces.filter((name) => name !== defaultInterface).sort()
+    return defaultInterface && interfaces.includes(defaultInterface)
+      ? [defaultInterface, ...rest]
+      : rest
+  }, [interfaces, defaultInterface])
   const cleanDatabase = useCleanDatabase()
+  const tidyTags = useTidyTags()
+  const blake3Backfill = useBlake3Backfill()
+  const stopBlake3Backfill = useStopBlake3Backfill()
   const dropDatabase = useDropDatabase()
 
   return (
@@ -167,6 +206,76 @@ export function GlobalSection({
             )}
             <br />
             {t("settings.enteringADeepseekApiKey")}
+          </Row>
+          <Row label={t("settings.pluginInterface")}>
+            {pluginBindingScope === "none" ? (
+              t("settings.pluginInterfaceUnsupported")
+            ) : (
+              <>
+            {/* The kernel's own default route leads the list and is labelled both on the
+                "unbound" entry (what the user is actually getting right now) and on that
+                interface's own entry (what pinning it would reproduce). */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <select
+                className="stdinput"
+                style={{ flex: "1 1 auto", minWidth: 0 }}
+                value={pluginBindInterface}
+                onChange={(e) => setPluginBindInterface(e.target.value)}
+              >
+                <option value="">
+                  {t("settings.pluginInterfaceDefault")}
+                  {defaultInterface
+                    ? ` · ${t("settings.pluginInterfaceFollowing", { iface: defaultInterface })}`
+                    : ""}
+                </option>
+                {orderedInterfaces.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                    {name === defaultInterface
+                      ? ` · ${t("settings.pluginInterfaceSystemRoute")}`
+                      : ""}
+                  </option>
+                ))}
+              </select>
+              {pluginBindInterface ? (
+                <button
+                  type="button"
+                  className="stdbtn"
+                  style={{ minWidth: "auto", whiteSpace: "nowrap" }}
+                  onClick={() => setPluginBindInterface("")}
+                >
+                  {t("settings.pluginInterfaceReset")}
+                </button>
+              ) : null}
+            </div>
+            <br />
+            {pluginBindingScope === "rust-only"
+              ? t("settings.pluginInterfaceHintPartial")
+              : t("settings.pluginInterfaceHint")}
+            {egressBinding?.state === "failed" ? (
+              <>
+                <br />
+                <span className="diag-field-error">
+                  {t("settings.egressBindingFailed", {
+                    iface: egressBinding.interface ?? "",
+                  })}
+                </span>
+              </>
+            ) : null}
+              </>
+            )}
+          </Row>
+          <Row label={t("settings.directDownloadUrl")}>
+            <input
+              className="stdinput"
+              style={{ width: "100%" }}
+              value={directDownloadUrl}
+              onChange={(e) => onDirectDownloadUrlChange(e.target.value)}
+              placeholder="https://dl.example.org"
+              spellCheck={false}
+            />
+            <br />
+            {t("settings.directDownloadUrlHint")}
           </Row>
           <Row label={t("settings.recommendationPrecision")}>
             <select
@@ -285,6 +394,14 @@ export function GlobalSection({
           >
             {t("settings.archiveSplitDeleteOriginalDescription")}
           </CheckboxRow>
+          <CheckboxRow
+            id="ingest_strict_verify"
+            checked={ingestStrictVerify}
+            onChange={setIngestStrictVerify}
+            label={t("settings.ingestStrictVerify")}
+          >
+            {t("settings.ingestStrictVerifyDescription")}
+          </CheckboxRow>
           {/* Site-wide guest-mode switch (FR-003) — grants nothing alone; also needs a category
               marked visible to guests (Categories.tsx) to actually route guests in. */}
           <CheckboxRow
@@ -295,6 +412,71 @@ export function GlobalSection({
           >
             {t("settings.evenWithThePasswordProtection")}
           </CheckboxRow>
+          <ActionRow
+            id="tidy-tags"
+            label={t("settings.tidyTags")}
+            onClick={async () => {
+              const confirmed = await confirmDialog(
+                <div>
+                  <div>{t("settings.tidyTagsConfirmIntro")}</div>
+                  <ul
+                    style={{
+                      margin: "4px auto 0",
+                      padding: 0,
+                      listStyle: "none",
+                      display: "inline-block",
+                      textAlign: "left",
+                    }}
+                  >
+                    {[
+                      "settings.tidyTagsRuleDateAdded",
+                      "settings.tidyTagsRuleDuplicates",
+                      "settings.tidyTagsRuleWhitespace",
+                      "settings.tidyTagsRuleNamespace",
+                      "settings.tidyTagsRuleEmptyValue",
+                    ].map((key) => (
+                      <li key={key} style={{ padding: "2px 0" }}>
+                        • {t(key)}
+                      </li>
+                    ))}
+                  </ul>
+                  <div style={{ marginTop: 8 }}>{t("settings.tidyTagsConfirmNote")}</div>
+                </div>,
+              )
+              if (!confirmed) return
+              const result = await tidyTags.mutateAsync()
+              onStatus(
+                t("settings.tidyTagsResult", {
+                  scanned: result.scanned,
+                  repaired: result.repaired,
+                }),
+              )
+            }}
+          >
+            {t("settings.tidyTagsDescription")}
+          </ActionRow>
+          <ActionRow
+            id="blake3-backfill"
+            label={t("settings.blake3Backfill")}
+            onClick={async () => {
+              const result = await blake3Backfill.mutateAsync()
+              onStatus(
+                t(result.already_running ? "settings.blake3BackfillRunning" : "settings.blake3BackfillStarted"),
+              )
+            }}
+          >
+            {t("settings.blake3BackfillDescription")}{" "}
+            <button
+              type="button"
+              className="stdbtn"
+              onClick={async () => {
+                const result = await stopBlake3Backfill.mutateAsync()
+                onStatus(t(result.stopped ? "settings.blake3BackfillStopped" : "settings.blake3BackfillIdle"))
+              }}
+            >
+              {t("settings.blake3BackfillStop")}
+            </button>
+          </ActionRow>
           <ActionRow
             id="clean-db"
             label={t("settings.cleanDatabase")}

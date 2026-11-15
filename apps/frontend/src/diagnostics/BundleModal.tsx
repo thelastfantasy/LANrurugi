@@ -9,6 +9,7 @@ import {
   formatLocal,
   parseLocal,
 } from "@/components/common-ui/Form/DateTimeField"
+import { copyText } from "@/lib/clipboard"
 import { toast } from "@/toast"
 
 import {
@@ -106,13 +107,14 @@ export function BundleView() {
       onError,
     })
 
-  const copy = () => {
+  const copy = async () => {
     if (!rendered) return
     const body = `${title ?? rendered[language].title}\n\n${rendered[language].body}`
-    void navigator.clipboard.writeText(body).then(
-      () => toast({ icon: "success", text: t("diagnostics.bundle.copied") }),
-      () => toast({ icon: "error", text: t("diagnostics.bundle.copyFailed") }),
-    )
+    if (await copyText(body)) {
+      toast({ icon: "success", text: t("diagnostics.bundle.copied") })
+    } else {
+      toast({ icon: "error", text: t("diagnostics.bundle.copyFailed") })
+    }
   }
 
   return (
@@ -291,7 +293,7 @@ export function BundleView() {
                 {lang === "zh" ? "中文" : "English"}
               </button>
             ))}
-            <button type="button" className="stdbtn" onClick={copy}>
+            <button type="button" className="stdbtn" onClick={() => void copy()}>
               {t("diagnostics.bundle.copy")}
             </button>
           </div>

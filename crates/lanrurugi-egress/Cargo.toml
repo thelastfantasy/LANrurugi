@@ -1,0 +1,12 @@
+[package]
+name = "lanrurugi-egress"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LD_PRELOAD shim: binds every outbound INET socket to one network interface."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+libc.workspace = true

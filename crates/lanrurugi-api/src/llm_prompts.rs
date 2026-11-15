@@ -58,15 +58,17 @@ pub(crate) fn tankoubon_chapter_rename_system() -> String {
 
 /// Bump whenever the reranking instructions change: the ordering is cached per
 /// `(archive, limit, version)`, so a stale entry would otherwise outlive the prompt it came from.
-pub(crate) const RECOMMEND_RERANK_PROMPT_VERSION: &str = "v1";
+pub(crate) const RECOMMEND_RERANK_PROMPT_VERSION: &str = "v2";
 
 /// Recommendation LLM rerank prompt.
 pub(crate) fn recommend_llm_system() -> String {
-    "你是一个漫画/同人志推荐引擎。你会收到当前漫画的标题和标签、以及候选漫画清单（id: 标题 | 标签 | 页数 | 版本）。\n\
+    "你是一个漫画/同人志推荐引擎。你会收到当前漫画的标题、标签、页数与阅读进度，以及候选漫画清单（id: 标题 | 标签 | 页数 | 阅读进度 | 版本）。\n\
          请从候选中挑选并排序推荐。排序规则（按优先级）：\n\
          1) 同一系列的下一卷必须排第一（例如当前是第10卷，那么第11卷就是第一推荐，没有第二种可能）；\n\
          2) 同一系列的其它卷紧随其后，按卷号顺序；\n\
          3) 其余候选按与当前漫画的相关度降序。\n\
+         阅读进度规则：候选清单已经排除了「已读完」的作品；「未读」优先于「在读」，「在读」优先于「进度未知」；\n\
+         当前漫画若已读完，同一系列的下一卷优先；当前漫画若在读，先推荐同一系列里接续当前进度的卷。\n\
          候选清单里的标题已经去掉了翻译/版本信息，同一作品的不同版本也已合并成一条，版本仅作为行尾「版本: …」的说明——\
          不要因为版本或翻译不同而改变排序，也不要把它当成另一部作品。\n\
          副标题（如「～聖職姉妹の背徳～」）不同的是不同作品，不要当成同一系列。\n\
@@ -488,6 +490,19 @@ mod tests {
         );
     }
 
+    /// v2 is the reading-aware ranking contract: the prompt must say candidates are already
+    /// filtered, and how the progress tiers order — otherwise the cache version bump is the only
+    /// thing that changed.
+    #[test]
+    fn the_rerank_prompt_teaches_the_reading_progress_rules() {
+        assert_eq!(RECOMMEND_RERANK_PROMPT_VERSION, "v2");
+        let prompt = recommend_llm_system();
+        assert!(prompt.contains("阅读进度"));
+        assert!(prompt.contains("已经排除了「已读完」"));
+        assert!(prompt.contains("「未读」优先于「在读」"));
+        assert!(prompt.contains("阅读进度 | 版本"));
+    }
+
     fn prompt_for(plugin_type: &str) -> String {
         plugin_generation_system_prompt(
             plugin_type,
@@ -721,6 +736,33 @@ pub(crate) fn grouping_review_system() -> String {
      只输出 JSON 对象，不要输出其它文字：\n\
      {\"verdicts\":[{\"id\":\"m1\",\"keep\":true,\"reason\":\"一句话理由\"}]}\n\
      verdicts 必须恰好包含输入中的每一个 id，各一次，不要增加或遗漏。\n\n"
+        .to_string()
+        + library_data_rule()
+}
+
+/// The duplicate reviewer: decide which copies to keep and which to drop.
+///
+/// The input is numbers and text only (never images) — the local perceptual hash already decided
+/// that these covers look alike, and this model's job is the semantic question a hash cannot
+/// answer: same work or not, and which copy is worth keeping.
+pub(crate) const DUPLICATE_REVIEW_PROMPT_VERSION: &str = "v1";
+
+pub(crate) fn duplicate_review_system() -> String {
+    "你是漫画/同人志书库的整理助手。系统用封面感知哈希找出了一组看起来可能重复的档案，\
+     每部都给标题、作者/社团、语言、页数、字节数和逐页清晰度。你要判断它们的关系，并建议每一部\
+     要保留还是丢弃。\n\n\
+     关系只能是以下之一：\n\
+     - same_work：同一作品的两个扫本/两个版本（画质、缺页、裁切不同）。\n\
+     - different_versions：同一作品的不同译本（语言不同，画面相同）——两个通常都值得保留。\n\
+     - adjacent_volumes：同一系列的相邻卷，不是重复。\n\
+     - unrelated：只是封面相似或标题相近，其实是无关作品。\n\n\
+     判断依据：页数差、清晰度、语言、作者/社团是否一致、标题去掉「中国翻訳」「DL版」「無修正」\
+     这类发布信息后是否相同。缺页的版本不要保留（除非它是唯一有该语言的译本）。\
+     拿不准时保留（keep: true），由用户决定。\n\n\
+     只输出 JSON 对象，不要输出其它文字：\n\
+     {\"verdict\":\"same_work\",\"members\":[{\"index\":0,\"keep\":true,\"why\":\"一句话\"}],\
+     \"reason\":\"一句话说明这组是什么关系\",\"confidence\":0.8}\n\
+     members 必须恰好包含输入中的每一个 index，各一次，不要增加或遗漏。\n\n"
         .to_string()
         + library_data_rule()
 }

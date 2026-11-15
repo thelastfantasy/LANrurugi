@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next"
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -202,7 +203,7 @@ export function SafetyPasswordDialog({
 function submitLabel(
   configured: boolean,
   confirmLabel: string,
-  t: (key: string, options?: Record<string, unknown>) => string,
+  t: TFunction,
 ): string {
   if (!configured) return t("safetyPassword.setAndContinue")
   return confirmLabel

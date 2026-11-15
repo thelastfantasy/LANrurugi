@@ -1,9 +1,9 @@
-import type { MouseEvent } from "react"
 
 import type { ArchiveMetadata } from "@/api/types"
 
 import { CompactTableHeader } from "./CompactTableHeader"
 import { CompactTableRow } from "./CompactTableRow"
+import type { ContextMenuTrigger } from "./types"
 
 export function CompactTable({
   shown,
@@ -28,7 +28,7 @@ export function CompactTable({
   onSearchTag: (namespacedTag: string) => void
   onToggleSelected: (id: string) => void
   onOpen: (id: string) => void
-  onContextMenu: (e: MouseEvent, archive: ArchiveMetadata) => void
+  onContextMenu: (e: ContextMenuTrigger, archive: ArchiveMetadata) => void
 }) {
   return (
     <table className="itg" style={{ width: "100%" }}>

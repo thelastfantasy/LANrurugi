@@ -1,6 +1,7 @@
 import "@/share/share.css"
 
 import { useQuery } from "@tanstack/react-query"
+import type { TFunction } from "i18next"
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -10,8 +11,8 @@ import type { DownloadQueueItem, JobRecord } from "@/api/types"
 import { IconButton } from "@/components/common-ui/Form"
 import { formatBytes, JobProgressBar, STATE_COLOR } from "@/components/Display/JobProgress"
 import { QueueErrorText } from "@/components/Layout"
+import { copyWithToast } from "@/lib/clipboard"
 import { routes } from "@/lib/routes"
-import { copyWithToast } from "@/share/clipboard"
 import { ShareQr } from "@/share/ShareQr"
 import { FONT_SIZE_SM, FONT_SIZE_XS } from "@/theme"
 
@@ -64,7 +65,7 @@ function OpenButton({ archiveId }: { archiveId: string }) {
 /// Per-archive failures arrive as `code: detail` for local write problems (disk full, read-only,
 /// quota) and as plain text otherwise. The code is localized; the original stays in the tooltip.
 function archiveErrorText(
-  t: (key: string, options?: Record<string, unknown>) => string,
+  t: TFunction,
   error: string | null | undefined,
 ): string {
   if (!error) return ""

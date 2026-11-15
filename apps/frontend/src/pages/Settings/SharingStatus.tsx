@@ -2,8 +2,8 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { CheckboxField, Input, Switch } from "@/components/common-ui/Form"
+import { copyWithToast } from "@/lib/clipboard"
 import { useSaveShareSettings, useShareSettings } from "@/share/api"
-import { copyWithToast } from "@/share/clipboard"
 import type { ShareEndpointStatus, ShareServiceStatus, ShareSettings } from "@/share/types"
 import { toast } from "@/toast"
 
@@ -83,7 +83,17 @@ export function SharingEndpointSummary() {
   const settings = useShareSettings()
   const endpoint = settings.data?.endpoint as ShareEndpointStatus | undefined
   if (!endpoint) return null
-  if (!endpoint.running) return <>{t("share.status.notRunning")}</>
+  if (!endpoint.running) {
+    // A pinned interface that is not present is the one "not running" case with an actionable
+    // reason, and the endpoint deliberately refuses to fall back to the physical link.
+    return (
+      <>
+        {endpoint.binding === "missing"
+          ? t("share.status.bindingMissing", { iface: endpoint.bound_interface ?? "" })
+          : t("share.status.notRunning")}
+      </>
+    )
+  }
   return (
     <>
       {t("share.panel.connectivitySummary", {
@@ -94,11 +104,11 @@ export function SharingEndpointSummary() {
   )
 }
 
-/** This instance's `lrrg-node:` string, for friends to add, when it offers a node role. */
+/** This instance's node code, for friends to add: short, permanent, and free of any address. */
 export function SharingNodeString() {
   const { t } = useTranslation()
   const settings = useShareSettings()
-  const node = (settings.data?.endpoint as ShareEndpointStatus & { node_string?: string | null } | undefined)?.node_string
+  const node = (settings.data?.endpoint as ShareEndpointStatus & { node_code?: string | null } | undefined)?.node_code
   if (!node) return <p className="share-result-note">{t("share.nodes.noString")}</p>
   return (
     <div className="share-result-row">

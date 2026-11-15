@@ -1128,6 +1128,7 @@ mod tests {
             heal_failed_at: None,
             corrupted_pages: vec![],
             has_patch: false,
+            blake3: None,
         }
     }
 

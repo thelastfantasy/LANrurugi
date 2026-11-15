@@ -2609,8 +2609,9 @@ pub(crate) async fn start_download(
                         }
                         // Under either policy the incoming revision is meant to win: with
                         // `always_overwrite` the old archive is already gone, and with
-                        // `overwrite_if_same_name` this is precisely the "filenames collide, so
-                        // replace" case — otherwise nothing collides and this has no effect.
+                        // `overwrite_if_same_name` the old one stays, so the incoming revision is
+                        // simply catalogued beside it. `overwrite` here only decides what happens
+                        // to a byte-identical file already in the library.
                         overwrite = true;
                     }
                     RevisionRelation::OlderThan { archive_id, hops } => {
@@ -2700,21 +2701,62 @@ pub(crate) async fn start_download(
             }
 
             if let Some(downloads) = parsed.downloads.filter(|d| !d.is_empty()) {
-                match run_managed_downloads(
-                    state_for_task.clone(),
-                    plugin_namespace_for_task.clone(),
-                    downloads,
-                    job_id_for_task.clone(),
-                    category.clone(),
-                    overwrite,
-                    &source_url,
-                    &cancel_for_task,
-                    queue_item_id_for_task.as_deref(),
-                    queue_link.clone(),
-                    auth,
-                )
-                .await
-                {
+                // A download that ends on a network error is not necessarily a failed download:
+                // the bytes already on disk are kept in a `.part` file and the next attempt
+                // resumes from them (issue #88). Retrying here is what turns "the VPN reconnected
+                // for two seconds" into a slightly slower download instead of a red row. Only
+                // transport failures retry — a 404 or a rejected page is the upstream's answer,
+                // and repeating it changes nothing.
+                /// Whether a failed transfer is worth repeating. Transport failures and a truncated body are what a
+/// reconnect produces; 429/502/503/504 are the upstream saying "not now" (FR-009's own repack
+/// answer is a 503 plus `Retry-After`). A 404 or a rejected page is an answer, and repeating it
+/// changes nothing.
+fn retryable_download_error(error: &lanrurugi_core::queue_error::QueueError) -> bool {
+    use lanrurugi_core::queue_error::QueueError;
+    match error {
+        QueueError::HttpRequestFailed { .. } | QueueError::TruncatedDownload { .. } => true,
+        QueueError::HttpStatus { status, .. } => matches!(status, 429 | 502 | 503 | 504),
+        _ => false,
+    }
+}
+
+const MAX_DOWNLOAD_RETRIES: u32 = 4;
+                let mut attempt = 0u32;
+                let outcome = loop {
+                    match run_managed_downloads(
+                        state_for_task.clone(),
+                        plugin_namespace_for_task.clone(),
+                        downloads.clone(),
+                        job_id_for_task.clone(),
+                        category.clone(),
+                        overwrite,
+                        &source_url,
+                        &cancel_for_task,
+                        queue_item_id_for_task.as_deref(),
+                        queue_link.clone(),
+                        auth.clone(),
+                    )
+                    .await
+                    {
+                        Err(error)
+                            if retryable_download_error(&error)
+                                && attempt < MAX_DOWNLOAD_RETRIES
+                                && !cancel_for_task.is_cancelled() =>
+                        {
+                            attempt += 1;
+                            let wait = std::time::Duration::from_secs(2u64.pow(attempt).min(60));
+                            tracing::warn!(
+                                attempt,
+                                wait = ?wait,
+                                error = ?error,
+                                "download ended on a network error; retrying"
+                            );
+                            tokio::time::sleep(wait).await;
+                        }
+                        other => break other,
+                    }
+                };
+                match outcome {
                     Ok(ids) => {
                         // The new revision is catalogued now, so retiring the one it supersedes is
                         // finally safe (issue #107's `always_overwrite`). Skipped when ingestion
@@ -2794,6 +2836,13 @@ pub(crate) async fn start_download(
                         if let Some((repo, item_id)) = &queue_link {
                             // Fetch/cache metadata before Done so the frontend sees it.
                             if let Ok(Some(mut item)) = repo.get(item_id).await {
+                                // The archive exists as of this moment — exactly what
+                                // `ensure_metadata_cached`'s apply step needs. It was left unset
+                                // here before, so a preview fetched during the download never
+                                // reached the archive; when the post-ingest auto-run also failed
+                                // (no enabled plugin understands the archive), a finished
+                                // download landed with no tags at all.
+                                item.archive_ids = Some(ids.clone());
                                 if item.auto_fetch_metadata || item.title.is_none() {
                                     ensure_metadata_cached(&state_for_task, &mut item).await;
                                 }
@@ -3112,6 +3161,10 @@ pub(crate) async fn update_queue_item_state(
                                 // never keep showing a stale older-revision banner after the item
                                 // has moved on to some other state.
                                 "pending_revision_confirmation": &item.pending_revision_confirmation,
+                                // Same delta-merge reason: an item that reaches a terminal state
+                                // must not keep a stale "transferring" flag in a client that
+                                // never refetched the whole list.
+                                "transferring": &item.transferring,
                             }));
                         }
                         return;
@@ -3138,6 +3191,44 @@ pub(crate) async fn update_queue_item_state(
                 return;
             }
         }
+    }
+}
+
+/// Sets [`DownloadQueueItem::transferring`] — true while this item holds a transfer permit, false
+/// once the transfer loop is done with it and ingest takes over.
+///
+/// A separate write from [`update_queue_item_state`] because the flag changes on two boundaries
+/// that are not state transitions (permit acquired, ingest begun), and it is deliberately
+/// best-effort with no retry: it only feeds a live "how many are transferring right now" count,
+/// which the frontend's next whole-list poll corrects anyway.
+async fn set_queue_item_transferring(
+    repo: &lanrurugi_storage::download_queue::DownloadQueueRepository,
+    tx: Option<&tokio::sync::broadcast::Sender<serde_json::Value>>,
+    item_id: &str,
+    transferring: bool,
+) {
+    let mut item = match repo.get(item_id).await {
+        Ok(Some(item)) => item,
+        Ok(None) => return,
+        Err(e) => {
+            tracing::warn!(%item_id, error = %e, "could not load download-queue item to set transferring");
+            return;
+        }
+    };
+    if item.transferring == transferring {
+        return;
+    }
+    item.transferring = transferring;
+    if let Err(e) = repo.update(&item).await {
+        tracing::warn!(%item_id, error = %e, "could not persist download-queue item's transferring flag");
+        return;
+    }
+    if let Some(tx) = tx {
+        let _ = tx.send(serde_json::json!({
+            "kind": "update",
+            "id": item_id,
+            "transferring": transferring,
+        }));
     }
 }
 
@@ -3401,6 +3492,22 @@ pub(crate) async fn ensure_metadata_cached(
     // Cache hit — still within the 10-min window.
     if let Some(at) = item.metadata_preview_at {
         if now - at < METADATA_CACHE_TTL_MS {
+            // Still owes the archive its tags: this preview may have been fetched at start time,
+            // before there was an archive, and the caller is the one that now supplies
+            // `archive_ids`.
+            if item.auto_fetch_metadata {
+                if let (Some(tags), Some(archive_ids)) = (
+                    item.metadata_preview
+                        .as_ref()
+                        .and_then(|p| p.get("tags"))
+                        .and_then(|v| v.as_str()),
+                    item.archive_ids.as_ref(),
+                ) {
+                    for aid in archive_ids {
+                        apply_metadata_tags(state, aid, tags).await;
+                    }
+                }
+            }
             return item.metadata_preview.clone();
         }
     }
@@ -3830,6 +3937,13 @@ async fn run_managed_downloads(
                         None,
                     )
                     .await;
+                    set_queue_item_transferring(
+                        &repo,
+                        state.download_queue_tx.as_ref(),
+                        &item_id,
+                        true,
+                    )
+                    .await;
                 });
             }
         };
@@ -3888,6 +4002,14 @@ async fn run_managed_downloads(
         downloaded_files.push(downloaded_result);
     }
 
+    // Every resource's bytes have landed; from here until the item reaches a terminal state it is
+    // bundling/cataloguing, not transferring. Kept `Downloading` rather than a state of its own so
+    // Stop/Pause/Delete keep behaving exactly as they did while the transfer permit was held — only
+    // the "transferring now" count (and the row's own label) reads the difference.
+    if let Some((repo, item_id)) = &queue_link {
+        set_queue_item_transferring(repo, state.download_queue_tx.as_ref(), item_id, false).await;
+    }
+
     let mut archive_ids = Vec::new();
     if should_bundle {
         let bundle_filename =
@@ -3899,6 +4021,16 @@ async fn run_managed_downloads(
         )
         .await
         .map_err(|e| lanrurugi_core::queue_error::QueueError::from(&e))?;
+        let ingest_result =
+            ingest_downloaded_file(&state, &bundled, overwrite, Some(source_url), queue_item_id)
+                .await;
+        crate::download_queue::keep_failed_download(
+            &state,
+            queue_item_id,
+            &bundled,
+            &ingest_result,
+        )
+        .await;
         let ingested = crate::download_manager::ingest::record_ingest_result(
             &state,
             auth.as_ref(),
@@ -3909,8 +4041,7 @@ async fn run_managed_downloads(
                 "source_url": source_url,
                 "queue_item_id": queue_item_id,
             }),
-            ingest_downloaded_file(&state, &bundled, overwrite, Some(source_url), queue_item_id)
-                .await,
+            ingest_result,
         )
         .await
         .map_err(|e| lanrurugi_core::queue_error::QueueError::from(&e))?;
@@ -3921,6 +4052,21 @@ async fn run_managed_downloads(
         archive_ids.push(ingested.archive_id);
     } else {
         for downloaded_result in downloaded_files {
+            let ingest_result = ingest_downloaded_file(
+                &state,
+                &downloaded_result,
+                overwrite,
+                Some(source_url),
+                queue_item_id,
+            )
+            .await;
+            crate::download_queue::keep_failed_download(
+                &state,
+                queue_item_id,
+                &downloaded_result,
+                &ingest_result,
+            )
+            .await;
             let ingested = crate::download_manager::ingest::record_ingest_result(
                 &state,
                 auth.as_ref(),
@@ -3931,14 +4077,7 @@ async fn run_managed_downloads(
                     "source_url": source_url,
                     "queue_item_id": queue_item_id,
                 }),
-                ingest_downloaded_file(
-                    &state,
-                    &downloaded_result,
-                    overwrite,
-                    Some(source_url),
-                    queue_item_id,
-                )
-                .await,
+                ingest_result,
             )
             .await
             .map_err(|e| lanrurugi_core::queue_error::QueueError::from(&e))?;
@@ -3949,6 +4088,12 @@ async fn run_managed_downloads(
             }
             archive_ids.push(ingested.archive_id);
         }
+    }
+    // Remember which archive this source URL produced, so re-adding the same URL is refused
+    // before another whole download rather than discovered after hashing it (020 makes the bytes
+    // identical, but the bandwidth would already be spent).
+    if let Some(first) = archive_ids.first() {
+        crate::download_sources::record(&state, source_url, first).await;
     }
     Ok(archive_ids)
 }
@@ -4493,9 +4638,6 @@ pub(crate) mod tests {
                     redis.config.clone(),
                 ),
             ),
-            compare_cache: Arc::new(lanrurugi_storage::compare_cache::CompareCacheRepository::new(
-                redis.config.clone(),
-            )),
             bookmarks: Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
                 redis.config.clone(),
             )),
@@ -4511,6 +4653,8 @@ pub(crate) mod tests {
         translation_telemetry: Default::default(),
             filename_locks: Default::default(),
             download_queue_tx: None,
+            subscription_check_tx: None,
+            grouping: Default::default(),
             refresh_tokens: Arc::new(lanrurugi_storage::refresh_tokens::RefreshTokenRepository::new(
                 redis.config.clone(),
             )),
@@ -4640,7 +4784,6 @@ pub(crate) mod tests {
                     metadata_tags: Vec::new(),
                     auto_fetch_metadata: false,
                     overwrite_on_duplicate: false,
-                    conflict_policy: lanrurugi_storage::subscriptions::ConflictPolicy::Ask,
                     state: lanrurugi_storage::download_queue::DownloadQueueState::Queued,
                 })
                 .await

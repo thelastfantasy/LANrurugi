@@ -304,7 +304,7 @@ half of the server-side anti-flash-of-default-theme mechanism — see that file'
 Vite's own `transformIndexHtml` hook, which re-reads the file from disk on every request, same as
 any other Vite-served frontend file; no build step of its own to go stale.
 
-**Exception: adding a new frontend dependency DOES need a rebuild, plus one extra step beyond
+**Exception: adding or upgrading a frontend dependency DOES need a rebuild, plus one extra step beyond
 the usual `dev-rebuild && dev-down && dev-up`.** `apps/frontend/node_modules` is a **named volume**
 (`lrr-dev-frontend-node-modules`, `compose.dev.yaml`'s own comment on that line explains the
 "poke a hole back through the bind mount" reasoning), not part of the `apps/frontend` bind mount
@@ -320,10 +320,11 @@ added (e.g. `@uiw/react-codemirror`/`@codemirror/lang-javascript`/`codemirror` f
 rebuild re-seeds it from scratch, not just rebuilding the image again:
 
 ```sh
-mise run dev-down
-docker volume rm lanrurugi_lrr-dev-frontend-node-modules   # or: podman volume rm ...
 mise run dev-rebuild
-mise run dev-up
+mise run dev-down
+podman rm lrr-dev                                  # dev-down only stops it; a stopped container still holds the volume
+podman volume rm lrr-dev-frontend-node-modules
+mise run dev-up                                    # recreates the container (`podman run --replace`) and re-seeds the volume
 ```
 
 Also remember to regenerate the root `pnpm-lock.yaml` (`pnpm install` from repo root) *before*

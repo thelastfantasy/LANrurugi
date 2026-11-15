@@ -59,6 +59,25 @@ environment:
 **Unset, every path keeps exactly its previous default**, so existing deployments need no change;
 mounting each path separately (thumbnails on the HDD, the database on an SSD) still works too.
 
+### Filenames inside the library
+
+Every archive LANrurugi writes is named after its content:
+`<library>/<first two id chars>/<id>.<ext>`, with a `<id>.json` sidecar recording the original
+filename, title and size (used to rebuild after a lost database). A download, upload or share
+import therefore succeeds regardless of how long its filename is; the title comes from the original
+filename with release markers such as `[中国翻訳]`/`[DL版]` stripped, and you can still edit `title`
+on the edit page.
+
+Your own files are never renamed: any catalogued archive that is not at `ab/{id}.ext` — one that
+predates the upgrade, or one you later drop in over SMB, rsync or a plain copy — is moved into
+`<library>/_byname/` together with its relative path on the next scan. Archives under `_byname/` are
+addressed by filename and browse, read, search and download as before; `.patch.zip` files travel
+with their archive. If the destination already holds a file, the move is skipped and reported
+(`skipped_occupied`) rather than overwriting anything.
+
+The library root is therefore LANrurugi's own; do not point other tools at the old paths directly
+(paths under `_byname/` are stable and safe to point at).
+
 ### Logs
 
 Logs go to **both stderr and files** by default, split by category into `general`, `shinobu`,

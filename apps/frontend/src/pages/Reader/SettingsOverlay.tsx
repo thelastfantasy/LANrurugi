@@ -5,6 +5,7 @@ import type { Settings } from "@/api/types";
 import { NullableNumberInput } from "@/components/common-ui/Form/NumberInput"
 import { RadioGroup, RadioItem } from "@/components/common-ui/Form/Radio";
 import { Switch } from "@/components/common-ui/Form/Switch";
+import { useIsNarrowViewport } from "@/hooks/useIsNarrowViewport";
 import {
   FIT_MODE,
   type FitMode,
@@ -93,9 +94,12 @@ export function SettingsOverlay({
   stampAutoUnbookmark,
   onUpdateServerSetting,
   loggedIn,
+  infiniteScrollForced,
 }: {
   settings: ReaderSettings;
   update: (partial: Partial<ReaderSettings>) => void;
+  /** The narrow-viewport auto switch is overriding the infinite-scroll choice right now. */
+  infiniteScrollForced: boolean;
   onClose: () => void;
   /** The two server-backed (`LRR_CONFIG`) settings this overlay also surfaces. */
   stampAutoBookmark: boolean;
@@ -124,6 +128,10 @@ export function SettingsOverlay({
     ensureLink(CONFIG_CSS_ID, "/legacy/config.css");
     return () => removeLink(CONFIG_CSS_ID);
   }, []);
+
+  // Below this width `#i2` is `display: none` by legacy's own CSS, so the toggle only has the
+  // leftover fit-height effect on phones — not worth a section that reads as broken.
+  const headerIsAlwaysHidden = useIsNarrowViewport("(max-width: 1000px)");
 
   function btnClass(active: boolean) {
     return `favtag-btn${active ? " toggled" : ""}`;
@@ -285,22 +293,29 @@ export function SettingsOverlay({
                 />
               </SettingSection>
 
-              <SettingSection title={t("reader.header") ?? ""}>
-                <input
-                  className={btnClass(!settings.hideHeader)}
-                  type="button"
-                  style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
-                  value={t("reader.visible") ?? undefined}
-                  onClick={() => update({ hideHeader: false })}
-                />
-                <input
-                  className={btnClass(settings.hideHeader)}
-                  type="button"
-                  style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
-                  value={t("reader.hidden") ?? undefined}
-                  onClick={() => update({ hideHeader: true })}
-                />
-              </SettingSection>
+              {!headerIsAlwaysHidden && (
+                <SettingSection
+                  title={t("reader.header") ?? ""}
+                  description={
+                    t("reader.thisBarShowsTheTitlePageControlsAndFileInfo") ?? undefined
+                  }
+                >
+                  <input
+                    className={btnClass(!settings.hideHeader)}
+                    type="button"
+                    style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+                    value={t("reader.visible") ?? undefined}
+                    onClick={() => update({ hideHeader: false })}
+                  />
+                  <input
+                    className={btnClass(settings.hideHeader)}
+                    type="button"
+                    style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
+                    value={t("reader.hidden") ?? undefined}
+                    onClick={() => update({ hideHeader: true })}
+                  />
+                </SettingSection>
+              )}
             </>
           )}
 
@@ -348,11 +363,16 @@ export function SettingsOverlay({
 
           <SettingSection
             title={t("reader.infiniteScrolling") ?? ""}
-            description={t("reader.displayAllImagesInA") ?? undefined}
+            description={
+              (infiniteScrollForced
+                ? t("reader.infiniteScrollForcedByNarrow")
+                : t("reader.displayAllImagesInA")) ?? undefined
+            }
           >
             <input
               className={btnClass(settings.infiniteScroll)}
               type="button"
+              disabled={infiniteScrollForced}
               style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
               value={t("reader.enabled") ?? undefined}
               onClick={() => update({ infiniteScroll: true })}
@@ -360,9 +380,21 @@ export function SettingsOverlay({
             <input
               className={btnClass(!settings.infiniteScroll)}
               type="button"
+              disabled={infiniteScrollForced}
               style={{ height: CONTROL_HEIGHT, boxSizing: "border-box" }}
               value={t("reader.disabled") ?? undefined}
               onClick={() => update({ infiniteScroll: false })}
+            />
+          </SettingSection>
+
+          <SettingSection
+            title={t("reader.autoInfiniteScrollNarrow") ?? ""}
+            description={t("reader.autoInfiniteScrollNarrowDesc") ?? undefined}
+            indent
+          >
+            <Switch
+              checked={settings.autoInfiniteScrollNarrow}
+              onCheckedChange={(v) => update({ autoInfiniteScrollNarrow: v })}
             />
           </SettingSection>
 

@@ -94,6 +94,8 @@ mod tests {
     fn a_frame_round_trips_with_its_engine() {
         let message = Request::Renew {
             claim_id: "c".into(),
+            verified_bytes: 0,
+            finished: false,
         };
         let frame = encode(&message).unwrap();
         let len = body_len(frame[..4].try_into().unwrap()).unwrap();
@@ -115,6 +117,8 @@ mod tests {
             &older,
             &Request::Renew {
                 claim_id: "x".into(),
+                verified_bytes: 0,
+                finished: false,
             },
         )
         .unwrap();

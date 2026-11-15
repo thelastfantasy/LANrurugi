@@ -49,7 +49,16 @@ fn current_family_id(cfg: &crate::auth::LiveAuthConfig, headers: &HeaderMap) -> 
 fn session_json(
     meta: &lanrurugi_storage::refresh_tokens::RefreshFamilyMeta,
     current: bool,
+    absolute_lifetime_secs: i64,
 ) -> serde_json::Value {
+    // `null` rather than a sentinel timestamp: with no absolute cap configured there is no date to
+    // show, and `i64::MAX` would render as a year far in the future.
+    let expires_at = meta.expires_at_under(absolute_lifetime_secs);
+    let expires_at = if expires_at == lanrurugi_storage::refresh_tokens::NO_ABSOLUTE_EXPIRY {
+        serde_json::Value::Null
+    } else {
+        json!(expires_at)
+    };
     json!({
         "family_id": meta.family_id,
         "name": meta.device_name(),
@@ -63,7 +72,7 @@ fn session_json(
         "created_at": meta.created_at,
         "last_seen_at": meta.last_seen_at,
         "idle_expires_at": meta.idle_expires_at,
-        "expires_at": meta.expires_at,
+        "expires_at": expires_at,
         "current": current,
     })
 }
@@ -80,13 +89,18 @@ async fn list_sessions(State(state): State<AppState>, headers: HeaderMap) -> Res
         }
     };
     let current = current_family_id(&cfg, &headers);
-    match state.refresh_tokens.list_active_families(now_secs()).await {
+    let absolute_lifetime_secs = cfg.refresh_token_lifetime_secs as i64;
+    match state
+        .refresh_tokens
+        .list_active_families(now_secs(), absolute_lifetime_secs)
+        .await
+    {
         Ok(families) => {
             let body: Vec<_> = families
                 .iter()
                 .map(|meta| {
                     let is_current = current.as_deref() == Some(meta.family_id.as_str());
-                    session_json(meta, is_current)
+                    session_json(meta, is_current, absolute_lifetime_secs)
                 })
                 .collect();
             axum::Json(body).into_response()
@@ -126,9 +140,12 @@ async fn rename_session(
             "name must be 80 characters or fewer",
         );
     }
-    let current_family = match crate::auth::load(&state).await {
-        Ok(cfg) => current_family_id(&cfg, &headers),
-        Err(_) => None,
+    let (current_family, absolute_lifetime_secs) = match crate::auth::load(&state).await {
+        Ok(cfg) => (
+            current_family_id(&cfg, &headers),
+            cfg.refresh_token_lifetime_secs as i64,
+        ),
+        Err(_) => (None, 0),
     };
     match state
         .refresh_tokens
@@ -157,7 +174,10 @@ async fn rename_session(
             .await;
             ok(
                 "rename_session",
-                [("data", session_json(&meta, is_current))],
+                [(
+                    "data",
+                    session_json(&meta, is_current, absolute_lifetime_secs),
+                )],
             )
         }
         Err(e) => error(
@@ -238,5 +258,42 @@ async fn revoke_session(
             "revoke_session",
             e.to_string(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lanrurugi_storage::refresh_tokens::{RefreshFamilyMeta, NO_ABSOLUTE_EXPIRY};
+
+    fn meta() -> RefreshFamilyMeta {
+        RefreshFamilyMeta {
+            family_id: "family".to_string(),
+            created_at: 1_000,
+            last_seen_at: 1_500,
+            idle_expires_at: 2_500,
+            expires_at: NO_ABSOLUTE_EXPIRY,
+            device_info: None,
+            last_ip: None,
+            current_token_id: "token".to_string(),
+            custom_name: None,
+            device_id: None,
+        }
+    }
+
+    #[test]
+    fn an_uncapped_session_reports_no_absolute_expiry() {
+        // `null`, not `i64::MAX`: the Settings device list has no date to render, and a far-future
+        // timestamp would be worse than saying "no limit".
+        let json = session_json(&meta(), false, 0);
+        assert!(json["expires_at"].is_null());
+    }
+
+    #[test]
+    fn a_capped_session_reports_the_cap_counted_from_the_original_login() {
+        let json = session_json(&meta(), false, 5_000);
+        assert_eq!(json["expires_at"], json!(6_000));
+        // The stored snapshot is irrelevant: the current setting wins.
+        assert_ne!(meta().expires_at, 6_000);
     }
 }

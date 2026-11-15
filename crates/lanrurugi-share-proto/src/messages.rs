@@ -8,10 +8,14 @@ use crate::ticket::SignedTicket;
 /// The protocol version carried by every request. ALPN is `h3`, so this is the only place the
 /// application protocol is identified (FR-045).
 /// 2: archive entries carry their table of contents (`ArchiveEntry::toc`).
+/// 3: node lookup returns the node's record rather than an address list.
+/// 4: the node record carries the peer's direct addresses (`KnockV1::direct_addrs`), so a peer
+///    reached by node code can be dialled directly instead of only through its relay.
 /// The sharing engine's version: the wire protocol this build speaks, carried in every handshake.
 /// Two instances must run the same one to import from, or help deliver to, each other; browsing a
-/// share (page, card, covers, reading) is plain HTTP and never checks it.
-pub const SHARE_ENGINE_VERSION: u16 = 3;
+/// share (page, card, covers, reading) is plain HTTP and never checks it. Bumped once per software
+/// version that touches the wire, not once per change.
+pub const SHARE_ENGINE_VERSION: u16 = 4;
 
 /// The transport generation this engine version speaks: iroh's QUIC/relay wire protocol is not
 /// negotiated separately, so a bump that breaks it means a new `SHARE_ENGINE_VERSION` as well. The
@@ -254,6 +258,12 @@ pub enum Request {
     },
     Renew {
         claim_id: String,
+        /// Cumulative bytes this claim has verified against the manifest, so the sharer counts
+        /// what actually arrived rather than what it tried to send.
+        verified_bytes: u64,
+        /// This is the import's closing report: the sharer flushes the ratio now instead of
+        /// waiting for its next threshold, so the last few megabytes are never lost.
+        finished: bool,
     },
     Range {
         ticket: SignedTicket,
@@ -273,6 +283,11 @@ pub enum Request {
         addrs: Vec<String>,
     },
     HelperHeartbeat {
+        share_id: String,
+    },
+    /// A helper stops helping: the sharer drops it now instead of waiting 15 minutes for it to
+    /// age out, so a switched-off node stops being offered to importers at once.
+    HelperLeave {
         share_id: String,
     },
     RendezvousPut {

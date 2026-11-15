@@ -1,20 +1,33 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
+import { startDownload } from "@/api/download";
 import type { ArchiveMetadata } from "@/api/types";
 import {
+  BottomSheet,
   PopupMenu,
   PopupMenuItem,
   PopupMenuSeparator,
+  SheetGrid,
+  SheetTile,
 } from "@/components/common-ui/Display";
 import { RatingWidget } from "@/components/common-ui/Form";
+import {
+  PHONE_WIDTH_QUERY,
+  useIsNarrowViewport,
+} from "@/hooks/useIsNarrowViewport";
 import { useMenuPalette } from "@/hooks/useMenuPalette";
+import { copyWithToast } from "@/lib/clipboard";
 import { routes } from "@/lib/routes";
 import { splitTagsByNamespace } from "@/lib/tagFormat";
 import { isTankoubonId } from "@/lib/utils/isTankoubonId";
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme";
-import { toast } from "@/toast";
 
 import { type ContextMenuState } from "./types";
 
@@ -72,10 +85,21 @@ export function ArchiveContextMenu({
   const isTank = isTankoubonId(archive.arcid);
   const staticCategories = (categories ?? []).filter((c) => !c.search);
   const [categoryMenuOpen, setCategoryMenuOpen] = useState(false);
+  const [categorySheetOpen, setCategorySheetOpen] = useState(false);
   const palette = useMenuPalette();
+  // Phone width gets a bottom action sheet instead of the floating menu.
+  const narrow = useIsNarrowViewport(PHONE_WIDTH_QUERY);
   const menuRef = useRef<HTMLUListElement | null>(null);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
-  const [menuWidth, setMenuWidth] = useState(0);
+  // Geometry decided from the row's rect when the submenu opens: align with the row, then bound
+  // the panel to the room actually left on that side. No post-mount measurement, so the panel
+  // never renders at an overflowing position first.
+  const [submenuPlacement, setSubmenuPlacement] = useState<{
+    side: "left" | "right";
+    up: boolean;
+    maxHeight: number;
+    maxWidth: number;
+  } | null>(null);
 
   // `state.x/y` are document coordinates (clientX/Y + scroll), so keep `position: absolute` and
   // clamp against the *visual* viewport: on mobile `window.innerHeight` still counts the strip a
@@ -108,7 +132,6 @@ export function ArchiveContextMenu({
         Math.max(visibleTop + margin, top),
         Math.max(visibleTop + margin, visibleBottom - rect.height - margin),
       );
-      setMenuWidth(rect.width);
       setPosition({ left, top });
     }
     // Placed once, in document coordinates: the menu then scrolls with the page and keeps its
@@ -126,17 +149,38 @@ export function ArchiveContextMenu({
     return () => window.removeEventListener("resize", onResize);
   }, [x, y]);
 
-  // Open the category submenu towards whichever side actually has room.
-  const submenuOnLeft =
-    position !== null &&
-    menuWidth > 0 &&
-    position.left + menuWidth + 200 >
-      window.scrollX + (window.visualViewport?.offsetLeft ?? 0) + (window.visualViewport?.width ?? window.innerWidth);
-
   // Submenu opens on hover; a short close delay absorbs the mouse crossing the gap into it.
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  function openSubmenu(which: "category") {
+  /** Place the panel beside the parent menu so the two never overlap, then fit it to the room. */
+  function placeSubmenu(trigger: HTMLElement) {
+    const anchor = menuRef.current?.getBoundingClientRect();
+    const row = trigger.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const width = viewport?.width ?? window.innerWidth;
+    const height = viewport?.height ?? window.innerHeight;
+    const margin = 8;
+    const side_ = anchor ?? row;
+    const roomRight = width - margin - side_.right;
+    const roomLeft = side_.left - margin;
+    // Prefer the side with room beside the menu; never slide the panel over the menu itself.
+    const side = roomRight >= 180 || roomRight >= roomLeft ? "right" : "left";
+    const rows = Math.max(1, staticCategories.length);
+    const needed = Math.min(220, rows * 30 + 14);
+    const below = height - margin - row.bottom;
+    const above = row.top - margin;
+    // Vertical alignment is not required: open downwards when the list fits there, upwards when
+    // only that side does. The panel scrolls instead of running off the screen.
+    const up = below < needed && above > below;
+    setSubmenuPlacement({
+      side,
+      up,
+      maxWidth: Math.max(120, side === "right" ? roomRight : roomLeft),
+      maxHeight: Math.min(220, Math.max(72, up ? above : below)),
+    });
+  }
+  function openSubmenu(which: "category", trigger?: HTMLElement | null) {
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    if (trigger) placeSubmenu(trigger);
     setCategoryMenuOpen(which === "category");
   }
   function scheduleCloseSubmenus() {
@@ -148,21 +192,156 @@ export function ArchiveContextMenu({
 
   function copyLink() {
     const url = `${window.location.origin}${routes.reader(archive.arcid)}`;
-    navigator.clipboard
-      .writeText(url)
-      .then(() =>
-        toast({
-          heading: t("library.linkCopiedToClipboard") ?? undefined,
-          icon: "info",
-          hideAfter: 3000,
-        }),
-      )
-      .catch(() =>
-        toast({
-          heading: t("library.failedToCopyLink") ?? undefined,
-          icon: "error",
-        }),
-      );
+    // `copyWithToast` falls back to a selection-based copy: the async clipboard API needs a secure
+    // context, and a home instance is usually reached over plain HTTP, where this used to throw
+    // before even the failure toast could appear.
+    void copyWithToast(
+      url,
+      t("library.linkCopiedToClipboard") ?? "",
+      t("library.failedToCopyLink") ?? "",
+    );
+  }
+
+  type Action = { key: string; icon: string; label: ReactNode; run: () => void };
+  const act = (key: string, icon: string, label: ReactNode, run: () => void): Action => ({
+    key,
+    icon,
+    label,
+    run: () => {
+      onClose();
+      run();
+    },
+  });
+  const primaryActions: Action[] = [
+    act("read", "fa-book-open", t("common.read"), () => onOpen(archive.arcid)),
+    ...(loggedIn && !isTank && archive.pagecount > 0
+      ? [
+          act(
+            "progress",
+            archive.progress > 0 ? "fa-eye-slash" : "fa-eye",
+            archive.progress > 0 ? t("library.markAsUnread") : t("library.markAsRead"),
+            () => onSetProgress(archive.arcid, archive.progress > 0 ? 0 : archive.pagecount),
+          ),
+        ]
+      : []),
+    ...(loggedIn
+      ? [
+          act("download", "fa-download", t("library.download"), () => {
+            void startDownload(
+              isTank ? `/api/tankoubons/${archive.arcid}` : `/api/archives/${archive.arcid}`,
+            );
+          }),
+          act("share", "fa-share-nodes", t("share.action.share"), () => onShare(archive.arcid)),
+        ]
+      : []),
+    act("link", "fa-link", t("library.copyLink"), copyLink),
+    ...(loggedIn
+      ? [
+          act(
+            "select",
+            "fa-check-square",
+            isSelected ? t("library.removeFromSelection") : t("library.addToSelection"),
+            () => onToggleSelection(archive.arcid),
+          ),
+        ]
+      : []),
+  ];
+  const editAction = act(
+    "edit",
+    "fa-pen",
+    isTank ? t("common.editTankoubon") : t("library.editMetadata"),
+    () => navigate(isTank ? routes.tankoubonEdit(archive.arcid) : routes.edit(archive.arcid)),
+  );
+  const deleteAction = act("delete", "fa-trash", t("common.delete"), () =>
+    onDelete(archive.arcid, isTank),
+  );
+  const ratingWidget = (size: number) => (
+    <RatingWidget
+      archiveId={archive.arcid}
+      tags={archive.tags}
+      size={size}
+      onChange={(nextTags) => {
+        const tagsByNamespace = splitTagsByNamespace(nextTags);
+        const rating = tagsByNamespace.rating?.[0] ?? null;
+        onRatingChange(archive.arcid, isTank, rating);
+      }}
+    />
+  );
+
+  if (narrow) {
+    // Not through `act`: it opens a second sheet over this one instead of closing the menu.
+    const categoryAction: Action = {
+      key: "category",
+      icon: "fa-search-plus",
+      label: t("library.addToCategory"),
+      run: () => setCategorySheetOpen(true),
+    };
+    const sheetActions = loggedIn
+      ? [...primaryActions, editAction, categoryAction, deleteAction]
+      : primaryActions;
+    return (
+      <BottomSheet onClose={onClose} cancelLabel={t("common.cancel")}>
+        <div className="flex items-center gap-3" style={{ padding: "8px 0 12px", textAlign: "left" }}>
+          <img
+            src={
+              isTank
+                ? `/api/tankoubons/${archive.arcid}/thumbnail`
+                : `/api/archives/${archive.arcid}/thumbnail`
+            }
+            alt=""
+            className="shrink-0 rounded object-cover"
+            style={{ width: 48, height: 68 }}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="line-clamp-2 break-words" style={{ fontSize: 15, fontWeight: 600 }}>
+              {archive.title}
+            </div>
+            {loggedIn && <div style={{ marginTop: 8 }}>{ratingWidget(28)}</div>}
+          </div>
+        </div>
+        <SheetGrid separator={palette.separator}>
+          {sheetActions.map((a) => (
+            <SheetTile key={a.key} icon={a.icon} onClick={a.run} danger={a.key === "delete"}>
+              {a.label}
+            </SheetTile>
+          ))}
+        </SheetGrid>
+        {loggedIn && (
+          <BottomSheet
+            open={categorySheetOpen}
+            onClose={() => setCategorySheetOpen(false)}
+            cancelLabel={t("common.cancel")}
+          >
+            <div style={{ fontSize: 15, fontWeight: 600, padding: "8px 0 12px", textAlign: "left" }}>
+              {t("library.addToCategory")}
+            </div>
+            {staticCategories.length === 0 ? (
+              <div style={{ opacity: 0.6, paddingBottom: 6 }}>{t("library.noCategoriesFound")}</div>
+            ) : (
+              <SheetGrid>
+                {staticCategories.map((c) => {
+                  const currentlyIn = c.archives.includes(archive.arcid);
+                  return (
+                    <SheetTile
+                      key={c.id}
+                      onClick={() => onToggleCategory(c.id, archive.arcid, currentlyIn)}
+                      style={
+                        currentlyIn
+                          ? { background: palette.hoverBg, color: palette.hoverText }
+                          : undefined
+                      }
+                    >
+                      {currentlyIn && <i className="fa fa-check" style={{ marginRight: 6 }}></i>}
+                      {c.name}
+                    </SheetTile>
+                  );
+                })}
+              </SheetGrid>
+            )}
+          </BottomSheet>
+        )}
+      </BottomSheet>
+    );
   }
 
   return (
@@ -185,8 +364,11 @@ export function ArchiveContextMenu({
           // at the overflowing position first.
           visibility: position ? "visible" : "hidden",
           // Dynamic viewport height so a browser toolbar showing/hiding never re-creates overflow.
-          maxHeight: "calc(100dvh - 24px)",
-          overflowY: "auto",
+          // While the category submenu is open both are dropped: an `overflow` other than visible
+          // clips the absolutely-positioned submenu, which is what made it look like the entry
+          // simply refused to expand (and the scrollbar the user saw was this same box).
+          maxHeight: categoryMenuOpen ? undefined : "calc(100dvh - 24px)",
+          overflowY: categoryMenuOpen ? "visible" : "auto",
           zIndex: Z_OVERLAY_CONTENT,
         }}
       >
@@ -200,115 +382,35 @@ export function ArchiveContextMenu({
                 marginBottom: ".35em",
               }}
             >
-              <RatingWidget
-                archiveId={archive.arcid}
-                tags={archive.tags}
-                size={16}
-                onChange={(nextTags) => {
-                  const tagsByNamespace = splitTagsByNamespace(nextTags);
-                  const rating = tagsByNamespace.rating?.[0] ?? null;
-                  onRatingChange(archive.arcid, isTank, rating);
-                }}
-              />
+              {ratingWidget(16)}
             </li>
           </>
         )}
-        <PopupMenuItem
-          onClick={() => {
-            onClose();
-            onOpen(archive.arcid);
-          }}
-        >
-          <i className="fa fa-book-open" style={{ width: 18 }}></i>{" "}
-          {t("common.read")}
-        </PopupMenuItem>
-        {loggedIn && !isTank && archive.pagecount > 0 && (
-          <PopupMenuItem
-            onClick={() => {
-              onClose();
-              onSetProgress(
-                archive.arcid,
-                archive.progress > 0 ? 0 : archive.pagecount,
-              );
-            }}
-          >
-            <i
-              className={`fa ${archive.progress > 0 ? "fa-eye-slash" : "fa-eye"}`}
-              style={{ width: 18 }}
-            ></i>{" "}
-            {archive.progress > 0
-              ? t("library.markAsUnread")
-              : t("library.markAsRead")}
+        {primaryActions.map((a) => (
+          <PopupMenuItem key={a.key} onClick={a.run}>
+            <i className={`fa ${a.icon}`} style={{ width: 18 }}></i> {a.label}
           </PopupMenuItem>
-        )}
-        {loggedIn && (
-          <PopupMenuItem
-            onClick={() => {
-              onClose();
-              window.location.assign(
-                isTank
-                  ? `/api/tankoubons/${archive.arcid}/download`
-                  : `/api/archives/${archive.arcid}/download`,
-              );
-            }}
-          >
-            <i className="fa fa-download" style={{ width: 18 }}></i>{" "}
-            {t("library.download")}
-          </PopupMenuItem>
-        )}
-        {loggedIn && (
-          <PopupMenuItem
-            onClick={() => {
-              onClose();
-              onShare(archive.arcid);
-            }}
-          >
-            <i className="fa fa-share-nodes" style={{ width: 18 }}></i>{" "}
-            {t("share.action.share")}
-          </PopupMenuItem>
-        )}
-        <PopupMenuItem
-          onClick={() => {
-            onClose();
-            copyLink();
-          }}
-        >
-          <i className="fa fa-link" style={{ width: 18 }}></i>{" "}
-          {t("library.copyLink")}
-        </PopupMenuItem>
-        {loggedIn && (
-          <PopupMenuItem
-            onClick={() => {
-              onClose();
-              onToggleSelection(archive.arcid);
-            }}
-          >
-            <i className="fa fa-check-square" style={{ width: 18 }}></i>{" "}
-            {isSelected
-              ? t("library.removeFromSelection")
-              : t("library.addToSelection")}
-          </PopupMenuItem>
-        )}
+        ))}
         {loggedIn && (
           <>
             <PopupMenuSeparator />
-            <PopupMenuItem
-              onClick={() => {
-                onClose();
-                navigate(
-                  isTank
-                    ? routes.tankoubonEdit(archive.arcid)
-                    : routes.edit(archive.arcid),
-                );
-              }}
-            >
-              <i className="fa fa-pen" style={{ width: 18 }}></i>{" "}
-              {isTank ? t("common.editTankoubon") : t("library.editMetadata")}
+            <PopupMenuItem onClick={editAction.run}>
+              <i className={`fa ${editAction.icon}`} style={{ width: 18 }}></i> {editAction.label}
             </PopupMenuItem>
             <PopupMenuItem
               style={{ position: "relative" }}
-              onMouseEnter={() => openSubmenu("category")}
+              onMouseEnter={(e) => openSubmenu("category", e.currentTarget)}
               onMouseLeave={scheduleCloseSubmenus}
+              // Hover is the only way this opened before, so on a touch screen (no hover) the
+              // submenu could never appear at all. A tap toggles it instead.
+              onClick={(e) => {
+                if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+                if (categoryMenuOpen) {
+                  setCategoryMenuOpen(false);
+                } else {
+                  openSubmenu("category", e.currentTarget);
+                }
+              }}
             >
               <i className="fa fa-search-plus" style={{ width: 18 }}></i>{" "}
               {t("library.addToCategory")}
@@ -317,10 +419,14 @@ export function ArchiveContextMenu({
                   portal={false}
                   style={{
                     position: "absolute",
-                    ...(submenuOnLeft ? { right: "100%" } : { left: "100%" }),
-                    top: 0,
-                    maxHeight: 220,
+                    ...(submenuPlacement?.side === "left"
+                      ? { right: "100%" }
+                      : { left: "100%" }),
+                    ...(submenuPlacement?.up ? { bottom: 0 } : { top: 0 }),
+                    maxHeight: submenuPlacement?.maxHeight ?? 220,
+                    maxWidth: submenuPlacement?.maxWidth ?? "calc(100vw - 16px)",
                     overflowY: "auto",
+                    overflowX: "hidden",
                   }}
                   onMouseEnter={() => openSubmenu("category")}
                   onMouseLeave={scheduleCloseSubmenus}
@@ -353,14 +459,8 @@ export function ArchiveContextMenu({
               )}
             </PopupMenuItem>
             <PopupMenuSeparator />
-            <PopupMenuItem
-              onClick={() => {
-                onClose();
-                onDelete(archive.arcid, isTank);
-              }}
-            >
-              <i className="fa fa-trash" style={{ width: 18 }}></i>{" "}
-              {t("common.delete")}
+            <PopupMenuItem onClick={deleteAction.run}>
+              <i className={`fa ${deleteAction.icon}`} style={{ width: 18 }}></i> {deleteAction.label}
             </PopupMenuItem>
           </>
         )}
@@ -368,3 +468,4 @@ export function ArchiveContextMenu({
     </>
   );
 }
+

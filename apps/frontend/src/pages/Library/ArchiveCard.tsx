@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next"
 import type { MouseEvent } from "react"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
@@ -5,12 +6,14 @@ import { useTranslation } from "react-i18next"
 import type { ArchiveMetadata } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
 import { FormatBadge, StatusIcon } from "@/components/Display"
+import { useLongPress } from "@/hooks/useLongPress"
 import { routes } from "@/lib/routes"
 import { isBookExtension } from "@/lib/utils/bookFormats"
 import { highlightText } from "@/lib/utils/highlightText"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 
 import { TagLine } from "./TagLine"
+import type { ContextMenuTrigger } from "./types"
 
 const gap = { marginLeft: 2 }
 
@@ -61,7 +64,7 @@ function PageCountBadge({ archive }: { archive: ArchiveMetadata }) {
  *  Naming them beats a generic "matched via members" — the whole point is which volumes. */
 function matchReasonText(
   members: { name: string }[],
-  t: (key: string, options?: Record<string, unknown>) => string,
+  t: TFunction,
 ): string {
   const names = members.map((m) => m.name || "?").join("、")
   return t("library.tankMatchedThroughMembers", { members: names })
@@ -90,7 +93,7 @@ export function ArchiveCard({
   selected: boolean
   cropThumbs: boolean
   onToggleSelect: (id: string) => void
-  onContextMenu: (e: MouseEvent, archive: ArchiveMetadata) => void
+  onContextMenu: (e: ContextMenuTrigger, archive: ArchiveMetadata) => void
   onOpen: (id: string) => void
   onSearchTag: (namespacedTag: string) => void
   /** Space-separated keywords to `<mark>` inside the title, e.g. from a search box. */
@@ -104,6 +107,9 @@ export function ArchiveCard({
     : `/api/archives/${id}/thumbnail?no_fallback=true`
   const [thumbLoaded, setThumbLoaded] = useState(() => loadedThumbs.has(thumbSrc))
   const [thumbFailed, setThumbFailed] = useState(false)
+  // Touch opens the menu on our own long-press timing; right-click stays on `onContextMenu`.
+  const [cardEl, setCardEl] = useState<HTMLDivElement | null>(null)
+  useLongPress(cardEl, (_, e) => onContextMenu(e, archive), { blockContextMenu: () => true })
 
   function handleOpen(e: MouseEvent) {
     e.preventDefault()
@@ -117,6 +123,7 @@ export function ArchiveCard({
 
   return (
     <div
+      ref={setCardEl}
       className={`id1${selected ? " msm-selected" : ""}`}
       id={id}
       onContextMenu={(e) => onContextMenu(e, archive)}

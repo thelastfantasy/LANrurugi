@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
+import { Select } from "@/components/common-ui/Form"
 import { displayTocName, isReservedTocIdentifier, TOC_CHAPTER_COUNT, TOC_IDENTIFIER_TABLE_OF_CONTENTS, tocChapterIdentifier } from "@/lib/utils/tocValidation"
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme"
 
@@ -96,27 +97,28 @@ export function QuickAddTocOptions({ onPick, asMenuItems }: { onPick: (title: st
     { icon: "fa-image", title: t("reader.illustration") ?? "Illustration", value: t("reader.illustration") ?? "Illustration" },
   ]
   const Row = asMenuItems ? PopupMenuItem : "div"
+  // Native `<select>` styled with `.favtag-btn` leaves the browser's own arrow sitting above the
+  // text's optical centre; the shared Select centres its icon and matches every other dropdown.
+  const [chapterPick, setChapterPick] = useState("")
+  const chapterItems = [
+    { value: "", label: t("reader.chapter") },
+    ...Array.from({ length: TOC_CHAPTER_COUNT }, (_, i) => i + 1).map((n) => ({
+      value: String(n),
+      label: t("reader.chapterN", { n }),
+    })),
+  ]
   const chapterSelect = (
-    <select
-      className="favtag-btn"
-      defaultValue=""
-      style={{ marginLeft: 4 }}
-      onClick={(e) => e.stopPropagation()}
-      onChange={(e) => {
-        if (!e.target.value) return
-        onPick(tocChapterIdentifier(Number(e.target.value)))
-        e.target.value = ""
-      }}
-    >
-      <option value="" disabled>
-        {t("reader.chapter")}
-      </option>
-      {Array.from({ length: TOC_CHAPTER_COUNT }, (_, i) => i + 1).map((n) => (
-        <option key={n} value={n}>
-          {t("reader.chapterN", { n })}
-        </option>
-      ))}
-    </select>
+    <div style={{ marginLeft: 4 }} onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+      <Select
+        value={chapterPick}
+        onValueChange={(value) => {
+          setChapterPick("")
+          if (value) onPick(tocChapterIdentifier(Number(value)))
+        }}
+        items={chapterItems}
+        ariaLabel={t("reader.chapter")}
+      />
+    </div>
   )
   return (
     <>

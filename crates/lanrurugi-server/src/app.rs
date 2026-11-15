@@ -79,12 +79,27 @@ pub fn build_app(
         .with_state(state.clone())
         // Outermost `/api/*` layer, before `require_api_key` — a preflight `OPTIONS` request must
         // never reach the auth check (see `cors::apply_cors`'s own docs).
-        .layer(axum::middleware::from_fn_with_state(state, apply_cors));
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            apply_cors,
+        ));
 
     let mut router = Router::new()
         .nest("/api", api)
         .merge(lanrurugi_api::health::router().with_state(health_state))
         .merge(lanrurugi_api::opensearch::router().with_state(opensearch_state));
+
+    // Outermost: a request that arrived on the download-only host name may only fetch downloads,
+    // and cross-origin reads of a share's media are answered with the headers a reader needs.
+    router = router
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            lanrurugi_api::download_host::restrict_to_downloads,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            lanrurugi_api::download_host::share_media_cors,
+        ));
 
     // The scanner reads this to decide whether it should be taking new work right now. Applied to
     // the whole router, not just the API: a reader flipping pages only issues GETs, and the scan has

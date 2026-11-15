@@ -11,3 +11,18 @@ if (!("ResizeObserver" in globalThis)) {
   }
   globalThis.ResizeObserver = NoopResizeObserver as unknown as typeof ResizeObserver
 }
+
+// jsdom has no `matchMedia` either; `useIsNarrowViewport` reads it on mount. Default to a wide
+// viewport that never changes; tests about the narrow layout stub their own (`vi.stubGlobal`).
+if (typeof window !== "undefined" && !window.matchMedia) {
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as typeof window.matchMedia
+}

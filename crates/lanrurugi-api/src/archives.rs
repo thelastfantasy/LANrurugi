@@ -276,8 +276,8 @@ pub fn router() -> Router<AppState> {
             put(add_toc_entry).delete(remove_toc_entry),
         )
         .route("/archives/{id}/download", get(download_archive))
+        .route("/archives/{id}/download-link", get(download_link))
         .route("/archives/{id}/patch", delete(delete_patch))
-        .route("/archives/{id}/rename", put(rename_archive))
         .route(
             "/archives/{id}/isnew",
             put(set_new_flag).delete(clear_new_flag),
@@ -304,6 +304,8 @@ fn parse_date_added(tags: &str) -> Option<u64> {
 async fn list_archives(State(state): State<AppState>) -> Response {
     match state.repos.archives.list_all().await {
         Ok(mut archives) => {
+            let pending = crate::visibility::pending_ids(&state).await;
+            archives.retain(|a| !pending.contains(a.id.as_str()));
             // Ingestion order, newest first — same `sortby=date_added&order=desc` semantics the
             // Library homepage's own default search already uses (`lanrurugi_search::engine`'s
             // `sort_ids`), including that function's own explicit rule that an archive missing
@@ -331,8 +333,10 @@ async fn list_archives(State(state): State<AppState>) -> Response {
 async fn untagged_archives(State(state): State<AppState>) -> Response {
     match state.repos.archives.list_all().await {
         Ok(archives) => {
+            let pending = crate::visibility::pending_ids(&state).await;
             let untagged: Vec<String> = archives
                 .into_iter()
+                .filter(|a| !pending.contains(a.id.as_str()))
                 .filter(|a| !has_meaningful_tags(&a.tags))
                 .map(|a| a.id.into_string())
                 .collect();
@@ -370,6 +374,17 @@ fn has_meaningful_tags(tags: &str) -> bool {
         .any(|ns| t.starts_with(ns));
         !is_basic
     })
+}
+
+/// Read endpoints answer 404 both for an archive outside the guest's scope and for one whose
+/// ingest has not finished yet (spec 025) — the same answer as for an id that does not exist.
+pub(crate) async fn read_denied(
+    state: &AppState,
+    auth: Option<&crate::auth_context::AuthContext>,
+    id: &lanrurugi_core::ids::ArchiveId,
+) -> bool {
+    guest_scope_denies(state, auth, id).await
+        || crate::visibility::is_pending(state, id.as_str()).await
 }
 
 /// 007-guest-restricted-access: `true` when `auth` is a `GuestVisitor` whose scope excludes `id` —
@@ -410,7 +425,7 @@ async fn get_archive_metadata(
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
 ) -> Response {
-    if guest_scope_denies(&state, auth.as_deref(), &id).await {
+    if read_denied(&state, auth.as_deref(), &id).await {
         return not_found("get_archive_metadata", format!("{id} does not exist."));
     }
     match crate::search::resolve_search_entry(&state, id.as_str()).await {
@@ -590,6 +605,14 @@ pub(crate) async fn purge_one_archive(
                     if e.kind() != std::io::ErrorKind::NotFound {
                         tracing::warn!(%id, file = %archive.file, error = %e, "failed to remove deleted archive's file from disk");
                     }
+                }
+                // The sidecar snapshots this archive's own filename/title; with the bytes gone it
+                // can never be read back for anything, and leaving it behind is exactly the
+                // orphaned `<ab>/<id>.json` files a library accumulates (found live in `./ef/`).
+                if let Err(e) =
+                    lanrurugi_storage::sidecar::remove(&state.library.archive_dir, id.as_str())
+                {
+                    tracing::warn!(%id, error = %e, "failed to remove deleted archive's sidecar");
                 }
             }
             // A sidecar `.patch.zip` (issue #77's own follow-on design) is associated purely by
@@ -951,11 +974,34 @@ pub struct DownloadParams {
     inline: bool,
 }
 
+/// `GET /archives/{id}/download-link` — where the browser should go to fetch the bytes: the
+/// configured direct host (signed) when the site is behind a proxy, this origin otherwise.
+async fn download_link(
+    State(state): State<AppState>,
+    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
+) -> Response {
+    if crate::visibility::is_pending(&state, id.as_str()).await {
+        return not_found("download_link", format!("{id} does not exist."));
+    }
+    let url = crate::direct_download::link(
+        &state,
+        &format!("archives:{id}"),
+        &format!("/api/dl/archives/{id}"),
+        &format!("/api/archives/{id}/download"),
+    )
+    .await;
+    axum::Json(serde_json::json!({ "url": url })).into_response()
+}
+
 async fn download_archive(
     State(state): State<AppState>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<DownloadParams>,
+    headers: HeaderMap,
 ) -> Response {
+    if crate::visibility::is_pending(&state, id.as_str()).await {
+        return not_found("download_archive", format!("{id} does not exist."));
+    }
     let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
         Ok(None) => return not_found("download_archive", "No archive ID specified."),
@@ -972,61 +1018,75 @@ async fn download_archive(
     {
         return inline_pdf(&archive).await;
     }
-    serve_archive_download(&archive).await
+    serve_archive_download(&archive, byte_range(&headers), if_range(&headers)).await
 }
 
 /// The bytes `/archives/{id}/download` serves, shared with the share recipient route (017).
-pub(crate) async fn serve_archive_download(archive: &Archive) -> Response {
+pub(crate) async fn serve_archive_download(
+    archive: &Archive,
+    range: Option<&str>,
+    if_range: Option<&str>,
+) -> Response {
     // A sidecar `.patch.zip` (issue #77's own follow-on design) means the reader is showing pages
     // that don't exist in the archive file itself — downloading the raw file as-is would silently
-    // drop them. The repackaged archive is streamed through a temp file: it used to be built as
-    // one `Vec<u8>` holding the whole member, which for a large patched archive is the entire
-    // file in memory before the first byte goes out. `Ok(false)` (nothing to merge) falls through
-    // to plain file streaming below, exactly as before.
+    // drop them. The repackaged archive is cached under a fingerprint of the archive and its
+    // patch, so a resumed download can be answered with a range instead of a fresh body.
     let archive_file = archive.file.clone();
     let disposition = content_disposition_for(archive);
-    let merged = lanrurugi_core::concurrency::run_blocking(move || {
-        let path = std::path::Path::new(&archive_file);
-        let tmp =
-            std::env::temp_dir().join(format!("lrr-merged-{}.zip", uuid::Uuid::new_v4().simple()));
-        let file = std::fs::File::create(&tmp).ok()?;
-        match lanrurugi_scanner::patch::write_merged_zip(path, std::io::BufWriter::new(file)) {
-            Ok(true) => Some(tmp),
-            _ => {
-                let _ = std::fs::remove_file(&tmp);
-                None
+    let patch = lanrurugi_scanner::patch::patch_path_for(std::path::Path::new(&archive_file));
+    if !patch.is_file() {
+        // The common case: no sidecar, the file on disk is the download.
+        return serve_download_file(
+            std::path::Path::new(&archive.file),
+            disposition,
+            "application/octet-stream",
+            range,
+            if_range,
+        )
+        .await;
+    }
+    let job = Repack::Merged {
+        archive: std::path::PathBuf::from(&archive_file),
+        patch,
+    };
+    let cache = repack_cache_path("merged", &job.cache_key());
+    if !cache.is_file() {
+        // A range needs the length up front, so a file still being built cannot answer it: the
+        // build is started and the request waits for it, which a download manager sees as a slow
+        // first response rather than an error it has to retry blindly.
+        if range.is_some() {
+            begin_repack(cache.clone(), job);
+            if !wait_repack(&cache, REPACK_WAIT).await {
+                return repack_pending();
             }
-        }
-    })
-    .await;
-    if let Ok(Some(tmp)) = merged {
-        match crate::common::stream_temp_file(tmp.clone()) {
-            Ok(body) => {
-                let mut response = (
-                    [
-                        (header::CONTENT_TYPE, "application/octet-stream".to_string()),
-                        (header::CONTENT_DISPOSITION, disposition),
-                    ],
-                    body,
-                )
-                    .into_response();
-                if let Ok(meta) = std::fs::metadata(&tmp) {
-                    response
-                        .headers_mut()
-                        .insert(header::CONTENT_LENGTH, meta.len().into());
-                }
-                return response;
-            }
-            Err(e) => {
-                let _ = std::fs::remove_file(&tmp);
-                tracing::warn!(error = %e, "could not stream the merged archive; falling back");
-            }
+        } else {
+            // No range: answer from the file while it is being written. Waiting for the whole
+            // archive first is what turned a large tankoubon or patch merge into a gateway
+            // timeout — nginx gives up at 60 s, a CDN at 100 s, and nothing had been sent yet.
+            return follow_repack(cache, job, disposition, "application/octet-stream");
         }
     }
-    // Streamed rather than `tokio::fs::read`: a multi-gigabyte archive was previously loaded
-    // whole into the process before the first byte went out (the same reason `inline_pdf` below
-    // streams).
-    let file = match tokio::fs::File::open(&archive.file).await {
+    serve_download_file(
+        &cache,
+        disposition,
+        "application/octet-stream",
+        range,
+        if_range,
+    )
+    .await
+}
+
+/// Serves `path` as an attachment, honouring a single-range `Range` request. Shared by the plain
+/// archive file and by every repackaged download (a merged patch, a tankoubon zip), which used to
+/// answer ranges only when the bytes happened to be a plain file.
+pub(crate) async fn serve_download_file(
+    path: &std::path::Path,
+    disposition: String,
+    content_type: &str,
+    range: Option<&str>,
+    if_range: Option<&str>,
+) -> Response {
+    let mut file = match tokio::fs::File::open(path).await {
         Ok(file) => file,
         Err(e) => {
             return error(
@@ -1036,11 +1096,68 @@ pub(crate) async fn serve_archive_download(archive: &Archive) -> Response {
             )
         }
     };
-    let length = file.metadata().await.map(|m| m.len()).ok();
+    let metadata = file.metadata().await.ok();
+    let length = metadata.as_ref().map(|m| m.len());
+    // A strong validator: browsers only resume a download that carries one, and `If-Range` is
+    // what keeps a resume from splicing a replaced file onto the old bytes.
+    let etag = metadata.as_ref().map(|m| {
+        let modified = m
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        format!("\"{:x}-{modified:x}\"", m.len())
+    });
+    let range_still_valid = match (if_range, etag.as_deref()) {
+        (Some(value), Some(etag)) => value.trim() == etag,
+        (Some(_), None) => false,
+        (None, _) => true,
+    };
+    let range = range.filter(|_| range_still_valid);
+    if let (Some(spec), Some(total)) = (range, length) {
+        if let Some((start, end)) = parse_byte_range(spec, total) {
+            if tokio::io::AsyncSeekExt::seek(&mut file, std::io::SeekFrom::Start(start))
+                .await
+                .is_ok()
+            {
+                let mut response = (
+                    StatusCode::PARTIAL_CONTENT,
+                    [
+                        (header::CONTENT_TYPE, content_type.to_string()),
+                        (header::CONTENT_DISPOSITION, disposition.clone()),
+                        (
+                            header::CONTENT_RANGE,
+                            format!("bytes {start}-{end}/{total}"),
+                        ),
+                        (header::ACCEPT_RANGES, "bytes".to_string()),
+                    ],
+                    axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(
+                        tokio::io::AsyncReadExt::take(file, end - start + 1),
+                    )),
+                )
+                    .into_response();
+                response
+                    .headers_mut()
+                    .insert(header::CONTENT_LENGTH, (end - start + 1).into());
+                if let Some(etag) = etag.as_deref() {
+                    if let Ok(value) = header::HeaderValue::from_str(etag) {
+                        response.headers_mut().insert(header::ETAG, value);
+                    }
+                }
+                return response;
+            }
+            // Seeking failed: start the body over rather than fail the download.
+            if let Ok(fresh) = tokio::fs::File::open(path).await {
+                file = fresh;
+            }
+        }
+    }
     let mut response = (
         [
-            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (header::CONTENT_TYPE, content_type.to_string()),
             (header::CONTENT_DISPOSITION, disposition),
+            (header::ACCEPT_RANGES, "bytes".to_string()),
         ],
         axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file)),
     )
@@ -1050,7 +1167,386 @@ pub(crate) async fn serve_archive_download(archive: &Archive) -> Response {
             .headers_mut()
             .insert(header::CONTENT_LENGTH, length.into());
     }
+    if let Some(etag) = etag.as_deref() {
+        if let Ok(value) = header::HeaderValue::from_str(etag) {
+            response.headers_mut().insert(header::ETAG, value);
+        }
+    }
     response
+}
+
+/// A download that has to be repackaged before it can be served. The bytes depend only on the
+/// inputs listed here, which is also what names the cache file.
+pub(crate) enum Repack {
+    /// A patched archive, rebuilt as one zip.
+    Merged {
+        archive: std::path::PathBuf,
+        patch: std::path::PathBuf,
+    },
+    /// A tankoubon, zipped from its members in reading order.
+    Tankoubon {
+        tank: String,
+        members: Vec<crate::tankoubon_zip::MemberSource>,
+    },
+}
+
+impl Repack {
+    /// Everything the produced bytes depend on — including the member order, their names inside
+    /// the zip and the members that are missing — so any change lands on a new cache file.
+    pub(crate) fn cache_key(&self) -> String {
+        let mut key = String::new();
+        let files: Vec<(&str, &std::path::Path)> = match self {
+            Self::Merged { archive, patch } => vec![("archive", archive), ("patch", patch)],
+            Self::Tankoubon { members, .. } => members
+                .iter()
+                .enumerate()
+                .filter_map(|(index, member)| match member {
+                    crate::tankoubon_zip::MemberSource::File { title, path } => {
+                        key.push_str(&format!("{index}\u{1f}{title}\u{1f}"));
+                        Some(("member", path.as_path()))
+                    }
+                    crate::tankoubon_zip::MemberSource::Missing { title } => {
+                        key.push_str(&format!("{index}\u{1f}missing\u{1f}{title}\u{1f}"));
+                        None
+                    }
+                })
+                .collect(),
+        };
+        for (tag, path) in files {
+            key.push_str(&format!("{tag}\u{1f}{}\u{1f}", path.to_string_lossy()));
+            if let Ok(meta) = std::fs::metadata(path) {
+                key.push_str(&format!("{}\u{1f}", meta.len()));
+                if let Ok(modified) = meta.modified() {
+                    if let Ok(since) = modified.duration_since(std::time::UNIX_EPOCH) {
+                        key.push_str(&format!("{}\u{1f}", since.as_nanos()));
+                    }
+                }
+            }
+            key.push('\u{1e}');
+        }
+        if let Self::Tankoubon { tank, .. } = self {
+            key.insert_str(0, &format!("{tank}\u{1e}"));
+        }
+        let digest = blake3::hash(key.as_bytes());
+        digest.to_hex().to_string()
+    }
+}
+
+/// One lock per cache file, so the many connections a download manager opens at once produce a
+/// single build instead of one per connection.
+fn repack_lock(cache: &std::path::Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<std::path::PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>,
+        >,
+    > = std::sync::OnceLock::new();
+    let locks = LOCKS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut locks = locks.lock().expect("repack locks");
+    locks
+        .entry(cache.to_path_buf())
+        .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
+
+/// Builds the cache file unless it is already there. Writes under a temporary name and renames, so
+/// a crash never leaves a half-written file that looks complete.
+pub(crate) async fn ensure_repack(cache: &std::path::Path, job: Repack) -> bool {
+    if cache.is_file() {
+        return true;
+    }
+    let lock = repack_lock(cache);
+    let _guard = lock.lock().await;
+    if cache.is_file() {
+        return true;
+    }
+    prune_repack_cache();
+    let target = cache.to_path_buf();
+    let staging = target.with_extension("part");
+    lanrurugi_core::concurrency::run_blocking(move || {
+        let Ok(file) = std::fs::File::create(&staging) else {
+            return false;
+        };
+        let writer = std::io::BufWriter::new(file);
+        let built = match &job {
+            Repack::Merged { archive, .. } => {
+                matches!(
+                    lanrurugi_scanner::patch::write_merged_zip(archive, writer),
+                    Ok(true)
+                )
+            }
+            Repack::Tankoubon { members, .. } => {
+                crate::tankoubon_zip::write_tankoubon_zip(writer, members).is_ok()
+            }
+        };
+        if built && std::fs::rename(&staging, &target).is_ok() {
+            true
+        } else {
+            let _ = std::fs::remove_file(&staging);
+            false
+        }
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// How long a range request waits for a repackaged file to be built before giving up with a
+/// `Retry-After`. Long enough for a few gigabytes read off spinning disks, short enough that a
+/// client is not left hanging on a build that died.
+const REPACK_WAIT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Polls until the repackaged file exists. The build itself is a background task, so this only
+/// watches the file system — two requests racing here share one build through `repack_lock`.
+pub(crate) async fn wait_repack(cache: &std::path::Path, limit: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        if cache.is_file() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
+/// Answers with the staging file as it grows, so the first byte leaves before the archive is done.
+/// The staging file is renamed on completion, which is the signal that nothing more is coming.
+pub(crate) fn follow_repack(
+    cache: std::path::PathBuf,
+    job: Repack,
+    disposition: String,
+    content_type: &'static str,
+) -> Response {
+    let staging = cache.with_extension("part");
+    begin_repack(cache.clone(), job);
+    struct Follow {
+        staging: std::path::PathBuf,
+        target: std::path::PathBuf,
+        file: Option<tokio::fs::File>,
+        /// Bytes already handed to the client; the final file is read from here once the build
+        /// finishes, so bytes written between the last read and the rename are not lost.
+        pos: u64,
+        idle: u32,
+    }
+    let state = Follow {
+        staging,
+        target: cache,
+        file: None,
+        pos: 0,
+        idle: 0,
+    };
+    let stream = futures_util::stream::unfold(state, |mut state| async move {
+        use tokio::io::AsyncReadExt;
+        loop {
+            if state.file.is_none() {
+                match tokio::fs::File::open(&state.staging).await {
+                    Ok(file) => state.file = Some(file),
+                    Err(_) => {
+                        // Not created yet, or already renamed: both are "ask again shortly".
+                        if state.target.is_file() {
+                            return None;
+                        }
+                        state.idle += 1;
+                        if state.idle > 600 {
+                            return None;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        continue;
+                    }
+                }
+            }
+            let mut buffer = vec![0u8; 64 * 1024];
+            match state
+                .file
+                .as_mut()
+                .expect("opened above")
+                .read(&mut buffer)
+                .await
+            {
+                Ok(0) => {
+                    if state.target.is_file() {
+                        use tokio::io::AsyncSeekExt;
+                        let mut file = tokio::fs::File::open(&state.target).await.ok()?;
+                        file.seek(std::io::SeekFrom::Start(state.pos)).await.ok()?;
+                        match file.read(&mut buffer).await {
+                            Ok(0) => return None,
+                            Ok(read) => {
+                                buffer.truncate(read);
+                                state.pos += read as u64;
+                                state.file = Some(file);
+                                return Some((
+                                    Ok::<_, std::io::Error>(axum::body::Bytes::from(buffer)),
+                                    state,
+                                ));
+                            }
+                            Err(_) => return None,
+                        }
+                    }
+                    state.idle += 1;
+                    if state.idle > 600 {
+                        return None;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                Ok(read) => {
+                    buffer.truncate(read);
+                    state.pos += read as u64;
+                    state.idle = 0;
+                    return Some((
+                        Ok::<_, std::io::Error>(axum::body::Bytes::from(buffer)),
+                        state,
+                    ));
+                }
+                Err(_) => return None,
+            }
+        }
+    });
+    (
+        [
+            (header::CONTENT_TYPE, content_type.to_string()),
+            (header::CONTENT_DISPOSITION, disposition),
+            (header::ACCEPT_RANGES, "bytes".to_string()),
+        ],
+        axum::body::Body::from_stream(stream),
+    )
+        .into_response()
+}
+
+/// Starts the build in the background, for a range request that cannot wait for it.
+pub(crate) fn begin_repack(cache: std::path::PathBuf, job: Repack) {
+    tokio::spawn(async move {
+        if !ensure_repack(&cache, job).await {
+            tracing::warn!(cache = %cache.display(), "a repackaged download could not be built");
+        }
+    });
+}
+
+/// The answer for a range request that arrived while its file is still being built. Download
+/// managers retry on this, which is why it says when.
+pub(crate) fn repack_pending() -> Response {
+    let mut response = error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "download_archive",
+        "the archive is being prepared; retry shortly".to_string(),
+    );
+    response.headers_mut().insert(
+        header::RETRY_AFTER,
+        axum::http::HeaderValue::from_static("5"),
+    );
+    response
+}
+
+/// The cache file a repackaged download is served from. The fingerprint covers every input, so an
+/// edited archive or patch produces a new file instead of a stale body behind a fresh Range.
+pub(crate) fn repack_cache_path(tag: &str, key: &str) -> std::path::PathBuf {
+    repack_dir().join(format!("{tag}-{key}.zip"))
+}
+
+/// Where repackaged downloads are cached: inside the instance's own temp directory, so it is
+/// visible to `tempmaxsize` accounting and to the operators who already clean that up.
+static REPACK_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+fn repack_dir() -> std::path::PathBuf {
+    REPACK_DIR.get_or_init(std::env::temp_dir).clone()
+}
+
+pub fn set_repack_dir(dir: std::path::PathBuf) {
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = REPACK_DIR.set(dir);
+}
+
+/// Drops cache files nobody has touched for a day, then the oldest ones until the cache fits in
+/// its size budget. Called when a build starts, which is the only moment a new file appears and so
+/// the only moment the set can grow.
+///
+/// A repackaged archive can be several gigabytes, so age alone is not enough: a burst of large
+/// downloads would hold all of them at once. The budget is deliberately larger than any single
+/// `tempmaxsize`-style cache — evicting a file a download manager is resuming from would make the
+/// resume start over.
+fn prune_repack_cache() {
+    const KEEP: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+    const BUDGET: u64 = 4 * 1024 * 1024 * 1024;
+    let Ok(entries) = std::fs::read_dir(repack_dir()) else {
+        return;
+    };
+    let mut kept: Vec<(std::time::SystemTime, u64, std::path::PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("merged-") && !name.starts_with("tankoubon-") {
+            continue;
+        }
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        let stale = modified.elapsed().is_ok_and(|age| age > KEEP);
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+            continue;
+        }
+        kept.push((modified, meta.len(), entry.path()));
+    }
+    let mut total: u64 = kept.iter().map(|(_, size, _)| *size).sum();
+    if total <= BUDGET {
+        return;
+    }
+    kept.sort_by_key(|(modified, _, _)| *modified);
+    for (_, size, path) in kept {
+        if total <= BUDGET {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(size);
+        }
+    }
+}
+
+/// The `Range` header of a download request, when it asks for a single byte span.
+/// `If-Range`, so a range request only applies to the file it was started from.
+pub(crate) fn if_range(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::IF_RANGE)
+        .and_then(|value| value.to_str().ok())
+}
+
+pub(crate) fn byte_range(headers: &HeaderMap) -> Option<&str> {
+    headers.get(header::RANGE).and_then(|v| v.to_str().ok())
+}
+
+/// `bytes=start-end`, `bytes=start-` and `bytes=-suffix`, clamped to `total`.
+fn parse_byte_range(value: &str, total: u64) -> Option<(u64, u64)> {
+    let spec = value.trim().strip_prefix("bytes=")?;
+    if spec.contains(',') || total == 0 {
+        return None;
+    }
+    let (start, end) = spec.split_once('-')?;
+    match (start.trim(), end.trim()) {
+        ("", "") => None,
+        // A suffix range asks for the last N bytes.
+        ("", suffix) => {
+            let suffix: u64 = suffix.parse().ok()?;
+            let len = suffix.min(total);
+            (len > 0).then(|| (total - len, total - 1))
+        }
+        (start, "") => {
+            let start: u64 = start.parse().ok()?;
+            (start < total).then(|| (start, total - 1))
+        }
+        (start, end) => {
+            let start: u64 = start.parse().ok()?;
+            let end: u64 = end.parse().ok()?;
+            if start > end || start >= total {
+                return None;
+            }
+            Some((start, end.min(total - 1)))
+        }
+    }
 }
 
 /// Streams the PDF rather than reading it into memory: a PDF can be hundreds of megabytes.
@@ -1144,8 +1640,21 @@ fn content_disposition_for(archive: &Archive) -> String {
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("zip");
-    let real_name = format!("{}.{extension}", archive.name);
+    let real_name = format!("{}.{extension}", download_filename_stem(archive));
     format!("attachment; {}", disposition_filename(&real_name))
+}
+
+/// The stem a downloaded file gets. 020 keeps the original filename in `name` and the cleaned
+/// title in `title`, and the title is what the user sees — so the download is named after the
+/// title, with the filename as the fallback for a record that never got one. Path separators are
+/// folded to `_`: a metadata title like `Fate/stay night` must not create a directory on save.
+fn download_filename_stem(archive: &Archive) -> String {
+    let raw = if archive.title.trim().is_empty() {
+        &archive.name
+    } else {
+        &archive.title
+    };
+    raw.replace(['/', '\\'], "_")
 }
 
 /// Canonical extension for a served image `Content-Type`, or `None` for anything this module can't
@@ -1271,16 +1780,6 @@ pub(crate) fn attachment_header(filename: &str) -> header::HeaderValue {
     disposition_header(&format!("attachment; {}", disposition_filename(filename)))
 }
 
-/// `<stem>.<ext>` for a served image whose content type is only known at response time — for the
-/// endpoints whose URLs carry no filename of their own (the download-conflict comparison page, the
-/// OPDS page stream), so a save still lands on a name an image viewer will open.
-pub(crate) fn image_filename(stem: &str, content_type: &str) -> String {
-    format!(
-        "{stem}.{}",
-        canonical_extension(content_type).unwrap_or("bin")
-    )
-}
-
 /// `DELETE /archives/{id}/patch` — deletes the sidecar `.patch.zip` (if any) and clears the
 /// archive's `has_patch` flag. Lets the user undo a patch — e.g. to replace it with pages from a
 /// different source after re-running the comparison flow — without touching the archive itself.
@@ -1356,6 +1855,7 @@ async fn delete_patch(
         }
     }
 
+    clear_page_thumbnails(&state, id.as_str()).await;
     crate::activity::record_manual(
         &state,
         auth.as_ref().map(|e| &e.0),
@@ -1368,305 +1868,6 @@ async fn delete_patch(
     .await;
 
     axum::Json(json!({ "operation": "delete_patch", "success": 1 })).into_response()
-}
-
-/// Most filesystems this app is realistically deployed on (ext4, ZFS, APFS, NTFS) cap a single
-/// path *component* (not the full path) at 255 bytes — not 255 characters: a CJK filename, common
-/// in this library's own real usage, is 3 bytes/char in UTF-8, so this limit bites at 85 characters
-/// long before any character-count check would warn. Checked against the *patch* filename (see
-/// below), the tighter of the two constraints, not the archive filename directly.
-const MAX_FILENAME_BYTES: usize = 255;
-
-#[derive(Debug, Deserialize)]
-struct RenameArchiveParams {
-    /// The new filename *stem* only, no extension — the Edit page's rename modal renders the
-    /// extension as a fixed, non-editable suffix precisely so the backend never has to guess
-    /// whether a caller's string already includes one (see `renameArchiveDialog`'s own docs on
-    /// why that's a real footgun otherwise: silently doubling `.zip.zip`, or worse, actually
-    /// changing the file's apparent type). The real extension is always taken from the archive's
-    /// existing `file` path, never from this field.
-    stem: String,
-}
-
-/// `PUT /archives/{id}/rename` — additive, no legacy equivalent (legacy has no archive-rename
-/// feature at all; verified via `~/LANraragi/lib/LANraragi/Controller/*.pm` and `public/js/edit.js`
-/// having no `rename` reference anywhere). Renames the archive's on-disk file (not just its stored
-/// `title`/`name`), keeping `Archive::file` and `LRR_FILEMAP` in sync — modeled on
-/// `download_manager::ingest`'s own staging-file-to-`archive_dir` rename fixup, the closest
-/// existing precedent for "the archive's file path changed, update the two places that track it".
-///
-/// A sidecar `.patch.zip` (see `delete_patch`'s own docs on how it's associated — same directory,
-/// same stem, purely by filename convention) is renamed alongside the archive itself: leaving it
-/// under the old stem would silently break `patch::patch_path_for`'s lookup for every future
-/// request, making an existing patch invisible without deleting anything or erroring — the kind of
-/// silent data-loss-adjacent bug that's much worse than a rename this function could instead just
-/// reject outright.
-async fn rename_archive(
-    State(state): State<AppState>,
-    Path(id): Path<lanrurugi_core::ids::ArchiveId>,
-    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
-    axum::Json(params): axum::Json<RenameArchiveParams>,
-) -> Response {
-    let mut archive = match state.repos.archives.get(&id).await {
-        Ok(Some(a)) => a,
-        Ok(None) => return not_found("rename_archive", format!("{id} does not exist.")),
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "rename_archive",
-                e.to_string(),
-            )
-        }
-    };
-
-    let old_path = std::path::PathBuf::from(&archive.file);
-    let extension = old_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or_default();
-    // `sanitize_filename` (built for a whole filename, e.g. `foo.zip`) still does the right thing
-    // for a bare stem with no extension — it just strips any directory-traversal component off
-    // whatever's in the last path segment, which a dot-less string still has exactly one of.
-    let requested_stem = crate::upload::sanitize_filename(params.stem.trim());
-    if requested_stem.is_empty() {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "rename_archive",
-            "filename cannot be empty".to_string(),
-        );
-    }
-
-    let new_filename = if extension.is_empty() {
-        requested_stem.clone()
-    } else {
-        format!("{requested_stem}.{extension}")
-    };
-    let patch_filename = format!("{requested_stem}.patch.zip");
-    // Checked against the patch filename, not `new_filename` — `.patch.zip` (10 bytes) is longer
-    // than every real archive extension this app's own scanner accepts (`.zip`/`.cbz`/`.rar`/
-    // `.7z`/`.pdf`/... — 4-5 bytes), so a stem that just barely fits under 255 bytes with its real
-    // extension could still overflow once `.patch.zip` is appended — better to reject the rename
-    // outright here than let it silently produce a patch file the OS can't create at all (the
-    // archive itself would still succeed, since it's checked separately below, leaving a renamed
-    // archive with an now-permanently-unreachable-by-name existing patch).
-    if patch_filename.len() > MAX_FILENAME_BYTES {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "rename_archive",
-            format!(
-                "filename too long ({} bytes once combined with the patch sidecar's own \
-                 .patch.zip suffix; {MAX_FILENAME_BYTES} bytes max)",
-                patch_filename.len()
-            ),
-        );
-    }
-    if new_filename.len() > MAX_FILENAME_BYTES {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "rename_archive",
-            format!(
-                "filename too long ({} bytes; {MAX_FILENAME_BYTES} bytes max)",
-                new_filename.len()
-            ),
-        );
-    }
-
-    if new_filename
-        == old_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default()
-    {
-        // No-op rename (e.g. only whitespace trimmed away) — nothing to do, not an error.
-        return axum::Json(
-            json!({ "operation": "rename_archive", "success": 1, "filename": new_filename }),
-        )
-        .into_response();
-    }
-
-    // Held across the conflict check, the actual `rename`, and the DB/`LRR_FILEMAP` writes below
-    // — the same `FilenameLocks` a concurrent download/upload/watcher-driven ingest would take out
-    // on either name (`lanrurugi_scanner::pipeline::run`'s own per-event lock, `download_manager::
-    // ingest`'s staging-to-`archive_dir` fixup). Without this, a download that happens to resolve
-    // to the exact same target filename this rename is moving *to* (or a watcher event for the
-    // *old* name racing this handler before the `fs::rename` below completes) could interleave
-    // with this handler's own check-then-write sequence — the same kind of real, observed
-    // corruption `FilenameLocks`'s own module docs describe for the two ingest paths it already
-    // guards against each other. Two locks, not one, since both names are live for part of this
-    // handler's duration; always old-then-new (a fixed order, even though no other caller
-    // currently locks two names at once) to rule out a lock-order deadlock if that ever changes.
-    let old_filename_str = old_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default()
-        .to_string();
-    let _old_guard = state.lock_filename(&old_filename_str).await;
-    let _new_guard = state.lock_filename(&new_filename).await;
-
-    match state.repos.archives.find_by_filename(&new_filename).await {
-        Ok(Some(existing)) if existing.id != id => {
-            return error(
-                StatusCode::CONFLICT,
-                "rename_archive",
-                format!(
-                    "an archive with filename {new_filename:?} already exists ({}).",
-                    existing.id
-                ),
-            )
-        }
-        Ok(_) => {}
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "rename_archive",
-                e.to_string(),
-            )
-        }
-    }
-
-    let new_path = old_path.with_file_name(&new_filename);
-    // Journaled *before* the disk rename, cleared only after the archive record below is durably
-    // saved — a crash in between (disk already renamed, DB record still pointing at the old path)
-    // otherwise leaves `repair_zombie_archives`' own repair guessing purely from `archive.name`,
-    // which may not have been saved yet either. This entry gives the startup repair the exact
-    // old/new paths this rename was mid-flight on, no guessing required. Best-effort: if Redis is
-    // briefly unreachable here, the rename still proceeds — a real Redis outage already blocks the
-    // rest of this handler's own writes (the `archives.save()` below) as effectively as it would
-    // block writing this journal entry.
-    if let Ok(mut conn) = state.redis.config.get().await {
-        let _: Result<(), _> = conn
-            .hset(
-                lanrurugi_storage::keys::PENDING_RENAME_KEY,
-                id.as_str(),
-                format!("{}\n{}", old_path.display(), new_path.display()),
-            )
-            .await;
-    }
-
-    if let Err(e) = tokio::fs::rename(&old_path, &new_path).await {
-        if let Ok(mut conn) = state.redis.config.get().await {
-            let _: Result<(), _> = conn
-                .hdel(lanrurugi_storage::keys::PENDING_RENAME_KEY, id.as_str())
-                .await;
-        }
-        // A real attempted rename (past every pre-execution validation/conflict check above) that
-        // failed on the actual disk operation — worth recording.
-        crate::activity::record_manual(
-            &state,
-            auth.as_ref().map(|e| &e.0),
-            lanrurugi_storage::activity::action_types::ARCHIVE_RENAME,
-            lanrurugi_storage::activity::ActivityTarget {
-                id: Some(id.to_string()),
-                label: Some(old_filename_str.clone()),
-                kind: Some("archive".to_string()),
-            },
-            lanrurugi_storage::activity::Outcome::Failure {
-                reason: e.to_string(),
-            },
-            None,
-            None,
-        )
-        .await;
-        return error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "rename_archive",
-            format!("failed to rename file on disk: {e}"),
-        );
-    }
-
-    if archive.has_patch {
-        let old_patch_path = lanrurugi_scanner::patch::patch_path_for(&old_path);
-        let new_patch_path = old_path.with_file_name(&patch_filename);
-        if old_patch_path.exists() {
-            if let Err(e) = tokio::fs::rename(&old_patch_path, &new_patch_path).await {
-                // The archive file itself already moved — rolling that back here would trade one
-                // inconsistent state (renamed archive, stale-named patch) for another (original
-                // name restored, but the caller was already told the whole operation failed,
-                // leaving no clean signal either way) without actually fixing anything, since the
-                // real problem is whatever made this specific rename fail (permissions, a second
-                // conflicting file already at `new_patch_path`, ...) and would just as likely
-                // reject the rollback `rename` too. Surface the failure; the archive's own rename
-                // already succeeded and is reported as such below — this is logged, not fatal.
-                tracing::error!(%id, old_patch_path = %old_patch_path.display(), new_patch_path = %new_patch_path.display(), error = %e, "renamed archive file but failed to rename its sidecar patch file");
-            }
-        }
-    }
-
-    archive.file = new_path.to_string_lossy().to_string();
-    // `name` (legacy field, exposed to the frontend as `filename`) is the *stem* on its own —
-    // stored independently of `file`, not derived from it (unlike `extension()`, which always
-    // re-reads `file` itself) — so it goes stale unless updated here too. Left alone, the Edit
-    // page's "Current File Name" field would keep showing the pre-rename name even though the
-    // file on disk (and every other place `file` is read from) had already moved.
-    archive.name = requested_stem.clone();
-    if let Err(e) = state.repos.archives.save(&archive).await {
-        // The journal entry deliberately stays — it's still true that the disk file is at
-        // `new_path` while the DB record isn't caught up yet, exactly the state the journal
-        // exists to record. `repair_zombie_archives` will finish the job on next startup; a
-        // manual retry of this same rename request would also just re-do this save.
-        //
-        // The disk rename already succeeded — only the DB record write failed — still a genuine
-        // attempted-and-failed operation (and a materially different, higher-severity failure mode
-        // than the disk-rename failure above: file and DB now disagree).
-        crate::activity::record_manual(
-            &state,
-            auth.as_ref().map(|e| &e.0),
-            lanrurugi_storage::activity::action_types::ARCHIVE_RENAME,
-            lanrurugi_storage::activity::ActivityTarget {
-                id: Some(id.to_string()),
-                label: Some(new_filename.clone()),
-                kind: Some("archive".to_string()),
-            },
-            lanrurugi_storage::activity::Outcome::Failure {
-                reason: e.to_string(),
-            },
-            None,
-            None,
-        )
-        .await;
-        return error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "rename_archive",
-            format!("renamed file on disk but failed to save the archive record: {e}"),
-        );
-    }
-
-    if let Ok(mut conn) = state.redis.config.get().await {
-        let old_str = old_path.to_string_lossy().to_string();
-        let new_str = new_path.to_string_lossy().to_string();
-        let _: Result<(), _> = conn
-            .hdel(lanrurugi_storage::keys::FILEMAP_KEY, &old_str)
-            .await;
-        let _: Result<(), _> = conn
-            .hset(lanrurugi_storage::keys::FILEMAP_KEY, &new_str, id.as_str())
-            .await;
-        let _: Result<(), _> = conn
-            .hdel(lanrurugi_storage::keys::PENDING_RENAME_KEY, id.as_str())
-            .await;
-    }
-
-    crate::activity::record_manual(
-        &state,
-        auth.as_ref().map(|e| &e.0),
-        lanrurugi_storage::activity::action_types::ARCHIVE_RENAME,
-        lanrurugi_storage::activity::ActivityTarget {
-            id: Some(id.to_string()),
-            label: Some(new_filename.clone()),
-            kind: Some("archive".to_string()),
-        },
-        lanrurugi_storage::activity::Outcome::Success,
-        // `name` — matches `tankoubon.rename`/`token.rename`'s own `before`/`after` field name for
-        // the identical "this resource's own display name changed" shape, so the frontend's
-        // activity-description renderer can read one shared `{ name: string }` shape across every
-        // rename-type action type instead of special-casing this one's field name (`filename`, its
-        // pre-unification name) apart from the others.
-        Some(json!({ "name": old_filename_str })),
-        Some(json!({ "name": new_filename })),
-    )
-    .await;
-
-    axum::Json(json!({ "operation": "rename_archive", "success": 1, "filename": new_filename }))
-        .into_response()
 }
 
 /// Cover thumbnail path, matching legacy `extract_thumbnail`'s sharding: `<thumb_dir>/<id[0:2]>/<id>.<ext>`.
@@ -1718,7 +1919,7 @@ pub(crate) async fn get_archive_thumbnail(
     // The same resource-level guest check every other per-archive read uses. Without this, an
     // out-of-scope archive's cover/per-page thumbnail (whose URL is exposed by the admin-only
     // bookmarks page and can be persisted in browser/image caches) remains reachable by a guest.
-    if guest_scope_denies(&state, auth.as_deref(), &id).await {
+    if read_denied(&state, auth.as_deref(), &id).await {
         return not_found("serve_thumbnail", format!("{id} does not exist."));
     }
     let page = params.page.unwrap_or(0);
@@ -1823,12 +2024,56 @@ pub(crate) async fn get_archive_thumbnail(
     )
 }
 
-/// The on-disk path of a thumbnail, or `None` when `id` cannot name a stored archive.
+/// The bytes a share serves for an archive's cover, without an HTTP request in front of it.
 ///
-/// `ArchiveId` is a transparent `String` newtype that validates nothing, and callers pass ids
-/// straight from a URL path segment — so without the `is_valid_archive_id` check this would join
-/// `..`/absolute segments into `thumb_dir` and `&id[0..2]` would panic on a short or
-/// non-char-boundary string.
+/// The share protocol cannot negotiate formats (it has no `Accept` header), so the only sensible
+/// default is the format the library already stores — WebP — exactly as the old headerless path
+/// did. Asking for a "source" capability instead made every share browse regenerate a JPEG per
+/// cover on the sharing side.
+/// Whether these bytes are the "no thumbnail" placeholder rather than a real cover. Callers that
+/// derive data from the *image* (the duplicate detector's perceptual hash) must treat the
+/// placeholder as "no cover available": it is one fixed PNG, so every archive that fell back to it
+/// would otherwise hash identically and look like a 100% visual match.
+pub(crate) fn is_placeholder_thumbnail(bytes: &[u8]) -> bool {
+    bytes == PLACEHOLDER_THUMBNAIL
+}
+
+pub(crate) async fn share_thumbnail(
+    state: &AppState,
+    id: &lanrurugi_core::ids::ArchiveId,
+    page: u32,
+) -> Option<(&'static str, Vec<u8>)> {
+    if !is_valid_archive_id(id.as_str()) {
+        return None;
+    }
+    let client_support = ClientImageSupport::webp();
+    let mut conn = state.redis.config.get().await.ok()?;
+    let thumb_settings = lanrurugi_scanner::thumbnail::read_settings(&mut conn).await;
+    let desired_format = desired_thumbnail_format(client_support, thumb_settings.format);
+    if let Some((content_type, bytes)) =
+        read_thumbnail_format(state, id.as_str(), page, desired_format).await
+    {
+        return Some((content_type, bytes.to_vec()));
+    }
+    if let Some((content_type, bytes)) = regenerate_thumbnail_on_demand(
+        state,
+        id.as_str(),
+        page,
+        desired_format,
+        thumb_settings.quality,
+    )
+    .await
+    {
+        return Some((content_type, bytes.to_vec()));
+    }
+    if let Some((content_type, bytes)) =
+        read_thumbnail_from_disk(state, id.as_str(), page, client_support).await
+    {
+        return Some((content_type, bytes.to_vec()));
+    }
+    Some(("image/png", PLACEHOLDER_THUMBNAIL.to_vec()))
+}
+
 /// A strong validator for one thumbnail payload, quoted per RFC 9110. Truncated to 16 hex digits:
 /// this is a cache key for a user's own screen, not a security boundary, and the whole point is
 /// cheap revalidation on every navigation.
@@ -1836,6 +2081,26 @@ fn thumbnail_etag(bytes: &[u8]) -> String {
     let hash = blake3::hash(bytes);
     let hex = hash.to_hex();
     format!("\"{}\"", &hex.as_str()[..16])
+}
+
+/// The on-disk path of a thumbnail, or `None` when `id` cannot name a stored archive.
+///
+/// `ArchiveId` is a transparent `String` newtype that validates nothing, and callers pass ids
+/// straight from a URL path segment — so without the `is_valid_archive_id` check this would join
+/// `..`/absolute segments into `thumb_dir` and `&id[0..2]` would panic on a short or
+/// non-char-boundary string.
+/// Drops an archive's cached per-page thumbnails (the cover is kept). Needed whenever its merged
+/// page list changes — a patch added or removed shifts every later page index.
+pub(crate) async fn clear_page_thumbnails(state: &AppState, id: &str) {
+    if !is_valid_archive_id(id) {
+        return;
+    }
+    let pages_dir = state.library.thumb_dir.join(&id[0..2]).join(id);
+    if let Err(e) = tokio::fs::remove_dir_all(&pages_dir).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(%id, error = %e, "could not clear page thumbnails");
+        }
+    }
 }
 
 fn thumbnail_disk_path(
@@ -2853,6 +3118,260 @@ fn resize_cache_path(
     ))
 }
 
+/// The identity of one page request for the singleflight map. Every flag that changes the bytes or
+/// the encoding parameters has to be in here, or two different requests would collapse into one.
+// Same eight facts `fetch_page` takes: anything that changes the bytes belongs in the key.
+#[allow(clippy::too_many_arguments)]
+fn page_flight_key(
+    path: &str,
+    is_patch: bool,
+    optimize: bool,
+    mobile: bool,
+    preview: bool,
+    requested_short_edge: Option<u32>,
+    client_support: ClientImageSupport,
+    head_only: bool,
+) -> String {
+    let short_edge_key = requested_short_edge
+        .map(|n| format!(":short{n}"))
+        .unwrap_or_default();
+    format!(
+        "{}:{}{}{}{}{}:{}{}",
+        if is_patch { "patch" } else { "orig" },
+        path,
+        if optimize { ":opt" } else { "" },
+        if mobile { ":mob" } else { "" },
+        if preview { ":preview" } else { "" },
+        short_edge_key,
+        client_support.key(),
+        // A HEAD's flight returns metadata only (empty body). Sharing it with a concurrent GET for
+        // the same page handed that GET zero bytes — a broken image in the reader.
+        if head_only { ":head" } else { "" },
+    )
+}
+
+/// How long a warming request waits before it starts: the visible page must win the CPU first.
+const WARM_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// One warm at a time. Warming is a bet on where the reader goes next; it must never compete with
+/// the page the user is actually waiting for.
+fn warm_page_semaphore() -> &'static tokio::sync::Semaphore {
+    static WARM: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    // Serial: two neighbours converting side by side share the CPU with the page being turned to,
+    // so all three land at once after a longer wait than one would have taken alone (reported as
+    // "three images appear together instead of the page I asked for").
+    WARM.get_or_init(|| tokio::sync::Semaphore::new(1))
+}
+
+/// Conversions the reader is currently blocked on. Warming waits for this to drop to zero.
+static VISIBLE_CONVERSIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Marks one visible conversion for as long as it runs.
+struct VisibleConversion;
+
+impl VisibleConversion {
+    fn begin() -> Self {
+        VISIBLE_CONVERSIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for VisibleConversion {
+    fn drop(&mut self) {
+        VISIBLE_CONVERSIONS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn visible_conversions() -> usize {
+    VISIBLE_CONVERSIONS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Workers for the one page a reader is waiting on. JXL encoding is the slow half of a cold page
+/// and scales across cores; everything speculative stays single-threaded. Capped at 30% of the
+/// cores, like every other CPU-bound parallel path in this workspace: the reader must not be able
+/// to make the server unusable for itself.
+fn page_encode_threads() -> usize {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    (cores * 3 / 10).clamp(1, 4)
+}
+
+/// How many pages may be converted at once. Flipping quickly used to start one conversion per
+/// page, each holding a decoded frame of a few hundred megabytes; a quarter of the cores keeps a
+/// burst from turning into an out-of-memory kill.
+fn conversion_slots() -> &'static tokio::sync::Semaphore {
+    static SLOTS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    SLOTS.get_or_init(|| {
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        tokio::sync::Semaphore::new((cores / 4).max(1))
+    })
+}
+
+/// Converts the pages on either side of `path` in the background, so the next turn finds its page
+/// already in the resize cache.
+///
+/// A cold page costs about 4.5 s (decode a 3000×4200 JPEG, downscale, encode WebP). Without this,
+/// every turn paid that in full and a reader flipping quickly kept cancelling requests it had just
+/// started — the page area stayed empty for as long as the flipping lasted. The result of the warm
+/// request itself is dropped; the point is the cache file it leaves behind.
+/// Bumped on every page actually served. A warm task that started before the reader moved on is
+/// warming pages nobody will look at, so it drops its work instead of competing with the page the
+/// reader is waiting for now.
+static WARM_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[allow(clippy::too_many_arguments)]
+fn warm_neighbours(
+    state: AppState,
+    id: String,
+    path: String,
+    archive_file: String,
+    corrupted_pages: Vec<String>,
+    mobile: bool,
+    requested_short_edge: Option<u32>,
+    client_support: ClientImageSupport,
+) {
+    let generation = WARM_GENERATION.load(std::sync::atomic::Ordering::SeqCst);
+    tokio::spawn(async move {
+        tokio::time::sleep(WARM_DELAY).await;
+        if WARM_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != generation {
+            return;
+        }
+        // Do not start while the reader is still waiting for a page of its own: sharing the CPU
+        // made that page slower and the warmed ones finish alongside it.
+        let waited = std::time::Instant::now();
+        while visible_conversions() > 0 {
+            if waited.elapsed() > std::time::Duration::from_secs(60) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        let Ok(_permit) = warm_page_semaphore().acquire().await else {
+            return;
+        };
+        let listing = archive_file.clone();
+        let pages = lanrurugi_core::concurrency::run_blocking(move || {
+            lanrurugi_scanner::archive_format::list_pages(std::path::Path::new(&listing))
+        })
+        .await
+        .ok()
+        .and_then(Result::ok);
+        let Some(pages) = pages else {
+            return;
+        };
+        let names: Vec<String> = pages;
+        let Some(index) = names.iter().position(|name| name == &path) else {
+            return;
+        };
+        for offset in [1isize, -1] {
+            // The reader may have turned the page while the first neighbour was warming. Warming
+            // is only ever worth doing for the page that is about to be looked at, so a newer
+            // generation ends this one instead of finishing a list nobody will read.
+            if WARM_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != generation
+                || visible_conversions() > 0
+            {
+                return;
+            }
+            let Some(target) = index
+                .checked_add_signed(offset)
+                .and_then(|next| names.get(next))
+            else {
+                continue;
+            };
+            // Through the same singleflight as a real request: if the reader turns onto this page
+            // while it is being warmed, it joins that conversion instead of starting a second one.
+            // The result is dropped on purpose — a warming request only cares that the cache entry
+            // now exists.
+            let key = page_flight_key(
+                target,
+                false,
+                true,
+                mobile,
+                false,
+                requested_short_edge,
+                client_support,
+                false,
+            );
+            let flight = state
+                .page_singleflight
+                .run((id.clone(), key), {
+                    let state = state.clone();
+                    let id = id.clone();
+                    let target = target.clone();
+                    let archive_file = archive_file.clone();
+                    let corrupted_pages = corrupted_pages.clone();
+                    move || async move {
+                        fetch_page(
+                            &state,
+                            &id,
+                            &target,
+                            &archive_file,
+                            &corrupted_pages,
+                            false,
+                            true,
+                            mobile,
+                            false,
+                            requested_short_edge,
+                            client_support,
+                            false,
+                            page_encode_threads(),
+                        )
+                        .await
+                    }
+                })
+                .await;
+            drop(flight);
+
+            // The reader paints this preview underneath the page and sweeps the page over it, so a
+            // cold preview arriving *after* the page turns that transition into a flash. Warming it
+            // here costs one small encode and makes the next page turn reveal instead of blink.
+            if let Some(target_index) = index.checked_add_signed(offset) {
+                let target = names[target_index].clone();
+                let key = page_flight_key(
+                    &target,
+                    false,
+                    true,
+                    mobile,
+                    true,
+                    requested_short_edge,
+                    client_support,
+                    false,
+                );
+                let preview = state
+                    .page_singleflight
+                    .run((id.clone(), key), {
+                        let state = state.clone();
+                        let id = id.clone();
+                        let archive_file = archive_file.clone();
+                        let corrupted_pages = corrupted_pages.clone();
+                        move || async move {
+                            fetch_page(
+                                &state,
+                                &id,
+                                &target,
+                                &archive_file,
+                                &corrupted_pages,
+                                false,
+                                true,
+                                mobile,
+                                true,
+                                requested_short_edge,
+                                client_support,
+                                false,
+                                1,
+                            )
+                            .await
+                        }
+                    })
+                    .await;
+                drop(preview);
+            }
+        }
+    });
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     use std::fmt::Write;
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -2915,7 +3434,7 @@ pub(crate) async fn serve_page(
     headers: &HeaderMap,
     head_only: bool,
 ) -> Response {
-    if guest_scope_denies(state, auth, id).await {
+    if read_denied(state, auth, id).await {
         return not_found("serve_page", format!("{id} does not exist."));
     }
     let archive = match state.repos.archives.get(id).await {
@@ -2929,6 +3448,18 @@ pub(crate) async fn serve_page(
             )
         }
     };
+
+    // A download or upload is catalogued before its bytes reach the library (the record is
+    // written with an empty `file` and filled in after the move). Until that fixup lands there is
+    // nothing to read, and the archive reader used to answer with a confusing "unsupported
+    // archive extension: \"\"" because the path was empty — say what is actually happening.
+    if archive.file.trim().is_empty() {
+        return error(
+            StatusCode::CONFLICT,
+            "serve_page",
+            "this archive is still being ingested; try again in a moment".to_string(),
+        );
+    }
 
     let is_patch = params.source.as_deref() == Some("patch");
     let optimize = matches!(params.optimize.as_deref(), Some("1" | "true"));
@@ -3003,50 +3534,84 @@ pub(crate) async fn serve_page(
     // `client_support.key()` is part of the key for the same reason: whether a JXL source page is
     // served as-is or converted to WebP changes the bytes/Content-Type entirely, so a JXL-capable
     // request and a WebP-only request for the same entry must not collapse onto each other.
-    let short_edge_key = requested_short_edge
-        .map(|n| format!(":short{n}"))
-        .unwrap_or_default();
-    let cache_key_path = format!(
-        "{}:{}{}{}{}{}:{}{}",
-        if is_patch { "patch" } else { "orig" },
-        params.path,
-        if optimize { ":opt" } else { "" },
-        if mobile { ":mob" } else { "" },
-        if preview_variant { ":preview" } else { "" },
-        short_edge_key,
-        client_support.key(),
-        // A HEAD's flight returns metadata only (empty body). Sharing it with a concurrent GET for
-        // the same page handed that GET zero bytes — a broken image in the reader.
-        if head_only { ":head" } else { "" },
+    let cache_key_path = page_flight_key(
+        &params.path,
+        is_patch,
+        optimize,
+        mobile,
+        preview_variant,
+        requested_short_edge,
+        client_support,
+        head_only,
     );
-    let result = state
-        .page_singleflight
-        .run((id.to_string(), cache_key_path), {
-            let state = state.clone();
-            let id = id.clone();
-            let path = params.path.clone();
-            let archive_file = archive.file.clone();
-            let corrupted_pages = archive.corrupted_pages.clone();
-            move || async move {
-                fetch_page(
-                    &state,
-                    id.as_str(),
-                    &path,
-                    &archive_file,
-                    &corrupted_pages,
-                    is_patch,
-                    optimize,
-                    mobile,
-                    preview_variant,
-                    requested_short_edge,
-                    client_support,
-                    head_only,
-                )
+    // The flight runs in its own task. A reader who flips past a page before it finishes drops
+    // this handler, and a dropped handler cancelled the conversion with it — the cache entry was
+    // never written, so every revisit (and every flip back) paid the full conversion again.
+    // Dropping the JoinHandle below does not abort the task, so the work always lands in the cache.
+    let flight = tokio::spawn({
+        let flight = state.page_singleflight.clone();
+        let state = state.clone();
+        let id = id.clone();
+        let path = params.path.clone();
+        let archive_file = archive.file.clone();
+        let corrupted_pages = archive.corrupted_pages.clone();
+        async move {
+            flight
+                .run((id.to_string(), cache_key_path), move || async move {
+                    fetch_page(
+                        &state,
+                        id.as_str(),
+                        &path,
+                        &archive_file,
+                        &corrupted_pages,
+                        is_patch,
+                        optimize,
+                        mobile,
+                        preview_variant,
+                        requested_short_edge,
+                        client_support,
+                        head_only,
+                        // A JXL preview is only worth its extra CPU when threaded (one thread
+                        // costs ~12 ms more than WebP for half the bytes); see the format choice
+                        // in `fetch_page`.
+                        if preview_variant {
+                            page_encode_threads()
+                        } else if prefetch || head_only {
+                            1
+                        } else {
+                            page_encode_threads()
+                        },
+                    )
+                    .await
+                })
                 .await
-            }
-        })
-        .await;
+        }
+    });
+    // Only a page someone is actually waiting on counts as visible; a prefetch or a HEAD must not
+    // hold warming back.
+    let _visible = (!prefetch && !head_only).then(VisibleConversion::begin);
+    let result = flight
+        .await
+        .unwrap_or_else(|error| Err(format!("page worker stopped: {error}")));
     drop(low_priority_permit);
+
+    // Warm the neighbours of a page the reader is actually looking at, so turning a page finds it
+    // already converted. Skipped for HEAD (a question, not a page), for the tiny preview variant,
+    // for patch pages (read from a separate zip with its own path space) and for requests that
+    // were themselves speculative.
+    if result.is_ok() && !head_only && optimize && !preview_variant && !prefetch && !is_patch {
+        WARM_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        warm_neighbours(
+            state.clone(),
+            id.to_string(),
+            params.path.clone(),
+            archive.file.clone(),
+            archive.corrupted_pages.clone(),
+            mobile,
+            requested_short_edge,
+            client_support,
+        );
+    }
 
     match result {
         Ok(page) => {
@@ -3295,6 +3860,7 @@ async fn fetch_page(
     requested_short_edge: Option<u32>,
     client_support: ClientImageSupport,
     head_only: bool,
+    jxl_threads: usize,
 ) -> Result<FetchedPage, String> {
     if is_patch {
         let archive_file_owned = archive_file.to_string();
@@ -3369,7 +3935,7 @@ async fn fetch_page(
         )
         .await
         .unwrap_or((None, None, None));
-    let enable_resize = enable_resize.map(|v| v != "0").unwrap_or(false);
+    let enable_resize = crate::settings::stored_bool("enableresize", enable_resize.as_deref());
     let threshold: i64 = threshold
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_SIZE_THRESHOLD);
@@ -3430,13 +3996,16 @@ async fn fetch_page(
         return Ok(serve_original_page(archive_file, path, raw, content_type).await);
     }
 
-    // `None` means this client can decode neither WebP nor JXL; serve source bytes. For preview
-    // requests prefer WebP when both are available because the tiny placeholder should stay tiny.
+    // `None` means this client can decode neither WebP nor JXL; serve source bytes. Previews use
+    // JXL when the client can decode it: measured on a real page at the preview settings (600px,
+    // q35) JXL is 12 KB against WebP's 30 KB, for ~12 ms more encode time on one thread — and the
+    // preview is warmed off the critical path, then encoded with several threads (see the thread
+    // count chosen when `fetch_page` is called). WebP stays the fallback for JXL-less clients.
     let output_format = if preview {
-        if client_support.webp {
-            Some(EncodeFormat::Webp)
-        } else if client_support.jxl {
+        if client_support.jxl {
             Some(EncodeFormat::Jxl)
+        } else if client_support.webp {
+            Some(EncodeFormat::Webp)
         } else {
             None
         }
@@ -3734,19 +4303,22 @@ async fn fetch_page(
             true,
         ));
     }
+    // Held only around the conversion, never around a cache hit.
+    let _slot = conversion_slots().acquire().await;
     let converted = if force_convert {
-        lanrurugi_scanner::resize::convert_to_format(
+        lanrurugi_scanner::resize::convert_to_format_with_jxl_threads(
             raw.clone(),
             effective_quality as u8,
             effective_max_short_edge,
             max_long_edge,
             preview_full_short_edge,
             output_format,
+            jxl_threads,
         )
         .await
         .map(Some)
     } else {
-        lanrurugi_scanner::resize::resize_if_over_threshold(
+        lanrurugi_scanner::resize::resize_if_over_threshold_with_jxl_threads(
             raw.clone(),
             effective_quality as u8,
             effective_threshold_for_output,
@@ -3754,6 +4326,7 @@ async fn fetch_page(
             max_long_edge,
             preview_full_short_edge,
             output_format,
+            jxl_threads,
         )
         .await
     };
@@ -3959,7 +4532,7 @@ pub(crate) async fn get_files(
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
 ) -> Response {
-    if guest_scope_denies(&state, auth.as_deref(), &id).await {
+    if read_denied(&state, auth.as_deref(), &id).await {
         return not_found("get_file_list", format!("{id} does not exist."));
     }
     let archive = match state.repos.archives.get(&id).await {
@@ -3973,6 +4546,16 @@ pub(crate) async fn get_files(
             )
         }
     };
+    // Same window as `serve_page`: a download/upload is catalogued with an empty `file` and only
+    // gets its real path after the move. Answering "still being ingested" beats a 500 whose
+    // message ("unsupported archive extension") describes an implementation detail.
+    if archive.file.trim().is_empty() {
+        return error(
+            StatusCode::CONFLICT,
+            "get_file_list",
+            "this archive is still being ingested; try again in a moment".to_string(),
+        );
+    }
     let archive_path = std::path::Path::new(&archive.file);
     // `optimize=1` is stamped on every generated URL — the reader then gets whatever
     // `fetch_page` decides is best for its advertised capabilities (JXL-native passthrough,
@@ -4027,7 +4610,7 @@ async fn get_page_dimensions(
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     Query(params): Query<PageDimensionsParams>,
 ) -> Response {
-    if guest_scope_denies(&state, auth.as_deref(), &id).await {
+    if read_denied(&state, auth.as_deref(), &id).await {
         return not_found("get_page_dimensions", format!("{id} does not exist."));
     }
     let archive = match state.repos.archives.get(&id).await {
@@ -4244,7 +4827,7 @@ async fn get_page_thumbnails(
         for member_id in &tank.archives {
             // A Tankoubon can contain a mix of guest-visible and admin-only members; a guest must
             // not get thumbnails (or even a page-count contribution) for the hidden ones.
-            if guest_scope_denies(&state, auth.as_deref(), member_id).await {
+            if read_denied(&state, auth.as_deref(), member_id).await {
                 continue;
             }
             if let Ok(Some(archive)) = state.repos.archives.get(member_id).await {
@@ -4290,7 +4873,7 @@ async fn get_page_thumbnails(
 
     // Regular archive
     let archive_id = ArchiveId(id);
-    if guest_scope_denies(&state, auth.as_deref(), &archive_id).await {
+    if read_denied(&state, auth.as_deref(), &archive_id).await {
         return not_found(
             "get_page_thumbnails",
             format!("{archive_id} does not exist."),
@@ -4444,6 +5027,117 @@ mod tests {
         assert_eq!(served_page_filename("dir/000.tif", "image/tiff"), "000.tif");
     }
 
+    /// Spec 025 (D3, D5): while an archive is in the pending set every read endpoint answers 404
+    /// exactly as for an unknown id, and neither list endpoint includes it; publishing it makes
+    /// the same requests succeed at once.
+    #[tokio::test]
+    async fn a_pending_archive_is_unreadable_and_unlisted_until_published() {
+        let Some(state) = crate::plugins::tests::test_state().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let lock = lanrurugi_storage::test_support::RedisTestLock::acquire(
+            &state.redis.archive,
+            "pending_visibility",
+        )
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("book.zip");
+        std::fs::write(&file, b"not really a zip").unwrap();
+        let id = format!("{}00000000", uuid::Uuid::new_v4().simple());
+        let mut archive = archive_named(&file.to_string_lossy(), "book.zip", "Pending Gate");
+        archive.id = ArchiveId(id.clone());
+        archive.pagecount = 1;
+        state.repos.archives.save(&archive).await.unwrap();
+        crate::visibility::mark_pending(&state, &id).await.unwrap();
+
+        async fn body(resp: Response) -> String {
+            let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+        let metadata = |s: &AppState| {
+            get_archive_metadata(State(s.clone()), None, Path(ArchiveId(id.clone())))
+        };
+
+        let hidden = metadata(&state).await;
+        assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+        assert!(!body(hidden).await.contains("Pending Gate"));
+        let download = download_archive(
+            State(state.clone()),
+            Path(ArchiveId(id.clone())),
+            Query(DownloadParams { inline: false }),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(download.status(), StatusCode::NOT_FOUND);
+        assert!(!body(list_archives(State(state.clone())).await)
+            .await
+            .contains(&id));
+        assert!(!body(untagged_archives(State(state.clone())).await)
+            .await
+            .contains(&id));
+
+        crate::visibility::publish(&state, &id).await;
+        assert_eq!(metadata(&state).await.status(), StatusCode::OK);
+        assert!(body(list_archives(State(state.clone())).await)
+            .await
+            .contains(&id));
+
+        let _ = state.repos.archives.delete(&ArchiveId(id.clone())).await;
+        lock.release().await;
+    }
+
+    fn archive_named(file: &str, name: &str, title: &str) -> Archive {
+        Archive {
+            id: lanrurugi_core::ids::ArchiveId("a".repeat(40)),
+            name: name.to_string(),
+            title: title.to_string(),
+            file: file.to_string(),
+            tags: String::new(),
+            summary: String::new(),
+            arcsize: 0,
+            pagecount: 0,
+            isnew: false,
+            lastreadpage: 0,
+            lastreadtime: 0,
+            thumbhash: None,
+            toc: vec![],
+            stamp_ids: vec![],
+            heal_failed_at: None,
+            corrupted_pages: vec![],
+            has_patch: false,
+            blake3: None,
+        }
+    }
+
+    #[test]
+    fn a_hash_named_archive_downloads_under_its_title() {
+        // 020 FR-019: the on-disk name is `<id>.<ext>`, and the download is still named after
+        // what the user sees — the title, not the (possibly marked-up) original filename.
+        let archive = archive_named(
+            "/library/ab/aaaa.zip",
+            "[Group] The Book [DL版]",
+            "The Book",
+        );
+        let disposition = content_disposition_for(&archive);
+        assert!(disposition.contains("filename=\"The Book.zip\""));
+        assert!(disposition.contains("filename*=UTF-8''The%20Book.zip"));
+    }
+
+    #[test]
+    fn a_title_with_a_path_separator_does_not_become_a_directory() {
+        let archive = archive_named("/library/ab/aaaa.zip", "Fate stay night", "Fate/stay night");
+        assert!(content_disposition_for(&archive).contains("filename=\"Fate_stay night.zip\""));
+    }
+
+    #[test]
+    fn an_archive_without_a_title_falls_back_to_its_filename() {
+        let archive = archive_named("/library/Series/Book.zip", "Book", "");
+        assert!(content_disposition_for(&archive).contains("filename=\"Book.zip\""));
+    }
+
     #[test]
     fn attachment_headers_survive_a_non_ascii_filename() {
         // The regression this guards: a hand-built `format!("attachment; filename=\"{name}\"")`
@@ -4453,17 +5147,6 @@ mod tests {
         let rendered = value.to_str().expect("header value must be valid");
         assert!(rendered.starts_with("attachment; "));
         assert!(rendered.contains("filename*="));
-    }
-
-    #[test]
-    fn image_filename_uses_the_served_formats_extension() {
-        assert_eq!(image_filename("item_a_3", "image/jxl"), "item_a_3.jxl");
-        assert_eq!(image_filename("item_a_3", "image/webp"), "item_a_3.webp");
-        // An unrecognized content type keeps the stem rather than claiming a format.
-        assert_eq!(
-            image_filename("item_a_3", "application/octet-stream"),
-            "item_a_3.bin"
-        );
     }
 
     #[test]
@@ -4754,5 +5437,19 @@ mod tests {
     #[test]
     fn image_content_type_falls_back_for_too_short_input() {
         assert_eq!(image_content_type(b"\xFF"), "application/octet-stream");
+    }
+
+    #[test]
+    fn a_byte_range_is_clamped_to_the_file() {
+        assert_eq!(parse_byte_range("bytes=0-9", 100), Some((0, 9)));
+        assert_eq!(parse_byte_range("bytes=90-", 100), Some((90, 99)));
+        assert_eq!(parse_byte_range("bytes=-10", 100), Some((90, 99)));
+        assert_eq!(parse_byte_range("bytes=-500", 100), Some((0, 99)));
+        assert_eq!(parse_byte_range("bytes=95-500", 100), Some((95, 99)));
+        assert_eq!(parse_byte_range("bytes=100-", 100), None);
+        assert_eq!(parse_byte_range("bytes=5-1", 100), None);
+        assert_eq!(parse_byte_range("bytes=0-1,4-5", 100), None);
+        assert_eq!(parse_byte_range("seconds=0-1", 100), None);
+        assert_eq!(parse_byte_range("bytes=0-", 0), None);
     }
 }

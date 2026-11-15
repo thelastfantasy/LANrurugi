@@ -328,6 +328,7 @@ async fn login(
         .make_room_for_new_family_with_device(
             now as i64,
             auth.max_login_devices as i64,
+            auth.refresh_token_lifetime_secs as i64,
             Some(device_id.as_str()),
         )
         .await
@@ -497,6 +498,7 @@ async fn refresh(
             token_id,
             secret,
             now as i64,
+            auth.refresh_token_lifetime_secs as i64,
             auth.refresh_token_idle_lifetime_secs as i64,
             SessionContext {
                 device_info: rotate_device_info,
@@ -869,8 +871,8 @@ mod tests {
             session_secret: b"test-secret".to_vec(),
             cookie_names: lanrurugi_core::session::CookieNames::for_secret(b"test"),
             access_token_lifetime_secs: 3_600,
-            refresh_token_lifetime_secs: 604_800,
-            refresh_token_idle_lifetime_secs: 1_209_600,
+            refresh_token_lifetime_secs: 0,
+            refresh_token_idle_lifetime_secs: 604_800,
             max_login_devices: 5,
             retired_cookie_domain: None,
             force_secure_cookies: false,

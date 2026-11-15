@@ -1105,7 +1105,9 @@ async fn run_split_job(
         }
         let mut target_sources: HashMap<String, String> = HashMap::new();
         let file = std::fs::File::create(&target).map_err(|e| e.to_string())?;
-        let mut writer = zip::ZipWriter::new(file);
+        // ZipWriter emits a header per member; against a bare `File` each one is its own syscall.
+        // The bundle writer (`download_manager/bundle.rs`) already buffers this way.
+        let mut writer = zip::ZipWriter::new(std::io::BufWriter::with_capacity(1 << 20, file));
         let mut seen = HashSet::new();
 
         let group_files: Vec<String> = all_files

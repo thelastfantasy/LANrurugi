@@ -4,17 +4,27 @@ import {
   CheckboxField,
   Input,
   NullableNumberInput,
+  Select,
   Switch,
 } from "@/components/common-ui/Form";
 import { DateTimeField } from "@/components/common-ui/Form/DateTimeField";
+import { Z_OVERLAY_ABOVE_LEGACY_MODAL } from "@/theme";
 
-import type { ShareFields, SharePermissions } from "./types";
+import type { RatioAction, ShareFields, SharePermissions } from "./types";
 
 /** Editable share settings as the form holds them. */
+/** One click each, because these are the ratios people actually pick. */
+const RATIO_PRESETS = [1, 1.1, 5, 10];
+
 export interface ShareFormState {
   title: string;
   permissions: SharePermissions;
   downloadLimit: number | "";
+  /** Imported bytes over the share's own size; `""` means no target. */
+  targetRatio: number | "";
+  ratioAction: RatioAction;
+  /** Bytes per second once throttled; `""` pauses instead. */
+  ratioRate: number | "";
   ipAllow: string;
   ipFirstN: number | "";
   /** Unix seconds; `""` never expires. Held as the instant itself, not a day count, so opening and
@@ -56,6 +66,9 @@ export function formFromShare(s: {
   title: string;
   permissions: SharePermissions;
   download_limit: number | null;
+  target_ratio?: number | null;
+  ratio_action?: RatioAction;
+  ratio_rate?: number | null;
   ip_allow?: string[];
   ip_first_n?: number | null;
   expires_at: number | null;
@@ -66,6 +79,9 @@ export function formFromShare(s: {
     title: s.title,
     permissions: s.permissions,
     downloadLimit: s.download_limit ?? "",
+    targetRatio: s.target_ratio ?? "",
+    ratioAction: s.ratio_action ?? "stop",
+    ratioRate: s.ratio_rate ?? "",
     ipAllow: (s.ip_allow ?? []).join("\n"),
     ipFirstN: s.ip_first_n ?? "",
     expiresAt: s.expires_at ?? "",
@@ -79,6 +95,9 @@ export function fieldsFromForm(f: ShareFormState): ShareFields {
     title: f.title.trim() || null,
     permissions: f.permissions,
     download_limit: f.downloadLimit === "" ? null : f.downloadLimit,
+    target_ratio: f.targetRatio === "" ? null : f.targetRatio,
+    ratio_action: f.ratioAction,
+    ratio_rate: f.ratioRate === "" ? null : f.ratioRate,
     ip_allow: f.ipAllow
       .split(/[\n,]/)
       .map((s) => s.trim())
@@ -148,6 +167,65 @@ export function ShareFieldsForm({
       <span className="share-form-hint">
         {t("share.form.downloadLimitHint")}
       </span>
+
+      <span>{t("share.form.targetRatio")}</span>
+      <div className="share-ratio-row">
+        <NullableNumberInput
+          value={value.targetRatio}
+          min={0}
+          step={0.1}
+          onValueChange={(v) => set({ targetRatio: v })}
+          placeholder={t("share.form.off")}
+          style={{ width: "7em" }}
+          aria-label={t("share.form.targetRatio")}
+        />
+        <div className="share-ratio-presets">
+          {RATIO_PRESETS.map((preset) => (
+            <button
+              key={preset}
+              type="button"
+              className="stdbtn"
+              onClick={() => set({ targetRatio: preset })}
+            >
+              {preset.toFixed(1)}
+            </button>
+          ))}
+        </div>
+      </div>
+      <span className="share-form-hint">{t("share.form.targetRatioHint")}</span>
+
+      {/* "Once reached" is meaningless with no target, so both it and the rate hide until one
+          is typed — an empty target means the ratio machinery is off entirely. */}
+      {value.targetRatio !== "" && (
+        <>
+          <span>{t("share.form.ratioAction")}</span>
+          <Select
+            popupZIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL}
+            value={value.ratioAction}
+            onValueChange={(v) => set({ ratioAction: v as RatioAction })}
+            align="start"
+            items={[
+              { value: "stop", label: t("share.ratio.stop") },
+              { value: "throttle", label: t("share.ratio.throttle") },
+            ]}
+          />
+        </>
+      )}
+      {value.targetRatio !== "" && value.ratioAction === "throttle" && (
+        <>
+          <span>{t("share.form.ratioRate")}</span>
+          <NullableNumberInput
+            value={value.ratioRate}
+            min={0}
+            step={1024}
+            onValueChange={(v) => set({ ratioRate: v })}
+            placeholder={t("share.form.ratioRatePaused")}
+            style={{ width: "10em" }}
+            aria-label={t("share.form.ratioRate")}
+          />
+          <span className="share-form-hint">{t("share.form.ratioRateHint")}</span>
+        </>
+      )}
 
       <span>{t("share.form.ipAllow")}</span>
       <Input

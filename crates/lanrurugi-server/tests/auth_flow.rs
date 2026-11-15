@@ -51,6 +51,7 @@ fn test_archive(id: &str, title: &str) -> lanrurugi_core::entities::Archive {
         heal_failed_at: None,
         corrupted_pages: vec![],
         has_patch: false,
+        blake3: None,
     }
 }
 
@@ -94,9 +95,6 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         lanrurugi_storage::ignored_group_suggestions::IgnoredGroupSuggestionsRepository::new(
             redis.config.clone(),
         ),
-    );
-    let compare_cache = Arc::new(
-        lanrurugi_storage::compare_cache::CompareCacheRepository::new(redis.config.clone()),
     );
     let bookmarks = Arc::new(lanrurugi_storage::bookmarks::BookmarksRepository::new(
         redis.config.clone(),
@@ -154,7 +152,6 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         download_queue,
         recommend_cache,
         ignored_group_suggestions,
-        compare_cache,
         bookmarks,
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new(
             std::env::temp_dir().join("lanrurugi-test-models"),
@@ -168,6 +165,8 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         translation_telemetry: Default::default(),
         filename_locks: Default::default(),
         download_queue_tx: None,
+        subscription_check_tx: None,
+        grouping: Default::default(),
         refresh_tokens,
         api_tokens,
         api_token_last_touch: Default::default(),

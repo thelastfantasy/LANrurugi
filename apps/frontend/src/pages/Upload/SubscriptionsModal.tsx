@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next"
 import { useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -68,7 +69,7 @@ function canRetry(state: DownloadQueueState): boolean {
 
 /** A queue item's own state in one word, for a list that has no room for the queue's own progress
  * bars and buttons. `needsDecision` states are called what they are — the question, not the wait. */
-function stateLabel(state: DownloadQueueState, t: (k: string) => string | null) {
+function stateLabel(state: DownloadQueueState, t: TFunction) {
   switch (state) {
     case "done":
       return t("upload.done")

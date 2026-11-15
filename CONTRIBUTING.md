@@ -14,7 +14,7 @@ LANrurugi 的后端是 Rust（`crates/` 下的 Cargo workspace），前端是 Re
 
 | 命令 | 作用 |
 |---|---|
-| `mise run check` | 提交/推送前必跑：clippy + fmt-check + 前端 tsc/eslint |
+| `mise run check` | 提交/推送前必跑：clippy + fmt-check + 前端语法检查（esbuild）/tsc/eslint |
 | `mise run test` | 全量 `cargo test --workspace`（带 `--no-fail-fast`） |
 | `mise run test-crate -- <crate>` | 只测某个 crate，迭代时用 |
 | `mise run clippy` / `mise run fmt` | 单独跑 lint / 格式化 |
@@ -34,6 +34,9 @@ LANrurugi 的后端是 Rust（`crates/` 下的 Cargo workspace），前端是 Re
 - **前端**：React 19 + TypeScript + Vite + Tailwind + Zustand + TanStack Query，位于
   `apps/frontend/` 下。
 - **插件**：沙箱化的 Deno 子进程，每个插件命名空间一个（`crates/lanrurugi-plugin/`）。
+- **共享（实例间分享）**：引擎在 `crates/lanrurugi-share/`（iroh 端点、分享协议、导入、节点角色），
+  线协议在 `crates/lanrurugi-share-proto/`；HTTP 路由留在 `lanrurugi-api`。引擎只通过
+  `lanrurugi_share::host::ShareHost` 访问资料库、下载队列和设置，不依赖 `lanrurugi-api`（CI 有检查）。
 - **页面内翻译（Phase 2）**：同一 workspace 下的 `crates/lanrurugi-{ocr,fontcache,translate}` 与
   `apps/frontend/src/translation/`，不是独立部署单元——OCR 检测用 `oar-ocr`、识别用 `ort` +
   `manga-ocr`（均为 Apache-2.0，仅 CPU），翻译适配 OpenAI 兼容 / Anthropic / DeepSeek 三种后端。

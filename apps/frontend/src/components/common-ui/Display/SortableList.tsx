@@ -12,6 +12,7 @@ import {
 import {
   arrayMove,
   horizontalListSortingStrategy,
+  rectSortingStrategy,
   SortableContext,
   sortableKeyboardCoordinates,
   useSortable,
@@ -63,6 +64,7 @@ export function SortableList<T>({
   onReorder,
   renderItem,
   direction = "vertical",
+  gridMinItemWidth = 120,
   onScroller,
 }: {
   items: T[]
@@ -70,8 +72,10 @@ export function SortableList<T>({
   /** Called once after a drop changes the order — receives the complete new ordered id list. */
   onReorder: (newOrder: string[]) => void
   renderItem: (item: T, dragHandleProps: DragHandleProps) => React.ReactNode
-  /** `'horizontal'` reorders left/right in a scrolling flex row instead of vertically. */
-  direction?: "vertical" | "horizontal"
+  /** `'horizontal'` reorders left/right in a scrolling flex row instead of vertically; `'grid'`
+   * wraps items into columns at least `gridMinItemWidth` wide. */
+  direction?: "vertical" | "horizontal" | "grid"
+  gridMinItemWidth?: number
   /** Exposes the internal Lenis instance (horizontal mode only) so a caller can drive prev/next-
    * arrow buttons the same way `RecentlyAddedCarousel`'s own carousel does — a callback, not a
    * plain `RefObject`, so the caller can mirror it into its own state and actually re-render (a
@@ -155,9 +159,25 @@ export function SortableList<T>({
     >
       <SortableContext
         items={ids}
-        strategy={direction === "horizontal" ? horizontalListSortingStrategy : verticalListSortingStrategy}
+        strategy={
+          direction === "horizontal"
+            ? horizontalListSortingStrategy
+            : direction === "grid"
+              ? rectSortingStrategy
+              : verticalListSortingStrategy
+        }
       >
-        {direction === "horizontal" ? (
+        {direction === "grid" ? (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: `repeat(auto-fill, minmax(${gridMinItemWidth}px, 1fr))`,
+              gap: 10,
+            }}
+          >
+            {items_}
+          </div>
+        ) : direction === "horizontal" ? (
           <div ref={containerRef} className="hide-scrollbar" style={{ display: "flex", flexDirection: "row", overflowX: "auto" }}>
             {items_}
           </div>

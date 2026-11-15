@@ -2,6 +2,8 @@ import { lazy,Suspense } from "react"
 import { BrowserRouter, Route, Routes, useParams } from "react-router-dom"
 import { ToastContainer } from "react-toastify"
 
+import { AndroidToastTransition } from "@/toast"
+
 import { AuthBridgeGate } from "./AuthBridgeGate"
 import { NotFoundPage } from "./components/Display/NotFoundPage"
 import { DialogHost } from "./dialog"
@@ -60,7 +62,18 @@ export function App() {
     <BrowserRouter>
       <AuthBridgeGate />
       <FirstRunWizardGate />
-      <ToastContainer limit={7} theme="light" />
+      {/* Toasts dismiss on a horizontal swipe. The library's own default asks for 80% of the
+          toast's width, which on a phone is nearly a full-screen drag — reported as "swipe does
+          nothing" — so a short flick is enough here. Vertical scrolling still works over a toast
+          because `index.css` relaxes the library's `touch-action: none` to `pan-y`. */}
+      <ToastContainer
+        limit={7}
+        theme="light"
+        transition={AndroidToastTransition}
+        draggable
+        draggableDirection="x"
+        draggablePercent={30}
+      />
       <DialogHost />
       <Suspense fallback={<RouteFallback />}>
       <Routes>

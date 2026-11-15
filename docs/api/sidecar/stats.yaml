@@ -121,7 +121,7 @@
         required: false
         schema: { type: string }
         description: >-
-          `size` bucket key (`lt_1mb` … `gte_500mb`), a `rating` of `0`-`5` (where `0` is the
+          `size` bucket key (`lt_1mb` … `gte_2gb`), a `rating` of `0`-`5` (where `0` is the
           unrated-or-zero slot, exactly as the chart's own distribution counts it), or a `progress`
           ladder key (`unread`, `1_20`, `21_40`, `41_60`, `61_80`, `81_99`, `finished`).
     responses:
@@ -262,7 +262,7 @@ components:
       properties:
         key:
           type: string
-          enum: [lt_1mb, lt_5mb, lt_10mb, lt_25mb, lt_50mb, lt_100mb, lt_250mb, lt_500mb, gte_500mb]
+          enum: [lt_1mb, lt_5mb, lt_10mb, lt_25mb, lt_50mb, lt_100mb, lt_250mb, lt_500mb, lt_1gb, lt_1_5gb, lt_2gb, gte_2gb]
         min_bytes: { type: integer, format: int64, description: Inclusive lower bound. }
         max_bytes:
           type: integer

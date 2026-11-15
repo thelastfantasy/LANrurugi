@@ -170,6 +170,10 @@ mod tests {
         assert!(!is_watched_archive_path(Path::new(
             "/library/thumb/foo.zip"
         )));
+        // A hash-layout sidecar sits next to its archive and is not an archive itself (020).
+        assert!(!is_watched_archive_path(Path::new(
+            "/library/5f/5fff1a46220b45cf8db24c1721062b7e20fdb8dc.json"
+        )));
     }
 
     #[tokio::test]

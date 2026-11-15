@@ -9,13 +9,12 @@ import {
   useUpdateSubscription,
 } from "@/api/hooks"
 import type {
-  ConflictPolicy,
   SourceChangePolicy,
   SourceRemovalPolicy,
   SubscriptionBody,
   SubscriptionSource,
 } from "@/api/types"
-import { RadioGroup, RadioItem, Switch } from "@/components/common-ui/Form"
+import { NumberInput, RadioGroup, RadioItem, Switch } from "@/components/common-ui/Form"
 import { TagInput } from "@/components/Form"
 import { toast } from "@/toast"
 
@@ -53,7 +52,6 @@ const CHOICES_STYLE = {
   display: "flex",
   flexDirection: "column",
   gap: 3,
-  marginLeft: 12,
 } as const
 
 /** A name describing what the subscription actually follows.
@@ -272,6 +270,69 @@ export function SubscriptionForm({
 
       </div>
 
+      <p className="sub-form-section">{t("subscriptions.scanWindow")}</p>
+      <div className="sub-form-grid">
+        <label>{t("subscriptions.scanMode")}</label>
+        <div>
+          <RadioGroup
+            value={draft.scan.mode}
+            onValueChange={(mode) => {
+              const scan = draft.scan
+              setDraft({
+                ...draft,
+                scan:
+                  mode === "days"
+                    ? { mode: "days", days: scan.mode === "days" ? scan.days : 14 }
+                    : { mode: "pages", pages: scan.mode === "pages" ? scan.pages : 4 },
+              })
+            }}
+            name={`subscription-scan-${subscriptionId ?? "new"}`}
+            style={CHOICES_STYLE}
+          >
+            <RadioItem value="pages">{t("subscriptions.scanByPages")}</RadioItem>
+            <RadioItem value="days">{t("subscriptions.scanByDays")}</RadioItem>
+          </RadioGroup>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "8px 0 0" }}>
+            <NumberInput
+              min={1}
+              max={draft.scan.mode === "pages" ? 75 : 30}
+              value={draft.scan.mode === "pages" ? draft.scan.pages : draft.scan.days}
+              onValueChange={(value) => {
+                // Clamped here as well as on the server: the field's own bounds stop a typo from
+                // turning into a whole tag search being read on every check.
+                const max = draft.scan.mode === "pages" ? 75 : 30
+                const clamped = Math.min(max, Math.max(1, Math.trunc(value)))
+                setDraft({
+                  ...draft,
+                  scan:
+                    draft.scan.mode === "pages"
+                      ? { mode: "pages", pages: clamped }
+                      : { mode: "days", days: clamped },
+                })
+              }}
+              style={{ width: 90 }}
+            />
+            <span>
+              {t(
+                draft.scan.mode === "pages"
+                  ? "subscriptions.scanPagesUnit"
+                  : "subscriptions.scanDaysUnit",
+              )}
+            </span>
+          </div>
+          <p className="sub-form-hint">
+            {t(
+              draft.scan.mode === "pages"
+                ? "subscriptions.scanPagesHint"
+                : "subscriptions.scanDaysHint",
+              draft.scan.mode === "pages"
+                ? { max: 75 }
+                : { days: draft.scan.days, max: 30 },
+            )}
+          </p>
+        </div>
+      </div>
+
       <p className="sub-form-section">{t("subscriptions.filterRules")}</p>
       <FieldRuleEditor
         fields={availableFields}
@@ -316,22 +377,6 @@ export function SubscriptionForm({
         <RadioItem value="auto">{t("subscriptions.downloadAutomatically")}</RadioItem>
       </RadioGroup>
 
-      <p className="sub-form-section">{t("subscriptions.whenFilenamesCollide")}</p>
-      <RadioGroup
-        value={draft.conflict_policy}
-        onValueChange={(v) => setDraft({ ...draft, conflict_policy: v as ConflictPolicy })}
-        name={`subscription-conflict-policy-${subscriptionId ?? "new"}`}
-        style={CHOICES_STYLE}
-      >
-        <RadioItem value="ask">{t("subscriptions.conflictAsk")}</RadioItem>
-        <RadioItem value="auto_rename">{t("subscriptions.conflictAutoRename")}</RadioItem>
-        <RadioItem value="overwrite">{t("subscriptions.conflictOverwrite")}</RadioItem>
-        <RadioItem value="discard">{t("subscriptions.conflictDiscard")}</RadioItem>
-      </RadioGroup>
-      <p className="sub-form-hint" style={{ marginLeft: 12 }}>
-        {t("subscriptions.conflictHint")}
-      </p>
-
       <p className="sub-form-section">{t("subscriptions.whenSourceChanges")}</p>
       <RadioGroup
         value={draft.on_source_changed}
@@ -355,7 +400,7 @@ export function SubscriptionForm({
         <RadioItem value="notify">{t("subscriptions.removalNotify")}</RadioItem>
         <RadioItem value="ignore">{t("subscriptions.removalIgnore")}</RadioItem>
       </RadioGroup>
-      <p className="sub-form-hint" style={{ marginLeft: 12 }}>
+      <p className="sub-form-hint">
         {t("subscriptions.removalNeverDeletes")}
       </p>
 

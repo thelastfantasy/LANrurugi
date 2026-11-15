@@ -16,8 +16,6 @@ use deadpool_redis::Pool;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::subscriptions::ConflictPolicy;
-
 #[derive(Debug, Error)]
 pub enum DownloadQueueStorageError {
     #[error("Redis error: {0}")]
@@ -131,6 +129,18 @@ pub struct PendingFilenameConflict {
     pub staged_at: i64,
 }
 
+/// A downloaded file that outlived its failed cataloguing attempt — see
+/// [`DownloadQueueItem::staged`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StagedDownload {
+    pub path: String,
+    pub filename: String,
+    /// The fingerprint taken when the bytes arrived (027 FR-011): a retry compares against this,
+    /// not against whatever the file holds by then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blake3: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DownloadQueueItem {
     pub id: String,
@@ -191,13 +201,6 @@ pub struct DownloadQueueItem {
     pub metadata_tags: Vec<String>,
     pub auto_fetch_metadata: bool,
     pub overwrite_on_duplicate: bool,
-    /// The policy the subscription that queued this item pre-answered its filename conflicts with
-    /// (`ConflictPolicy::Ask` for everything else, including a manual add). Carried on the item
-    /// rather than looked up from the subscription at ingest time: the conflict is resolved long
-    /// after the decision to download, and a policy edited in between should govern the *next*
-    /// download, not retroactively re-decide one already in flight.
-    #[serde(default)]
-    pub conflict_policy: ConflictPolicy,
     pub state: DownloadQueueState,
     /// Set once `start` has launched the actual background download —
     /// `lanrurugi_core::jobs::JobRegistry` job ID, used by the frontend to look up live
@@ -249,6 +252,16 @@ pub struct DownloadQueueItem {
     /// so a later re-run of the same URL asks again instead of silently inheriting a stale yes.
     #[serde(default)]
     pub revision_confirmed: bool,
+    /// The user asked for this URL again even though the source registry says it already produced
+    /// an archive (`QueueError::SourceAlreadyImported`). Bypasses that guard, and keeps the row out
+    /// of "clear completed" so a forced re-download is not wiped by a routine cleanup.
+    #[serde(default)]
+    pub forced: bool,
+    /// The downloaded file kept when cataloguing failed (`QueueError::IngestFailed`): the row's
+    /// retry can then re-ingest these bytes instead of downloading them a second time. Cleared on
+    /// a successful retry, and the file is removed when the item is deleted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staged: Option<StagedDownload>,
     /// The download plugin's own revision chain for this work, as `(source, posted_at)` pairs —
     /// carried from the download call to whichever ingestion path catalogues it (the ordinary one, or
     /// the filename-conflict resolution that happens later) and stored onto the resulting archive
@@ -266,6 +279,13 @@ pub struct DownloadQueueItem {
     pub started_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<i64>,
+    /// True exactly while this item's bytes are moving: set when its transfer permit is acquired,
+    /// cleared when the transfer loop hands the file to ingest. [`DownloadQueueState::Downloading`]
+    /// covers more than that (bundling and cataloguing a finished file can take minutes), so a
+    /// count of "transferring now" has to read this rather than the state — counting `Downloading`
+    /// alone showed more items than the configured per-domain limit even while that limit held.
+    #[serde(default)]
+    pub transferring: bool,
     pub created_at: i64,
 }
 
@@ -305,8 +325,6 @@ pub struct NewQueueItem {
     pub metadata_tags: Vec<String>,
     pub auto_fetch_metadata: bool,
     pub overwrite_on_duplicate: bool,
-    /// See [`DownloadQueueItem::conflict_policy`].
-    pub conflict_policy: ConflictPolicy,
     /// A download starts `Queued` (waiting for the user to press Start/for `start_all`). A local
     /// upload's bytes are already fully in hand by the time this is called — its own `add` call
     /// site sets this straight to whatever the synchronous ingest attempt that follows actually
@@ -351,7 +369,6 @@ impl DownloadQueueRepository {
             metadata_tags: new_item.metadata_tags,
             auto_fetch_metadata: new_item.auto_fetch_metadata,
             overwrite_on_duplicate: new_item.overwrite_on_duplicate,
-            conflict_policy: new_item.conflict_policy,
             state: new_item.state,
             job_id: None,
             archive_ids: None,
@@ -362,9 +379,12 @@ impl DownloadQueueRepository {
             pending_filename_conflict: None,
             pending_revision_confirmation: None,
             revision_confirmed: false,
+            forced: false,
+            staged: None,
             version_history: None,
             started_at: None,
             finished_at: None,
+            transferring: false,
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as i64)
@@ -519,7 +539,6 @@ mod tests {
             metadata_tags: Vec::new(),
             auto_fetch_metadata: false,
             overwrite_on_duplicate: false,
-            conflict_policy: ConflictPolicy::Ask,
             state: DownloadQueueState::Done,
             job_id: None,
             archive_ids: None,
@@ -530,9 +549,12 @@ mod tests {
             pending_filename_conflict: None,
             pending_revision_confirmation: None,
             revision_confirmed: false,
+            forced: false,
+            staged: None,
             version_history: None,
             started_at: Some(created_at),
             finished_at: Some(created_at),
+            transferring: false,
         };
 
         let finished = |id: &str, at: i64| item(id, at);
@@ -582,7 +604,6 @@ mod tests {
             metadata_tags: Vec::new(),
             auto_fetch_metadata: false,
             overwrite_on_duplicate: false,
-            conflict_policy: crate::subscriptions::ConflictPolicy::Ask,
             state: DownloadQueueState::Queued,
         }
     }
@@ -658,7 +679,6 @@ mod tests {
                 metadata_tags: Vec::new(),
                 auto_fetch_metadata: false,
                 overwrite_on_duplicate: false,
-                conflict_policy: crate::subscriptions::ConflictPolicy::Ask,
                 state: DownloadQueueState::Done,
             })
             .await

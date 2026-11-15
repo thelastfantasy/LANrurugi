@@ -43,6 +43,7 @@ fn archive(id: &str, file: &std::path::Path) -> Archive {
         heal_failed_at: None,
         corrupted_pages: vec![],
         has_patch: false,
+        blake3: None,
     }
 }
 
@@ -69,6 +70,11 @@ async fn make_share(
         permissions: Permissions::ALL,
         download_limit: None,
         downloads_used: 0,
+        import_bytes: 0,
+        total_bytes: 0,
+        target_ratio: None,
+        ratio_action: lanrurugi_storage::shares::RatioAction::Stop,
+        ratio_rate: None,
         ip_allow: vec![],
         ip_first_n: None,
         expires_at: None,

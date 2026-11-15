@@ -1,6 +1,6 @@
 import { useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { Bar, BarChart, CartesianGrid, Cell, Tooltip, XAxis, YAxis } from "recharts"
+import { Bar, CartesianGrid, Cell, ComposedChart, Line, Tooltip, XAxis, YAxis } from "recharts"
 
 import type { StatsBucketSelection } from "@/api/hooks"
 import type { StatsOverview } from "@/api/types"
@@ -9,7 +9,7 @@ import { routes } from "@/lib/routes"
 
 import { BucketArchivesPanel } from "./BucketArchivesPanel"
 import { useChartPalette } from "./chartPalette"
-import { BarRow, ChartTooltip, MIN_BAR_PIXELS, StatsSection, StatsTable, useStatsPanel } from "./Charts"
+import { BarRow, ChartTooltip, LegendSwatch, MIN_BAR_PIXELS, StatsSection, StatsTable, useStatsPanel } from "./Charts"
 import {
   formatBytes,
   formatPercent,
@@ -64,22 +64,40 @@ export function IngestHistory({ ingest }: { ingest: StatsOverview["ingest"] }) {
     ...bucket,
     label: timelineLabel(bucket.key, view.resolvedUnit),
   }))
+  const countName = t("stats.ingested")
+  const bytesName = t("stats.addedCapacity")
 
   return (
     <StatsSection title={t("stats.ingestHistory")} icon="fa-upload" hint={t("stats.ingestHistoryHint")}>
       <TimelineControls view={view} />
-      <InteractiveChartFrame height={220} view={view}>
-        <BarChart data={data} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+      <InteractiveChartFrame height={240} view={view}>
+        <ComposedChart data={data} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" opacity={0.2} vertical={false} />
           <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
-          <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={36} />
+          <YAxis yAxisId="count" allowDecimals={false} tick={{ fontSize: 11 }} width={36} />
+          {/* Capacity gets its own axis: bytes and archive counts differ by orders of magnitude,
+              and sharing one axis would flatten one of the two series into the baseline. */}
+          <YAxis
+            yAxisId="bytes"
+            orientation="right"
+            tick={{ fontSize: 11 }}
+            width={58}
+            tickFormatter={(value) => formatBytes(Number(value))}
+          />
           <Tooltip
             cursor={{ fill: "rgba(127,127,127,0.15)" }}
-            content={<ChartTooltip formatValue={(value) => t("stats.archiveCountValue", { count: Number(value) })} />}
+            content={
+              <ChartTooltip
+                formatValue={(value, entry) =>
+                  entry.name === bytesName ? formatBytes(Number(value)) : Number(value).toLocaleString()
+                }
+              />
+            }
           />
           <Bar
+            yAxisId="count"
             dataKey="archives"
-            name={t("stats.ingested")}
+            name={countName}
             radius={[3, 3, 0, 0]}
             cursor="pointer"
             // Non-zero bars are drawn at least this tall so a one-archive bucket stays clickable:
@@ -99,8 +117,29 @@ export function IngestHistory({ ingest }: { ingest: StatsOverview["ingest"] }) {
               />
             ))}
           </Bar>
-        </BarChart>
+          <Line
+            yAxisId="bytes"
+            type="monotone"
+            dataKey="bytes"
+            name={bytesName}
+            stroke={palette[3]}
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 3 }}
+          />
+        </ComposedChart>
       </InteractiveChartFrame>
+
+      <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: "0.75rem", margin: "6px 0 0" }}>
+        <span>
+          <LegendSwatch color={palette[1]} />
+          {countName}
+        </span>
+        <span>
+          <LegendSwatch color={palette[3]} />
+          {bytesName}
+        </span>
+      </div>
       <BucketArchivesPanel
         selection={selected}
         title={t("stats.bucketArchivesIngest")}

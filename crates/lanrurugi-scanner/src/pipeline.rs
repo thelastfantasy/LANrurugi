@@ -50,6 +50,9 @@ pub enum PipelineError {
     Repository(#[from] lanrurugi_storage::repository::RepositoryError),
     #[error("timed out after {0:?} ingesting file")]
     Timeout(Duration),
+    /// 027: the whole-file fingerprint could not be read; no record is written without one.
+    #[error("could not fingerprint the file: {0}")]
+    Fingerprint(#[source] std::io::Error),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,6 +256,14 @@ pub struct IngestOptions<'a> {
     /// fixup + the startup zombie-repair sweep in `main.rs`. The watcher path leaves this
     /// `false` (`path` IS already final there).
     pub defer_file_path: bool,
+    /// Set by a caller that already holds [`content_lock`] for this content id (the download
+    /// manager does, from before it renames the file into the library). Without it that caller
+    /// would deadlock on its own lock. Everything else leaves this `false` and gets serialized
+    /// here.
+    pub locked: bool,
+    /// The whole-file BLAKE3 (lowercase hex) when the caller already has it (027): taken when the
+    /// bytes arrived, or by the copy into the library. `None` reads the file once to compute it.
+    pub blake3: Option<&'a str>,
 }
 
 impl<'a> IngestOptions<'a> {
@@ -263,6 +274,8 @@ impl<'a> IngestOptions<'a> {
             intended_filename: Some(name),
             title_filename: Some(name),
             defer_file_path: false,
+            locked: false,
+            blake3: None,
         }
     }
 }
@@ -284,9 +297,20 @@ pub async fn ingest_file_with_policy(
         intended_filename,
         title_filename,
         defer_file_path,
+        locked,
+        blake3,
     } = options;
 
     let id = ArchiveId(size_aware_id(path)?);
+    // One ingest at a time per content id. The watcher can see these same bytes while the
+    // download manager is about to catalogue them (it renames the staged file into the library
+    // before cataloguing), and without this both paths catalogue the same id — the later
+    // `catalogue_new_archive` saving a bare record that wipes the title/source the other wrote.
+    let _ingest_guard = if locked {
+        None
+    } else {
+        Some(content_lock(id.as_str()).await)
+    };
     let path_str = path.to_string_lossy().to_string();
 
     let mut config_conn = config_pool.get().await?;
@@ -301,6 +325,9 @@ pub async fn ingest_file_with_policy(
         // exactly matching legacy's `change_archive_id` semantics for a rewritten file.
         match archives.rename_id(&previous_id, &id).await {
             Ok(()) => {
+                // New bytes under the old record: the carried-over fingerprint is stale (027).
+                let fingerprint = fingerprint(path, blake3).await?;
+                archives.set_blake3(&id, &fingerprint).await?;
                 let _: () = config_conn
                     .hset(FILEMAP_KEY, &path_str, id.as_str())
                     .await?;
@@ -372,6 +399,7 @@ pub async fn ingest_file_with_policy(
         date_added: read_date_added_settings(&mut config_conn).await,
         defer_file_path,
     };
+    let fingerprint = fingerprint(path, blake3).await?;
     catalogue_new_archive(
         archives,
         search_pool,
@@ -380,6 +408,7 @@ pub async fn ingest_file_with_policy(
         &id,
         path,
         title_filename,
+        &fingerprint,
         catalogue_settings,
     )
     .await?;
@@ -397,6 +426,19 @@ pub async fn ingest_file_with_policy(
 struct DateAddedSettings {
     enabled: bool,
     use_last_modified: bool,
+}
+
+/// The caller's fingerprint, or one read from `path` off the async reactor (027 FR-010).
+async fn fingerprint(path: &Path, known: Option<&str>) -> Result<String, PipelineError> {
+    if let Some(known) = known {
+        return Ok(known.to_string());
+    }
+    let path = path.to_path_buf();
+    lanrurugi_core::concurrency::run_blocking(move || lanrurugi_core::io::blake3_file(&path))
+        .await
+        .map_err(|e| PipelineError::Fingerprint(std::io::Error::other(e)))?
+        .map(|hash| hash.to_hex().to_string())
+        .map_err(PipelineError::Fingerprint)
 }
 
 /// The two independent settings groups `catalogue_new_archive` needs — bundled into one struct
@@ -496,6 +538,7 @@ async fn catalogue_new_archive(
     id: &ArchiveId,
     path: &Path,
     title_filename: Option<&str>,
+    blake3: &str,
     settings: CatalogueSettings,
 ) -> Result<(), PipelineError> {
     let CatalogueSettings {
@@ -515,16 +558,42 @@ async fn catalogue_new_archive(
     // Under the Sun" produced `download-9602cda7e6d0...`). The watcher/full-scan callers correctly
     // pass `None` here, since a file discovered already sitting in the watched archive directory
     // already has its own real name as its `path`.
-    let name = title_filename
-        .and_then(|f| Path::new(f).file_stem())
+    // A sidecar is only consulted when this archive is being catalogued *fresh* (a rebuild after
+    // the records were lost): a live record would have been reused instead of reaching here. It is
+    // the one place the original filename survives once the file is hash-named.
+    let sidecar = path
+        .parent()
+        .and_then(Path::parent)
+        .filter(|library| lanrurugi_storage::paths::is_hash_layout_path(library, path, id.as_str()))
+        .and_then(|library| lanrurugi_storage::sidecar::read(library, id.as_str()));
+    let name = sidecar
+        .as_ref()
+        .and_then(|s| Path::new(&s.original_filename).file_stem())
         .and_then(|s| s.to_str())
         .map(str::to_string)
+        .or_else(|| {
+            title_filename
+                .and_then(|f| Path::new(f).file_stem())
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| {
             path.file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or_default()
                 .to_string()
         });
+    // The title is the filename with release markers stripped; `name` stays the verbatim original
+    // (minus extension), which is what legacy backups are matched by and what a user recognises.
+    // An empty result (a name made only of markers) falls back to the name rather than nothing.
+    let title = sidecar.map(|s| s.title).unwrap_or_else(|| {
+        let cleaned = crate::release_markers::clean_title(&name);
+        if cleaned.trim().is_empty() {
+            name.clone()
+        } else {
+            cleaned
+        }
+    });
     let arcsize = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let pagecount = match archive_format::list_pages(path) {
         Ok(pages) => pages.len() as u32,
@@ -570,7 +639,7 @@ async fn catalogue_new_archive(
     let mut archive = Archive {
         id: id.clone(),
         name: name.clone(),
-        title: name,
+        title,
         // `defer_file_path` callers (download/upload ingest of a *staged* file) get an empty
         // `file` here and fill it in after the move to `archive_dir` — never the staging path
         // itself, whose bytes get swept and would leave a dangling record (see
@@ -593,8 +662,44 @@ async fn catalogue_new_archive(
         heal_failed_at: None,
         corrupted_pages: Vec::new(),
         has_patch,
+        blake3: Some(blake3.to_string()),
     };
     archives.save(&archive).await?;
+    // The sidecar is written after the record exists and the bytes are final, never before: a
+    // snapshot of an archive nobody can open would be worse than no snapshot. Only hash-layout
+    // archives get one (020) — by-name archives carry their original name in the name itself.
+    if let Some(library) = path.parent().and_then(Path::parent) {
+        if lanrurugi_storage::paths::is_hash_layout_path(library, path, id.as_str()) {
+            // On a rebuild there is no `title_filename`: the name on disk is the id. Falling back
+            // to it would overwrite the only copy of the original name with `<id>.zip`, so an
+            // existing sidecar wins. Its `original_path` is preserved for the same reason.
+            let previous = lanrurugi_storage::sidecar::read(library, id.as_str());
+            let original_filename = title_filename
+                .map(str::to_string)
+                .or_else(|| previous.as_ref().map(|s| s.original_filename.clone()))
+                .or_else(|| {
+                    path.file_name()
+                        .and_then(|f| f.to_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+            match lanrurugi_storage::sidecar::Sidecar::for_archive(
+                id.as_str(),
+                path,
+                &original_filename,
+                &archive.title,
+            ) {
+                Ok(mut sidecar) => {
+                    sidecar.original_path = previous.map(|s| s.original_path).unwrap_or_default();
+                    if let Err(e) = lanrurugi_storage::sidecar::write(library, &sidecar) {
+                        tracing::warn!(%id, error = %e, "failed to write the archive sidecar");
+                    }
+                }
+                Err(e) => tracing::warn!(%id, error = %e, "failed to build the archive sidecar"),
+            }
+        }
+    }
+
     if let Err(e) = lanrurugi_search::indexer::index_new_archive(
         search_pool,
         equivalence,
@@ -604,6 +709,24 @@ async fn catalogue_new_archive(
     .await
     {
         tracing::warn!(%id, error = %e, "failed to index new archive for search");
+    }
+
+    // `index_new_archive` only writes the title/new/untagged entries. The record's own tags
+    // (`date_added:…`, and whatever a caller stamps right after) need their `INDEX_<tag>` sets
+    // here too — otherwise a freshly catalogued archive is invisible to every tag search
+    // (`source:`, `date_added:`, …) until something edits its tags again. Found live: four
+    // archives showed on the homepage but `source:` could not find them, while the same page's
+    // untagged/title searches worked.
+    if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
+        search_pool,
+        equivalence,
+        id.as_str(),
+        "",
+        &archive.tags,
+    )
+    .await
+    {
+        tracing::warn!(%id, error = %e, "failed to index a new archive's tags for search");
     }
 
     if pagecount > 0 {
@@ -654,6 +777,30 @@ pub(crate) fn book_outline_toc(path: &Path) -> Vec<lanrurugi_core::entities::Toc
         .collect();
     toc.sort_by_key(|t| t.page);
     toc
+}
+
+/// One mutex per content id, so two ingests of the same bytes serialize instead of racing for the
+/// same destination path. Entries are dropped once no one holds or waits on them.
+pub async fn content_lock(id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+    use std::sync::{Arc, LazyLock, Mutex, Weak};
+
+    static LOCKS: LazyLock<Mutex<std::collections::HashMap<String, Weak<tokio::sync::Mutex<()>>>>> =
+        LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+    let lock: Arc<tokio::sync::Mutex<()>> = {
+        let mut locks = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+        locks.retain(|_, weak| weak.strong_count() > 0);
+        let entry = locks.entry(id.to_string()).or_default();
+        match entry.upgrade() {
+            Some(lock) => lock,
+            None => {
+                let lock = Arc::new(tokio::sync::Mutex::new(()));
+                *entry = Arc::downgrade(&lock);
+                lock
+            }
+        }
+    };
+    lock.lock_owned().await
 }
 
 #[cfg(test)]
@@ -785,13 +932,25 @@ mod tests {
         };
 
         let archive = archives.get(&id).await.unwrap().unwrap();
-        assert_eq!(archive.title, "[King Angel] Maiden Under the Sun");
+        // The title is derived from the real name with release markers stripped; `name` itself
+        // stays verbatim (it is what a legacy backup is matched by).
+        assert_eq!(archive.title, "King Angel Maiden Under the Sun");
         assert_eq!(archive.name, "[King Angel] Maiden Under the Sun");
         // The on-disk `file` path is untouched by `title_filename` — still the real staging path
         // at this point (a caller's own separate rename-into-place step, already covered by
         // `upload.rs`/`ingest_downloaded_file`'s own logic, isn't exercised by this pipeline-level
         // function).
         assert_eq!(archive.file, staged_path.to_string_lossy());
+        // 027: no fingerprint was handed in, so the pipeline read the file for one.
+        assert_eq!(
+            archive.blake3,
+            Some(
+                lanrurugi_core::io::blake3_file(&staged_path)
+                    .unwrap()
+                    .to_hex()
+                    .to_string()
+            )
+        );
 
         archives.delete(&id).await.unwrap();
         let mut conn = config_pool.get().await.unwrap();

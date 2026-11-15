@@ -4,9 +4,8 @@ import { useTranslation } from "react-i18next"
 import { Tooltip } from "@/components/common-ui/Display"
 import { NumberInput, RadioGroup, RadioItem, Select } from "@/components/common-ui/Form"
 import { CARD_THEMES, THEME_COLORS, type ThemeColor } from "@/embed/theme"
+import { copyWithToast } from "@/lib/clipboard"
 import { Z_OVERLAY_ABOVE_LEGACY_MODAL } from "@/theme"
-
-import { copyWithToast } from "./clipboard"
 
 type Kind = "iframe" | "element"
 /** `instance`: no theme given, so the card follows the library's; `custom`: colours over a base. */

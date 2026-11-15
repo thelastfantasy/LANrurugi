@@ -82,7 +82,7 @@ jobs:
       # `Dockerfile.build`'s own `perl cpanminus` + `cpanm PPI JSON::PP` steps.
       - name: Install libarchive build dependencies + redis-server + perl/PPI
         run: |
-          sudo apt-get update
+          scripts/ci-apt-update.sh
           sudo apt-get install -y --no-install-recommends \
             zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev libxml2-dev libacl1-dev \
             nasm libopenjp2-7-dev \
@@ -92,6 +92,14 @@ jobs:
 
       # The e-book worker's end-to-end tests load PDFium (pinned in scripts/fetch-pdfium.sh) and run
       # DjVuLibre's tools; the text typesetter needs CJK fonts. Without these the tests skip.
+      # GitHub's release CDN answered 504 on every retry of two consecutive runs (2026-11-09), so
+      # the download is cached: the key changes only when the pin changes.
+      - name: Cache PDFium
+        uses: actions/cache@v6
+        with:
+          path: .pdfium/linux-x64
+          key: pdfium-${{ runner.os }}-7543
+
       - name: Fetch PDFium
         run: scripts/fetch-pdfium.sh amd64 .pdfium/linux-x64
 
@@ -155,6 +163,16 @@ jobs:
       # missing the embed and GPU workers. See the script's own header.
       - name: release image binary parity
         run: scripts/check-image-binaries.sh
+
+      # 023: the sharing engine talks to the application only through `ShareHost`. Comment lines
+      # may name what is kept out; code and manifest may not.
+      - name: sharing engine boundary
+        run: |
+          if grep -rnE '^\s*[^/[:space:]].*\b(AppState|lanrurugi_api|axum)\b' crates/lanrurugi-share/src \
+             || grep -nE '^(lanrurugi-api|axum)\b' crates/lanrurugi-share/Cargo.toml; then
+            echo "lanrurugi-share must not depend on lanrurugi-api, axum or AppState" >&2
+            exit 1
+          fi
 
       # PRs and `dev` merges: a compile-only check (`--all-targets` still covers every test and
       # bench target). `main`: the full lint gate, since that is the only place a lint can still
@@ -220,6 +238,10 @@ jobs:
 
       - name: eslint
         run: pnpm --filter lanrurugi-frontend run lint
+
+      # Parse-only check; covers tests/, which `tsc -b` never compiles (issue #112).
+      - name: syntax check
+        run: pnpm --filter lanrurugi-frontend exec node scripts/check-syntax.mjs src tests
 
       # Type-check on every push (seconds); the production bundle and the unit tests only on a
       # `main` push, next to the Rust suite — see the `cargo test` step's own comment for why the

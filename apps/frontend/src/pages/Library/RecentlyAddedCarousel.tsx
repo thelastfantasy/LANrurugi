@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import Lenis from "lenis";
-import type { MouseEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { IconType } from "react-icons";
@@ -9,31 +8,26 @@ import {
   FaBook,
   FaBookmark,
   FaCaretDown,
-  FaCheckDouble,
   FaChevronLeft,
   FaChevronRight,
-  FaCompress,
+  FaClockRotateLeft,
   FaDice,
-  FaEject,
   FaEllipsis,
-  FaHammer,
   FaInbox,
-  FaSquareCheck,
   FaTag,
 } from "react-icons/fa6";
 
 import { fetchJson } from "@/api/client";
 import { useInfiniteBookmarks } from "@/api/hooks";
 import type { ArchiveMetadata, SearchResponse } from "@/api/types";
-import { Menu, MenuItem, SortableList } from "@/components/common-ui/Display";
+import { Menu, MenuItem } from "@/components/common-ui/Display";
 import { IconButton } from "@/components/common-ui/Form";
 import { NEW_ONLY, UNTAGGED_ONLY } from "@/lib/constants";
 import { CAROUSEL_OPEN_KEY, CAROUSEL_TYPE_KEY } from "@/lib/storageKeys";
 import { BookmarkedArchiveHoverCard } from "@/pages/Bookmarks/BookmarkedArchiveHoverCard";
 
 import { CarouselCard } from "./CarouselCard";
-import { SelectedArchiveSlideContent } from "./SelectedArchiveSlideContent";
-import { type CarouselMode } from "./types";
+import { type CarouselMode, type ContextMenuTrigger } from "./types";
 
 /** A `Lenis` instance mirrored into both a ref (for event handlers — `onClick`'s own `scrollTo`
  * calls need a value that's always current without re-subscribing) and state (a plain ref write
@@ -104,14 +98,12 @@ function useCarouselOverflow(lenis: Lenis | null, itemsSignal: unknown) {
  * content). */
 const CAROUSEL_MODE_ICON: Record<CarouselMode, IconType> = {
   ondeck: FaBook,
+  recent: FaClockRotateLeft,
   random: FaDice,
   inbox: FaInbox,
   untagged: FaTag,
   bookmark: FaBookmark,
 }
-
-/** Height of the selection strip, and of the "nothing selected yet" hint that replaces it — equal
- *  so entering/leaving the first selection does not shift the grid below. */
 
 export function RecentlyAddedCarousel({
   filter,
@@ -122,15 +114,6 @@ export function RecentlyAddedCarousel({
   loggedIn,
   onContextMenu,
   onOpen,
-  multiSelect,
-  selectedIds,
-  onToggleSelected,
-  onReorderSelection,
-  onSelectPage,
-  onClearSelection,
-  onRunBatch,
-  onMerge,
-  canMerge,
   onSearchTag,
 }: {
   filter: string;
@@ -141,21 +124,11 @@ export function RecentlyAddedCarousel({
   /** Gates the "Bookmarked" carousel mode — an unauthenticated guest has no personal bookmarks. */
   loggedIn: boolean;
   onContextMenu: (
-    e: MouseEvent,
+    e: ContextMenuTrigger,
     archive: ArchiveMetadata,
     source: "carousel",
   ) => void;
   onOpen: (id: string) => void;
-  multiSelect: boolean;
-  selectedIds: string[];
-  onToggleSelected: (id: string) => void;
-  /** Drag-to-reorder in the selection list — the new order becomes the merged Tankoubon's volume order. */
-  onReorderSelection: (newOrder: string[]) => void;
-  onSelectPage: () => void;
-  onClearSelection: () => void;
-  onRunBatch: () => void;
-  onMerge: () => void;
-  canMerge: boolean;
   onSearchTag: (namespacedTag: string) => void;
 }) {
   const { t } = useTranslation();
@@ -171,8 +144,8 @@ export function RecentlyAddedCarousel({
   const carouselRef = useRef<HTMLDivElement | null>(null);
   const [lenisRef, lenisInstance, setLenisInstance] = useLenisMirror();
   // A callback ref (not a plain `useRef` + `useEffect([items])`) because this div's own mount
-  // state doesn't track `items` at all — switching into/out of selection mode (`multiSelect`)
-  // unmounts and remounts this exact div without `items` ever changing, which previously left
+  // state doesn't track `items` at all — collapsing and reopening the carousel unmounts and
+  // remounts this exact div without `items` ever changing, which previously left
   // `lenisRef.current` bound to a detached, since-orphaned node while the real one went
   // unbound — every arrow click was silently clamped to a stale `limit: 0`. A callback ref fires
   // exactly on this node's own mount/unmount, whatever the reason, so it can never miss one.
@@ -200,19 +173,6 @@ export function RecentlyAddedCarousel({
       ?.firstElementChild as HTMLElement | null;
     return firstChild ? firstChild.getBoundingClientRect().width + 8 : 236;
   }, []);
-  // Selection mode renders its own scroll container inside `SortableList` rather than the
-  // `carouselRef` div above, so prev/next arrows there need their own ref pair.
-  const selectionListRef = useRef<HTMLDivElement>(null);
-  const [selectionLenisRef, selectionLenisInstance, setSelectionLenisInstance] = useLenisMirror();
-  const selectionOverflow = useCarouselOverflow(selectionLenisInstance, selectedIds);
-  const stepSelectionSlide = useCallback(() => {
-    // `selectionListRef` > `SortableList`'s own scroll container > one `SortableRow` wrapper
-    // div > the `.carousel-slide` this component's own `renderItem` returns.
-    const firstChild = selectionListRef.current?.querySelector(
-      ":scope > div > div > .carousel-slide",
-    ) as HTMLElement | null;
-    return firstChild ? firstChild.getBoundingClientRect().width + 8 : 236;
-  }, []);
   const handleBookmarkWheelPassthrough = useCallback(
     (deltaX: number, deltaY: number) => {
       const el = carouselRef.current;
@@ -238,7 +198,7 @@ export function RecentlyAddedCarousel({
     localStorage.setItem(CAROUSEL_TYPE_KEY, storedMode);
   }, [storedMode]);
 
-  const isOpen = open || multiSelect;
+  const isOpen = open;
 
   const params = new URLSearchParams();
   if (filter) params.set("filter", filter);
@@ -272,6 +232,13 @@ export function RecentlyAddedCarousel({
       modeParams.set("start", "-1");
       path = `/search?${modeParams.toString()}`;
       break;
+    case "recent":
+      // Reading history, newest first — unlike `ondeck` it keeps finished archives and drops the
+      // "hide completed" filter, and `lastread` itself already excludes never-opened archives.
+      modeParams.set("sortby", "lastread");
+      modeParams.set("order", "desc");
+      path = `/search?${modeParams.toString()}`;
+      break;
     case "bookmark":
       path = "";
       break;
@@ -287,7 +254,7 @@ export function RecentlyAddedCarousel({
       ? ["search", "random", modeParams.toString()]
       : ["search", { filter, category, mode, hideCompleted, groupbyTanks }],
     queryFn: () => fetchJson<SearchResponse>(path),
-    enabled: isOpen && !multiSelect && !isBookmarkMode,
+    enabled: isOpen && !isBookmarkMode,
   });
   const bookmarksQuery = useInfiniteBookmarks("bookmarked_at", undefined, loggedIn);
   const bookmarkEntries = bookmarksQuery.data?.pages[0]?.entries ?? [];
@@ -324,6 +291,7 @@ export function RecentlyAddedCarousel({
 
   const modeLabel: Record<CarouselMode, string> = {
     ondeck: t("library.onDeck"),
+    recent: t("library.recentlyRead"),
     random: t("library.random"),
     inbox: t("library.newArchives"),
     untagged: t("library.untaggedArchives"),
@@ -351,14 +319,8 @@ export function RecentlyAddedCarousel({
             overflow: "hidden",
           }}
         >
-          {multiSelect ? (
-            <FaSquareCheck size={16} aria-hidden="true" />
-          ) : (
-            <ModeIcon size={16} aria-hidden="true" />
-          )}
-          <div style={{ marginLeft: 8 }}>
-            {multiSelect ? t("app.selection") : modeLabel[mode]}
-          </div>
+          <ModeIcon size={16} aria-hidden="true" />
+          <div style={{ marginLeft: 8 }}>{modeLabel[mode]}</div>
           <FaCaretDown
             size={24}
             style={{
@@ -368,55 +330,7 @@ export function RecentlyAddedCarousel({
             }}
           />
         </div>
-        {isOpen && multiSelect && (
-          <div
-            className="collapsible-right"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {selectedIds.length > 0 && (
-              <span>{t("library.selected", { n: selectedIds.length })}</span>
-            )}
-            {selectedIds.length > 0 && (
-              <IconButton
-                variant="ghost-btn"
-                icon={<FaHammer size={18} />}
-                size={28}
-                style={{ marginLeft: 12 }}
-                title={t("library.runBatchOperationsOnSelection") ?? undefined}
-                onClick={onRunBatch}
-              />
-            )}
-            {canMerge && (
-              <IconButton
-                variant="ghost-btn"
-                icon={<FaCompress size={18} />}
-                size={28}
-                style={{ marginLeft: 12 }}
-                title={t("library.mergeArchivesIntoTankoubon") ?? undefined}
-                onClick={onMerge}
-              />
-            )}
-            {selectedIds.length > 0 && (
-              <IconButton
-                variant="ghost-btn"
-                icon={<FaEject size={18} />}
-                size={28}
-                style={{ marginLeft: 12 }}
-                title={t("library.clearSelection") ?? undefined}
-                onClick={onClearSelection}
-              />
-            )}
-            <IconButton
-              variant="ghost-btn"
-              icon={<FaCheckDouble size={18} />}
-              size={28}
-              style={{ marginLeft: 12 }}
-              title={t("library.selectAllInPage") ?? undefined}
-              onClick={onSelectPage}
-            />
-          </div>
-        )}
-        {isOpen && !multiSelect && (
+        {isOpen && (
           <div
             className="collapsible-right"
             onClick={(e) => e.stopPropagation()}
@@ -443,8 +357,15 @@ export function RecentlyAddedCarousel({
               }
             >
               {(loggedIn
-                ? (["ondeck", "random", "inbox", "untagged", "bookmark"] as CarouselMode[])
-                : (["ondeck", "random", "inbox", "untagged"] as CarouselMode[])
+                ? ([
+                    "ondeck",
+                    "recent",
+                    "random",
+                    "inbox",
+                    "untagged",
+                    "bookmark",
+                  ] as CarouselMode[])
+                : (["ondeck", "recent", "random", "inbox", "untagged"] as CarouselMode[])
               ).map((m) => {
                 const ModeIcon = CAROUSEL_MODE_ICON[m]
                 return (
@@ -459,116 +380,7 @@ export function RecentlyAddedCarousel({
             </Menu>
           </div>
         )}
-        {isOpen && multiSelect && (
-          <div
-            className="collapsible-body"
-            style={{ width: "100%", boxSizing: "border-box" }}
-          >
-            <div className="selection-strip">
-            {selectedIds.length === 0 ? (
-              // Fills whatever height the strip has (`.selection-strip`), rather than stating that
-              // height itself: the placeholder and the archive cards are both 100% of the strip, so
-              // they agree at every viewport and zoom without a second hardcoded number to drift.
-              <div
-                style={{
-                  padding: "8px 0",
-                  boxSizing: "border-box",
-                  height: "100%",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 8,
-                }}
-              >
-                <i className="fa fa-glasses fa-2x" aria-hidden="true"></i>
-                <span>{t("library.clickArchivesToAddThem")}</span>
-              </div>
-            ) : (
-              <div
-                style={{ padding: "8px 0", position: "relative" }}
-                ref={selectionListRef}
-              >
-                <SortableList
-                  items={selectedIds}
-                  getId={(id) => id}
-                  direction="horizontal"
-                  onReorder={onReorderSelection}
-                  onScroller={setSelectionLenisInstance}
-                  renderItem={(id, dragHandleProps) => (
-                    <div
-                      {...dragHandleProps.attributes}
-                      {...dragHandleProps.listeners}
-                      className="carousel-slide"
-                      style={{
-                        marginRight: 8,
-                        cursor: dragHandleProps.isDragging
-                          ? "grabbing"
-                          : "grab",
-                      }}
-                    >
-                      <SelectedArchiveSlideContent
-                        id={id}
-                        cropThumbs={cropThumbs}
-                        onContextMenu={(e, archive) =>
-                          onContextMenu(e, archive, "carousel")
-                        }
-                        onRemove={onToggleSelected}
-                      />
-                    </div>
-                  )}
-                />
-                {selectionOverflow.canScrollLeft && (
-                  <IconButton
-                    className="carousel-prev"
-                    icon={<FaChevronLeft size={24} />}
-                    size={32}
-                    style={{
-                      position: "absolute",
-                      left: 0,
-                      top: "50%",
-                      transform: "translateY(-50%)",
-                      zIndex: 20,
-                    }}
-                    onClick={() => {
-                      const lenis = selectionLenisRef.current;
-                      if (!lenis) return;
-                      // Re-measure right before scrolling — Lenis's own `ResizeObserver`-driven
-                      // remeasure can still be pending (see `SortableList`'s own `resize()` call
-                      // for the full story) in the narrow window right after this arrow first
-                      // appears, so a `scrollTo` immediately after selecting items could otherwise
-                      // clamp against a stale, too-small `limit`.
-                      lenis.resize();
-                      lenis.scrollTo(lenis.targetScroll - stepSelectionSlide());
-                    }}
-                  />
-                )}
-                {selectionOverflow.canScrollRight && (
-                  <IconButton
-                    className="carousel-next"
-                    icon={<FaChevronRight size={24} />}
-                    size={32}
-                    style={{
-                      position: "absolute",
-                      right: 0,
-                      top: "50%",
-                      transform: "translateY(-50%)",
-                      zIndex: 20,
-                    }}
-                    onClick={() => {
-                      const lenis = selectionLenisRef.current;
-                      if (!lenis) return;
-                      lenis.resize();
-                      lenis.scrollTo(lenis.targetScroll + stepSelectionSlide());
-                    }}
-                  />
-                )}
-              </div>
-            )}
-            </div>
-          </div>
-        )}
-        {isOpen && !multiSelect && (
+        {isOpen && (
           <div
             className="collapsible-body"
             style={{ width: "100%", boxSizing: "border-box" }}
@@ -663,8 +475,8 @@ export function RecentlyAddedCarousel({
                     onClick={() => {
                       const lenis = lenisRef.current;
                       if (!lenis) return;
-                      // Re-measure right before scrolling — see the selection-mode arrows' own
-                      // comment (identical race, same fix) for why this can't be skipped.
+                      // Re-measure right before scrolling: Lenis's own `ResizeObserver`-driven
+                      // remeasure can still be pending, and would clamp against a stale `limit`.
                       lenis.resize();
                       lenis.scrollTo(lenis.targetScroll - stepSlide());
                     }}
