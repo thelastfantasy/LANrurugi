@@ -1412,6 +1412,8 @@ export function Reader() {
   /** Touch infinite scroll reads vertically, so a tap on the lower half scrolls forward by the `j`
    * step and one on the upper half back; the toolbar is a long press instead (see below). */
   function onInfiniteScrollTap(clientY: number) {
+    // Some browsers (Firefox for Android) still send a click when a pinch lifts; that is no tap.
+    if (multiTouchGestureRef.current) return;
     const forward = clientY >= window.innerHeight / 2;
     if (
       forward &&
@@ -1722,15 +1724,32 @@ export function Reader() {
   }
 
   const infiniteScrollOn = readerSettings.infiniteScroll;
+  /** In infinite scroll, the page at mid-screen and where its top was before a fullscreen switch:
+   * the viewport's height changes with it, and the page is put back in place afterwards. */
+  const fullscreenAnchorRef = useRef<{ el: HTMLElement; top: number } | null>(null);
+  /** Whether the current or last touch gesture had a second finger down at any point. */
+  const multiTouchGestureRef = useRef(false);
   const setFullscreen = useCallback(
     (on: boolean) => {
-      if (on && !document.fullscreenElement) {
+      if (on === !!document.fullscreenElement) return;
+      fullscreenAnchorRef.current = null;
+      if (infiniteScrollOn) {
+        const mid = window.innerHeight / 2;
+        for (const el of document.querySelectorAll<HTMLElement>(".infinite-scroll img[data-page]")) {
+          const r = el.getBoundingClientRect();
+          if (r.top <= mid && r.bottom >= mid) {
+            fullscreenAnchorRef.current = { el, top: r.top };
+            break;
+          }
+        }
+      }
+      if (on) {
         // Infinite scroll scrolls the document, so the document goes fullscreen. A fullscreen
         // element is pinned to the viewport and does not scroll: with the reader container
         // there, the view jumped to the first page and stopped scrolling.
         const target = infiniteScrollOn ? document.documentElement : containerRef.current;
         target?.requestFullscreen?.().catch(() => undefined);
-      } else if (!on && document.fullscreenElement) {
+      } else {
         document.exitFullscreen?.().catch(() => undefined);
       }
     },
@@ -1742,38 +1761,67 @@ export function Reader() {
   }
 
   useEffect(() => {
+    let frames = 0;
+    let raf = 0;
+    // The viewport settles over a few frames (browser chrome sliding away), so the anchored page
+    // is re-placed on each of them.
+    const restore = () => {
+      const anchor = fullscreenAnchorRef.current;
+      if (!anchor || !anchor.el.isConnected) return;
+      const drift = anchor.el.getBoundingClientRect().top - anchor.top;
+      if (Math.abs(drift) >= 1) window.scrollBy(0, drift);
+      if (++frames < 20) raf = requestAnimationFrame(restore);
+      else fullscreenAnchorRef.current = null;
+    };
     function onFullscreenChange() {
       setIsFullscreen(document.fullscreenElement !== null);
+      cancelAnimationFrame(raf);
+      frames = 0;
+      raf = requestAnimationFrame(restore);
     }
     document.addEventListener("fullscreenchange", onFullscreenChange);
-    return () =>
+    return () => {
+      cancelAnimationFrame(raf);
       document.removeEventListener("fullscreenchange", onFullscreenChange);
+    };
   }, []);
 
   // Touch screens have no fullscreen button while headless, and no keyboard for `f`. Two fingers
   // swiping up enter fullscreen, down leave it; the first movement past the threshold decides and
-  // nothing repeats until the fingers lift. The move listener is non-passive because otherwise the
-  // swipe scrolls the page out from under the gesture instead.
+  // nothing repeats until the fingers lift. Both fingers must travel the same way: a pinch moves
+  // them apart, and its midpoint drifting (thumb further than finger) used to read as a swipe.
+  // The move listener is non-passive so that two fingers can be kept from scrolling at all.
   useEffect(() => {
     if (supportsHover) return;
-    let startY: number | null = null;
-    let fired = false;
-    const midY = (touches: TouchList) => (touches[0].clientY + touches[1].clientY) / 2;
+    const SWIPE_PX = 60;
+    let start: [number, number] | null = null;
+    let done = false;
     function onTouchStart(e: TouchEvent) {
-      fired = false;
-      startY = e.touches.length === 2 ? midY(e.touches) : null;
+      // A new gesture starts with one finger down; a second one makes the whole gesture multi-touch.
+      multiTouchGestureRef.current = e.touches.length > 1;
+      done = false;
+      start = e.touches.length === 2 ? [e.touches[0].clientY, e.touches[1].clientY] : null;
     }
     function onTouchMove(e: TouchEvent) {
-      if (startY === null || fired || e.touches.length !== 2) return;
-      const delta = midY(e.touches) - startY;
-      if (Math.abs(delta) < 60) return;
+      // Two fingers never scroll the reader: with pinch-zoom off (`#i3`'s `touch-action`), a pinch
+      // in Firefox for Android moved the page dozens of images away (cause in Firefox unknown).
+      if (e.touches.length >= 2 && e.cancelable) e.preventDefault();
+      if (start === null || done || e.touches.length !== 2) return;
+      const d0 = e.touches[0].clientY - start[0];
+      const d1 = e.touches[1].clientY - start[1];
+      // Fingers parting or closing by more than they travel together: a pinch, ignored to the end.
+      if (Math.abs(d0 - d1) > Math.max(30, Math.min(Math.abs(d0), Math.abs(d1)))) {
+        done = true;
+        return;
+      }
+      if (Math.sign(d0) !== Math.sign(d1) || Math.min(Math.abs(d0), Math.abs(d1)) < SWIPE_PX) return;
       e.preventDefault();
-      fired = true;
-      setFullscreen(delta < 0);
+      done = true;
+      setFullscreen(d0 < 0);
     }
     function onTouchEnd() {
-      startY = null;
-      fired = false;
+      start = null;
+      done = false;
     }
     document.addEventListener("touchstart", onTouchStart, { passive: true });
     document.addEventListener("touchmove", onTouchMove, { passive: false });

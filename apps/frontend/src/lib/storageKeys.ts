@@ -68,3 +68,6 @@ export const DEFAULT_DUPLICATES_COVER_PERCENT = 32
 export const MIN_DUPLICATES_COVER_PERCENT = 16
 
 export const MAX_DUPLICATES_COVER_PERCENT = 50
+
+/** The Library selection drawer's layout: `"list"` (rows) or `"grid"` (large thumbnails). */
+export const SELECTION_VIEW_KEY = "selectionView"

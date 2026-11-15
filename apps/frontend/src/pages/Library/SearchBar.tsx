@@ -24,6 +24,7 @@ export function SearchBar({
   suggestions,
   recentSearches,
   multiSelect,
+  canSelect,
   searchInputRef,
   onFilterInputChange,
   onAutocompleteOpenChange,
@@ -43,6 +44,8 @@ export function SearchBar({
   suggestions: SearchSuggestion[];
   recentSearches: string[];
   multiSelect: boolean;
+  /** False when there is nothing to select; leaving selection mode stays possible. */
+  canSelect: boolean;
   searchInputRef: RefObject<HTMLInputElement | null>;
   onFilterInputChange: (value: string, openAutocomplete: boolean) => void;
   onAutocompleteOpenChange: (open: boolean) => void;
@@ -359,6 +362,7 @@ export function SearchBar({
             id="msm-toggle"
             className={`searchbtn${multiSelect ? " toggled" : ""}`}
             style={{ flexGrow: 1 }}
+            disabled={!multiSelect && !canSelect}
             onClick={() => void onToggleMultiSelect()}
           >
             {t("batch.selectArchives")}

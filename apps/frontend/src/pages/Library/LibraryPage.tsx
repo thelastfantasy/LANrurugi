@@ -15,6 +15,7 @@ import { LibraryShortcutsOverlay } from "./LibraryShortcutsOverlay";
 import { RecentlyAddedCarousel } from "./RecentlyAddedCarousel";
 import { ResultInfoAndPager } from "./ResultInfoAndPager";
 import { SearchBar } from "./SearchBar";
+import { SelectionDrawer, SelectionFab } from "./SelectionDrawer";
 import { SettingsMenu } from "./SettingsMenu";
 import { SortBySelector } from "./SortBySelector";
 
@@ -42,6 +43,8 @@ export function Library() {
   const deleteTarget = lib.deleteTarget;
   const [aiTankoubonDrawerOpen, setAiTankoubonDrawerOpen] = useState(false);
   const [shareIds, setShareIds] = useState<string[] | null>(null);
+  // Selection mode starts minimized, so the grid is free for picking.
+  const [selectionDrawerOpen, setSelectionDrawerOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // The bottom pager scrolls back up to this bar, so a new page is read from its top.
   const optionsRef = useRef<HTMLDivElement>(null);
@@ -119,6 +122,7 @@ export function Library() {
             suggestions={lib.suggestions}
             recentSearches={lib.recentSearches}
             multiSelect={lib.multiSelect}
+            canSelect={lib.search.isLoading || lib.shown.length > 0}
             searchInputRef={lib.searchInputRef}
             onFilterInputChange={(value, open) => {
               lib.setFilterInputOverride(value);
@@ -138,7 +142,11 @@ export function Library() {
             onToggleToken={lib.toggleToken}
             onPickRecent={lib.applyRecentFilter}
             onRemoveRecent={lib.removeRecentFilter}
-            onToggleMultiSelect={() => void lib.handleToggleMultiSelect()}
+            onToggleMultiSelect={() => {
+              // Entering: bring the results into view, since that is where the picking happens.
+              if (!lib.multiSelect) optionsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+              void lib.handleToggleMultiSelect();
+            }}
             onAiSmartTankoubon={() => setAiTankoubonDrawerOpen(true)}
             loggedIn={lib.loggedIn}
           />
@@ -153,71 +161,9 @@ export function Library() {
           loggedIn={lib.loggedIn}
           onContextMenu={lib.handleContextMenu}
           onOpen={lib.handleOpenArchive}
-          multiSelect={lib.multiSelect}
-          selectedIds={lib.selectedIds}
-          onToggleSelected={lib.toggleSelected}
-          onReorderSelection={lib.setSelectedIds}
-          onSelectPage={lib.selectAllOnPage}
-          onClearSelection={lib.clearSelection}
-          onRunBatch={lib.runBatchOnSelection}
-          onMerge={() => void lib.mergeSelectionIntoTankoubon()}
-          canMerge={lib.canMerge}
           onSearchTag={lib.applyTagSearch}
         />
       </div>
-
-      {lib.multiSelect && (
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 8,
-            padding: "8px 0",
-          }}
-        >
-          <span>
-            {lib.selectedIds.length === 0
-              ? lib.t("Batch operations apply to the current filter")
-              : lib.t("{{n}} selected", { n: lib.selectedIds.length })}
-          </span>
-          <button
-            type="button"
-            className="stdbtn"
-            onClick={() => lib.selectAllOnPage()}
-          >
-            {lib.t("Select All on Page")}
-          </button>
-          <button type="button" className="stdbtn" onClick={lib.clearSelection}>
-            {lib.t("Clear Selection")}
-          </button>
-          {/* With nothing selected this runs over everything the filter matches — the point being
-              that "tag-scan every untagged archive" should not require ticking hundreds of boxes. */}
-          <button
-            type="button"
-            className="stdbtn"
-            onClick={
-              lib.selectedIds.length === 0
-                ? () => void lib.runBatchOnFilter()
-                : lib.runBatchOnSelection
-            }
-          >
-            {lib.selectedIds.length === 0
-              ? lib.t("Batch process all {{n}} results", { n: lib.filteredCount })
-              : lib.t("Batch Operations")}
-          </button>
-          {lib.canMerge && (
-            <button
-              type="button"
-              className="stdbtn"
-              onClick={() => void lib.mergeSelectionIntoTankoubon()}
-            >
-              {lib.t("Merge into Tankoubon")}
-            </button>
-          )}
-        </div>
-      )}
 
       <div ref={optionsRef} className="table-options table-options-row">
         {lib.viewMode === "thumbnail" && (
@@ -411,6 +357,32 @@ export function Library() {
             lib.setDeleteTarget(null);
           }}
         />
+      )}
+
+      {lib.multiSelect && (
+        <>
+          <SelectionDrawer
+            open={selectionDrawerOpen}
+            selectedIds={lib.selectedIds}
+            filteredCount={lib.filteredCount}
+            canMerge={lib.canMerge}
+            onMinimize={() => setSelectionDrawerOpen(false)}
+            onExit={() => {
+              setSelectionDrawerOpen(false);
+              void lib.handleToggleMultiSelect();
+            }}
+            onReorder={lib.setSelectedIds}
+            onRemove={lib.toggleSelected}
+            onSelectPage={() => lib.selectAllOnPage()}
+            onClear={lib.clearSelection}
+            onRunBatch={lib.runBatchOnSelection}
+            onRunBatchOnFilter={() => void lib.runBatchOnFilter()}
+            onMerge={() => void lib.mergeSelectionIntoTankoubon()}
+          />
+          {!selectionDrawerOpen && (
+            <SelectionFab count={lib.selectedIds.length} onOpen={() => setSelectionDrawerOpen(true)} />
+          )}
+        </>
       )}
 
       <AiSmartTankoubonDrawer open={aiTankoubonDrawerOpen} onClose={() => setAiTankoubonDrawerOpen(false)} />

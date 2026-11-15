@@ -54,14 +54,24 @@ export function useLongPress(
       window.removeEventListener("click", swallowClick, true)
       window.removeEventListener("pointerdown", unswallow, true)
     }
-    const onMove = (e: PointerEvent) => {
-      if (
-        Math.abs(e.clientX - startX) > MOVE_TOLERANCE_PX ||
-        Math.abs(e.clientY - startY) > MOVE_TOLERANCE_PX
-      ) {
-        stopTimer()
-      }
+    const movedAt = (x: number, y: number) => {
+      if (Math.abs(x - startX) > MOVE_TOLERANCE_PX || Math.abs(y - startY) > MOVE_TOLERANCE_PX) stopTimer()
     }
+    const onMove = (e: PointerEvent) => movedAt(e.clientX, e.clientY)
+    // Once the browser takes a drag over as a scroll it cancels the pointer, and no pointer moves
+    // follow; touch events still do, so the hold is watched through them until the finger lifts.
+    const onTouchMove = (e: TouchEvent) => {
+      const touch = e.touches[0]
+      if (touch) movedAt(touch.clientX, touch.clientY)
+    }
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length > 0) return
+      stopTimer()
+      detach()
+    }
+    // A browser claiming a held image for its own menu cancels the touch too, before that menu;
+    // as with `pointercancel`, the hold itself stands.
+    const onTouchCancel = () => detach()
     const onOtherDown = (e: PointerEvent) => {
       pointers.add(e.pointerId)
       if (pointers.size > 1) stopTimer()
@@ -74,11 +84,10 @@ export function useLongPress(
         detach()
       }
     }
-    // Bookkeeping only: see `touchHeld`. Scrolling, the other way a browser cancels a pointer, is
-    // caught by `onScroll`.
+    // Not a cancel of the hold: see `touchHeld`. Scrolling, the other way a browser cancels a
+    // pointer, is caught by `onScroll` and `onTouchMove`, which stay attached until release.
     const onCancel = (e: PointerEvent) => {
       pointers.delete(e.pointerId)
-      if (pointers.size === 0) detach()
     }
     const onScroll = () => stopTimer()
     const attach = () => {
@@ -87,6 +96,9 @@ export function useLongPress(
       document.addEventListener("pointerup", onUp)
       document.addEventListener("pointercancel", onCancel)
       document.addEventListener("scroll", onScroll, true)
+      document.addEventListener("touchmove", onTouchMove, { passive: true })
+      document.addEventListener("touchend", onTouchEnd)
+      document.addEventListener("touchcancel", onTouchCancel)
     }
     const detach = () => {
       document.removeEventListener("pointerdown", onOtherDown)
@@ -94,6 +106,9 @@ export function useLongPress(
       document.removeEventListener("pointerup", onUp)
       document.removeEventListener("pointercancel", onCancel)
       document.removeEventListener("scroll", onScroll, true)
+      document.removeEventListener("touchmove", onTouchMove)
+      document.removeEventListener("touchend", onTouchEnd)
+      document.removeEventListener("touchcancel", onTouchCancel)
     }
 
     const onDown = (e: Event) => {

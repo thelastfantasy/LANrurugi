@@ -3671,23 +3671,6 @@ body div.ido {
   border-radius: 3px;
 }
 
-/* Library selection strip (`RecentlyAddedCarousel`): one archive card tall, and both the
-   "pick something" placeholder and the slides fill it (`height: 100%`), so entering selection mode
-   or picking the first archive never changes the strip's height at any viewport or zoom. */
-.selection-strip {
-  height: 360px;
-}
-
-@media all and (max-width: 560px) {
-  .selection-strip {
-    height: 272px;
-  }
-}
-
-.selection-strip .carousel-slide {
-  height: 100%;
-}
-
 /* The AI grouping drawer's compact pager uses the shared `NumberInput`, whose own stepper is
    `../../components/common-ui/Form/NumberInput.tsx`'s absolutely-positioned pair; inside this pill
    it would overlay the "/ total" label, so it stays hidden and the pill's ← → do the stepping.

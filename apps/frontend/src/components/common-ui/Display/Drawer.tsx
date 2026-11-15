@@ -25,6 +25,8 @@ export function Drawer({
   children,
   width = 560,
   swipeToClose = true,
+  headerActions,
+  onCloseButton,
 }: {
   open: boolean
   onClose: () => void
@@ -35,6 +37,11 @@ export function Drawer({
    * otherwise fight the drawer's swipe-right-to-close. Only the content stops closing on a swipe:
    * the title and bottom bars still do. */
   swipeToClose?: boolean
+  /** Extra buttons in the title bar, before the close button. */
+  headerActions?: ReactNode
+  /** What the title bar's ✕ does, when it means more than a swipe, Escape or the backdrop
+   * (`onClose`) — e.g. leaving a mode, where those only minimize. */
+  onCloseButton?: () => void
 }) {
   const [footer, setFooter] = useState<HTMLDivElement | null>(null)
   return (
@@ -70,16 +77,27 @@ export function Drawer({
               <BaseDrawer.Title className="m-0 min-w-0 flex-1 truncate" style={{ fontSize: 15, fontWeight: 700 }}>
                 {title}
               </BaseDrawer.Title>
-              <BaseDrawer.Close
-                render={
-                  <IconButton
-                    icon="fa fa-times"
-                    size={30}
-                    className="modal-close-btn"
-                    style={{ borderRadius: "50%", flexShrink: 0 }}
-                  />
-                }
-              />
+              {headerActions}
+              {onCloseButton ? (
+                <IconButton
+                  icon="fa fa-times"
+                  size={30}
+                  className="modal-close-btn"
+                  style={{ borderRadius: "50%", flexShrink: 0 }}
+                  onClick={onCloseButton}
+                />
+              ) : (
+                <BaseDrawer.Close
+                  render={
+                    <IconButton
+                      icon="fa fa-times"
+                      size={30}
+                      className="modal-close-btn"
+                      style={{ borderRadius: "50%", flexShrink: 0 }}
+                    />
+                  }
+                />
+              )}
             </div>
             <BaseDrawer.Content
               className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
