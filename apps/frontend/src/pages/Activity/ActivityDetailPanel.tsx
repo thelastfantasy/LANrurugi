@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next"
 import { Fragment } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -77,7 +78,7 @@ function geoSummary(info: ActivityGeoInfo): string {
  * browser that withheld a Chromium-only field (`deviceMemory`, Client Hints, Network Information)
  * doesn't clutter the panel with rows that carry no information. */
 function clientReportedRows(
-  t: (key: string) => string,
+  t: TFunction,
   info: ActivityClientReportedInfo,
   userAgent: ActivityUserAgentInfo | null,
 ): { label: string; value: string }[] {

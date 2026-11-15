@@ -1,6 +1,7 @@
 import "./share.css"
 
 import { useMutation } from "@tanstack/react-query"
+import type { TFunction } from "i18next"
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -40,7 +41,7 @@ export function shareRefsFromPayloads(payloads: string[]): ShareRef[] {
   return [...(explicit.size > 0 ? explicit : bare).values()]
 }
 
-function refusalText(t: (k: string, o?: Record<string, unknown>) => string, e: unknown): string {
+function refusalText(t: TFunction, e: unknown): string {
   // A refusal is its stable code; some carry a technical detail after a colon (a version mismatch
   // names the other side's protocol versions), which the localized text shows as `{{detail}}`.
   const [code, detail] = (e instanceof ApiError ? e.message : "internal").split(/:\s*/, 2)

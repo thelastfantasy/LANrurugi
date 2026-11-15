@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next"
 import type { MouseEvent } from "react"
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
@@ -63,7 +64,7 @@ function PageCountBadge({ archive }: { archive: ArchiveMetadata }) {
  *  Naming them beats a generic "matched via members" — the whole point is which volumes. */
 function matchReasonText(
   members: { name: string }[],
-  t: (key: string, options?: Record<string, unknown>) => string,
+  t: TFunction,
 ): string {
   const names = members.map((m) => m.name || "?").join("、")
   return t("library.tankMatchedThroughMembers", { members: names })
