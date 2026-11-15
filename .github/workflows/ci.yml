@@ -221,6 +221,10 @@ jobs:
       - name: eslint
         run: pnpm --filter lanrurugi-frontend run lint
 
+      # Parse-only check; covers tests/, which `tsc -b` never compiles (issue #112).
+      - name: syntax check
+        run: pnpm --filter lanrurugi-frontend exec node scripts/check-syntax.mjs src tests
+
       # Type-check on every push (seconds); the production bundle and the unit tests only on a
       # `main` push, next to the Rust suite — see the `cargo test` step's own comment for why the
       # long half of CI is parked at the release merge.

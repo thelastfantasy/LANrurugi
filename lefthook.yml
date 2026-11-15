@@ -20,7 +20,7 @@ pre-commit:
     frontend-lint:
       glob: "apps/frontend/{src,tests}/**/*.{ts,tsx}"
       root: "apps/frontend"
-      run: npx tsc -b --force && npx eslint --fix {staged_files}
+      run: node scripts/check-syntax.mjs {staged_files} && npx tsc -b --force && npx eslint --fix {staged_files}
       stage_fixed: true
 
 pre-push:
@@ -32,4 +32,4 @@ pre-push:
     frontend-lint:
       glob: "apps/frontend/{src,tests}/**/*.{ts,tsx}"
       root: "apps/frontend"
-      run: npx tsc -b --force && npx eslint --fix src/ tests/ --ext .tsx,.ts
+      run: node scripts/check-syntax.mjs src tests && npx tsc -b --force && npx eslint --fix src/ tests/ --ext .tsx,.ts
