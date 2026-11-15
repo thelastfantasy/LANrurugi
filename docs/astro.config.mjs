@@ -108,6 +108,7 @@ export default defineConfig({
             { label: '快速开始', translations: { en: 'Quickstart' }, slug: 'guide/quickstart' },
             { label: '支持的格式', translations: { en: 'Supported formats' }, slug: 'guide/formats' },
             { label: '分享与导入', translations: { en: 'Sharing and importing' }, slug: 'guide/sharing' },
+            { label: '让分享走 VPN', translations: { en: 'Sharing over a VPN' }, slug: 'guide/sharing-vpn' },
             { label: '用文档站测试 API', translations: { en: 'Testing the API from these docs' }, slug: 'guide/api-testing' },
             { label: 'llms.txt', slug: 'guide/llms-txt' },
           ],

@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+governor.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
@@ -18,6 +19,8 @@ sha2.workspace = true
 base64 = "0.23"
 reqwest.workspace = true
 webpki-root-certs.workspace = true
+blake3.workspace = true
+libc.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }

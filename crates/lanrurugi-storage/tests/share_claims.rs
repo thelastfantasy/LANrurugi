@@ -25,6 +25,11 @@ fn share(now: i64) -> Share {
         permissions: Permissions::ALL,
         download_limit: None,
         downloads_used: 0,
+        import_bytes: 0,
+        total_bytes: 0,
+        target_ratio: None,
+        ratio_action: lanrurugi_storage::shares::RatioAction::default(),
+        ratio_rate: None,
         ip_allow: vec![],
         ip_first_n: None,
         expires_at: None,
@@ -102,8 +107,27 @@ async fn claims_count_once_and_respect_limits() {
         .await
         .unwrap();
     assert_eq!(again, ClaimOutcome::Existing(claim));
-    assert_eq!(repo.get(&open.id).await.unwrap().unwrap().downloads_used, 1);
+    // An import is not a download: it feeds the share's ratio instead (FR-015's own split).
+    assert_eq!(repo.get(&open.id).await.unwrap().unwrap().downloads_used, 0);
+    let imports = {
+        let mut conn = pool.get().await.unwrap();
+        let key = lanrurugi_storage::keys::share_key(&open.id);
+        let _: () =
+            deadpool_redis::redis::AsyncCommands::hincr(&mut conn, &key, "imports_used", 0u8)
+                .await
+                .unwrap();
+        deadpool_redis::redis::AsyncCommands::hget::<_, _, u32>(&mut conn, &key, "imports_used")
+            .await
+            .unwrap_or(0)
+    };
+    assert_eq!(imports, 1);
     assert_eq!(repo.claim_history(&open.id, 10).await.unwrap().len(), 1);
+    // A real download is counted, and only it can exhaust `download_limit`.
+    repo.claim(&open, ClaimKind::BrowserDownload, ip(3), None, None, now)
+        .await
+        .unwrap();
+    assert_eq!(repo.get(&open.id).await.unwrap().unwrap().downloads_used, 1);
+    assert_eq!(repo.claim_history(&open.id, 10).await.unwrap().len(), 2);
 
     // First-N locks the share to the first address.
     let mut first = share(now);
@@ -200,5 +224,42 @@ async fn a_stale_save_cannot_revive_a_revoked_share() {
         after.title.as_deref(),
         Some("edited"),
         "the edit itself must still apply"
+    );
+}
+
+/// The ratio's numerator is the importer's verified total, reported cumulatively: a repeat, a
+/// stale report after a reconnect, or a retried piece must never add bytes twice (FR-015).
+#[tokio::test]
+async fn verified_bytes_only_count_new_data() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set or unreachable");
+        return;
+    };
+    let _lock = RedisTestLock::acquire(&pool, "share_verified").await;
+    let repo = ShareRepository::new(pool.clone());
+    let now = 1_000;
+
+    let open = share(now);
+    repo.create(&open).await.unwrap();
+    let ClaimOutcome::Created(claim) = repo
+        .claim(&open, ClaimKind::Import, ip(1), None, Some("ep"), now)
+        .await
+        .unwrap()
+    else {
+        panic!("first claim should be created");
+    };
+
+    assert_eq!(
+        repo.add_claim_verified(&claim, 1_000_000).await.unwrap(),
+        1_000_000
+    );
+    // The same total reported again (a reconnected importer, a duplicated renewal).
+    assert_eq!(repo.add_claim_verified(&claim, 1_000_000).await.unwrap(), 0);
+    // A stale report that knows less than the high-water mark.
+    assert_eq!(repo.add_claim_verified(&claim, 400_000).await.unwrap(), 0);
+    // Only the increase counts.
+    assert_eq!(
+        repo.add_claim_verified(&claim, 1_600_000).await.unwrap(),
+        600_000
     );
 }

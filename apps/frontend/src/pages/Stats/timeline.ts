@@ -14,6 +14,7 @@ export type ResolvedUnit = "day" | "week" | "month"
 export interface DailyPoint {
   date: string
   archives?: number
+  bytes?: number
   pages?: number
   last_read?: number
 }
@@ -28,6 +29,7 @@ export interface TimelineBucket {
   /** How many daily points fell in this bucket — the tooltip's own denominator for "per day". */
   days: number
   archives: number
+  bytes: number
   pages: number
   last_read: number
 }
@@ -124,7 +126,7 @@ export function bucketSeries(
     const existing = buckets.get(key)
     if (existing) existing.to = day
     else {
-      buckets.set(key, { key, from: day, to: day, days: 0, archives: 0, pages: 0, last_read: 0 })
+      buckets.set(key, { key, from: day, to: day, days: 0, archives: 0, bytes: 0, pages: 0, last_read: 0 })
       order.push(key)
     }
   }
@@ -134,6 +136,7 @@ export function bucketSeries(
     if (!bucket) continue
     bucket.days += 1
     bucket.archives += point.archives ?? 0
+    bucket.bytes += point.bytes ?? 0
     bucket.pages += point.pages ?? 0
     bucket.last_read += point.last_read ?? 0
   }
@@ -141,7 +144,7 @@ export function bucketSeries(
   // zero-filled bucket beats a `!` that a later edit could turn into a crash.
   return order.map(
     (key) =>
-      buckets.get(key) ?? { key, from, to, days: 0, archives: 0, pages: 0, last_read: 0 },
+      buckets.get(key) ?? { key, from, to, days: 0, archives: 0, bytes: 0, pages: 0, last_read: 0 },
   )
 }
 

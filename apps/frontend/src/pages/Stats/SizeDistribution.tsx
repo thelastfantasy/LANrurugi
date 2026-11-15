@@ -15,41 +15,60 @@ import { formatBytes, formatPercent, sizeBucketLabelKey } from "./format"
  *  answers "what does my library look like" at a glance, the table answers "how many exactly".
  *  Three representations of the same bucket list on purpose: the backend only sends counts and
  *  byte sums, so every label here (including the band boundaries) is localized client-side. */
+/** A band this bundle has no label for (an older UI against a newer backend, or the reverse)
+ *  still gets a readable label from the bounds the response carries — leaking
+ *  `stats.sizeBucket.gte_500mb` into the axis and table is worse than an English-shaped one. */
+function fallbackBandLabel(bucket: StatsOverview["size_buckets"][number]): string {
+  if (bucket.max_bytes === undefined) return `≥ ${formatBytes(bucket.min_bytes)}`
+  return bucket.min_bytes === 0
+    ? `< ${formatBytes(bucket.max_bytes)}`
+    : `${formatBytes(bucket.min_bytes)} - ${formatBytes(bucket.max_bytes)}`
+}
+
 export function SizeDistribution({ buckets }: { buckets: StatsOverview["size_buckets"] }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const palette = useChartPalette()
   const { muted } = useStatsPanel()
   const [selected, setSelected] = useState<StatsBucketSelection | null>(null)
-  // All nine band labels only fit side by side on a wide chart: rotated, the longest one
-  // ("500 MB or more") is ~65px, so nine of them need ~630px of axis. Below that they ran into
-  // each other — measured on a 390px-wide phone, all eight adjacent pairs overlapped. Narrow
-  // viewports therefore let recharts label whichever ticks fit, exactly like the two time-series
-  // charts above already do; the table below still spells out every band.
+  // Twelve band labels only fit side by side on a wide chart: rotated, the longest one
+  // ("500 MB - 1 GB") is ~70px, so twelve need ~840px of axis plus the card's own padding. Below
+  // ~1100px adjacent labels start touching — measured on a 390px-wide phone, where every adjacent
+  // pair overlapped — so narrower charts label every other band (every third on a phone) and lean
+  // on the table below, which still spells out every band exactly.
   const narrowViewport = useIsNarrowViewport("(max-width: 768px)")
+  const denseAxis = useIsNarrowViewport("(max-width: 1100px)")
   const total = buckets.reduce((sum, bucket) => sum + bucket.archives, 0)
   if (total === 0) return null
 
-  const data = buckets.map((bucket) => ({
-    ...bucket,
-    label: t(sizeBucketLabelKey(bucket.key)),
-  }))
+  const data = buckets.map((bucket) => {
+    const key = sizeBucketLabelKey(bucket.key)
+    return {
+      ...bucket,
+      label: i18n.exists(key) ? t(key) : fallbackBandLabel(bucket),
+    }
+  })
+  // Thinned labels always keep the last band: an unlabeled open-ended "≥ 2 GB" bar would read as
+  // "everything else", which is the one band the chart exists to show.
+  const labels = data.map((bucket) => bucket.label)
+  const tickStep = !denseAxis ? 1 : narrowViewport ? 3 : 2
+  const ticks = labels.filter((_, index) => index % tickStep === 0)
+  if (ticks[ticks.length - 1] !== labels[labels.length - 1]) {
+    ticks.push(labels[labels.length - 1])
+  }
 
   return (
     <StatsSection title={t("stats.sizeDistribution")} icon="fa-database" hint={t("stats.sizeDistributionHint")}>
       <ChartFrame height={240}>
         <BarChart data={data} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" opacity={0.2} vertical={false} />
-          {/* Nine band labels only fit side by side on a wide chart: rotated, the longest one
-              ("500 MB or more") is ~65px, so nine need ~630px of axis. Below that they ran into
-              each other — measured on a 390px-wide phone, all eight adjacent pairs overlapped —
-              and letting recharts choose ("preserveStartEnd") did not help, because that estimate
-              assumes the unrotated text width. A narrow viewport therefore labels every other band
-              at a slightly smaller size (five legible labels) and leans on the table below, which
-              still spells out every band exactly. */}
+          {/* Explicit ticks rather than recharts' own "fit what you can": its estimate assumes the
+              unrotated label width, which made it keep too many. See `tickStep` above for the
+              per-width step and why the last band is always kept. */}
           <XAxis
             dataKey="label"
             tick={{ fontSize: narrowViewport ? 10 : 11 }}
-            interval={narrowViewport ? 1 : 0}
+            ticks={ticks}
+            interval={0}
             angle={-25}
             textAnchor="end"
             height={50}

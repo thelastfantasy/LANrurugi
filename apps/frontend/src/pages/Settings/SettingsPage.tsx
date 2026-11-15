@@ -97,10 +97,15 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [subfoldersToTankoubons, setSubfoldersToTankoubons] = useState(settings.subfolders_to_tankoubons)
   const [archiveSplitSuggestionsEnabled, setArchiveSplitSuggestionsEnabled] = useState(settings.archive_split_suggestions_enabled)
   const [archiveSplitDeleteOriginalEnabled, setArchiveSplitDeleteOriginalEnabled] = useState(settings.archive_split_delete_original_enabled)
+  const [ingestStrictVerify, setIngestStrictVerify] = useState(settings.ingest_strict_verify ?? false)
   const [guestmode, setGuestmode] = useState(settings.guestmode)
   const [idlescan, setIdlescan] = useState(settings.idlescan)
   const [newbadgemode, setNewbadgemode] = useState(settings.newbadgemode)
   const [recommendprecision, setRecommendprecision] = useState(settings.recommendprecision)
+  const [pluginBindInterface, setPluginBindInterface] = useState(
+    settings.plugin_bind_interface ?? "",
+  )
+  const [directDownloadUrl, setDirectDownloadUrl] = useState(settings.direct_download_url ?? "")
   const [keyInput, setKeyInput] = useState("")
 
   const [newPassword, setNewPassword] = useState("")
@@ -124,7 +129,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [recycleRetentionDays, setRecycleRetentionDays] = useState(settings.recycle_retention_days)
   const [recycleMaxSizeGb, setRecycleMaxSizeGb] = useState(settings.recycle_max_size_gb)
   const [tempmaxsize, setTempmaxsize] = useState(settings.tempmaxsize)
-  const [replacedupe, setReplacedupe] = useState(settings.replacedupe)
 
   // Normalize the API value so the radio group is always selectable across the `"auto"` ->
   // `"jxl"` rename and older backends that don't return the one-field contract yet. Saving writes
@@ -133,6 +137,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [thumbnailFormat, setThumbnailFormat] = useState(savedThumbnailFormat)
   const [webpquality, setWebpquality] = useState(settings.webpquality)
   const [excludednamespaces, setExcludednamespaces] = useState(settings.excludednamespaces)
+  const [sourceEquivalences, setSourceEquivalences] = useState(settings.source_equivalences)
   const [tagruleson, setTagruleson] = useState(settings.tagruleson)
   const [tagrules, setTagrules] = useState(settings.tagrules)
   const [usedateadded, setUsedateadded] = useState(settings.usedateadded)
@@ -190,6 +195,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       subfoldersToTankoubons !== settings.subfolders_to_tankoubons ||
       archiveSplitSuggestionsEnabled !== settings.archive_split_suggestions_enabled ||
       archiveSplitDeleteOriginalEnabled !== settings.archive_split_delete_original_enabled ||
+      ingestStrictVerify !== (settings.ingest_strict_verify ?? false) ||
       guestmode !== settings.guestmode ||
       idlescan !== settings.idlescan ||
       accessTokenLifetimeSecs !== settings.access_token_lifetime_secs ||
@@ -204,10 +210,10 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       logMaxFiles !== savedLogMaxFiles ||
       recycleRetentionDays !== settings.recycle_retention_days ||
       recycleMaxSizeGb !== settings.recycle_max_size_gb ||
-      replacedupe !== settings.replacedupe ||
       thumbnailFormat !== savedThumbnailFormat ||
       webpquality !== settings.webpquality ||
       excludednamespaces !== settings.excludednamespaces ||
+      sourceEquivalences !== settings.source_equivalences ||
       tagruleson !== settings.tagruleson ||
       tagrules !== settings.tagrules ||
       usedateadded !== settings.usedateadded ||
@@ -215,18 +221,25 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       timezone !== settings.timezone ||
       newbadgemode !== settings.newbadgemode ||
       recommendprecision !== settings.recommendprecision ||
+      // `?? ""`: a backend that predates this field returns nothing, and `"" !== undefined` would
+      // mark the form dirty on load — the save bar then appears before anything was touched.
+      pluginBindInterface !== (settings.plugin_bind_interface ?? "") ||
+      directDownloadUrl !== (settings.direct_download_url ?? "") ||
       translationIsDirty,
     [
       htmltitle, language, pagesize, enableresize, sizethreshold, readerquality,
       localprogress, authprogress, stampautobookmark, stampautounbookmark, subfoldersToTankoubons,
-      archiveSplitSuggestionsEnabled, archiveSplitDeleteOriginalEnabled,
+      archiveSplitSuggestionsEnabled, archiveSplitDeleteOriginalEnabled, ingestStrictVerify,
       guestmode, idlescan, accessTokenLifetimeSecs,
       refreshTokenLifetimeSecs, refreshTokenIdleLifetimeSecs, maxLoginDevices,
       trustedOrigins, ssoAutoRedirect, enablecors, tempmaxsize,
       logMaxFileMb, logMaxFiles,
       recycleRetentionDays, recycleMaxSizeGb,
-      replacedupe, savedThumbnailFormat, thumbnailFormat, webpquality, excludednamespaces, tagruleson,
+      savedThumbnailFormat, thumbnailFormat, webpquality, excludednamespaces,
+      sourceEquivalences, tagruleson,
       tagrules, usedateadded, usedatemodified, timezone, newbadgemode, recommendprecision,
+      pluginBindInterface,
+      directDownloadUrl,
       settings, translationIsDirty,
     ],
   )
@@ -242,47 +255,64 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       setNewPassword("")
       setNewPassword2("")
     }
-    await updateSettings.mutateAsync({
-      htmltitle,
-      language,
-      pagesize,
-      enableresize,
-      sizethreshold,
-      readerquality,
-      localprogress,
-      authprogress,
-      stampautobookmark,
-      stampautounbookmark,
-      subfolders_to_tankoubons: subfoldersToTankoubons,
-      archive_split_suggestions_enabled: archiveSplitSuggestionsEnabled,
-      archive_split_delete_original_enabled: archiveSplitDeleteOriginalEnabled,
-      guestmode,
-      idlescan,
-      access_token_lifetime_secs: accessTokenLifetimeSecs,
-      refresh_token_lifetime_secs: refreshTokenLifetimeSecs,
-      refresh_token_idle_lifetime_secs: refreshTokenIdleLifetimeSecs,
-      max_login_devices: maxLoginDevices,
-      trusted_origins: trustedOrigins,
-      sso_auto_redirect: ssoAutoRedirect,
-      enablecors,
-      tempmaxsize,
-      logmaxfilemb: logMaxFileMb,
-      logmaxfiles: logMaxFiles,
-      recycle_retention_days: recycleRetentionDays,
-      recycle_max_size_gb: recycleMaxSizeGb,
-      replacedupe,
-      thumbnail_format: thumbnailFormat,
-      webpquality,
-      excludednamespaces,
-      tagruleson,
-      tagrules,
-      usedateadded,
-      usedatemodified,
-      timezone,
-      newbadgemode,
-      recommendprecision,
-      ...(keyInput.trim() && { llm_api_key: keyInput.trim() }),
-    })
+    const settingsWarnings: string[] = []
+    try {
+      const saved = (await updateSettings.mutateAsync({
+        htmltitle,
+        language,
+        pagesize,
+        enableresize,
+        sizethreshold,
+        readerquality,
+        localprogress,
+        authprogress,
+        stampautobookmark,
+        stampautounbookmark,
+        subfolders_to_tankoubons: subfoldersToTankoubons,
+        archive_split_suggestions_enabled: archiveSplitSuggestionsEnabled,
+        archive_split_delete_original_enabled: archiveSplitDeleteOriginalEnabled,
+        ingest_strict_verify: ingestStrictVerify,
+        guestmode,
+        idlescan,
+        access_token_lifetime_secs: accessTokenLifetimeSecs,
+        refresh_token_lifetime_secs: refreshTokenLifetimeSecs,
+        refresh_token_idle_lifetime_secs: refreshTokenIdleLifetimeSecs,
+        max_login_devices: maxLoginDevices,
+        trusted_origins: trustedOrigins,
+        sso_auto_redirect: ssoAutoRedirect,
+        enablecors,
+        tempmaxsize,
+        logmaxfilemb: logMaxFileMb,
+        logmaxfiles: logMaxFiles,
+        recycle_retention_days: recycleRetentionDays,
+        recycle_max_size_gb: recycleMaxSizeGb,
+        thumbnail_format: thumbnailFormat,
+        webpquality,
+        excludednamespaces,
+        source_equivalences: sourceEquivalences,
+        tagruleson,
+        tagrules,
+        usedateadded,
+        usedatemodified,
+        timezone,
+        newbadgemode,
+        recommendprecision,
+        plugin_bind_interface: pluginBindInterface,
+        direct_download_url: directDownloadUrl.trim(),
+        ...(keyInput.trim() && { llm_api_key: keyInput.trim() }),
+      })) as { warnings?: string[] } | undefined
+      settingsWarnings.push(...(saved?.warnings ?? []))
+    } catch (e) {
+      // A rejected save (e.g. an http:// download address while the site is https) must say why;
+      // without this the promise rejected silently and the page kept its edited values with no
+      // feedback at all.
+      toast({
+        heading: t("settings.settingsSaveFailed") ?? undefined,
+        text: e instanceof ApiError ? e.message : String(e),
+        icon: "error",
+      })
+      return
+    }
     setKeyInput("")
 
     if (translationIsDirty && translation.settings) {
@@ -307,7 +337,15 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       dispatchTranslation({ kind: "saved", settings: saved })
     }
 
-    toast({ heading: t("settings.settingsSaved") ?? undefined, icon: "success" })
+    if (settingsWarnings.length > 0) {
+      toast({
+        heading: t("settings.settingsSavedWithWarnings") ?? undefined,
+        text: settingsWarnings.join("\n"),
+        icon: "warning",
+      })
+    } else {
+      toast({ heading: t("settings.settingsSaved") ?? undefined, icon: "success" })
+    }
   }
 
   async function handleLogout() {
@@ -436,6 +474,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             setArchiveSplitSuggestionsEnabled={setArchiveSplitSuggestionsEnabled}
             archiveSplitDeleteOriginalEnabled={archiveSplitDeleteOriginalEnabled}
             setArchiveSplitDeleteOriginalEnabled={setArchiveSplitDeleteOriginalEnabled}
+            ingestStrictVerify={ingestStrictVerify}
+            setIngestStrictVerify={setIngestStrictVerify}
             guestmode={guestmode}
             setGuestmode={setGuestmode}
             newbadgemode={newbadgemode}
@@ -444,6 +484,14 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             keyInput={keyInput}
             setKeyInput={setKeyInput}
             recommendprecision={recommendprecision}
+            pluginBindInterface={pluginBindInterface}
+            egressBinding={settings.egress_binding}
+            pluginBindingScope={info.data?.interface_binding?.plugin ?? "full"}
+            directDownloadUrl={directDownloadUrl}
+            onDirectDownloadUrlChange={setDirectDownloadUrl}
+            setPluginBindInterface={setPluginBindInterface}
+            interfaces={settings.interfaces ?? []}
+            defaultInterface={settings.default_interface ?? null}
             setRecommendprecision={setRecommendprecision}
             onStatus={setStatus}
           />
@@ -558,8 +606,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           <ArchiveFilesSection
             tempmaxsize={tempmaxsize}
             setTempmaxsize={setTempmaxsize}
-            replacedupe={replacedupe}
-            setReplacedupe={setReplacedupe}
             onStatus={setStatus}
           />
 
@@ -570,6 +616,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
             setWebpquality={setWebpquality}
             excludednamespaces={excludednamespaces}
             setExcludednamespaces={setExcludednamespaces}
+            sourceEquivalences={sourceEquivalences}
+            setSourceEquivalences={setSourceEquivalences}
             tagruleson={tagruleson}
             setTagruleson={setTagruleson}
             tagrules={tagrules}

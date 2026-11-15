@@ -1,8 +1,8 @@
-import type { MouseEvent } from "react"
 
 import type { ArchiveMetadata } from "@/api/types"
 
 import { ArchiveCard } from "./ArchiveCard"
+import type { ContextMenuTrigger } from "./types"
 
 export function CarouselCard({
   archive,
@@ -14,7 +14,7 @@ export function CarouselCard({
 }: {
   archive: ArchiveMetadata
   cropThumbs: boolean
-  onContextMenu: (e: MouseEvent, archive: ArchiveMetadata) => void
+  onContextMenu: (e: ContextMenuTrigger, archive: ArchiveMetadata) => void
   onOpen: (id: string) => void
   onSearchTag?: (namespacedTag: string) => void
   highlightQuery?: string

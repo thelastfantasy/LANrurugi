@@ -131,6 +131,29 @@ pub enum QueueError {
         expected: u64,
         got: u64,
     },
+    /// 022 US4: the download was pinned to a network interface that could not be used. Reported
+    /// instead of quietly downloading over the physical link, which is exactly what the pin was
+    /// meant to prevent; the interface is named so the message points at the setting.
+    EgressUnavailable {
+        interface: String,
+    },
+    /// This source URL has already produced an archive in the library. Detected before any bytes
+    /// are fetched again; the queue row offers "download anyway" for the case where the source
+    /// changed without changing its URL (the record keeps the first archive's id).
+    SourceAlreadyImported {
+        existing_id: String,
+    },
+    /// Another queue item for the same source URL is still downloading. Blocked the same way as
+    /// [`QueueError::SourceAlreadyImported`] (and with the same "download anyway" escape hatch),
+    /// but there is no archive id to link to yet — the bytes are not catalogued.
+    SourceDownloadInProgress,
+    /// The bytes arrived and were kept, but cataloguing them failed (a corrupt archive, a
+    /// thumbnail/PDFium failure, a Redis write error). Distinct from [`QueueError::Internal`]
+    /// because the downloaded file is still on disk: the row offers "retry ingest", which re-runs
+    /// cataloguing on the same bytes instead of downloading them again.
+    IngestFailed {
+        reason: String,
+    },
     /// Every other internal fault (Redis/DB/filesystem/timeout/task-panic) — deliberately not
     /// broken out into more specific kinds, since none of these are actionable by the user beyond
     /// "something went wrong, check the server logs".
@@ -155,6 +178,35 @@ pub enum QueueError {
     /// local failure.
     ShareImport {
         reason: String,
+    },
+    /// 027 FR-001: a copy into the library ended with a different length than the source had when
+    /// it started (short read, or the source changed under the copy). The source is kept.
+    CopyLengthMismatch {
+        path: String,
+        expected: u64,
+        copied: u64,
+        dest_len: u64,
+    },
+    /// 027 FR-002/003: flushing the copy (or its directory) to disk failed — on NFS/SMB this is
+    /// where a full disk or a lost server first shows up. The source is kept.
+    DurabilityFailed {
+        path: String,
+        os_error: String,
+    },
+    /// 027 FR-012: the bytes copied into the library do not hash to the fingerprint taken when they
+    /// were first received, so the staged file itself is damaged. A download is fetched again; an
+    /// adopted file is kept where it was.
+    StagedContentCorrupted {
+        path: String,
+        expected_blake3: String,
+        actual_blake3: String,
+    },
+    /// 027 FR-014: strict verification read a block back from the library and it differed from
+    /// what was written. The source is kept.
+    VerifyReadbackMismatch {
+        path: String,
+        offset: u64,
+        len: u64,
     },
 }
 
@@ -182,6 +234,14 @@ impl QueueError {
             QueueError::SupersededByNewerRevision { .. } => 1007,
             QueueError::ShareImport { .. } => 1008,
             QueueError::TruncatedDownload { .. } => 1009,
+            QueueError::EgressUnavailable { .. } => 1010,
+            QueueError::SourceAlreadyImported { .. } => 1011,
+            QueueError::SourceDownloadInProgress => 1012,
+            QueueError::IngestFailed { .. } => 1013,
+            QueueError::CopyLengthMismatch { .. } => 1014,
+            QueueError::DurabilityFailed { .. } => 1015,
+            QueueError::StagedContentCorrupted { .. } => 1016,
+            QueueError::VerifyReadbackMismatch { .. } => 1017,
         }
     }
 }

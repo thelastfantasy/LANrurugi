@@ -67,6 +67,62 @@ struct ResumeMetadata {
     /// `Content-Disposition` (some servers only send it on the initial full response), so this is
     /// the authoritative filename for the whole download, not re-derived on resume.
     filename: String,
+    /// Bytes of the `.part` file known to be on disk (`sync_data`'d), 027 FR-006. Anything past
+    /// it may be garbage left by a crash, so a resume starts here. Absent in a sidecar written
+    /// before 027: such a partial file is not trusted at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    confirmed_len: Option<u64>,
+}
+
+/// A resumable download confirms its progress (flush + record) every this many bytes or this long,
+/// whichever comes first: a few dozen flushes for a multi-GB file, a negligible cost (FR-008).
+const CONFIRM_EVERY_BYTES: u64 = 64 * 1024 * 1024;
+const CONFIRM_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Writes the sidecar so a crash leaves either the old one or the new one, never half of it.
+async fn write_meta(path: &Path, meta: &ResumeMetadata) -> std::io::Result<()> {
+    let raw = serde_json::to_vec(meta).map_err(std::io::Error::other)?;
+    let tmp = path.with_extension("json.tmp");
+    {
+        use tokio::io::AsyncWriteExt;
+        let mut file = tokio::fs::File::create(&tmp).await?;
+        file.write_all(&raw).await?;
+        lanrurugi_core::io::sync_file(&file).await?;
+    }
+    tokio::fs::rename(&tmp, path).await
+}
+
+/// Flushes the `.part` file and records how much of it is safe to resume from.
+async fn confirm_progress(
+    file: &tokio::fs::File,
+    paths: &ResumePaths,
+    meta: &mut ResumeMetadata,
+    downloaded: u64,
+) -> std::io::Result<()> {
+    file.sync_data().await?;
+    meta.confirmed_len = Some(downloaded);
+    write_meta(&paths.meta_path, meta).await
+}
+
+/// BLAKE3 state for the first `len` bytes of a resumed `.part` file: the hasher cannot be saved, so
+/// the confirmed prefix is read once more (027 R3).
+async fn hash_prefix(path: &Path, len: u64) -> std::io::Result<blake3::Hasher> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        use std::io::Read;
+        let mut hasher = blake3::Hasher::new();
+        let file = std::fs::File::open(&path)?;
+        let mut limited = file.take(len);
+        let copied = std::io::copy(&mut limited, &mut hasher)?;
+        if copied != len {
+            return Err(std::io::Error::other(
+                "partial file is shorter than its confirmed length",
+            ));
+        }
+        Ok(hasher)
+    })
+    .await
+    .map_err(std::io::Error::other)?
 }
 
 /// Where a resumable download's partial bytes and sidecar metadata live on disk, derived once from
@@ -115,6 +171,15 @@ pub enum DownloadError {
     /// declared a length (see the completion check's own note on `chunked`).
     #[error("download truncated: expected {expected} bytes, got {got}")]
     Truncated { expected: u64, got: u64 },
+    /// No chunk arrived within the idle window. Without this, a connection that died without an
+    /// RST/FIN (a NAT rebind, a suspended laptop) leaves `stream.next()` pending forever and the
+    /// queue row sits at "downloading" with no error at all.
+    #[error("no data for {seconds} seconds from {url}")]
+    Stalled { seconds: u64, url: String },
+    /// 022 US4: the interface a download was pinned to could not be used. Deliberately an error
+    /// rather than a fallback to the default route — that fallback is the leak pinning prevents.
+    #[error("could not bind the download to interface {0}: {1}")]
+    Egress(String, String),
     /// The caller's `CancellationToken` fired (a user pressed Stop) — deliberately not converted
     /// to a `QueueError` variant the way every other member of this enum is: a user-requested stop
     /// isn't a failure to surface as an error state, it's handled by the caller reverting the
@@ -149,10 +214,25 @@ impl From<&DownloadError> for lanrurugi_core::queue_error::QueueError {
             // queue item to `Queued` instead of recording an error) — this arm only exists so the
             // match stays exhaustive; `Internal` is a harmless placeholder that should never
             // actually surface.
+            DownloadError::Stalled { url, .. } => {
+                QueueError::HttpRequestFailed { url: url.clone() }
+            }
             DownloadError::Truncated { expected, got } => QueueError::TruncatedDownload {
                 expected: *expected,
                 got: *got,
             },
+            // 022 US4: the interface was set but unusable. The queue row's error text names the
+            // interface, which is the actionable half — a retry without fixing it is pointless.
+            DownloadError::Egress(interface, reason) => {
+                tracing::warn!(
+                    interface,
+                    reason,
+                    "the download interface could not be bound"
+                );
+                QueueError::EgressUnavailable {
+                    interface: interface.clone(),
+                }
+            }
             DownloadError::Cancelled => QueueError::Internal,
         }
     }
@@ -168,6 +248,9 @@ pub struct DownloadedFile {
     /// docs on how this is determined).
     pub filename: String,
     pub bytes_downloaded: u64,
+    /// BLAKE3 of the staged bytes, lowercase hex, taken as they were first written (027 FR-010).
+    /// `None` only where no one has hashed them yet.
+    pub blake3: Option<String>,
 }
 
 /// One event from [`download_one`] — see that function's own docs on why this is delivered via
@@ -331,8 +414,26 @@ async fn inspect_resume_state(staging_dir: &Path, resume_key: Option<&str>) -> R
     let Ok(meta) = serde_json::from_slice::<ResumeMetadata>(&raw_meta) else {
         return ResumeState::Fresh;
     };
+    // Only the confirmed prefix is trusted (027 FR-007): a sidecar without one predates 027, and a
+    // file shorter than it was cut by something else. Either way, start over.
+    let Some(confirmed) = meta.confirmed_len.filter(|&c| c <= part_meta.len()) else {
+        return ResumeState::Fresh;
+    };
+    if part_meta.len() > confirmed {
+        let trimmed = async {
+            let file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .open(&paths.part_path)
+                .await?;
+            file.set_len(confirmed).await?;
+            file.sync_data().await
+        };
+        if trimmed.await.is_err() {
+            return ResumeState::Fresh;
+        }
+    }
     ResumeState::Resumable {
-        existing_len: part_meta.len(),
+        existing_len: confirmed,
         meta,
     }
 }
@@ -367,7 +468,9 @@ async fn download_one_inner(
     let resume_paths = resume_key.map(|key| ResumePaths::new(staging_dir, key));
     let resume_state = inspect_resume_state(staging_dir, resume_key).await;
 
-    let client = lanrurugi_core::http_client::default_client();
+    // Bound to whatever interface the settings chose (empty = kernel routing), so a download
+    // actually leaves through the VPN when the operator asked for that.
+    let client = super::outbound::outbound_client()?;
     let mut request = client.request(method, parsed_url.clone());
     for (name, value) in &req.headers {
         request = request.header(name, value);
@@ -517,12 +620,27 @@ async fn download_one_inner(
                     .and_then(|v| v.to_str().ok())
                     .map(str::to_string),
                 filename: filename.clone(),
+                confirmed_len: Some(0),
             };
-            if let Ok(raw) = serde_json::to_vec(&meta) {
-                let _ = tokio::fs::write(&paths.meta_path, raw).await;
-            }
+            let _ = write_meta(&paths.meta_path, &meta).await;
         }
     }
+    // The sidecar the confirmation points below rewrite: the one just written, or the resumed one.
+    let mut confirm_meta = match (&resume_paths, &resume_state) {
+        (None, _) => None,
+        (Some(_), ResumeState::Resumable { meta, .. }) if resumed => Some(meta.clone()),
+        (Some(paths), _) => tokio::fs::read(&paths.meta_path)
+            .await
+            .ok()
+            .and_then(|raw| serde_json::from_slice::<ResumeMetadata>(&raw).ok()),
+    };
+    let mut hasher = if resumed {
+        hash_prefix(&staging_path, existing_len)
+            .await
+            .map_err(|e| DownloadError::Io(staging_path.clone(), e))?
+    } else {
+        blake3::Hasher::new()
+    };
 
     let mut file = if resumed {
         // Append, not truncate — the whole point of a `206` resume is to build on the bytes
@@ -549,7 +667,12 @@ async fn download_one_inner(
     // which is still comfortably under SC-001's "at least 3 distinct intermediate states" bar for
     // anything but a near-instantaneous download).
     let mut last_reported = std::time::Instant::now();
+    let mut last_confirmed = std::time::Instant::now();
     const PROGRESS_REPORT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+    /// How long a single chunk read may stay pending before the transfer counts as stalled. The
+    /// slowest legitimate gap is a server that is still archiving on its side, which is exactly what
+    /// the 503 + `Retry-After` contract above is for on LANrurugi's own repacks.
+    const READ_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
     loop {
         // Raced against the stream on every iteration (rather than checked once before the loop)
@@ -568,15 +691,27 @@ async fn download_one_inner(
         let chunk = tokio::select! {
             biased;
             _ = cancel.cancelled() => {
+                confirm_before_leaving(&file, &resume_paths, &mut confirm_meta, downloaded).await;
                 drop(file);
                 if resume_paths.is_none() {
                     let _ = tokio::fs::remove_file(&staging_path).await;
                 }
                 return Err(DownloadError::Cancelled);
             }
-            chunk = stream.next() => match chunk {
-                Some(chunk) => chunk,
-                None => break,
+            chunk = tokio::time::timeout(READ_IDLE_TIMEOUT, stream.next()) => match chunk {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(_) => {
+                    confirm_before_leaving(&file, &resume_paths, &mut confirm_meta, downloaded).await;
+                    drop(file);
+                    if resume_paths.is_none() {
+                        let _ = tokio::fs::remove_file(&staging_path).await;
+                    }
+                    return Err(DownloadError::Stalled {
+                        seconds: READ_IDLE_TIMEOUT.as_secs(),
+                        url: req.url.clone(),
+                    });
+                }
             },
         };
         let chunk = match chunk {
@@ -587,6 +722,7 @@ async fn download_one_inner(
                 // resumable (spec FR-004's "no half-cataloged archive" extends to "no
                 // half-downloaded litter on disk" too); a resumable call keeps it on purpose (see
                 // this loop's own docs above).
+                confirm_before_leaving(&file, &resume_paths, &mut confirm_meta, downloaded).await;
                 drop(file);
                 if resume_paths.is_none() {
                     let _ = tokio::fs::remove_file(&staging_path).await;
@@ -610,6 +746,18 @@ async fn download_one_inner(
             return Err(DownloadError::Io(staging_path.clone(), e));
         }
         downloaded += chunk.len() as u64;
+        hasher.update(&chunk);
+        if let (Some(paths), Some(meta)) = (&resume_paths, confirm_meta.as_mut()) {
+            let confirmed = meta.confirmed_len.unwrap_or(0);
+            if downloaded - confirmed >= CONFIRM_EVERY_BYTES
+                || last_confirmed.elapsed() >= CONFIRM_EVERY
+            {
+                confirm_progress(&file, paths, meta, downloaded)
+                    .await
+                    .map_err(|e| DownloadError::Io(staging_path.clone(), e))?;
+                last_confirmed = std::time::Instant::now();
+            }
+        }
 
         if last_reported.elapsed() >= PROGRESS_REPORT_INTERVAL {
             // A closed receiver (caller stopped listening) is not a download failure — the
@@ -663,15 +811,10 @@ async fn download_one_inner(
                 }
                 None => staging_dir.join(format!("download-{}", uuid::Uuid::new_v4().simple())),
             };
-            if tokio::fs::rename(&staging_path, &extensioned)
+            // Both names are in `staging_dir`, so this is a rename, flushed on both sides.
+            lanrurugi_core::io::durable_rename(&staging_path, &extensioned)
                 .await
-                .is_err()
-            {
-                tokio::fs::copy(&staging_path, &extensioned)
-                    .await
-                    .map_err(|e| DownloadError::Io(extensioned.clone(), e))?;
-                let _ = tokio::fs::remove_file(&staging_path).await;
-            }
+                .map_err(|e| DownloadError::Io(extensioned.clone(), e))?;
             let _ = tokio::fs::remove_file(&paths.meta_path).await;
             extensioned
         }
@@ -682,7 +825,23 @@ async fn download_one_inner(
         path: final_path,
         filename,
         bytes_downloaded: downloaded,
+        blake3: Some(hasher.finalize().to_hex().to_string()),
     })
+}
+
+/// A resumable download that stops early records what it has, so the retry continues from here
+/// instead of the last periodic confirmation. Best effort: the previous confirmation stays valid.
+async fn confirm_before_leaving(
+    file: &tokio::fs::File,
+    resume_paths: &Option<ResumePaths>,
+    meta: &mut Option<ResumeMetadata>,
+    downloaded: u64,
+) {
+    if let (Some(paths), Some(meta)) = (resume_paths, meta.as_mut()) {
+        if let Err(e) = confirm_progress(file, paths, meta, downloaded).await {
+            tracing::warn!(error = %e, "could not record download progress for a resume");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -700,6 +859,136 @@ mod tests {
             axum::serve(listener, router).await.unwrap();
         });
         (format!("http://{addr}"), handle)
+    }
+
+    /// A server for the 027 resume tests: honours `Range` when `If-Range` matches its ETag, and
+    /// records every `Range` it was asked for.
+    async fn spawn_range_server(
+        body: Vec<u8>,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>,
+    ) {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_in = seen.clone();
+        let router = axum::Router::new().route(
+            "/r.zip",
+            axum::routing::get(move |headers: axum::http::HeaderMap| {
+                let body = body.clone();
+                let seen = seen_in.clone();
+                async move {
+                    let range = headers
+                        .get(reqwest::header::RANGE)
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_string);
+                    seen.lock().unwrap().push(range.clone());
+                    let start = range
+                        .as_deref()
+                        .and_then(|r| r.strip_prefix("bytes="))
+                        .and_then(|r| r.strip_suffix('-'))
+                        .and_then(|n| n.parse::<usize>().ok());
+                    let etag = (reqwest::header::ETAG.as_str(), "\"v1\"".to_string());
+                    match start {
+                        Some(start) => (
+                            axum::http::StatusCode::PARTIAL_CONTENT,
+                            [
+                                etag,
+                                (
+                                    reqwest::header::CONTENT_RANGE.as_str(),
+                                    format!("bytes {start}-{}/{}", body.len() - 1, body.len()),
+                                ),
+                            ],
+                            body[start..].to_vec(),
+                        ),
+                        None => (
+                            axum::http::StatusCode::OK,
+                            [
+                                etag,
+                                (reqwest::header::ACCEPT_RANGES.as_str(), "bytes".to_string()),
+                            ],
+                            body,
+                        ),
+                    }
+                    .into_response()
+                }
+            }),
+        );
+        let (base, _server) = spawn_test_server(router).await;
+        (base, seen)
+    }
+
+    fn resume_fixture(dir: &Path, key: &str, url: &str, part: &[u8], confirmed: Option<u64>) {
+        let paths = ResumePaths::new(dir, key);
+        std::fs::write(&paths.part_path, part).unwrap();
+        let meta = ResumeMetadata {
+            url: url.to_string(),
+            etag: Some("\"v1\"".to_string()),
+            last_modified: None,
+            filename: "r.zip".to_string(),
+            confirmed_len: confirmed,
+        };
+        std::fs::write(&paths.meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+    }
+
+    async fn fetch(url: &str, dir: &Path, key: &str) -> DownloadedFile {
+        let req = DownloadRequest {
+            url: url.to_string(),
+            method: None,
+            headers: vec![],
+            filename_hint: Some("r.zip".to_string()),
+        };
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        download_one(
+            &DownloadManager::new(),
+            &[],
+            &req,
+            &NoopRateResolver,
+            tx,
+            dir,
+            &tokio_util::sync::CancellationToken::new(),
+            &|| {},
+            Some(key),
+        )
+        .await
+        .unwrap()
+    }
+
+    /// 027 US2: garbage a crash left past the confirmed length is cut off, the resume asks for the
+    /// rest from there, and the result (and its fingerprint) match the whole resource.
+    #[tokio::test]
+    async fn a_resume_starts_at_the_confirmed_length_not_the_file_length() {
+        let body: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        let (base, seen) = spawn_range_server(body.clone()).await;
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("{base}/r.zip");
+        let mut part = body[..100_000].to_vec();
+        part.extend(std::iter::repeat_n(0u8, 50_000));
+        resume_fixture(dir.path(), "t027a", &url, &part, Some(100_000));
+
+        let done = fetch(&url, dir.path(), "t027a").await;
+
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            [Some("bytes=100000-".to_string())]
+        );
+        assert_eq!(std::fs::read(&done.path).unwrap(), body);
+        assert_eq!(done.blake3, Some(blake3::hash(&body).to_hex().to_string()));
+    }
+
+    /// 027 US2: a partial file whose sidecar predates confirmation points is not trusted.
+    #[tokio::test]
+    async fn a_partial_file_without_a_confirmed_length_downloads_from_scratch() {
+        let body: Vec<u8> = (0..120_000u32).map(|i| (i % 239) as u8).collect();
+        let (base, seen) = spawn_range_server(body.clone()).await;
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("{base}/r.zip");
+        resume_fixture(dir.path(), "t027b", &url, &body[..60_000], None);
+
+        let done = fetch(&url, dir.path(), "t027b").await;
+
+        assert_eq!(seen.lock().unwrap().as_slice(), [None]);
+        assert_eq!(std::fs::read(&done.path).unwrap(), body);
+        assert_eq!(done.blake3, Some(blake3::hash(&body).to_hex().to_string()));
     }
 
     /// The byte-count check (issue #109) must not fire when the response never declared a length:
@@ -1531,6 +1820,8 @@ mod tests {
             etag: Some("\"stale-etag\"".to_string()),
             last_modified: None,
             filename: "archive.zip".to_string(),
+            // Fully confirmed, so only the stale validator can be what discards it.
+            confirmed_len: Some(b"stale garbage bytes".len() as u64),
         };
         tokio::fs::write(
             &resume_paths.meta_path,

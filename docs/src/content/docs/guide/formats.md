@@ -15,10 +15,15 @@ description: 能放进书库的压缩包与电子书格式，以及每种格式�
 | 7-Zip | `.7z` `.cb7` |
 | TAR | `.tar` `.cbt`，以及 gzip / bzip2 / xz / lzma 压缩的 tar（`.gz` `.bz2` `.xz` `.lzma`） |
 | LZH | `.lzh` `.lha` |
+| Pixiv 动图 | `.ugoira` |
 
 压缩包里能作为页面的图片：PNG、JPEG（`.jpg` `.jpeg` `.jfif`）、GIF、BMP、WebP、AVIF、JPEG XL、HEIF/HEIC。
 浏览器显示不了的格式（例如部分浏览器上的 AVIF、JPEG XL 和动画图）会由服务端转换后再显示；HEIF/HEIC 目前
 无法转换，只有原生支持它的浏览器（例如 Safari）能显示。
+
+`.ugoira` 是 Pixiv 的动图格式：文件本身是一个 ZIP（装着逐帧图片和 `animation.json` 里的帧延迟），
+但它不是「很多页」，而是一张动图。扫描时会当作一个只有 1 页的档案收录，服务端按 `animation.json`
+的延迟把帧合成为动态 WebP 后交给阅读器播放，因此缩略图和阅读页都取第一帧。
 
 用 zstd 压缩的文件（`.zst`）目前不支持，不会被收录。
 

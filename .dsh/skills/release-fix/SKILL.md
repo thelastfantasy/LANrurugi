@@ -54,6 +54,9 @@ git checkout -b fix/<slug>
 2. 只在**真的要发版**时改；改完再跑一遍 check。
 3. 文档：`README.md` 的功能条目、`docs/comparison-with-lanraragi.md`、
    `docs/` 里版本相关页面。没有用户可感知的变化就不用动。
+4. 动了共享（share）的线上协议或语义时，`crates/lanrurugi-share-proto/src/messages.rs`
+   的 `SHARE_ENGINE_VERSION` 也要 bump，并在它上面的注释里加一行说明这一版改了什么。
+   **一个软件版本只 bump 一次**，不是每个改动都加一次。
 
 ## 5. 合到 dev，再合到 main
 

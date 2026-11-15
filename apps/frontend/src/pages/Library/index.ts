@@ -26,7 +26,6 @@ export * from "./ResultInfoAndPager"
 
 export * from "./SearchBar"
 
-export * from "./SelectedArchiveSlideContent"
 
 export * from "./SettingsMenu"
 

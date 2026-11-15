@@ -61,9 +61,9 @@ export function PopupMenuItem({
   children,
 }: {
   disabled?: boolean
-  onClick?: (e: React.MouseEvent) => void
+  onClick?: (e: React.MouseEvent<HTMLLIElement>) => void
   onMouseDown?: (e: React.MouseEvent) => void
-  onMouseEnter?: () => void
+  onMouseEnter?: (e: React.MouseEvent<HTMLLIElement>) => void
   onMouseLeave?: () => void
   style?: CSSProperties
   children: ReactNode
@@ -83,7 +83,7 @@ export function PopupMenuItem({
         if (disabled) return
         e.currentTarget.style.background = palette.hoverBg
         e.currentTarget.style.color = palette.hoverText
-        onMouseEnter?.()
+        onMouseEnter?.(e)
       }}
       onMouseLeave={(e) => {
         if (disabled) return

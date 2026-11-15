@@ -214,6 +214,11 @@ async fn open(
     let manifest = browse_manifest(&state, &share).await;
     let mut value = manifest_json(&share, &manifest);
     value["token"] = Value::String(token);
+    // The page can be served through a proxy while downloads go straight to this instance; the
+    // recipient page needs the address before it can build a download link.
+    if let Some(base) = crate::settings::direct_download_url(&state).await {
+        value["download_base"] = Value::String(base);
+    }
     Json(value).into_response()
 }
 
@@ -545,7 +550,14 @@ async fn download_archive(
     };
     match state.repos.archives.get(&id).await {
         Ok(Some(archive)) => throttled(
-            crate::archives::serve_archive_download(&archive).await,
+            crate::archives::serve_archive_download(
+                &archive,
+                headers
+                    .get(axum::http::header::RANGE)
+                    .and_then(|v| v.to_str().ok()),
+                crate::archives::if_range(&headers),
+            )
+            .await,
             caps,
         ),
         _ => not_found(),
@@ -568,8 +580,15 @@ async fn download_tankoubon(
         Ok(c) => c,
         Err(r) => return r,
     };
-    crate::tankoubons::tankoubon_zip_response(&state, &id)
-        .await
-        .map(|r| throttled(r, caps))
-        .unwrap_or_else(not_found)
+    crate::tankoubons::tankoubon_zip_response(
+        &state,
+        &id,
+        headers
+            .get(axum::http::header::RANGE)
+            .and_then(|v| v.to_str().ok()),
+        crate::archives::if_range(&headers),
+    )
+    .await
+    .map(|r| throttled(r, caps))
+    .unwrap_or_else(not_found)
 }

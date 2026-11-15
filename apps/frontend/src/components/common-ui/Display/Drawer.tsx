@@ -25,15 +25,23 @@ export function Drawer({
   children,
   width = 560,
   swipeToClose = true,
+  headerActions,
+  onCloseButton,
 }: {
   open: boolean
   onClose: () => void
   title?: ReactNode
   children: ReactNode
   width?: number
-  /** `false` when the content uses horizontal swipes itself (e.g. paging), which would otherwise
-   * fight the drawer's swipe-right-to-close. Closing then stays on the button, backdrop and Escape. */
+  /** `false` while the content uses rightward swipes itself (e.g. paging back), which would
+   * otherwise fight the drawer's swipe-right-to-close. Only the content stops closing on a swipe:
+   * the title and bottom bars still do. */
   swipeToClose?: boolean
+  /** Extra buttons in the title bar, before the close button. */
+  headerActions?: ReactNode
+  /** What the title bar's ✕ does, when it means more than a swipe, Escape or the backdrop
+   * (`onClose`) — e.g. leaving a mode, where those only minimize. */
+  onCloseButton?: () => void
 }) {
   const [footer, setFooter] = useState<HTMLDivElement | null>(null)
   return (
@@ -46,7 +54,6 @@ export function Drawer({
         <BaseDrawer.Viewport
           className="fixed inset-0 flex items-stretch justify-end"
           style={{ zIndex: 9001 }}
-          data-base-ui-swipe-ignore={swipeToClose ? undefined : ""}
         >
           <BaseDrawer.Popup
             className="id1 overflow-hidden text-left outline-none [transform:translateX(var(--drawer-swipe-movement-x))] transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] data-[ending-style]:[transform:translateX(100%)] data-[starting-style]:[transform:translateX(100%)] data-[swiping]:select-none data-[swiping]:duration-0"
@@ -70,18 +77,33 @@ export function Drawer({
               <BaseDrawer.Title className="m-0 min-w-0 flex-1 truncate" style={{ fontSize: 15, fontWeight: 700 }}>
                 {title}
               </BaseDrawer.Title>
-              <BaseDrawer.Close
-                render={
-                  <IconButton
-                    icon="fa fa-times"
-                    size={30}
-                    className="modal-close-btn"
-                    style={{ borderRadius: "50%", flexShrink: 0 }}
-                  />
-                }
-              />
+              {headerActions}
+              {onCloseButton ? (
+                <IconButton
+                  icon="fa fa-times"
+                  size={30}
+                  className="modal-close-btn"
+                  style={{ borderRadius: "50%", flexShrink: 0 }}
+                  onClick={onCloseButton}
+                />
+              ) : (
+                <BaseDrawer.Close
+                  render={
+                    <IconButton
+                      icon="fa fa-times"
+                      size={30}
+                      className="modal-close-btn"
+                      style={{ borderRadius: "50%", flexShrink: 0 }}
+                    />
+                  }
+                />
+              )}
             </div>
-            <BaseDrawer.Content className="min-h-0 flex-1 overflow-y-auto overscroll-contain" style={{ padding: "4px 20px 20px" }}>
+            <BaseDrawer.Content
+              className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+              style={{ padding: "4px 20px 20px" }}
+              data-base-ui-swipe-ignore={swipeToClose ? undefined : ""}
+            >
               <FooterSlot.Provider value={footer}>{children}</FooterSlot.Provider>
             </BaseDrawer.Content>
             {/* Hidden until a `DrawerFooter` renders into it. */}

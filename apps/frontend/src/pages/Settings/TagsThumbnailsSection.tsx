@@ -16,6 +16,8 @@ export function TagsThumbnailsSection({
   setWebpquality,
   excludednamespaces,
   setExcludednamespaces,
+  sourceEquivalences,
+  setSourceEquivalences,
   tagruleson,
   setTagruleson,
   tagrules,
@@ -34,6 +36,8 @@ export function TagsThumbnailsSection({
   setWebpquality: (v: number) => void
   excludednamespaces: string
   setExcludednamespaces: (v: string) => void
+  sourceEquivalences: string
+  setSourceEquivalences: (v: string) => void
   tagruleson: boolean
   setTagruleson: (v: boolean) => void
   tagrules: string
@@ -172,6 +176,20 @@ export function TagsThumbnailsSection({
             {t("settings.commaseparatedListOfTagNamespaces")}
             <br />
             {t("settings.clientsWillUseThisList")}
+          </Row>
+          <Row label={t("settings.sourceEquivalences")}>
+            {/* One equivalence group per line; `source:` searches match every host in a group, so
+                the same gallery is findable by whichever front-end domain the user has at hand. */}
+            <textarea
+              className="stdinput"
+              style={{ width: "100%", height: 72 }}
+              value={sourceEquivalences}
+              onChange={(e) => setSourceEquivalences(e.target.value)}
+            />
+            <br />
+            {t("settings.sourceEquivalencesHint")}
+            <br />
+            {t("settings.sourceEquivalencesExample")}
           </Row>
           <Row label={t("settings.tagRules")}>
             <input id="tagruleson" className="fa" type="checkbox" checked={tagruleson} onChange={(e) => setTagruleson(e.target.checked)} />

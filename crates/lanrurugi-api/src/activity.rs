@@ -50,6 +50,7 @@ fn system_actor(subsystem: &str) -> Actor {
         "scanner" => "Scanner (File Watcher)",
         "metadata_plugin" => "Metadata Plugin (auto)",
         "translation" => "Translation Pipeline (auto)",
+        "share" => "Share Transfer (auto)",
         _ => subsystem,
     };
     Actor {

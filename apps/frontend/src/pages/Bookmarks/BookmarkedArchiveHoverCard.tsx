@@ -5,6 +5,7 @@ import type { ArchiveMetadata, BookmarkedArchiveResponse } from "@/api/types";
 import { useBookmarkHoverStore } from "@/bookmarkHoverStore";
 import { useSupportsHover } from "@/hooks/useSupportsHover";
 import { CarouselCard } from "@/pages/Library/CarouselCard";
+import type { ContextMenuTrigger } from "@/pages/Library/types";
 
 import { BookmarkHoverGrid } from "./BookmarkHoverGrid";
 
@@ -21,7 +22,7 @@ export function BookmarkedArchiveHoverCard({
 }: {
   entry: BookmarkedArchiveResponse;
   cropThumbs: boolean;
-  onContextMenu: (e: MouseEvent, archive: ArchiveMetadata) => void;
+  onContextMenu: (e: ContextMenuTrigger, archive: ArchiveMetadata) => void;
   onOpen: (id: string) => void;
   onSearchTag?: (namespacedTag: string) => void;
   /** Passed straight through to `BookmarkHoverGrid`'s own prop of the same name. */

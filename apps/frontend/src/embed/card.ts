@@ -3,9 +3,9 @@
  * library locale files, so a page that frames many cards stays light. Its actions follow the
  * share's permissions; an import-only share leads with its code.
  */
+import { copyText } from "../lib/copyText"
 import { formatBytes } from "../lib/formatBytes"
 import { formatShareCode } from "../share/code"
-import { copyText } from "../share/copyText"
 import { renderQr } from "../share/qr"
 import type { CardText } from "./text"
 

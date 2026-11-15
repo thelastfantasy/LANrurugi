@@ -1,7 +1,8 @@
 import { useTranslation } from "react-i18next"
 
+import { copyWithToast } from "@/lib/clipboard"
+
 import { useShareCode } from "./api"
-import { copyWithToast } from "./clipboard"
 import { EmbedConfigurator } from "./EmbedConfigurator"
 import { qrPngBlob } from "./qr"
 import { ShareQr } from "./ShareQr"

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next"
 
 import { Select } from "@/components/common-ui/Form"
 import { useReaderSettings } from "@/hooks/useReaderSettings"
+import { withImageCapabilities } from "@/lib/utils/imageFormatSupport"
 import { fetchContentLengthKb, fetchResizedPageInfo, type ResizedPageInfo } from "@/lib/utils/imageMeta"
 import { displayTocName } from "@/lib/utils/tocValidation"
 import { chapterForPage, tocChapterSpans } from "@/pages/Reader/ArchiveOverviewOverlay/shared"
@@ -139,6 +140,10 @@ export function ShareReader({
   }, [toward, go, goTo, count, rtl, updateSettings, onClose])
 
   const url = pages?.[index]
+  // The share page renders through the same `serve_page` as the library reader, so it can be
+  // downscaled and re-encoded too; pinning the codec list into the URL keeps the `<img>` and the
+  // HEADs that fill the info bar on the same answer.
+  const displayUrl = url ? withImageCapabilities(url) : undefined
 
   // The address follows the page, so a reload or a shared link opens here.
   const pageChanged = useRef(onPageChange)
@@ -156,29 +161,29 @@ export function ShareReader({
 
   // What the server did with this page (format, original size), as the library reader shows it.
   useEffect(() => {
-    if (!url) return
-    let request = heads.current.get(url)
+    if (!displayUrl) return
+    let request = heads.current.get(displayUrl)
     if (!request) {
-      const absolute = new URL(url, window.location.href).toString()
+      const absolute = displayUrl
       request = Promise.all([fetchResizedPageInfo(absolute), fetchContentLengthKb(absolute)]).then(([resized, sizeKb]) => ({
         resized,
         sizeKb,
       }))
-      heads.current.set(url, request)
+      heads.current.set(displayUrl, request)
     }
     let cancelled = false
-    void request.then((h) => !cancelled && setHead({ url, head: h }))
+    void request.then((h) => !cancelled && setHead({ url: displayUrl, head: h }))
     return () => {
       cancelled = true
     }
-  }, [url])
+  }, [displayUrl])
 
   const name = url ? (new URL(url, window.location.href).searchParams.get("path") ?? "") : ""
   let info: ReactNode = name
   const page = loaded?.index === index ? loaded : null
   // `head` is null until the first answer, and so is `url` until the page list loads: compare only
   // when both exist, or `undefined === undefined` reads into a null `head`.
-  const pageHead = head && url && head.url === url ? head.head : null
+  const pageHead = head && displayUrl && head.url === displayUrl ? head.head : null
   if (page && pageHead?.resized) {
     const r = pageHead.resized
     const origKb = r.origSizeBytes / 1024
@@ -222,15 +227,15 @@ export function ShareReader({
       <div className="share-reader-stage" data-tall={tall ? "1" : undefined}>
         {failed && <p>{t("share.page.readFailed")}</p>}
         {!failed && !pages && <i className="fa fa-3x fa-cog fa-spin" aria-hidden="true"></i>}
-        {url && (
+        {displayUrl && (
           <img
             className="share-reader-page"
-            src={url}
+            src={displayUrl}
             alt={`${index + 1}`}
             referrerPolicy="no-referrer"
             onLoad={(e) => {
               const img = e.currentTarget
-              setLoaded({ index, width: img.naturalWidth, height: img.naturalHeight, kb: servedKb(url) })
+              setLoaded({ index, width: img.naturalWidth, height: img.naturalHeight, kb: servedKb(displayUrl) })
             }}
             onClick={(e) => {
               const rect = e.currentTarget.getBoundingClientRect()

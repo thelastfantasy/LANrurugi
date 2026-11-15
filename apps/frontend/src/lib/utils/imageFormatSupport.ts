@@ -81,10 +81,13 @@ function base64ToBlob(base64: string, type: string): Blob {
   return new Blob([bytes], { type })
 }
 
-function detectViaImageElement(dataUrl: string): Promise<boolean> {
+function detectViaImageElement(dataUrl: string): Promise<boolean | null> {
   return new Promise((resolve) => {
     const image = new Image()
-    const timer = window.setTimeout(() => resolve(false), 800)
+    // A timeout is "unknown", not "unsupported": a busy mobile tab can take longer than the budget
+    // to decode even a 2x2 sample, and reporting that as `false` used to downgrade the shared
+    // cookie for a year (the "one tab has JXL, the next does not" report).
+    const timer = window.setTimeout(() => resolve(null), 800)
     image.onload = () => {
       window.clearTimeout(timer)
       resolve(true)
@@ -116,7 +119,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | nul
 async function detectDecodeSupport(
   type: "image/jxl" | "image/webp" | "image/avif",
   base64: string,
-): Promise<boolean> {
+): Promise<boolean | null> {
   // WebCodecs' `ImageDecoder.isTypeSupported` is the cheapest and least side-effectful signal on
   // current Chromium. Fall back to actually decoding a tiny embedded sample where unavailable.
   const decoderCtor = (globalThis as { ImageDecoder?: { isTypeSupported?: (type: string) => Promise<boolean> } }).ImageDecoder
@@ -136,6 +139,8 @@ async function detectDecodeSupport(
         bitmap.close?.()
         return true
       }
+      // Timed out (`null`): inconclusive, so fall through to the image-element path rather than
+      // claiming the format is unsupported.
     } catch {
       // A browser can decode WebP through `<img>` even where `createImageBitmap` is unavailable;
       // try the image-element path below before giving up.
@@ -154,7 +159,7 @@ async function detectDecodeSupport(
 async function detectAnimationSupport(
   type: "image/webp" | "image/avif" | "image/jxl",
   base64: string,
-): Promise<boolean> {
+): Promise<boolean | null> {
   // `ImageDecoder`'s `data` accepts an ArrayBuffer/view or a ReadableStream — *not* a `Blob`
   // (Chromium throws `TypeError` for one), so the bytes are passed directly.
   const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))
@@ -193,7 +198,7 @@ async function detectAnimationSupport(
     }
   }
 
-  return new Promise((resolve) => {
+  return new Promise<boolean | null>((resolve) => {
     const img = new Image()
     const url = URL.createObjectURL(blob)
     const canvas = document.createElement("canvas")
@@ -209,13 +214,15 @@ async function detectAnimationSupport(
       context.drawImage(img, 0, 0, 8, 8)
       return context.getImageData(0, 0, 8, 8).data.join(",")
     }
-    const finish = (value: boolean) => {
+    const finish = (value: boolean | null) => {
       window.clearTimeout(timer)
       URL.revokeObjectURL(url)
       img.remove()
       resolve(value)
     }
-    const timer = window.setTimeout(() => finish(false), 4000)
+    // Like the still probes: a timeout means "could not tell", so the caller keeps whatever the
+    // stored cookie already said instead of recording a downgrade.
+    const timer = window.setTimeout(() => finish(null), 4000)
     img.onload = () => {
       // Attached, off-screen: a detached image is not animated by Chromium, which would make this
       // detector answer "no animation" for every sample.
@@ -301,20 +308,37 @@ function supportToPreference(caps: ImageDecodeCapabilities): ImageFormatSupport 
   return caps.jxl ? "jxl" : caps.webp ? "webp" : "source"
 }
 
-/** Runs once from `main.tsx` before React mounts, then caches the result for request headers. */
+/**
+ * Runs once from `main.tsx` before React mounts, then caches the result for request headers.
+ *
+ * The probe only ever *adds* capability. A `null` result means "could not tell" (timeout, a busy
+ * tab, a rejected `createImageBitmap`) and keeps whatever the stored cookie already claimed —
+ * writing that as `false` is what made the same browser flip between JXL and WebP on consecutive
+ * loads, because the cookie outlives the tab and every load re-probed under different load.
+ */
 export async function installImageFormatSupportCookie(): Promise<ImageFormatSupport> {
-  const [jxl, webp, avif] = await Promise.all([
+  const stored = readCapabilitiesCookie()
+  const [probedJxl, probedWebp, probedAvif] = await Promise.all([
     detectDecodeSupport("image/jxl", TINY_JXL_BASE64),
     detectDecodeSupport("image/webp", TINY_WEBP_BASE64),
     detectDecodeSupport("image/avif", TINY_AVIF_BASE64),
   ])
-  // Only probe AVIF sequences, and only where still AVIF already decodes: no browser is known to
+  const jxl = probedJxl ?? stored?.jxl ?? false
+  const webp = probedWebp ?? stored?.webp ?? true
+  const avif = probedAvif ?? stored?.avif ?? false
+  // Only probe AVIF/JXL sequences where the still format already decodes: no browser is known to
   // split still/animated for WebP, and probing a codec the browser lacks is a guaranteed "no".
-  const [avifAnim, jxlAnim] = await Promise.all([
+  const [probedAvifAnim, probedJxlAnim] = await Promise.all([
     avif ? detectAnimationSupport("image/avif", TINY_ANIMATED_AVIF_BASE64) : Promise.resolve(false),
     jxl ? detectAnimationSupport("image/jxl", TINY_ANIMATED_JXL_BASE64) : Promise.resolve(false),
   ])
-  cachedCapabilities = { jxl, webp, avif, avifAnim, jxlAnim }
+  cachedCapabilities = {
+    jxl,
+    webp,
+    avif,
+    avifAnim: probedAvifAnim ?? (avif ? (stored?.avifAnim ?? false) : false),
+    jxlAnim: probedJxlAnim ?? (jxl ? (stored?.jxlAnim ?? false) : false),
+  }
   const support = supportToPreference(cachedCapabilities)
   cachedSupport = support
   document.cookie = `${IMAGE_FORMAT_SUPPORT_COOKIE}=${capabilitiesToWire(
@@ -344,4 +368,39 @@ export function getImageFormatSupport(): ImageFormatSupport {
 /** Capability list for the backend's necessity check (a client that cannot render the source). */
 export function getImageCapabilityHeader(): string {
   return capabilitiesToWire(getImageDecodeCapabilities())
+}
+
+/**
+ * The same URL with the browser's capability list pinned as `?format=`.
+ *
+ * `<img>` tags can only carry the cookie, while the reader's `fetch()` HEADs carry a header — two
+ * sources that could disagree across tabs (or after a re-probe), which showed up as a page that was
+ * converted to one codec while its own file-info bar reported the other. A query parameter is the
+ * one place both paths are guaranteed to read, and the backend already prefers it
+ * (`ClientImageSupport::from_request`).
+ */
+export function withImageCapabilities(url: string): string {
+  try {
+    const parsed = new URL(url, window.location.href)
+    parsed.searchParams.set("format", getImageCapabilityHeader())
+    return parsed.toString()
+  } catch {
+    return url
+  }
+}
+
+/**
+ * The decoder disagreed with the probe: a JXL URL failed to load. Drops JXL from this tab's
+ * capabilities (in memory only, so a reload re-probes) — page URLs carry the list, so every
+ * subsequent `<img>` and HEAD asks for WebP instead and the reader's info bar keeps agreeing with
+ * what actually rendered.
+ *
+ * A transient network failure can reach here too, which is exactly why this is not written to the
+ * cookie: the worst case is one tab preferring WebP until it is reloaded.
+ */
+export function markJxlUndecodable(): void {
+  const caps = cachedCapabilities ?? readCapabilitiesCookie()
+  if (!caps?.jxl) return
+  cachedCapabilities = { ...caps, jxl: false, jxlAnim: false }
+  cachedSupport = supportToPreference(cachedCapabilities)
 }

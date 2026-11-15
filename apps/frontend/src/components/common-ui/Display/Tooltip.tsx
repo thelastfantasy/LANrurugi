@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 
 import { FONT_SIZE_MD, Z_OVERLAY_TOOLTIP } from "@/theme"
@@ -11,6 +11,10 @@ const GAP = 8
 /** Grace period before the tooltip closes after the pointer leaves — long enough to cross `GAP`
  * without closing out from under a cursor still headed toward the bubble's own content. */
 const CLOSE_DELAY_MS = 150
+
+/** The hover tooltip currently showing, module-wide. Opening another one closes this one right
+ * away instead of letting it sit next to the new bubble for the rest of its close delay. */
+let activeTooltip: { close: () => void } | null = null
 
 /** Hover/focus tooltip — a `title`-attribute replacement for icon-only buttons or richer content.
  * Debounces close, auto-flips to stay in viewport, and portals to `document.body`. */
@@ -29,8 +33,9 @@ export function Tooltip({
   /** Extra styles merged onto the trigger-wrapping `<span>`, e.g. flex sizing for a block-level
    * trigger. */
   wrapperStyle?: React.CSSProperties
-  /** Overrides the bubble's default 320px width cap. */
-  maxWidth?: number
+  /** Overrides the bubble's default 320px width cap; any CSS length, so a caller can widen it by a
+   *  character or two in `rem` without redoing the pixel arithmetic. */
+  maxWidth?: number | string
   /** Overrides the default `Z_OVERLAY_TOOLTIP` — needed when the trigger lives inside something
    * with an even higher z-index (e.g. `Modal.tsx`'s 9001), or the portaled bubble renders behind it. */
   zIndex?: number
@@ -41,6 +46,12 @@ export function Tooltip({
   const [visible, setVisible] = useState(false)
   const [style, setStyle] = useState<React.CSSProperties>({ position: "fixed", top: -9999, left: -9999, visibility: "hidden" })
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** This instance's entry in `activeTooltip`; `close` mirrors `cancelClose` + hide. */
+  const self = useRef<{ close: () => void }>({ close: () => {} })
+  self.current.close = () => {
+    cancelClose()
+    setVisible(false)
+  }
   const wrapperRef = useRef<HTMLSpanElement>(null)
   const bubbleRef = useRef<HTMLDivElement>(null)
   const cursorPos = useRef<{ x: number; y: number } | null>(null)
@@ -52,13 +63,27 @@ export function Tooltip({
     }
   }
 
+  function forgetActive() {
+    if (activeTooltip === self.current) activeTooltip = null
+  }
+
   function scheduleClose() {
     cancelClose()
-    closeTimer.current = setTimeout(() => setVisible(false), closeDelay)
+    closeTimer.current = setTimeout(() => {
+      closeTimer.current = null
+      forgetActive()
+      setVisible(false)
+    }, closeDelay)
   }
 
   function open() {
     cancelClose()
+    if (activeTooltip !== null && activeTooltip !== self.current) {
+      const previous = activeTooltip
+      activeTooltip = null
+      previous.close()
+    }
+    activeTooltip = self.current
     setVisible(true)
   }
 
@@ -71,7 +96,8 @@ export function Tooltip({
   function recompute() {
     const bubble = bubbleRef.current
     if (!bubble) return
-    const bubbleRect = bubble.getBoundingClientRect()
+    // The outer popup, padding and border included: the inner box alone let it overrun the right edge.
+    const bubbleRect = (bubble.parentElement ?? bubble).getBoundingClientRect()
     // scrollHeight, not bubbleRect.height — a previous call's maxHeight cap would otherwise be measured back in.
     const naturalHeight = bubble.scrollHeight
 
@@ -120,6 +146,13 @@ export function Tooltip({
     })
   }
 
+  useEffect(
+    () => () => {
+      if (activeTooltip === self.current) activeTooltip = null
+    },
+    [],
+  )
+
   useLayoutEffect(() => {
     if (!visible) return
     recompute()
@@ -144,7 +177,11 @@ export function Tooltip({
       onMouseEnter={open}
       onMouseMove={handleMouseMove}
       onMouseLeave={scheduleClose}
-      onFocus={open}
+      // Keyboard focus only: focus handed back by a closing drawer or dialog after a tap or click
+      // must not pop the bubble open on its own.
+      onFocus={(e) => {
+        if ((e.target as Element).matches?.(":focus-visible")) open()
+      }}
       onBlur={scheduleClose}
     >
       {children}
@@ -161,11 +198,15 @@ export function Tooltip({
               className="swal2-popup"
               style={{
                 display: "block",
-                padding: "6px 10px",
+                padding: "6px 10px", // + 1px border: 22px across, in the viewport cap below
                 fontSize: FONT_SIZE_MD,
                 lineHeight: 1.5,
                 whiteSpace: "normal",
-                maxWidth,
+                // Sized by its content, not by the room left of where it was last placed: a fixed
+                // box shrinks to fit the viewport from its `left`, so near the right edge it was
+                // measured squeezed and then kept that squeezed width once moved back into view.
+                width: "max-content",
+                maxWidth: `min(${typeof maxWidth === "number" ? `${maxWidth}px` : maxWidth}, calc(100vw - ${GAP * 2 + 22}px))`,
                 textAlign: "left",
                 borderRadius: 4,
                 boxShadow: "0 2px 8px rgba(0,0,0,0.3)",

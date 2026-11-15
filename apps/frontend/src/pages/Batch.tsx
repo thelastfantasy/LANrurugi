@@ -234,6 +234,11 @@ export function Batch() {
     <div className="ido">
       <h1 className="ih">{t("batch.batchOperations")}</h1>
       <p>{t("batch.selectWhatYouDLike")}</p>
+      {/* Always visible, not a transient toast: the checklist is long and scrolls, so "how many did
+          I tick" is otherwise only knowable by scrolling back through it. */}
+      <p style={{ fontWeight: "bold" }}>
+        {t("batch.selectedCount", { n: selected.size, total: archives.data?.length ?? 0 })}
+      </p>
 
       <div>
         <div className="left-column" style={{ width: 400 }}>

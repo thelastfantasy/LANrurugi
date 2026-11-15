@@ -118,16 +118,22 @@ export function Stats() {
               hint={t("stats.largestArchiveValue", { size: formatBytes(totals?.largest_bytes ?? 0) })}
             />
             <StatsCard
-              icon="far fa-circle-check"
-              label={t("stats.readingStatus")}
-              value={`${(totals?.unread ?? 0).toLocaleString()} / ${(totals?.finished ?? 0).toLocaleString()}`}
-              hint={t("stats.unreadFinishedHint")}
+              icon="fa-book"
+              label={t("stats.archivesUnread")}
+              value={(totals?.unread ?? 0).toLocaleString()}
+              hint={t("stats.archivesUnreadHint")}
             />
             <StatsCard
-              icon="fa-spinner"
-              label={t("stats.inProgress")}
+              icon="fa-book-open"
+              label={t("stats.archivesRead")}
               value={(totals?.reading ?? 0).toLocaleString()}
-              hint={t("stats.newBadgesValue", { count: totals?.new ?? 0 })}
+              hint={t("stats.archivesReadHint")}
+            />
+            <StatsCard
+              icon="far fa-circle-check"
+              label={t("stats.archivesFinished")}
+              value={(totals?.finished ?? 0).toLocaleString()}
+              hint={t("stats.archivesFinishedHint")}
             />
             <StatsCard
               icon="far fa-star-half-stroke"
@@ -150,6 +156,16 @@ export function Stats() {
               value={(totals?.categories ?? 0).toLocaleString()}
             />
           </div>
+
+          {/* Kept from the removed "in progress" card: the new-badge count is independent of the
+              three reading buckets (the badge can outlive a first read), so it belongs in a note
+              rather than as the hint of any one of them. */}
+          {totals && totals.new > 0 ? (
+            <p style={{ ...muted, fontSize: "0.78rem", marginTop: 10 }}>
+              <i className="fa fa-certificate" style={{ marginRight: 6 }} />
+              {t("stats.newBadgesValue", { count: totals.new })}
+            </p>
+          ) : null}
 
           {localProgressOnly ? (
             <p style={{ ...muted, fontSize: "0.78rem", marginTop: 10 }}>

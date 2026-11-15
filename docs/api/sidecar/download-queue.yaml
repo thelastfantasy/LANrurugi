@@ -1,10 +1,9 @@
 # The download queue (`specs/005-download-plugin-progress/`).
 #
 # This file covers the queue's own lifecycle: listing, adding, editing, deleting, and starting
-# items — individually and in bulk. The **archive-comparison sub-group** under
-# `/download_queue/{id}/compare*` and the per-item `/overwrite`, `/rename`, `/stop`,
-# `/confirm-older` and `/fetch-metadata` operations are not written up yet; they are listed in the
-# reference with their own handler notes and are counted as the remaining backlog there.
+# items — individually and in bulk. The per-item `/stop`, `/confirm-older` and
+# `/fetch-metadata` operations are not written up yet; they are listed in the reference with
+# their own handler notes and are counted as the remaining backlog there.
 "/api/download_queue":
   get:
     summary: List queue items

@@ -8,6 +8,7 @@ import { Tooltip } from "@/components/common-ui/Display"
 import { IconButton } from "@/components/common-ui/Form"
 import { CollapsibleSection, DateTimeStack, IpGeoLink, ShortId } from "@/components/Display"
 import { confirmDialog, infoDialog, promptDialog } from "@/dialog"
+import { copyText } from "@/lib/clipboard"
 import { FONT_SIZE_SM, Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme"
 import { toast } from "@/toast"
 
@@ -30,11 +31,12 @@ function maskToken(token: string): string {
   return `${token.slice(0, 8)}${"*".repeat(MASK_STAR_COUNT)}${token.slice(-4)}`
 }
 
-function copyToClipboard(value: string, t: (key: string) => string | null) {
-  navigator.clipboard
-    .writeText(value)
-    .then(() => toast({ heading: t("Copied to clipboard!") ?? undefined, icon: "info", hideAfter: 3000 }))
-    .catch(() => toast({ heading: t("Failed to copy.") ?? undefined, icon: "error" }))
+async function copyToClipboard(value: string, t: (key: string) => string | null) {
+  if (await copyText(value)) {
+    toast({ heading: t("Copied to clipboard!") ?? undefined, icon: "info", hideAfter: 3000 })
+  } else {
+    toast({ heading: t("Failed to copy.") ?? undefined, icon: "error" })
+  }
 }
 
 /** Marks a token's role inline in the Name column via icon + tooltip, instead of a separate column. */
@@ -174,7 +176,7 @@ export function ApiTokensSection() {
           <IconButton
             icon="fas fa-copy"
             title={t("settings.copyToClipboard") ?? undefined}
-            onClick={() => copyToClipboard(rawToken, t)}
+            onClick={() => void copyToClipboard(rawToken, t)}
             size={25}
           />
         </div>

@@ -783,6 +783,14 @@ div.id4 a:hover {
     box-shadow: 0 0 0 1.5px #DCDDCB, 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
+/* `.stdbtn:focus` repaints a focused button in the paper palette; a closing dialog hands focus
+   back to the button that opened it, which would leave this solid pill looking inverted. */
+.modal-close-btn:focus {
+    background-color: #E9A53A;
+    color: #FFFFFF;
+    border: none;
+}
+
 /* Destructive-action button (`components/Display/Confirm.tsx`'s `danger` prop) — a real class,
    not an inline hardcoded color (see g.css's own comment on this class for why inline defeats
    `.stdbtn:hover` entirely). Reuses this theme's own existing warning colors
@@ -1118,6 +1126,14 @@ div.id4 a:hover {
 .preview-row-waiting {
   background-color: rgba(199, 145, 33, 0.14);
   border-left: 3px solid rgba(199, 145, 33, 0.6);
+}
+
+/* Outside the subscription's time window: read from the source, never a candidate. Grey rather than
+   red — nothing was ruled out — and dimmed so a long list still reads as "these are not the ones". */
+.preview-row-expired {
+  background-color: rgba(128, 128, 128, 0.1);
+  border-left: 3px solid rgba(128, 128, 128, 0.45);
+  opacity: 0.55;
 }
 
 /* One condition within a group. Banded so that where one condition ends and the next begins is
@@ -1707,4 +1723,21 @@ textarea {
     font-variant-numeric: tabular-nums;
     opacity: 0.75;
     line-height: 28px;
+}
+
+/* Headless reader's title/progress line: this theme's ink, haloed in this theme's own page
+   colour so a caption over artwork stays readable without inventing a new palette. */
+.reader-headless-info,
+.reader-headless-jump {
+    color: #EFEAEA;
+    text-shadow: 0 1px 2px #E9BBC5, 0 0 6px #E9BBC5, 0 0 12px #E9BBC5;
+}
+
+/* Touch screens keep `:hover` on a button after a tap until something else is tapped, and
+   `.favtag-btn:hover` is more specific than `.toggled`, so an unselected category button stayed
+   painted exactly like a selected one. Without hover, only `.toggled` may paint. */
+@media (hover: none) {
+    .favtag-btn:hover:not(.toggled) {
+        background: #BE234B !important;
+    }
 }

@@ -92,6 +92,12 @@ impl NodeCode {
     }
 
     /// `XXXX-XXXX-XXXX-XXXX`, which is how it is shown and copied.
+    /// What people see and paste: the code with the scheme that says what it is. `parse_prefixed`
+    /// accepts it, so a copy-and-paste round trip works.
+    pub fn prefixed(&self) -> String {
+        format!("lrrg-node:{}", self.display())
+    }
+
     pub fn display(&self) -> String {
         self.0
             .as_bytes()
@@ -151,6 +157,7 @@ mod tests {
         let code = NodeCode::generate();
         assert_eq!(code.as_str().len(), NODE_CODE_LEN);
         assert_eq!(NodeCode::parse(&code.display()).unwrap(), code);
+        assert_eq!(NodeCode::parse_prefixed(&code.prefixed()).unwrap(), code);
         assert_eq!(NodeCode::parse(code.as_str()).unwrap(), code);
         // The user-visible form tolerates the usual transcription mistakes.
         assert_eq!(

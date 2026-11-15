@@ -2,12 +2,11 @@ import { useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate, useParams } from "react-router-dom"
 
-import { ApiError, sendJson } from "@/api/client"
+import { sendJson } from "@/api/client"
 import {
   useArchiveMetadata,
   useDeleteArchive,
   usePlugins,
-  useRenameArchive,
   useSettings,
   useStats,
   useUpdateArchiveMetadata,
@@ -15,10 +14,10 @@ import {
 import type { ArchiveMetadata } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
 import { TagInput } from "@/components/Form"
-import { confirmDialog, renameArchiveDialog } from "@/dialog"
+import { confirmDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
-import { dismissToast, toast } from "@/toast"
+import { toast } from "@/toast"
 
 export function Edit() {
   const { t } = useTranslation()
@@ -62,7 +61,6 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
   const stats = useStats(2)
   const updateMetadata = useUpdateArchiveMetadata(archiveId)
   const deleteArchive = useDeleteArchive()
-  const renameArchive = useRenameArchive(archiveId)
 
   useDocumentTitle(t("edit.editing1").replace("%1", archive.title))
   const [title, setTitle] = useState(archive.title)
@@ -103,36 +101,6 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
         },
       },
     })
-  }
-
-  /** Renames the on-disk file — distinct from `title`, a display label. Only the stem round-trips;
-   * `archive.extension` is a separate, already-dotless field. */
-  async function handleRename() {
-    const nextStem = await renameArchiveDialog(archive.filename, archive.extension)
-    if (nextStem === null || nextStem.trim() === "" || nextStem.trim() === archive.filename) return
-    const pendingToastId = toast({
-      heading: t("edit.renaming") ?? undefined,
-      text: t("edit.thisMayTakeAMoment") ?? undefined,
-      icon: "info",
-      hideAfter: false,
-      closeOnClick: false,
-    })
-    try {
-      const result = await renameArchive.mutateAsync(nextStem.trim())
-      dismissToast(pendingToastId)
-      toast({
-        heading: t("edit.archiveRenamedTo") ?? undefined,
-        text: result.filename,
-        icon: "success",
-      })
-    } catch (err) {
-      dismissToast(pendingToastId)
-      toast({
-        heading: t("edit.renameFailed") ?? undefined,
-        text: err instanceof ApiError ? err.message : String(err),
-        icon: "error",
-      })
-    }
   }
 
   /** Saves current form state first, then fetches+merges plugin tags — not a preview, it
@@ -222,19 +190,6 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
         <div style={{ display: "flex", flexDirection: "column", gap: 10, textAlign: "left" }}>
           {/* maxWidth: 'none' overrides .stdinput's theme cap of 450px so fields fill the
               grid column on this page's wider card. */}
-          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr auto", alignItems: "center", gap: 6 }}>
-            <span>{t("edit.currentFileName")}</span>
-            <input readOnly className="stdinput" type="text" style={{ width: "100%", maxWidth: "none" }} value={archive.filename} />
-            <input
-              className="stdbtn"
-              type="button"
-              value={t("edit.rename") ?? undefined}
-              onClick={() => void handleRename()}
-              disabled={renameArchive.isPending}
-              style={{ minWidth: 70, height: 18, boxSizing: "border-box" }}
-            />
-          </div>
-
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "center", gap: 6 }}>
             <span>{t("edit.id")}</span>
             <input readOnly className="stdinput" type="text" style={{ width: "100%", maxWidth: "none" }} maxLength={255} value={archiveId} />

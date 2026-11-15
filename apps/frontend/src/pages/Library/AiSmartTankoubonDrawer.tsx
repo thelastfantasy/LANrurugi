@@ -1,8 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query"
-import { type CSSProperties, useEffect, useRef, useState } from "react"
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { ApiError, sendJson } from "@/api/client"
+import { sendJson } from "@/api/client"
 import {
   type AiGroupSuggestion,
   type GroupReview,
@@ -22,7 +22,8 @@ import {
 import { Drawer, DrawerFooter, Tooltip } from "@/components/common-ui/Display"
 import { IconButton, NumberInput } from "@/components/common-ui/Form"
 import { AiSkeleton, ArchiveChecklistItem } from "@/components/Display"
-import { useHorizontalSwipe, useIsNarrowViewport } from "@/hooks"
+import { useIsNarrowViewport } from "@/hooks"
+import { useSwipePager } from "@/hooks/useSwipePager"
 import { routes } from "@/lib/routes"
 import { Z_OVERLAY_ABOVE_LEGACY_MODAL } from "@/theme"
 import { toast } from "@/toast"
@@ -183,6 +184,61 @@ function MemberTitle({ id, title, muted }: { id: string; title: string; muted: b
   )
 }
 
+/** The pager above the cards. It stays put while the cards slide beneath it. One row, always:
+ * with a few hundred suggestions `space-between` wrapped the counter onto a second line. */
+function TopPager({
+  page,
+  total,
+  onPrev,
+  onNext,
+}: {
+  page: number
+  total: number
+  onPrev: () => void
+  onNext: () => void
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+        flexWrap: "nowrap",
+      }}
+    >
+      <button
+        type="button"
+        className="stdbtn"
+        disabled={page === 0}
+        onClick={onPrev}
+        style={{ minWidth: 28, flexShrink: 0, visibility: page === 0 ? "hidden" : undefined }}
+      >
+        <i className="fa fa-chevron-left" aria-hidden="true"></i>
+      </button>
+      <span
+        style={{
+          fontSize: 12,
+          opacity: 0.6,
+          whiteSpace: "nowrap",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {page + 1} / {total}
+      </span>
+      <button
+        type="button"
+        className="stdbtn"
+        disabled={page === total - 1}
+        onClick={onNext}
+        style={{ minWidth: 28, flexShrink: 0, visibility: page === total - 1 ? "hidden" : undefined }}
+      >
+        <i className="fa fa-chevron-right" aria-hidden="true"></i>
+      </button>
+    </div>
+  )
+}
+
 /** One AI-suggested group's card — members start checked, except those the AI review rejected
  * (unless the user already toggled them); "Create Tankoubon" is disabled below 2 checked. */
 function SuggestionCard({
@@ -192,9 +248,8 @@ function SuggestionCard({
   titleById,
   tankoubonNameById,
   onDismissed,
-  onPrev,
-  onNext,
   onJump,
+  preview = false,
 }: {
   suggestion: AiGroupSuggestion
   page: number
@@ -202,9 +257,9 @@ function SuggestionCard({
   titleById: Map<string, string>
   tankoubonNameById: Map<string, string>
   onDismissed: () => void
-  onPrev: () => void
-  onNext: () => void
   onJump: (page: number) => void
+  /** A neighbour shown beside the current card while paging: its actions stay out of the footer. */
+  preview?: boolean
 }) {
   const { t } = useTranslation()
   const narrow = useIsNarrowViewport()
@@ -327,48 +382,6 @@ function SuggestionCard({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {/* One row, always: with a few hundred suggestions the counter is long enough that
-          `space-between` wrapped it onto a second line ("1 /" above "1000"), which is what made the
-          drawer's top-left corner look broken. */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 8,
-          flexWrap: "nowrap",
-        }}
-      >
-        <button
-          type="button"
-          className="stdbtn"
-          disabled={page === 0}
-          onClick={onPrev}
-          style={{ minWidth: 28, flexShrink: 0, visibility: page === 0 ? "hidden" : undefined }}
-        >
-          <i className="fa fa-chevron-left" aria-hidden="true"></i>
-        </button>
-        <span
-          style={{
-            fontSize: 12,
-            opacity: 0.6,
-            whiteSpace: "nowrap",
-            fontVariantNumeric: "tabular-nums",
-          }}
-        >
-          {page + 1} / {total}
-        </span>
-        <button
-          type="button"
-          className="stdbtn"
-          disabled={page === total - 1}
-          onClick={onNext}
-          style={{ minWidth: 28, flexShrink: 0, visibility: page === total - 1 ? "hidden" : undefined }}
-        >
-          <i className="fa fa-chevron-right" aria-hidden="true"></i>
-        </button>
-      </div>
-
       <div className={isAddToExisting ? "ai-suggestion-card-add" : "ai-suggestion-card-new"} style={{ borderRadius: 8, overflow: "hidden", textAlign: "left" }}>
         <div
           className="ai-suggestion-card-header"
@@ -444,6 +457,7 @@ function SuggestionCard({
         </ul>
       </div>
 
+      {!preview && (
       <DrawerFooter>
         <div
           className="ai-grouping-footer"
@@ -549,6 +563,7 @@ function SuggestionCard({
           </div>
         </div>
       </DrawerFooter>
+      )}
     </div>
   )
 }
@@ -688,22 +703,39 @@ function MobileAddButton({ t, disabled, onConfirm }: ConfirmProps) {
  * tall the current card is. Its body mounts on each open, which is what requests fresh suggestions. */
 export function AiSmartTankoubonDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t } = useTranslation()
+  // A rightward swipe on the body pages back while there is a page to go back to; on the first
+  // page it closes the drawer instead, as the title and bottom bars always do.
+  const [canPageBack, setCanPageBack] = useState(false)
   return (
-    <Drawer open={open} onClose={onClose} title={t("library.aiSmartCreateTankoubon")} width={600} swipeToClose={false}>
-      <SuggestionsBody onClose={onClose} />
+    <Drawer
+      open={open}
+      onClose={onClose}
+      title={t("library.aiSmartCreateTankoubon")}
+      width={600}
+      swipeToClose={!canPageBack}
+    >
+      <SuggestionsBody onClose={onClose} onCanPageBackChange={setCanPageBack} />
     </Drawer>
   )
 }
 
 /** Skeleton while the request runs, then one suggested group at a time in a paginated card.
  * Creating a group removes it and clamps the page index. */
-function SuggestionsBody({ onClose }: { onClose: () => void }) {
+function SuggestionsBody({
+  onClose,
+  onCanPageBackChange,
+}: {
+  onClose: () => void
+  onCanPageBackChange: (canPageBack: boolean) => void
+}) {
   const { t } = useTranslation()
   const archives = useArchives()
-  const aiGroupSuggestions = useAiGroupSuggestions()
-  const [suggestions, setSuggestions] = useState<AiGroupSuggestion[] | null>(() => cachedSuggestions())
+  const { state: aiGroupState, start: startGrouping } = useAiGroupSuggestions()
+  // The list handed over from a previous mount (module-level TTL cache), read once.
+  const [initialList] = useState<AiGroupSuggestion[] | null>(() => cachedSuggestions())
   // Read once: whether this mount already has a list from the cache (then it must not re-request).
-  const startedFromCache = useRef(suggestions !== null)
+  const startedFromCache = useRef(initialList !== null)
+  const [dismissed, setDismissed] = useState<string[]>([])
   const [page, setPage] = useState(0)
   const [showIgnored, setShowIgnored] = useState(false)
 
@@ -719,68 +751,95 @@ function SuggestionsBody({ onClose }: { onClose: () => void }) {
     tankoubonNameById.set(tank.id, tank.name)
   }
 
+  // The POST only starts (or joins) the server-side run — the answer itself arrives on the hook's
+  // SSE stream, which is what lets this drawer be closed and reopened without losing the work.
   // A `let cancelled` local (not a ref) so StrictMode's double-invoke in dev doesn't leave the
   // second, actually-mounted instance permanently stuck on the skeleton.
-  const { mutate: requestSuggestions } = aiGroupSuggestions
   useEffect(() => {
     if (startedFromCache.current) return
-    let cancelled = false
-    requestSuggestions(undefined, {
-      onSuccess: (data) => {
-        suggestionCache = { at: Date.now(), suggestions: data.suggestions }
-        if (!cancelled) setSuggestions(data.suggestions)
-      },
-      onError: (err) => {
-        if (cancelled) return
-        onClose()
-        // `embed_unavailable` means the local worker/model is missing — an environment problem the
-        // user can act on (install the model / fix the image), not a generic failure. Without this
-        // distinction the old behaviour was indistinguishable from "nothing to suggest".
-        const unavailable =
-          err instanceof ApiError &&
-          (err.body as { error?: string } | undefined)?.error === "embed_unavailable"
-        toast({
-          heading: t(unavailable ? "library.aiGroupingUnavailable" : "library.aiGroupingFailed") ?? undefined,
-          text: unavailable ? t("library.aiGroupingUnavailableHint") : String(err),
-          icon: "error",
-        })
-      },
+    startGrouping().catch((err) => {
+      onClose()
+      toast({
+        heading: t("library.aiGroupingFailed") ?? undefined,
+        text: String(err),
+        icon: "error",
+      })
     })
-    return () => {
-      cancelled = true
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Derived, never mirrored into state: `running` with suggestions is the graph-only result
+  // published before the (network-bound) record write, so the first cards appear seconds before
+  // the full run finishes, and a `done` event simply replaces them.
+  const serverList =
+    aiGroupState && (aiGroupState.status === "ready" || aiGroupState.status === "running")
+      ? aiGroupState.suggestions
+      : undefined
+  const suggestions = useMemo(() => {
+    const list = serverList ?? initialList
+    if (!list) return null
+    return list.filter((s) => !dismissed.includes(s.suggestion_id))
+  }, [serverList, initialList, dismissed])
+
+  // Keep the reopen cache current — an external store, so writing it from an effect is the
+  // intended use (unlike local state, which is derived above).
+  useEffect(() => {
+    if (serverList) suggestionCache = { at: Date.now(), suggestions: serverList }
+  }, [serverList])
+
+  // A run-level failure (as opposed to a request that never got off the ground) arrives as an
+  // `error` event. `embed_unavailable` means the local worker/model is missing — an environment
+  // problem the user can act on (install the model / fix the image), not a generic failure.
+  const reportedErrorRun = useRef<string | null>(null)
+  useEffect(() => {
+    if (aiGroupState?.status !== "error") return
+    const key = `${aiGroupState.run_id ?? ""}:${aiGroupState.code ?? ""}`
+    if (reportedErrorRun.current === key) return
+    reportedErrorRun.current = key
+    const unavailable = aiGroupState.code === "embed_unavailable"
+    onClose()
+    toast({
+      heading: t(unavailable ? "library.aiGroupingUnavailable" : "library.aiGroupingFailed") ?? undefined,
+      text: unavailable ? t("library.aiGroupingUnavailableHint") : (aiGroupState.message ?? ""),
+      icon: "error",
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiGroupState])
+
+  const current = suggestions?.[page]
+  // On touch, a sideways drag anywhere in the body slides between suggestions (the drawer's own
+  // swipe-to-close is off there while a page back exists); the body fills the drawer so short
+  // cards leave no dead area.
+  const count = suggestions?.length ?? 0
+  const canPageBack = !showIgnored && count > 1 && page > 0
+  useEffect(() => {
+    onCanPageBackChange(canPageBack)
+  }, [canPageBack, onCanPageBackChange])
+  // The next open starts on the first page.
+  useEffect(() => () => onCanPageBackChange(false), [onCanPageBackChange])
+  const pager = useSwipePager({ page, count: showIgnored ? 0 : count, onPageChange: setPage })
+  const { go } = pager
 
   useEffect(() => {
     if (!suggestions || suggestions.length <= 1 || showIgnored) return
     function onKeyDown(e: KeyboardEvent) {
       if ((e.target as HTMLElement)?.tagName === "INPUT") return
-      if (e.key === "ArrowLeft") {
-        setPage((p) => Math.max(0, p - 1))
-      } else if (e.key === "ArrowRight") {
-        setPage((p) => Math.min((suggestions?.length ?? 1) - 1, p + 1))
-      }
+      if (e.key === "ArrowLeft") go(-1)
+      else if (e.key === "ArrowRight") go(1)
     }
     document.addEventListener("keydown", onKeyDown)
     return () => document.removeEventListener("keydown", onKeyDown)
-  }, [suggestions, showIgnored])
-
-  const current = suggestions?.[page]
-  // On touch, a sideways swipe anywhere in the body pages through suggestions (the drawer's own
-  // swipe-to-close is off); the body fills the drawer so short cards leave no dead area.
-  const count = suggestions?.length ?? 0
-  const swipe = useHorizontalSwipe({
-    onSwipeLeft: () => !showIgnored && setPage((p) => Math.min(count - 1, p + 1)),
-    onSwipeRight: () => !showIgnored && setPage((p) => Math.max(0, p - 1)),
-  })
+  }, [suggestions, showIgnored, go])
   // Prefetch the next two reviews so paging forward rarely waits; the card reviews itself.
   useGroupSuggestionReview(suggestions?.[page + 1], !showIgnored)
   useGroupSuggestionReview(suggestions?.[page + 2], !showIgnored)
 
   return (
-    <div {...swipe} style={{ ...swipe.style, display: "flex", flexDirection: "column", gap: 12, minHeight: "100%" }}>
-        {aiGroupSuggestions.isPending || !suggestions ? (
+    <div
+      ref={pager.areaRef}
+      style={{ touchAction: "pan-y", display: "flex", flexDirection: "column", gap: 12, minHeight: "100%" }}
+    >
+        {!suggestions ? (
           <AiSkeleton />
         ) : showIgnored ? (
           <IgnoredSuggestionsList
@@ -853,34 +912,43 @@ function SuggestionsBody({ onClose }: { onClose: () => void }) {
               style={{ marginTop: 6 }}
               onClick={() => {
                 suggestionCache = null
-                requestSuggestions(undefined, {
-                  onSuccess: (data) => {
-                    suggestionCache = { at: Date.now(), suggestions: data.suggestions }
-                    setSuggestions(data.suggestions)
-                  },
-                })
+                void startGrouping()
               }}
-              disabled={aiGroupSuggestions.isPending}
+              disabled={suggestions === null}
             >
               {t("library.aiGroupingRecheck")}
             </button>
           </div>
         ) : current ? (
-          <SuggestionCard
-            key={current.suggestion_id}
-            suggestion={current}
-            page={page}
-            total={suggestions.length}
-            titleById={titleById}
-            tankoubonNameById={tankoubonNameById}
-            onPrev={() => setPage((p) => Math.max(0, p - 1))}
-            onNext={() => setPage((p) => Math.min(suggestions.length - 1, p + 1))}
-            onJump={setPage}
-            onDismissed={() => {
-              setSuggestions((prev) => (prev ?? []).filter((s) => s !== current))
-              setPage((p) => Math.max(0, Math.min(p, suggestions.length - 2)))
-            }}
-          />
+          <>
+          <TopPager page={page} total={suggestions.length} onPrev={() => go(-1)} onNext={() => go(1)} />
+          {/* Clipped sideways only, so a taller neighbour is not cut to the current card's height. */}
+          <div style={{ overflowX: "clip" }}>
+            <div ref={pager.trackRef} style={{ position: "relative" }}>
+              {[page - 1, page, page + 1].map((i) => {
+                const s = suggestions[i]
+                if (!s) return null
+                return (
+                  <div key={s.suggestion_id} style={pager.slotStyle(i)} inert={i !== page}>
+                    <SuggestionCard
+                      suggestion={s}
+                      page={i}
+                      total={suggestions.length}
+                      titleById={titleById}
+                      tankoubonNameById={tankoubonNameById}
+                      preview={i !== page}
+                      onJump={setPage}
+                      onDismissed={() => {
+                        setDismissed((prev) => [...prev, s.suggestion_id])
+                        setPage((p) => Math.max(0, Math.min(p, suggestions.length - 2)))
+                      }}
+                    />
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+          </>
         ) : null}
 
         {ignoredSuggestions.data && ignoredSuggestions.data.ignored.length > 0 && (

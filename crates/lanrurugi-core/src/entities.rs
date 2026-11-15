@@ -79,6 +79,10 @@ pub struct Archive {
     /// (`watcher::is_watched_archive_path` explicitly excludes them).
     #[serde(default)]
     pub has_patch: bool,
+    /// BLAKE3 of the whole file, lowercase hex (027). `None` for archives catalogued before it
+    /// existed, until the backfill job fills it in. Saving a record never clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blake3: Option<String>,
 }
 
 impl Archive {

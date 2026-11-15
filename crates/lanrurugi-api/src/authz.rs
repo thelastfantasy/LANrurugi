@@ -516,25 +516,33 @@ mod tests {
     }
 
     /// 017 FR-040: only administrators download a whole tankoubon.
+    ///
+    /// `/download-link` matters as much as `/download`: it mints a signed URL that `/api/dl/*`
+    /// serves to anyone, so a guest that can call it can fetch the whole book without ever
+    /// touching the gated route.
     #[tokio::test]
     async fn tankoubon_download_is_admin_only() {
         let e = route_enforcer().await;
-        let path = "/api/tankoubons/TANK_1/download";
-        assert!(check_route(&e, Some(&session_auth()), path, "GET"));
-        assert!(check_route(
-            &e,
-            Some(&token_auth(TokenRole::Admin)),
-            path,
-            "GET"
-        ));
-        assert!(!check_route(
-            &e,
-            Some(&token_auth(TokenRole::Guest)),
-            path,
-            "GET"
-        ));
-        assert!(!check_route(&e, Some(&guest_visitor_auth()), path, "GET"));
-        assert!(!check_route(&e, Some(&anonymous_auth()), path, "GET"));
+        for path in [
+            "/api/tankoubons/TANK_1/download",
+            "/api/tankoubons/TANK_1/download-link",
+        ] {
+            assert!(check_route(&e, Some(&session_auth()), path, "GET"));
+            assert!(check_route(
+                &e,
+                Some(&token_auth(TokenRole::Admin)),
+                path,
+                "GET"
+            ));
+            assert!(!check_route(
+                &e,
+                Some(&token_auth(TokenRole::Guest)),
+                path,
+                "GET"
+            ));
+            assert!(!check_route(&e, Some(&guest_visitor_auth()), path, "GET"));
+            assert!(!check_route(&e, Some(&anonymous_auth()), path, "GET"));
+        }
     }
 
     /// 014: the generation record is session-only like its sibling wizard routes, and AI usage is

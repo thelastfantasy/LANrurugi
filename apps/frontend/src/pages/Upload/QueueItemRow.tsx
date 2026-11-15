@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -6,10 +6,10 @@ import {
   useConfirmOlderRevision,
   useDeleteQueueItem,
   useFetchQueueItemMetadata,
+  useForceDownloadQueueItem,
   useJobProgressOverride,
-  useOverwriteQueueItem,
   usePauseQueueItem,
-  useRenameQueueItem,
+  useReingestQueueItem,
   useStartQueueItem,
   useStopQueueItem,
   useSubscriptions,
@@ -32,19 +32,16 @@ import {
   STATE_COLOR,
 } from "@/components/Display";
 import { QueueErrorText } from "@/components/Layout";
+import { useIsNarrowViewport } from "@/hooks/useIsNarrowViewport";
 import { routes } from "@/lib/routes";
-import { FONT_SIZE_SM, FONT_SIZE_XS, Z_OVERLAY_BACKDROP, Z_OVERLAY_TOOLTIP } from "@/theme";
-import { dismissToast, toast } from "@/toast";
+import { FONT_SIZE_SM, FONT_SIZE_XS, Z_OVERLAY_TOOLTIP } from "@/theme";
 
-import { ComparisonResultModal } from "./ComparisonResultModal";
-import { ConflictMenu, RenamePopover } from "./FilenameTemplateEditor";
 import {
   ICON_BUTTON_STYLE,
   LOCAL_UPLOAD_NAMESPACE,
   TooltipIfPresent,
   TruncatedFilename,
 } from "./shared";
-import { useCompareStream } from "./useCompareStream";
 
 /** Whether `ms` falls on today's own calendar day. */
 function isToday(ms: number): boolean {
@@ -76,6 +73,10 @@ export function RowStats({
   onOpenSubscriptions: () => void
 }) {
   const { t } = useTranslation()
+  // On a phone this line always wraps anyway, so it is split at a meaningful point instead of
+  // wherever the width happens to run out: when it started + how long it took, then how fast and
+  // how big. On a desktop it stays one line.
+  const narrow = useIsNarrowViewport()
   // The same SSE-pushed bytes the progress bar uses: `computeSpeed` keeps one smoothing window per
   // job, so the two must not feed it polled values and SSE values alternately — that made every
   // other reading a negative delta and the displayed rate swing far wider than the transfer did.
@@ -114,6 +115,11 @@ export function RowStats({
   const startedMs = job?.started_at ?? item.started_at ?? null
   const endedMs = job?.finished_at ?? item.finished_at ?? (running && now > 0 ? now : null)
   const durationMs = startedMs && endedMs && endedMs >= startedMs ? endedMs - startedMs : null
+  // The bytes are all in, but the item is still `downloading`: the server is cataloguing the
+  // archive and writing it into the library, which for a 1.4 GB file is minutes of disk work with
+  // no byte counter of its own. Only an explicit `false` counts — a server that predates the field
+  // omits it, and must keep showing the plain reading.
+  const ingesting = item.state === "downloading" && item.transferring === false
   // Prefer the two *measured* rates: the job's transfer-window average while the job is still in
   // memory, then the value persisted onto the item when it completed. Deriving a rate here from
   // the whole job duration included every minute spent waiting for the server's first byte (a
@@ -168,18 +174,49 @@ export function RowStats({
       )
     : null
 
+  // Today reads as "today <time>"; anything older carries its real date, so a row from two days
+  // ago can never be mistaken for one that just started. On a phone the seconds are dropped: they
+  // were the difference between two lines and three, and a queue row never needs them.
+  const startedLabel = startedMs
+    ? isToday(startedMs)
+      ? t("upload.statStartedToday", {
+          time: new Date(startedMs).toLocaleTimeString(
+            undefined,
+            narrow ? { hour: "2-digit", minute: "2-digit" } : undefined,
+          ),
+        })
+      : t("upload.statStarted", {
+          time: new Date(startedMs).toLocaleString(
+            undefined,
+            narrow
+              ? { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }
+              : undefined,
+          ),
+        })
+    : null
+  const startedParts = [startedLabel].filter(Boolean) as string[]
+  const elapsedText =
+    durationMs != null ? t("upload.statElapsed", { duration: formatDuration(durationMs) }) : null
+  // The size is kept out of the wrapped text: on a phone it sits on the right of the two-line
+  // block, vertically centered, so the numbers stay readable instead of trailing a wrapped line.
+  const averageText =
+    average != null ? t("upload.statAverage", { rate: formatBytes(average) }) : null
+  const remainingText =
+    !ingesting && remainingMs != null
+      ? t("upload.statRemaining", { duration: formatDuration(remainingMs) })
+      : null
+  const transferParts = [elapsedText, remainingText].filter(Boolean) as string[]
+  // The two figures on the right of the narrow layout: the rate keeps its /s suffix without the
+  // "average" label, which the row's context already supplies.
+  const speedText = average != null ? `${formatBytes(average)}/s` : null
+  const sizeText = bytes != null ? formatBytes(bytes) : null
   const parts = [
-    // Today reads as "today <time>"; anything older carries its real date, so a row from two days
-    // ago can never be mistaken for one that just started.
-    startedMs &&
-      (isToday(startedMs)
-        ? t("upload.statStartedToday", { time: new Date(startedMs).toLocaleTimeString() })
-        : t("upload.statStarted", { time: new Date(startedMs).toLocaleString() })),
-    durationMs != null && t("upload.statElapsed", { duration: formatDuration(durationMs) }),
-    average != null && t("upload.statAverage", { rate: formatBytes(average) }),
-    remainingMs != null && t("upload.statRemaining", { duration: formatDuration(remainingMs) }),
-    bytes != null && formatBytes(bytes),
-  ].filter(Boolean) as string[]
+    ...startedParts,
+    ...(elapsedText ? [elapsedText] : []),
+    ...(averageText ? [averageText] : []),
+    ...(remainingText ? [remainingText] : []),
+    ...(sizeText ? [sizeText] : []),
+  ]
 
   if (parts.length === 0 && !item.subscription_id) return null
 
@@ -209,7 +246,80 @@ export function RowStats({
           </a>
         </Tooltip>
       )}
-      {parts.length > 0 && <span>{parts.join(" · ")}</span>}
+      {narrow ? (
+        <span
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flex: "1 1 0%",
+            minWidth: 0,
+          }}
+        >
+          <span
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 0,
+              flex: 1,
+              minWidth: 0,
+              lineHeight: 1.15,
+              // Reserved so a finished row still keeps the two-line height the right-hand figures
+              // stretch to.
+              minHeight: "2.3em",
+            }}
+          >
+            {startedParts.length > 0 && (
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {startedParts.join(" · ")}
+              </span>
+            )}
+            {transferParts.length > 0 && (
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {transferParts.join(" · ")}
+              </span>
+            )}
+          </span>
+          {speedText && (
+            <span
+              style={{
+                flexShrink: 0,
+                alignSelf: "stretch",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "flex-end",
+                minWidth: "6ch",
+                fontSize: "0.8rem",
+                lineHeight: 1,
+                whiteSpace: "nowrap",
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              {speedText}
+            </span>
+          )}
+          {sizeText && (
+            <span
+              style={{
+                flexShrink: 0,
+                alignSelf: "stretch",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "flex-end",
+                minWidth: "7ch",
+                fontSize: "0.95rem",
+                lineHeight: 1,
+                whiteSpace: "nowrap",
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              {sizeText}
+            </span>
+          )}
+        </span>
+      ) : (
+        parts.length > 0 && <span>{parts.join(" · ")}</span>
+      )}
     </div>
   )
 }
@@ -278,32 +388,30 @@ export function QueueItemRow({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  // See `RowStats`: the transfer is over but the item stays `downloading` while the server writes
+  // the archive into the library. Only an explicit `false` counts (older servers omit the field).
+  const ingesting = item.state === "downloading" && item.transferring === false;
   const update = useUpdateQueueItem();
   const fetchMetadata = useFetchQueueItemMetadata();
   const start = useStartQueueItem();
+  const forceStart = useForceDownloadQueueItem();
+  const reingest = useReingestQueueItem();
+  // A failed cataloguing attempt keeps the downloaded file: retrying then means re-ingesting those
+  // bytes, not downloading the archive again.
+  const needsReingest = item.error?.kind === "ingest_failed" && !!item.staged;
+  const sourceBlocked =
+    item.error?.kind === "source_already_imported" ||
+    item.error?.kind === "source_download_in_progress";
   const stop = useStopQueueItem();
   const pause = usePauseQueueItem();
   const confirmOlder = useConfirmOlderRevision();
   const del = useDeleteQueueItem();
-  const overwriteConflict = useOverwriteQueueItem();
-  const renameConflict = useRenameQueueItem();
-  const compareStream = useCompareStream();
   // Shared with the subscriptions page's own list (same query key), so a queue of a dozen rows
   // still costs one request.
   const subscriptions = useSubscriptions();
   const subscriptionName = item.subscription_id
     ? subscriptions.data?.find((s) => s.id === item.subscription_id)?.name
     : undefined;
-  const [conflictMenuOpen, setConflictMenuOpen] = useState(false);
-  const conflictButtonRef = useRef<HTMLButtonElement | null>(null);
-  const [renamePopover, setRenamePopover] = useState<{
-    x: number;
-    y: number;
-  } | null>(null);
-  // Real state (not a ref) — showModal reads it during render, so closing must re-render.
-  const [started, setStarted] = useState(false);
-  const startedRef = useRef(false);
-  const pendingCompareToastRef = useRef<ReturnType<typeof toast> | null>(null);
   const archiveId =
     item.archive_ids?.[0] ??
     (job?.result as { archive_ids?: string[] } | null)?.archive_ids?.[0];
@@ -316,47 +424,6 @@ export function QueueItemRow({
     if (!metadataPlugin) return;
     fetchMetadata.mutate(item.id);
   }
-
-  function handleCompare() {
-    setConflictMenuOpen(false);
-    const pendingToastId = toast({
-      heading: t("upload.analyzing") ?? "Analyzing…",
-      icon: "info",
-      hideAfter: false,
-      closeOnClick: false,
-    });
-    pendingCompareToastRef.current = pendingToastId;
-    startedRef.current = true;
-    setStarted(true);
-    compareStream.start(item.id);
-  }
-
-  const hasFirstSample = compareStream.state.samples.some((s) => s !== undefined);
-  const streamDone = compareStream.finished || compareStream.state.summary !== null;
-  const noMatch = streamDone && !hasFirstSample;
-  const showModal = started && hasFirstSample && !compareStream.error;
-
-  useEffect(() => {
-    if (!startedRef.current) return;
-    if ((hasFirstSample || streamDone || compareStream.error) && pendingCompareToastRef.current !== null) {
-      dismissToast(pendingCompareToastRef.current);
-      pendingCompareToastRef.current = null;
-    }
-    if (noMatch) {
-      toast({ heading: t("upload.noReliableComparisonResult"), icon: "info", hideAfter: false });
-      startedRef.current = false;
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setStarted(false);
-    }
-    if (compareStream.error) {
-      if (pendingCompareToastRef.current !== null) {
-        dismissToast(pendingCompareToastRef.current);
-        pendingCompareToastRef.current = null;
-      }
-      toast({ heading: compareStream.error, icon: "error" });
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasFirstSample, streamDone, noMatch, compareStream.error]);
 
   return (
     <>
@@ -416,6 +483,11 @@ export function QueueItemRow({
                 >
                   {item.title ?? item.url}
                 </span>
+                {ingesting ? (
+                  <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.85 }}>
+                    {t("upload.ingestingHint")}
+                  </div>
+                ) : null}
                 {item.state === "waiting" ? (
                   <div style={{ fontSize: FONT_SIZE_XS, color: "#c79121" }}>
                     {t("upload.waiting")}
@@ -443,7 +515,11 @@ export function QueueItemRow({
                       pluginNamespace={item.plugin_namespace}
                     />
                   ) : (
-                    <JobProgressBar job={job} inlineLabel />
+                    <JobProgressBar
+                      job={job}
+                      inlineLabel
+                      readingLabel={ingesting ? t("upload.ingesting") : undefined}
+                    />
                   )
                 ) : (
                   <span style={{ fontSize: FONT_SIZE_SM }}>
@@ -644,20 +720,9 @@ export function QueueItemRow({
               />
             </Tooltip>
 
-            <Tooltip label={t("upload.overwriteDuplicate") ?? ""}>
-              <input
-                className="queue-item-flag"
-                type="checkbox"
-                checked={item.overwrite_on_duplicate}
-                disabled={item.state !== "queued"}
-                onChange={(e) =>
-                  void update.mutateAsync({
-                    id: item.id,
-                    overwrite_on_duplicate: e.target.checked,
-                  })
-                }
-              />
-            </Tooltip>
+            {/* `overwrite_on_duplicate` is gone from the UI: since 020 an archive is addressed by
+                its content id, so identical bytes are always reported as already present and a
+                filename collision cannot happen. The field survives in the API for older clients. */}
           </>
         )}
 
@@ -675,65 +740,7 @@ export function QueueItemRow({
             flex: "0 0 56px",
           }}
         >
-        {item.pending_filename_conflict ? (
-          <>
-            <div style={{ position: "relative" }}>
-              <Tooltip label={t("upload.resolveConflict") ?? ""}>
-                <button
-                  ref={conflictButtonRef}
-                  type="button"
-                  className="stdbtn"
-                  style={ICON_BUTTON_STYLE}
-                  disabled={
-                    overwriteConflict.isPending || renameConflict.isPending
-                  }
-                  onClick={() => setConflictMenuOpen((open) => !open)}
-                >
-                  <i className="fa fa-clone" aria-hidden="true"></i>
-                </button>
-              </Tooltip>
-              {conflictMenuOpen && (
-                <>
-                  <div
-                    style={{
-                      position: "fixed",
-                      inset: 0,
-                      zIndex: Z_OVERLAY_BACKDROP,
-                    }}
-                    onClick={() => setConflictMenuOpen(false)}
-                  />
-                  <ConflictMenu
-                    onOverwrite={() => {
-                      setConflictMenuOpen(false);
-                      void overwriteConflict.mutateAsync({ id: item.id });
-                    }}
-                    onRename={() => {
-                      const rect = conflictButtonRef.current?.getBoundingClientRect();
-                      if (rect) setRenamePopover({ x: rect.left, y: rect.bottom });
-                      setConflictMenuOpen(false);
-                    }}
-                    onCompare={() => void handleCompare()}
-                    stagedAt={item.pending_filename_conflict.staged_at}
-                  />
-                </>
-              )}
-            </div>
-            {renamePopover && (
-              <RenamePopover
-                anchor={renamePopover}
-                conflict={item.pending_filename_conflict}
-                itemTitle={item.title}
-                itemNamespace={item.plugin_namespace}
-                pending={renameConflict.isPending}
-                onCancel={() => setRenamePopover(null)}
-                onConfirm={(filename) => {
-                  setRenamePopover(null);
-                  void renameConflict.mutateAsync({ id: item.id, filename });
-                }}
-              />
-            )}
-          </>
-        ) : item.state === "awaiting_revision_confirmation" ? (
+        {item.state === "awaiting_revision_confirmation" ? (
           <>
             <Tooltip label={t("upload.downloadAnyway") ?? ""}>
               <button
@@ -790,13 +797,29 @@ export function QueueItemRow({
             </Tooltip>
           </>
         ) : (
+          <>
+          {item.state === "error" && sourceBlocked && (
+            <Tooltip label={t("upload.forceDownload") ?? ""}>
+              <button
+                type="button"
+                className="stdbtn"
+                style={ICON_BUTTON_STYLE}
+                disabled={forceStart.isPending}
+                onClick={() => void forceStart.mutateAsync(item.id)}
+              >
+                <i className="fa fa-download" aria-hidden="true"></i>
+              </button>
+            </Tooltip>
+          )}
           <Tooltip
             label={
-              (item.state === "error" || wasCancelled
-                ? t("upload.retry")
-                : item.state === "paused"
-                  ? t("upload.resume")
-                  : t("library.download")) ?? ""
+              (needsReingest
+                ? t("upload.reingest")
+                : item.state === "error" || wasCancelled
+                  ? t("upload.retry")
+                  : item.state === "paused"
+                    ? t("upload.resume")
+                    : t("library.download")) ?? ""
             }
           >
             <button
@@ -808,24 +831,31 @@ export function QueueItemRow({
                   item.state !== "error" &&
                   item.state !== "cancelled" &&
                   item.state !== "paused") ||
-                start.isPending
+                (needsReingest ? reingest.isPending : start.isPending)
               }
               onClick={() => {
-                void start.mutateAsync(item.id);
+                if (needsReingest) {
+                  void reingest.mutateAsync(item.id);
+                } else {
+                  void start.mutateAsync(item.id);
+                }
               }}
             >
               <i
                 className={`fa ${
-                  item.state === "paused"
-                    ? "fa-play"
-                    : item.state === "error" || wasCancelled
-                      ? "fa-redo"
-                      : "fa-download"
+                  needsReingest
+                    ? "fa-file-import"
+                    : item.state === "paused"
+                      ? "fa-play"
+                      : item.state === "error" || wasCancelled
+                        ? "fa-redo"
+                        : "fa-download"
                 }`}
                 aria-hidden="true"
               ></i>
             </button>
           </Tooltip>
+          </>
         )}
         </div>
 
@@ -874,17 +904,6 @@ export function QueueItemRow({
           </button>
         </Tooltip>
       </div>
-      {showModal && (
-        <ComparisonResultModal
-          queueItemId={item.id}
-          state={compareStream.state}
-          onClose={() => {
-            compareStream.close();
-            startedRef.current = false;
-            setStarted(false);
-          }}
-        />
-      )}
     </>
   );
 }

@@ -46,7 +46,9 @@ function actionIconName(action: FitAction, isFullscreen: boolean): string {
     case FIT_MODE.FIT_HEIGHT:
       return "fa-up-down"
     case FIT_MODE.CONTAINER:
-      return "fa-vector-square"
+      // Not `fa-vector-square`: that one is Pro-only, so the row rendered with no glyph at all
+      // (reported 2026-11-11). `fa-maximize` is the free icon that reads "fit inside the box".
+      return "fa-maximize"
   }
 }
 
@@ -67,6 +69,8 @@ export function FitMenuButton({
   onPrimaryChange,
   compact,
   fullscreenHost,
+  headless,
+  onToggleHeadless,
 }: {
   isFullscreen: boolean
   onToggleFullscreen: () => void
@@ -81,6 +85,10 @@ export function FitMenuButton({
    *  and therefore never painted — the menu opened onto nothing (reported from a phone 2026-11-06).
    *  Render it inside the reader container instead. */
   fullscreenHost?: HTMLElement | null
+  /** Headless mode hides every other piece of reader chrome, so this control is the only way back
+   *  out — hence its own row here rather than a separate toolbar button that would be hidden too. */
+  headless: boolean
+  onToggleHeadless: () => void
 }) {
   const { t } = useTranslation()
   const palette = useMenuPalette()
@@ -106,6 +114,21 @@ export function FitMenuButton({
       />
     )
   }
+
+  const rowStyle = (current: boolean): React.CSSProperties => ({
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    width: "100%",
+    padding: "6px 8px",
+    background: current ? palette.hoverBg : "transparent",
+    border: 0,
+    borderRadius: ".2em",
+    color: "inherit",
+    font: "inherit",
+    textAlign: "left",
+    cursor: "pointer",
+  })
 
   const labelFor = (action: FitAction) =>
     action === "fullscreen"
@@ -147,6 +170,20 @@ export function FitMenuButton({
           }
         />
         <Popover.Portal container={fullscreenHost ?? undefined}>
+          {/* A transparent full-viewport backdrop, so an "outside" click dismisses the menu instead
+              of reaching the reader's own click-to-turn handler underneath: without it, closing
+              the menu by clicking anywhere also turned the page (reported 2026-11-11). It also
+              keeps the document-level turn handler from seeing a reader-surface target, because
+              that handler ignores clicks inside a fixed-position layer. */}
+          <Popover.Backdrop
+            className="reader-popover-backdrop"
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: Z_OVERLAY_TOOLTIP - 1,
+              background: "transparent",
+            }}
+          />
           <Popover.Positioner sideOffset={8} collisionPadding={8} className="outline-none" style={{ zIndex: Z_OVERLAY_TOOLTIP }}>
             <Popover.Popup
               className={`rounded-[.3em] ${FLOATING_POPUP_TRANSITION_CLASSES}`}
@@ -174,20 +211,7 @@ export function FitMenuButton({
                         run(action)
                         onPrimaryChange(action)
                       }}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        width: "100%",
-                        padding: "6px 8px",
-                        background: action === primary ? palette.hoverBg : "transparent",
-                        border: 0,
-                        borderRadius: ".2em",
-                        color: "inherit",
-                        font: "inherit",
-                        textAlign: "left",
-                        cursor: "pointer",
-                      }}
+                      style={rowStyle(action === primary)}
                     />
                   }
                 >
@@ -204,6 +228,35 @@ export function FitMenuButton({
                   />
                 </Popover.Close>
               ))}
+              <div
+                aria-hidden="true"
+                style={{ height: 1, background: palette.border, opacity: 0.6, margin: "4px 2px" }}
+              />
+              {/* A mode, not a fit action: it must not steal the primary button's action, so it
+                  never calls `onPrimaryChange`. */}
+              <Popover.Close
+                render={
+                  <button
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={headless}
+                    onClick={onToggleHeadless}
+                    style={rowStyle(false)}
+                  />
+                }
+              >
+                <i
+                  className={`fas ${headless ? "fa-eye" : "fa-eye-slash"}`}
+                  aria-hidden="true"
+                  style={{ width: 14, textAlign: "center" }}
+                />
+                <span>{t("reader.headlessMode")}</span>
+                <i
+                  className="fa fa-check"
+                  aria-hidden="true"
+                  style={{ marginLeft: "auto", opacity: headless ? 1 : 0 }}
+                />
+              </Popover.Close>
             </Popover.Popup>
           </Popover.Positioner>
         </Popover.Portal>
