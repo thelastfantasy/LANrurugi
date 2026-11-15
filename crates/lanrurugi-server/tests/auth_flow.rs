@@ -241,7 +241,9 @@ async fn age_out_used_refresh_token(redis: &RedisDbs, refresh_cookie: &str) {
     record.used_at = Some(0);
     let raw = serde_json::to_string(&record).expect("RefreshTokenRecord must serialize");
     let key = format!("LANRURUGI_REFRESH_TOKEN_{token_id}");
-    let ttl_secs = (record.expires_at.saturating_sub(record.issued_at)).max(1) as u64;
+    // Any TTL that outlives the test will do. Not `expires_at - issued_at`: with no absolute cap
+    // (the default) `expires_at` is `NO_ABSOLUTE_EXPIRY` (`i64::MAX`), which Redis refuses.
+    let ttl_secs: u64 = 3600;
     let mut conn = redis
         .config
         .get()
