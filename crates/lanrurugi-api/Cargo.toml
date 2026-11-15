@@ -90,7 +90,3 @@ if-addrs = { workspace = true }
 # in this worker" arrives with its explanation discarded. No shipped code path needs this.
 tracing-subscriber.workspace = true
 tempfile = "3"
-
-# 017: the macOS system proxy, which programs there do not see as environment variables.
-[target.'cfg(target_os = "macos")'.dependencies]
-system-configuration.workspace = true

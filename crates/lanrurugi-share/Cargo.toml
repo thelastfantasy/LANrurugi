@@ -41,3 +41,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+
+# 017: the macOS system proxy (`proxy.rs`), which programs there do not see as environment variables.
+[target.'cfg(target_os = "macos")'.dependencies]
+system-configuration.workspace = true
