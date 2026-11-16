@@ -834,10 +834,12 @@ export function QueueItemRow({
                 (needsReingest ? reingest.isPending : start.isPending)
               }
               onClick={() => {
+                // `mutate`, not `mutateAsync`: a refused start is shown by the row itself (the
+                // hook refetches the queue on error), so there is no rejection left to handle.
                 if (needsReingest) {
-                  void reingest.mutateAsync(item.id);
+                  reingest.mutate(item.id);
                 } else {
-                  void start.mutateAsync(item.id);
+                  start.mutate(item.id);
                 }
               }}
             >

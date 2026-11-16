@@ -62,6 +62,84 @@ pub enum IngestDownloadError {
         existing_id: String,
         filename: String,
     },
+    /// What arrived is not an archive with pages — typically a web page the server answered with
+    /// (a "still being prepared" notice) under a 200. Refused before cataloguing (#300); the bytes
+    /// are dropped, so a retry downloads again.
+    #[error("the downloaded file is not an archive: {detail}")]
+    NotAnArchive {
+        detail: String,
+        /// The page's own text, when it was a web page: usually the server saying why.
+        page_excerpt: Option<String>,
+    },
+}
+
+/// Refuses a staged download that cannot be opened as an archive or has no pages. A library scan
+/// still catalogues such a file (with 0 pages) because it is already on disk; a download is not
+/// the user's file yet, and keeping it would only add a broken record (#300). A momentary I/O
+/// failure is not judged here — cataloguing reports that itself.
+fn check_is_archive(path: &std::path::Path) -> Result<(), IngestDownloadError> {
+    let detail = match lanrurugi_scanner::archive_format::list_pages(path) {
+        Ok(pages) if !pages.is_empty() => return Ok(()),
+        Ok(_) => "it contains no pages".to_string(),
+        Err(e) if !e.is_permanent() => return Ok(()),
+        Err(e) => e.to_string(),
+    };
+    let head = std::fs::read(path)
+        .map(|bytes| bytes.into_iter().take(64 * 1024).collect::<Vec<u8>>())
+        .unwrap_or_default();
+    Err(IngestDownloadError::NotAnArchive {
+        detail,
+        page_excerpt: html_excerpt(&head),
+    })
+}
+
+/// The visible text at the start of `bytes`, when they are an HTML page; `None` otherwise.
+pub(crate) fn html_excerpt(bytes: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(bytes);
+    let lower = text
+        .trim_start_matches('\u{feff}')
+        .trim_start()
+        .to_ascii_lowercase();
+    if !(lower.starts_with("<!doctype html")
+        || lower.starts_with("<html")
+        || lower.contains("<html"))
+    {
+        return None;
+    }
+    // Drop scripts and styles whole, then every tag, then collapse whitespace.
+    let mut out = String::new();
+    let mut rest = text.as_ref();
+    while let Some(start) = rest.find('<') {
+        out.push_str(&rest[..start]);
+        let tag = &rest[start..];
+        let lower_tag = tag.get(..8).unwrap_or(tag).to_ascii_lowercase();
+        let skip_to = if lower_tag.starts_with("<script") {
+            tag.to_ascii_lowercase()
+                .find("</script>")
+                .map(|i| i + "</script>".len())
+        } else if lower_tag.starts_with("<style") {
+            tag.to_ascii_lowercase()
+                .find("</style>")
+                .map(|i| i + "</style>".len())
+        } else {
+            tag.find('>').map(|i| i + 1)
+        };
+        match skip_to {
+            Some(n) => {
+                out.push(' ');
+                rest = &tag[n..];
+            }
+            None => {
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    let collapsed = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+    Some(collapsed.chars().take(300).collect())
 }
 
 /// Converts to the structured, translatable `QueueError` the frontend actually renders — logs
@@ -134,6 +212,16 @@ impl From<&IngestDownloadError> for lanrurugi_core::queue_error::QueueError {
                 existing_id: existing_id.clone(),
                 reason: (*reason).into(),
             },
+            IngestDownloadError::NotAnArchive {
+                detail,
+                page_excerpt,
+            } => {
+                tracing::warn!(%detail, excerpt = ?page_excerpt, "downloaded file is not an archive");
+                QueueError::DownloadedNotArchive {
+                    detail: detail.clone(),
+                    page_excerpt: page_excerpt.clone(),
+                }
+            }
             IngestDownloadError::PendingRename(conflict) => QueueError::DuplicateFilename {
                 existing_id: conflict.existing_id.clone(),
                 filename: conflict.original_filename.clone(),
@@ -306,6 +394,10 @@ async fn ingest_staged_download(
     source_url: Option<&str>,
     defer_publication: bool,
 ) -> Result<IngestedDownload, IngestDownloadError> {
+    let staged = downloaded.path.clone();
+    lanrurugi_core::concurrency::run_blocking(move || check_is_archive(&staged))
+        .await
+        .map_err(|e| IngestDownloadError::Io(std::io::Error::other(e.to_string())))??;
     let duplicate_policy = if overwrite {
         DuplicatePolicy::Overwrite
     } else {
@@ -1189,6 +1281,54 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    /// #300: an E-Hentai "still being prepared" page saved under the archive's `.zip` name.
+    const PREPARING_PAGE: &str = "<!DOCTYPE html><html><head><title>Archiver</title><style>div{margin:0}</style></head><body><p>The file is already being processed. Please contact staff if it is not ready within a few minutes.</p><script>function gotonext(){document.location = \"/archive/1/x/2\";}</script></body></html>";
+
+    #[test]
+    fn a_web_page_reads_back_as_its_visible_text() {
+        let excerpt = html_excerpt(PREPARING_PAGE.as_bytes()).unwrap();
+        assert!(
+            excerpt.starts_with("Archiver The file is already being processed."),
+            "{excerpt}"
+        );
+        assert!(
+            !excerpt.contains("gotonext") && !excerpt.contains("margin"),
+            "{excerpt}"
+        );
+        assert_eq!(html_excerpt(b"PK\x03\x04 not a page"), None);
+    }
+
+    /// #300: a download that is not an archive is refused before anything is catalogued.
+    #[tokio::test]
+    async fn a_web_page_saved_as_a_zip_is_refused_before_cataloguing() {
+        let root = tempfile::tempdir().unwrap();
+        let Some(state) = state_with_temp_dirs(root.path()).await else {
+            return;
+        };
+        let path = state.library.temp_dir.join("3313403_token.zip");
+        std::fs::write(&path, PREPARING_PAGE).unwrap();
+        let downloaded = crate::download_manager::stream::DownloadedFile {
+            path: path.clone(),
+            filename: "3313403_token.zip".into(),
+            bytes_downloaded: PREPARING_PAGE.len() as u64,
+            blake3: None,
+        };
+
+        let outcome = ingest_downloaded_file(&state, &downloaded, false, None, None).await;
+
+        match outcome {
+            Err(IngestDownloadError::NotAnArchive { page_excerpt, .. }) => {
+                assert!(page_excerpt.unwrap().contains("already being processed"));
+            }
+            other => panic!("expected NotAnArchive, got {:?}", other.as_ref().err()),
+        }
+        let catalogued: Vec<_> = std::fs::read_dir(&state.library.archive_dir)
+            .unwrap()
+            .flatten()
+            .collect();
+        assert!(catalogued.is_empty(), "nothing reaches the library");
     }
 
     /// 027 US3: a copied file is checked against the fingerprint taken when it arrived.

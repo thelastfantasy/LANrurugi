@@ -25,7 +25,15 @@ async function bootstrap() {
   void startDiagnostics()
   const root = document.getElementById("root")
   if (!root) throw new Error("missing #root element")
-  createRoot(root).render(
+  // #287: `import.meta.env.DEV` is a build-time constant, so a production bundle drops this branch
+  // and never emits the overlay's chunk.
+  let rootOptions: Parameters<typeof createRoot>[1]
+  if (import.meta.env.DEV) {
+    const overlay = await import("./devtools/devOverlay")
+    overlay.installDevOverlay()
+    rootOptions = overlay.devRootOptions
+  }
+  createRoot(root, rootOptions).render(
     <StrictMode>
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>

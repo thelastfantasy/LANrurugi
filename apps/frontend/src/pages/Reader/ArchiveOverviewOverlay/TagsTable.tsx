@@ -45,7 +45,7 @@ export function TagsTable({ tags }: { tags: string }) {
                 </div>
               ) : (
                 (byNamespace.get(namespace) ?? []).map((value) => (
-                  <div className="gt" key={value}>
+                  <div className={namespace === "source" ? "gt" : "gt gt-single"} key={value}>
                     {namespace === "source" ? (
                       <a
                         href={getTagSearchURL(namespace, value, timezone)}
@@ -56,7 +56,11 @@ export function TagsTable({ tags }: { tags: string }) {
                         {value}
                       </a>
                     ) : (
-                      <a href={getTagSearchURL(namespace, value, timezone)} onClick={(e) => e.stopPropagation()}>
+                      <a
+                        href={getTagSearchURL(namespace, value, timezone)}
+                        onClick={(e) => e.stopPropagation()}
+                        title={formatTagValue(namespace, value, timezone)}
+                      >
                         {formatTagValue(namespace, value, timezone)}
                       </a>
                     )}

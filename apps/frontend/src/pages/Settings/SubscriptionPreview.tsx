@@ -102,6 +102,11 @@ export function previewGridColumns(fields?: string[]): string {
   return columns.join(" ")
 }
 
+/** The preview's columns for the subscriptions dialog's lists: the same tracks, with a wider last
+ *  column, since there it carries the outcome, its reason and when the check ran. */
+export const SUBSCRIPTION_LIST_COLUMNS =
+  "2.5em minmax(35%, 1fr) minmax(0, 10%) minmax(100px, 14%) minmax(86px, 10%) minmax(130px, 17%)"
+
 /** Why this candidate landed where it did: a short label in the column, the sentence in a tooltip.
  *
  * The full sentences ("先前检查中已见过", "被规则跳过：…") are what made this column wide enough to
@@ -209,10 +214,48 @@ export function useIsTruncated<T extends HTMLElement>() {
   return { ref, truncated }
 }
 
+/** When a work was published: stacked date and time, one line on a phone. */
+export function PostedCell({ postedAt }: { postedAt?: number | null }) {
+  const narrow = useIsNarrowViewport("(max-width: 760px)")
+  return (
+    <span className="preview-posted">
+      {postedAt != null ? (
+        narrow ? (
+          new Date(postedAt * 1000).toLocaleString()
+        ) : (
+          <DateTimeStack epochSeconds={postedAt} />
+        )
+      ) : (
+        "—"
+      )}
+    </span>
+  )
+}
+
+/** A source-side rating as stars, the exact value in a tooltip: a 4.5 and a 5 are hard to tell
+ *  apart at 14px, and the value is what a rating floor is judged against. */
+export function RatingCell({ rating }: { rating?: number | null }) {
+  const { t } = useTranslation()
+  return (
+    <span className="preview-rating">
+      {rating != null ? (
+        // Above `Modal`'s own 9001 — this grid is read inside dialogs.
+        <Tooltip label={t("subscriptions.ratingValue", { rating })} zIndex={9700}>
+          <span style={{ display: "inline-flex" }}>
+            <StarRatingDisplay rating={rating} size={14} />
+          </span>
+        </Tooltip>
+      ) : (
+        "—"
+      )}
+    </span>
+  )
+}
+
 /** The uploader name, with its full value in a tooltip whenever the column had to truncate it.
  * A handle is often the only thing telling two rows apart, and "kingdomc…" is neither readable nor
  * copyable — the bubble's text is selectable, so the full name can be taken from it. */
-function UploaderCell({ name }: { name: string }) {
+export function UploaderCell({ name }: { name: string }) {
   const { ref, truncated } = useIsTruncated<HTMLSpanElement>()
   const cell = (
     <span ref={ref} className="preview-uploader">
@@ -251,7 +294,6 @@ export function SubscriptionPreview({
   const forget = useForgetSeen()
   const block = useBlockSubscriptionSources()
   const titleOrder = useLanguageOrder()
-  const narrow = useIsNarrowViewport("(max-width: 760px)")
   const rows = preview.candidates
   const includeField = (field: string) => fields === undefined || fields.includes(field)
   const columns = previewGridColumns(fields)
@@ -356,45 +398,14 @@ export function SubscriptionPreview({
               )}
             </span>
 
-            {includeField("posted_at") && (
-              <span className="preview-posted">
-                {r.posted_at != null ? (
-                  narrow ? (
-                    new Date(r.posted_at * 1000).toLocaleString()
-                  ) : (
-                    <DateTimeStack epochSeconds={r.posted_at} />
-                  )
-                ) : (
-                  "—"
-                )}
-              </span>
-            )}
+            {includeField("posted_at") && <PostedCell postedAt={r.posted_at} />}
 
             {includeField("uploader") && (
               // Its own column so uploaders line up down the page, the way the verdicts do.
               <UploaderCell name={r.uploader ?? ""} />
             )}
 
-            {includeField("rating") && (
-              <span className="preview-rating">
-                {r.rating != null ? (
-                  // The stars are a shape, not a number: a 4.5 and a 5 are hard to tell apart at
-                  // 14px, and "which rating did it actually have" is what a rating floor is judged
-                  // against. The exact value is one hover away rather than a column of digits.
-                  <Tooltip
-                    label={t("subscriptions.ratingValue", { rating: r.rating })}
-                    // Above `Modal`'s own 9001 — see this file's other in-dialog tooltips.
-                    zIndex={9700}
-                  >
-                    <span style={{ display: "inline-flex" }}>
-                      <StarRatingDisplay rating={r.rating} size={14} />
-                    </span>
-                  </Tooltip>
-                ) : (
-                  "—"
-                )}
-              </span>
-            )}
+            {includeField("rating") && <RatingCell rating={r.rating} />}
 
             <span className="preview-verdict">
               <Reason record={r} />

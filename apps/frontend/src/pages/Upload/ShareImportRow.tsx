@@ -93,7 +93,9 @@ const IN_FLIGHT = new Set(["starting", "downloading", "waiting"])
  * row; expanded it lists every archive in a bounded, scrolling area. */
 export function ShareImportRow({ item, job }: { item: DownloadQueueItem; job: JobRecord | undefined }) {
   const { t } = useTranslation()
-  const [expanded, setExpanded] = useState(false)
+  // Open while the import runs, since per-archive progress is what one is watching then (#289).
+  // Only the initial value follows the state: once mounted, the caret is the user's alone.
+  const [expanded, setExpanded] = useState(() => IN_FLIGHT.has(item.state))
   const start = useStartQueueItem()
   const stop = useStopQueueItem()
   const del = useDeleteQueueItem()
@@ -229,30 +231,37 @@ export function ShareImportRow({ item, job }: { item: DownloadQueueItem; job: Jo
                   ? `${formatBytes(a.bytes_done)} / ${formatBytes(a.size)}`
                   : t(`share.importRow.state.${a.state}`)}
               </span>
-              {a.local_archive_id && <OpenButton archiveId={a.local_archive_id} />}
-              {a.note && (
-                <span className="share-import-archive-note" title={a.note}>
-                  {a.note}
-                </span>
-              )}
-              {a.state === "failed" && (
-                <>
-                  <span className="share-import-archive-error" title={a.error ?? ""}>
-                    {archiveErrorText(t, a.error)}
-                  </span>
-                  <button
-                    type="button"
-                    className="favtag-btn"
-                    onClick={() =>
-                      void sendJson(
-                        "POST",
-                        `/shares/imports/${encodeURIComponent(d.id)}/archives/${encodeURIComponent(a.sharer_archive_id)}/retry`,
-                      ).then(() => detail.refetch())
-                    }
-                  >
-                    {t("share.importRow.retry")}
-                  </button>
-                </>
+              {/* Always present, empty or not, so every row's bar and state line up (#288). */}
+              <span className="share-import-archive-action">
+                {a.local_archive_id && <OpenButton archiveId={a.local_archive_id} />}
+              </span>
+              {(a.note || a.state === "failed") && (
+                <div className="share-import-archive-extra">
+                  {a.note && (
+                    <span className="share-import-archive-note" title={a.note}>
+                      {a.note}
+                    </span>
+                  )}
+                  {a.state === "failed" && (
+                    <>
+                      <span className="share-import-archive-error" title={a.error ?? ""}>
+                        {archiveErrorText(t, a.error)}
+                      </span>
+                      <button
+                        type="button"
+                        className="favtag-btn"
+                        onClick={() =>
+                          void sendJson(
+                            "POST",
+                            `/shares/imports/${encodeURIComponent(d.id)}/archives/${encodeURIComponent(a.sharer_archive_id)}/retry`,
+                          ).then(() => detail.refetch())
+                        }
+                      >
+                        {t("share.importRow.retry")}
+                      </button>
+                    </>
+                  )}
+                </div>
               )}
             </li>
           ))}

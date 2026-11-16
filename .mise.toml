@@ -372,6 +372,10 @@ run = "scripts/dev-container-run.sh"
 description = "Stop the local full-stack dev container"
 run = "podman stop lrr-dev"
 
+[tasks.dev-seed]
+description = "Write the uncommon-state seed data (subscriptions awaiting approval, reservations, check history) into the running dev container (#286)"
+run = "node apps/frontend/tests/seed/seed.mjs --container lrr-dev --port 16379"
+
 [tasks.dev-rebuild]
 description = "Rebuild the dev image after a *backend* source change (frontend changes need no rebuild — Vite picks them up live)"
 # Deliberately `podman build` directly, NOT `podman compose -f compose.dev.yaml build` — this

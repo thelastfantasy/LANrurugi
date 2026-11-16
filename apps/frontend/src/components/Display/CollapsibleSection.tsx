@@ -1,6 +1,8 @@
 import { useState } from "react"
 import { FaCaretDown, FaCaretRight, FaCaretUp } from "react-icons/fa6"
 
+import { SectionErrorBoundary } from "@/components/common-ui/Display/SectionErrorBoundary"
+
 /** Legacy's `.collapsible.extensible.with-right-caret > li.option-flyout` accordion pattern —
  * clicking `.collapsible-title` toggles `.active` independently per section (no sibling collapse).
  *
@@ -89,7 +91,8 @@ export function CollapsibleSection({
       </div>
       {(open || id) && (
         <div className="collapsible-body" style={open ? bodyStyle : { display: "none" }}>
-          {children}
+          {/* A crash in one section's body leaves its header and every other section usable (#283). */}
+          <SectionErrorBoundary section={id ?? "section"}>{children}</SectionErrorBoundary>
         </div>
       )}
     </Container>

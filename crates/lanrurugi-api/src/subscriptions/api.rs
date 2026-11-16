@@ -53,11 +53,17 @@ pub fn router() -> Router<AppState> {
         .route("/subscriptions/{id}/check", post(check_now))
         .route("/subscriptions/{id}/forget", post(forget_seen))
         .route("/subscriptions/{id}/block", post(block_sources))
+        .route("/subscriptions/{id}/unskip", post(unskip_sources))
+        .route(
+            "/subscriptions/{id}/approve-pending",
+            post(approve_all_pending),
+        )
         .route("/subscriptions/tracking", get(tracking_for))
         .route("/subscriptions/history", get(combined_history))
         .route("/subscriptions/blocked", get(blocked_works))
         .route("/reservations", get(list_reservations))
         .route("/reservations/{id}/discard", post(discard_reservation))
+        .route("/reservations/{id}/retry", post(retry_reservation))
 }
 
 #[derive(Debug, Deserialize)]
@@ -500,13 +506,13 @@ async fn combined_history(
                     "id": item.id,
                     "state": item.state,
                     "error": item.error,
-                    // Restartable states, so the interface can offer a retry rather than only naming
-                    // the failure (`is_startable`'s own set).
+                    // Restartable states (`is_startable`'s own set), and only when the failure is one
+                    // a second attempt could change: "already in the library" is not.
                     "can_retry": matches!(
                         item.state,
                         lanrurugi_storage::download_queue::DownloadQueueState::Error
                             | lanrurugi_storage::download_queue::DownloadQueueState::Cancelled
-                    ),
+                    ) && item.error.as_ref().is_none_or(|e| e.retryable()),
                 }),
             )
         })
@@ -514,15 +520,39 @@ async fn combined_history(
 
     // Per subscription, because that is how cycles are stored; merged afterwards by time.
     let mut entries: Vec<serde_json::Value> = Vec::new();
+    // Every subscription's skips, kept for after the merge: one whose check aged out of the history
+    // is listed from its own record.
+    let mut skipped_works: Vec<(
+        String,
+        String,
+        String,
+        lanrurugi_storage::subscriptions::SkippedWork,
+    )> = Vec::new();
     for subscription in &subscriptions {
         let cycles = state
             .subscriptions
             .recent_cycles(&subscription.id, CYCLES_PER_SUBSCRIPTION)
             .await
             .unwrap_or_default();
+        // A cycle's "awaiting approval" is never rewritten once answered, so a skipped work would
+        // still read as waiting (and as accepted). The skip record says what actually happened.
+        let skipped = state
+            .subscriptions
+            .skipped_all(&subscription.id)
+            .await
+            .unwrap_or_default();
+        for (source, work) in &skipped {
+            skipped_works.push((
+                subscription.id.clone(),
+                subscription.name.clone(),
+                source.clone(),
+                work.clone(),
+            ));
+        }
         for cycle in cycles {
             for record in &cycle.candidates {
                 entries.push(json!({
+                    "skipped": skipped.contains_key(&record.source_url),
                     "subscription_id": subscription.id,
                     "subscription_name": subscription.name,
                     "checked_at": cycle.finished_at,
@@ -556,6 +586,55 @@ async fn combined_history(
         );
         seen.insert(key)
     });
+
+    for (subscription_id, name, source, work) in skipped_works {
+        if !seen.insert((subscription_id.clone(), source.clone())) {
+            continue;
+        }
+        entries.push(json!({
+            "subscription_id": subscription_id,
+            "subscription_name": name,
+            "checked_at": work.at / 1000,
+            "outcome": "completed",
+            "candidate": {
+                "source_url": source,
+                "title": work.title,
+                "verdict": { "verdict": "awaiting_approval" },
+            },
+            "skipped": true,
+            "download": outcome_by_source.get(&source),
+        }));
+    }
+
+    // A queued work whose cycle has aged out of the history is still the subscription's doing, and
+    // the queue still holds it: listed from the queue record so "accepted" never loses it.
+    for item in queue.iter() {
+        let Some(subscription_id) = &item.subscription_id else {
+            continue;
+        };
+        let source = crate::plugins::trim_url(&item.url);
+        if !seen.insert((subscription_id.clone(), source.clone())) {
+            continue;
+        }
+        let name = subscriptions
+            .iter()
+            .find(|s| &s.id == subscription_id)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+        let mut candidate = json!({ "source_url": source, "verdict": { "verdict": "queued" } });
+        if let Some(title) = &item.title {
+            candidate["title"] = json!({ "origin": title });
+        }
+        entries.push(json!({
+            "subscription_id": subscription_id,
+            "subscription_name": name,
+            "checked_at": item.created_at / 1000,
+            "outcome": "completed",
+            "candidate": candidate,
+            "download": outcome_by_source.get(&source),
+        }));
+    }
+    entries.sort_by_key(|e| std::cmp::Reverse(e["checked_at"].as_i64().unwrap_or(0)));
 
     let limit = params.limit.unwrap_or(1000).min(1000);
     entries.truncate(limit);
@@ -667,6 +746,117 @@ struct BlockBody {
 /// Distinct from a rule rejection on purpose — a rule reads a value that can change, so a rejection is
 /// provisional and decided afresh every cycle (FR-011i), while this is an answer, and re-deciding it
 /// would ask again what the user already said. The preview offers it per row; `forget_seen` undoes it.
+/// `POST /subscriptions/{id}/approve-pending` — after switching a subscription to automatic
+/// download: check it once more, then approve every work still waiting on it.
+///
+/// Decided on the server, not from a list the client holds: a work that reached the approval list
+/// after the client last read it would otherwise be left behind. The check runs first so that list
+/// is current; with automatic download on, whatever it newly matches is queued by the check itself.
+/// Answers at once — a check may page through the source for a while — and does the work behind it.
+async fn approve_all_pending(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let Ok(Some(_)) = state.subscriptions.get(&id).await else {
+        return not_found("approve_all_pending", format!("{id} does not exist."));
+    };
+    let spawned = state.clone();
+    tokio::spawn(async move {
+        // One check of a subscription at a time: if the scheduler is checking it now, wait for that
+        // to finish rather than running a second one beside it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30 * 60);
+        let guard = loop {
+            if let Some(guard) = spawned.subscriptions_in_flight.claim(&id).await {
+                break Some(guard);
+            }
+            if std::time::Instant::now() > deadline {
+                break None;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        };
+        if guard.is_none() {
+            tracing::warn!(subscription_id = %id, "gave up waiting for a running check; approving the current list");
+        } else {
+            super::runner::run_check(&spawned, &id, super::runner::CheckTrigger::Manual).await;
+        }
+        let ids: Vec<String> = spawned
+            .subscriptions
+            .list_pending()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| p.subscription_id == id)
+            .map(|p| p.id)
+            .collect();
+        let (approved, failures) = approve_entries(&spawned, &ids).await;
+        drop(guard);
+        tracing::info!(
+            subscription_id = %id,
+            approved,
+            failed = failures.len(),
+            "approved the subscription's pending works after a fresh check"
+        );
+    });
+    axum::Json(json!({ "operation": "approve_all_pending", "success": 1, "started": true }))
+        .into_response_owned()
+}
+
+/// `POST /subscriptions/{id}/unskip` — puts skipped works back on the approval list, under the title
+/// they were skipped with, so the user can answer them again.
+#[derive(Debug, Deserialize)]
+struct UnskipBody {
+    sources: Vec<String>,
+    /// Queue them for download at once instead of returning them to the approval list.
+    #[serde(default)]
+    download: bool,
+}
+
+async fn unskip_sources(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    axum::Json(body): axum::Json<UnskipBody>,
+) -> Response {
+    let Ok(Some(subscription)) = state.subscriptions.get(&id).await else {
+        return not_found(
+            "unskip_subscription_sources",
+            format!("{id} does not exist."),
+        );
+    };
+    let taken = match state.subscriptions.take_skipped(&id, &body.sources).await {
+        Ok(taken) => taken,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "unskip_subscription_sources",
+                e.to_string(),
+            )
+        }
+    };
+    let mut restored = 0usize;
+    for (source, work) in taken {
+        if body.download {
+            // Same path as approving: queued and started, or left skipped-no-more with the reason.
+            if enqueue_work(&state, &subscription, &source).await.is_ok() {
+                restored += 1;
+                continue;
+            }
+        }
+        let entry = lanrurugi_storage::subscriptions::PendingApproval {
+            id: uuid::Uuid::new_v4().to_string(),
+            subscription_id: id.clone(),
+            source_url: source,
+            title: work.title,
+            created_at: now_secs(),
+        };
+        if state.subscriptions.save_pending(&entry).await.is_ok() {
+            restored += 1;
+        }
+    }
+    axum::Json(json!({
+        "operation": "unskip_subscription_sources",
+        "success": 1,
+        "restored": restored,
+    }))
+    .into_response_owned()
+}
+
 async fn block_sources(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -867,7 +1057,7 @@ async fn check_now(State(state): State<AppState>, Path(id): Path<String>) -> Res
     };
     let spawned = state.clone();
     tokio::spawn(async move {
-        super::runner::run_check(&spawned, &id).await;
+        super::runner::run_check(&spawned, &id, super::runner::CheckTrigger::Manual).await;
     });
     axum::Json(json!({ "operation": "check_subscription", "success": 1 })).into_response_owned()
 }
@@ -907,14 +1097,53 @@ struct PendingIds {
 ///
 /// Partial success is reported rather than rolled back: with several items, one that fails to queue
 /// is no reason to un-approve the rest, and the caller is told exactly which ones did not make it.
-async fn approve_pending(
-    State(state): State<AppState>,
-    axum::Json(body): axum::Json<PendingIds>,
-) -> Response {
+/// Queues and starts one subscription work, as the unattended runner would. `Err` means it never
+/// reached the queue; `Ok(Err)` means it is queued but did not start (still startable by hand).
+async fn enqueue_work(
+    state: &AppState,
+    subscription: &lanrurugi_storage::subscriptions::Subscription,
+    source_url: &str,
+) -> Result<Result<String, String>, super::reservations::ReservationReason> {
+    // The subscription's `source` is the discovery plugin, which has no `execDownload`; the
+    // download plugin that owns this URL is resolved separately, and every download-plugin setting
+    // is keyed off its namespace. See `plugins::resolve_download_plugin_for_url`.
+    let Some((download_namespace, _)) =
+        crate::plugins::resolve_download_plugin_for_url(state, source_url).await
+    else {
+        return Err(super::reservations::ReservationReason::NoDownloadPlugin);
+    };
+    let overwrite_on_duplicate =
+        crate::plugins::resolve_queue_overwrite_on_duplicate(state, &download_namespace).await;
+    let item = state
+        .download_queue
+        .add(lanrurugi_storage::download_queue::NewQueueItem {
+            origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
+            subscription_id: Some(subscription.id.clone()),
+            url: source_url.to_string(),
+            plugin_namespace: download_namespace,
+            file_size: None,
+            category: subscription.target_category.clone(),
+            metadata_tags: subscription.metadata_tags.clone(),
+            auto_fetch_metadata: subscription.enrich_metadata,
+            overwrite_on_duplicate,
+            // Enters the queue exactly as a manually added URL would, inheriting the existing
+            // start/stop/retry behaviour rather than getting a path of its own.
+            state: lanrurugi_storage::download_queue::DownloadQueueState::Queued,
+        })
+        .await
+        .map_err(|e| super::reservations::ReservationReason::DownloadFailed(e.to_string()))?;
+    // Approving or retrying *is* the decision this download was waiting for, so it starts here —
+    // see `download_queue::start_item_from_subscription`'s own docs.
+    Ok(crate::download_queue::start_item_from_subscription(state, &item.id).await)
+}
+
+/// Queues and starts each pending work, as approving it from the list does. Returns how many reached
+/// the queue and, per id, why one did not (or did but did not start).
+async fn approve_entries(state: &AppState, ids: &[String]) -> (usize, Vec<serde_json::Value>) {
     let mut approved = 0usize;
     let mut failures: Vec<serde_json::Value> = Vec::new();
 
-    for id in &body.ids {
+    for id in ids {
         let Ok(Some(entry)) = state.subscriptions.get_pending(id).await else {
             failures.push(json!({ "id": id, "error": "no such pending approval" }));
             continue;
@@ -924,61 +1153,30 @@ async fn approve_pending(
             continue;
         };
 
-        // Same resolution the unattended runner performs — the subscription's `source` is the
-        // discovery plugin, which has no `execDownload`; the download plugin is what owns this URL,
-        // and every download-plugin setting is keyed off its namespace. See
-        // `plugins::resolve_download_plugin_for_url`.
-        let Some((download_namespace, _)) =
-            crate::plugins::resolve_download_plugin_for_url(&state, &entry.source_url).await
-        else {
-            // Left pending rather than dismissed: installing the missing plugin is a real fix, and
-            // the user's answer should survive until then.
-            failures.push(json!({
-                "id": id,
-                "error": "no installed download plugin matches this source URL",
-            }));
-            continue;
-        };
-        let overwrite_on_duplicate =
-            crate::plugins::resolve_queue_overwrite_on_duplicate(&state, &download_namespace).await;
-
-        let queued = state
-            .download_queue
-            .add(lanrurugi_storage::download_queue::NewQueueItem {
-                origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
-                subscription_id: Some(entry.subscription_id.clone()),
-                url: entry.source_url.clone(),
-                plugin_namespace: download_namespace,
-                file_size: None,
-                category: subscription.target_category.clone(),
-                metadata_tags: subscription.metadata_tags.clone(),
-                auto_fetch_metadata: subscription.enrich_metadata,
-                overwrite_on_duplicate,
-                // Enters the queue exactly as a manually added URL would, inheriting the existing
-                // start/stop/retry behaviour rather than getting a path of its own.
-                state: lanrurugi_storage::download_queue::DownloadQueueState::Queued,
-            })
-            .await;
-
-        match queued {
-            Ok(item) => {
+        match enqueue_work(state, &subscription, &entry.source_url).await {
+            Ok(started) => {
                 // Deleted only after the queue accepted it; the other order would lose the work
                 // entirely while the user believed they had approved it.
                 let _ = state.subscriptions.delete_pending(id).await;
                 approved += 1;
-                // Approving *is* the decision this download was waiting for, so it starts here
-                // rather than parking as a second, redundant "press Start" step — see
-                // `download_queue::start_item_from_subscription`'s own docs.
-                if let Err(e) =
-                    crate::download_queue::start_item_from_subscription(&state, &item.id).await
-                {
+                if let Err(e) = started {
                     // Still queued and startable from the upload page, so this is a warning.
                     failures.push(json!({ "id": id, "error": e, "queued": true }));
                 }
             }
-            Err(e) => failures.push(json!({ "id": id, "error": e.to_string() })),
+            // Left pending rather than dismissed: installing a missing plugin is a real fix, and
+            // the user's answer should survive until then.
+            Err(reason) => failures.push(json!({ "id": id, "error": reason.as_key() })),
         }
     }
+    (approved, failures)
+}
+
+async fn approve_pending(
+    State(state): State<AppState>,
+    axum::Json(body): axum::Json<PendingIds>,
+) -> Response {
+    let (approved, failures) = approve_entries(&state, &body.ids).await;
 
     axum::Json(json!({
         "operation": "approve_pending",
@@ -1008,6 +1206,13 @@ async fn dismiss_pending(
                 std::slice::from_ref(&entry.source_url),
             )
             .await;
+        let _ = state
+            .subscriptions
+            .mark_skipped(
+                &entry.subscription_id,
+                &[(entry.source_url.clone(), entry.title.clone())],
+            )
+            .await;
         let _ = state.subscriptions.delete_pending(id).await;
         dismissed += 1;
     }
@@ -1025,9 +1230,16 @@ async fn list_reservations(State(state): State<AppState>) -> Response {
             // Only waiting entries are the user's to-do list; discarded ones are retained purely so
             // later cycles know not to re-offer that work (FR-016), and showing them would turn a
             // settled decision back into an open question.
-            let waiting: Vec<_> = items
+            let waiting: Vec<serde_json::Value> = items
                 .into_iter()
                 .filter(|e| e.status == ReservationStatus::Waiting)
+                .map(|e| {
+                    let retryable =
+                        super::reservations::ReservationReason::from_key(&e.reason).retryable();
+                    let mut value = serde_json::to_value(&e).unwrap_or_default();
+                    value["retryable"] = json!(retryable);
+                    value
+                })
                 .collect();
             axum::Json(json!({ "reservations": waiting })).into_response_owned()
         }
@@ -1036,6 +1248,49 @@ async fn list_reservations(State(state): State<AppState>) -> Response {
             "list_reservations",
             e.to_string(),
         ),
+    }
+}
+
+/// `POST /reservations/{id}/retry` — tries a work that could not be downloaded once more. On
+/// success the entry is gone (the queue item now carries the work); on failure it stays, with the
+/// new reason.
+async fn retry_reservation(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let entry = match state.subscriptions.get_reservation(&id).await {
+        Ok(Some(entry)) => entry,
+        Ok(None) => return not_found("retry_reservation", format!("{id} does not exist.")),
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "retry_reservation",
+                e.to_string(),
+            )
+        }
+    };
+    let Ok(Some(subscription)) = state.subscriptions.get(&entry.subscription_id).await else {
+        return not_found("retry_reservation", "the subscription no longer exists");
+    };
+    match enqueue_work(&state, &subscription, &entry.source_url).await {
+        Ok(started) => {
+            let _ = state.subscriptions.delete_reservation(&id).await;
+            axum::Json(json!({
+                "operation": "retry_reservation",
+                "success": 1,
+                "started": started.is_ok(),
+                "error": started.err(),
+            }))
+            .into_response_owned()
+        }
+        Err(reason) => {
+            let mut entry = entry;
+            entry.reason = reason.as_key();
+            let _ = state.subscriptions.save_reservation(&entry).await;
+            crate::common::coded_error(
+                StatusCode::CONFLICT,
+                "retry_reservation",
+                &entry.reason,
+                "the work could not be queued",
+            )
+        }
     }
 }
 

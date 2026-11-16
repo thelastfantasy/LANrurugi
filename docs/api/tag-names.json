@@ -31,6 +31,13 @@
     "description_en": "Backfill the whole-file BLAKE3 fingerprint for archives catalogued before it was recorded: start and stop the background job."
   },
   {
+    "key": "integrity_scan",
+    "zh": "损坏档案扫描 API",
+    "en": "Integrity Scan API",
+    "description_zh": "扫描书库找出文件已损坏（缺失、无法打开、没有页面）的档案：启动、停止后台任务，以及查看结果。",
+    "description_en": "Scan the library for archives whose file is damaged (missing, unreadable, or without pages): start and stop the background job, and read the findings."
+  },
+  {
     "key": "categories",
     "zh": "分类 API",
     "en": "Category API"

@@ -4692,6 +4692,19 @@ pub(crate) mod tests {
     /// its queue item's state.
     #[tokio::test]
     async fn waiting_state_is_set_while_blocked_on_a_busy_domain_permit() {
+        /// A real one-page zip, unique per `marker`: a download that is not an archive is refused
+        /// before cataloguing (#300), so plain text bodies no longer ingest.
+        fn one_page_zip(marker: &str) -> Vec<u8> {
+            use std::io::Write as _;
+            let mut buf = std::io::Cursor::new(Vec::new());
+            let mut writer = zip::ZipWriter::new(&mut buf);
+            let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
+            writer.start_file("001.png", options).unwrap();
+            writer.write_all(marker.as_bytes()).unwrap();
+            writer.finish().unwrap();
+            buf.into_inner()
+        }
+
         let Some(state) = test_state().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
@@ -4719,14 +4732,14 @@ pub(crate) mod tests {
                     async move {
                         hold_first_srv.notify_one();
                         release_first_srv.notified().await;
-                        format!("first resource body {run_id}").into_bytes()
+                        one_page_zip(&format!("first resource body {run_id}"))
                     }
                 }),
             )
             .route(
                 &format!("/{second_filename}"),
                 axum::routing::get(move || async move {
-                    format!("second resource body {run_id}").into_bytes()
+                    one_page_zip(&format!("second resource body {run_id}"))
                 }),
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

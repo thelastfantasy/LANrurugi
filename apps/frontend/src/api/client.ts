@@ -170,13 +170,14 @@ export async function recoverSession(): Promise<boolean> {
   return false
 }
 
-/** Reads `{error, detail?, raw_output?}`, appending detail/raw_output when present. */
-async function readErrorBody(response: Response, path: string): Promise<string> {
+/** Builds the {@link ApiError} for a failed response from `{error, detail?, raw_output?, code?}`,
+ * appending detail/raw_output to the message and keeping the body for callers that branch on it. */
+async function apiErrorFrom(response: Response, path: string): Promise<ApiError> {
   const body = (await response.json().catch(() => null)) as ErrorBody | null
-  return errorMessage(body, response.status, path)
+  return new ApiError(response.status, errorMessage(body, response.status, path), body ?? undefined)
 }
 
-type ErrorBody = { error?: string; detail?: string; raw_output?: string; field?: string }
+type ErrorBody = { error?: string; detail?: string; raw_output?: string; field?: string; code?: string }
 
 function errorMessage(body: ErrorBody | null, status: number, path: string): string {
   if (!body?.error) return `Request to ${path} failed with ${status}`
@@ -195,7 +196,7 @@ export async function fetchJson<T>(path: string, retried = false): Promise<T> {
         invalidateLoginStatus()
       }
     }
-    throw new ApiError(response.status, await readErrorBody(response, path))
+    throw await apiErrorFrom(response, path)
   }
 
   return (await response.json()) as T
@@ -283,7 +284,7 @@ export async function fetchText(path: string, retried = false): Promise<string> 
         invalidateLoginStatus()
       }
     }
-    throw new ApiError(response.status, await readErrorBody(response, path))
+    throw await apiErrorFrom(response, path)
   }
 
   return response.text()
@@ -344,7 +345,7 @@ export async function sendJsonForBlob(
         invalidateLoginStatus()
       }
     }
-    throw new ApiError(response.status, await readErrorBody(response, path))
+    throw await apiErrorFrom(response, path)
   }
 
   const disposition = response.headers.get("Content-Disposition")

@@ -32,7 +32,7 @@ Docker 用 `-e` 或 compose 的 `environment`。注意镜像的启动命令里�
 | `LANRURUGI_LIBRARY_PATH`<br>`--library-path` | `./library` | 书库目录，可以直接指向旧版 LANraragi 的 `content` |
 | `LANRURUGI_THUMB_DIR`<br>`--thumb-dir` | `./thumb` | 缩略图缓存 |
 | `LANRURUGI_DATA_DIR` | 未设置 | 设了就把缩略图、Redis 数据库、模型、日志都放到它下面的同名子目录，容器只需挂一个卷（见下方说明） |
-| `LANRURUGI_TEMP_DIR`<br>`--temp-dir` | `./temp` | 上传暂存、转码与渲染缓存，受 `tempmaxsize` 限制 |
+| `LANRURUGI_TEMP_DIR`<br>`--temp-dir` | `./temp` | 上传暂存、转码与渲染缓存（缓存部分受 `tempmaxsize` 限制）；分享导入的未完成文件也在这里，只受磁盘剩余空间限制。容器部署建议把它挂载到宿主机目录，否则大文件会写进容器可写层，重建容器后导入进度也会丢失 |
 | `LANRURUGI_LOG_DIRECTORY`<br>`--log-dir` | `./log` | 设置 → 日志页面读的分类日志 |
 | `LANRURUGI_PLUGINS_DIR`<br>`--plugins-dir` | `./plugins` | 插件 `.ts` 所在目录，按子目录分命名空间 |
 | `LANRURUGI_STATIC_DIR`<br>`--static-dir` | 未设置 | 前端构建产物。不设就只提供 API（开发时前端跑 Vite 的 dev server） |

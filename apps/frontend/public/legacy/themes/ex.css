@@ -1670,3 +1670,11 @@ textarea {
         background: #4f5052 !important;
     }
 }
+
+/* Additive — no legacy equivalent: a subscription's group row in the approval list. The blue this
+   theme already uses for its "in progress" history icon (`.history-state-running`), so the group
+   heading stands apart from the green/red result bands without inventing a new hue. */
+.preview-group-head {
+    background-color: rgba(80, 140, 205, 0.25);
+    border-left: 3px solid rgb(80, 140, 205);
+}

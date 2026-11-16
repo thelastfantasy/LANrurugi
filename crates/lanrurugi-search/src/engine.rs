@@ -800,6 +800,24 @@ async fn state_filter(
     match value {
         "new" => intersect_members(search_conn, NEW_KEY, scope).await,
         "untagged" => intersect_members(search_conn, UNTAGGED_KEY, scope).await,
+        // The file is known to be unreadable: self-heal failed on it, or a damaged-archive scan
+        // found it (#291). Both write the same field on the archive hash.
+        "damaged" => {
+            let mut ids = HashSet::new();
+            for id in scope {
+                if id.starts_with("TANK") {
+                    continue;
+                }
+                let marked: bool = archive_conn
+                    .hexists(id, "heal_failed_at")
+                    .await
+                    .unwrap_or(false);
+                if marked {
+                    ids.insert(id.clone());
+                }
+            }
+            Ok(ids)
+        }
         "tank" => Ok(scope
             .iter()
             .filter(|id| id.starts_with("TANK_"))
@@ -3770,6 +3788,27 @@ mod tests {
         // `is:new` (all three were just indexed as new), `is:untagged` (none are).
         assert_eq!(search_ids("artist:alpha is:new").await, vec![id_a.clone()]);
         assert!(search_ids("artist:alpha is:untagged").await.is_empty());
+
+        // `is:damaged` reads the archive's own `heal_failed_at` marker.
+        assert!(search_ids("artist:beta is:damaged").await.is_empty());
+        {
+            let mut conn = archive_pool.get().await.unwrap();
+            let _: () =
+                deadpool_redis::redis::AsyncCommands::hset(&mut conn, &id_b, "heal_failed_at", 1)
+                    .await
+                    .unwrap();
+        }
+        assert_eq!(
+            search_ids("(artist:alpha | artist:beta) is:damaged").await,
+            vec![id_b.clone()]
+        );
+        {
+            let mut conn = archive_pool.get().await.unwrap();
+            let _: () =
+                deadpool_redis::redis::AsyncCommands::hdel(&mut conn, &id_b, "heal_failed_at")
+                    .await
+                    .unwrap();
+        }
 
         // `has:patch`.
         assert_eq!(

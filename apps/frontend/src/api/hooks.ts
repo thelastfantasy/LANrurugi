@@ -58,6 +58,8 @@ import type {
   HistoryEntry,
   HoverPageOrderResponse,
   ImportSnapshotMetadata,
+  IntegrityFinding,
+  IntegrityScanStatus,
   JobRecord,
   JobsResponse,
   LibraryStatus,
@@ -75,7 +77,7 @@ import type {
   PublicThemeSettings,
   RandomArchivesResponse,
   RecycleBinView,
-  ReservationEntry,
+  ReservationListItem,
   RestoreResult,
   SafetyPasswordStatus,
   SearchResponse,
@@ -153,6 +155,10 @@ export function useSettings(options?: { enabled?: boolean }) {
     queryKey: ["settings"],
     queryFn: () => fetchJson<Settings>("/settings"),
     enabled: options?.enabled,
+    // Read by two dozen components, some once per row (a tag table's timezone): with the default
+    // staleTime of 0 every newly mounted row refetched it — 20 requests in 10 s opening one modal.
+    // Saving settings invalidates this key, so a minute of reuse never shows a stale value here.
+    staleTime: 60_000,
   })
 }
 
@@ -1409,6 +1415,23 @@ export function useSubscriptionCheckProgress() {
   return progress
 }
 
+/** Puts skipped works back on the approval list, to be answered again. */
+export function useUnskipSubscriptionSources() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, sources, download = false }: { id: string; sources: string[]; download?: boolean }) =>
+      sendJson<{ restored: number }>("POST", `/subscriptions/${encodeURIComponent(id)}/unskip`, {
+        sources,
+        download,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+      void queryClient.invalidateQueries({ queryKey: ["subscription-pending"] })
+      void queryClient.invalidateQueries({ queryKey: ["subscription-history"] })
+    },
+  })
+}
+
 export function useBlockSubscriptionSources() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -1488,6 +1511,20 @@ export function usePendingApprovals() {
 /** Approving puts the works in the normal download queue, so the Downloads page is where their
  *  progress is then followed — nothing further happens on the Subscriptions page. Takes a list
  *  because FR-007b requires approving individually *or* together; one item is a list of one. */
+/** After switching a subscription to automatic download: the server checks it once more, then
+ *  approves everything still waiting on it. Runs in the background; the queue shows the result. */
+export function useApproveAllPending() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (subscriptionId: string) =>
+      sendJson<{ started: boolean }>("POST", `/subscriptions/${encodeURIComponent(subscriptionId)}/approve-pending`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["subscription-pending"] })
+      void queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+    },
+  })
+}
+
 export function useApprovePending() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -1518,7 +1555,33 @@ export function useReservations() {
   return useQuery({
     queryKey: ["reservations"],
     queryFn: () =>
-      fetchJson<{ reservations: ReservationEntry[] }>("/reservations").then((r) => r.reservations),
+      fetchJson<{ reservations: ReservationListItem[] }>("/reservations").then((r) => r.reservations),
+  })
+}
+
+/** Subscription works that did not download: those that failed in the queue plus those that never
+ *  reached it. One number, since to the reader both are "download failed". */
+export function useSubscriptionFailedCount(): number {
+  const reservations = useReservations()
+  const queue = useDownloadQueue()
+  const inQueue = (queue.data ?? []).filter((i) => i.subscription_id && i.state === "error").length
+  return inQueue + (reservations.data?.length ?? 0)
+}
+
+/** Tries a work that never reached the download queue once more; on success it is queued. */
+export function useRetryReservation() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<{ started: boolean; error?: string | null }>(
+        "POST",
+        `/reservations/${encodeURIComponent(id)}/retry`,
+      ),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["reservations"] })
+      void queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+      void queryClient.invalidateQueries({ queryKey: ["subscription-history"] })
+    },
   })
 }
 
@@ -1890,6 +1953,49 @@ export function useBlake3Backfill() {
 export function useStopBlake3Backfill() {
   return useMutation({
     mutationFn: () => sendJson<{ stopped: boolean }>("DELETE", "/database/blake3-backfill"),
+  })
+}
+
+/** #292: the damaged-archive scan and its findings. Polled while a scan runs. */
+export function useIntegrityScan(enabled = true) {
+  return useQuery({
+    queryKey: ["integrity-scan"],
+    queryFn: () => fetchJson<IntegrityScanStatus>("/database/integrity-scan"),
+    enabled,
+    refetchInterval: (query) => (query.state.data?.running ? 2000 : false),
+  })
+}
+
+export function useStartIntegrityScan() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () =>
+      sendJson<{ job: string; already_running?: boolean }>("POST", "/database/integrity-scan"),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["integrity-scan"] }),
+  })
+}
+
+export function useStopIntegrityScan() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => sendJson<{ stopped: boolean }>("DELETE", "/database/integrity-scan"),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["integrity-scan"] }),
+  })
+}
+
+/** Checks one damaged archive again; clears its mark when the file opens now (#291). */
+export function useRecheckArchive() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<{ damaged: boolean; finding: IntegrityFinding | null }>(
+        "POST",
+        `/database/integrity-scan/archives/${encodeURIComponent(id)}`,
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["integrity-scan"] })
+      void queryClient.invalidateQueries({ queryKey: ["archives"] })
+    },
   })
 }
 

@@ -1680,7 +1680,12 @@ pub(crate) async fn keep_failed_download<T>(
 ) {
     match result {
         Ok(_) => {}
-        Err(crate::download_manager::ingest::IngestDownloadError::StagedCorrupted { .. }) => {
+        // Damaged bytes (027 R7), or bytes that were never an archive (#300): nothing to keep —
+        // the retry downloads again.
+        Err(
+            crate::download_manager::ingest::IngestDownloadError::StagedCorrupted { .. }
+            | crate::download_manager::ingest::IngestDownloadError::NotAnArchive { .. },
+        ) => {
             let _ = tokio::fs::remove_file(&file.path).await;
         }
         Err(_) => {
@@ -1791,6 +1796,7 @@ async fn reingest(State(state): State<AppState>, Path(id): Path<String>) -> Resp
             if matches!(
                 e,
                 crate::download_manager::ingest::IngestDownloadError::StagedCorrupted { .. }
+                    | crate::download_manager::ingest::IngestDownloadError::NotAnArchive { .. }
             ) {
                 // The kept bytes are damaged (027 R7): drop them, so the row's retry downloads again.
                 remove_kept_bytes(Some(&item)).await;

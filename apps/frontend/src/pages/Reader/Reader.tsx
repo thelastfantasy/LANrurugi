@@ -3,6 +3,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
+import { unreadableArchiveCode } from "@/api/apiError";
 import { ApiError } from "@/api/client";
 import { startDownload } from "@/api/download";
 import {
@@ -109,6 +110,7 @@ import {
 import { MarkerLayer } from "./MarkerLayer";
 import { SettingsOverlay } from "./SettingsOverlay";
 import { TankoubonSplitModal } from "./TankoubonSplitModal";
+import { UnreadableArchivePage } from "./UnreadableArchivePage";
 
 // Loaded only when someone shares, keeping the share dialog out of the reader chunk.
 const ShareDialog = lazy(() => import("@/share/ShareDialog").then((m) => ({ default: m.ShareDialog })));
@@ -588,10 +590,18 @@ export function Reader() {
   }, [headless, currentPage]);
   useEffect(() => {
     if (!headless || !supportsHover) return;
+    // The bottom-left 20% corner, widened to the block's own extent: a long title reaches past
+    // that corner, and pointing at its far end should reveal it too (#298).
+    const margin = 16;
     function onMove(e: MouseEvent) {
-      setHeadlessInfoRevealed(
-        e.clientX < window.innerWidth * 0.2 && e.clientY > window.innerHeight * 0.8,
-      );
+      const inCorner =
+        e.clientX < window.innerWidth * 0.2 && e.clientY > window.innerHeight * 0.8;
+      const r = headlessInfoRef.current?.getBoundingClientRect();
+      const onBlock =
+        !!r &&
+        e.clientX <= r.right + margin &&
+        e.clientY >= r.top - margin;
+      setHeadlessInfoRevealed(inCorner || onBlock);
     }
     window.addEventListener("mousemove", onMove);
     return () => window.removeEventListener("mousemove", onMove);
@@ -718,7 +728,9 @@ export function Reader() {
     const bottomChrome = (area: HTMLElement): number => {
       let total = 0;
       let node: HTMLElement | null = area;
-      while (node && node !== document.body) {
+      // Stops at the fullscreen element: what lies outside it is still laid out but not shown, and
+      // counting it kept fit-height at the windowed height after entering fullscreen.
+      while (node && node !== document.body && node !== document.fullscreenElement) {
         const parent: HTMLElement | null = node.parentElement;
         if (!parent) break;
         const nodeBottom = node.getBoundingClientRect().bottom;
@@ -746,8 +758,11 @@ export function Reader() {
       // The slack covers what a siblings-only walk cannot see: the ancestors' bottom padding and
       // the footer's own margins (~15px measured, 20 leaves a few pixels of headroom so rounding
       // never reintroduces a scrollbar).
-      const available = Math.round(
-        window.innerHeight - box.top - bottomChrome(area) - 20,
+      // In fullscreen there is nothing around the area for the slack to cover, and keeping it left a
+      // 20px strip under the page; flooring alone keeps a fraction from adding a scrollbar.
+      const slack = document.fullscreenElement ? 0 : 20;
+      const available = Math.floor(
+        window.innerHeight - box.top - bottomChrome(area) - slack,
       );
       setFitHeightPx(available > 160 ? available : null);
     };
@@ -2351,6 +2366,16 @@ export function Reader() {
     if (firstError?.status === 403)
       return <ForbiddenPage reason={firstError.message} />;
     if (firstError?.status === 401) return null;
+    const unreadable = unreadableArchiveCode(pages.error);
+    if (unreadable && archiveId)
+      return (
+        <UnreadableArchivePage
+          archiveId={archiveId}
+          title={metadata.data?.title}
+          code={unreadable}
+          reason={(pages.error as ApiError).message}
+        />
+      );
 
     return (
       <div className="ido">

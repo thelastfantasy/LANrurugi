@@ -1,5 +1,7 @@
 // Shapes match lanrurugi-api's JSON responses, mirroring legacy's openapi.yaml schemas.
 
+import type { ReservationEntry as GeneratedReservationEntry } from "./generated/ReservationEntry"
+
 /** One table-of-contents entry. */
 export interface TocEntry {
   name: string
@@ -29,6 +31,8 @@ export interface ArchiveMetadata {
   has_patch?: boolean
   /** LANrurugi-only: whether an Archive split suggestion exists for this archive. */
   has_split_suggestion?: boolean
+  /** LANrurugi-only, present only when `true`: the file is known to be unreadable (#291). */
+  damaged?: boolean
   /** Only on a Tankoubon row that matched because of its members rather than its own record
    *  (see the search engine's `fold_tanks`): which members matched, so the card can say why it is
    *  in a result set its own tags do not explain. */
@@ -122,6 +126,8 @@ export interface Settings {
   /** Days a finished download-queue entry is kept; `0` keeps them all. Swept hourly by the
    *  subscription scheduler. */
   download_queue_retention_days: number
+  /** Days a work skipped from the approval list keeps its "skipped" label; `0` keeps it forever. */
+  skipped_retention_days: number
   /** Size cap for one category's active log file, in megabytes: past this it rolls over. */
   logmaxfilemb: number
   /** Files kept per log category, including the one currently being written. */
@@ -650,6 +656,8 @@ export interface HistoryEntry {
   checked_at: number
   outcome: CycleOutcome
   candidate: CandidateRecord
+  /** The user skipped it from the approval list; the cycle's own verdict still reads "awaiting". */
+  skipped?: boolean
   /** What became of it once queued. Absent for anything never queued — rejected, still waiting, or
    *  already held. A cycle records only the decision, so without this a download that later failed
    *  still reads as "queued". */
@@ -679,25 +687,15 @@ export interface SubscriptionSource {
   description?: string | null
 }
 
-export interface ReservationEntry {
-  id: string
-  subscription_id: string
-  source_url: string
-  reason: string
-  status: "waiting" | "discarded"
-  created_at: number
-}
+// Generated from the Rust structs the API serializes (#284): a field change there fails `tsc` here.
+export type { ReservationEntry } from "./generated/ReservationEntry"
+
+/** As `GET /reservations` lists it: whether its failure reason is one a retry could change. */
+export type ReservationListItem = GeneratedReservationEntry & { retryable: boolean }
 
 /** A matched work waiting for the user's go-ahead, because its subscription has `auto_download`
- * off. Kept as its own record rather than read back out of cycle history — history ages out, but an
- * unanswered question should not disappear on its own. */
-export interface PendingApproval {
-  id: string
-  subscription_id: string
-  source_url: string
-  title?: string | null
-  created_at: number
-}
+ * off. Its `title` is a map by language; rendering it as a string blanked the settings page (#281). */
+export type { PendingApproval } from "./generated/PendingApproval"
 
 export interface SubscriptionBody {
   name: string
@@ -969,6 +967,8 @@ export type QueueError =
   | { kind: "staged_content_corrupted"; path: string; expected_blake3: string; actual_blake3: string }
   /** 027: strict verification read a block back that differs from what was written. */
   | { kind: "verify_readback_mismatch"; path: string; offset: number; len: number }
+  /** #300: not an archive with pages — usually a web page the server sent instead of the file. */
+  | { kind: "downloaded_not_archive"; detail: string; page_excerpt?: string | null }
 
 /** One raw archive entry (file or directory) from a header-only walk — powers the tree-structure
  * popover in the comparison modal. */
@@ -1700,4 +1700,31 @@ export interface DuplicatePatchResult {
   skipped: number
   renamed: number
   patch_pages: number
+}
+
+/** #292: why a scan flagged an archive's file. */
+export type IntegrityProblem = "missing" | "unreadable" | "no_pages"
+
+export interface IntegrityFinding {
+  problem: IntegrityProblem
+  /** Untranslated reader-facing error text. */
+  detail: string
+  checked_at: number
+  size_on_disk: number | null
+}
+
+export interface DamagedArchive {
+  id: string
+  title: string
+  file: string
+  arcsize: number
+  /** Set when the archive's self-heal already failed — known broken without a scan. */
+  heal_failed_at: number | null
+  finding: IntegrityFinding | null
+}
+
+export interface IntegrityScanStatus {
+  running: { job: string; done: number; total: number } | null
+  last_run: { finished_at: number; checked: number; damaged: number; cancelled: boolean } | null
+  archives: DamagedArchive[]
 }

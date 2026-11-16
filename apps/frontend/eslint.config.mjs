@@ -10,14 +10,14 @@ import simpleImportSort from 'eslint-plugin-simple-import-sort'
 import stylistic from '@stylistic/eslint-plugin'
 
 export default [
-  { ignores: ['dist/**'] },
+  { ignores: ['dist/**', 'src/api/generated/**'] },
   js.configs.recommended,
   {
     // One-off Node build scripts (e.g. `generate-emoji-zh-names.mjs`) — not part of the app
     // bundle, so they get Node's own globals (`process`/`console`/`URL`/CommonJS `require` via
     // `createRequire`) instead of `src/**`'s browser ones below, matching the environment they
     // actually run in (`node scripts/foo.mjs`, never a browser).
-    files: ['scripts/**/*.mjs'],
+    files: ['scripts/**/*.mjs', 'tests/seed/**/*.mjs'],
     languageOptions: {
       globals: { ...globals.node },
     },

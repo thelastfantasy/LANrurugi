@@ -42,7 +42,8 @@ export function SortBySelector({
     ]),
   ].sort()
 
-  const options = ["title", "date_added", "lastread_all", RELEVANCE_SORT, ...namespaces]
+  // Title fourth: date added, last read and relevance are the orders people actually browse by.
+  const options = ["date_added", "lastread_all", RELEVANCE_SORT, "title", ...namespaces]
 
   return (
     <div className="thumbnail-options" style={{ display: "flex", alignItems: "center" }}>

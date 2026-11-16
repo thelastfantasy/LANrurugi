@@ -26,6 +26,26 @@ pub fn error(status: StatusCode, operation: &str, message: impl Into<String>) ->
         .into_response()
 }
 
+/// [`error`] plus a machine-readable `code`, for a failure the client handles differently from
+/// any other (e.g. not retrying it).
+pub fn coded_error(
+    status: StatusCode,
+    operation: &str,
+    code: &str,
+    message: impl Into<String>,
+) -> Response {
+    (
+        status,
+        Json(json!({
+            "operation": operation,
+            "error": message.into(),
+            "code": code,
+            "success": 0,
+        })),
+    )
+        .into_response()
+}
+
 pub fn not_found(operation: &str, message: impl Into<String>) -> Response {
     error(StatusCode::NOT_FOUND, operation, message)
 }

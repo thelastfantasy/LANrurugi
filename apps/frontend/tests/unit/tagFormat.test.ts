@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { buildSearchToken, getTagSearchURL } from "@/lib/tagFormat"
+import { buildSearchToken, getTagSearchURL, normalizeTag } from "@/lib/tagFormat"
 
 describe("buildSearchToken", () => {
   it("leaves a single-word namespaced value unquoted, with the exact-match suffix when requested", () => {
@@ -41,5 +41,35 @@ describe("getTagSearchURL", () => {
 
   it("leaves source tags as external links, untouched by quoting", () => {
     expect(getTagSearchURL("source", "e-hentai.org/g/123/abc")).toBe("https://e-hentai.org/g/123/abc")
+  })
+})
+
+// #297: a tag copied as a search token is stored in its plain form.
+describe("normalizeTag", () => {
+  it("drops the quotes and the exact-match suffix of a copied search token", () => {
+    expect(normalizeTag('female:"hair buns$"')).toBe("female:hair buns")
+    expect(normalizeTag('female:"cervix penetration$"')).toBe("female:cervix penetration")
+    expect(normalizeTag("female:glasses$")).toBe("female:glasses")
+    expect(normalizeTag('female:"big breasts"')).toBe("female:big breasts")
+    expect(normalizeTag('"female:sole female$"')).toBe("female:sole female")
+  })
+
+  it("trims and lower-cases the namespace only", () => {
+    expect(normalizeTag("  Female : Hair Buns  ")).toBe("female:Hair Buns")
+  })
+
+  it("keeps a quote or a dollar sign inside the value", () => {
+    expect(normalizeTag('other:say "hi" twice')).toBe('other:say "hi" twice')
+    expect(normalizeTag("other:$100 bill")).toBe("other:$100 bill")
+  })
+
+  it("leaves URLs and plain tags alone", () => {
+    expect(normalizeTag("source:e-hentai.org/g/1/abc")).toBe("source:e-hentai.org/g/1/abc")
+    expect(normalizeTag("tankoubon")).toBe("tankoubon")
+  })
+
+  it("returns nothing for an empty token", () => {
+    expect(normalizeTag('female:""')).toBe("")
+    expect(normalizeTag("   ")).toBe("")
   })
 })
