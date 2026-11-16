@@ -1287,8 +1287,12 @@
   "subscriptions.outcomeSkipped": "已跳過",
   "subscriptions.skippedOnly": "只顯示已跳過",
   "subscriptions.skippedEmpty": "沒有跳過的作品。",
-  "subscriptions.skippedRetentionLabel": "已跳過作品的記錄保留",
+  "subscriptions.skippedRetentionLabel": "自動清理已跳過作品的記錄",
   "subscriptions.skippedRetentionHint": "超過天數後，跳過的作品在歷史裡不再顯示為「已跳過」，但仍然不會再被提出來。填 0 表示永久保留。每小時檢查一次。",
   "subscriptions.unskip": "放回待確認",
-  "subscriptions.unskipped": "已放回待確認"
+  "subscriptions.unskipped": "已放回待確認",
+  "subscriptions.queueRetentionLabel": "自動清理已完成的下載記錄",
+  "subscriptions.queueRetentionUnit": "天後",
+  "subscriptions.approveWaitingOnAuto": "這個訂閱還有 {{count}} 部作品等待確認。改為自動下載後，它們不會自動開始。要一起下載嗎？會先重新檢查一次訂閱，確保包含最新進入待確認的作品。",
+  "subscriptions.approveWaitingStarted": "正在重新檢查訂閱，完成後會下載等待確認的作品。進度可在下載佇列中查看。"
 }

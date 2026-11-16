@@ -10,6 +10,8 @@
 
 import type { ErrorInfo } from "react"
 
+import { FOREIGN_NODE_ERROR } from "@/diagnostics/sdk"
+
 type Kind = "error" | "console" | "request"
 
 interface Entry {
@@ -54,6 +56,8 @@ function describe(error: unknown): { title: string; detail: string } {
 /** Reports an error from one of React's root callbacks or a global handler. */
 export function reportDevError(source: string, error: unknown, info?: Partial<ErrorInfo>) {
   const { title, detail } = describe(error)
+  // Not the app's: see `FOREIGN_NODE_ERROR` in diagnostics/sdk.ts.
+  if (FOREIGN_NODE_ERROR.test(title)) return
   const stack = info?.componentStack ? `\n\nComponent stack:${info.componentStack}` : ""
   add("error", `[${source}] ${title}`, detail + stack, true)
 }
@@ -98,7 +102,10 @@ function watchRequestRate() {
     const [input, init] = args
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase()
-    const path = url.replace(/^https?:\/\/[^/]+/, "").split("?")[0]
+    // The query is part of what makes two requests the same: a reader's per-page HEADs differ only in
+    // `?path=`, and counting them as one flagged ordinary page turns as a loop. A real loop repeats
+    // the exact URL.
+    const path = url.replace(/^https?:\/\/[^/]+/, "")
     const key = `${method} ${path}`
     const now = Date.now()
     const times = (seen.get(key) ?? []).filter((at) => now - at < RATE_WINDOW_MS)

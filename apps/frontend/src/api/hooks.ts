@@ -1511,6 +1511,20 @@ export function usePendingApprovals() {
 /** Approving puts the works in the normal download queue, so the Downloads page is where their
  *  progress is then followed — nothing further happens on the Subscriptions page. Takes a list
  *  because FR-007b requires approving individually *or* together; one item is a list of one. */
+/** After switching a subscription to automatic download: the server checks it once more, then
+ *  approves everything still waiting on it. Runs in the background; the queue shows the result. */
+export function useApproveAllPending() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (subscriptionId: string) =>
+      sendJson<{ started: boolean }>("POST", `/subscriptions/${encodeURIComponent(subscriptionId)}/approve-pending`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["subscription-pending"] })
+      void queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+    },
+  })
+}
+
 export function useApprovePending() {
   const queryClient = useQueryClient()
   return useMutation({

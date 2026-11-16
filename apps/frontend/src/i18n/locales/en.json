@@ -3304,8 +3304,10 @@
   "subscriptions.outcomeSkipped": "Skipped",
   "subscriptions.skippedOnly": "Skipped only",
   "subscriptions.skippedEmpty": "Nothing has been skipped.",
-  "subscriptions.skippedRetentionLabel": "Keep the skipped label for",
+  "subscriptions.skippedRetentionLabel": "Auto-clean skipped work records",
   "subscriptions.skippedRetentionHint": "After this many days a skipped work no longer shows as skipped in the history. It is still never offered again. 0 keeps the label forever. Checked hourly.",
   "subscriptions.unskip": "Back to awaiting approval",
-  "subscriptions.unskipped": "Moved back to awaiting approval"
+  "subscriptions.unskipped": "Moved back to awaiting approval",
+  "subscriptions.approveWaitingOnAuto": "This subscription still has {{count}} works waiting for approval. Switching to automatic download does not start them. Download them too? The subscription is checked once more first, so anything newly waiting is included.",
+  "subscriptions.approveWaitingStarted": "Checking the subscription, then downloading the works that were waiting. Progress shows in the download queue."
 }

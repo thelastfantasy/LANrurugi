@@ -29,6 +29,12 @@ const nativeFetch: typeof fetch =
   typeof window.fetch === "function" ? window.fetch.bind(window) : (...args) => fetch(...args)
 
 /** Whether a request is the SDK's own envelope post, which must not be traced or recorded. */
+/** Firefox refusing an event handler a look at a node the page does not own (one injected by a
+ * browser extension, or a native control's inner element): React's dispatch reading its fiber, or
+ * Sentry's DOM breadcrumbs reading `_sentryId`. That one mouse event goes unhandled and nothing else
+ * happens; React's random property suffix made each page load a new issue. */
+export const FOREIGN_NODE_ERROR = /Permission denied to access property "(__react(Fiber|Props)\$|_sentryId")/
+
 export function isIngestRequest(url: string): boolean {
   return url.replace(/^https?:\/\/[^/]+/, "").startsWith(INGEST_PATH)
 }
@@ -220,6 +226,7 @@ async function init(): Promise<void> {
         shouldCreateSpanForRequest: (url) => !isIngestRequest(url),
       }),
     ],
+    ignoreErrors: [FOREIGN_NODE_ERROR],
     beforeSend(event) {
       // The server caps a stored event at 64 KB; drop anything absurd before it gets there.
       if (JSON.stringify(event).length > 60_000) return null

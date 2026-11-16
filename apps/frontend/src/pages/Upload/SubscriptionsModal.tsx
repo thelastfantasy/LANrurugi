@@ -1,5 +1,5 @@
 import type { TFunction } from "i18next"
-import { type CSSProperties, Fragment, useMemo, useState } from "react"
+import { type CSSProperties, Fragment, useCallback, useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import {
@@ -172,8 +172,9 @@ function Verdict({ record }: { record: CandidateRecord }) {
   }
 }
 
-/** A "keep for N days" setting in the dialog's footer (`0` keeps everything). A local draft so
- *  typing does not fire a request per keystroke; committed on blur. */
+/** A "keep for N days" setting in the dialog's footer (`0` keeps everything). Saved shortly after the
+ *  value settles, not on blur: the input's stepper buttons change it without ever focusing the
+ *  input, so a blur-only save never fired for them. Leaving the field saves at once. */
 function RetentionField({
   field,
   icon,
@@ -191,6 +192,30 @@ function RetentionField({
   const [draft, setDraft] = useState<number | null>(null)
   const saved = settings.data?.[field] ?? 30
   const days = draft ?? saved
+
+  const commit = useCallback(
+    (value: number) => {
+      if (!settings.data || value === saved) {
+        setDraft(null)
+        return
+      }
+      // Leaving the field right after a pause would otherwise send the same value twice.
+      if (updateSettings.isPending) return
+      void updateSettings.mutateAsync({ [field]: value }).then(() => {
+        setDraft(null)
+        toast({ text: t("subscriptions.queueRetentionSaved") ?? undefined, icon: "success" })
+      })
+    },
+    [field, saved, settings.data, t, updateSettings],
+  )
+
+  // One save per pause, so a run of stepper clicks is one request.
+  useEffect(() => {
+    if (draft === null) return
+    const timer = window.setTimeout(() => commit(draft), 800)
+    return () => window.clearTimeout(timer)
+  }, [draft, commit])
+
   return (
     <label style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", fontSize: FONT_SIZE_XS }}>
       <i className={`fa ${icon}`} aria-hidden="true"></i>
@@ -199,14 +224,10 @@ function RetentionField({
         className="stdinput"
         min={0}
         value={days}
-        disabled={updateSettings.isPending || settings.isPending}
+        disabled={settings.isPending}
         onValueChange={(v) => setDraft(Math.max(0, v))}
         onBlur={() => {
-          if (!settings.data || days === saved) return
-          void updateSettings.mutateAsync({ [field]: days }).then(() => {
-            setDraft(null)
-            toast({ text: t("subscriptions.queueRetentionSaved") ?? undefined, icon: "success" })
-          })
+          if (draft !== null) commit(draft)
         }}
         style={{ width: 64, height: 21 }}
       />

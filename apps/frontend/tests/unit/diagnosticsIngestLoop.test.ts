@@ -30,3 +30,14 @@ describe("diagnostics ingest loop", () => {
     expect(isIngestRequest("/api/archives")).toBe(false)
   })
 })
+
+describe("foreign-node errors", () => {
+  it("matches only React's and Sentry's own properties refused by Firefox", async () => {
+    const { FOREIGN_NODE_ERROR } = await import("@/diagnostics/sdk")
+    expect(FOREIGN_NODE_ERROR.test('Permission denied to access property "__reactFiber$63mpwa23tfj"')).toBe(true)
+    expect(FOREIGN_NODE_ERROR.test('Permission denied to access property "__reactProps$abc"')).toBe(true)
+    expect(FOREIGN_NODE_ERROR.test('Permission denied to access property "_sentryId"')).toBe(true)
+    expect(FOREIGN_NODE_ERROR.test('Permission denied to access property "document"')).toBe(false)
+    expect(FOREIGN_NODE_ERROR.test("Cannot read properties of undefined")).toBe(false)
+  })
+})

@@ -3304,8 +3304,10 @@
   "subscriptions.outcomeSkipped": "已跳过",
   "subscriptions.skippedOnly": "只显示已跳过",
   "subscriptions.skippedEmpty": "没有跳过的作品。",
-  "subscriptions.skippedRetentionLabel": "已跳过作品的记录保留",
+  "subscriptions.skippedRetentionLabel": "自动清理已跳过作品的记录",
   "subscriptions.skippedRetentionHint": "超过天数后，跳过的作品在历史里不再显示为「已跳过」，但仍然不会再被提出来。填 0 表示永久保留。每小时检查一次。",
   "subscriptions.unskip": "放回待确认",
-  "subscriptions.unskipped": "已放回待确认"
+  "subscriptions.unskipped": "已放回待确认",
+  "subscriptions.approveWaitingOnAuto": "这个订阅还有 {{count}} 部作品等待确认。改为自动下载后，它们不会自动开始。要一起下载吗？会先重新检查一次订阅，确保包含最新进入待确认的作品。",
+  "subscriptions.approveWaitingStarted": "正在重新检查订阅，完成后会下载等待确认的作品。进度可在下载队列中查看。"
 }

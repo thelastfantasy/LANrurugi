@@ -1073,21 +1073,25 @@ input[type="checkbox"].lrr-checkbox-bare::after {
   opacity: 0.9;
 }
 
-/* Headless on a phone leaves nothing but the page, so it is centred in the viewport instead of
- * hugging the top edge with the rest of the screen empty below it. */
-@media all and (max-width: 1000px) {
-  #i1.reader-headless {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    /* `div.sni` carries the legacy 2px/6px vertical margins and `body` a 2px padding; a 100dvh
-       box plus those pushes the container past the viewport and clips its bottom border, so the
-       height is measured against the body's content box and the margins are dropped. */
-    min-height: calc(100dvh - 4px);
-    box-sizing: border-box;
-    margin: 0;
-  }
+/* Headless leaves nothing but the page, so it is centred in the viewport at every width instead of
+ * hugging the top edge with the rest of the screen empty below it — a page shorter than the screen
+ * used to sit at the top on a desktop. */
+#i1.reader-headless {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  /* `div.sni` carries the legacy 2px/6px vertical margins and `body` a 2px padding; a 100dvh
+     box plus those pushes the container past the viewport and clips its bottom border, so the
+     height is measured against the body's content box and the margins are dropped. */
+  min-height: calc(100dvh - 4px);
+  box-sizing: border-box;
+  /* Vertical margins only: on a desktop the container hugs the page and is centred by legacy's
+     own horizontal `auto` margins, which a plain `margin: 0` took away. */
+  margin-top: 0;
+  margin-bottom: 0;
+}
 
+@media all and (max-width: 1000px) {
   #i1.reader-headless #display {
     width: 100%;
   }

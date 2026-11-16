@@ -54,6 +54,10 @@ pub fn router() -> Router<AppState> {
         .route("/subscriptions/{id}/forget", post(forget_seen))
         .route("/subscriptions/{id}/block", post(block_sources))
         .route("/subscriptions/{id}/unskip", post(unskip_sources))
+        .route(
+            "/subscriptions/{id}/approve-pending",
+            post(approve_all_pending),
+        )
         .route("/subscriptions/tracking", get(tracking_for))
         .route("/subscriptions/history", get(combined_history))
         .route("/subscriptions/blocked", get(blocked_works))
@@ -742,6 +746,58 @@ struct BlockBody {
 /// Distinct from a rule rejection on purpose — a rule reads a value that can change, so a rejection is
 /// provisional and decided afresh every cycle (FR-011i), while this is an answer, and re-deciding it
 /// would ask again what the user already said. The preview offers it per row; `forget_seen` undoes it.
+/// `POST /subscriptions/{id}/approve-pending` — after switching a subscription to automatic
+/// download: check it once more, then approve every work still waiting on it.
+///
+/// Decided on the server, not from a list the client holds: a work that reached the approval list
+/// after the client last read it would otherwise be left behind. The check runs first so that list
+/// is current; with automatic download on, whatever it newly matches is queued by the check itself.
+/// Answers at once — a check may page through the source for a while — and does the work behind it.
+async fn approve_all_pending(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let Ok(Some(_)) = state.subscriptions.get(&id).await else {
+        return not_found("approve_all_pending", format!("{id} does not exist."));
+    };
+    let spawned = state.clone();
+    tokio::spawn(async move {
+        // One check of a subscription at a time: if the scheduler is checking it now, wait for that
+        // to finish rather than running a second one beside it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30 * 60);
+        let guard = loop {
+            if let Some(guard) = spawned.subscriptions_in_flight.claim(&id).await {
+                break Some(guard);
+            }
+            if std::time::Instant::now() > deadline {
+                break None;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        };
+        if guard.is_none() {
+            tracing::warn!(subscription_id = %id, "gave up waiting for a running check; approving the current list");
+        } else {
+            super::runner::run_check(&spawned, &id, super::runner::CheckTrigger::Manual).await;
+        }
+        let ids: Vec<String> = spawned
+            .subscriptions
+            .list_pending()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| p.subscription_id == id)
+            .map(|p| p.id)
+            .collect();
+        let (approved, failures) = approve_entries(&spawned, &ids).await;
+        drop(guard);
+        tracing::info!(
+            subscription_id = %id,
+            approved,
+            failed = failures.len(),
+            "approved the subscription's pending works after a fresh check"
+        );
+    });
+    axum::Json(json!({ "operation": "approve_all_pending", "success": 1, "started": true }))
+        .into_response_owned()
+}
+
 /// `POST /subscriptions/{id}/unskip` — puts skipped works back on the approval list, under the title
 /// they were skipped with, so the user can answer them again.
 #[derive(Debug, Deserialize)]
@@ -1081,14 +1137,13 @@ async fn enqueue_work(
     Ok(crate::download_queue::start_item_from_subscription(state, &item.id).await)
 }
 
-async fn approve_pending(
-    State(state): State<AppState>,
-    axum::Json(body): axum::Json<PendingIds>,
-) -> Response {
+/// Queues and starts each pending work, as approving it from the list does. Returns how many reached
+/// the queue and, per id, why one did not (or did but did not start).
+async fn approve_entries(state: &AppState, ids: &[String]) -> (usize, Vec<serde_json::Value>) {
     let mut approved = 0usize;
     let mut failures: Vec<serde_json::Value> = Vec::new();
 
-    for id in &body.ids {
+    for id in ids {
         let Ok(Some(entry)) = state.subscriptions.get_pending(id).await else {
             failures.push(json!({ "id": id, "error": "no such pending approval" }));
             continue;
@@ -1098,7 +1153,7 @@ async fn approve_pending(
             continue;
         };
 
-        match enqueue_work(&state, &subscription, &entry.source_url).await {
+        match enqueue_work(state, &subscription, &entry.source_url).await {
             Ok(started) => {
                 // Deleted only after the queue accepted it; the other order would lose the work
                 // entirely while the user believed they had approved it.
@@ -1114,6 +1169,14 @@ async fn approve_pending(
             Err(reason) => failures.push(json!({ "id": id, "error": reason.as_key() })),
         }
     }
+    (approved, failures)
+}
+
+async fn approve_pending(
+    State(state): State<AppState>,
+    axum::Json(body): axum::Json<PendingIds>,
+) -> Response {
+    let (approved, failures) = approve_entries(&state, &body.ids).await;
 
     axum::Json(json!({
         "operation": "approve_pending",

@@ -758,8 +758,11 @@ export function Reader() {
       // The slack covers what a siblings-only walk cannot see: the ancestors' bottom padding and
       // the footer's own margins (~15px measured, 20 leaves a few pixels of headroom so rounding
       // never reintroduces a scrollbar).
-      const available = Math.round(
-        window.innerHeight - box.top - bottomChrome(area) - 20,
+      // In fullscreen there is nothing around the area for the slack to cover, and keeping it left a
+      // 20px strip under the page; flooring alone keeps a fraction from adding a scrollbar.
+      const slack = document.fullscreenElement ? 0 : 20;
+      const available = Math.floor(
+        window.innerHeight - box.top - bottomChrome(area) - slack,
       );
       setFitHeightPx(available > 160 ? available : null);
     };
