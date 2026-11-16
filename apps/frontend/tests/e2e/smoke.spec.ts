@@ -28,8 +28,17 @@ test.describe("smoke", { tag: "@smoke" }, () => {
       await page.goto(path)
       await page.waitForLoadState("networkidle")
       if (path === "/config") {
-        // Sections render their bodies only once opened.
-        for (const title of await page.locator(".collapsible-title:not(.active)").all()) await title.click()
+        // Sections render their bodies only once opened. Always the first still-collapsed one: each
+        // click takes a heading out of this set, so a list snapshotted up front runs past its end.
+        // Bounded, since an opened section can reveal collapsible headings of its own.
+        await page.locator(".collapsible-title").first().waitFor()
+        // Visible only: a section nested in a collapsed one is rendered but hidden until its parent opens.
+        const collapsed = page.locator(".collapsible-title:not(.active):visible")
+        for (let opened = 0; opened < 40 && (await collapsed.count()) > 0; opened++) {
+          // At the leading icon, not the centre: some headings carry buttons of their own there
+          // (the subscriptions heading's history button opens a dialog over the page).
+          await collapsed.first().click({ position: { x: 12, y: 12 } })
+        }
         await page.waitForLoadState("networkidle")
         // The seeded approval with titles by language is what crashed this page in #281.
         await expect(page.getByText(/Seed work with titles by language|多言語タイトルのシード作品/).first()).toBeVisible()
