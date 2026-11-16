@@ -3309,5 +3309,8 @@
   "subscriptions.unskip": "Back to awaiting approval",
   "subscriptions.unskipped": "Moved back to awaiting approval",
   "subscriptions.approveWaitingOnAuto": "This subscription still has {{count}} works waiting for approval. Switching to automatic download does not start them. Download them too? The subscription is checked once more first, so anything newly waiting is included.",
-  "subscriptions.approveWaitingStarted": "Checking the subscription, then downloading the works that were waiting. Progress shows in the download queue."
+  "subscriptions.approveWaitingStarted": "Checking the subscription, then downloading the works that were waiting. Progress shows in the download queue.",
+  "components.layout.downloadedWebPage": "The server sent a web page instead of the file, so nothing was added. The page said: \"{{excerpt}}\". Retry once the file is ready.",
+  "components.layout.downloadedNotArchive": "The downloaded file is not an archive with pages, so nothing was added: {{detail}}",
+  "E-Hentai is still preparing this archive. Retry in a minute or two.": "E-Hentai is still preparing this archive. Retry in a minute or two."
 }

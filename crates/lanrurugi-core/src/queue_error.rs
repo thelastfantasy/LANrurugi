@@ -201,6 +201,13 @@ pub enum QueueError {
         expected_blake3: String,
         actual_blake3: String,
     },
+    /// #300: what the download produced is not an archive with pages — usually a web page the
+    /// server sent under a 200 ("the file is still being prepared"). `page_excerpt` is that page's
+    /// own text, which is what tells the user why. Nothing was catalogued; a retry downloads again.
+    DownloadedNotArchive {
+        detail: String,
+        page_excerpt: Option<String>,
+    },
     /// 027 FR-014: strict verification read a block back from the library and it differed from
     /// what was written. The source is kept.
     VerifyReadbackMismatch {
@@ -242,6 +249,7 @@ impl QueueError {
             QueueError::DurabilityFailed { .. } => 1015,
             QueueError::StagedContentCorrupted { .. } => 1016,
             QueueError::VerifyReadbackMismatch { .. } => 1017,
+            QueueError::DownloadedNotArchive { .. } => 1018,
         }
     }
 
@@ -270,7 +278,8 @@ impl QueueError {
             | QueueError::CopyLengthMismatch { .. }
             | QueueError::DurabilityFailed { .. }
             | QueueError::StagedContentCorrupted { .. }
-            | QueueError::VerifyReadbackMismatch { .. } => true,
+            | QueueError::VerifyReadbackMismatch { .. }
+            | QueueError::DownloadedNotArchive { .. } => true,
             QueueError::InvalidUrl { .. }
             | QueueError::InvalidHttpMethod { .. }
             | QueueError::DuplicateArchive { .. }

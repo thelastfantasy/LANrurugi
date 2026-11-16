@@ -3309,5 +3309,8 @@
   "subscriptions.unskip": "放回待确认",
   "subscriptions.unskipped": "已放回待确认",
   "subscriptions.approveWaitingOnAuto": "这个订阅还有 {{count}} 部作品等待确认。改为自动下载后，它们不会自动开始。要一起下载吗？会先重新检查一次订阅，确保包含最新进入待确认的作品。",
-  "subscriptions.approveWaitingStarted": "正在重新检查订阅，完成后会下载等待确认的作品。进度可在下载队列中查看。"
+  "subscriptions.approveWaitingStarted": "正在重新检查订阅，完成后会下载等待确认的作品。进度可在下载队列中查看。",
+  "components.layout.downloadedWebPage": "服务器返回的是一个网页而不是文件，所以没有入库。网页内容：「{{excerpt}}」。等文件准备好后点重试。",
+  "components.layout.downloadedNotArchive": "下载到的文件不是有效的档案，所以没有入库：{{detail}}",
+  "E-Hentai is still preparing this archive. Retry in a minute or two.": "E-Hentai 还在准备这个压缩包，请过一两分钟再重试。"
 }

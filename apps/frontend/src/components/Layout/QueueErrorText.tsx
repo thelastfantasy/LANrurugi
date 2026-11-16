@@ -62,6 +62,15 @@ export function QueueErrorText({ error }: { error: QueueError }) {
           {t("components.layout.verifyReadbackMismatch", { offset: error.offset, len: error.len })}
         </span>
       )
+    case "downloaded_not_archive":
+      // The page's own words are what explain it (a "still being prepared" notice, a login wall).
+      return (
+        <span title={error.detail}>
+          {error.page_excerpt
+            ? t("components.layout.downloadedWebPage", { excerpt: error.page_excerpt })
+            : t("components.layout.downloadedNotArchive", { detail: error.detail })}
+        </span>
+      )
     case "egress_unavailable":
       return (
         <span>{t("components.layout.egressInterfaceUnavailable", { interface: error.interface })}</span>

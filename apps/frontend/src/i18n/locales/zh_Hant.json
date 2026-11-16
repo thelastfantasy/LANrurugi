@@ -1294,5 +1294,8 @@
   "subscriptions.queueRetentionLabel": "自動清理已完成的下載記錄",
   "subscriptions.queueRetentionUnit": "天後",
   "subscriptions.approveWaitingOnAuto": "這個訂閱還有 {{count}} 部作品等待確認。改為自動下載後，它們不會自動開始。要一起下載嗎？會先重新檢查一次訂閱，確保包含最新進入待確認的作品。",
-  "subscriptions.approveWaitingStarted": "正在重新檢查訂閱，完成後會下載等待確認的作品。進度可在下載佇列中查看。"
+  "subscriptions.approveWaitingStarted": "正在重新檢查訂閱，完成後會下載等待確認的作品。進度可在下載佇列中查看。",
+  "components.layout.downloadedWebPage": "伺服器回傳的是一個網頁而不是檔案，所以沒有入庫。網頁內容：「{{excerpt}}」。等檔案準備好後點重試。",
+  "components.layout.downloadedNotArchive": "下載到的檔案不是有效的檔案，所以沒有入庫：{{detail}}",
+  "E-Hentai is still preparing this archive. Retry in a minute or two.": "E-Hentai 還在準備這個壓縮檔，請過一兩分鐘再重試。"
 }

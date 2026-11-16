@@ -305,6 +305,28 @@ export async function execDownload(
   if (parseError || finalURL === undefined) {
     return { error: { error_code: "Couldn't proceed with download", data: { archivesize, content } } };
   }
+  // The archive host answers "already being processed" (a 200 web page) while it is still preparing
+  // the zip; downloading that page would save it as the archive (#300). Look first — the page
+  // without `start=1` is a small HTML notice either way, never the archive itself — and say so
+  // instead. A plugin call is capped at 30 s, so waiting it out here is not an option; the queue
+  // row's retry is.
+  try {
+    const probe = new URL(finalURL.href);
+    probe.search = "";
+    const page = (await lrr_info["user_agent"].max_redirects(5).get(probe.href)).result.body;
+    if (typeof page === "string" && page.indexOf("already being processed") != -1) {
+      logger.info(`Archive not ready yet: ${probe.href}`);
+      return {
+        error: {
+          error_code: "E-Hentai is still preparing this archive. Retry in a minute or two.",
+        },
+      };
+    }
+  } catch (probeError) {
+    // A failed look is not a reason to give up: the host's own check after the download still
+    // refuses anything that is not an archive.
+    logger.debug(`Could not check whether the archive is ready: ${probeError}`);
+  }
   finalURL.search = "start=1";
   // `filename_hint` matters here: the H@H archive-serving URL's own last path segment isn't a
   // real filename (confirmed via a real download landing on the literal string `"2"`, no

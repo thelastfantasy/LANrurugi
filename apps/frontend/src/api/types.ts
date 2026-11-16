@@ -967,6 +967,8 @@ export type QueueError =
   | { kind: "staged_content_corrupted"; path: string; expected_blake3: string; actual_blake3: string }
   /** 027: strict verification read a block back that differs from what was written. */
   | { kind: "verify_readback_mismatch"; path: string; offset: number; len: number }
+  /** #300: not an archive with pages — usually a web page the server sent instead of the file. */
+  | { kind: "downloaded_not_archive"; detail: string; page_excerpt?: string | null }
 
 /** One raw archive entry (file or directory) from a header-only walk — powers the tree-structure
  * popover in the comparison modal. */

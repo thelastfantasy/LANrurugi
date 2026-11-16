@@ -3010,5 +3010,8 @@
   "subscriptions.unskip": "確認待ちに戻す",
   "subscriptions.unskipped": "確認待ちに戻しました",
   "subscriptions.approveWaitingOnAuto": "この購読には確認待ちの作品が {{count}} 件あります。自動ダウンロードに切り替えても、これらは自動では始まりません。一緒にダウンロードしますか？先に購読をもう一度チェックし、新たに確認待ちになった作品も含めます。",
-  "subscriptions.approveWaitingStarted": "購読を再チェックしてから、確認待ちだった作品をダウンロードします。進捗はダウンロードキューで確認できます。"
+  "subscriptions.approveWaitingStarted": "購読を再チェックしてから、確認待ちだった作品をダウンロードします。進捗はダウンロードキューで確認できます。",
+  "components.layout.downloadedWebPage": "サーバーがファイルではなくウェブページを返したため、追加しませんでした。ページの内容：「{{excerpt}}」。ファイルの準備ができたら再試行してください。",
+  "components.layout.downloadedNotArchive": "ダウンロードしたファイルはページのあるアーカイブではないため、追加しませんでした：{{detail}}",
+  "E-Hentai is still preparing this archive. Retry in a minute or two.": "E-Hentai がまだこのアーカイブを準備しています。1〜2 分後に再試行してください。"
 }
