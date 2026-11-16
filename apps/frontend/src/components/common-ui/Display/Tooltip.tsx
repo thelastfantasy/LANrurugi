@@ -18,6 +18,8 @@ let activeTooltip: { close: () => void } | null = null
 
 /** Hover/focus tooltip — a `title`-attribute replacement for icon-only buttons or richer content.
  * Debounces close, auto-flips to stay in viewport, and portals to `document.body`. */
+const HIDDEN_STYLE: React.CSSProperties = { position: "fixed", top: -9999, left: -9999, visibility: "hidden" }
+
 export function Tooltip({
   label,
   children,
@@ -44,13 +46,19 @@ export function Tooltip({
   closeDelay?: number
 }) {
   const [visible, setVisible] = useState(false)
-  const [style, setStyle] = useState<React.CSSProperties>({ position: "fixed", top: -9999, left: -9999, visibility: "hidden" })
+  const [style, setStyle] = useState<React.CSSProperties>(HIDDEN_STYLE)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** This instance's entry in `activeTooltip`; `close` mirrors `cancelClose` + hide. */
   const self = useRef<{ close: () => void }>({ close: () => {} })
   self.current.close = () => {
     cancelClose()
+    hide()
+  }
+
+  /** Back off-screen as well as invisible, so a reopen never starts at the last position. */
+  function hide() {
     setVisible(false)
+    setStyle(HIDDEN_STYLE)
   }
   const wrapperRef = useRef<HTMLSpanElement>(null)
   const bubbleRef = useRef<HTMLDivElement>(null)
@@ -72,7 +80,7 @@ export function Tooltip({
     closeTimer.current = setTimeout(() => {
       closeTimer.current = null
       forgetActive()
-      setVisible(false)
+      hide()
     }, closeDelay)
   }
 
@@ -175,6 +183,11 @@ export function Tooltip({
       ref={wrapperRef}
       style={{ position: "relative", display: "inline-flex", ...wrapperStyle }}
       onMouseEnter={open}
+      // Every move over the trigger (or the bubble, a React child through the portal) cancels a
+      // pending close. `mouseenter` alone missed one path: the pointer falling from the bubble back
+      // onto the trigger — e.g. when the bubble is repositioned out from under a resting pointer —
+      // which React does not count as entering, so the bubble's own leave closed it.
+      onMouseOver={open}
       onMouseMove={handleMouseMove}
       onMouseLeave={scheduleClose}
       // Keyboard focus only: focus handed back by a closing drawer or dialog after a tap or click
@@ -190,7 +203,11 @@ export function Tooltip({
           <div
             role="tooltip"
             onMouseEnter={cancelClose}
-            onMouseLeave={scheduleClose}
+            onMouseLeave={(e) => {
+              // Back onto the trigger is not leaving.
+              if (e.relatedTarget instanceof Node && wrapperRef.current?.contains(e.relatedTarget)) return
+              scheduleClose()
+            }}
             onContextMenu={(e) => { e.stopPropagation() }}
             style={{ position: style.position, top: style.top, left: style.left, visibility: style.visibility, zIndex }}
           >

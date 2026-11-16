@@ -513,6 +513,26 @@ export function useSearch(options: SearchOptions) {
   })
 }
 
+/** `/search` one 100-result page at a time, for a list that loads more as it is scrolled. */
+export function useSearchPages(options: Omit<SearchOptions, "start">) {
+  return useInfiniteQuery({
+    queryKey: ["search-pages", options],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      fetchJson<SearchResponse>(`/search?${searchParams({ ...options, start: pageParam }).toString()}`),
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((n, page) => n + page.data.length, 0)
+      return last.data.length > 0 && loaded < last.recordsFiltered ? loaded : undefined
+    },
+    enabled: options.enabled ?? true,
+  })
+}
+
+/** Every `/search` result at once (`start=-1`) — for "add all matches", an explicit action. */
+export function fetchAllSearchResults(options: Omit<SearchOptions, "start" | "enabled">) {
+  return fetchJson<SearchResponse>(`/search?${searchParams({ ...options, start: -1 }).toString()}`)
+}
+
 export function useUpdateArchiveMetadata(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
