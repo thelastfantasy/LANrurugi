@@ -3953,3 +3953,117 @@ div.gt.gt-single > span {
   padding-top: 8px;
   border-top: 1px solid rgba(128, 128, 128, 0.35);
 }
+
+/* Batch operations: operations | selected | divider | picker. The picker column only exists once
+   the divider's button opens it; both lists fill the height the page gives them and scroll inside. */
+.batch-page {
+  text-align: left;
+}
+.batch-layout {
+  display: grid;
+  grid-template-columns: 340px minmax(260px, 1fr) 20px;
+  gap: 0 8px;
+  height: max(420px, calc(100vh - 230px));
+  margin-bottom: 12px;
+}
+.batch-layout.is-picker-open {
+  grid-template-columns: 340px minmax(240px, 1fr) 20px minmax(300px, 1.2fr);
+}
+.batch-ops {
+  overflow-y: auto;
+  min-width: 0;
+}
+.batch-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+}
+.batch-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+}
+.batch-head-btn {
+  width: auto;
+  margin: 0;
+  padding: 0 8px;
+}
+.batch-list {
+  flex: 1;
+  min-height: 0;
+}
+.batch-empty {
+  padding: 12px;
+  opacity: 0.75;
+}
+.batch-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 8px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.15);
+}
+.batch-row-pick {
+  cursor: pointer;
+}
+.batch-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.batch-row-loading {
+  opacity: 0.6;
+  font-family: monospace;
+}
+.batch-row-kind {
+  opacity: 0.7;
+}
+.batch-row-remove {
+  flex: none;
+}
+/* Full height, so it reads as the edge between two columns; the button sits in its middle. */
+.batch-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-left: 1px solid rgba(128, 128, 128, 0.35);
+  border-right: 1px solid rgba(128, 128, 128, 0.35);
+}
+.batch-divider-btn {
+  width: 20px;
+  min-width: 0;
+  height: 48px;
+  margin: 0;
+  padding: 0;
+}
+
+/* Phone: the selection fills the page; the operations bar is pinned to the bottom. */
+.batch-mobile .batch-selected {
+  height: calc(100dvh - 260px);
+  min-height: 300px;
+}
+.batch-mobile-bar {
+  position: sticky;
+  bottom: 0;
+  padding: 8px 0;
+  background-color: inherit;
+}
+.batch-mobile-bar .stdbtn {
+  width: 100%;
+  margin: 0;
+}
+/* The windowed list needs a height to window against; the drawer's own body only scrolls. */
+.batch-drawer-body .batch-picker {
+  height: calc(100dvh - 140px);
+}
+.batch-ops-sheet {
+  padding: 8px 12px;
+  text-align: left;
+}

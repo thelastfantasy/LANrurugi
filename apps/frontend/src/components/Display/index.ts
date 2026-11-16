@@ -33,3 +33,5 @@ export * from "./ShortId"
 export * from "./TagCloud"
 
 export * from "./TagTable"
+
+export * from "./WindowedList"
