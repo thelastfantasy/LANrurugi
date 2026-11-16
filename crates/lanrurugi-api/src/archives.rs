@@ -2358,14 +2358,11 @@ async fn clear_new_flag(
 
 async fn set_isnew(state: &AppState, id: &lanrurugi_core::ids::ArchiveId, isnew: bool) -> Response {
     let operation = if isnew { "add_new" } else { "clear_new" };
-    let mut archive = match state.repos.archives.get(id).await {
-        Ok(Some(a)) => a,
-        Ok(None) => return not_found(operation, format!("{id} does not exist.")),
-        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, operation, e.to_string()),
-    };
-    archive.isnew = isnew;
-    match state.repos.archives.save(&archive).await {
-        Ok(()) => {
+    // The flag alone, never the whole record: the reader clears it as it opens an archive, in the
+    // same instant it saves the first page, and a whole-record save from a snapshot taken a moment
+    // earlier erased that progress (#302).
+    match state.repos.archives.set_isnew(id, isnew).await {
+        Ok(true) => {
             if let Err(e) =
                 lanrurugi_search::indexer::set_isnew_index(&state.redis.search, id.as_str(), isnew)
                     .await
@@ -2374,6 +2371,7 @@ async fn set_isnew(state: &AppState, id: &lanrurugi_core::ids::ArchiveId, isnew:
             }
             axum::Json(json!({ "operation": operation, "id": id, "success": 1 })).into_response()
         }
+        Ok(false) => not_found(operation, format!("{id} does not exist.")),
         Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, operation, e.to_string()),
     }
 }

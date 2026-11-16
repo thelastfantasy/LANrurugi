@@ -236,7 +236,14 @@ impl ArchiveRepository {
         Ok(())
     }
 
-    /// Creates or fully overwrites an archive record's hash fields.
+    /// Creates or fully overwrites an archive record's hash fields — except reading progress
+    /// (`progress`, `lastreadtime`), which is only written when the record does not have it yet.
+    ///
+    /// Every whole-record writer is a read-modify-write, and the reader saves progress on its own
+    /// at any moment: a save from a snapshot taken just before that write used to put the old
+    /// progress back (#302 — opening an archive cleared its `isnew` from a stale snapshot and
+    /// erased the page just recorded). A new record, a re-keyed one or one restored from the
+    /// recycle bin still gets the progress it carries; changing it otherwise is [`Self::set_progress`]'s.
     pub async fn save(&self, archive: &Archive) -> Result<()> {
         let mut conn = self.pool.get().await?;
         let toc_json = serde_json::to_string(&toc_to_legacy_map(&archive.toc)).map_err(|e| {
@@ -273,8 +280,6 @@ impl ArchiveRepository {
             ("arcsize", archive.arcsize.to_string().into()),
             ("pagecount", archive.pagecount.to_string().into()),
             ("isnew", if archive.isnew { "true" } else { "false" }.into()),
-            ("progress", archive.lastreadpage.to_string().into()),
-            ("lastreadtime", archive.lastreadtime.to_string().into()),
             ("toc", toc_json.into()),
             ("stamps", stamps_json.into()),
             ("corrupted_pages", corrupted_pages_json.into()),
@@ -284,6 +289,20 @@ impl ArchiveRepository {
             ),
         ];
         let _: () = conn.hset_multiple(archive.id.as_str(), &fields).await?;
+        let _: () = conn
+            .hset_nx(
+                archive.id.as_str(),
+                "progress",
+                archive.lastreadpage.to_string(),
+            )
+            .await?;
+        let _: () = conn
+            .hset_nx(
+                archive.id.as_str(),
+                "lastreadtime",
+                archive.lastreadtime.to_string(),
+            )
+            .await?;
         // Like `thumbhash`: written when known, never cleared by a save that did not carry it.
         if let Some(blake3) = &archive.blake3 {
             let _: () = conn.hset(archive.id.as_str(), "blake3", blake3).await?;
@@ -308,6 +327,21 @@ impl ArchiveRepository {
             }
         }
         Ok(())
+    }
+
+    /// Writes only the `isnew` flag, of a record that still exists; `false` when it does not.
+    /// Never a whole-record save: clearing the flag is what the reader does as it opens an archive,
+    /// right beside its own progress write (#302).
+    pub async fn set_isnew(&self, id: &ArchiveId, isnew: bool) -> Result<bool> {
+        const SCRIPT: &str = "if redis.call('EXISTS', KEYS[1]) == 1 then \
+            redis.call('HSET', KEYS[1], 'isnew', ARGV[1]) return 1 end return 0";
+        let mut conn = self.pool.get().await?;
+        let written: i64 = deadpool_redis::redis::Script::new(SCRIPT)
+            .key(id.as_str())
+            .arg(if isnew { "true" } else { "false" })
+            .invoke_async(&mut conn)
+            .await?;
+        Ok(written == 1)
     }
 
     /// Writes only the whole-file fingerprint (027 backfill), so a concurrent edit of any other
@@ -1246,6 +1280,58 @@ mod tests {
         assert_eq!(fetched, archive);
 
         repo.delete(&id).await.unwrap();
+        assert!(repo.get(&id).await.unwrap().is_none());
+    }
+
+    /// #302: a whole-record save from a snapshot taken before a progress write must not put the
+    /// old progress back, and clearing `isnew` touches nothing else.
+    #[tokio::test]
+    async fn a_stale_save_or_an_isnew_change_keeps_the_progress_written_meanwhile() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = ArchiveRepository::new(pool);
+        let id = ArchiveId("3".repeat(40));
+        let archive = Archive {
+            id: id.clone(),
+            name: "n".into(),
+            title: "t".into(),
+            file: "/x.zip".into(),
+            tags: String::new(),
+            summary: String::new(),
+            arcsize: 1,
+            pagecount: 10,
+            isnew: true,
+            lastreadpage: 0,
+            lastreadtime: 0,
+            thumbhash: None,
+            toc: vec![],
+            stamp_ids: vec![],
+            heal_failed_at: None,
+            corrupted_pages: vec![],
+            has_patch: false,
+            blake3: None,
+        };
+        repo.save(&archive).await.unwrap();
+
+        // The reader's interleaving: a snapshot is read, the first page is saved, and then the
+        // snapshot is written back with only `isnew` changed.
+        let mut stale = repo.get(&id).await.unwrap().unwrap();
+        repo.set_progress(&id, 1, 1_794_797_658).await.unwrap();
+        stale.isnew = false;
+        repo.save(&stale).await.unwrap();
+        let after = repo.get(&id).await.unwrap().unwrap();
+        assert_eq!((after.lastreadpage, after.lastreadtime), (1, 1_794_797_658));
+        assert!(!after.isnew);
+
+        // The narrow flag write leaves progress alone too, and never recreates a deleted record.
+        repo.set_progress(&id, 4, 1_794_800_000).await.unwrap();
+        assert!(repo.set_isnew(&id, true).await.unwrap());
+        let after = repo.get(&id).await.unwrap().unwrap();
+        assert_eq!((after.lastreadpage, after.isnew), (4, true));
+        repo.delete(&id).await.unwrap();
+        assert!(!repo.set_isnew(&id, false).await.unwrap());
         assert!(repo.get(&id).await.unwrap().is_none());
     }
 
