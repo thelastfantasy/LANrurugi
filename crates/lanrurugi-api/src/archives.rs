@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha1::{Digest, Sha1};
 
-use crate::common::{error, not_found, ok};
+use crate::common::{coded_error, error, not_found, ok};
 use crate::settings::{DEFAULT_READER_QUALITY, DEFAULT_SIZE_THRESHOLD};
 use crate::state::FetchedPage;
 use crate::AppState;
@@ -4578,12 +4578,36 @@ pub(crate) async fn get_files(
                 .collect();
             axum::Json(json!({ "job": 0, "pages": pages })).into_response()
         }
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "get_file_list",
-            e.to_string(),
-        ),
+        Err(e) => unreadable_archive_response("get_file_list", &id, archive_path, &e),
     }
+}
+
+/// A file that cannot be read the same way however often it is retried (truncated, not an archive,
+/// gone) answers 422 with a `code` the reader shows and never retries; only a momentary I/O failure
+/// stays a 500 (#290). The cause is logged once, which is also the one diagnostics event.
+pub(crate) fn unreadable_archive_response(
+    operation: &str,
+    id: &lanrurugi_core::ids::ArchiveId,
+    path: &std::path::Path,
+    e: &lanrurugi_scanner::archive_format::ArchiveFormatError,
+) -> Response {
+    use lanrurugi_scanner::archive_format::ArchiveFormatError;
+    let missing = matches!(e, ArchiveFormatError::Io(io) if io.kind() == std::io::ErrorKind::NotFound)
+        || !path.exists();
+    let code = if missing {
+        "archive_missing"
+    } else if e.is_permanent() {
+        "archive_corrupted"
+    } else {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, operation, e.to_string());
+    };
+    tracing::warn!(archive = %id, file = %path.display(), code, error = %e, "archive cannot be read");
+    coded_error(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        operation,
+        code,
+        e.to_string(),
+    )
 }
 
 #[derive(Debug, Deserialize)]

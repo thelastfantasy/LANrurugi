@@ -130,6 +130,10 @@ async fn search_entry_json(
     // follow-on design — the library-grid patch badge) goes here instead, same pattern
     // `archive_count` above already established for a LANrurugi-only addition.
     obj.insert("has_patch".into(), json!(a.has_patch));
+    // #291: only when set, so an ordinary card carries nothing extra.
+    if a.heal_failed_at.is_some() {
+        obj.insert("damaged".into(), json!(true));
+    }
     // 027: the whole-file BLAKE3, when known. Same additive pattern as `has_patch`.
     if let Some(blake3) = &a.blake3 {
         obj.insert("blake3".into(), json!(blake3));

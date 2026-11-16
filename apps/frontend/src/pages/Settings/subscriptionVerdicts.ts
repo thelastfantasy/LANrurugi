@@ -32,3 +32,30 @@ function fieldLabel(t: TFunction, field: string): string {
   const label = t(key)
   return label === key ? field : label
 }
+
+/** A work that never reached the download queue, in words: the server sends a stable reason key
+ * (`insufficient_credit`, `download_failed:<detail>`) so it can be translated. */
+export function reservationReasonText(t: TFunction, reason: string): string {
+  if (reason === "source_unreachable") return t("reservations.sourceUnreachable")
+  if (reason === "insufficient_credit") return t("reservations.insufficientCredit")
+  if (reason === "no_download_plugin") return t("reservations.noDownloadPlugin")
+  if (reason.startsWith("download_failed:"))
+    return t("reservations.downloadFailed", { detail: reason.slice("download_failed:".length) })
+  return reason
+}
+
+/** Items split by the subscription that produced them, groups in order of their first item, so a
+ *  list mixing several subscriptions reads one subscription at a time. */
+export function groupBySubscription<T>(
+  items: readonly T[],
+  subscriptionOf: (item: T) => string | null | undefined,
+): { subscriptionId: string; items: T[] }[] {
+  const groups = new Map<string, T[]>()
+  for (const item of items) {
+    const id = subscriptionOf(item) ?? ""
+    const group = groups.get(id)
+    if (group) group.push(item)
+    else groups.set(id, [item])
+  }
+  return [...groups].map(([subscriptionId, grouped]) => ({ subscriptionId, items: grouped }))
+}

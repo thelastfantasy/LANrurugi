@@ -155,6 +155,10 @@ p, token_guest, /api/database/duplicates/compare, GET, deny
 p, token_guest, /api/database/duplicates/patch, POST, deny
 p, token_guest, /api/database/blake3-backfill, POST, deny
 p, token_guest, /api/database/blake3-backfill, DELETE, deny
+p, token_guest, /api/database/integrity-scan, GET, deny
+p, token_guest, /api/database/integrity-scan, POST, deny
+p, token_guest, /api/database/integrity-scan, DELETE, deny
+p, token_guest, /api/database/integrity-scan/archives/:id, POST, deny
 p, token_guest, /api/database/duplicates/decisions, GET, deny
 p, token_guest, /api/database/duplicates/decisions, POST, deny
 p, token_guest, /api/database/import-legacy, POST, deny

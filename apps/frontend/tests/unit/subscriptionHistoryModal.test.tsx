@@ -22,9 +22,19 @@ vi.mock("@/api/hooks", async (importOriginal) => ({
   useBlockedWorks: () => ({ data: state.blocked, isPending: false }),
   useBlockSubscriptionSources: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useForgetSeen: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useUnskipSubscriptionSources: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  // The merged dialog's other tabs and footer; empty here, since these tests are about history rows.
+  usePendingApprovals: () => ({ data: [] }),
+  useReservations: () => ({ data: [] }),
+  useRetryReservation: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useDiscardReservation: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useSubscriptionFailedCount: () => 0,
+  useSubscriptions: () => ({ data: [] }),
+  useSettings: () => ({ data: { download_queue_retention_days: 30 }, isPending: false }),
+  useUpdateSettings: () => ({ isPending: false, mutateAsync: vi.fn() }),
 }))
 
-const { SubscriptionHistoryModal } = await import("@/pages/Settings/SubscriptionHistoryModal")
+const { SubscriptionsModal } = await import("@/pages/Upload/SubscriptionsModal")
 
 function entry(over: Partial<HistoryEntry> = {}): HistoryEntry {
   return {
@@ -49,13 +59,13 @@ function renderModal() {
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter>
-        <SubscriptionHistoryModal onClose={() => {}} />
+        <SubscriptionsModal onClose={() => {}} />
       </MemoryRouter>
     </QueryClientProvider>,
   )
 }
 
-describe("SubscriptionHistoryModal", () => {
+describe("SubscriptionsModal history tabs", () => {
   beforeEach(() => {
     state.entries = []
     state.pending = false
@@ -105,7 +115,8 @@ describe("SubscriptionHistoryModal", () => {
     renderModal()
 
     expect(screen.getByText(/You blocked this work/)).toBeTruthy()
-    expect(screen.getByDisplayValue("Reconsider")).toBeTruthy()
+    // An icon button now, named for screen readers (and its tooltip).
+    expect(screen.getByRole("button", { name: "Reconsider" })).toBeTruthy()
   })
 
   it("falls back to the cycle's own verdict when the download is still in flight", () => {

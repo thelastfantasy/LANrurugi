@@ -30,6 +30,7 @@ pub mod gpu_worker_client;
 pub mod health;
 pub mod heartbeat;
 pub mod integrity_backfill;
+pub mod integrity_scan;
 pub mod jobs;
 pub mod llm_prompts;
 pub mod llm_usage;
@@ -101,6 +102,7 @@ pub fn router() -> Router<AppState> {
         .merge(archive_split::router())
         .merge(archives::router())
         .merge(integrity_backfill::router())
+        .merge(integrity_scan::router())
         .merge(direct_download::router())
         .merge(bench::router())
         .merge(bookmarks::router())

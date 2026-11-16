@@ -58,6 +58,21 @@ git checkout -b fix/<slug>
    的 `SHARE_ENGINE_VERSION` 也要 bump，并在它上面的注释里加一行说明这一版改了什么。
    **一个软件版本只 bump 一次**，不是每个改动都加一次。
 
+## 4.5 发布前诊断检查（dev→main 之前必做）
+
+```sh
+scripts/sentry-pre-release-check.sh            # 默认从最新 release tag 起算
+scripts/sentry-pre-release-check.sh --since 2026-11-01 --threshold 500
+```
+
+只读查询 NAS 上 rustrak 的 SQLite（`ssh truenas`），输出三块：
+
+1. **新问题**：dev 和 prod 项目自上个版本以来首次出现的 issue。逐条确认已修、可以接受，或者写进 PR 说明。
+2. **span 分组**：按 op 和描述统计数量，带 `!` 的分组超过阈值。
+3. **事务分组**：按名称统计数量，带 `!` 的同样超过阈值。
+
+带 `!` 的分组一定要查清原因。曾经出过的情况：上报接口自己追踪自己（#282）、健康检查被追踪。这些不是错误，所以不会出现在问题列表里，只能靠这一步发现。
+
 ## 5. 合到 dev，再合到 main
 
 ```sh

@@ -192,6 +192,7 @@ const SETTINGS_FIELD_SECTIONS: Record<string, string> = {
   newbadgemode: "global",
   recommendprecision: "global",
   download_queue_retention_days: "global",
+  skipped_retention_days: "global",
   llm_api_key: "global",
   theme: "theme",
   access_token_lifetime_secs: "security",

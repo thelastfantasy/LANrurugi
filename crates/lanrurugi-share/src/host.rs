@@ -135,8 +135,6 @@ pub trait ImportHost: Send + Sync {
         done: u64,
         total: u64,
     );
-    /// `tempmaxsize` in bytes: the ceiling for the whole temp tree, partial imports included.
-    fn temp_quota_bytes(&self) -> BoxFuture<'_, Option<u64>>;
 }
 
 /// Why the library would not take a staged import file.
@@ -306,9 +304,6 @@ impl ImportHost for EmptyHost {
         _done: u64,
         _total: u64,
     ) {
-    }
-    fn temp_quota_bytes(&self) -> BoxFuture<'_, Option<u64>> {
-        Box::pin(async { None })
     }
 }
 

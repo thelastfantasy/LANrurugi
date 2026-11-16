@@ -315,12 +315,13 @@ input[type="checkbox"].lrr-checkbox-bare::after {
   }
 }
 
+/* Wraps instead of truncating, so a long title can be read in full (#298); the block's own
+   max-width keeps it off most of the page. */
 .reader-headless-title {
   font-size: 0.88rem;
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* Chapter jump OSD (headless, `t`). Deliberately neutral: a grey translucent sheet over the
@@ -2728,6 +2729,9 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 
 .preview-title {
   min-width: 0;
+  /* A title with no break opportunity (a long run of one character, a bare URL) wraps inside its
+     column instead of spilling over the others. */
+  overflow-wrap: anywhere;
 }
 
 /* Date and time stacked by `DateTimeStack`, in the viewer's own local formatting. */
@@ -3186,7 +3190,8 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 .preview-row-actions {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  /* Icon buttons, so they fit one line: a row's actions never stack. */
+  flex-wrap: nowrap;
   justify-content: flex-end;
   gap: 2px 4px;
   margin-top: 2px;
@@ -3230,14 +3235,6 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   text-align: center;
 }
 
-.queue-records-grid {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 10em) minmax(0, 14em);
-  /* Its own scroll box rather than `.sub-modal-preview`'s fixed 65vh pane: that one is a twin of
-     the form modal's fields, and in this list it stretched every row to fill the height. */
-  max-height: 40vh;
-  overflow-y: auto;
-  padding-right: 4px;
-}
 
 /* One subscription's check history: the cycle picker, then work | uploader | verdict. */
 .check-history-head {
@@ -3279,13 +3276,72 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   max-height: 65vh;
 }
 
-.history-subscription,
 .history-when {
   font-size: 0.85em;
   opacity: 0.75;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The match history's body keeps one height whatever the tab or filter shows; the grid inside
+   scrolls, and starts at the top rather than stretching its rows to fill the space. */
+.history-body {
+  height: 65vh;
+}
+.history-body > .sub-modal-preview {
+  max-height: 100%;
+  align-content: start;
+}
+@media (max-width: 760px) {
+  .history-body {
+    height: 70vh;
+  }
+}
+
+.history-sub-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.history-sub-state {
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
+/* Above the list: a tab's own filter on the left, the subscription picker on the right. One height
+   whether or not either is shown, so switching tabs does not move the list. */
+.sub-modal-filters {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 28px;
+  margin-bottom: 8px;
+}
+
+.sub-modal-retention {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* When the check ran, under the outcome in a subscription list's last column. */
+.preview-verdict .history-when {
+  display: block;
+}
+
+.history-blocked-mark {
+  font-size: 0.85em;
+  opacity: 0.8;
+  margin-right: 2px;
+}
+
+/* Why a download failed, under the verdict: the reason is what tells one failure from another. */
+.history-failure-reason {
+  display: block;
+  font-size: 0.85em;
+  opacity: 0.8;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 760px) {
@@ -3793,4 +3849,103 @@ body div.ido {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Tag chips (`div.gt`) holding one value. With `line-height: normal` a CJK value falls back to a
+ * font with different ascent/descent, and the two fonts' baselines stretched its line box, so the
+ * chip came out taller than a Latin one beside it. A fixed-height text box makes every chip the
+ * same height whatever font draws it. Source URLs keep wrapping and are not marked with this. */
+div.gt.gt-single {
+  line-height: 1.25em;
+}
+div.gt.gt-single > a,
+div.gt.gt-single > span {
+  display: inline-block;
+  height: 1.25em;
+  line-height: 1.25em;
+  vertical-align: top;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A subscription's heading inside the approval list when several subscriptions have works waiting:
+   spans every column; neutral rule so it fits every theme. */
+.preview-group-head {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-weight: bold;
+  /* Colour and the 3px edge come from each theme (`.preview-group-head` in the theme files); the
+     8px matches the rows' cell padding, so the group's checkbox sits over theirs. */
+  padding: 6px 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.preview-group-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* Leads the row, before the checkbox, the way an expander does in a tree. */
+.preview-group-toggle {
+  flex: none;
+  width: 1em;
+  margin-right: 4px;
+  text-align: center;
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+.pending-row {
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+/* The approval checkbox in the state-icon slot: room for the 13px box plus a gap before the title,
+   which the icon-sized slot alone does not leave. */
+.pending-check {
+  width: 1.6em;
+  margin-right: 2px;
+  text-align: left;
+  vertical-align: top;
+  padding-top: 2px;
+}
+.preview-group-head > .pending-check {
+  padding-top: 0;
+}
+
+/* Grouped subscription lists have no subscription column: the title takes that track too. */
+.preview-title-wide {
+  grid-column: span 2;
+}
+.pending-title {
+  display: flex;
+  align-items: flex-start;
+}
+.pending-title > .pending-check {
+  flex: none;
+}
+.pending-title-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pending-batch {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+
+/* The subscriptions dialog's footer: the queue's retention setting and the way to the full page. */
+.sub-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(128, 128, 128, 0.35);
 }

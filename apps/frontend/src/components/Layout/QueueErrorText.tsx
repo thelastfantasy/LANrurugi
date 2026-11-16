@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
 import type { QueueError } from "@/api/types"
+import { formatBytes } from "@/lib/formatBytes"
 import { routes } from "@/lib/routes"
 
 /** Renders a structured `QueueError` as translated text, mapping `.kind` to an i18n key. A
@@ -109,9 +110,21 @@ export function QueueErrorText({ error }: { error: QueueError }) {
       return <span>{t("components.layout.anInternalErrorOccurred")}</span>
     case "stale_after_restart":
       return <span>{t("components.layout.downloadWasInterruptedByA")}</span>
-    case "share_import":
+    case "share_import": {
+      // `not_enough_disk:<needed>:<available>` is this instance's own refusal (#280).
+      const disk = /^not_enough_disk:(\d+):(\d+)$/.exec(error.reason)
+      if (disk)
+        return (
+          <span>
+            {t("share.importRow.notEnoughDisk", {
+              needed: formatBytes(Number(disk[1])),
+              available: formatBytes(Number(disk[2])),
+            })}
+          </span>
+        )
       // A sharer's refusal has a translated message; anything else is shown as reported.
       return <span>{t(`share.refusal.${error.reason}`, { defaultValue: error.reason })}</span>
+    }
     case "superseded_by_newer_revision":
       return (
         <span>

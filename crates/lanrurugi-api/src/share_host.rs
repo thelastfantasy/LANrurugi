@@ -397,23 +397,4 @@ impl ImportHost for AppState {
             "import": crate::share_imports::detail(record, false),
         }));
     }
-
-    /// `tempmaxsize` in bytes (the setting is in MB).
-    fn temp_quota_bytes(&self) -> BoxFuture<'_, Option<u64>> {
-        Box::pin(async move {
-            let mut conn = self.redis.config.get().await.ok()?;
-            let megabytes: Option<String> = deadpool_redis::redis::AsyncCommands::hget(
-                &mut conn,
-                lanrurugi_storage::keys::CONFIG_KEY,
-                "tempmaxsize",
-            )
-            .await
-            .ok()?;
-            let megabytes = megabytes
-                .and_then(|v| v.parse::<i64>().ok())
-                .unwrap_or(crate::download_manager::ingest::DEFAULT_TEMP_MAX_SIZE_MB)
-                .max(0) as u64;
-            Some(megabytes * 1024 * 1024)
-        })
-    }
 }

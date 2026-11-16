@@ -73,7 +73,11 @@ pub trait Reporter: Send + Sync {
 /// perfectly healthy networks.
 pub fn capture_log_event(level: &str, target: &str) -> bool {
     match level {
-        "ERROR" => !target.starts_with("lanrurugi_api::diagnostics"),
+        // `tower_http`'s "response failed" duplicates the event `capture_5xx` already records
+        // for the same response, without its path or reason (#290).
+        "ERROR" => {
+            !target.starts_with("lanrurugi_api::diagnostics") && !target.starts_with("tower_http")
+        }
         "WARN" => {
             target.starts_with("lanrurugi_")
                 && !target.starts_with("lanrurugi_api::version")
@@ -299,6 +303,11 @@ mod tests {
         // No panic, no global state: a settled run must not report on drop.
         Silent.cron("no-such-monitor").ok();
         Silent.capture(Level::Error, "ignored", Attrs::new());
+    }
+
+    #[test]
+    fn tower_http_failures_are_left_to_capture_5xx() {
+        assert!(!capture_log_event("ERROR", "tower_http::trace::on_failure"));
     }
 
     #[test]

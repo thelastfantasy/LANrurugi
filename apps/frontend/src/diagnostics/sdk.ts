@@ -20,6 +20,19 @@ interface DiagnosticsConfig {
   window: ForwardWindow
 }
 
+/** Where envelopes are posted. */
+export const INGEST_PATH = "/api/diagnostics/envelope"
+
+/** `fetch` as it was before the SDK (and {@link listenForRequests}) wrapped it. Envelopes go through
+ * this one, so posting a span never records another span to post (#282). */
+const nativeFetch: typeof fetch =
+  typeof window.fetch === "function" ? window.fetch.bind(window) : (...args) => fetch(...args)
+
+/** Whether a request is the SDK's own envelope post, which must not be traced or recorded. */
+export function isIngestRequest(url: string): boolean {
+  return url.replace(/^https?:\/\/[^/]+/, "").startsWith(INGEST_PATH)
+}
+
 /** The SDK is initialised; later calls only refresh the scope. */
 let started = false
 /** An init is in flight, so concurrent callers share it. */
@@ -59,11 +72,11 @@ function serializeEnvelope(request: TransportRequest): string {
  * the default derives `<dsn>/api/<project>/envelope/` and Sentry's DSN parser only accepts a
  * *numeric* project id, so pointing it at a path like `/diagnostics` silently disables the client.
  */
-function localTransport(): BrowserTransport {
+export function localTransport(): BrowserTransport {
   return {
     send: async (envelope) => {
       try {
-        const response = await fetch("/api/diagnostics/envelope", {
+        const response = await nativeFetch(INGEST_PATH, {
           method: "POST",
           headers: { "Content-Type": "application/x-sentry-envelope" },
           body: serializeEnvelope(envelope),
@@ -129,6 +142,7 @@ function listenForRequests() {
           : request.url
     // Paths only: a query string can carry a share code.
     const clean = path.replace(/^https?:\/\/[^/]+/, "").split("?")[0]
+    if (isIngestRequest(clean)) return response
     const duration = Math.round(performance.now() - started)
     if (!response.ok && response.status >= 400) {
       Sentry.addBreadcrumb({
@@ -201,7 +215,10 @@ async function init(): Promise<void> {
     tracesSampleRate: config.window.open ? 1.0 : 0.01,
     integrations: (defaults) => [
       ...defaults,
-      Sentry.browserTracingIntegration({ instrumentNavigation: true }),
+      Sentry.browserTracingIntegration({
+        instrumentNavigation: true,
+        shouldCreateSpanForRequest: (url) => !isIngestRequest(url),
+      }),
     ],
     beforeSend(event) {
       // The server caps a stored event at 64 KB; drop anything absurd before it gets there.
@@ -244,7 +261,7 @@ export function captureRenderError(error: unknown): void {
 
 /** The ingest URL the SDK derives from {@link diagnosticsDsn}, exported for tests. */
 export function ingestUrl(host: string): string {
-  return `http://${host}/api/diagnostics/envelope/`
+  return `http://${host}${INGEST_PATH}/`
 }
 
 /** Reports a handled failure — one the UI recovered from but still wants to know about. */

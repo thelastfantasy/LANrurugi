@@ -2,27 +2,32 @@ import { render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { DownloadQueueItem, PendingApproval, ReservationEntry, Subscription } from "@/api/types"
+import type { HistoryEntry, PendingApproval, ReservationListItem, Subscription } from "@/api/types"
 
-// The modal's whole point is which records it shows, and that is decided entirely by these three
-// hooks — mocking them is the only way to see the list without a server that has matched something.
+// The merged subscriptions dialog: what waits on the user, what failed (whether or not it ever
+// reached the queue), and the way out to the full settings page. History rows have their own spec.
 const state = {
   subscriptions: [] as Subscription[],
   pending: [] as PendingApproval[],
-  reservations: [] as ReservationEntry[],
-  queue: [] as DownloadQueueItem[],
+  reservations: [] as ReservationListItem[],
+  history: [] as HistoryEntry[],
 }
 
 vi.mock("@/api/hooks", () => ({
   useSubscriptions: () => ({ data: state.subscriptions }),
   usePendingApprovals: () => ({ data: state.pending }),
-  useReservations: () => ({ data: state.reservations }),
-  useDownloadQueue: () => ({ data: state.queue }),
   useApprovePending: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useDismissPending: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useReservations: () => ({ data: state.reservations }),
+  useRetryReservation: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useDiscardReservation: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useSubscriptionFailedCount: () => state.reservations.length,
+  useSubscriptionHistory: () => ({ data: state.history, isPending: false }),
+  useBlockedWorks: () => ({ data: [], isPending: false }),
+  useBlockSubscriptionSources: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useForgetSeen: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useUnskipSubscriptionSources: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useStartQueueItem: () => ({ isPending: false, mutateAsync: vi.fn() }),
-  // The modal also carries the queue-retention setting, so it reads (and writes) settings.
   useSettings: () => ({ data: { download_queue_retention_days: 30 }, isPending: false }),
   useUpdateSettings: () => ({ isPending: false, mutateAsync: vi.fn() }),
 }))
@@ -41,10 +46,10 @@ function subscription(over: Partial<Subscription> = {}): Subscription {
   } as Subscription
 }
 
-function renderModal() {
+function renderModal(initialBand?: "pending" | "failed") {
   return render(
     <MemoryRouter>
-      <SubscriptionsModal onClose={() => {}} />
+      <SubscriptionsModal initialBand={initialBand} onClose={() => {}} />
     </MemoryRouter>,
   )
 }
@@ -54,67 +59,42 @@ describe("SubscriptionsModal", () => {
     state.subscriptions = [subscription()]
     state.pending = []
     state.reservations = []
-    state.queue = []
+    state.history = []
   })
 
-  it("shows where an auto-downloaded match ended up, not just what is waiting", () => {
-    // An auto-downloading subscription produces no approvals at all, so without the queue the modal
-    // claimed nothing had matched while five works were downloading behind it.
-    state.queue = [
-      {
-        id: "q1",
-        url: "https://e-hentai.org/g/1/abcdef/",
-        subscription_id: "s1",
-        plugin_namespace: "download/ehentai",
-        state: "done",
-        title: "An Auto-Downloaded Work",
-        created_at: 2,
-      } as DownloadQueueItem,
-      {
-        id: "q2",
-        url: "https://e-hentai.org/g/2/abcdef/",
-        subscription_id: "s1",
-        plugin_namespace: "download/ehentai",
-        state: "downloading",
-        title: null,
-        created_at: 1,
-      } as DownloadQueueItem,
-    ]
-    renderModal()
-
-    expect(screen.getByText("An Auto-Downloaded Work")).toBeTruthy()
-    expect(screen.getByText(/download queue/i)).toBeTruthy()
-    expect(screen.getByText("Done")).toBeTruthy()
-    expect(screen.getByText("Downloading")).toBeTruthy()
-    // The empty state must not claim nothing matched when the queue has these.
-    expect(screen.queryByText(/No subscription has matched/)).toBeNull()
-  })
-
-  it("lists the matched works, not the subscriptions themselves", () => {
+  it("lists the works waiting for approval on its own tab, with the count on the tab", () => {
     state.pending = [
-      {
-        id: "p1",
-        subscription_id: "s1",
-        source_url: "https://e-hentai.org/g/1/abcdef/",
-        title: "A Matched Work",
-        created_at: 1,
-      },
+      { id: "p1", subscription_id: "s1", source_url: "e-hentai.org/g/1/abcdef", title: { origin: "A Matched Work" }, created_at: 1 },
     ]
-    renderModal()
+    renderModal("pending")
 
     expect(screen.getByText("A Matched Work")).toBeTruthy()
-    // The subscription's own name belongs to the row as attribution, not as the list's subject…
-    expect(screen.getByText("trace测试")).toBeTruthy()
-    // …and the subscription list itself (its columns) is not what this modal is for.
-    expect(screen.queryByText("Checks")).toBeNull()
-    expect(screen.queryByText("Last checked")).toBeNull()
+    expect(screen.getByRole("tab", { name: /\(1\)/ })).toBeTruthy()
   })
 
-  it("says so when nothing has matched, instead of showing an empty table", () => {
-    renderModal()
+  it("says so when nothing waits, instead of an empty table", () => {
+    renderModal("pending")
 
-    expect(screen.getByText(/No subscription has matched anything yet/)).toBeTruthy()
-    expect(screen.queryByText("Checks")).toBeNull()
+    expect(screen.getByText(/Nothing is waiting for your go-ahead/)).toBeTruthy()
+  })
+
+  it("shows a work that never reached the queue as a failed download, with its reason", () => {
+    state.reservations = [
+      {
+        id: "r1",
+        subscription_id: "s1",
+        source_url: "e-hentai.org/g/2/abcdef",
+        reason: "insufficient_credit",
+        status: "waiting",
+        created_at: 2,
+        retryable: true,
+      },
+    ]
+    renderModal("failed")
+
+    expect(screen.getByText("Download failed")).toBeTruthy()
+    expect(screen.getByText(/credit/i)).toBeTruthy()
+    expect(screen.getByRole("button", { name: /Retry/i })).toBeTruthy()
   })
 
   it("keeps the way to the full settings page, and the count of rules behind it", () => {

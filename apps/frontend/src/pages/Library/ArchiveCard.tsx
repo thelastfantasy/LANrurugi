@@ -27,13 +27,15 @@ function StatusIcons({ archive }: { archive: ArchiveMetadata }) {
   const showCrown = isRead && (isTank || !showNew)
   // No legacy equivalent, so no mutual-exclusion with the other badges.
   const showPatch = archive.has_patch === true
+  const damaged = archive.damaged === true
 
   const isBook = isBookExtension(archive.extension)
-  if (!showNew && !showCrown && !isTank && !showPatch && !isBook) return null
+  if (!showNew && !showCrown && !isTank && !showPatch && !isBook && !damaged) return null
   return (
     // Inline flow rather than flex: the row aligns this box by its first baseline, and the marks
     // centre on the text's middle like any inline icon.
     <div className="status-icons" style={{ flexShrink: 0, whiteSpace: "nowrap" }}>
+      {damaged && <StatusIcon kind="damaged" title={t("library.damaged") ?? undefined} style={gap} />}
       {isBook && <FormatBadge extension={archive.extension} style={gap} />}
       {showNew && <StatusIcon kind="new" title={t("library.new") ?? undefined} style={gap} />}
       {showCrown && <StatusIcon kind="read" title={t("common.read") ?? undefined} style={gap} />}
@@ -153,7 +155,11 @@ export function ArchiveCard({
           </Tooltip>
         )}
       </div>
-      <div className={cropThumbs ? "id3" : "id3 nocrop"} style={{ position: "relative" }}>
+      {/* A damaged file is greyed out: it is in the library but cannot be read (#291). */}
+      <div
+        className={cropThumbs ? "id3" : "id3 nocrop"}
+        style={{ position: "relative", opacity: archive.damaged ? 0.5 : undefined }}
+      >
         {multiSelect && (
           <input
             type="checkbox"

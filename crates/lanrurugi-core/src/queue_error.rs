@@ -244,11 +244,65 @@ impl QueueError {
             QueueError::VerifyReadbackMismatch { .. } => 1017,
         }
     }
+
+    /// Whether downloading the same URL again could end differently. `false` for an outcome the
+    /// library or the source has already settled (it is already held, a newer revision is, the
+    /// URL itself is invalid) and for one that needs a choice rather than a retry (a filename
+    /// conflict). Exhaustive on purpose: a new kind has to decide.
+    pub fn retryable(&self) -> bool {
+        match self {
+            QueueError::PluginReported { .. }
+            | QueueError::PluginExecutionFailed { .. }
+            | QueueError::MalformedPluginResponse { .. }
+            | QueueError::EmptyPluginResult { .. }
+            | QueueError::HttpRequestFailed { .. }
+            | QueueError::HttpStatus { .. }
+            | QueueError::WriteFailed
+            | QueueError::BundleFailed
+            | QueueError::TruncatedDownload { .. }
+            | QueueError::EgressUnavailable { .. }
+            | QueueError::SourceDownloadInProgress
+            | QueueError::IngestFailed { .. }
+            | QueueError::Internal
+            | QueueError::StaleAfterRestart
+            | QueueError::DuplicateFilenameCleaned { .. }
+            | QueueError::ShareImport { .. }
+            | QueueError::CopyLengthMismatch { .. }
+            | QueueError::DurabilityFailed { .. }
+            | QueueError::StagedContentCorrupted { .. }
+            | QueueError::VerifyReadbackMismatch { .. } => true,
+            QueueError::InvalidUrl { .. }
+            | QueueError::InvalidHttpMethod { .. }
+            | QueueError::DuplicateArchive { .. }
+            | QueueError::DuplicateFilename { .. }
+            | QueueError::AlreadyPatched { .. }
+            | QueueError::SourceAlreadyImported { .. }
+            | QueueError::SupersededByNewerRevision { .. } => false,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_settled_outcome_is_not_offered_a_retry() {
+        assert!(!QueueError::SourceAlreadyImported {
+            existing_id: "a".into()
+        }
+        .retryable());
+        assert!(!QueueError::SupersededByNewerRevision {
+            archive_id: "a".into()
+        }
+        .retryable());
+        assert!(QueueError::HttpStatus {
+            status: 503,
+            url: "u".into()
+        }
+        .retryable());
+        assert!(QueueError::StaleAfterRestart.retryable());
+    }
 
     #[test]
     fn code_covers_every_variant_with_a_stable_number() {

@@ -8,6 +8,7 @@ description = "Sharing engine: protocol, transport and import pipeline, independ
 [dependencies]
 bytes.workspace = true
 ed25519-dalek.workspace = true
+libc.workspace = true
 netwatch = "0.19.3"
 iroh-mdns-address-lookup.workspace = true
 lanrurugi-core.workspace = true

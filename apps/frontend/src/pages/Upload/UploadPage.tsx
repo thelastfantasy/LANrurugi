@@ -20,7 +20,6 @@ import { FONT_SIZE_XS, useApplyTheme, Z_OVERLAY_ABOVE_DRAWER } from "@/theme"
 import { toast } from "@/toast"
 
 import { DownloadQueuePanel } from "./DownloadQueuePanel"
-import { ReservationGroup } from "./ReservationGroup"
 import { findMatchingPlugin, findPluginByDomain } from "./shared"
 import { SubscriptionStatus } from "./SubscriptionStatus"
 
@@ -440,7 +439,6 @@ export function Upload() {
             }
           />
           <DownloadQueuePanel downloadPlugins={downloadPlugins.data} metadataPlugins={metadataPlugins.data} />
-          <ReservationGroup />
         </div>
       </div>
 

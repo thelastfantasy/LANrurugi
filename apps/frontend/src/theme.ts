@@ -135,6 +135,16 @@ export function ensureLink(id: string, href: string) {
   if (link.href !== href) link.href = href
 }
 
+// Dev only (see `legacyCssHotReload` in vite.config.ts): re-fetch a legacy stylesheet in place when
+// its file changes, since HMR does not reach these hand-added links.
+if (import.meta.hot) {
+  import.meta.hot.on("legacy-css-changed", ({ path }: { path: string }) => {
+    for (const link of document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')) {
+      if (new URL(link.href).pathname === path) link.href = `${path}?t=${Date.now()}`
+    }
+  })
+}
+
 /** Removes a `<link>` added by {@link ensureLink} — needed for page-scoped CSS an SPA route
  * change must undo by hand (legacy discards it via full page load instead). */
 export function removeLink(id: string) {

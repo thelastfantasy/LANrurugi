@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
+import { normalizeTag } from "@/lib/tagFormat"
+
 /** Replicates legacy's `tagger` jQuery plugin markup (`<div class="tagger"><ul><li><a>`) so its
  * theme CSS applies unmodified. Controlled on the flat `"namespace:tag, namespace:tag"` string. */
 
@@ -85,7 +87,7 @@ export function TagInput({
   }, [draft, suggestions, tags])
 
   function commit(raw: string) {
-    const next = raw.trim()
+    const next = normalizeTag(raw)
     if (!next || tags.includes(next)) return
     onChange([...tags, next].join(", "))
   }
@@ -135,8 +137,8 @@ export function TagInput({
     e.preventDefault()
     const next = [...tags]
     for (const piece of text.split(/,\s?/)) {
-      const trimmed = piece.trim()
-      if (trimmed && !next.includes(trimmed)) next.push(trimmed)
+      const tag = normalizeTag(piece)
+      if (tag && !next.includes(tag)) next.push(tag)
     }
     onChange(next.join(", "))
     setDraft("")
@@ -175,6 +177,10 @@ export function TagInput({
                   padding: disabled ? "4px 8px" : "4px 4px 4px 8px",
                   display: "inline-flex",
                   alignItems: "center",
+                  // Taller than either font's line box, so a tag whose CJK value falls back to a
+                  // font with different metrics is no taller than a Latin one; long tags still wrap.
+                  lineHeight: 1.25,
+                  minHeight: "1.5em",
                   gap: 4,
                   wordBreak: "break-all",
                   textDecoration: "none",

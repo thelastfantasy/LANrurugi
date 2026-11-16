@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom"
 import { ApiError } from "@/api/client"
 import { useChangePassword, useLogout, useServerInfo, useSettings, useUpdateCheck, useUpdateSettings } from "@/api/hooks"
 import type { Settings as SettingsType } from "@/api/types"
+import { SectionErrorBoundary } from "@/components/common-ui/Display"
 import { RadioGroup, RadioItem } from "@/components/common-ui/Form"
 import { Button } from "@/components/common-ui/Form/Button"
 import { CollapsibleSection } from "@/components/Display"
@@ -447,54 +448,56 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         style={{ paddingBottom: 72 }}
       >
         <ul className="collapsible extensible with-right-caret">
-          <GlobalSection
-            htmltitle={htmltitle}
-            setHtmltitle={setHtmltitle}
-            language={language}
-            setLanguage={setLanguage}
-            pagesize={pagesize}
-            setPagesize={setPagesize}
-            enableresize={enableresize}
-            setEnableresize={setEnableresize}
-            sizethreshold={sizethreshold}
-            setSizethreshold={setSizethreshold}
-            readerquality={readerquality}
-            setReaderquality={setReaderquality}
-            localprogress={localprogress}
-            setLocalprogress={setLocalprogress}
-            authprogress={authprogress}
-            setAuthprogress={setAuthprogress}
-            stampautobookmark={stampautobookmark}
-            setStampautobookmark={setStampautobookmark}
-            stampautounbookmark={stampautounbookmark}
-            setStampautounbookmark={setStampautounbookmark}
-            subfoldersToTankoubons={subfoldersToTankoubons}
-            setSubfoldersToTankoubons={setSubfoldersToTankoubons}
-            archiveSplitSuggestionsEnabled={archiveSplitSuggestionsEnabled}
-            setArchiveSplitSuggestionsEnabled={setArchiveSplitSuggestionsEnabled}
-            archiveSplitDeleteOriginalEnabled={archiveSplitDeleteOriginalEnabled}
-            setArchiveSplitDeleteOriginalEnabled={setArchiveSplitDeleteOriginalEnabled}
-            ingestStrictVerify={ingestStrictVerify}
-            setIngestStrictVerify={setIngestStrictVerify}
-            guestmode={guestmode}
-            setGuestmode={setGuestmode}
-            newbadgemode={newbadgemode}
-            setNewbadgemode={setNewbadgemode}
-            llmApiKeySet={settings.llm_api_key_set}
-            keyInput={keyInput}
-            setKeyInput={setKeyInput}
-            recommendprecision={recommendprecision}
-            pluginBindInterface={pluginBindInterface}
-            egressBinding={settings.egress_binding}
-            pluginBindingScope={info.data?.interface_binding?.plugin ?? "full"}
-            directDownloadUrl={directDownloadUrl}
-            onDirectDownloadUrlChange={setDirectDownloadUrl}
-            setPluginBindInterface={setPluginBindInterface}
-            interfaces={settings.interfaces ?? []}
-            defaultInterface={settings.default_interface ?? null}
-            setRecommendprecision={setRecommendprecision}
-            onStatus={setStatus}
-          />
+          <SectionErrorBoundary as="li" section="global">
+            <GlobalSection
+              htmltitle={htmltitle}
+              setHtmltitle={setHtmltitle}
+              language={language}
+              setLanguage={setLanguage}
+              pagesize={pagesize}
+              setPagesize={setPagesize}
+              enableresize={enableresize}
+              setEnableresize={setEnableresize}
+              sizethreshold={sizethreshold}
+              setSizethreshold={setSizethreshold}
+              readerquality={readerquality}
+              setReaderquality={setReaderquality}
+              localprogress={localprogress}
+              setLocalprogress={setLocalprogress}
+              authprogress={authprogress}
+              setAuthprogress={setAuthprogress}
+              stampautobookmark={stampautobookmark}
+              setStampautobookmark={setStampautobookmark}
+              stampautounbookmark={stampautounbookmark}
+              setStampautounbookmark={setStampautounbookmark}
+              subfoldersToTankoubons={subfoldersToTankoubons}
+              setSubfoldersToTankoubons={setSubfoldersToTankoubons}
+              archiveSplitSuggestionsEnabled={archiveSplitSuggestionsEnabled}
+              setArchiveSplitSuggestionsEnabled={setArchiveSplitSuggestionsEnabled}
+              archiveSplitDeleteOriginalEnabled={archiveSplitDeleteOriginalEnabled}
+              setArchiveSplitDeleteOriginalEnabled={setArchiveSplitDeleteOriginalEnabled}
+              ingestStrictVerify={ingestStrictVerify}
+              setIngestStrictVerify={setIngestStrictVerify}
+              guestmode={guestmode}
+              setGuestmode={setGuestmode}
+              newbadgemode={newbadgemode}
+              setNewbadgemode={setNewbadgemode}
+              llmApiKeySet={settings.llm_api_key_set}
+              keyInput={keyInput}
+              setKeyInput={setKeyInput}
+              recommendprecision={recommendprecision}
+              pluginBindInterface={pluginBindInterface}
+              egressBinding={settings.egress_binding}
+              pluginBindingScope={info.data?.interface_binding?.plugin ?? "full"}
+              directDownloadUrl={directDownloadUrl}
+              onDirectDownloadUrlChange={setDirectDownloadUrl}
+              setPluginBindInterface={setPluginBindInterface}
+              interfaces={settings.interfaces ?? []}
+              defaultInterface={settings.default_interface ?? null}
+              setRecommendprecision={setRecommendprecision}
+              onStatus={setStatus}
+            />
+          </SectionErrorBoundary>
 
           <CollapsibleSection id="theme" icon="fa-paint-brush" title={t("settings.theme")}>
               <table style={{ margin: "auto", fontSize: FONT_SIZE_SM }}>
@@ -571,78 +574,98 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
               </table>
           </CollapsibleSection>
 
-          <SecuritySection
-            newPassword={newPassword}
-            setNewPassword={setNewPassword}
-            newPassword2={newPassword2}
-            setNewPassword2={setNewPassword2}
-            accessTokenLifetimeSecs={accessTokenLifetimeSecs}
-            setAccessTokenLifetimeSecs={setAccessTokenLifetimeSecs}
-            refreshTokenLifetimeSecs={refreshTokenLifetimeSecs}
-            setRefreshTokenLifetimeSecs={setRefreshTokenLifetimeSecs}
-            refreshTokenIdleLifetimeSecs={refreshTokenIdleLifetimeSecs}
-            setRefreshTokenIdleLifetimeSecs={setRefreshTokenIdleLifetimeSecs}
-            maxLoginDevices={maxLoginDevices}
-            setMaxLoginDevices={setMaxLoginDevices}
-            trustedOrigins={trustedOrigins}
-            setTrustedOrigins={setTrustedOrigins}
-            ssoAutoRedirect={ssoAutoRedirect}
-            setSsoAutoRedirect={setSsoAutoRedirect}
-            enablecors={enablecors}
-            setEnablecors={setEnablecors}
-          />
+          <SectionErrorBoundary as="li" section="security">
+            <SecuritySection
+              newPassword={newPassword}
+              setNewPassword={setNewPassword}
+              newPassword2={newPassword2}
+              setNewPassword2={setNewPassword2}
+              accessTokenLifetimeSecs={accessTokenLifetimeSecs}
+              setAccessTokenLifetimeSecs={setAccessTokenLifetimeSecs}
+              refreshTokenLifetimeSecs={refreshTokenLifetimeSecs}
+              setRefreshTokenLifetimeSecs={setRefreshTokenLifetimeSecs}
+              refreshTokenIdleLifetimeSecs={refreshTokenIdleLifetimeSecs}
+              setRefreshTokenIdleLifetimeSecs={setRefreshTokenIdleLifetimeSecs}
+              maxLoginDevices={maxLoginDevices}
+              setMaxLoginDevices={setMaxLoginDevices}
+              trustedOrigins={trustedOrigins}
+              setTrustedOrigins={setTrustedOrigins}
+              ssoAutoRedirect={ssoAutoRedirect}
+              setSsoAutoRedirect={setSsoAutoRedirect}
+              enablecors={enablecors}
+              setEnablecors={setEnablecors}
+            />
+          </SectionErrorBoundary>
 
-          <ApiTokensSection />
-          <SharingSection />
-          <SubscriptionsSection />
+          <SectionErrorBoundary as="li" section="api-tokens">
+            <ApiTokensSection />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary as="li" section="sharing">
+            <SharingSection />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary as="li" section="subscriptions">
+            <SubscriptionsSection />
+          </SectionErrorBoundary>
 
-          <RecycleBinSection
-            retentionDays={recycleRetentionDays}
-            setRetentionDays={setRecycleRetentionDays}
-            maxSizeGb={recycleMaxSizeGb}
-            setMaxSizeGb={setRecycleMaxSizeGb}
-          />
+          <SectionErrorBoundary as="li" section="recycle">
+            <RecycleBinSection
+              retentionDays={recycleRetentionDays}
+              setRetentionDays={setRecycleRetentionDays}
+              maxSizeGb={recycleMaxSizeGb}
+              setMaxSizeGb={setRecycleMaxSizeGb}
+            />
+          </SectionErrorBoundary>
 
-          <ArchiveFilesSection
-            tempmaxsize={tempmaxsize}
-            setTempmaxsize={setTempmaxsize}
-            onStatus={setStatus}
-          />
+          <SectionErrorBoundary as="li" section="archive-files">
+            <ArchiveFilesSection
+              tempmaxsize={tempmaxsize}
+              setTempmaxsize={setTempmaxsize}
+              onStatus={setStatus}
+            />
+          </SectionErrorBoundary>
 
-          <TagsThumbnailsSection
-            thumbnailFormat={thumbnailFormat}
-            setThumbnailFormat={setThumbnailFormat}
-            webpquality={webpquality}
-            setWebpquality={setWebpquality}
-            excludednamespaces={excludednamespaces}
-            setExcludednamespaces={setExcludednamespaces}
-            sourceEquivalences={sourceEquivalences}
-            setSourceEquivalences={setSourceEquivalences}
-            tagruleson={tagruleson}
-            setTagruleson={setTagruleson}
-            tagrules={tagrules}
-            setTagrules={setTagrules}
-            usedateadded={usedateadded}
-            setUsedateadded={setUsedateadded}
-            usedatemodified={usedatemodified}
-            setUsedatemodified={setUsedatemodified}
-            timezone={timezone}
-            setTimezone={setTimezone}
-            onStatus={setStatus}
-          />
+          <SectionErrorBoundary as="li" section="tags-thumbnails">
+            <TagsThumbnailsSection
+              thumbnailFormat={thumbnailFormat}
+              setThumbnailFormat={setThumbnailFormat}
+              webpquality={webpquality}
+              setWebpquality={setWebpquality}
+              excludednamespaces={excludednamespaces}
+              setExcludednamespaces={setExcludednamespaces}
+              sourceEquivalences={sourceEquivalences}
+              setSourceEquivalences={setSourceEquivalences}
+              tagruleson={tagruleson}
+              setTagruleson={setTagruleson}
+              tagrules={tagrules}
+              setTagrules={setTagrules}
+              usedateadded={usedateadded}
+              setUsedateadded={setUsedateadded}
+              usedatemodified={usedatemodified}
+              setUsedatemodified={setUsedatemodified}
+              timezone={timezone}
+              setTimezone={setTimezone}
+              onStatus={setStatus}
+            />
+          </SectionErrorBoundary>
 
-          <TranslationSection state={translation} dispatch={dispatchTranslation} />
+          <SectionErrorBoundary as="li" section="translation">
+            <TranslationSection state={translation} dispatch={dispatchTranslation} />
+          </SectionErrorBoundary>
 
-          <LlmUsageSection />
+          <SectionErrorBoundary as="li" section="llm-usage">
+            <LlmUsageSection />
+          </SectionErrorBoundary>
 
-          <WorkersSection
-            idlescan={idlescan}
-            setIdlescan={setIdlescan}
-            logMaxFileMb={logMaxFileMb}
-            setLogMaxFileMb={setLogMaxFileMb}
-            logMaxFiles={logMaxFiles}
-            setLogMaxFiles={setLogMaxFiles}
-          />
+          <SectionErrorBoundary as="li" section="background-workers">
+            <WorkersSection
+              idlescan={idlescan}
+              setIdlescan={setIdlescan}
+              logMaxFileMb={logMaxFileMb}
+              setLogMaxFileMb={setLogMaxFileMb}
+              logMaxFiles={logMaxFiles}
+              setLogMaxFiles={setLogMaxFiles}
+            />
+          </SectionErrorBoundary>
         </ul>
       </form>
 

@@ -4,6 +4,7 @@ import path from 'node:path'
 import { defineConfig, type Plugin, type ProxyOptions } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import checker from 'vite-plugin-checker'
 
 /** `http-proxy` (what Vite's own `server.proxy`/`preview.proxy` wrap) rewrites the outgoing
  * `Host` header to match the proxy *target* by default — fine for `/api/*` (nothing there reads
@@ -46,6 +47,28 @@ function preserveOriginalHostHeader(): NonNullable<ProxyOptions['configure']> {
  * the normal dev-only HMR client / React refresh preamble still gets injected. This keeps the
  * production-safe injection logic in Rust only, without a second Vite-side theme-resolution
  * implementation. */
+/** Dev only: the legacy stylesheets (`public/legacy/**.css`, the themes among them) are `<link>`s the
+ * app adds itself, which Vite's HMR never swaps — an edit stayed invisible until a forced reload.
+ * This tells the page which file changed, and `theme.ts` re-fetches that one link in place. */
+function legacyCssHotReload(): Plugin {
+  return {
+    name: 'legacy-css-hot-reload',
+    apply: 'serve',
+    configureServer(server) {
+      const dir = path.resolve(__dirname, 'public/legacy')
+      server.watcher.add(dir)
+      server.watcher.on('change', (file) => {
+        if (!file.startsWith(dir) || !file.endsWith('.css')) return
+        server.ws.send({
+          type: 'custom',
+          event: 'legacy-css-changed',
+          data: { path: '/legacy' + file.slice(dir.length).split(path.sep).join('/') },
+        })
+      })
+    },
+  }
+}
+
 function rustHtmlMiddleware(): Plugin {
   return {
     name: 'rust-html-middleware',
@@ -136,7 +159,21 @@ export default defineConfig({
     // `optimizeDeps` cache didn't fix it, ruling out a stale-prebundle explanation.
     dedupe: ['react', 'react-dom'],
   },
-  plugins: [react(), tailwindcss(), rustHtmlMiddleware()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    rustHtmlMiddleware(),
+    legacyCssHotReload(),
+    // #287: type and lint errors shown in the browser during `vite dev`, in a worker so HMR is not
+    // held up. Never part of a build. `LANRURUGI_DEV_CHECKER=0` turns it off on a slow machine.
+    process.env.LANRURUGI_DEV_CHECKER !== '0' &&
+      checker({
+        enableBuild: false,
+        typescript: { buildMode: true },
+        eslint: { lintCommand: 'eslint "./src/**/*.{ts,tsx}"', useFlatConfig: true, dev: { logLevel: ['error'] } },
+        overlay: { initialIsOpen: false, position: 'bl' },
+      }),
+  ],
   // The share card framed by other sites is its own page (`embed.html`), so it never loads the app.
   define: {
     // The release identity for diagnostics reports (specs/018 FR-023). Displayed in the version

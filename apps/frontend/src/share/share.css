@@ -564,11 +564,27 @@ div.ido.share-closed p:last-child {
   overflow-y: auto;
   font-size: 0.85em;
 }
+/* A grid, not a flex row: an open button, a note or an error on one row must not push that row's
+   bar and state out of line with the others (#288). */
 .share-import-archives li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px 9em 22px;
+  align-items: center;
+  column-gap: 6px;
+  padding: 1px 0;
+}
+.share-import-archive-action {
+  display: inline-flex;
+  justify-content: center;
+}
+/* A note or failure goes on a line of its own under the row. */
+.share-import-archive-extra {
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 1px 0;
+  min-width: 0;
+  padding-left: 1em;
 }
 .share-import-archive-title {
   flex: 1;
@@ -578,14 +594,14 @@ div.ido.share-closed p:last-child {
   white-space: nowrap;
 }
 .share-import-archive-error {
-  max-width: 40%;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 /* A successful import's own note (a rename): quieter than an error, same truncation. */
 .share-import-archive-note {
-  max-width: 40%;
+  min-width: 0;
   opacity: 0.75;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -668,7 +684,6 @@ div.ido.share-closed p:last-child {
 }
 
 .share-import-archive-bar {
-  flex: 0 0 120px;
   height: 6px;
   border-radius: 3px;
   overflow: hidden;
@@ -679,8 +694,8 @@ div.ido.share-closed p:last-child {
   height: 100%;
 }
 .share-import-archive-state {
-  flex: 0 0 auto;
-  min-width: 9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
   text-align: right;
   white-space: nowrap;
 }
@@ -724,11 +739,8 @@ div.ido.share-closed p:last-child {
   user-select: all;
 }
 @media (max-width: 560px) {
-  .share-import-archive-bar {
-    flex-basis: 60px;
-  }
-  .share-import-archive-state {
-    min-width: 0;
+  .share-import-archives li {
+    grid-template-columns: minmax(0, 1fr) 60px 7.5em 22px;
   }
   /* Phone: the title and progress keep the full first line; the buttons wrap to a line of their own. */
   .share-import-row {
@@ -739,15 +751,6 @@ div.ido.share-closed p:last-child {
   }
   .share-import-row-actions {
     margin-left: auto;
-  }
-  /* A failed archive's error moves under its title instead of squeezing it to nothing. */
-  .share-import-archives li {
-    flex-wrap: wrap;
-  }
-  .share-import-archive-error {
-    order: 1;
-    flex-basis: 100%;
-    max-width: none;
   }
 }
 

@@ -72,13 +72,18 @@ export function TagTable({
               byNamespace[namespace].map((value, i) => (
                 <div
                   key={i}
-                  className="gt"
+                  // `gt-single` (index.css) keeps CJK and Latin chips the same height; a source URL
+                  // is left out so it can still wrap.
+                  className={displayKey === "source" ? "gt" : "gt gt-single"}
                   style={{ maxWidth: "100%", whiteSpace: "normal", overflow: "visible", textOverflow: "clip" }}
                 >
                   {!links ? (
                     // Same chip, same text, no destination: `.gt` carries the styling, so a plain
                     // span is visually identical to the anchor it replaces.
-                    <span style={{ wordBreak: "break-all" }}>
+                    <span
+                      style={{ wordBreak: "break-all" }}
+                      title={displayKey === "source" ? value : formatTagValue(displayKey, value, timezone)}
+                    >
                       {displayKey === "source"
                         ? value
                         : formatTagValue(displayKey, value, timezone)}
@@ -103,6 +108,7 @@ export function TagTable({
                         onSearchTag(displayKey, tagValueForSearch(displayKey, value, timezone))
                       }}
                       style={{ wordBreak: "break-all", cursor: onSearchTag ? "pointer" : undefined }}
+                      title={formatTagValue(displayKey, value, timezone)}
                     >
                       {formatTagValue(displayKey, value, timezone)}
                     </a>
