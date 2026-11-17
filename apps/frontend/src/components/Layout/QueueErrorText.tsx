@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
 import type { QueueError } from "@/api/types"
+import { Link } from "@/components/common-ui/Link"
 import { formatBytes } from "@/lib/formatBytes"
 import { routes } from "@/lib/routes"
 
@@ -87,30 +88,18 @@ export function QueueErrorText({ error }: { error: QueueError }) {
               ? "A matching archive already exists"
               : "An archive with this filename already exists",
           )}{" "}
-          <a
-            href={routes.reader(error.existing_id)}
-            onClick={(e) => {
-              e.preventDefault()
-              navigate(routes.reader(error.existing_id))
-            }}
-          >
+          <Link to={routes.reader(error.existing_id)}>
             {error.existing_id}
-          </a>
+          </Link>
         </span>
       )
     case "duplicate_filename":
       return (
         <span>
           {t("components.layout.theFilenameFilenameIsAlready", { filename: error.filename })}{" "}
-          <a
-            href={routes.reader(error.existing_id)}
-            onClick={(e) => {
-              e.preventDefault()
-              navigate(routes.reader(error.existing_id))
-            }}
-          >
+          <Link to={routes.reader(error.existing_id)}>
             {error.existing_id}
-          </a>
+          </Link>
         </span>
       )
     case "duplicate_filename_cleaned":
@@ -138,15 +127,9 @@ export function QueueErrorText({ error }: { error: QueueError }) {
       return (
         <span>
           {t("components.layout.aNewerRevisionIsAlreadyInLibrary")}{" "}
-          <a
-            href={routes.reader(error.archive_id)}
-            onClick={(e) => {
-              e.preventDefault()
-              navigate(routes.reader(error.archive_id))
-            }}
-          >
+          <Link to={routes.reader(error.archive_id)}>
             {error.archive_id}
-          </a>
+          </Link>
         </span>
       )
     case "ingest_failed":
@@ -162,15 +145,9 @@ export function QueueErrorText({ error }: { error: QueueError }) {
       return (
         <span>
           {t("components.layout.thisSourceWasAlreadyImported")}{" "}
-          <a
-            href={routes.reader(error.existing_id)}
-            onClick={(e) => {
-              e.preventDefault()
-              navigate(routes.reader(error.existing_id))
-            }}
-          >
+          <Link to={routes.reader(error.existing_id)}>
             {error.existing_id}
-          </a>
+          </Link>
         </span>
       )
     case "already_patched":

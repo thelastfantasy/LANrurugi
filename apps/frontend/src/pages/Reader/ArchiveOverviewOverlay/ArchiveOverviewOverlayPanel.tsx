@@ -1,5 +1,4 @@
 import { useQueryClient } from "@tanstack/react-query"
-import type { MouseEvent } from "react"
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { FaFileArchive, FaPlus, FaShareAlt } from "react-icons/fa"
@@ -99,7 +98,9 @@ function ScrollToTopFab({ onJump }: { onJump: () => void }) {
   )
 }
 
-/** Placeholder for an unloaded page in the grid so the scrollbar reflects the true total. */
+/** Placeholder for an unloaded page in the grid so the scrollbar reflects the true total. Its box
+ * matches a loaded cell exactly (`overview-page-cell` fixes the width, `div.id3` the height), so
+ * the grid never re-packs a row when the real thumbnail replaces it. */
 function PagePlaceholder({ page: _page, onVisible }: { page: number; onVisible: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -115,8 +116,8 @@ function PagePlaceholder({ page: _page, onVisible }: { page: number; onVisible: 
   return (
     <div
       ref={ref}
-      className="id3 quick-thumbnail"
-      style={{ width: 205, aspectRatio: "1 / 1.414", background: "rgba(128,128,128,0.06)", borderRadius: 4 }}
+      className="id3 quick-thumbnail overview-page-cell"
+      style={{ background: "rgba(128,128,128,0.06)", borderRadius: 4 }}
     />
   )
 }
@@ -288,9 +289,7 @@ export function ArchiveOverviewOverlay({
 
   /** Legacy's `.set-thumbnail` handler. In Tankoubon mode always sets the Tankoubon's own cover;
    * the backend resolves the owning member archive. */
-  function handleSetThumbnail(e: MouseEvent, page: number) {
-    e.preventDefault()
-    e.stopPropagation()
+  function handleSetThumbnail(page: number) {
     const mutation = isTank ? setTankoubonThumbnail : setThumbnail
     mutation.mutate(page, {
       onSuccess: () => {
@@ -322,9 +321,7 @@ export function ArchiveOverviewOverlay({
 
   /** Legacy's `.add-toc` handler. `page` is a global page number in Tankoubon mode; resolves to
    * the real owning archive first. */
-  async function handleAddToc(e: MouseEvent, page: number) {
-    e.preventDefault()
-    e.stopPropagation()
+  async function handleAddToc(page: number) {
     const title = await promptTocTitle()
     if (!title) return
     const target = resolve(page)
@@ -441,34 +438,45 @@ export function ArchiveOverviewOverlay({
   })()
 
   const [highlightedPage, setHighlightedPage] = useState<number | null>(null)
-  const scrolledRef = useRef(false)
+  // The `scrollTop` this effect last set, or null while it has not centred anything yet. Kept in a
+  // ref rather than a local because the effect re-runs on every batch load.
+  const appliedTopRef = useRef<number | null>(null)
   useEffect(() => {
     if (!autoFocus) return
-    if (scrolledRef.current) return
     const section = document.getElementById("pages-section")
-    if (!section) return
-    const obs = new MutationObserver(() => {
-      const cell = document.querySelector(`[data-page-cell="${currentPage}"]`)
-      if (!cell) return
-      cell.scrollIntoView({ block: "center" })
+    const overlay = document.getElementById("archivePagesOverlay")
+    if (!section || !overlay) return
+
+    // `scrollIntoView({ block: "center" })` centres against the overlay's box as it is at that one
+    // instant. On a phone that box's height changes whenever the browser's own toolbar slides in or
+    // out (the overlay is sized in `dvh`), so the page that was just centred drifts away from the
+    // middle afterwards. Centre by hand instead and re-centre on every resize — the guard below
+    // hands control back as soon as the reader scrolls, so this can never fight a manual drag.
+    const centreOnPage = () => {
+      const cell = document.querySelector<HTMLElement>(`[data-page-cell="${currentPage}"]`)
+      if (!cell) return false
+      // Anything but our own last write means the reader took over: never fight a manual scroll.
+      if (appliedTopRef.current !== null && Math.abs(overlay.scrollTop - appliedTopRef.current) > 1) return true
+      const box = overlay.getBoundingClientRect()
+      const rect = cell.getBoundingClientRect()
+      overlay.scrollTop += (rect.top - box.top) - (overlay.clientHeight - rect.height) / 2
+      appliedTopRef.current = overlay.scrollTop
+      return true
+    }
+    const tryCentre = () => {
+      if (!centreOnPage()) return
       setHighlightedPage(currentPage)
-      scrolledRef.current = true
-      obs.disconnect()
-    })
+    }
+    const obs = new MutationObserver(tryCentre)
+    const ro = new ResizeObserver(tryCentre)
     obs.observe(section, { childList: true, subtree: true })
-    const tryImmediate = setTimeout(() => {
-      const cell = document.querySelector(`[data-page-cell="${currentPage}"]`)
-      if (cell) {
-        cell.scrollIntoView({ block: "center" })
-        setHighlightedPage(currentPage)
-        scrolledRef.current = true
-        obs.disconnect()
-      }
-    }, 0)
+    ro.observe(overlay)
+    const immediate = setTimeout(tryCentre, 0)
     const clearTimer = setTimeout(() => setHighlightedPage(null), 3000)
     return () => {
       obs.disconnect()
-      clearTimeout(tryImmediate)
+      ro.disconnect()
+      clearTimeout(immediate)
       clearTimeout(clearTimer)
     }
   }, [autoFocus, currentPage, paginatedPages])
@@ -994,7 +1002,7 @@ export function ArchiveOverviewOverlay({
           </div>
         </div>
 
-        <div id="pages-section" style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 8 }}>
+        <div id="pages-section" className="overview-page-grid">
           {loadedTotal > 0 && loadedStart > 0 && (
             <div style={{ width: "100%", height: 3, background: "rgba(128,128,128,0.15)", marginBottom: 4 }}>
               <div

@@ -40,6 +40,7 @@ import { Badge } from "@/components/common-ui/Display"
 import { Keycap as Key } from "@/components/common-ui/Display/Keycap";
 import { IconButton, ToggleButtonMenu } from "@/components/common-ui/Form";
 import { currentRating,RatingWidget } from "@/components/common-ui/Form/RatingWidget";
+import { isPlainLinkClick } from "@/components/common-ui/Link"
 import {
   ForbiddenPage,
   FormatBadge,
@@ -64,7 +65,7 @@ import {
   useReaderSettings,
 } from "@/hooks/useReaderSettings";
 import { useSupportsHover } from "@/hooks/useSupportsHover";
-import { useSwipeDownToDismiss } from "@/hooks/useSwipeDownToDismiss";
+import { useSwipeToDismiss } from "@/hooks/useSwipeToDismiss";
 import { useTankoubonReading } from "@/hooks/useTankoubonReading";
 import { routes } from "@/lib/routes";
 import { getTagSearchURL } from "@/lib/tagFormat";
@@ -637,7 +638,7 @@ export function Reader() {
       blockContextMenu: (el) => el.closest(".infinite-scroll img[data-page]") !== null,
     },
   );
-  useSwipeDownToDismiss(infiniteToolbarEl, () => setInfiniteToolbarPage(null));
+  useSwipeToDismiss(infiniteToolbarEl, () => setInfiniteToolbarPage(null), "down");
   useEffect(() => {
     if (infiniteToolbarPage === null) return;
     const img = infiniteScrollRootRef.current?.querySelector(
@@ -3673,6 +3674,7 @@ export function Reader() {
                 id="imgLink"
                 href={leftUrl}
                 onClick={(e) => {
+                  if (!isPlainLinkClick(e)) return
                   const x = e.clientX;
                   const isLeftHalf = x < window.innerWidth / 2;
                   e.preventDefault();

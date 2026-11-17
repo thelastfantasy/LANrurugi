@@ -434,8 +434,9 @@ function TankoubonForm({ tankId, tankoubon, titleById }: { tankId: string; tanko
                     }}
                   >
                     <span
-                      {...dragHandleProps.attributes}
-                      {...dragHandleProps.listeners}
+                      ref={dragHandleProps.handleRef}
+                      role="button"
+                      tabIndex={0}
                       style={{
                         gridColumn: "1",
                         gridRow: twoRow ? "1 / 3" : undefined,

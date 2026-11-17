@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next"
 
 import type { ArchiveMetadata } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
+import { isPlainLinkClick,Link } from "@/components/common-ui/Link"
 import { FormatBadge, StatusIcon } from "@/components/Display"
 import { useLongPress } from "@/hooks/useLongPress"
 import { routes } from "@/lib/routes"
@@ -114,6 +115,10 @@ export function ArchiveCard({
   useLongPress(cardEl, (_, e) => onContextMenu(e, archive), { blockContextMenu: () => true })
 
   function handleOpen(e: MouseEvent) {
+    // Let the browser keep its own link gestures — Ctrl/Cmd/Shift for a new tab/window, Alt for
+    // Firefox's save-link — and ignore a click that only ended a text selection, which is what
+    // Alt-dragging part of the title produces.
+    if (!isPlainLinkClick(e)) return
     e.preventDefault()
     if (multiSelect) {
       onToggleSelect(id)
@@ -131,14 +136,14 @@ export function ArchiveCard({
       onContextMenu={(e) => onContextMenu(e, archive)}
     >
       <div className="id2" style={{ display: "flex", alignItems: "baseline", justifyContent: "center", gap: 2 }}>
-        <a
-          href={routes.reader(id)}
+        <Link
+          to={routes.reader(id)}
           title={archive.title}
           onClick={handleOpen}
           style={{ flex: "0 1 auto", minWidth: 0 }}
         >
           {highlightText(archive.title, highlightQuery)}
-        </a>
+        </Link>
         <StatusIcons archive={archive} />
         {archive.match_reason?.kind === "members" && (
           <Tooltip label={matchReasonText(archive.match_reason.members, t)}>
@@ -168,7 +173,7 @@ export function ArchiveCard({
             style={{ position: "absolute", top: 6, left: 6, zIndex: 1, width: 20, height: 20 }}
           />
         )}
-        <a href={routes.reader(id)} title={archive.title} onClick={handleOpen}>
+        <Link to={routes.reader(id)} title={archive.title} onClick={handleOpen}>
           {!thumbLoaded && !thumbFailed && (
             <>
               <img style={{ position: "relative" }} src="/legacy/img/wait_warmly.jpg" alt="" />
@@ -190,7 +195,7 @@ export function ArchiveCard({
             }}
             onError={() => setThumbFailed(true)}
           />
-        </a>
+        </Link>
       </div>
       <div className="id4">
         <PageCountBadge archive={archive} />

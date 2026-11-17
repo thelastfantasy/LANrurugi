@@ -84,10 +84,11 @@ export function useAnchoredMenuPosition(anchor: DOMRect) {
   return { setMenuEl, pos }
 }
 
-/** Preset rows (封面/封底/目录/彩页 + 第N章 select), shared by the popover and the lightbox. */
-export function QuickAddTocOptions({ onPick, asMenuItems }: { onPick: (title: string) => void; asMenuItems: boolean }) {
+/** The quick-add chapter presets (封面/封底/目录/彩页…), shared by the popover, the lightbox and the
+ * phone sheet; "chapter N" comes after them as `tocChapterIdentifier(n)`, n ≤ `TOC_CHAPTER_COUNT`. */
+export function useQuickTocPresets(): { icon: string; title: string; value: string }[] {
   const { t } = useTranslation()
-  const presets: { icon: string; title: string; value: string }[] = [
+  return [
     { icon: "fa-file-image", title: t("reader.cover") ?? "Cover", value: t("reader.cover") ?? "Cover" },
     { icon: "fa-file-image", title: t("reader.backCover") ?? "Back Cover", value: t("reader.backCover") ?? "Back Cover" },
     { icon: "fa-list", title: t("reader.tableOfContents") ?? "Table of Contents", value: TOC_IDENTIFIER_TABLE_OF_CONTENTS },
@@ -96,6 +97,12 @@ export function QuickAddTocOptions({ onPick, asMenuItems }: { onPick: (title: st
     { icon: "fa-pen-nib", title: t("reader.afterword") ?? "Afterword", value: t("reader.afterword") ?? "Afterword" },
     { icon: "fa-image", title: t("reader.illustration") ?? "Illustration", value: t("reader.illustration") ?? "Illustration" },
   ]
+}
+
+/** Preset rows (封面/封底/目录/彩页 + 第N章 select), shared by the popover and the lightbox. */
+export function QuickAddTocOptions({ onPick, asMenuItems }: { onPick: (title: string) => void; asMenuItems: boolean }) {
+  const { t } = useTranslation()
+  const presets = useQuickTocPresets()
   const Row = asMenuItems ? PopupMenuItem : "div"
   // Native `<select>` styled with `.favtag-btn` leaves the browser's own arrow sitting above the
   // text's optical centre; the shared Select centres its icon and matches every other dropdown.

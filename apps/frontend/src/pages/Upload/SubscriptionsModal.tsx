@@ -764,7 +764,7 @@ export function SubscriptionsModal({
         title={t("subscriptions.title")}
         width={980}
       >
-        {body}
+        <div className="sub-drawer-body">{body}</div>
       </Drawer>
     )
   }

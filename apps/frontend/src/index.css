@@ -1152,6 +1152,31 @@ input[type="checkbox"].lrr-checkbox-bare::after {
   }
 }
 
+/* The reader overview's page grid. Legacy sizes each cell from its own image's aspect ratio
+ * (`div.id3 img { height: 100%; width: auto }`), so a cell's width is not final until the image has
+ * decoded — every arriving thumbnail can re-pack the row it sits in, and one batch load shortens the
+ * whole grid by hundreds of pixels, which on a phone reads as the page jumping while you drag.
+ * Fixing the width to a 1:√2 page box derived from legacy's own cell height (280px → 198px, and the
+ * 196px height `lrr.css` sets below 560px → 139px) makes the grid's geometry depend on nothing but
+ * the page count. `object-fit: contain` keeps each image's own ratio inside that box, so a
+ * double-page spread is letterboxed instead of widening its cell. */
+.overview-page-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.overview-page-cell {
+  width: 198px;
+}
+
+@media all and (max-width: 560px) {
+  .overview-page-cell {
+    width: 139px;
+  }
+}
+
 /* Additive: the reader overview overlay's page-grid briefly outlines whichever page it opened on
  * (`ArchiveOverviewOverlay.tsx`'s `PageGridCell`, `highlighted` prop) — a static outline alone is
  * easy to miss at a glance across a grid that can run into the hundreds of otherwise-identical
@@ -3314,6 +3339,30 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   .history-body {
     height: 70vh;
   }
+}
+
+/* In the phone drawer the list takes whatever height the drawer has left under the tabs and filters,
+   rather than a fixed 70vh: that box ran past the drawer's bottom, so its last rows sat below the
+   fold even with the list scrolled to its end. */
+.sub-drawer-body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.sub-drawer-body > * {
+  flex-shrink: 0;
+}
+.sub-drawer-body > .history-body {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sub-drawer-body > .history-body > .sub-modal-preview {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: none;
 }
 
 .history-sub-option {

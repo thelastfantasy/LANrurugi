@@ -438,11 +438,12 @@ export function useFilterCounts(filters: readonly string[], base: SearchOptions)
   })
 }
 
-export function useArchiveMetadata(id: string | null) {
+/** `enabled: false` defers the request — long lists only fetch for rows that come into view. */
+export function useArchiveMetadata(id: string | null, enabled = true) {
   return useQuery({
     queryKey: ["archive", id],
     queryFn: () => fetchJson<ArchiveMetadata>(`/archives/${id}/metadata`),
-    enabled: id !== null,
+    enabled: id !== null && enabled,
   })
 }
 

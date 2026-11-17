@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next"
 
 import type { ArchiveMetadata } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
+import { isPlainLinkClick,Link } from "@/components/common-ui/Link"
 import { FormatBadge, StatusIcon } from "@/components/Display"
 import { useLongPress } from "@/hooks/useLongPress"
 import { routes } from "@/lib/routes"
@@ -66,9 +67,12 @@ export function CompactTableRow({
           anchor="cursor"
           wrapperStyle={{ display: "inline" }}
         >
-          <a
-            href={routes.reader(archive.arcid)}
+          <Link
+            to={routes.reader(archive.arcid)}
             onClick={(e) => {
+              // The browser keeps its own link gestures; a click that ended a text selection is
+              // not a request to open the archive either.
+              if (!isPlainLinkClick(e)) return
               e.preventDefault()
               if (multiSelect) onToggleSelected(archive.arcid)
               else onOpen(archive.arcid)
@@ -86,7 +90,7 @@ export function CompactTableRow({
                 <FormatBadge extension={archive.extension} />
               </>
             )}
-          </a>
+          </Link>
         </Tooltip>
       </td>
       {Array.from({ length: columns }, (_, i) => i + 1).map((i) => (

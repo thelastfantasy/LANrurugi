@@ -1,5 +1,6 @@
 import { useSettings } from "@/api/hooks"
 import { StarRatingDisplay } from "@/components/common-ui/Form"
+import { isPlainLinkClick } from "@/components/common-ui/Link"
 import {
   BARE_TAG_NAMESPACE,
   displayNamespace,
@@ -54,6 +55,7 @@ export function TagTable({
                 <a
                   href={links ? getTagSearchURL(displayKey, byNamespace[namespace][0] ?? "", timezone) : undefined}
                   onClick={(e) => {
+                    if (!isPlainLinkClick(e)) return
                     if (!links || !onSearchTag) return
                     e.preventDefault()
                     e.stopPropagation()
@@ -102,6 +104,7 @@ export function TagTable({
                     <a
                       href={getTagSearchURL(displayKey, value, timezone)}
                       onClick={(e) => {
+                        if (!isPlainLinkClick(e)) return
                         if (!onSearchTag) return
                         e.preventDefault()
                         e.stopPropagation()

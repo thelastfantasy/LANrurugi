@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next"
 import { useArchivePages } from "@/api/hooks"
 import type { ArchivePage } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
-import { useHorizontalScroll } from "@/hooks"
+import { useBackToClose, useHorizontalScroll, useSupportsHover, useSwipeToDismiss } from "@/hooks"
 import { useMenuPalette } from "@/hooks/useMenuPalette"
 import { fetchContentLengthKb } from "@/lib/utils/imageMeta"
 import { displayTocName, TOC_IDENTIFIER_TABLE_OF_CONTENTS, tocChapterIdentifier } from "@/lib/utils/tocValidation"
@@ -162,6 +162,14 @@ export function PageLightbox({
   const lenisRef = useHorizontalScroll(filmstripRef)
   const scrollFilmstripOnNextPage = useRef(false)
   const suppressHoverRef = useRef(true)
+  // Swipe the panel right to close it, matching the drawers (touch only — the hook is touch-driven).
+  const [panelEl, setPanelEl] = useState<HTMLDivElement | null>(null)
+  useSwipeToDismiss(panelEl, onClose, "right")
+  // Touch devices only: Android's back gesture and Firefox Android's own swipe-back cannot be
+  // cancelled by the page, so the swipe would otherwise leave the reader instead of closing this.
+  // A desktop Back button is a real navigation and keeps behaving like one.
+  const supportsHover = useSupportsHover()
+  useBackToClose(!supportsHover, onClose)
 
   const pageUrl = pages.data?.pages[previewPage - 1]?.url
   const dimensions = measured?.page === previewPage ? measured : null
@@ -264,6 +272,7 @@ export function PageLightbox({
         }}
       />
       <div
+        ref={setPanelEl}
         style={{
           position: "fixed",
           inset: "3vh 3vw",
@@ -392,7 +401,12 @@ export function PageLightbox({
           )}
         </div>
 
-        <div style={{ position: "relative", flex: "0 0 auto", height: 158, background: palette.bg, borderTop: `1px solid ${palette.separator}` }}>
+        {/* `data-swipe-ignore`: the strip pans horizontally, so a sideways drag that starts on it
+            belongs to the strip, not to the close gesture. */}
+        <div
+          data-swipe-ignore
+          style={{ position: "relative", flex: "0 0 auto", height: 158, background: palette.bg, borderTop: `1px solid ${palette.separator}` }}
+        >
           <LightboxFilmstripEdge direction="left" onScroll={scrollFilmstrip} />
           <LightboxFilmstripEdge direction="right" onScroll={scrollFilmstrip} />
           <div
