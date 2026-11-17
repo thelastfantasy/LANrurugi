@@ -136,23 +136,24 @@ pub(crate) fn check_file(path: &std::path::Path) -> Option<Finding> {
 /// Brings the archive record in line with a check: a finding sets `heal_failed_at` (if not set
 /// already), a file that opens clears it and restores the page count and size.
 async fn apply_to_record(state: &AppState, id: &ArchiveId, inspection: &Inspection) {
-    let Ok(Some(mut archive)) = state.repos.archives.get(id).await else {
-        return;
-    };
-    match inspection {
-        Inspection::Damaged(_) if archive.heal_failed_at.is_none() => {
-            archive.heal_failed_at = Some(now_secs().max(0) as u64);
-        }
-        Inspection::Readable { pages, size }
-            if archive.heal_failed_at.is_some() || archive.pagecount == 0 =>
-        {
-            archive.heal_failed_at = None;
-            archive.pagecount = *pages as u32;
-            archive.arcsize = *size;
-        }
-        _ => return,
-    }
-    if let Err(e) = state.repos.archives.save(&archive).await {
+    let updated = state
+        .repos
+        .archives
+        .update(id, |archive| match inspection {
+            Inspection::Damaged(_) if archive.heal_failed_at.is_none() => {
+                archive.heal_failed_at = Some(now_secs().max(0) as u64);
+            }
+            Inspection::Readable { pages, size }
+                if archive.heal_failed_at.is_some() || archive.pagecount == 0 =>
+            {
+                archive.heal_failed_at = None;
+                archive.pagecount = *pages as u32;
+                archive.arcsize = *size;
+            }
+            _ => {}
+        })
+        .await;
+    if let Err(e) = updated {
         tracing::warn!(%id, error = %e, "could not update an archive's damaged marker");
     }
 }

@@ -636,7 +636,7 @@ async fn catalogue_new_archive(
     // `has_patch: false` that would only get corrected the next time some other code path happens
     // to touch this archive's record.
     let has_patch = crate::patch::patch_path_for(path).exists();
-    let mut archive = Archive {
+    let archive = Archive {
         id: id.clone(),
         name: name.clone(),
         title,
@@ -664,7 +664,7 @@ async fn catalogue_new_archive(
         has_patch,
         blake3: Some(blake3.to_string()),
     };
-    archives.save(&archive).await?;
+    archives.create_or_replace(&archive).await?;
     // The sidecar is written after the record exists and the bytes are final, never before: a
     // snapshot of an archive nobody can open would be worse than no snapshot. Only hash-layout
     // archives get one (020) — by-name archives carry their original name in the name itself.
@@ -743,9 +743,12 @@ async fn catalogue_new_archive(
         )
         .await
         {
+            // Only the hash: the record is live by now, and the reader or a plugin may have
+            // changed it while the thumbnail rendered.
             Ok(thumbhash) => {
-                archive.thumbhash = thumbhash;
-                archives.save(&archive).await?;
+                archives
+                    .update(&archive.id, |a| a.thumbhash = thumbhash)
+                    .await?;
             }
             Err(e) => {
                 tracing::warn!(%id, error = %e, "thumbnail generation failed for new archive")
@@ -1125,7 +1128,7 @@ mod tests {
         };
         let mut existing_archive = archives.get(&existing_id).await.unwrap().unwrap();
         existing_archive.file = dir.path().join(&shared_name).to_string_lossy().to_string();
-        archives.save(&existing_archive).await.unwrap();
+        archives.create_or_replace(&existing_archive).await.unwrap();
         // The "existing" archive's real file, at the filename the new file will collide with.
         std::fs::copy(&existing_staged_path, dir.path().join(&shared_name)).unwrap();
 

@@ -669,26 +669,35 @@ async fn import_from_legacy_inner(
     }
 
     for (id, title, tags, summary_text, thumbhash) in archives_to_write {
-        if let Some(mut archive) = archives.get(&id).await? {
-            snapshot.archives.push(BackupArchive {
-                arcid: archive.id.as_str().to_string(),
-                title: archive.title.clone(),
-                tags: archive.tags.clone(),
-                summary: (!archive.summary.is_empty()).then(|| archive.summary.clone()),
-                thumbhash: archive.thumbhash.clone(),
-                filename: archive.name.clone(),
-            });
-            archive.title = title;
-            // Pass 1 strips the legacy `date_added:` from every mode; in overwrite mode that would
-            // otherwise leave the archive with none at all, so re-attach this instance's own.
-            archive.tags = if on_existing == ImportConflictMode::Overwrite {
-                attach_newest_date_added(&archive.tags, tags)
-            } else {
-                tags
-            };
-            archive.summary = summary_text;
-            archive.thumbhash = thumbhash;
-            archives.save(&archive).await?;
+        // The undo snapshot and the change are taken under the record's lock, so the snapshot is
+        // exactly what this write replaced.
+        let mut before: Option<BackupArchive> = None;
+        let updated = archives
+            .update(&id, |archive| {
+                before = Some(BackupArchive {
+                    arcid: archive.id.as_str().to_string(),
+                    title: archive.title.clone(),
+                    tags: archive.tags.clone(),
+                    summary: (!archive.summary.is_empty()).then(|| archive.summary.clone()),
+                    thumbhash: archive.thumbhash.clone(),
+                    filename: archive.name.clone(),
+                });
+                archive.title = title;
+                // Pass 1 strips the legacy `date_added:` from every mode; in overwrite mode that would
+                // otherwise leave the archive with none at all, so re-attach this instance's own.
+                archive.tags = if on_existing == ImportConflictMode::Overwrite {
+                    attach_newest_date_added(&archive.tags, tags)
+                } else {
+                    tags
+                };
+                archive.summary = summary_text;
+                if thumbhash.is_some() {
+                    archive.thumbhash = thumbhash;
+                }
+            })
+            .await?;
+        if updated.is_some() {
+            snapshot.archives.extend(before);
             summary.archives_updated += 1;
         }
     }
@@ -781,7 +790,7 @@ async fn import_from_legacy_inner(
             pinned,
             visible_to_guest,
         };
-        categories.save(&saved).await?;
+        categories.create_or_replace(&saved).await?;
         category_by_name.insert(saved.name.clone(), saved);
         summary.categories_restored += 1;
     }
@@ -847,7 +856,7 @@ async fn import_from_legacy_inner(
             created_at,
             updated_at: Some(unix_seconds()),
         };
-        groupings.save(&saved).await?;
+        groupings.create_or_replace(&saved).await?;
         tankoubon_by_name.insert(saved.name.clone(), saved);
         summary.tankoubons_restored += 1;
     }
@@ -930,16 +939,15 @@ async fn import_from_legacy_inner(
     // touched at all (a page this legacy export has no record for), and clobbering the whole list
     // would silently delete them (reported live via external code review, 2026-08-29).
     for (archive_id, imported_stamp_ids) in stamp_ids_by_archive {
-        if let Some(mut archive) = archives.get(&archive_id).await? {
-            let mut merged = archive.stamp_ids.clone();
-            for id in imported_stamp_ids {
-                if !merged.contains(&id) {
-                    merged.push(id);
+        archives
+            .update(&archive_id, |archive| {
+                for id in imported_stamp_ids {
+                    if !archive.stamp_ids.contains(&id) {
+                        archive.stamp_ids.push(id);
+                    }
                 }
-            }
-            archive.stamp_ids = merged;
-            archives.save(&archive).await?;
-        }
+            })
+            .await?;
     }
 
     Ok(())
@@ -1184,7 +1192,7 @@ mod tests {
         // (confirmed live, 2026-08-29, after switching this module off exact-id matching).
         let id = "1".repeat(40);
         archives
-            .save(&test_archive(
+            .create_or_replace(&test_archive(
                 &id,
                 "x-overwrite",
                 "Current Title",
@@ -1250,7 +1258,7 @@ mod tests {
 
         let archive_id = "8".repeat(40);
         archives
-            .save(&test_archive(
+            .create_or_replace(&test_archive(
                 &archive_id,
                 "snap",
                 "Current Title",
@@ -1264,7 +1272,7 @@ mod tests {
         // the legacy record's `catid`, deliberately different here to prove that.
         let existing_catid = "SET_8800000001".to_string();
         categories
-            .save(&Category {
+            .create_or_replace(&Category {
                 catid: CategoryId(existing_catid.clone()),
                 name: "Existing Category".to_string(),
                 search: None,
@@ -1357,7 +1365,7 @@ mod tests {
 
         let id = "2".repeat(40);
         archives
-            .save(&test_archive(
+            .create_or_replace(&test_archive(
                 &id,
                 "x-merge-union",
                 "Current Title",
@@ -1419,7 +1427,7 @@ mod tests {
 
         let id = "7".repeat(40);
         archives
-            .save(&test_archive(
+            .create_or_replace(&test_archive(
                 &id,
                 "x-merge-takes-legacy-rating",
                 "Current Title",
@@ -1475,7 +1483,7 @@ mod tests {
 
         let id = "a".repeat(40);
         archives
-            .save(&test_archive(
+            .create_or_replace(&test_archive(
                 &id,
                 "x-merge-date-added",
                 "Current Title",
@@ -1536,7 +1544,7 @@ mod tests {
 
         let id = "b".repeat(40);
         archives
-            .save(&test_archive(
+            .create_or_replace(&test_archive(
                 &id,
                 "x-overwrite-date-added",
                 "Current Title",
@@ -1610,7 +1618,7 @@ mod tests {
 
         let id = "3".repeat(40);
         archives
-            .save(&test_archive(
+            .create_or_replace(&test_archive(
                 &id,
                 "x-skip",
                 "Current Title",
@@ -1670,7 +1678,7 @@ mod tests {
         let legacy_id = "4".repeat(40);
         let current_id = "4".repeat(39) + "1";
         archives
-            .save(&test_archive(
+            .create_or_replace(&test_archive(
                 &current_id,
                 "unique_basename",
                 "Current Title",
@@ -1746,11 +1754,11 @@ mod tests {
         let dup_a = "5".repeat(40);
         let dup_b = "5".repeat(39) + "1";
         archives
-            .save(&test_archive(&dup_a, "dup", "A", "", "/dir_a/dup.zip"))
+            .create_or_replace(&test_archive(&dup_a, "dup", "A", "", "/dir_a/dup.zip"))
             .await
             .unwrap();
         archives
-            .save(&test_archive(&dup_b, "dup", "B", "", "/dir_b/dup.zip"))
+            .create_or_replace(&test_archive(&dup_b, "dup", "B", "", "/dir_b/dup.zip"))
             .await
             .unwrap();
 
@@ -1961,7 +1969,7 @@ mod tests {
             }
             let current_id = test_archive_id(&format!("cur-{}", legacy_archive.arcid));
             archives
-                .save(&test_archive(
+                .create_or_replace(&test_archive(
                     &current_id,
                     &basename,
                     "placeholder",
@@ -1979,7 +1987,7 @@ mod tests {
             for side in ["a", "b"] {
                 let current_id = test_archive_id(&format!("cur-ambiguous-{i}-{side}"));
                 archives
-                    .save(&test_archive(
+                    .create_or_replace(&test_archive(
                         &current_id,
                         filename,
                         "placeholder",

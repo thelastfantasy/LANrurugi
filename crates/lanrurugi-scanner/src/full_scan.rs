@@ -492,7 +492,7 @@ pub async fn heal_pagecounts(archives: &ArchiveRepository) -> HealSummary {
     };
 
     let mut summary = HealSummary::default();
-    for mut archive in all {
+    for archive in all {
         if archive.pagecount != 0 || archive.file.is_empty() || !Path::new(&archive.file).exists() {
             continue;
         }
@@ -523,13 +523,22 @@ pub async fn heal_pagecounts(archives: &ArchiveRepository) -> HealSummary {
                     .unwrap_or(archive.arcsize);
                 let old_pagecount = archive.pagecount;
                 let new_pagecount = pages.len() as u32;
-                archive.pagecount = new_pagecount;
-                archive.arcsize = new_arcsize;
-                archive.heal_failed_at = None;
-                if is_book && archive.toc.is_empty() {
-                    archive.toc = crate::pipeline::book_outline_toc(Path::new(&archive.file));
-                }
-                if let Err(e) = archives.save(&archive).await {
+                let outline = (is_book && archive.toc.is_empty())
+                    .then(|| crate::pipeline::book_outline_toc(Path::new(&archive.file)));
+                // Onto the record as it is now: listing the pages took a while.
+                let healed = archives
+                    .update(&archive.id, |a| {
+                        a.pagecount = new_pagecount;
+                        a.arcsize = new_arcsize;
+                        a.heal_failed_at = None;
+                        if let Some(outline) = outline {
+                            if a.toc.is_empty() {
+                                a.toc = outline;
+                            }
+                        }
+                    })
+                    .await;
+                if let Err(e) = healed {
                     tracing::warn!(archive_id = %archive.id, error = %e, "heal_pagecounts: failed to save healed archive");
                     summary.failed += 1;
                     summary.details.push(HealDetail {
@@ -574,8 +583,10 @@ pub async fn heal_pagecounts(archives: &ArchiveRepository) -> HealSummary {
                 // fixtures left in a library turned into 173 identical warning events in a few
                 // hours, which drowns the issues list (2026-11-01).
                 let already_failing = archive.heal_failed_at.is_some();
-                archive.heal_failed_at = Some(now_unix_secs());
-                if let Err(e) = archives.save(&archive).await {
+                let marked = archives
+                    .update(&archive.id, |a| a.heal_failed_at = Some(now_unix_secs()))
+                    .await;
+                if let Err(e) = marked {
                     tracing::warn!(archive_id = %archive.id, error = %e, "heal_pagecounts: failed to persist heal_failed_at marker");
                 }
                 if already_failing {
@@ -696,7 +707,7 @@ mod tests {
         // keyed by the shared legacy id, whose `file` field points at B (scanned "last") while
         // metadata (tags) reflects whatever was set while the record still looked like A/B mixed.
         archives
-            .save(&Archive {
+            .create_or_replace(&Archive {
                 id: lanrurugi_core::ids::ArchiveId(legacy_id.clone()),
                 name: "b".into(),
                 title: "Legacy Title".into(),
@@ -831,7 +842,7 @@ mod tests {
         // prunes entries whose archive is gone (the debris of an ingest that died between writing
         // the mapping and writing the record), so this test needs a real record behind it.
         archives
-            .save(&Archive {
+            .create_or_replace(&Archive {
                 id: lanrurugi_core::ids::ArchiveId(placeholder_id.to_string()),
                 name: "known".into(),
                 title: "Known".into(),
@@ -1208,7 +1219,7 @@ mod tests {
 
         let id = lanrurugi_core::ids::ArchiveId("1".repeat(40));
         archives
-            .save(&archive_with_zero_pagecount(id.as_str(), &path))
+            .create_or_replace(&archive_with_zero_pagecount(id.as_str(), &path))
             .await
             .unwrap();
 
@@ -1252,7 +1263,7 @@ mod tests {
 
         let id = lanrurugi_core::ids::ArchiveId("2".repeat(40));
         archives
-            .save(&archive_with_zero_pagecount(id.as_str(), &path))
+            .create_or_replace(&archive_with_zero_pagecount(id.as_str(), &path))
             .await
             .unwrap();
 

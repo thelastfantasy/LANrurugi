@@ -82,8 +82,6 @@ pub async fn run(state: &AppState, apply: bool) -> Result<RepairReport, String> 
         report.scanned += 1;
         stamp_ids.extend(archive.stamp_ids.iter().cloned());
         let id = archive.id.to_string();
-        let old_title = archive.title.clone();
-        let old_tags = archive.tags.clone();
         let mut touched = Vec::new();
         repair_field(&mut touched, "archive", &id, "name", &mut archive.name);
         repair_field(&mut touched, "archive", &id, "title", &mut archive.title);
@@ -99,47 +97,41 @@ pub async fn run(state: &AppState, apply: bool) -> Result<RepairReport, String> 
             continue;
         }
         if apply {
+            // Repaired again on the record as it is now, under its lock: the scan above worked on
+            // a list read at the start, and writing those copies back would undo edits made since.
             state
                 .repos
                 .archives
-                .save(&archive)
+                .update_then(
+                    &archive.id,
+                    |a| {
+                        let mut again = Vec::new();
+                        repair_field(&mut again, "archive", &id, "name", &mut a.name);
+                        repair_field(&mut again, "archive", &id, "title", &mut a.title);
+                        repair_field(&mut again, "archive", &id, "summary", &mut a.summary);
+                        repair_field(&mut again, "archive", &id, "tags", &mut a.tags);
+                    },
+                    |old, new| async move {
+                        if old.title != new.title {
+                            // The recommender's embedding is derived from the title, so a repaired
+                            // title needs the same recompute `update_archive_metadata` triggers.
+                            let state = state.clone();
+                            let precompute_id = new.id.to_string();
+                            let title = new.title.clone();
+                            tokio::spawn(async move {
+                                crate::recommend_precompute::precompute_one(
+                                    &state,
+                                    &precompute_id,
+                                    &title,
+                                )
+                                .await;
+                            });
+                        }
+                        crate::archives::reindex_title_and_tags(state, old, new).await;
+                    },
+                )
                 .await
                 .map_err(|e| e.to_string())?;
-            if archive.title != old_title {
-                if let Err(e) = lanrurugi_search::indexer::update_title_index(
-                    &state.redis.search,
-                    &state.equivalence,
-                    &archive.id,
-                    &old_title,
-                    &archive.title,
-                )
-                .await
-                {
-                    tracing::warn!(id, error = %e, "mojibake repair: title index update failed");
-                }
-                // The recommender's embedding is derived from the title, so a repaired title needs
-                // the same background recompute `update_archive_metadata` triggers.
-                let state = state.clone();
-                let precompute_id = id.clone();
-                let title = archive.title.clone();
-                tokio::spawn(async move {
-                    crate::recommend_precompute::precompute_one(&state, &precompute_id, &title)
-                        .await;
-                });
-            }
-            if archive.tags != old_tags {
-                if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
-                    &state.redis.search,
-                    &state.equivalence,
-                    &archive.id,
-                    &old_tags,
-                    &archive.tags,
-                )
-                .await
-                {
-                    tracing::warn!(id, error = %e, "mojibake repair: tag index update failed");
-                }
-            }
         }
         report.repaired_fields += touched.len();
         report.findings.extend(touched);
@@ -163,7 +155,9 @@ pub async fn run(state: &AppState, apply: bool) -> Result<RepairReport, String> 
             state
                 .repos
                 .categories
-                .save(&category)
+                .update(&category.catid, |c| {
+                    repair_field(&mut Vec::new(), "category", &id, "name", &mut c.name);
+                })
                 .await
                 .map_err(|e| e.to_string())?;
         }
@@ -180,8 +174,6 @@ pub async fn run(state: &AppState, apply: bool) -> Result<RepairReport, String> 
     for mut grouping in groupings {
         report.scanned += 1;
         let id = grouping.tankid.to_string();
-        let old_name = grouping.name.clone();
-        let old_tags = grouping.tags.clone();
         let mut touched = Vec::new();
         repair_field(&mut touched, "tankoubon", &id, "name", &mut grouping.name);
         repair_field(
@@ -199,35 +191,20 @@ pub async fn run(state: &AppState, apply: bool) -> Result<RepairReport, String> 
             state
                 .repos
                 .groupings
-                .save(&grouping)
+                .update_then(
+                    &grouping.tankid,
+                    |g| {
+                        let mut again = Vec::new();
+                        repair_field(&mut again, "tankoubon", &id, "name", &mut g.name);
+                        repair_field(&mut again, "tankoubon", &id, "summary", &mut g.summary);
+                        repair_field(&mut again, "tankoubon", &id, "tags", &mut g.tags);
+                    },
+                    |old, new| {
+                        crate::tankoubons::reindex_tankoubon(state, &grouping.tankid, old, new)
+                    },
+                )
                 .await
                 .map_err(|e| e.to_string())?;
-            if grouping.name != old_name {
-                if let Err(e) = lanrurugi_search::indexer::update_title_index(
-                    &state.redis.search,
-                    &state.equivalence,
-                    grouping.tankid.as_str(),
-                    &old_name,
-                    &grouping.name,
-                )
-                .await
-                {
-                    tracing::warn!(id, error = %e, "mojibake repair: tank title index update failed");
-                }
-            }
-            if grouping.tags != old_tags {
-                if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
-                    &state.redis.search,
-                    &state.equivalence,
-                    grouping.tankid.as_str(),
-                    &old_tags,
-                    &grouping.tags,
-                )
-                .await
-                {
-                    tracing::warn!(id, error = %e, "mojibake repair: tank tag index update failed");
-                }
-            }
         }
         report.repaired_fields += touched.len();
         report.findings.extend(touched);

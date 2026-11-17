@@ -4660,6 +4660,7 @@ dependencies = [
  "ipnet",
  "lanrurugi-core",
  "lanrurugi-share-proto",
+ "lockable",
  "rand 0.10.3",
  "redis",
  "serde",
@@ -4826,6 +4827,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
 dependencies = [
  "scopeguard",
+]
+
+[[package]]
+name = "lockable"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b0f35193d57711b7b4730a3b888a5033347fb7be1ee9a64a755fa4ee013ef80"
+dependencies = [
+ "derive_more",
+ "futures",
+ "itertools 0.14.0",
+ "tokio",
 ]
 
 [[package]]

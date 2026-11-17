@@ -311,7 +311,7 @@ async fn create(
         // Starts the settle window: a rule saved a moment ago is the one most likely to be wrong.
         settings_changed_at: Some(now_secs()),
     };
-    match state.subscriptions.save(&subscription).await {
+    match state.subscriptions.create_or_replace(&subscription).await {
         Ok(()) => axum::Json(json!({ "subscription": subscription })).into_response_owned(),
         Err(e) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -345,34 +345,34 @@ async fn update(
     Path(id): Path<String>,
     axum::Json(body): axum::Json<SubscriptionBody>,
 ) -> Response {
-    let Ok(Some(existing)) = state.subscriptions.get(&id).await else {
-        return not_found("update_subscription", format!("{id} does not exist."));
-    };
     if let Err(resp) = validate(&state, &body).await {
         return resp;
     }
-    let updated = Subscription {
-        name: body.name,
-        source: body.source,
-        criteria: body.criteria,
-        scan: body.scan,
-        filters: body.filters,
-        interval_secs: body.interval_secs,
-        target_category: body.target_category,
-        metadata_tags: body.metadata_tags,
-        enrich_metadata: body.enrich_metadata,
-        auto_download: body.auto_download,
-        credit_policy: body.credit_policy,
-        credentials: body.credentials,
-        on_source_changed: body.on_source_changed,
-        on_source_removed: body.on_source_removed,
-        // Restarts the settle window on every edit, not only on creation: changing a rule is as
-        // likely to be a mistake as writing one, and the check that follows is just as unattended.
-        settings_changed_at: Some(now_secs()),
-        ..existing
-    };
-    match state.subscriptions.save(&updated).await {
-        Ok(()) => axum::Json(json!({ "subscription": updated })).into_response_owned(),
+    let edited = state.subscriptions.update(&id, |existing| {
+        *existing = Subscription {
+            name: body.name,
+            source: body.source,
+            criteria: body.criteria,
+            scan: body.scan,
+            filters: body.filters,
+            interval_secs: body.interval_secs,
+            target_category: body.target_category,
+            metadata_tags: body.metadata_tags,
+            enrich_metadata: body.enrich_metadata,
+            auto_download: body.auto_download,
+            credit_policy: body.credit_policy,
+            credentials: body.credentials,
+            on_source_changed: body.on_source_changed,
+            on_source_removed: body.on_source_removed,
+            // Restarts the settle window on every edit, not only on creation: changing a rule is as
+            // likely to be a mistake as writing one, and the check that follows is just as unattended.
+            settings_changed_at: Some(now_secs()),
+            ..existing.clone()
+        };
+    });
+    match edited.await {
+        Ok(None) => not_found("update_subscription", format!("{id} does not exist.")),
+        Ok(Some(updated)) => axum::Json(json!({ "subscription": updated })).into_response_owned(),
         Err(e) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "update_subscription",
@@ -394,14 +394,12 @@ async fn remove(State(state): State<AppState>, Path(id): Path<String>) -> Respon
 }
 
 async fn set_state(state: &AppState, id: &str, new_state: SubscriptionState, op: &str) -> Response {
-    match state.subscriptions.get(id).await {
-        Ok(Some(mut s)) => {
-            s.state = new_state;
-            match state.subscriptions.save(&s).await {
-                Ok(()) => axum::Json(json!({ "subscription": s })).into_response_owned(),
-                Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, op, e.to_string()),
-            }
-        }
+    match state
+        .subscriptions
+        .update(id, |s| s.state = new_state)
+        .await
+    {
+        Ok(Some(s)) => axum::Json(json!({ "subscription": s })).into_response_owned(),
         Ok(None) => not_found(op, format!("{id} does not exist.")),
         Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, op, e.to_string()),
     }

@@ -544,15 +544,15 @@ pub(crate) async fn catalogue_staged_file(
             undo.failed(&incoming).await;
             return Err(e);
         }
-        let mut repaired = existing;
-        repaired.file = dest.to_string_lossy().to_string();
-        if repaired.blake3.is_none() {
-            repaired.blake3 = fingerprint.clone();
-        }
         state
             .repos
             .archives
-            .save(&repaired)
+            .update(&existing.id, |a| {
+                a.file = dest.to_string_lossy().to_string();
+                if a.blake3.is_none() {
+                    a.blake3 = fingerprint.clone();
+                }
+            })
             .await
             .map_err(|e| IngestDownloadError::Io(std::io::Error::other(e)))?;
         undo.succeeded().await;
@@ -692,67 +692,52 @@ pub(crate) async fn catalogue_staged_file(
     const RETRIES: u32 = 3;
     const BACKOFF_MS: [u64; RETRIES as usize] = [200, 500, 1000];
     for (i, &delay) in BACKOFF_MS.iter().enumerate() {
-        match state.repos.archives.get(&archive_id).await {
-            Ok(Some(mut archive)) => {
-                archive.file = dest.to_string_lossy().to_string();
-                // Indexing below diffs against this: without the diff, the appended `source:`
-                // would never get its `INDEX_source:…` set and `source:` search would not find it.
-                let old_tags = archive.tags.clone();
-                // `None` for a local upload (its callers pass the queue item's own filename-as-`url`
-                // through nothing — see `upload.rs`/`download_queue.rs::resolve_conflict`) — there's no
-                // real external source for a file the user picked off their own disk, so stamping one
-                // would be fabricated data, not metadata. Legacy's own `Utils::Minion::download_url` task
-                // (verified against source) computes `$og_url = trim_url($url)` from the URL the *user
-                // originally gave* (the gallery page, never whatever internal download link a plugin
-                // transformed it into) and passes `"source:$og_url"` into `handle_incoming_file` *before*
-                // cataloguing — this is host-side download-task code, not something a metadata plugin adds
-                // itself, and has no equivalent at all for an upload. Appended here (not a blind overwrite)
-                // since a plugin's own `execDownload` could in principle have already supplied tags via
-                // some other path; deduped the same way `set_tags(..., append=1)` does.
-                if let Some(source_url) = source_url {
-                    let source_tag = format!("source:{}", crate::plugins::trim_url(source_url));
-                    if !archive.tags.split(',').any(|t| t.trim() == source_tag) {
-                        archive.tags = if archive.tags.is_empty() {
-                            source_tag
-                        } else {
-                            format!("{},{source_tag}", archive.tags)
-                        };
-                    }
-                }
-                match state.repos.archives.save(&archive).await {
-                    Ok(()) => {
-                        if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
-                            &state.redis.search,
-                            &state.equivalence,
-                            archive_id.as_str(),
-                            &old_tags,
-                            &archive.tags,
-                        )
-                        .await
-                        {
-                            tracing::warn!(%archive_id, error = %e, "failed to index the download source tag");
+        // Re-indexed from the old tags, under the lock: without the diff, the appended `source:`
+        // would never get its `INDEX_source:…` set and `source:` search would not find it.
+        let updated = state
+            .repos
+            .archives
+            .update_then(
+                &archive_id,
+                |archive| {
+                    archive.file = dest.to_string_lossy().to_string();
+                    // `None` for a local upload (its callers pass the queue item's own filename-as-`url`
+                    // through nothing — see `upload.rs`/`download_queue.rs::resolve_conflict`) — there's no
+                    // real external source for a file the user picked off their own disk, so stamping one
+                    // would be fabricated data, not metadata. Legacy's own `Utils::Minion::download_url` task
+                    // (verified against source) computes `$og_url = trim_url($url)` from the URL the *user
+                    // originally gave* (the gallery page, never whatever internal download link a plugin
+                    // transformed it into) and passes `"source:$og_url"` into `handle_incoming_file` *before*
+                    // cataloguing — this is host-side download-task code, not something a metadata plugin adds
+                    // itself, and has no equivalent at all for an upload. Appended here (not a blind overwrite)
+                    // since a plugin's own `execDownload` could in principle have already supplied tags via
+                    // some other path; deduped the same way `set_tags(..., append=1)` does.
+                    if let Some(source_url) = source_url {
+                        let source_tag = format!("source:{}", crate::plugins::trim_url(source_url));
+                        if !archive.tags.split(',').any(|t| t.trim() == source_tag) {
+                            archive.tags = if archive.tags.is_empty() {
+                                source_tag
+                            } else {
+                                format!("{},{source_tag}", archive.tags)
+                            };
                         }
-                        break;
                     }
-                    Err(e) if i + 1 < RETRIES as usize => {
-                        tracing::warn!(%archive_id, attempt = i + 1, delay_ms = delay, error = %e, "failed to fix up archive file path, retrying");
-                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                    }
-                    Err(e) => {
-                        tracing::error!(%archive_id, error = %e, "failed to fix up archive file path after {RETRIES} attempts — startup zombie sweep will repair");
-                    }
-                }
-            }
+                },
+                |old, new| crate::archives::reindex_title_and_tags(state, old, new),
+            )
+            .await;
+        match updated {
+            Ok(Some(_)) => break,
             Ok(None) => {
                 tracing::error!(%archive_id, "archive record vanished during file-path fixup");
                 break;
             }
             Err(e) if i + 1 < RETRIES as usize => {
-                tracing::warn!(%archive_id, attempt = i + 1, delay_ms = delay, error = %e, "failed to load archive for file-path fixup, retrying");
+                tracing::warn!(%archive_id, attempt = i + 1, delay_ms = delay, error = %e, "failed to fix up archive file path, retrying");
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
             Err(e) => {
-                tracing::error!(%archive_id, error = %e, "failed to load archive for file-path fixup after {RETRIES} attempts — startup zombie sweep will repair");
+                tracing::error!(%archive_id, error = %e, "failed to fix up archive file path after {RETRIES} attempts — startup zombie sweep will repair");
             }
         }
     }
@@ -1737,37 +1722,26 @@ async fn stamp_source_tag(state: &AppState, archive_id: &str, source_url: Option
         return;
     };
     let source_tag = format!("source:{}", crate::plugins::trim_url(source_url));
-    let Ok(Some(mut archive)) = state
+    let updated = state
         .repos
         .archives
-        .get(&ArchiveId(archive_id.to_string()))
-        .await
-    else {
-        return;
-    };
-    if archive.tags.split(',').any(|t| t.trim() == source_tag) {
-        return;
-    }
-    let old_tags = archive.tags.clone();
-    archive.tags = if archive.tags.is_empty() {
-        source_tag
-    } else {
-        format!("{},{source_tag}", archive.tags)
-    };
-    if let Err(e) = state.repos.archives.save(&archive).await {
+        .update_then(
+            &ArchiveId(archive_id.to_string()),
+            |archive| {
+                if archive.tags.split(',').any(|t| t.trim() == source_tag) {
+                    return;
+                }
+                archive.tags = if archive.tags.is_empty() {
+                    source_tag
+                } else {
+                    format!("{},{source_tag}", archive.tags)
+                };
+            },
+            |old, new| crate::archives::reindex_title_and_tags(state, old, new),
+        )
+        .await;
+    if let Err(e) = updated {
         tracing::warn!(archive_id, error = %e, "failed to stamp the download source tag");
-        return;
-    }
-    if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
-        &state.redis.search,
-        &state.equivalence,
-        archive_id,
-        &old_tags,
-        &archive.tags,
-    )
-    .await
-    {
-        tracing::warn!(archive_id, error = %e, "failed to index a stamped download source tag");
     }
 }
 

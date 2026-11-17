@@ -3685,7 +3685,7 @@ mod tests {
             ),
         ] {
             // The `title` field is written here as well as into the title *index* below, exactly as
-            // a real archive record is (`ArchiveRepository::save` writes both): the `phrase:`
+            // a real archive record is (`ArchiveRepository::create_or_replace` writes both): the `phrase:`
             // operator scans the archive's own hash, so a fixture with only the index entry would
             // silently test nothing.
             let _: () = aconn
@@ -4041,7 +4041,7 @@ mod tests {
         let category_id = lanrurugi_core::ids::CategoryId("SET_9999000001".to_string());
         let dynamic_id = lanrurugi_core::ids::CategoryId("SET_9999000002".to_string());
         categories
-            .save(&lanrurugi_core::entities::Category {
+            .create_or_replace(&lanrurugi_core::entities::Category {
                 catid: category_id.clone(),
                 name: "Fixture Static".to_string(),
                 search: None,
@@ -4052,7 +4052,7 @@ mod tests {
             .await
             .unwrap();
         categories
-            .save(&lanrurugi_core::entities::Category {
+            .create_or_replace(&lanrurugi_core::entities::Category {
                 catid: dynamic_id.clone(),
                 name: "Fixture Dynamic".to_string(),
                 search: Some("artist:alpha".to_string()),

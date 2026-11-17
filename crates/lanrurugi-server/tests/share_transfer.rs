@@ -84,7 +84,7 @@ async fn an_archive_transfers_verified_and_revocation_stops_renewal() {
     state
         .repos
         .archives
-        .save(&Archive {
+        .create_or_replace(&Archive {
             id: ArchiveId(archive_id.clone()),
             name: "archive".into(),
             title: "archive".into(),
@@ -428,7 +428,7 @@ async fn helpers_serve_verified_ranges_and_follow_the_share() {
         state
             .repos
             .archives
-            .save(&archive_record(id, &file, size))
+            .create_or_replace(&archive_record(id, &file, size))
             .await
             .unwrap();
     }

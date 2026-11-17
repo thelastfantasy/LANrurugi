@@ -43,19 +43,41 @@ pub struct TidyTagsReport {
 /// Only the last rule removes an index key (`INDEX_artist:`); the others fold to the same key or
 /// rewrite only the display side, which is why the report carries the before/after tags for the
 /// caller to apply where it matters.
-pub async fn tidy_tags(archives: &ArchiveRepository) -> Result<TidyTagsReport, RepositoryError> {
+///
+/// Each rewrite happens under the archive's lock on its tags as they are then, and `reindex(id,
+/// old, new)` runs inside that lock, so an edit made while the pass runs is neither lost nor
+/// indexed out of order.
+pub async fn tidy_tags<R, Fut>(
+    archives: &ArchiveRepository,
+    reindex: R,
+) -> Result<TidyTagsReport, RepositoryError>
+where
+    R: Fn(String, String, String) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     let mut report = TidyTagsReport::default();
-    for mut archive in archives.list_all().await? {
+    for archive in archives.list_all().await? {
         report.scanned += 1;
-        let tidied = tidy_tag_string(&archive.tags);
-        if tidied != archive.tags {
-            report.changes.push(TidyTagsChange {
-                id: archive.id.to_string(),
-                old_tags: archive.tags.clone(),
-                new_tags: tidied.clone(),
-            });
-            archives.set_tags(&archive.id, &tidied).await?;
-            archive.tags = tidied;
+        if tidy_tag_string(&archive.tags) == archive.tags {
+            continue;
+        }
+        let mut change = None;
+        archives
+            .update_then(
+                &archive.id,
+                |a| a.tags = tidy_tag_string(&a.tags),
+                |before, after| {
+                    change = Some(TidyTagsChange {
+                        id: after.id.to_string(),
+                        old_tags: before.tags.clone(),
+                        new_tags: after.tags.clone(),
+                    });
+                    reindex(after.id.to_string(), before.tags, after.tags)
+                },
+            )
+            .await?;
+        if let Some(change) = change {
+            report.changes.push(change);
             report.repaired += 1;
         }
     }
@@ -180,18 +202,18 @@ mod tests {
         let dirty_id = "9".repeat(40);
         let clean_id = "8".repeat(40);
         archives
-            .save(&archive(
+            .create_or_replace(&archive(
                 &dirty_id,
                 "artist:a,date_added:1742054739,date_added:1793928516",
             ))
             .await
             .unwrap();
         archives
-            .save(&archive(&clean_id, "artist:a,date_added:1793928516"))
+            .create_or_replace(&archive(&clean_id, "artist:a,date_added:1793928516"))
             .await
             .unwrap();
 
-        let report = tidy_tags(&archives).await.unwrap();
+        let report = tidy_tags(&archives, |_, _, _| async {}).await.unwrap();
         assert!(report.scanned >= 2);
         assert!(report.repaired >= 1);
 
@@ -209,7 +231,7 @@ mod tests {
         assert_eq!(clean.tags, "artist:a,date_added:1793928516");
 
         // Idempotent: a second run finds nothing left to do.
-        let again = tidy_tags(&archives).await.unwrap();
+        let again = tidy_tags(&archives, |_, _, _| async {}).await.unwrap();
         assert_eq!(again.repaired, 0);
 
         archives.delete(&ArchiveId(dirty_id)).await.unwrap();

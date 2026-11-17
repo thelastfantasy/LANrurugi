@@ -321,7 +321,7 @@ mod tests {
 
         let id = lanrurugi_core::ids::ArchiveId("9".repeat(40));
         archives
-            .save(&Archive {
+            .create_or_replace(&Archive {
                 id: id.clone(),
                 name: "n".into(),
                 title: "My Title".into(),

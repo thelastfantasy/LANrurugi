@@ -879,34 +879,28 @@ async fn add_toc_entry(
     let Some(title) = params.title else {
         return error(StatusCode::BAD_REQUEST, "update_toc", "title is required.");
     };
-    let mut archive = match state.repos.archives.get(&id).await {
-        Ok(Some(a)) => a,
-        Ok(None) => return not_found("update_toc", format!("{id} does not exist.")),
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "update_toc",
-                e.to_string(),
-            )
-        }
-    };
-    archive.toc.retain(|t| t.page != params.page);
-    // Reserved chapter/ToC identifiers (`c1`-`c20`, `toc`) are meant to be unique per archive —
-    // the frontend's quick-add/keyboard-shortcut flows send these instead of localized display
-    // text specifically so re-setting "chapter 4" on a new page moves it rather than creating a
-    // second, stale "chapter 4" entry at the old page. Plain free-text titles (anything not one
-    // of these reserved identifiers) keep the old page-only dedup — a user is free to have two
-    // different pages both titled the same custom text if they want.
-    if is_reserved_toc_identifier(&title) {
-        archive.toc.retain(|t| t.name != title);
-    }
-    archive.toc.push(TocEntry {
-        page: params.page,
-        name: title,
-    });
-    archive.toc.sort_by_key(|t| t.page);
-    match state.repos.archives.save(&archive).await {
-        Ok(()) => ok(
+    let page = params.page;
+    let updated = state
+        .repos
+        .archives
+        .update(&id, |archive| {
+            archive.toc.retain(|t| t.page != page);
+            // Reserved chapter/ToC identifiers (`c1`-`c20`, `toc`) are meant to be unique per archive —
+            // the frontend's quick-add/keyboard-shortcut flows send these instead of localized display
+            // text specifically so re-setting "chapter 4" on a new page moves it rather than creating a
+            // second, stale "chapter 4" entry at the old page. Plain free-text titles (anything not one
+            // of these reserved identifiers) keep the old page-only dedup — a user is free to have two
+            // different pages both titled the same custom text if they want.
+            if is_reserved_toc_identifier(&title) {
+                archive.toc.retain(|t| t.name != title);
+            }
+            archive.toc.push(TocEntry { page, name: title });
+            archive.toc.sort_by_key(|t| t.page);
+        })
+        .await;
+    match updated {
+        Ok(None) => not_found("update_toc", format!("{id} does not exist.")),
+        Ok(Some(_)) => ok(
             "update_toc",
             [(
                 "successMessage",
@@ -938,20 +932,15 @@ async fn remove_toc_entry(
             "Tankoubon entries do not have their own ToC — use the member archive's ID instead.",
         );
     }
-    let mut archive = match state.repos.archives.get(&id).await {
-        Ok(Some(a)) => a,
-        Ok(None) => return not_found("remove_toc", format!("{id} does not exist.")),
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "remove_toc",
-                e.to_string(),
-            )
-        }
-    };
-    archive.toc.retain(|t| t.page != params.page);
-    match state.repos.archives.save(&archive).await {
-        Ok(()) => ok(
+    let page = params.page;
+    match state
+        .repos
+        .archives
+        .update(&id, |archive| archive.toc.retain(|t| t.page != page))
+        .await
+    {
+        Ok(None) => not_found("remove_toc", format!("{id} does not exist.")),
+        Ok(Some(_)) => ok(
             "remove_toc",
             [(
                 "successMessage",
@@ -1788,7 +1777,7 @@ async fn delete_patch(
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
 ) -> Response {
-    let mut archive = match state.repos.archives.get(&id).await {
+    let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
         Ok(None) => return not_found("delete_patch", format!("{id} not found.")),
         Err(e) => {
@@ -1831,8 +1820,12 @@ async fn delete_patch(
         }
     }
     if archive.has_patch {
-        archive.has_patch = false;
-        if let Err(e) = state.repos.archives.save(&archive).await {
+        if let Err(e) = state
+            .repos
+            .archives
+            .update(&archive.id, |a| a.has_patch = false)
+            .await
+        {
             // Patch file removal already succeeded above; only the DB flag write failed — still
             // a genuine attempted-and-failed operation.
             crate::activity::record_manual(
@@ -2282,7 +2275,7 @@ async fn update_thumbnail(
         return not_found("update_thumbnail", "No archive ID specified.");
     }
     let page = params.page.unwrap_or(1);
-    let mut archive = match state.repos.archives.get(&id).await {
+    let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
         Ok(None) => return not_found("update_thumbnail", format!("{id} does not exist.")),
         Err(e) => {
@@ -2328,8 +2321,13 @@ async fn update_thumbnail(
     {
         Ok(thumbhash) => {
             if thumbhash.is_some() {
-                archive.thumbhash = thumbhash;
-                if let Err(e) = state.repos.archives.save(&archive).await {
+                // The render took a while: write just the hash onto the record as it is now.
+                if let Err(e) = state
+                    .repos
+                    .archives
+                    .update(&id, |a| a.thumbhash = thumbhash)
+                    .await
+                {
                     tracing::warn!(id = %id, error = %e, "failed to persist updated thumbhash");
                 }
             }
@@ -2579,13 +2577,17 @@ pub async fn spawn_regen_thumbnails_job(
             .zip(results)
             .collect();
 
-        for (i, mut archive) in archives.into_iter().enumerate() {
+        for (i, archive) in archives.into_iter().enumerate() {
             if let Some(result) = results_by_index.remove(&i) {
                 let shard = archive.id[0..2.min(archive.id.len())].to_string();
                 match result {
                     Ok(thumbhash) => {
-                        archive.thumbhash = thumbhash;
-                        if let Err(e) = archive_repo.save(&archive).await {
+                        // Only the hash: `archives` was listed before a library-wide render, and
+                        // writing those copies back would undo every edit made meanwhile.
+                        if let Err(e) = archive_repo
+                            .update(&archive.id, |a| a.thumbhash = thumbhash)
+                            .await
+                        {
                             tracing::warn!(id = %archive.id, error = %e, "failed to persist regenerated thumbhash");
                         }
                         // Clean up sibling files left over in the *other* thumbnail format —
@@ -2638,40 +2640,81 @@ pub struct UpdateMetadataParams {
 /// `PUT /archives/{id}/metadata` (US3): overwrites title/tags/summary and keeps the search
 /// indexes (title index, tag indexes, untagged set) in sync, matching legacy `set_title`/
 /// `set_tags`/`set_summary`'s side effects (`Utils/Database.pm`).
+/// Brings the title and tag indexes from `old` to `new`. Pass it to `update_then`, so it runs
+/// under the record's lock: these are diffs, and two of them applied in the other order leave a
+/// stale index.
+pub(crate) async fn reindex_title_and_tags(
+    state: &AppState,
+    old: lanrurugi_core::entities::Archive,
+    new: lanrurugi_core::entities::Archive,
+) {
+    let id = new.id.as_str();
+    if old.title != new.title {
+        if let Err(e) = lanrurugi_search::indexer::update_title_index(
+            &state.redis.search,
+            &state.equivalence,
+            id,
+            &old.title,
+            &new.title,
+        )
+        .await
+        {
+            tracing::warn!(%id, error = %e, "failed to update title search index");
+        }
+    }
+    if old.tags != new.tags {
+        if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
+            &state.redis.search,
+            &state.equivalence,
+            id,
+            &old.tags,
+            &new.tags,
+        )
+        .await
+        {
+            tracing::warn!(%id, error = %e, "failed to update tag search index");
+        }
+    }
+}
+
 async fn update_archive_metadata(
     State(state): State<AppState>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Query(params): Query<UpdateMetadataParams>,
 ) -> Response {
-    let mut archive = match state.repos.archives.get(&id).await {
-        Ok(Some(a)) => a,
-        Ok(None) => return not_found("update_metadata", format!("{id} does not exist.")),
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "update_metadata",
-                e.to_string(),
-            )
-        }
-    };
+    // The values it replaced are read under the record's lock along with the change, so the tag
+    // diff and the index updates below describe exactly this write.
+    let mut before: Option<(String, String, String)> = None;
+    let updated = state
+        .repos
+        .archives
+        .update_then(
+            &id,
+            |archive| {
+                before = Some((
+                    archive.title.clone(),
+                    archive.tags.clone(),
+                    archive.summary.clone(),
+                ));
+                if let Some(title) = params.title.filter(|t| !t.is_empty()) {
+                    archive.title = title;
+                }
+                if let Some(tags) = params.tags {
+                    archive.tags = tags;
+                }
+                if let Some(summary) = params.summary {
+                    archive.summary = summary;
+                }
+            },
+            |old, new| reindex_title_and_tags(&state, old, new),
+        )
+        .await;
+    let (old_title, old_tags, old_summary) = before.unwrap_or_default();
 
-    let old_title = archive.title.clone();
-    let old_tags = archive.tags.clone();
-    let old_summary = archive.summary.clone();
-
-    if let Some(title) = params.title.filter(|t| !t.is_empty()) {
-        archive.title = title;
-    }
-    if let Some(tags) = params.tags {
-        archive.tags = tags;
-    }
-    if let Some(summary) = params.summary {
-        archive.summary = summary;
-    }
-
-    match state.repos.archives.save(&archive).await {
-        Ok(()) => {
+    match updated {
+        Ok(None) => not_found("update_metadata", format!("{id} does not exist.")),
+        Ok(Some(archive)) => {
             // `tags_added`/`tags_removed` — the actual set difference, computed here rather than
             // handing the frontend two raw comma-joined strings to parse and diff itself: this is
             // the one place that already knows both the old and new tag string, Rust's own
@@ -2749,32 +2792,6 @@ async fn update_archive_metadata(
                 .await;
             }
             if archive.title != old_title {
-                if let Err(e) = lanrurugi_search::indexer::update_title_index(
-                    &state.redis.search,
-                    &state.equivalence,
-                    &id,
-                    &old_title,
-                    &archive.title,
-                )
-                .await
-                {
-                    tracing::warn!(%id, error = %e, "failed to update title search index");
-                }
-            }
-            if archive.tags != old_tags {
-                if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
-                    &state.redis.search,
-                    &state.equivalence,
-                    &id,
-                    &old_tags,
-                    &archive.tags,
-                )
-                .await
-                {
-                    tracing::warn!(%id, error = %e, "failed to update tag search index");
-                }
-            }
-            if archive.title != old_title {
                 let state = state.clone();
                 let id = id.to_string();
                 let title = archive.title.clone();
@@ -2795,7 +2812,7 @@ async fn update_archive_metadata(
                 lanrurugi_storage::activity::action_types::ARCHIVE_METADATA_UPDATE,
                 lanrurugi_storage::activity::ActivityTarget {
                     id: Some(id.to_string()),
-                    label: Some(archive.title.clone()),
+                    label: Some(old_title.clone()),
                     kind: Some("archive".to_string()),
                 },
                 lanrurugi_storage::activity::Outcome::Failure {
@@ -4793,9 +4810,19 @@ async fn generate_page_thumbnails(
         }
     }
     if !newly_corrupted.is_empty() {
-        let mut updated = archive;
-        updated.corrupted_pages.extend(newly_corrupted);
-        if let Err(e) = state.repos.archives.save(&updated).await {
+        // Added to the list as it is now: the generation above took a while.
+        let added = state
+            .repos
+            .archives
+            .update(&id, |a| {
+                for page in newly_corrupted {
+                    if !a.corrupted_pages.contains(&page) {
+                        a.corrupted_pages.push(page);
+                    }
+                }
+            })
+            .await;
+        if let Err(e) = added {
             tracing::warn!(%id, error = %e, "failed to persist newly-detected corrupted pages");
         }
     }
@@ -5070,7 +5097,12 @@ mod tests {
         let mut archive = archive_named(&file.to_string_lossy(), "book.zip", "Pending Gate");
         archive.id = ArchiveId(id.clone());
         archive.pagecount = 1;
-        state.repos.archives.save(&archive).await.unwrap();
+        state
+            .repos
+            .archives
+            .create_or_replace(&archive)
+            .await
+            .unwrap();
         crate::visibility::mark_pending(&state, &id).await.unwrap();
 
         async fn body(resp: Response) -> String {

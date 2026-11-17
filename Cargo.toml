@@ -84,6 +84,8 @@ libarchive2-sys = "0.2"
 chardetng = "1.0"
 encoding_rs = "0.8"
 libc = "0.2"
+# Per-record write locks (#302): one read-modify-write at a time per archive/subscription/category.
+lockable = { version = "0.2.0", default-features = false }
 # Frontend API types generated from the Rust structs the API returns (#284); test-time only.
 ts-rs = "12.0.1"
 # libwebp wrapper with a *streaming* animation API (`AnimationDecoder::next_frame` /

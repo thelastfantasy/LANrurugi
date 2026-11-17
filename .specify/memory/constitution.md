@@ -1,6 +1,18 @@
 <!--
 Sync Impact Report
 ===================
+Version change: 1.8.0 → 1.9.0 (MINOR — one bullet added to Principle III, nothing removed)
+Added (2026-11-17, issue #302): Principle III's "Changing a stored record" bullet. Clearing an
+archive's "new" flag read the whole record, and its write put back the reading progress the reader
+had saved in between; the same read-snapshot-then-write-everything shape was found in about 40
+other writers (metadata plugins, library-wide thumbnail regeneration, subscription checks,
+categories, tankoubons). Every repository now changes existing records only through `update` /
+`update_then` under a per-record lock, and the whole-record write is named `create_or_replace`.
+Templates: none need changes; plan/analyze already check every Principle III bullet.
+Developer guide: `docs/dev/data-writes.md` carries the how-to.
+
+Previous amendment
+------------------
 Version change: 1.7.0 → 1.8.0 (MINOR — one new principle added, two existing sections materially
 expanded; no prior wording removed or weakened, purely additive)
 Modified principles: III ("Resource-Conscious, Genuinely Concurrent Single-Process Architecture")
@@ -142,6 +154,18 @@ the legacy Perl implementation had none, not just a byproduct of switching langu
   through a single `rayon`-parallel dispatch (e.g. this codebase's own `parallel_map` helper)
   covering the whole collection, not thread the collection through the async loop one
   `spawn_blocking` call at a time.
+- **Changing a stored record MUST NOT write back a copy read earlier.** A record read, then changed
+  and written whole, puts back whatever another writer changed in between (#302: clearing the
+  "new" flag erased the page the reader had just saved). An existing archive, category, tankoubon
+  or subscription MUST be changed through its repository's `update` (or `update_then`, when
+  something derived from it — the search index — must follow in the same order), which re-reads
+  it under a per-record lock, applies the change and writes only what changed; a narrow
+  single-field writer (`set_progress`, `set_isnew`) is the other allowed form. `create_or_replace`
+  is only for a new record or a deliberate whole replacement (restore from the recycle bin, a
+  legacy import's overwrite). Slow work — network calls, rendering, LLM calls, a subscription's
+  paging — MUST happen before `update`, never inside its closure, since every other writer of that
+  record waits on the lock. A new kind of stored record MUST get the same `update` entry point
+  before its first writer ships. How-to: `docs/dev/data-writes.md`.
 
 ### IV. Sandboxed, Language-Agnostic Plugin Extensibility
 
@@ -438,4 +462,4 @@ convention and the language already used throughout the `001`/`002`/`003` artifa
 technical design documents, not chat communication, and English keeps them consistent with the
 Rust/TypeScript code, comments, and commit history they describe.
 
-**Version**: 1.8.0 | **Ratified**: 2026-07-05 | **Last Amended**: 2026-08-03
+**Version**: 1.9.0 | **Ratified**: 2026-07-05 | **Last Amended**: 2026-11-17

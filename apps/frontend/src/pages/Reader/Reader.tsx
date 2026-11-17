@@ -1541,10 +1541,22 @@ export function Reader() {
   // whole viewport becomes the turn target, split down the middle like the page itself. The image
   // link already turns pages and calls `preventDefault`, the loading placeholder does the same, and
   // the floating fit control stays out of the exclusion list, so nothing turns twice or fights the
-  // mode menu. `goTo` closes over this render's page, hence the ref instead of re-subscribing.
-  const goToRef = useRef(goTo);
+  // mode menu. A click there does what a click on the page would: in infinite scroll that is the
+  // page images' own scroll-then-turn, not a plain page turn. It closes over this render's page,
+  // hence the ref instead of re-subscribing.
+  function turnFromOutside(clientX: number, clientY: number) {
+    const target = clientX < window.innerWidth / 2 ? "prev" : "next";
+    if (!readerSettings.infiniteScroll) {
+      goTo(target);
+    } else if (!supportsHover) {
+      onInfiniteScrollTap(clientY);
+    } else {
+      goToInfiniteScrollPage(currentPage, target);
+    }
+  }
+  const turnFromOutsideRef = useRef(turnFromOutside);
   useEffect(() => {
-    goToRef.current = goTo;
+    turnFromOutsideRef.current = turnFromOutside;
   });
   // Where the gesture started decides whether it may turn a page. A backdrop that dismisses its
   // modal on press deletes it before the click is dispatched, and the browser then delivers that
@@ -1586,7 +1598,7 @@ export function Reader() {
       if (overlay !== null) return;
       if (e.defaultPrevented) return;
       if (inOtherLayer(e.target as HTMLElement | null)) return;
-      goToRef.current(e.clientX < window.innerWidth / 2 ? "prev" : "next");
+      turnFromOutsideRef.current(e.clientX, e.clientY);
     }
     document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("click", onClick);

@@ -42,7 +42,7 @@ pub const LEGACY_PENDING_VISIBILITY_PREFIX: &str = "LANRURUGI_PENDING_VISIBILITY
 /// category's own `archives` field), and until this index existed, answering "which categories is
 /// this one archive in" (`GET /archives/{id}/categories`) meant `CategoryRepository::list_all()`
 /// scanning and linearly `.contains()`-checking every category in the library (issue #67).
-/// Maintained by `CategoryRepository::save`/`delete` themselves (diffed against the previous
+/// Maintained by `CategoryRepository::create_or_replace`/`delete` themselves (diffed against the previous
 /// membership on every save, so a caller updating a category's `archives` field never has to
 /// remember to touch this index separately) — dynamic categories (a `search` predicate, no
 /// `archives` list of their own) are never indexed here, matching `get_archive_categories`'s own
@@ -52,7 +52,7 @@ pub fn archive_categories_key(archive_id: &str) -> String {
 }
 
 /// Additive, LANrurugi-only. Same reverse-index reasoning as [`archive_categories_key`], but for
-/// Tankoubon (`TANK_*`) membership — maintained by `GroupingRepository::save`/`delete`.
+/// Tankoubon (`TANK_*`) membership — maintained by `GroupingRepository::create_or_replace`/`delete`.
 pub fn archive_tankoubons_key(archive_id: &str) -> String {
     format!("LANRURUGI_ARCHIVE_TANKOUBONS_{archive_id}")
 }

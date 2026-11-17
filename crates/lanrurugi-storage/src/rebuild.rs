@@ -142,16 +142,26 @@ async fn update_references(
     new_id: &ArchiveId,
     stamp_ids: &[lanrurugi_core::ids::StampId],
 ) -> Result<(), RepositoryError> {
-    for mut category in categories.list_all().await? {
-        if let Some(pos) = category.archives.iter().position(|id| id == old_id) {
-            category.archives[pos] = new_id.clone();
-            categories.save(&category).await?;
+    for category in categories.list_all().await? {
+        if category.archives.contains(old_id) {
+            categories
+                .update(&category.catid, |c| {
+                    if let Some(pos) = c.archives.iter().position(|id| id == old_id) {
+                        c.archives[pos] = new_id.clone();
+                    }
+                })
+                .await?;
         }
     }
-    for mut grouping in groupings.list_all().await? {
-        if let Some(pos) = grouping.archives.iter().position(|id| id == old_id) {
-            grouping.archives[pos] = new_id.clone();
-            groupings.save(&grouping).await?;
+    for grouping in groupings.list_all().await? {
+        if grouping.archives.contains(old_id) {
+            groupings
+                .update(&grouping.tankid, |g| {
+                    if let Some(pos) = g.archives.iter().position(|id| id == old_id) {
+                        g.archives[pos] = new_id.clone();
+                    }
+                })
+                .await?;
         }
     }
     // A stamp's own `archive_id` field is a separate reverse-reference, not part of the archive
@@ -230,7 +240,7 @@ mod tests {
             .unwrap();
 
         archives
-            .save(&Archive {
+            .create_or_replace(&Archive {
                 id: legacy_id.clone(),
                 name: "book".into(),
                 title: "Book".into(),
@@ -255,7 +265,7 @@ mod tests {
 
         let catid = lanrurugi_core::ids::CategoryId("SET_1700000099".to_string());
         categories
-            .save(&Category {
+            .create_or_replace(&Category {
                 catid: catid.clone(),
                 name: "Cat".into(),
                 search: None,
@@ -267,7 +277,7 @@ mod tests {
             .unwrap();
         let tankid = lanrurugi_core::ids::TankId("TANK_1700000099".to_string());
         groupings
-            .save(&Grouping {
+            .create_or_replace(&Grouping {
                 tankid: tankid.clone(),
                 name: "Tank".into(),
                 summary: String::new(),
@@ -323,7 +333,7 @@ mod tests {
 
         let catid = lanrurugi_core::ids::CategoryId("SET_1700000199".to_string());
         categories
-            .save(&Category {
+            .create_or_replace(&Category {
                 catid: catid.clone(),
                 name: "Cat".into(),
                 search: None,
@@ -343,7 +353,7 @@ mod tests {
         // Swap membership from archive_a to archive_b — `save` must diff against the previous
         // state and update both archives' index entries, not just add the new one.
         categories
-            .save(&Category {
+            .create_or_replace(&Category {
                 catid: catid.clone(),
                 name: "Cat".into(),
                 search: None,
@@ -380,7 +390,7 @@ mod tests {
 
         let catid = lanrurugi_core::ids::CategoryId("SET_1700000299".to_string());
         categories
-            .save(&Category {
+            .create_or_replace(&Category {
                 catid: catid.clone(),
                 name: "Cat".into(),
                 search: None,
@@ -392,7 +402,7 @@ mod tests {
             .unwrap();
         let tankid = lanrurugi_core::ids::TankId("TANK_1700000299".to_string());
         groupings
-            .save(&Grouping {
+            .create_or_replace(&Grouping {
                 tankid: tankid.clone(),
                 name: "Tank".into(),
                 summary: String::new(),

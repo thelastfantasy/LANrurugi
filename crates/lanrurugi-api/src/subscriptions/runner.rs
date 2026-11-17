@@ -1167,8 +1167,14 @@ pub async fn run_check(state: &AppState, subscription_id: &str, trigger: CheckTr
     // `last_checked_at` advances even for a degraded or failed cycle: the source *was* contacted,
     // and retrying immediately would hammer a source that is already struggling. The next scheduled
     // check will try again.
-    subscription.last_checked_at = Some(now_secs());
-    let _ = state.subscriptions.save(&subscription).await;
+    // Only this field, onto the subscription as it is now: an edit or a disable made while this
+    // check ran must stay.
+    let checked_at = now_secs();
+    subscription.last_checked_at = Some(checked_at);
+    let _ = state
+        .subscriptions
+        .update(&subscription.id, |s| s.last_checked_at = Some(checked_at))
+        .await;
 
     let _ = state
         .subscriptions

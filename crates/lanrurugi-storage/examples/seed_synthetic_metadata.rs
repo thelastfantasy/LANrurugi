@@ -233,7 +233,7 @@ async fn main() {
             tank_members.push(archive.id.clone());
         }
         archives
-            .save(&archive)
+            .create_or_replace(&archive)
             .await
             .unwrap_or_else(|e| panic!("failed to save archive {i}: {e}"));
 
@@ -254,7 +254,7 @@ async fn main() {
                 updated_at: None,
             };
             groupings
-                .save(&tank)
+                .create_or_replace(&tank)
                 .await
                 .unwrap_or_else(|e| panic!("failed to save tankoubon {tank_index}: {e}"));
         }

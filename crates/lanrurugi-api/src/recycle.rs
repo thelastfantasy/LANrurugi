@@ -982,7 +982,7 @@ async fn restore_record(
     state
         .repos
         .archives
-        .save(&archive)
+        .create_or_replace(&archive)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -1238,7 +1238,12 @@ pub(crate) async fn restore_tankoubon(
         }
     }
 
-    if let Err(e) = state.repos.groupings.save(&tank.grouping).await {
+    if let Err(e) = state
+        .repos
+        .groupings
+        .create_or_replace(&tank.grouping)
+        .await
+    {
         rollback_recycled(state, &restored).await;
         return RestoreOutcome::Error(e.to_string());
     }

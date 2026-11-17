@@ -2112,7 +2112,12 @@ mod tests {
             has_patch: false,
             blake3: None,
         };
-        state.repos.archives.save(&archive).await.unwrap();
+        state
+            .repos
+            .archives
+            .create_or_replace(&archive)
+            .await
+            .unwrap();
         crate::download_sources::record(&state, &url, &archive_id).await;
 
         // `add` mints the row's id itself; keep what it returns rather than the placeholder.

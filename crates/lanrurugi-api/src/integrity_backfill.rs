@@ -261,7 +261,7 @@ mod tests {
             state
                 .repos
                 .archives
-                .save(&record(&id, &path))
+                .create_or_replace(&record(&id, &path))
                 .await
                 .unwrap();
             expected.push((

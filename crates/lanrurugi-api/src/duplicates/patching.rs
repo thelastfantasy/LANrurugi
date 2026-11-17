@@ -188,10 +188,13 @@ pub async fn create_patch(
     };
 
     if outcome.added > 0 {
-        let mut target = target;
         if !target.has_patch {
-            target.has_patch = true;
-            if let Err(e) = state.repos.archives.save(&target).await {
+            if let Err(e) = state
+                .repos
+                .archives
+                .update(&target.id, |a| a.has_patch = true)
+                .await
+            {
                 tracing::warn!(id = %body.target, error = %e, "patch written but has_patch flag not saved");
             }
         }

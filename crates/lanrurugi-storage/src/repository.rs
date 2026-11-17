@@ -227,106 +227,165 @@ impl ArchiveRepository {
         Ok(archives.into_iter().find(|a| a.file == file))
     }
 
-    /// Rewrites one archive's `tags` field and nothing else. Unlike [`Self::save`] this cannot
-    /// clobber fields another writer changed while a long pass held a stale snapshot (reading
-    /// progress, or `file` after a relocation).
-    pub async fn set_tags(&self, id: &ArchiveId, tags: &str) -> Result<()> {
+    /// Every stored field of `archive`, as written: `None` for an optional field that is absent
+    /// (and must not linger from an earlier record).
+    fn stored_fields(archive: &Archive) -> Result<Vec<(&'static str, Option<String>)>> {
+        let json = |field: &'static str, value: std::result::Result<String, serde_json::Error>| {
+            value.map_err(|e| RepositoryError::Json {
+                key: archive.id.to_string(),
+                field,
+                source: e,
+            })
+        };
+        let flag = |b: bool| Some(if b { "true" } else { "false" }.to_string());
+        Ok(vec![
+            ("name", Some(archive.name.clone())),
+            ("title", Some(archive.title.clone())),
+            ("file", Some(archive.file.clone())),
+            ("tags", Some(archive.tags.clone())),
+            ("summary", Some(archive.summary.clone())),
+            ("arcsize", Some(archive.arcsize.to_string())),
+            ("pagecount", Some(archive.pagecount.to_string())),
+            ("isnew", flag(archive.isnew)),
+            ("progress", Some(archive.lastreadpage.to_string())),
+            ("lastreadtime", Some(archive.lastreadtime.to_string())),
+            (
+                "toc",
+                Some(json(
+                    "toc",
+                    serde_json::to_string(&toc_to_legacy_map(&archive.toc)),
+                )?),
+            ),
+            (
+                "stamps",
+                Some(json("stamps", serde_json::to_string(&archive.stamp_ids))?),
+            ),
+            (
+                "corrupted_pages",
+                Some(json(
+                    "corrupted_pages",
+                    serde_json::to_string(&archive.corrupted_pages),
+                )?),
+            ),
+            ("has_patch", flag(archive.has_patch)),
+            ("blake3", archive.blake3.clone()),
+            ("thumbhash", archive.thumbhash.clone()),
+            (
+                "heal_failed_at",
+                archive.heal_failed_at.map(|ts| ts.to_string()),
+            ),
+        ])
+    }
+
+    /// Creates or fully overwrites an archive record — except reading progress (`progress`,
+    /// `lastreadtime`), written only when the record has none yet, and `blake3`/`thumbhash`, never
+    /// cleared by a save that does not carry them.
+    ///
+    /// For a new record, or one replaced as a whole (re-keyed, restored). Changing an existing
+    /// record is [`Self::update`]'s: a save from a snapshot puts back whatever another writer changed
+    /// since it was read (#302 — clearing `isnew` from a stale snapshot erased the page the reader
+    /// had just recorded). Progress is protected here as well, since the reader writes it on its
+    /// own at any moment.
+    pub async fn create_or_replace(&self, archive: &Archive) -> Result<()> {
+        let key = archive.id.as_str();
+        // One round trip: a catalogue pass saves thousands of these.
+        let mut pipe = deadpool_redis::redis::pipe();
+        for (field, value) in Self::stored_fields(archive)? {
+            match (field, value) {
+                ("progress" | "lastreadtime", Some(value)) => {
+                    pipe.hset_nx(key, field, value).ignore();
+                }
+                (_, Some(value)) => {
+                    pipe.hset(key, field, value).ignore();
+                }
+                ("blake3" | "thumbhash", None) => {}
+                // `heal_failed_at`: a fresh catalogue must not inherit an old failure marker.
+                (_, None) => {
+                    pipe.hdel(key, field).ignore();
+                }
+            }
+        }
         let mut conn = self.pool.get().await?;
-        let _: () = conn.hset(id.as_str(), "tags", tags).await?;
+        let _: () = pipe.query_async(&mut conn).await?;
         Ok(())
     }
 
-    /// Creates or fully overwrites an archive record's hash fields — except reading progress
-    /// (`progress`, `lastreadtime`), which is only written when the record does not have it yet.
+    /// Changes an existing record: under the record's lock, reads it as it is now, applies `change`,
+    /// and writes back only the fields that changed. `None` when the record does not exist (or is
+    /// deleted meanwhile — never recreated).
     ///
-    /// Every whole-record writer is a read-modify-write, and the reader saves progress on its own
-    /// at any moment: a save from a snapshot taken just before that write used to put the old
-    /// progress back (#302 — opening an archive cleared its `isnew` from a stale snapshot and
-    /// erased the page just recorded). A new record, a re-keyed one or one restored from the
-    /// recycle bin still gets the progress it carries; changing it otherwise is [`Self::set_progress`]'s.
-    pub async fn save(&self, archive: &Archive) -> Result<()> {
-        let mut conn = self.pool.get().await?;
-        let toc_json = serde_json::to_string(&toc_to_legacy_map(&archive.toc)).map_err(|e| {
-            RepositoryError::Json {
-                key: archive.id.to_string(),
-                field: "toc",
-                source: e,
-            }
-        })?;
-        let stamps_json =
-            serde_json::to_string(&archive.stamp_ids).map_err(|e| RepositoryError::Json {
-                key: archive.id.to_string(),
-                field: "stamps",
-                source: e,
-            })?;
-        let corrupted_pages_json =
-            serde_json::to_string(&archive.corrupted_pages).map_err(|e| RepositoryError::Json {
-                key: archive.id.to_string(),
-                field: "corrupted_pages",
-                source: e,
-            })?;
+    /// Do slow work before calling this: `change` runs while the lock is held, and every other
+    /// writer of this archive waits for it.
+    pub async fn update<F>(&self, id: &ArchiveId, change: F) -> Result<Option<Archive>>
+    where
+        F: FnOnce(&mut Archive),
+    {
+        self.update_then(id, change, |_, _| async {}).await
+    }
 
-        // `archive: &Archive` already outlives this whole call, so the text fields below don't
-        // need deep-copying just to satisfy `hset_multiple`'s single-`V`-type requirement — `Cow`
-        // lets them stay borrowed (`Cow::Borrowed`) while the fields that were already going
-        // through `.to_string()` regardless (numbers/bools/the pre-serialized JSON blobs above)
-        // keep doing the same allocation they always did (`Cow::Owned`).
-        let fields: Vec<(&str, std::borrow::Cow<'_, str>)> = vec![
-            ("name", archive.name.as_str().into()),
-            ("title", archive.title.as_str().into()),
-            ("file", archive.file.as_str().into()),
-            ("tags", archive.tags.as_str().into()),
-            ("summary", archive.summary.as_str().into()),
-            ("arcsize", archive.arcsize.to_string().into()),
-            ("pagecount", archive.pagecount.to_string().into()),
-            ("isnew", if archive.isnew { "true" } else { "false" }.into()),
-            ("toc", toc_json.into()),
-            ("stamps", stamps_json.into()),
-            ("corrupted_pages", corrupted_pages_json.into()),
-            (
-                "has_patch",
-                if archive.has_patch { "true" } else { "false" }.into(),
-            ),
-        ];
-        let _: () = conn.hset_multiple(archive.id.as_str(), &fields).await?;
-        let _: () = conn
-            .hset_nx(
-                archive.id.as_str(),
-                "progress",
-                archive.lastreadpage.to_string(),
-            )
-            .await?;
-        let _: () = conn
-            .hset_nx(
-                archive.id.as_str(),
-                "lastreadtime",
-                archive.lastreadtime.to_string(),
-            )
-            .await?;
-        // Like `thumbhash`: written when known, never cleared by a save that did not carry it.
-        if let Some(blake3) = &archive.blake3 {
-            let _: () = conn.hset(archive.id.as_str(), "blake3", blake3).await?;
-        }
-        if let Some(thumbhash) = &archive.thumbhash {
-            let _: () = conn
-                .hset(archive.id.as_str(), "thumbhash", thumbhash)
-                .await?;
-        }
-        // `HSET`, unlike `hset_multiple` above, never clears a field on its own — `heal_failed_at`
-        // needs an explicit `HDEL` when `None` so a fresh catalogue of this archive ID (e.g.
-        // re-downloading and overwriting a permanently-broken one) doesn't inherit a stale failure
-        // marker left over from whatever record previously occupied this ID.
-        match archive.heal_failed_at {
-            Some(ts) => {
-                let _: () = conn
-                    .hset(archive.id.as_str(), "heal_failed_at", ts.to_string())
-                    .await?;
+    /// [`Self::update`], then `after(before, after)` while the lock is still held, when the record
+    /// changed. For what is derived from the record elsewhere (the search index diffs old against
+    /// new tags): run after the lock, two changes could reach it in the other order.
+    pub async fn update_then<F, A, Fut>(
+        &self,
+        id: &ArchiveId,
+        change: F,
+        then: A,
+    ) -> Result<Option<Archive>>
+    where
+        F: FnOnce(&mut Archive),
+        A: FnOnce(Archive, Archive) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        let _guard = crate::record_lock::lock(&format!("archive:{id}")).await;
+        let Some(before) = self.get(id).await? else {
+            return Ok(None);
+        };
+        let mut archive = before.clone();
+        change(&mut archive);
+        let old = Self::stored_fields(&before)?;
+        let new = Self::stored_fields(&archive)?;
+        let mut set: Vec<String> = Vec::new();
+        let mut unset: Vec<&str> = Vec::new();
+        for ((field, was), (_, now)) in old.iter().zip(new.iter()) {
+            if was == now {
+                continue;
             }
-            None => {
-                let _: () = conn.hdel(archive.id.as_str(), "heal_failed_at").await?;
+            match now {
+                Some(value) => {
+                    set.push((*field).to_string());
+                    set.push(value.clone());
+                }
+                None => unset.push(field),
             }
         }
-        Ok(())
+        if set.is_empty() && unset.is_empty() {
+            return Ok(Some(archive));
+        }
+        // Only a record that still exists: one deleted meanwhile must not come back as a hash of
+        // just these fields.
+        const SCRIPT: &str = "if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end \
+            local n = tonumber(ARGV[1]) \
+            for i = 2, 2 * n, 2 do redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1]) end \
+            for i = 2 * n + 2, #ARGV do redis.call('HDEL', KEYS[1], ARGV[i]) end \
+            return 1";
+        let mut conn = self.pool.get().await?;
+        let script = deadpool_redis::redis::Script::new(SCRIPT);
+        let mut invocation = script.prepare_invoke();
+        invocation.key(id.as_str()).arg(set.len() / 2);
+        for value in &set {
+            invocation.arg(value);
+        }
+        for field in &unset {
+            invocation.arg(*field);
+        }
+        let written: i64 = invocation.invoke_async(&mut conn).await?;
+        drop(conn);
+        if written == 0 {
+            return Ok(None);
+        }
+        then(before, archive.clone()).await;
+        Ok(Some(archive))
     }
 
     /// Writes only the `isnew` flag, of a record that still exists; `false` when it does not.
@@ -611,13 +670,15 @@ impl CategoryRepository {
     /// Returns how many categories actually changed.
     pub async fn remove_archive_from_all(&self, archive_id: &ArchiveId) -> Result<u32> {
         let mut changed = 0u32;
-        for mut category in self.for_archive(archive_id).await? {
-            let before = category.archives.len();
-            category.archives.retain(|a| a != archive_id);
-            if category.archives.len() != before {
-                self.save(&category).await?;
-                changed += 1;
-            }
+        for category in self.for_archive(archive_id).await? {
+            let mut removed = false;
+            self.update(&category.catid, |c| {
+                let before = c.archives.len();
+                c.archives.retain(|a| a != archive_id);
+                removed = c.archives.len() != before;
+            })
+            .await?;
+            changed += u32::from(removed);
         }
         // `save` above already prunes this archive's own reverse-index entry for each category it
         // touched; this clears whatever would survive a category that somehow indexed the archive
@@ -681,7 +742,32 @@ impl CategoryRepository {
     /// never indexed here (nor was its previous state, if it was static and just became dynamic —
     /// `old_archives` comes up empty for a dynamic `previous`), matching `get_archive_categories`'s
     /// own `!c.is_dynamic()` filter on the read side.
-    pub async fn save(&self, category: &Category) -> Result<()> {
+    /// Writes a new category, or replaces one as a whole. Changing an existing one is
+    /// [`Self::update`]'s, so a change made from an older copy cannot undo another (#302).
+    pub async fn create_or_replace(&self, category: &Category) -> Result<()> {
+        let _guard = crate::record_lock::lock(&format!("category:{}", category.catid)).await;
+        self.write(category).await
+    }
+
+    /// Changes an existing category under its lock: reads it as it is now, applies `change`, and
+    /// writes it back. `None` when it does not exist.
+    pub async fn update<F>(&self, catid: &CategoryId, change: F) -> Result<Option<Category>>
+    where
+        F: FnOnce(&mut Category),
+    {
+        let _guard = crate::record_lock::lock(&format!("category:{catid}")).await;
+        let Some(mut category) = self.get(catid).await? else {
+            return Ok(None);
+        };
+        let before = category.clone();
+        change(&mut category);
+        if category != before {
+            self.write(&category).await?;
+        }
+        Ok(Some(category))
+    }
+
+    async fn write(&self, category: &Category) -> Result<()> {
         let mut conn = self.pool.get().await?;
         let archives_json =
             serde_json::to_string(&category.archives).map_err(|e| RepositoryError::Json {
@@ -689,7 +775,7 @@ impl CategoryRepository {
                 field: "archives",
                 source: e,
             })?;
-        // Same `Cow` reasoning as `ArchiveRepository::save` above — `category: &Category` already
+        // Same `Cow` reasoning as `ArchiveRepository::create_or_replace` above — `category: &Category` already
         // outlives this call, so the text fields don't need deep-copying just to unify with the
         // fields that were already allocating (`archives_json`/the `pinned` bool-to-string).
         let fields: Vec<(&str, std::borrow::Cow<'_, str>)> = vec![
@@ -739,6 +825,7 @@ impl CategoryRepository {
     }
 
     pub async fn delete(&self, catid: &CategoryId) -> Result<()> {
+        let _guard = crate::record_lock::lock(&format!("category:{catid}")).await;
         let mut conn = self.pool.get().await?;
         // Clear this category's own membership out of every member archive's reverse-index entry
         // before dropping the category hash itself — otherwise a deleted category's ID would keep
@@ -899,8 +986,48 @@ impl GroupingRepository {
     ///
     /// Issue #67: also keeps the `archive_id -> [tankoubon_id]` reverse index
     /// ([`crate::keys::archive_tankoubons_key`]) in sync — same diff-against-previous-membership
-    /// approach as `CategoryRepository::save`, see that method's own docs for the reasoning.
-    pub async fn save(&self, grouping: &Grouping) -> Result<()> {
+    /// approach as `CategoryRepository::create_or_replace`, see that method's own docs for the reasoning.
+    pub async fn create_or_replace(&self, grouping: &Grouping) -> Result<()> {
+        let _guard = crate::record_lock::lock(&format!("tankoubon:{}", grouping.tankid)).await;
+        self.write(grouping).await
+    }
+
+    /// Changes an existing tankoubon under its lock (#302): reads it as it is now, applies
+    /// `change`, and writes it back. `None` when it does not exist.
+    pub async fn update<F>(&self, tankid: &TankId, change: F) -> Result<Option<Grouping>>
+    where
+        F: FnOnce(&mut Grouping),
+    {
+        self.update_then(tankid, change, |_, _| async {}).await
+    }
+
+    /// [`Self::update`], then `then(before, after)` under the same lock when it changed — see
+    /// [`ArchiveRepository::update_then`].
+    pub async fn update_then<F, A, Fut>(
+        &self,
+        tankid: &TankId,
+        change: F,
+        then: A,
+    ) -> Result<Option<Grouping>>
+    where
+        F: FnOnce(&mut Grouping),
+        A: FnOnce(Grouping, Grouping) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        let _guard = crate::record_lock::lock(&format!("tankoubon:{tankid}")).await;
+        let Some(mut grouping) = self.get(tankid).await? else {
+            return Ok(None);
+        };
+        let before = grouping.clone();
+        change(&mut grouping);
+        if grouping != before {
+            self.write(&grouping).await?;
+            then(before, grouping.clone()).await;
+        }
+        Ok(Some(grouping))
+    }
+
+    async fn write(&self, grouping: &Grouping) -> Result<()> {
         let mut conn = self.pool.get().await?;
         let old_archives: std::collections::HashSet<ArchiveId> = self
             .get(&grouping.tankid)
@@ -1001,6 +1128,7 @@ impl GroupingRepository {
     }
 
     pub async fn delete(&self, tankid: &TankId) -> Result<()> {
+        let _guard = crate::record_lock::lock(&format!("tankoubon:{tankid}")).await;
         let mut conn = self.pool.get().await?;
         // Same "clear the reverse-index entries before dropping the forward key" reasoning as
         // `CategoryRepository::delete`.
@@ -1275,7 +1403,7 @@ mod tests {
             blake3: None,
         };
 
-        repo.save(&archive).await.unwrap();
+        repo.create_or_replace(&archive).await.unwrap();
         let fetched = repo.get(&id).await.unwrap().unwrap();
         assert_eq!(fetched, archive);
 
@@ -1313,14 +1441,14 @@ mod tests {
             has_patch: false,
             blake3: None,
         };
-        repo.save(&archive).await.unwrap();
+        repo.create_or_replace(&archive).await.unwrap();
 
         // The reader's interleaving: a snapshot is read, the first page is saved, and then the
         // snapshot is written back with only `isnew` changed.
         let mut stale = repo.get(&id).await.unwrap().unwrap();
         repo.set_progress(&id, 1, 1_794_797_658).await.unwrap();
         stale.isnew = false;
-        repo.save(&stale).await.unwrap();
+        repo.create_or_replace(&stale).await.unwrap();
         let after = repo.get(&id).await.unwrap().unwrap();
         assert_eq!((after.lastreadpage, after.lastreadtime), (1, 1_794_797_658));
         assert!(!after.isnew);
@@ -1333,6 +1461,123 @@ mod tests {
         repo.delete(&id).await.unwrap();
         assert!(!repo.set_isnew(&id, false).await.unwrap());
         assert!(repo.get(&id).await.unwrap().is_none());
+    }
+
+    /// #302: concurrent changes to one record all land, only changed fields are written, a field
+    /// set to `None` is removed, and a deleted record is never recreated.
+    #[tokio::test]
+    async fn concurrent_updates_all_land_and_a_deleted_record_stays_deleted() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = ArchiveRepository::new(pool.clone());
+        // Distinctive: tests share one Redis, and this one deletes its record at the end.
+        let id = ArchiveId("302a".repeat(10));
+        repo.create_or_replace(&Archive {
+            id: id.clone(),
+            name: "n".into(),
+            title: "t".into(),
+            file: "/x.zip".into(),
+            tags: String::new(),
+            summary: String::new(),
+            arcsize: 1,
+            pagecount: 10,
+            isnew: true,
+            lastreadpage: 0,
+            lastreadtime: 0,
+            thumbhash: None,
+            toc: vec![],
+            stamp_ids: vec![],
+            heal_failed_at: Some(5),
+            corrupted_pages: vec![],
+            has_patch: false,
+            blake3: None,
+        })
+        .await
+        .unwrap();
+
+        // Twenty writers each append their own tag; with whole-record writes from snapshots most
+        // of them would be lost.
+        let writers = (0..20).map(|i| {
+            let repo = repo.clone();
+            let id = id.clone();
+            tokio::spawn(async move {
+                repo.update(&id, |a| {
+                    a.tags = if a.tags.is_empty() {
+                        format!("t{i}")
+                    } else {
+                        format!("{},t{i}", a.tags)
+                    };
+                })
+                .await
+                .unwrap()
+            })
+        });
+        for writer in writers {
+            assert!(writer.await.unwrap().is_some());
+        }
+        // Progress written outside `update` is not touched by one that does not change it.
+        repo.set_progress(&id, 3, 1_794_797_658).await.unwrap();
+        repo.update(&id, |a| a.heal_failed_at = None).await.unwrap();
+        let after = repo.get(&id).await.unwrap().unwrap();
+        assert_eq!(after.tags.split(',').count(), 20);
+        assert_eq!((after.lastreadpage, after.lastreadtime), (3, 1_794_797_658));
+        assert_eq!(after.heal_failed_at, None);
+        let mut conn = pool.get().await.unwrap();
+        let marker: Option<String> = conn.hget(id.as_str(), "heal_failed_at").await.unwrap();
+        assert_eq!(marker, None);
+
+        repo.delete(&id).await.unwrap();
+        assert!(repo
+            .update(&id, |a| a.title = "back".into())
+            .await
+            .unwrap()
+            .is_none());
+        let exists: bool = conn.exists(id.as_str()).await.unwrap();
+        assert!(!exists);
+    }
+
+    /// #302: two members added to one category at once are both kept.
+    #[tokio::test]
+    async fn concurrent_category_adds_are_both_kept() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = CategoryRepository::new(pool);
+        let catid = CategoryId("SET_3020000001".into());
+        repo.create_or_replace(&Category {
+            catid: catid.clone(),
+            name: "c".into(),
+            search: None,
+            archives: vec![],
+            pinned: false,
+            visible_to_guest: false,
+        })
+        .await
+        .unwrap();
+        let adds = (0..10).map(|i| {
+            let repo = repo.clone();
+            let catid = catid.clone();
+            tokio::spawn(async move {
+                repo.update(&catid, |c| {
+                    c.archives.push(ArchiveId(format!("{:040x}", 0x302b00 + i)))
+                })
+                .await
+                .unwrap()
+            })
+        });
+        for add in adds {
+            add.await.unwrap();
+        }
+        assert_eq!(repo.get(&catid).await.unwrap().unwrap().archives.len(), 10);
+        repo.delete(&catid).await.unwrap();
+        assert!(repo
+            .update(&catid, |c| c.name = "x".into())
+            .await
+            .unwrap()
+            .is_none());
     }
 
     /// 027: the fingerprint survives a save that does not carry it (every whole-record writer that
@@ -1365,10 +1610,10 @@ mod tests {
             has_patch: false,
             blake3: None,
         };
-        repo.save(&archive).await.unwrap();
+        repo.create_or_replace(&archive).await.unwrap();
         assert!(repo.set_blake3(&id, &"ab".repeat(32)).await.unwrap());
         archive.title = "edited".into();
-        repo.save(&archive).await.unwrap();
+        repo.create_or_replace(&archive).await.unwrap();
         let fetched = repo.get(&id).await.unwrap().unwrap();
         assert_eq!(fetched.title, "edited");
         assert_eq!(fetched.blake3.as_deref(), Some("ab".repeat(32).as_str()));
@@ -1405,7 +1650,7 @@ mod tests {
             updated_at: None,
         };
 
-        repo.save(&grouping).await.unwrap();
+        repo.create_or_replace(&grouping).await.unwrap();
         let fetched = repo.get(&tankid).await.unwrap().unwrap();
         assert_eq!(fetched, grouping);
 
@@ -1427,7 +1672,7 @@ mod tests {
         let in_both = CategoryId("SET_1700000101".to_string());
         let only_kept = CategoryId("SET_1700000102".to_string());
 
-        repo.save(&Category {
+        repo.create_or_replace(&Category {
             catid: in_both.clone(),
             name: "Both".to_string(),
             search: None,
@@ -1437,7 +1682,7 @@ mod tests {
         })
         .await
         .unwrap();
-        repo.save(&Category {
+        repo.create_or_replace(&Category {
             catid: only_kept.clone(),
             name: "Untouched".to_string(),
             search: None,
@@ -1482,7 +1727,7 @@ mod tests {
             pinned: true,
             visible_to_guest: true,
         };
-        repo.save(&category).await.unwrap();
+        repo.create_or_replace(&category).await.unwrap();
         assert_eq!(repo.get(&catid).await.unwrap().unwrap(), category);
 
         let dyn_catid = CategoryId("SET_1700000002".to_string());
@@ -1494,7 +1739,7 @@ mod tests {
             pinned: false,
             visible_to_guest: false,
         };
-        repo.save(&dynamic).await.unwrap();
+        repo.create_or_replace(&dynamic).await.unwrap();
         let fetched = repo.get(&dyn_catid).await.unwrap().unwrap();
         assert!(fetched.is_dynamic());
         assert!(fetched.archives.is_empty());
@@ -1579,7 +1824,7 @@ mod tests {
             has_patch: false,
             blake3: None,
         };
-        archive_repo.save(&archive).await.unwrap();
+        archive_repo.create_or_replace(&archive).await.unwrap();
 
         let a = stamp_repo
             .create(
@@ -1660,7 +1905,7 @@ mod tests {
             has_patch: false,
             blake3: None,
         };
-        archive_repo.save(&archive).await.unwrap();
+        archive_repo.create_or_replace(&archive).await.unwrap();
 
         let stamp_id = stamp_repo
             .create(
@@ -1737,13 +1982,22 @@ mod tests {
         let a2 = ArchiveId("2".repeat(40));
         let a3_unscanned = ArchiveId("3".repeat(40));
         let a4 = ArchiveId("4".repeat(40));
-        archives_repo.save(&minimal_archive(&a1, 5)).await.unwrap();
-        archives_repo.save(&minimal_archive(&a2, 3)).await.unwrap();
         archives_repo
-            .save(&minimal_archive(&a3_unscanned, 0))
+            .create_or_replace(&minimal_archive(&a1, 5))
             .await
             .unwrap();
-        archives_repo.save(&minimal_archive(&a4, 4)).await.unwrap();
+        archives_repo
+            .create_or_replace(&minimal_archive(&a2, 3))
+            .await
+            .unwrap();
+        archives_repo
+            .create_or_replace(&minimal_archive(&a3_unscanned, 0))
+            .await
+            .unwrap();
+        archives_repo
+            .create_or_replace(&minimal_archive(&a4, 4))
+            .await
+            .unwrap();
 
         let tankid = TankId("TANK_1700000010".to_string());
         let grouping = Grouping {
@@ -1760,7 +2014,7 @@ mod tests {
             created_at: None,
             updated_at: None,
         };
-        groupings_repo.save(&grouping).await.unwrap();
+        groupings_repo.create_or_replace(&grouping).await.unwrap();
 
         // Global pages 1-5 -> a1 (pagecount 5), local pages 1-5.
         assert_eq!(
@@ -1835,7 +2089,7 @@ mod tests {
         // An archive not a member of any Tankoubon resolves to no entries at all, not an error.
         let not_a_member = ArchiveId("5".repeat(40));
         archives_repo
-            .save(&minimal_archive(&not_a_member, 1))
+            .create_or_replace(&minimal_archive(&not_a_member, 1))
             .await
             .unwrap();
         assert!(groupings_repo
@@ -1861,7 +2115,7 @@ mod tests {
             created_at: None,
             updated_at: None,
         };
-        groupings_repo.save(&grouping2).await.unwrap();
+        groupings_repo.create_or_replace(&grouping2).await.unwrap();
         let mut both = groupings_repo
             .resolve_local_page(&archives_repo, &a2, 1)
             .await

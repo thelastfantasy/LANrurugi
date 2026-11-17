@@ -41,27 +41,30 @@ pub async fn restore(
     let mut summary = RestoreSummary::default();
 
     for backup_archive in &doc.archives {
-        let Some(mut archive) = archives
-            .get(&ArchiveId(backup_archive.arcid.clone()))
-            .await?
-        else {
+        let restored = archives
+            .update(&ArchiveId(backup_archive.arcid.clone()), |archive| {
+                archive.title = backup_archive.title.clone();
+                archive.tags = backup_archive.tags.clone();
+                archive.summary = backup_archive.summary.clone().unwrap_or_default();
+                // A backup without one keeps the hash already here.
+                if backup_archive.thumbhash.is_some() {
+                    archive.thumbhash = backup_archive.thumbhash.clone();
+                }
+            })
+            .await?;
+        if restored.is_none() {
             // Per Backup/Export document semantics: restore only re-attaches metadata to
             // archives that already exist on this instance (matched by ID); it never fabricates
             // an Archive record for content that isn't actually present on disk.
             summary.archives_skipped_missing += 1;
             continue;
-        };
-        archive.title = backup_archive.title.clone();
-        archive.tags = backup_archive.tags.clone();
-        archive.summary = backup_archive.summary.clone().unwrap_or_default();
-        archive.thumbhash = backup_archive.thumbhash.clone();
-        archives.save(&archive).await?;
+        }
         summary.archives_updated += 1;
     }
 
     for backup_category in &doc.categories {
         categories
-            .save(&Category {
+            .create_or_replace(&Category {
                 catid: CategoryId(backup_category.catid.clone()),
                 name: backup_category.name.clone(),
                 search: backup_category.search.clone(),
@@ -80,7 +83,7 @@ pub async fn restore(
 
     for backup_tank in &doc.tankoubons {
         groupings
-            .save(&Grouping {
+            .create_or_replace(&Grouping {
                 tankid: TankId(backup_tank.tankid.clone()),
                 name: backup_tank.name.clone(),
                 summary: backup_tank.summary.clone(),
@@ -176,10 +179,9 @@ pub async fn relink_stamp_ids(
     }
 
     for (archive_id, stamp_ids) in by_archive {
-        if let Some(mut archive) = archives.get(&archive_id).await? {
-            archive.stamp_ids = stamp_ids;
-            archives.save(&archive).await?;
-        }
+        archives
+            .update(&archive_id, |archive| archive.stamp_ids = stamp_ids)
+            .await?;
     }
     Ok(())
 }
@@ -211,7 +213,7 @@ mod tests {
         // Archive already exists on "this instance" (as if freshly re-scanned, no metadata yet).
         let id = ArchiveId("7".repeat(40));
         archives
-            .save(&Archive {
+            .create_or_replace(&Archive {
                 id: id.clone(),
                 name: "n".into(),
                 title: "n".into(),

@@ -900,23 +900,24 @@ async fn finalize_staged_upload(
             }
 
             if title.is_some() || summary.is_some() || tags.is_some() {
-                if let Ok(Some(mut archive)) = state
+                let _ = state
                     .repos
                     .archives
-                    .get(&lanrurugi_core::ids::ArchiveId(ingested.archive_id.clone()))
-                    .await
-                {
-                    if let Some(t) = title {
-                        archive.title = t;
-                    }
-                    if let Some(s) = summary {
-                        archive.summary = s;
-                    }
-                    if let Some(t) = tags {
-                        archive.tags = t;
-                    }
-                    let _ = state.repos.archives.save(&archive).await;
-                }
+                    .update(
+                        &lanrurugi_core::ids::ArchiveId(ingested.archive_id.clone()),
+                        |archive| {
+                            if let Some(t) = title {
+                                archive.title = t;
+                            }
+                            if let Some(s) = summary {
+                                archive.summary = s;
+                            }
+                            if let Some(t) = tags {
+                                archive.tags = t;
+                            }
+                        },
+                    )
+                    .await;
             }
 
             // Legacy's own real order (`Model::Upload.pm`): user-supplied title/tags land first,

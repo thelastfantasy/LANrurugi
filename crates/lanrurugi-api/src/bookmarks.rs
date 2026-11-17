@@ -1161,7 +1161,7 @@ mod tests {
         state
             .repos
             .archives
-            .save(&test_archive(&archive_id))
+            .create_or_replace(&test_archive(&archive_id))
             .await
             .unwrap();
         state.bookmarks.add(&archive_id, 3, 0).await.unwrap();
@@ -1213,7 +1213,7 @@ mod tests {
         state
             .repos
             .archives
-            .save(&test_archive(&archive_id))
+            .create_or_replace(&test_archive(&archive_id))
             .await
             .unwrap();
         state.bookmarks.add(&archive_id, 1, 0).await.unwrap();
@@ -1259,7 +1259,7 @@ mod tests {
         state
             .repos
             .archives
-            .save(&test_archive(&archive_id))
+            .create_or_replace(&test_archive(&archive_id))
             .await
             .unwrap();
         state.bookmarks.add(&archive_id, 1, 0).await.unwrap();
@@ -1310,7 +1310,12 @@ mod tests {
         let mut archive = test_archive(&archive_id);
         archive.title = "The Great Battle".to_string();
         archive.name = "great-battle-basename".to_string();
-        state.repos.archives.save(&archive).await.unwrap();
+        state
+            .repos
+            .archives
+            .create_or_replace(&archive)
+            .await
+            .unwrap();
 
         let pages = vec![(12u32, Some("决战前夜".to_string())), (7u32, None)];
 
@@ -1354,7 +1359,7 @@ mod tests {
         state
             .repos
             .groupings
-            .save(&lanrurugi_core::entities::Grouping {
+            .create_or_replace(&lanrurugi_core::entities::Grouping {
                 tankid: tankid.clone(),
                 name: "My Series".to_string(),
                 summary: String::new(),

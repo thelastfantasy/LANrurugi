@@ -1467,15 +1467,13 @@ async fn apply_script_tag_updates(state: &AppState, plugin: &str, data: &Value) 
         ) else {
             continue;
         };
-        if let Ok(Some(mut archive)) = state
+        let _ = state
             .repos
             .archives
-            .get(&lanrurugi_core::ids::ArchiveId(id.to_string()))
-            .await
-        {
-            archive.tags = tags.to_string();
-            let _ = state.repos.archives.save(&archive).await;
-        }
+            .update(&lanrurugi_core::ids::ArchiveId(id.to_string()), |archive| {
+                archive.tags = tags.to_string();
+            })
+            .await;
     }
 }
 
@@ -1561,7 +1559,7 @@ async fn apply_foldertocat_categories(state: &AppState, plugin: &str, data: &Val
             pinned: false,
             visible_to_guest: false,
         };
-        let _ = state.repos.categories.save(&category).await;
+        let _ = state.repos.categories.create_or_replace(&category).await;
     }
 }
 
@@ -1683,92 +1681,69 @@ pub async fn run_enabled_metadata_plugins_on_archive(
             continue;
         }
 
-        let Ok(Some(mut archive)) = state
+        // `Model/Plugins.pm:292-296` — tag rules run on the plugin's freshly returned tags only,
+        // before they're merged into the record's, and only when `tagruleson` is set.
+        let new_tags = match data.get("tags").and_then(Value::as_str) {
+            Some(tags) if !tags.trim().is_empty() => {
+                Some(match get_computed_tagrules(state).await {
+                    Some(rules_text) => tag_rules::apply_tag_rules(tags, &rules_text),
+                    None => tags.to_string(),
+                })
+            }
+            _ => None,
+        };
+        let new_title = data
+            .get("title")
+            .and_then(Value::as_str)
+            .filter(|t| !t.trim().is_empty());
+        let new_summary = data
+            .get("summary")
+            .and_then(Value::as_str)
+            .filter(|t| !t.trim().is_empty());
+
+        // Merged onto the record as it is now (the plugin run took a while), under its lock.
+        let updated = state
             .repos
             .archives
-            .get(&lanrurugi_core::ids::ArchiveId(archive_id.to_string()))
-            .await
-        else {
-            summary.failures += 1;
-            continue;
-        };
-        let old_title = archive.title.clone();
-        let old_tags = archive.tags.clone();
-
-        // `set_tags($id, $newtags, 1)`'s real append+dedupe semantics (`Utils/Database.pm`) — new
-        // tags are appended after the existing ones, then deduplicated (first occurrence wins),
-        // not a blind overwrite.
-        if let Some(new_tags) = data.get("tags").and_then(Value::as_str) {
-            if !new_tags.trim().is_empty() {
-                // `Model/Plugins.pm:292-296` — tag rules run on the plugin's freshly returned tags
-                // only, before they're merged into `old_tags`, and only when `tagruleson` is set.
-                let rewritten;
-                let new_tags = match get_computed_tagrules(state).await {
-                    Some(rules_text) => {
-                        rewritten = tag_rules::apply_tag_rules(new_tags, &rules_text);
-                        rewritten.as_str()
+            .update_then(
+                &lanrurugi_core::ids::ArchiveId(archive_id.to_string()),
+                |archive| {
+                    // `set_tags($id, $newtags, 1)`'s append+dedupe semantics (`Utils/Database.pm`):
+                    // new tags go after the existing ones, first occurrence wins.
+                    if let Some(new_tags) = &new_tags {
+                        let mut seen = std::collections::HashSet::new();
+                        let merged: Vec<&str> = archive
+                            .tags
+                            .split(',')
+                            .chain(new_tags.split(','))
+                            .map(str::trim)
+                            .filter(|t| !t.is_empty() && seen.insert(*t))
+                            .collect();
+                        archive.tags = merged.join(",");
                     }
-                    None => new_tags,
-                };
-                let mut seen = std::collections::HashSet::new();
-                let mut merged = Vec::new();
-                for t in old_tags
-                    .split(',')
-                    .chain(new_tags.split(','))
-                    .map(str::trim)
-                    .filter(|t| !t.is_empty())
-                {
-                    if seen.insert(t.to_string()) {
-                        merged.push(t.to_string());
+                    if let Some(title) = new_title {
+                        archive.title = title.to_string();
                     }
-                }
+                    if let Some(summary_text) = new_summary {
+                        archive.summary = summary_text.to_string();
+                    }
+                },
+                |old, new| crate::archives::reindex_title_and_tags(state, old, new),
+            )
+            .await;
+        if updated.as_ref().is_ok_and(|a| a.is_some()) {
+            if let Some(new_tags) = &new_tags {
                 summary.added_tags +=
                     new_tags.split(',').filter(|t| !t.trim().is_empty()).count() as u32;
-                archive.tags = merged.join(",");
             }
-        }
-        if let Some(title) = data.get("title").and_then(Value::as_str) {
-            if !title.trim().is_empty() {
-                archive.title = title.to_string();
+            if let Some(title) = new_title {
                 summary.new_title = Some(title.to_string());
             }
         }
-        if let Some(summary_text) = data.get("summary").and_then(Value::as_str) {
-            if !summary_text.trim().is_empty() {
-                archive.summary = summary_text.to_string();
-            }
-        }
 
-        match state.repos.archives.save(&archive).await {
-            Ok(()) => {
-                summary.successes += 1;
-                if archive.title != old_title {
-                    if let Err(e) = lanrurugi_search::indexer::update_title_index(
-                        &state.redis.search,
-                        &state.equivalence,
-                        archive_id,
-                        &old_title,
-                        &archive.title,
-                    )
-                    .await
-                    {
-                        tracing::warn!(%archive_id, error = %e, "failed to update title search index");
-                    }
-                }
-                if archive.tags != old_tags {
-                    if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
-                        &state.redis.search,
-                        &state.equivalence,
-                        archive_id,
-                        &old_tags,
-                        &archive.tags,
-                    )
-                    .await
-                    {
-                        tracing::warn!(%archive_id, error = %e, "failed to update tag search index");
-                    }
-                }
-            }
+        match updated {
+            Ok(None) => summary.failures += 1,
+            Ok(Some(_)) => summary.successes += 1,
             Err(e) => {
                 tracing::warn!(%archive_id, plugin = %ns, error = %e, "failed to persist auto-run plugin's metadata");
                 summary.failures += 1;
@@ -3616,59 +3591,40 @@ pub(crate) async fn ensure_metadata_cached(
 /// Merges `metadata_tags` into an archive's existing tag string — appends tags that aren't
 /// already present, leaves existing ones untouched. Updates the archive record + search index.
 pub(crate) async fn apply_metadata_tags(state: &AppState, archive_id: &str, metadata_tags: &str) {
-    let mut archive = match state
+    let updated = state
         .repos
         .archives
-        .get(&lanrurugi_core::ids::ArchiveId(archive_id.to_string()))
-        .await
-    {
-        Ok(Some(a)) => a,
-        _ => return,
-    };
-
-    let existing: std::collections::HashSet<&str> = archive
-        .tags
-        .split(',')
-        .map(|t| t.trim())
-        .filter(|t| !t.is_empty())
-        .collect();
-    // `seen` starts from the archive's own tags and then absorbs each accepted input tag, so a
-    // duplicated value inside `metadata_tags` is written once instead of twice.
-    let mut seen = existing.clone();
-    let new_tags: Vec<&str> = metadata_tags
-        .split(',')
-        .map(|t| t.trim())
-        .filter(|t| !t.is_empty() && seen.insert(t))
-        .collect();
-
-    if new_tags.is_empty() {
-        return;
-    }
-
-    let old_tags = archive.tags.clone();
-    let merged = if archive.tags.is_empty() {
-        new_tags.join(", ")
-    } else {
-        format!("{}, {}", archive.tags, new_tags.join(", "))
-    };
-    archive.tags = merged;
-
-    if let Err(e) = state.repos.archives.save(&archive).await {
+        .update_then(
+            &lanrurugi_core::ids::ArchiveId(archive_id.to_string()),
+            |archive| {
+                // `seen` starts from the archive's own tags and then absorbs each accepted input
+                // tag, so a duplicated value inside `metadata_tags` is written once, not twice.
+                let mut seen: std::collections::HashSet<String> = archive
+                    .tags
+                    .split(',')
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect();
+                let new_tags: Vec<&str> = metadata_tags
+                    .split(',')
+                    .map(|t| t.trim())
+                    .filter(|t| !t.is_empty() && seen.insert(t.to_string()))
+                    .collect();
+                if new_tags.is_empty() {
+                    return;
+                }
+                archive.tags = if archive.tags.is_empty() {
+                    new_tags.join(", ")
+                } else {
+                    format!("{}, {}", archive.tags, new_tags.join(", "))
+                };
+            },
+            // Re-indexed under the lock, so the new tags are searchable immediately and in order.
+            |old, new| crate::archives::reindex_title_and_tags(state, old, new),
+        )
+        .await;
+    if let Err(e) = updated {
         tracing::warn!(%archive_id, error = %e, "failed to save metadata tags to archive");
-        return;
-    }
-
-    // Re-index so the new tags are searchable immediately.
-    if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
-        &state.redis.search,
-        &state.equivalence,
-        archive_id,
-        &old_tags,
-        &archive.tags,
-    )
-    .await
-    {
-        tracing::warn!(%archive_id, error = %e, "failed to update search index after metadata tag merge");
     }
 }
 

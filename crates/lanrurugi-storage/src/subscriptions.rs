@@ -730,7 +730,9 @@ impl SubscriptionRepository {
 
     // Subscriptions
 
-    pub async fn save(&self, subscription: &Subscription) -> Result<()> {
+    /// Writes a new subscription. An existing one is changed through [`Self::update`]: a check can
+    /// run for minutes, and saving the copy it started from would undo an edit made meanwhile.
+    pub async fn create_or_replace(&self, subscription: &Subscription) -> Result<()> {
         let mut conn = self.pool.get().await?;
         let key = subscription_key(&subscription.id);
         let raw = serde_json::to_string(subscription)
@@ -738,6 +740,21 @@ impl SubscriptionRepository {
         let _: () = conn.set(&key, raw).await?;
         let _: () = conn.sadd(SUBSCRIPTION_INDEX, &subscription.id).await?;
         Ok(())
+    }
+
+    /// Changes an existing subscription under its lock (#302): reads it as it is now, applies
+    /// `change`, writes it back. `None` when it does not exist (or was deleted meanwhile).
+    pub async fn update<F>(&self, id: &str, change: F) -> Result<Option<Subscription>>
+    where
+        F: FnOnce(&mut Subscription),
+    {
+        let _guard = crate::record_lock::lock(&subscription_key(id)).await;
+        let Some(mut subscription) = self.get(id).await? else {
+            return Ok(None);
+        };
+        change(&mut subscription);
+        self.create_or_replace(&subscription).await?;
+        Ok(Some(subscription))
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<Subscription>> {
@@ -769,6 +786,8 @@ impl SubscriptionRepository {
     /// or seen-set behind would be the same class of orphan this project fixed for archives in
     /// issue #102.
     pub async fn delete(&self, id: &str) -> Result<()> {
+        // Waits for an update in flight, so it cannot write the subscription back after this.
+        let _guard = crate::record_lock::lock(&subscription_key(id)).await;
         let mut conn = self.pool.get().await?;
         let _: () = conn.del(subscription_key(id)).await?;
         let _: () = conn.del(cycles_key(id)).await?;
@@ -1262,6 +1281,37 @@ mod tests {
         );
     }
 
+    /// #302: a check that finishes after the user disabled the subscription records its time
+    /// without turning it back on, and nothing brings back a deleted subscription.
+    #[tokio::test]
+    async fn a_finishing_check_keeps_an_edit_made_while_it_ran() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = SubscriptionRepository::new(pool);
+        let started = sub("sub-302-edit", 60, SubscriptionState::Enabled, None);
+        repo.create_or_replace(&started).await.unwrap();
+
+        repo.update(&started.id, |s| s.state = SubscriptionState::Disabled)
+            .await
+            .unwrap();
+        repo.update(&started.id, |s| s.last_checked_at = Some(42))
+            .await
+            .unwrap();
+        let after = repo.get(&started.id).await.unwrap().unwrap();
+        assert_eq!(after.state, SubscriptionState::Disabled);
+        assert_eq!(after.last_checked_at, Some(42));
+
+        repo.delete(&started.id).await.unwrap();
+        assert!(repo
+            .update(&started.id, |s| s.last_checked_at = Some(43))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(repo.get(&started.id).await.unwrap().is_none());
+    }
+
     /// The behaviour a user depends on: deleting a downloaded archive must NOT cause the subscription
     /// to fetch it again. Deletion deliberately does not touch the seen set, so this asserts the set
     /// keeps the record — the archive being gone is not evidence the user wants it back.
@@ -1478,7 +1528,7 @@ mod tests {
         };
         let repo = SubscriptionRepository::new(pool);
         let s = sub("sub-del-1", 3600, SubscriptionState::Enabled, None);
-        repo.save(&s).await.unwrap();
+        repo.create_or_replace(&s).await.unwrap();
         repo.save_pending(&pending(
             "pa-del-1",
             "sub-del-1",
