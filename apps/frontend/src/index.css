@@ -456,7 +456,9 @@ input[type="checkbox"].lrr-checkbox-bare::after {
 
 #reader-help.reader-help-panel {
   width: min(1100px, 94vw) !important;
-  left: 50%;
+  /* `!important` to answer legacy's `.small-overlay { left: 0 !important }` at ≤560px, which
+   * otherwise leaves the translate(-50%) centring to push the panel half off-screen. */
+  left: 50% !important;
   transform: translate(-50%, -50%);
   box-sizing: border-box;
   padding: 18px 24px;
@@ -3561,6 +3563,17 @@ body div.ido {
  * `!important`, so that is what this uses; the breakpoint keeps every desktop layout exactly as it
  * was, and `max-width` (rather than `width`) leaves narrow content untouched.
  */
+/* Reader overview's two admin buttons (edit / delete). `.stdbtn`'s theme-given 150px minimum
+ * cannot fit two of them in the panel's ~281px inner column on a phone, so they used to stack.
+ * Letting them share the row only below the phone breakpoint keeps the desktop pair legacy-sized.
+ * `!important` because an archive with a patch passes its own inline `min-width: 110px`. */
+@media (max-width: 768px) {
+  .admin-actions > .stdbtn {
+    flex: 1 1 0;
+    min-width: 0 !important;
+  }
+}
+
 @media (max-width: 768px) {
   body div.id1,
   body .left-column,

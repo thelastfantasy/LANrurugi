@@ -509,7 +509,9 @@ export function ArchiveOverviewOverlay({
               <div style={{ display: "inline-block", verticalAlign: "middle" }}>
                 <h2>{t("reader.adminOptions")}</h2>
 
-                <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                {/* `admin-actions` lets the pair share one row on a phone: `.stdbtn`'s theme-given
+                    150px minimum cannot fit two of them in the panel's ~281px inner column. */}
+                <div className="admin-actions" style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
                   <Button
                     variant="stdbtn"
                     style={archive.has_patch ? { width: "auto", minWidth: 110 } : undefined}
@@ -517,8 +519,10 @@ export function ArchiveOverviewOverlay({
                   >
                     {isTank ? t("common.editTankoubon") : t("reader.editArchiveMetadata")}
                   </Button>
+                  {/* Each theme's own destructive fill, same as the library's delete confirmations. */}
                   <Button
                     variant="stdbtn"
+                    className="stdbtn-danger"
                     style={archive.has_patch ? { width: "auto", minWidth: 110 } : undefined}
                     onClick={() => void deleteArchive()}
                   >

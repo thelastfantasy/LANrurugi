@@ -364,16 +364,21 @@ pub(crate) async fn record_ingest_result(
 /// the same content is replaced (`DuplicatePolicy::Overwrite`) or reported
 /// (`DuplicatePolicy::Reject`).
 ///
-/// `_queue_item_id` is kept for the call sites that still carry the queue item id; ingestion no
-/// longer needs it now that nothing stages a filename conflict.
+/// `queue_item_id` is what a "delete and download again" restore is keyed by: when this item is the
+/// one that recorded a plan, the archive goes back into its Tankoubons once it is catalogued.
 pub async fn ingest_downloaded_file(
     state: &AppState,
     downloaded: &DownloadedFile,
     overwrite: bool,
     source_url: Option<&str>,
-    _queue_item_id: Option<&str>,
+    queue_item_id: Option<&str>,
 ) -> Result<IngestedDownload, IngestDownloadError> {
-    ingest_staged_download(state, downloaded, overwrite, source_url, false).await
+    let ingested = ingest_staged_download(state, downloaded, overwrite, source_url, false).await?;
+    if let Some(item_id) = queue_item_id {
+        let archive_id = lanrurugi_core::ids::ArchiveId(ingested.archive_id.clone());
+        crate::redownload_restore::apply(state, item_id, &archive_id).await;
+    }
+    Ok(ingested)
 }
 
 /// [`ingest_downloaded_file`] for an upload, which runs a second plugin pass for the user's own

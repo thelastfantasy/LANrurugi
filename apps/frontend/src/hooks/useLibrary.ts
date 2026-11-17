@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 
-import { fetchJson, sendJson } from "@/api/client";
+import { ApiError, fetchJson, sendJson } from "@/api/client";
 import {
   useCategories,
   useCreateTankoubon,
@@ -772,7 +772,22 @@ const { t } = useTranslation();
         toast({ heading: t("recycleBin.movedToBin"), icon: "success" });
       }
     } else {
-      await fetch(`/api/archives/${archiveId}`, { method: "DELETE" });
+      try {
+        await sendJson("DELETE", `/archives/${archiveId}`)
+      } catch (err) {
+        // The server refuses to delete a healthy archive that a Tankoubon still lists (it would
+        // silently reshuffle that book), and says why — that message is what the user needs.
+        toast({
+          heading:
+            err instanceof ApiError && err.status === 409
+              ? t("library.deleteTankMemberRefused")
+              : err instanceof Error
+                ? err.message
+                : String(err),
+          icon: "error",
+        })
+        return
+      };
       // Recoverable for the retention window: offer the undo right where the mistake happened
       // (spec 019 FR-034) instead of making the user open the bin page.
       toast({

@@ -290,6 +290,10 @@ pub(crate) async fn recycle_archive(
         return DeleteOneOutcome::Error(e);
     }
 
+    // The member stays listed so a restore brings it back; only the tank's page marker has to
+    // leave the range that is now unreadable.
+    crate::tank_members::after_recycle(state, &archive).await;
+
     record_manual(
         state,
         auth,
@@ -1333,7 +1337,21 @@ pub(crate) async fn purge_entry(state: &AppState, entry: &RecycleEntry) -> Resul
     repository(state)
         .remove(&entry.id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // A recycled archive kept its Tankoubon membership so a restore could put it back; purging the
+    // bin entry is the point where that is no longer possible, so the member goes too.
+    if state
+        .repos
+        .archives
+        .get(&entry.id)
+        .await
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        crate::tank_members::after_permanent_delete_with(state, &entry.id, entry.page_count).await;
+    }
+    Ok(())
 }
 
 /// Reconciles the bin inventory against what is on disk (research §3). Runs once at startup:

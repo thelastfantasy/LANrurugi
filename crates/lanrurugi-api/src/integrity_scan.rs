@@ -162,6 +162,14 @@ async fn apply_to_record(state: &AppState, id: &ArchiveId, inspection: &Inspecti
     }
 }
 
+/// The last integrity check's verdict on this archive, if it recorded one. Cleared by a scan or a
+/// recheck that finds the file readable again, so this is "is it broken *now*", not "was it ever".
+pub(crate) async fn recorded_finding(state: &AppState, id: &ArchiveId) -> Option<Finding> {
+    let mut conn = state.redis.config.get().await.ok()?;
+    let raw: Option<String> = conn.hget(FINDINGS_KEY, id.as_str()).await.ok()?;
+    serde_json::from_str(&raw?).ok()
+}
+
 async fn store_finding(
     conn: &mut deadpool_redis::Connection,
     id: &ArchiveId,
@@ -257,6 +265,10 @@ async fn redownload(
         .find(|c| !c.is_dynamic())
         .map(|c| c.catid.to_string());
 
+    // Captured before the delete: a re-download produces a new archive record, and this is what
+    // puts it back where the old one was (its Tankoubons, its chapter names, its progress).
+    let restore_plan = crate::redownload_restore::capture(&state, &archive).await;
+
     match crate::recycle::recycle_archive(&state, &id, auth.as_ref().map(|e| &e.0)).await {
         crate::archives::DeleteOneOutcome::Deleted { .. } => {}
         crate::archives::DeleteOneOutcome::NotFound => {
@@ -290,6 +302,9 @@ async fn redownload(
         // The archive is already in the recycle bin, where it can be restored from.
         Err(e) => return internal(e.to_string()),
     };
+    // Keyed by this queue item, so only this re-download applies the plan: a later manual download
+    // of the same URL is a different item and leaves the archive out of the Tankoubon.
+    crate::redownload_restore::store(&state, &item.id, &restore_plan).await;
     // Queued but not started (another download of the same source running, say) is still a
     // success: the row is in the queue with its reason.
     let started = crate::download_queue::start_item_from_subscription(&state, &item.id).await;

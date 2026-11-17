@@ -276,6 +276,22 @@ export function Reader() {
   const metadata = isTank ? tankReading.metadata : singleMetadata;
   const tankSplitCandidates = tankFull.data?.result.full_data.filter((m) => m.has_split_suggestion) ?? []
   const pages = isTank ? tankReading.pages : singlePages;
+  // Members whose pages could not be listed are skipped rather than failing the whole book, so say
+  // so once: silently losing a chapter would look like the tankoubon is shorter than it is.
+  const unreadableChapters = tankReading.unreadableChapters;
+  const unreadableNoticeShown = useRef(false);
+  useEffect(() => {
+    if (unreadableChapters.length === 0 || unreadableNoticeShown.current) return;
+    unreadableNoticeShown.current = true;
+    toast({
+      icon: "warning",
+      text:
+        t("reader.tankChaptersUnreadable", {
+          count: unreadableChapters.length,
+          names: unreadableChapters.map((c) => c.title).join("、"),
+        }) ?? undefined,
+    });
+  }, [unreadableChapters, t]);
   useDocumentTitle(metadata.data?.title);
   const settings = useSettings();
   const updateSettings = useUpdateSettings();
@@ -636,6 +652,19 @@ export function Reader() {
       match: (el) => el.closest(".infinite-scroll img[data-page]"),
       // Android has no `-webkit-touch-callout`; its save-image menu would cover the toolbar.
       blockContextMenu: (el) => el.closest(".infinite-scroll img[data-page]") !== null,
+    },
+  );
+  // Long-pressing the toolbar's overview button opens the grid where the reader is, with no
+  // auto-scroll: a tap asks to be taken to the current page, a hold only asks to look around.
+  useLongPress(
+    document,
+    () => {
+      overviewAutoScroll.current = false;
+      setOverlay((prev) => (prev === "archive" ? null : "archive"));
+    },
+    {
+      enabled: !supportsHover,
+      match: (el) => el.closest("[data-overview-longpress]"),
     },
   );
   useSwipeToDismiss(infiniteToolbarEl, () => setInfiniteToolbarPage(null), "down");
@@ -2195,6 +2224,20 @@ export function Reader() {
         case "m":
           updateReaderSettings({ mangaMode: !readerSettings.mangaMode });
           return;
+        case "M": {
+          // Headless only, and no-op in endless scroll where the fit modes have nothing to size:
+          // the page column there is already full width and scrolls.
+          if (!headless || readerSettings.infiniteScroll) return;
+          e.preventDefault();
+          const cycle = [FIT_MODE.CONTAINER, FIT_MODE.FIT_WIDTH, FIT_MODE.FIT_HEIGHT] as const;
+          const next = cycle[(cycle.indexOf(readerSettings.fitMode) + 1) % cycle.length];
+          updateReaderSettings({ fitMode: next });
+          // The toolbar's split control highlights `fitAction`, which is a separate piece of state:
+          // without this the menu keeps ticking whatever was chosen there last.
+          setFitAction(next);
+          storeFitAction(next);
+          return;
+        }
         case "n":
           toggleAutoNextPage();
           return;
@@ -2247,6 +2290,7 @@ export function Reader() {
     totalPages,
     readerSettings.mangaMode,
     readerSettings.doublePageMode,
+    readerSettings.fitMode,
     readerSettings.infiniteScroll,
     readerSettings.jScrollUnit,
     readerSettings.jScrollAmount,
@@ -2672,6 +2716,13 @@ export function Reader() {
                 <Key>M</Key>
               </span>
               <span>{t("reader.mToggleMangaModeRighttoleft")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Shift</Key>
+                <Key>M</Key>
+              </span>
+              <span>{t("reader.shiftMCyclesFitMode")}</span>
             </li>
             <li>
               <span className="reader-help-keys">
@@ -3252,6 +3303,9 @@ export function Reader() {
           title={t("reader.archiveOverview") ?? undefined}
           size={32}
           style={{ borderRadius: "50%" }}
+          // Long-pressable: opens the grid without scrolling to the current page (see the
+          // `useLongPress` registration next to the other touch gestures).
+          data-overview-longpress=""
           onClick={() => {
             overviewAutoScroll.current = true;
             setOverlay((prev) => (prev === "archive" ? null : "archive"));

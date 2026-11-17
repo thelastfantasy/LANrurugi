@@ -449,6 +449,9 @@ pub(crate) enum DeleteOneOutcome {
 pub(crate) struct PurgeOptions {
     pub remove_archive_file: bool,
     pub keep_thumbnails: bool,
+    /// `true` when the archive is gone for good rather than moved into the bin, which decides
+    /// whether its Tankoubon memberships are dropped or kept for a restore.
+    pub permanent: bool,
     /// The recycle path writes its own `archive.recycle` entry, so the purge tail must not also
     /// log "deleted".
     pub record_activity: bool,
@@ -459,12 +462,14 @@ impl PurgeOptions {
     pub(crate) const PERMANENT: Self = Self {
         remove_archive_file: true,
         keep_thumbnails: false,
+        permanent: true,
         record_activity: true,
     };
     /// Specs/019: the payload already moved into the bin, and its cover must survive there.
     pub(crate) const AFTER_RECYCLE: Self = Self {
         remove_archive_file: false,
         keep_thumbnails: true,
+        permanent: false,
         record_activity: false,
     };
 }
@@ -491,6 +496,11 @@ pub(crate) async fn purge_one_archive(
             // user-triggered destructive action (unlinks the archive's file from disk, not just a
             // DB record).
             tracing::info!(%id, filename = %archive.name, "deleted archive");
+            // A permanent delete takes the Tankoubon memberships with it; a recycle keeps them so
+            // restoring from the bin puts the archive back where it was (see `tank_members`).
+            if options.permanent {
+                crate::tank_members::after_permanent_delete(state, &archive).await;
+            }
             if options.record_activity {
                 crate::activity::record_manual(
                     state,
@@ -673,11 +683,50 @@ pub(crate) async fn purge_one_archive(
     }
 }
 
+/// Refuses to delete a *healthy* archive that a Tankoubon still lists: taking it out silently
+/// reshuffles that book's pages, so the user has to remove it from the book first. A damaged one
+/// (the integrity scan recorded a finding, or its file is already gone) may go — that is exactly
+/// what "delete the damaged archive" means.
+pub(crate) async fn tank_member_delete_refusal(
+    state: &AppState,
+    id: &lanrurugi_core::ids::ArchiveId,
+) -> Option<axum::response::Response> {
+    let in_tank = state
+        .repos
+        .groupings
+        .for_archive(id)
+        .await
+        .map(|tanks| !tanks.is_empty())
+        .unwrap_or(false);
+    if !in_tank {
+        return None;
+    }
+    let file_missing = match state.repos.archives.get(id).await {
+        Ok(Some(a)) => !std::path::Path::new(&a.file).is_file(),
+        _ => false,
+    };
+    if file_missing
+        || crate::integrity_scan::recorded_finding(state, id)
+            .await
+            .is_some()
+    {
+        return None;
+    }
+    Some(error(
+        StatusCode::CONFLICT,
+        "delete_archive",
+        "This archive belongs to a Tankoubon. Remove it from the Tankoubon first, or delete it here after the integrity scan reports it as damaged.",
+    ))
+}
+
 async fn delete_archive(
     State(state): State<AppState>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
 ) -> Response {
+    if let Some(refusal) = tank_member_delete_refusal(&state, &id).await {
+        return refusal;
+    }
     match crate::recycle::recycle_archive(&state, &id, auth.as_ref().map(|e| &e.0)).await {
         DeleteOneOutcome::NotFound => not_found("delete_archive", format!("{id} does not exist.")),
         DeleteOneOutcome::Deleted { filename } => axum::Json(json!({
@@ -724,6 +773,18 @@ async fn batch_delete_archives(
     let mut results = Vec::new();
     let mut deleted_count = 0u32;
     for id in &body.ids {
+        // Same refusal as the single-delete endpoint, reported per id so one Tankoubon member in
+        // the selection does not fail the whole batch.
+        if tank_member_delete_refusal(&state, id).await.is_some() {
+            results.push(BatchDeleteResult {
+                id: id.to_string(),
+                success: false,
+                recycled: false,
+                filename: None,
+                error: Some("archive belongs to a Tankoubon".to_string()),
+            });
+            continue;
+        }
         let outcome = crate::recycle::recycle_archive(&state, id, auth).await;
         results.push(match outcome {
             DeleteOneOutcome::NotFound => BatchDeleteResult {
