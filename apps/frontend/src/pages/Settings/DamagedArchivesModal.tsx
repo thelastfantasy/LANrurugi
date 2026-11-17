@@ -127,6 +127,13 @@ export function DamagedArchivesModal({ onClose }: { onClose: () => void }) {
       ) : (
         <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
           <table className="itg" style={{ width: "100%" }}>
+            {/* `table.itg` is `table-layout: fixed`, which splits unsized columns evenly: without
+                these widths the button column took half the row and the text wrapped early. */}
+            <colgroup>
+              <col style={{ width: 28 }} />
+              <col />
+              <col style={{ width: 120 }} />
+            </colgroup>
             <tbody>
               {shown.map((a) => (
                 <tr key={a.id} className="gtr1">
@@ -139,6 +146,7 @@ export function DamagedArchivesModal({ onClose }: { onClose: () => void }) {
                     </a>
                     <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.85 }}>{problemText(t, a)}</div>
                     <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.7, userSelect: "all" }}>{a.file}</div>
+                    {a.sources.length > 0 && <SourceLine t={t} a={a} />}
                     <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.7 }}>
                       {sizeText(t, a)}
                       {detectedAt(a) && ` · ${t("settings.integrityFirstSeen", { time: detectedAt(a) })}`}
@@ -218,6 +226,28 @@ function RowIcon({
 }
 
 type TFn = ReturnType<typeof useTranslation>["t"]
+
+/** The archive's sources, the one "delete and download again" would use in bold with its plugin. */
+function SourceLine({ t, a }: { t: TFn; a: DamagedArchive }) {
+  return (
+    <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.85 }}>
+      {t("settings.integritySources")}
+      {a.sources.map((url, i) => {
+        const chosen = a.redownload?.url === url
+        return (
+          <span key={url}>
+            {i > 0 && " · "}
+            <a href={url} target="_blank" rel="noreferrer" style={chosen ? { fontWeight: "bold" } : undefined}>
+              {url.replace(/^https?:\/\//, "")}
+            </a>
+            {url === a.primary_source && t("settings.integrityPrimarySource")}
+            {chosen && a.redownload && ` (${a.redownload.plugin})`}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
 
 function problemText(t: TFn, a: DamagedArchive): string {
   if (!a.finding) return t("settings.integrityProblem.heal_failed")

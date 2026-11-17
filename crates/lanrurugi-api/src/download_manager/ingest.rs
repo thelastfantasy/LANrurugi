@@ -713,6 +713,8 @@ pub(crate) async fn catalogue_staged_file(
                     // since a plugin's own `execDownload` could in principle have already supplied tags via
                     // some other path; deduped the same way `set_tags(..., append=1)` does.
                     if let Some(source_url) = source_url {
+                        // The URL this download actually came from is the one known to work.
+                        archive.primary_source = Some(crate::plugins::trim_url(source_url));
                         let source_tag = format!("source:{}", crate::plugins::trim_url(source_url));
                         if !archive.tags.split(',').any(|t| t.trim() == source_tag) {
                             archive.tags = if archive.tags.is_empty() {
@@ -1728,6 +1730,7 @@ async fn stamp_source_tag(state: &AppState, archive_id: &str, source_url: Option
         .update_then(
             &ArchiveId(archive_id.to_string()),
             |archive| {
+                archive.primary_source = Some(crate::plugins::trim_url(source_url));
                 if archive.tags.split(',').any(|t| t.trim() == source_tag) {
                     return;
                 }

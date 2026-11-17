@@ -2668,6 +2668,19 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 
 .sub-modal-tabs > .stdbtn {
   flex: 1;
+  /* The themes give `.stdbtn` a 150px minimum: five tabs then needed 750px and pushed the whole
+     dialog sideways on a phone. */
+  min-width: 0;
+}
+
+/* Phones: the tabs wrap, three to a row. */
+@media (max-width: 760px) {
+  .sub-modal-tabs {
+    flex-wrap: wrap;
+  }
+  .sub-modal-tabs > .stdbtn {
+    flex: 1 1 calc(33.333% - 6px);
+  }
 }
 
 .sub-modal-tabs > .stdbtn.is-active {

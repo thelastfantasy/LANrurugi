@@ -573,6 +573,20 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         import_snapshots,
     };
 
+    // #302: archives downloaded before `primary_source` existed get it from the download registry.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let marked = lanrurugi_api::download_sources::backfill_primary_sources(&state).await;
+            if marked > 0 {
+                tracing::info!(
+                    marked,
+                    "primary sources backfilled from the download registry"
+                );
+            }
+        });
+    }
+
     // specs/019: finish any delete interrupted by a crash, then enforce the bin's bounds once before
     // serving; failures are logged, never fatal.
     {

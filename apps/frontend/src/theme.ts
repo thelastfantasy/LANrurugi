@@ -117,6 +117,11 @@ export const Z_OVERLAY_ABOVE_LEGACY_MODAL = 9500
 // underneath it and look like nothing happened.
 export const Z_OVERLAY_ABOVE_DRAWER = 9200
 
+// The imperative dialogs (`confirmDialog`, `infoDialog`, … in `dialog.tsx`): they can be opened from
+// inside any modal or drawer, so they sit above all of them (`Modal` 9001, drawer 9200, the legacy
+// overview 9500). Below 9700, which tooltips inside a `Modal` use.
+export const Z_DIALOG = 9600
+
 const LEGACY_STRUCTURAL_CSS_ID = "legacy-structural-css"
 const LEGACY_THEME_CSS_ID = "legacy-theme-css"
 const LEGACY_FILEUPLOAD_CSS_ID = "legacy-fileupload-css"

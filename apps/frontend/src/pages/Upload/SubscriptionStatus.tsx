@@ -32,12 +32,17 @@ export function SubscriptionStatus({ leading }: { leading?: ReactNode } = {}) {
   // controls pinned to a different height read as misaligned next to it.
   const ROW_BUTTON_SIZE = 26
   const waiting = pending.data?.length ?? 0
+  const pillLabel = [
+    t("upload.manageSubscriptions"),
+    waiting > 0 && t("upload.subscriptionsWaiting", { count: waiting }),
+    failed > 0 && t("upload.subscriptionsFailed", { count: failed }),
+  ]
+    .filter(Boolean)
+    .join(" · ")
 
   return (
-    // The pill carries the count and the modal the detail, so the summary line that used to sit here
-    // ("订阅：0/2 个启用") repeated what the button already says. What is left is only the counts
-    // that need acting on, and the row collapses to just the button — still right-aligned, `flex-end`
-    // plus the left item's `marginRight: auto` — when there are none.
+    // The pill carries the counts and the modal the detail; the row is `leading` on the left and the
+    // pill on the right (`flex-end`, plus the left item's `marginRight: auto`).
     <div
       style={{
         display: "flex",
@@ -57,81 +62,38 @@ export function SubscriptionStatus({ leading }: { leading?: ReactNode } = {}) {
           style={{
             display: "inline-flex",
             alignItems: "center",
-            // With no counts to push them apart, this is what keeps the pills on the right.
-            marginRight: waiting > 0 || failed > 0 ? undefined : "auto",
+            marginRight: "auto",
           }}
         >
           {leading}
         </span>
       )}
-      {(waiting > 0 || failed > 0) && (
-        <span
-          style={{
-            marginRight: "auto",
-            display: "inline-flex",
-            alignItems: "center",
-            flexWrap: "wrap",
-            gap: 6,
-            opacity: 0.9,
-          }}
-        >
-          {waiting > 0 && (
-            // A link, not a label: the count is something to act on, and the approval list is the
-            // first thing the subscriptions modal shows.
-            <button
-              type="button"
-              onClick={() => setOpenBand("pending")}
-              style={{
-                color: "#c79121",
-                background: "none",
-                border: "none",
-                padding: 0,
-                font: "inherit",
-                textDecoration: "underline",
-                cursor: "pointer",
-              }}
-            >
-              {t("upload.subscriptionsWaiting", { count: waiting })}
-            </button>
-          )}
-          {failed > 0 && (
-            <>
-              {waiting > 0 && <span>·</span>}
-              {/* Opens the history on its failed tab, where each row says why and offers a retry. */}
-              <button
-                type="button"
-                onClick={() => setOpenBand("failed")}
-                style={{
-                  background: "none",
-                  border: "none",
-                  padding: 0,
-                  font: "inherit",
-                  color: "inherit",
-                  textDecoration: "underline",
-                  cursor: "pointer",
-                }}
-              >
-                {t("upload.subscriptionsFailed", { count: failed })}
-              </button>
-            </>
-          )}
-        </span>
-      )}
-      {/* An icon-and-count pill rather than a text link: the number is what the button is *for*
-          (this is how many subscriptions the queue is being fed by), and a pill reads as a control
-          at a glance. The rss mark is the one the subscriptions' own settings section carries, so
-          the button reads as "the subscriptions" rather than as this queue. */}
-      <Tooltip label={t("upload.manageSubscriptions") ?? ""}>
+      {/* One icon-and-count pill: the subscriptions, then what needs acting on — works waiting for
+          approval and failed downloads — as numbers inside it. They used to be text links beside
+          it, too small to read or tap on a phone. The tooltip spells the numbers out. */}
+      <Tooltip label={pillLabel}>
         <button
           type="button"
           className="stdbtn pill-btn"
           style={{ height: ROW_BUTTON_SIZE }}
-          aria-label={t("upload.manageSubscriptions") ?? "Manage subscriptions"}
-          // Straight to the works waiting on an answer when there are any; otherwise the history.
-          onClick={() => setOpenBand(waiting > 0 ? "pending" : "all")}
+          aria-label={pillLabel}
+          // Straight to what needs an answer: waiting works first, then failures, else the history.
+          onClick={() => setOpenBand(waiting > 0 ? "pending" : failed > 0 ? "failed" : "all")}
         >
           <i className="fa fa-rss" aria-hidden="true"></i>
           <span>{all.length}</span>
+          {waiting > 0 && (
+            <>
+              <i className="fa fa-hourglass-half" aria-hidden="true"></i>
+              <span>{waiting}</span>
+            </>
+          )}
+          {failed > 0 && (
+            <>
+              <i className="fa fa-exclamation-triangle" aria-hidden="true"></i>
+              <span>{failed}</span>
+            </>
+          )}
         </button>
       </Tooltip>
       {openBand && <SubscriptionsModal initialBand={openBand} onClose={() => setOpenBand(null)} />}

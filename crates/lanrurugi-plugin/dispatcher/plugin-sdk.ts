@@ -90,8 +90,18 @@
  * whatever machine generated them, so a conversion step needs to strip/remap those before the
  * output is portable to another machine or CI.
  *
+ * ## Versions
+ *
+ * - **1.1.0** — {@linkcode MetadataResult.primary_source}: a metadata plugin can name the one source
+ *   the archive is known to be downloadable from.
+ * - **1.0.0** — everything before versions were recorded.
+ *
  * @module
  */
+
+/** This SDK's version ({@link https://semver.org semver}): a minor step adds optional fields a plugin
+ * may use, a major step changes what an existing plugin has to do. See the module docs' changelog. */
+export const SDK_VERSION = "1.1.0";
 
 /** The four plugin categories the host recognizes (`lanrurugi-api::plugins::PLUGIN_CATEGORIES`) —
  * also the fixed set of subdirectories under `plugins/` (`metadata/`, `login/`, `download/`,
@@ -255,6 +265,13 @@ export class PluginErrorException extends Error {
 export interface MetadataResult {
   tags?: string;
   title?: string;
+  /** Since 1.1.0. The source this plugin vouches for — its own site's page for this archive, in a
+   * form a download plugin accepts (e.g. `https://panda.chaika.moe/archive/123/`). The host adds
+   * the matching `source:` tag if missing and keeps the URL as the archive's primary source, which
+   * "download again" (damaged archives) prefers over any other `source:` tag. Only taken while the
+   * archive has none: the URL a download actually came from outranks it. Leave it out for sources
+   * merely linked from your site (another site's gallery), which may not be downloadable. */
+  primary_source?: string;
   /** Present instead of `tags`/`title` on failure (e.g. a filename plugin whose regex didn't
    * match) — a structured {@linkcode PluginError}, not thrown, so the host can report it without
    * the whole `use_plugin` call failing. */

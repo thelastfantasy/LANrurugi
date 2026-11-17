@@ -269,6 +269,7 @@ impl ArchiveRepository {
             ),
             ("has_patch", flag(archive.has_patch)),
             ("blake3", archive.blake3.clone()),
+            ("primary_source", archive.primary_source.clone()),
             ("thumbhash", archive.thumbhash.clone()),
             (
                 "heal_failed_at",
@@ -298,7 +299,7 @@ impl ArchiveRepository {
                 (_, Some(value)) => {
                     pipe.hset(key, field, value).ignore();
                 }
-                ("blake3" | "thumbhash", None) => {}
+                ("blake3" | "thumbhash" | "primary_source", None) => {}
                 // `heal_failed_at`: a fresh catalogue must not inherit an old failure marker.
                 (_, None) => {
                     pipe.hdel(key, field).ignore();
@@ -594,6 +595,7 @@ fn archive_from_fields(
         corrupted_pages,
         has_patch,
         blake3: fields.remove("blake3").filter(|v| !v.is_empty()),
+        primary_source: fields.remove("primary_source").filter(|v| !v.is_empty()),
     })
 }
 
@@ -1401,6 +1403,7 @@ mod tests {
             corrupted_pages: vec!["page03.jpg".to_string(), "page07.jpg".to_string()],
             has_patch: true,
             blake3: None,
+            primary_source: None,
         };
 
         repo.create_or_replace(&archive).await.unwrap();
@@ -1440,6 +1443,7 @@ mod tests {
             corrupted_pages: vec![],
             has_patch: false,
             blake3: None,
+            primary_source: None,
         };
         repo.create_or_replace(&archive).await.unwrap();
 
@@ -1493,6 +1497,7 @@ mod tests {
             corrupted_pages: vec![],
             has_patch: false,
             blake3: None,
+            primary_source: None,
         })
         .await
         .unwrap();
@@ -1609,6 +1614,7 @@ mod tests {
             corrupted_pages: vec![],
             has_patch: false,
             blake3: None,
+            primary_source: None,
         };
         repo.create_or_replace(&archive).await.unwrap();
         assert!(repo.set_blake3(&id, &"ab".repeat(32)).await.unwrap());
@@ -1823,6 +1829,7 @@ mod tests {
             corrupted_pages: vec![],
             has_patch: false,
             blake3: None,
+            primary_source: None,
         };
         archive_repo.create_or_replace(&archive).await.unwrap();
 
@@ -1904,6 +1911,7 @@ mod tests {
             corrupted_pages: vec![],
             has_patch: false,
             blake3: None,
+            primary_source: None,
         };
         archive_repo.create_or_replace(&archive).await.unwrap();
 
@@ -1959,6 +1967,7 @@ mod tests {
             corrupted_pages: vec![],
             has_patch: false,
             blake3: None,
+            primary_source: None,
         }
     }
 

@@ -1718,6 +1718,7 @@ mod tests {
             corrupted_pages: Vec::new(),
             has_patch: false,
             blake3: None,
+            primary_source: None,
         }
     }
 

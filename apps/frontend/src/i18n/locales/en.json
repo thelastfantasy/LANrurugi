@@ -3284,6 +3284,8 @@
   "settings.integrityRecheck": "Check again",
   "settings.integrityRecheckPassed": "The file opens now; the damaged mark was cleared.",
   "settings.integrityRecheckFailed": "Still damaged.",
+  "settings.integritySources": "Sources: ",
+  "settings.integrityPrimarySource": " (primary)",
   "settings.integrityRedownload": "Delete and download again",
   "settings.integrityRedownloadFrom": "Delete and download again with {{plugin}}: {{url}}",
   "settings.integrityRedownloadUnavailable": "No source tag matches an installed download plugin, so it cannot be downloaded again",

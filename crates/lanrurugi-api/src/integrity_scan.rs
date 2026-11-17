@@ -239,8 +239,7 @@ async fn redownload(
         Ok(None) => return crate::common::not_found(OP, format!("{id} does not exist.")),
         Err(e) => return internal(e.to_string()),
     };
-    let Some((url, plugin)) = crate::plugins::pick_redownload_source(&state, &archive.tags).await
-    else {
+    let Some((url, plugin)) = crate::plugins::pick_redownload_source(&state, &archive).await else {
         return crate::common::error(
             axum::http::StatusCode::BAD_REQUEST,
             OP,
@@ -376,7 +375,7 @@ async fn status(State(state): State<AppState>) -> Response {
             continue;
         }
         // What "delete and download again" would fetch, so the list can say so (or disable it).
-        let redownload = crate::plugins::pick_redownload_source(&state, &a.tags)
+        let redownload = crate::plugins::pick_redownload_source(&state, a)
             .await
             .map(|(url, plugin)| json!({ "url": url, "plugin": plugin }));
         items.push(json!({
@@ -386,6 +385,8 @@ async fn status(State(state): State<AppState>) -> Response {
             "arcsize": a.arcsize,
             "heal_failed_at": a.heal_failed_at,
             "finding": finding,
+            "sources": crate::plugins::source_urls(&a.tags),
+            "primary_source": a.primary_source.as_deref().map(|p| format!("https://{p}")),
             "redownload": redownload,
         }));
     }

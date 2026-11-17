@@ -1700,6 +1700,13 @@ pub async fn run_enabled_metadata_plugins_on_archive(
             .get("summary")
             .and_then(Value::as_str)
             .filter(|t| !t.trim().is_empty());
+        // SDK 1.1: the source this plugin vouches for (its own site's page for the archive). Taken
+        // only while the archive has none: the URL a download actually came from outranks it.
+        let declared_primary = data
+            .get("primary_source")
+            .and_then(Value::as_str)
+            .map(trim_url)
+            .filter(|s| !s.is_empty());
 
         // Merged onto the record as it is now (the plugin run took a while), under its lock.
         let updated = state
@@ -1726,6 +1733,20 @@ pub async fn run_enabled_metadata_plugins_on_archive(
                     }
                     if let Some(summary_text) = new_summary {
                         archive.summary = summary_text.to_string();
+                    }
+                    if let Some(primary) = &declared_primary {
+                        if archive.primary_source.is_none() {
+                            archive.primary_source = Some(primary.clone());
+                        }
+                        // The mark points at a `source:` tag, so the tag has to exist.
+                        let tag = format!("source:{primary}");
+                        if !archive.tags.split(',').any(|t| t.trim() == tag) {
+                            archive.tags = if archive.tags.is_empty() {
+                                tag
+                            } else {
+                                format!("{},{tag}", archive.tags)
+                            };
+                        }
                     }
                 },
                 |old, new| crate::archives::reindex_title_and_tags(state, old, new),
@@ -3359,19 +3380,29 @@ pub(crate) fn source_urls(tags: &str) -> Vec<String> {
         .collect()
 }
 
-/// Which of an archive's sources to download it from again, and with which download plugin: the
-/// source taken by the plugin that comes first in the download plugins' priority order. `None`
-/// when no source matches an installed download plugin.
+/// Which of an archive's sources to download it from again, and with which download plugin: its
+/// primary source while that is still one of its `source:` tags and a download plugin takes it,
+/// otherwise the source taken by the plugin that comes first in the download plugins' priority
+/// order. `None` when no source matches an installed download plugin.
 pub(crate) async fn pick_redownload_source(
     state: &AppState,
-    tags: &str,
+    archive: &lanrurugi_core::entities::Archive,
 ) -> Option<(String, String)> {
-    let sources = source_urls(tags);
+    let sources = source_urls(&archive.tags);
     if sources.is_empty() {
         return None;
     }
-    let namespaces = download_namespaces(state).await;
-    for ns in sort_namespaces_by_priority(state, &namespaces).await {
+    let namespaces = sort_namespaces_by_priority(state, &download_namespaces(state).await).await;
+    let primary = archive
+        .primary_source
+        .as_deref()
+        .and_then(|p| sources.iter().find(|u| trim_url(u) == p));
+    if let Some(url) = primary {
+        if let Some((ns, _)) = find_matching_plugin(state, &namespaces, url).await {
+            return Some((url.clone(), ns));
+        }
+    }
+    for ns in namespaces {
         let Ok(info) = state.plugins.plugin_info(&ns).await else {
             continue;
         };

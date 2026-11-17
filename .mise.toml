@@ -277,6 +277,12 @@ description = "Build deliverable 3 of 3: the plugin-authoring SDK reference into
 # `PluginErrorException`, and a run without it silently drops every one of those symbols from the
 # output. Only the JSON goes through the normaliser — the HTML was checked and contains no absolute
 # paths, while the JSON keys its nodes on `file:///<absolute path>`.
+#
+# Every SDK version is browsable: the current one at the root, each earlier `SDK_VERSION` under
+# `v<version>/`, built from the newest release tag that carried it (a tag from before the constant
+# existed is 1.0.0). Built from git rather than frozen as a release asset like the docs site: an SDK
+# version is three TypeScript files and `deno doc`, so an old one rebuilds the same way any time, and
+# every version gets today's theme. Without tags (a shallow clone) only the current one is built.
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
@@ -287,8 +293,47 @@ sources=(
   crates/lanrurugi-plugin/dispatcher/dispatcher.ts
   plugins/legacy-globals.d.ts
 )
-deno doc --html --name="LANrurugi Plugin SDK" --output="$out" "${sources[@]}"
-deno doc --json "${sources[@]}" | node scripts/normalize-sdk-doc-json.mjs . > "$out/plugin-sdk.json"
+sdk_version_of() { grep -o 'SDK_VERSION = "[^"]*"' "$1" | cut -d'"' -f2 || true; }
+latest=$(sdk_version_of "${sources[0]}")
+latest=${latest:-1.0.0}
+
+# build_one <source root> <output dir> <version> <dir under the site root, empty for the current>
+build_one() {
+  local root=$1 dest=$2 version=$3 dir=$4
+  (
+    cd "$root"
+    deno doc --html --name="LANrurugi Plugin SDK" --output="$OLDPWD/$dest" "${sources[@]}"
+    deno doc --json "${sources[@]}" | node "$OLDPWD/scripts/normalize-sdk-doc-json.mjs" . > "$OLDPWD/$dest/plugin-sdk.json"
+  )
+  # deno doc has no extra-stylesheet option; this links the shared LANrurugi palette into every
+  # page, and the version switcher and the old-version notice.
+  SDK_VERSION="$version" SDK_LATEST_VERSION="$latest" SDK_VERSION_DIR="$dir" \
+    node docs/scripts/theme-sdk.mjs "$dest"
+}
+
+build_one . "$out" "$latest" ""
+manifest='[{"version":"'"$latest"'","path":""}'
+declare -A built=(["$latest"]=1)
+if git rev-parse --git-dir >/dev/null 2>&1; then
+  for tag in $(git tag --list 'v*' --sort=-v:refname); do
+    version=$(git show "$tag:${sources[0]}" 2>/dev/null | grep -o 'SDK_VERSION = "[^"]*"' | cut -d'"' -f2 || true)
+    version=${version:-1.0.0}
+    [[ -n "${built[$version]:-}" ]] && continue
+    tmp=$(mktemp -d)
+    if ! git archive "$tag" "${sources[@]}" 2>/dev/null | tar -x -C "$tmp"; then
+      echo "skipping SDK $version ($tag): its sources are not all there"
+      rm -rf "$tmp"
+      continue
+    fi
+    build_one "$tmp" "$out/v$version" "$version" "v$version"
+    rm -rf "$tmp"
+    built[$version]=1
+    manifest+=',{"version":"'"$version"'","path":"v'"$version"'"}'
+    echo "built SDK $version from $tag"
+  done
+fi
+echo "${manifest}]" > "$out/versions.json"
+
 # Cloudflare Pages treats a project with no root 404.html as a single-page app: an unmatched path
 # gets index.html with a 200, which hides a broken link instead of showing it.
 cat > "$out/404.html" <<'HTMLEOF'
@@ -304,11 +349,9 @@ cat > "$out/404.html" <<'HTMLEOF'
   </body>
 </html>
 HTMLEOF
-# deno doc has no extra-stylesheet option; this links the shared LANrurugi palette into every page.
-node docs/scripts/theme-sdk.mjs "$out"
 # Same Cloudflare Pages headers as the docs site (noindex on the *.pages.dev hosts).
 cp docs/public/_headers "$out/_headers"
-echo "wrote $out/index.html, $out/plugin-sdk.json and $out/404.html"
+echo "wrote $out (SDK $latest at the root) and $out/versions.json: $(cat "$out/versions.json")"
 """
 
 [tasks.docs-swagger]

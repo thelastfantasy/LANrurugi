@@ -19,11 +19,12 @@ import {
   useUpdateSettings,
 } from "@/api/hooks"
 import type { CandidateRecord, HistoryEntry, QueueError, ReservationListItem } from "@/api/types"
-import { Modal, Tooltip } from "@/components/common-ui/Display"
+import { Drawer, Modal, Tooltip } from "@/components/common-ui/Display"
 import { CheckboxField, Select } from "@/components/common-ui/Form"
 import { NumberInput } from "@/components/common-ui/Form/NumberInput"
 import { TagTable } from "@/components/Display/TagTable"
 import { QueueErrorText } from "@/components/Layout"
+import { useIsNarrowViewport } from "@/hooks"
 import { useLanguageOrder } from "@/i18n/useLanguageOrder"
 import { routes } from "@/lib/routes"
 import { FONT_SIZE_XS } from "@/theme"
@@ -336,6 +337,13 @@ export function SubscriptionsModal({
   const unskip = useUnskipSubscriptionSources()
   const titleOrder = useLanguageOrder()
   const [band, setBand] = useState<Band>(initialBand)
+  const narrow = useIsNarrowViewport()
+  // Opened a frame after mount so the drawer's entry slide plays; closing waits for the exit slide.
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setDrawerOpen(true))
+    return () => cancelAnimationFrame(frame)
+  }, [])
   const pending = usePendingApprovals()
   const failedCount = useSubscriptionFailedCount()
   // Narrows every tab to one subscription; the grouping below already separates them otherwise.
@@ -436,11 +444,8 @@ export function SubscriptionsModal({
   ).length
   const counts: Partial<Record<Band, number>> = { pending: pending.data?.length ?? 0, failed: failedCount }
 
-  return (
-    <Modal onClose={onClose} width={980} textAlign="left">
-      <h3 className="ih" style={{ fontSize: "1.1em", margin: "0 0 4px", textAlign: "center" }}>
-        {t("subscriptions.title")}
-      </h3>
+  const body = (
+    <>
       <p style={{ fontSize: FONT_SIZE_XS, opacity: 0.8, margin: "0 0 10px", textAlign: "center" }}>
         {t("upload.subscriptionsSummary", {
           enabled: all.filter((s) => s.state.state === "enabled").length,
@@ -745,6 +750,30 @@ export function SubscriptionsModal({
           <i className="fa fa-external-link" aria-hidden="true"></i> {t("subscriptions.openFullSettings")}
         </a>
       </div>
+    </>
+  )
+
+  // A phone gets the drawer the library's AI tankoubon panel uses: the tabs, filters and a list
+  // were squeezed into a centred dialog there.
+  if (narrow) {
+    return (
+      <Drawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        onExited={onClose}
+        title={t("subscriptions.title")}
+        width={980}
+      >
+        {body}
+      </Drawer>
+    )
+  }
+  return (
+    <Modal onClose={onClose} width={980} textAlign="left">
+      <h3 className="ih" style={{ fontSize: "1.1em", margin: "0 0 4px", textAlign: "center" }}>
+        {t("subscriptions.title")}
+      </h3>
+      {body}
     </Modal>
   )
 }

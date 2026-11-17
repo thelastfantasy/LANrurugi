@@ -52,6 +52,7 @@ fn test_archive(id: &str, title: &str) -> lanrurugi_core::entities::Archive {
         corrupted_pages: vec![],
         has_patch: false,
         blake3: None,
+        primary_source: None,
     }
 }
 

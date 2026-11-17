@@ -83,6 +83,12 @@ pub struct Archive {
     /// existed, until the backfill job fills it in. Saving a record never clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blake3: Option<String>,
+    /// The one source this archive is known to be downloadable from, in `source:` tag form (no
+    /// scheme): the URL it was downloaded from, or the source its metadata plugin declared primary.
+    /// Not a tag, so not shown or searched; "download again" prefers it over other `source:` tags,
+    /// which a metadata plugin may add for other sites (and which may not work) (#302).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_source: Option<String>,
 }
 
 impl Archive {

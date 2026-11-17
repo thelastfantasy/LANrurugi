@@ -44,6 +44,7 @@ fn archive(id: &str, file: &std::path::Path) -> Archive {
         corrupted_pages: vec![],
         has_patch: false,
         blake3: None,
+        primary_source: None,
     }
 }
 

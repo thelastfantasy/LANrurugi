@@ -114,13 +114,22 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   // onto the archive (`source:panda.chaika.moe/archive/<id>`). That is the one exact identifier an
   // auto-run start has for a freshly ingested archive, whose title is still the bare filename.
   const tagged = chaika_id_from_tags(lrr_info["existing_tags"] ?? "");
+  // The Chaika archive page this archive was identified as — the source "download again" should
+  // use (SDK 1.1 `primary_source`). Only an archive id: the downloader takes no gallery links, and a
+  // title search finds galleries. The e-hentai source added alongside is never primary.
+  let primary_source: string | undefined;
+  const archive_page = (type: string, id: string) =>
+    type === "archive" ? `${chaika_url}/archive/${id}/` : undefined;
   if ((match = oneshotarg.match(/^(?:https?:\/\/)?panda\.chaika\.moe\/(gallery|archive)\/([0-9]+)\/?.*/))) {
     apply_result(await tags_from_chaika_id(match[1], match[2], addextra, addother, addsource, jpntitle));
+    primary_source = archive_page(match[1], match[2]);
   } else if ((match = oneshotarg.match(/^([0-9]+)$/))) {
     apply_result(await tags_from_chaika_id("archive", match[1], addextra, addother, addsource, jpntitle));
+    primary_source = archive_page("archive", match[1]);
   } else if (tagged !== null) {
     logger.info(`Using the Chaika id from the archive's own tags: ${tagged.type}/${tagged.id}`);
     apply_result(await tags_from_chaika_id(tagged.type, tagged.id, addextra, addother, addsource, jpntitle));
+    primary_source = archive_page(tagged.type, tagged.id);
   } else {
     logger.info("No Chaika id on the archive, falling back to text search.");
     apply_result(await search_for_archive(lrr_info["archive_title"], lrr_info["existing_tags"], addextra, addother, addsource, jpntitle));
@@ -131,7 +140,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     throw new PluginErrorException(message);
   } else {
     logger.info(`Sending the following tags to LRR: ${newtags}`);
-    return { tags: newtags, title: newtitle };
+    return { tags: newtags, title: newtitle, primary_source };
   }
 }
 

@@ -103,3 +103,6 @@ release-notes.md
 
 # Python bytecode from scripts/*.py run locally
 __pycache__/
+
+# `wrangler pages dev` local state (checking the docs/SDK Pages output locally).
+.wrangler/

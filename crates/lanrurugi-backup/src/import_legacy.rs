@@ -1167,6 +1167,7 @@ mod tests {
             corrupted_pages: vec![],
             has_patch: false,
             blake3: None,
+            primary_source: None,
         }
     }
 

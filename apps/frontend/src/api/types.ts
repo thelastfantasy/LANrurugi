@@ -1721,6 +1721,11 @@ export interface DamagedArchive {
   /** Set when the archive's self-heal already failed — known broken without a scan. */
   heal_failed_at: number | null
   finding: IntegrityFinding | null
+  /** The archive's `source:` tags, as URLs. */
+  sources: string[]
+  /** The one source it is known to be downloadable from (where it was downloaded, or what its
+   * metadata plugin vouched for); preferred by "delete and download again". */
+  primary_source: string | null
   /** What "delete and download again" would fetch: the `source:` tag taken by the
    * highest-priority download plugin. `null` when no source matches one. */
   redownload: { url: string; plugin: string } | null

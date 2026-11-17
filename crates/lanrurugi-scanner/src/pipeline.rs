@@ -663,6 +663,7 @@ async fn catalogue_new_archive(
         corrupted_pages: Vec::new(),
         has_patch,
         blake3: Some(blake3.to_string()),
+        primary_source: None,
     };
     archives.create_or_replace(&archive).await?;
     // The sidecar is written after the record exists and the bytes are final, never before: a

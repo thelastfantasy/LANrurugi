@@ -2985,6 +2985,8 @@
   "settings.integrityRecheck": "再チェック",
   "settings.integrityRecheckPassed": "ファイルを開けるようになったため、破損マークを解除しました。",
   "settings.integrityRecheckFailed": "まだ破損しています。",
+  "settings.integritySources": "ソース：",
+  "settings.integrityPrimarySource": "（主ソース）",
   "settings.integrityRedownload": "削除して再ダウンロード",
   "settings.integrityRedownloadFrom": "削除して {{plugin}} で再ダウンロード：{{url}}",
   "settings.integrityRedownloadUnavailable": "インストール済みのダウンロードプラグインに一致する source タグがないため、再ダウンロードできません",

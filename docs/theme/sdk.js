@@ -46,3 +46,33 @@
     search?.addEventListener('blur', shorten)
   })
 })()
+
+// Version switcher (injected by scripts/theme-sdk.mjs): the versions are read from the site root's
+// `versions.json`, and picking one opens the same page in that version — its 404 page says so when
+// the page does not exist there.
+;(() => {
+  const select = document.querySelector('.lr-version')
+  if (!select) return
+  const { current, root, page } = select.dataset
+  fetch(`${root}versions.json`)
+    .then((res) => (res.ok ? res.json() : []))
+    .then((versions) => {
+      if (!Array.isArray(versions) || versions.length < 2) return
+      select.replaceChildren(
+        ...versions.map((v, i) => {
+          const option = document.createElement('option')
+          option.value = v.path
+          option.textContent = i === 0 ? `${v.version} (latest)` : v.version
+          option.selected = v.version === current
+          return option
+        }),
+      )
+      select.classList.add('is-ready')
+    })
+    .catch(() => {
+      // Without the list the switcher keeps showing just this version.
+    })
+  select.addEventListener('change', () => {
+    location.href = `${root}${select.value ? `${select.value}/` : ''}${page ?? ''}`
+  })
+})()
