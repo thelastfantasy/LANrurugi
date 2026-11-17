@@ -2004,6 +2004,22 @@ export function useStopIntegrityScan() {
 }
 
 /** Checks one damaged archive again; clears its mark when the file opens now (#291). */
+/** Moves a damaged archive to the recycle bin and queues its source for download again. */
+export function useRedownloadDamagedArchive() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<{ url: string; plugin: string; queue_item: string; start_error: string | null }>(
+        "POST",
+        `/database/integrity-scan/archives/${encodeURIComponent(id)}/redownload`,
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["integrity-scan"] })
+      void queryClient.invalidateQueries({ queryKey: ["archives"] })
+    },
+  })
+}
+
 export function useRecheckArchive() {
   const queryClient = useQueryClient()
   return useMutation({

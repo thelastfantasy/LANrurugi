@@ -1084,8 +1084,8 @@ fn start_error_message(e: &StartError) -> String {
     }
 }
 
-/// Starts a queue item on the subscription orchestrator's behalf — server-side, with no request
-/// and nobody pressing Start behind it.
+/// Starts a queue item on the server's behalf — for the subscription orchestrator, or a damaged
+/// archive being downloaded again — with nobody pressing Start behind it.
 ///
 /// Needed because "download automatically" means exactly that (spec FR-007a and its own Q&A: the
 /// alternative to downloading automatically is the approval list, *not* a second click on Start),

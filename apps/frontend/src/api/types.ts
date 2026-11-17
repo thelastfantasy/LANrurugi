@@ -1721,6 +1721,9 @@ export interface DamagedArchive {
   /** Set when the archive's self-heal already failed — known broken without a scan. */
   heal_failed_at: number | null
   finding: IntegrityFinding | null
+  /** What "delete and download again" would fetch: the `source:` tag taken by the
+   * highest-priority download plugin. `null` when no source matches one. */
+  redownload: { url: string; plugin: string } | null
 }
 
 export interface IntegrityScanStatus {

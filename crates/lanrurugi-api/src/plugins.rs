@@ -3342,6 +3342,53 @@ pub(crate) async fn resolve_download_plugin_for_domain(
 
 /// Every installed namespace declaring `type: "download"`, in `discover_namespaces` order — the
 /// candidate set both resolvers above narrow down by URL/domain.
+/// An archive's `source:` tags as fetchable URLs. The tag holds [`trim_url`]'s form (no scheme),
+/// so `https://` is put back.
+pub(crate) fn source_urls(tags: &str) -> Vec<String> {
+    tags.split(',')
+        .filter_map(|t| t.trim().strip_prefix("source:"))
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| {
+            if v.starts_with("http://") || v.starts_with("https://") {
+                v.to_string()
+            } else {
+                format!("https://{v}")
+            }
+        })
+        .collect()
+}
+
+/// Which of an archive's sources to download it from again, and with which download plugin: the
+/// source taken by the plugin that comes first in the download plugins' priority order. `None`
+/// when no source matches an installed download plugin.
+pub(crate) async fn pick_redownload_source(
+    state: &AppState,
+    tags: &str,
+) -> Option<(String, String)> {
+    let sources = source_urls(tags);
+    if sources.is_empty() {
+        return None;
+    }
+    let namespaces = download_namespaces(state).await;
+    for ns in sort_namespaces_by_priority(state, &namespaces).await {
+        let Ok(info) = state.plugins.plugin_info(&ns).await else {
+            continue;
+        };
+        let Some(re) = info
+            .url_pattern
+            .as_deref()
+            .and_then(|p| regex::Regex::new(p).ok())
+        else {
+            continue;
+        };
+        if let Some(url) = sources.iter().find(|u| re.is_match(u)) {
+            return Some((url.clone(), ns));
+        }
+    }
+    None
+}
+
 async fn download_namespaces(state: &AppState) -> Vec<String> {
     let mut out = Vec::new();
     for ns in discover_namespaces(&state.plugins_dir).await {
@@ -4350,6 +4397,20 @@ pub(crate) mod tests {
     use super::*;
     use lanrurugi_plugin::protocol::PluginParameter;
     use lanrurugi_storage::plugin_options::DomainRuleOverride;
+
+    #[test]
+    fn source_urls_restore_the_scheme_the_tag_drops_and_skip_other_tags() {
+        assert_eq!(
+            source_urls(
+                "artist:x, source:e-hentai.org/g/1/ab ,source:https://chaika.moe/archive/2,source:"
+            ),
+            vec![
+                "https://e-hentai.org/g/1/ab".to_string(),
+                "https://chaika.moe/archive/2".to_string(),
+            ]
+        );
+        assert!(source_urls("artist:x").is_empty());
+    }
 
     fn plugin_info_with_parameters(parameters: Vec<PluginParameter>) -> PluginInfo {
         PluginInfo {

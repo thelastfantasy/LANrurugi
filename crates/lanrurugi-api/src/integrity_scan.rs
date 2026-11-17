@@ -32,6 +32,10 @@ pub fn router() -> Router<AppState> {
             get(status).post(start).delete(stop),
         )
         .route("/database/integrity-scan/archives/{id}", post(recheck))
+        .route(
+            "/database/integrity-scan/archives/{id}/redownload",
+            post(redownload),
+        )
 }
 
 /// `archive id -> Finding` for every archive the last scans found damaged.
@@ -218,6 +222,89 @@ async fn recheck(State(state): State<AppState>, Path(id): Path<ArchiveId>) -> Re
     axum::Json(json!({ "success": 1, "damaged": damaged, "finding": finding })).into_response()
 }
 
+/// Moves a damaged archive to the recycle bin and queues its source for download again: the
+/// `source:` tag taken by the highest-priority download plugin. The record has to go first — an
+/// archive id is the hash of the file's first 512 KB, which a complete copy of a truncated file
+/// shares, so the new download would otherwise be refused as already in the library.
+async fn redownload(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
+    Path(id): Path<ArchiveId>,
+) -> Response {
+    const OP: &str = "integrity_redownload";
+    let internal =
+        |e: String| crate::common::error(axum::http::StatusCode::INTERNAL_SERVER_ERROR, OP, e);
+    let archive = match state.repos.archives.get(&id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return crate::common::not_found(OP, format!("{id} does not exist.")),
+        Err(e) => return internal(e.to_string()),
+    };
+    let Some((url, plugin)) = crate::plugins::pick_redownload_source(&state, &archive.tags).await
+    else {
+        return crate::common::error(
+            axum::http::StatusCode::BAD_REQUEST,
+            OP,
+            "No source: tag of this archive matches an installed download plugin.",
+        );
+    };
+    // The new copy lands in the category the damaged one was in, when there was a plain one.
+    let category = state
+        .repos
+        .categories
+        .for_archive(&id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .find(|c| !c.is_dynamic())
+        .map(|c| c.catid.to_string());
+
+    match crate::recycle::recycle_archive(&state, &id, auth.as_ref().map(|e| &e.0)).await {
+        crate::archives::DeleteOneOutcome::Deleted { .. } => {}
+        crate::archives::DeleteOneOutcome::NotFound => {
+            return crate::common::not_found(OP, format!("{id} does not exist."))
+        }
+        crate::archives::DeleteOneOutcome::Error(e) => return internal(e),
+    }
+    if let Ok(mut conn) = state.redis.config.get().await {
+        let _: Result<(), _> = conn.hdel(FINDINGS_KEY, id.as_str()).await;
+    }
+
+    let overwrite_on_duplicate =
+        crate::plugins::resolve_queue_overwrite_on_duplicate(&state, &plugin).await;
+    let item = match state
+        .download_queue
+        .add(lanrurugi_storage::download_queue::NewQueueItem {
+            origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
+            subscription_id: None,
+            url: url.clone(),
+            plugin_namespace: plugin.clone(),
+            file_size: None,
+            category,
+            metadata_tags: Vec::new(),
+            auto_fetch_metadata: true,
+            overwrite_on_duplicate,
+            state: lanrurugi_storage::download_queue::DownloadQueueState::Queued,
+        })
+        .await
+    {
+        Ok(item) => item,
+        // The archive is already in the recycle bin, where it can be restored from.
+        Err(e) => return internal(e.to_string()),
+    };
+    // Queued but not started (another download of the same source running, say) is still a
+    // success: the row is in the queue with its reason.
+    let started = crate::download_queue::start_item_from_subscription(&state, &item.id).await;
+    axum::Json(json!({
+        "operation": OP,
+        "success": 1,
+        "url": url,
+        "plugin": plugin,
+        "queue_item": item.id,
+        "start_error": started.err(),
+    }))
+    .into_response()
+}
+
 async fn start(State(state): State<AppState>) -> Response {
     let cancel = CancellationToken::new();
     let job = {
@@ -282,23 +369,26 @@ async fn status(State(state): State<AppState>) -> Response {
         }
         Err(_) => Default::default(),
     };
-    let mut items: Vec<serde_json::Value> = archives
-        .iter()
-        .filter_map(|a| {
-            let finding = findings.get(a.id.as_str());
-            if finding.is_none() && a.heal_failed_at.is_none() {
-                return None;
-            }
-            Some(json!({
-                "id": a.id.as_str(),
-                "title": a.title,
-                "file": a.file,
-                "arcsize": a.arcsize,
-                "heal_failed_at": a.heal_failed_at,
-                "finding": finding,
-            }))
-        })
-        .collect();
+    let mut items: Vec<serde_json::Value> = Vec::new();
+    for a in &archives {
+        let finding = findings.get(a.id.as_str());
+        if finding.is_none() && a.heal_failed_at.is_none() {
+            continue;
+        }
+        // What "delete and download again" would fetch, so the list can say so (or disable it).
+        let redownload = crate::plugins::pick_redownload_source(&state, &a.tags)
+            .await
+            .map(|(url, plugin)| json!({ "url": url, "plugin": plugin }));
+        items.push(json!({
+            "id": a.id.as_str(),
+            "title": a.title,
+            "file": a.file,
+            "arcsize": a.arcsize,
+            "heal_failed_at": a.heal_failed_at,
+            "finding": finding,
+            "redownload": redownload,
+        }));
+    }
     items.sort_by(|a, b| a["title"].as_str().cmp(&b["title"].as_str()));
     axum::Json(json!({
         "running": running,
