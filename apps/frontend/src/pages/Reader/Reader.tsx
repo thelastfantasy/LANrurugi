@@ -793,6 +793,8 @@ export function Reader() {
   const infiniteScrollAnchorRef = useRef<{ el: HTMLElement; offset: number } | null>(null);
   /** The resumed page while it is still being held under the viewport, across effect re-runs. */
   const infiniteScrollPinPageRef = useRef<number | null>(null);
+  /** When the reader last touched the screen or the wheel — a drag changes the viewport height too. */
+  const infiniteScrollGestureRef = useRef(0);
   const infiniteScrollCurrentPageRef = useRef<number | null>(null);
   const infiniteScrollResumedRef = useRef(false);
   const infiniteScrollResumePageRef = useRef<number | null>(null);
@@ -2223,6 +2225,7 @@ export function Reader() {
       }, 150);
     }
     window.addEventListener("scroll", onScroll, { passive: true });
+
     return () => {
       window.removeEventListener("scroll", onScroll);
       if (timer !== undefined) window.clearTimeout(timer);
@@ -2524,6 +2527,7 @@ export function Reader() {
     // Tankoubon finishing its listing, say) — a local would drop the pin mid-settle and leave the
     // reader parked wherever the placeholder heights happened to put it.
     const pinnedPage = () => infiniteScrollPinPageRef.current;
+    let holding = false;
     // A page that fits the viewport is centred on it; a page taller than the viewport — which cannot
     // be centred without cutting off both ends — lands with its own top edge on the viewport's top,
     // i.e. the reader starts at the beginning of that page. Computed rather than left to
@@ -2537,18 +2541,113 @@ export function Reader() {
       const rect = el.getBoundingClientRect();
       window.scrollTo({ top: Math.max(0, Math.round(window.scrollY + alignFor(rect))) });
     };
+    /**
+     * Keeps re-applying the resume alignment frame by frame for a few seconds after the reader
+     * opens. A resize observer cannot cover everything that moves the target afterwards — the
+     * browser restoring its own scroll offset, a font or notification bar changing the toolbar
+     * height, a page above finishing its decode between two observations — and each of those is a
+     * jump the reader sees. Correcting every frame until the layout stops moving costs a rect read
+     * and, only when it is actually off, one scroll call.
+     */
+    const holdResumePage = (targetOf: () => HTMLElement | null) => {
+      if (holding) return;
+      holding = true;
+      const startedAt = performance.now();
+      let steadyFrames = 0;
+      // The target's own decode is the moment its box becomes final; the frame loop already notices
+      // it, but hooking `load` makes the correction land on that exact frame instead of the next one.
+      const target0 = targetOf();
+      target0?.addEventListener("load", () => {
+        const el = targetOf();
+        if (el) pin(el);
+      }, { once: true });
+      const pagesAbove = () => {
+        const pin = pinnedPage();
+        const all = [...root.querySelectorAll<HTMLImageElement>("[data-page] img, img[data-page]")];
+        return pin === null
+          ? []
+          : all.filter((img) => Number((img.closest("[data-page]") ?? img).getAttribute("data-page")) < pin);
+      };
+      const tick = () => {
+        if (pinnedPage() === null) {
+          holding = false;
+          return;
+        }
+        const el = targetOf();
+        if (!el) {
+          if (performance.now() - startedAt > 6000) {
+            holding = false;
+            return;
+          }
+          requestAnimationFrame(tick);
+          return;
+        }
+        const before = window.scrollY;
+        pin(el);
+        steadyFrames = Math.abs(window.scrollY - before) >= 1 ? 0 : steadyFrames + 1;
+        // Keep holding until everything above the target has actually decoded: on a phone that is
+        // several seconds, and stopping on a fixed timer just lets the last images drag the page
+        // away after the fact. A page still loading keeps `steadyFrames` reset anyway.
+        const aboveSettled = pagesAbove().every((img) => img.complete && img.naturalHeight > 0);
+        if (steadyFrames >= 45 && aboveSettled) {
+          holding = false;
+          return;
+        }
+        if (performance.now() - startedAt > 30_000) {
+          holding = false;
+          return;
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    };
+    const resumeStartedAt = performance.now();
     if (!alreadyResumed) {
       if (!infiniteScrollResumeReady) return;
-      infiniteScrollResumedRef.current = true;
       infiniteScrollCurrentPageRef.current = currentPage;
       infiniteScrollPinPageRef.current = currentPage;
-      const resumed = root.querySelector<HTMLElement>(`[data-page="${currentPage}"]`);
-      if (resumed) pin(resumed);
+      const targetOf = () => root.querySelector<HTMLElement>(`[data-page="${currentPage}"]`);
       // The resumed flag is a ref, so no render follows to drop `infiniteScrollResumeHidden`.
-      root.style.removeProperty("visibility");
+      const reveal = () => {
+        infiniteScrollResumedRef.current = true;
+        root.style.removeProperty("visibility");
+      };
+      const resumed = targetOf();
+      if (resumed) {
+        pin(resumed);
+        reveal();
+        holdResumePage(targetOf);
+      } else if (!holding) {
+        // A Tankoubon is a list of archives, so the page the reader stopped on can belong to a
+        // member that has not been appended yet. Revealing the column before it exists is exactly
+        // how the reader ends up looking at the first page instead of their own: hold the (hidden)
+        // column until the target is in the DOM, with a hard stop so a genuinely missing page
+        // cannot leave the reader staring at nothing.
+        const startedAt = performance.now();
+        const settle = () => {
+          if (infiniteScrollResumedRef.current) return;
+          const el = targetOf();
+          if (el) {
+            pin(el);
+            reveal();
+            holdResumePage(targetOf);
+            return;
+          }
+          if (performance.now() - startedAt > 4000) {
+            reveal();
+            return;
+          }
+          requestAnimationFrame(settle);
+        };
+        requestAnimationFrame(settle);
+      }
     }
     const PIN_EVENTS = ["pointerdown", "touchstart", "wheel", "keydown"] as const;
     const unpin = () => {
+      // Input that arrives while the reader is still opening belongs to the tap that navigated
+      // here, not to a decision to take over the scroll: honouring it drops the pin before the
+      // resume has even been applied, which is how the reader ends up wherever the column opened.
+      if (performance.now() - resumeStartedAt < 400) return;
       infiniteScrollPinPageRef.current = null;
       PIN_EVENTS.forEach((type) => window.removeEventListener(type, unpin, true));
     };
@@ -2563,6 +2662,8 @@ export function Reader() {
     // immediately, so this never fights the reader.
     const unpinTimer = window.setTimeout(unpin, 60_000);
     const REFLOW_GUARD_MS = 400;
+    /** How long after a touch or wheel the reflow must not scroll, only re-baseline. */
+    const GESTURE_QUIET_MS = 400;
     let reflowGuardUntil = performance.now() + REFLOW_GUARD_MS;
 
     let rafId: number | null = null;
@@ -2612,14 +2713,39 @@ export function Reader() {
         return;
       }
       const delta = alignFor(anchor.el.getBoundingClientRect()) - anchor.offset;
-      if (Math.abs(delta) >= 1) window.scrollBy(0, delta);
+      if (Math.abs(delta) < 1) return;
+      // A drag on a phone collapses or reveals the address bar, which shrinks or grows the viewport
+      // in the middle of that same drag: scrolling to compensate then would fight the finger. Take
+      // the new position as the baseline instead, and let the next idle reflow correct from there.
+      if (performance.now() - infiniteScrollGestureRef.current < GESTURE_QUIET_MS) {
+        anchor.offset = alignFor(anchor.el.getBoundingClientRect());
+        return;
+      }
+      window.scrollBy(0, delta);
     };
+
+    const markGesture = () => {
+      infiniteScrollGestureRef.current = performance.now();
+    };
+    const GESTURE_EVENTS = ["pointerdown", "touchstart", "touchmove", "wheel"] as const;
+    GESTURE_EVENTS.forEach((type) =>
+      window.addEventListener(type, markGesture, { capture: true, passive: true }),
+    );
 
     // Delivered after layout and before paint, so a re-pin here never shows the shifted frame.
     const resizeObserver = new ResizeObserver(reflow);
-    root
-      .querySelectorAll<HTMLElement>("[data-page]")
-      .forEach((img) => resizeObserver.observe(img));
+    const observePages = () =>
+      root
+        .querySelectorAll<HTMLElement>("[data-page]")
+        .forEach((img) => resizeObserver.observe(img));
+    observePages();
+    // A Tankoubon appends each member's pages as its listing arrives; those nodes are not covered by
+    // the observer until they are, and a page appearing above the pin shifts it like any late load.
+    const columnObserver = new MutationObserver(() => {
+      observePages();
+      reflow();
+    });
+    columnObserver.observe(root, { childList: true, subtree: true });
 
     // A phone's viewport height is not constant: the address bar comes and goes, and every change
     // moves the page under the viewport centre by half the difference. Re-applying the same
@@ -2631,9 +2757,13 @@ export function Reader() {
       unpin();
       window.clearTimeout(unpinTimer);
       window.removeEventListener("scroll", onScroll);
+      GESTURE_EVENTS.forEach((type) =>
+        window.removeEventListener(type, markGesture, { capture: true }),
+      );
       window.removeEventListener("resize", reflow);
       window.visualViewport?.removeEventListener("resize", reflow);
       if (rafId !== null) cancelAnimationFrame(rafId);
+      columnObserver.disconnect();
       resizeObserver.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
