@@ -616,15 +616,15 @@
 }
 
 /* Four short labels fit one row on a phone if they share the width instead of each claiming 96px:
-   4 × 96 + gaps is wider than the dialog's inner width at 390px. */
+   4 × 96 + gaps is wider than the dialog's inner width at 390px. Long translations (Japanese
+   "フィードバックパッケージ") still need a second row rather than overflowing the dialog. */
 @media (max-width: 640px) {
   .diag-tabs {
     gap: 6px;
-    flex-wrap: nowrap;
   }
 
   .diag-tab {
-    flex: 1 1 0;
+    flex: 1 1 auto;
     min-width: 0;
     padding: 2px 4px;
     font-size: 0.9em;

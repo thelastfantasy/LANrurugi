@@ -500,6 +500,9 @@ pub(crate) async fn purge_one_archive(
             // restoring from the bin puts the archive back where it was (see `tank_members`).
             if options.permanent {
                 crate::tank_members::after_permanent_delete(state, &archive).await;
+                // A recycle keeps both the patch file and this record, so restoring from the bin
+                // still knows where the patch pages came from; a permanent delete ends both.
+                crate::patch_provenance::forget(state, id.as_str()).await;
             }
             if options.record_activity {
                 crate::activity::record_manual(
@@ -1910,6 +1913,9 @@ async fn delete_patch(
     }
 
     clear_page_thumbnails(&state, id.as_str()).await;
+    // Nothing the record remembers about the patch is true any more — a later patch starts from a
+    // fresh provenance list instead of inheriting the deleted one's sources.
+    crate::patch_provenance::forget(&state, id.as_str()).await;
     crate::activity::record_manual(
         &state,
         auth.as_ref().map(|e| &e.0),
@@ -2273,8 +2279,17 @@ async fn regenerate_thumbnail_on_demand(
         .ok()
         .flatten()?;
     let file = std::path::PathBuf::from(&archive.file);
-    if let Some(reason) = crate::thumbnail_failures::blocked(state, id, page, &file).await {
-        tracing::debug!(id = %id, page, reason = %reason, "skipping thumbnail generation");
+    if let Some(block) = crate::thumbnail_failures::blocked(state, id, page, &file).await {
+        tracing::debug!(id = %id, page, reason = %block.reason, "skipping thumbnail generation");
+        // The remembered failure was the page's own bytes failing to decode: answer with the
+        // corrupted-page placeholder rather than the generic one, so the grid says why. A cover
+        // (`page == 0`) is the whole archive's problem, not one page's, and keeps the generic one.
+        if block.damaged && page > 0 {
+            return Some((
+                "image/svg+xml",
+                bytes::Bytes::from_static(CORRUPTED_PAGE_PLACEHOLDER),
+            ));
+        }
         return None;
     }
 
@@ -2300,8 +2315,23 @@ async fn regenerate_thumbnail_on_demand(
                         Ok(_) => read_thumbnail_format(&state, &id, page, format).await,
                         Err(e) => {
                             tracing::warn!(id = %id, page, error = %e, "on-demand thumbnail generation failed");
+                            let damaged = matches!(&e, lanrurugi_scanner::thumbnail::ThumbnailError::Decode(_));
                             crate::thumbnail_failures::note_failure(&state, &id, page, &file, &e)
                                 .await;
+                            if damaged && page > 0 {
+                                // One page's bytes are unreadable: remember which page (by entry
+                                // name, like every other corrupted-page record) so the full-size
+                                // read and the bulk scan-free paths agree with this grid.
+                                if let Some(entry) =
+                                    page_entry_name(&file, source_page).await
+                                {
+                                    mark_page_corrupted(&state, &id, &entry).await;
+                                }
+                                return Some((
+                                    "image/svg+xml",
+                                    bytes::Bytes::from_static(CORRUPTED_PAGE_PLACEHOLDER),
+                                ));
+                            }
                             None
                         }
                     }
@@ -2309,6 +2339,25 @@ async fn regenerate_thumbnail_on_demand(
             },
         )
         .await
+}
+
+/// The entry name of one page (`1`-based) in an archive file, for the records that key on names
+/// rather than indexes. `None` when the container cannot list its entries at all.
+async fn page_entry_name(file: &std::path::Path, page: usize) -> Option<String> {
+    let path = file.to_path_buf();
+    let (pages, _) = lanrurugi_core::concurrency::run_blocking(move || {
+        let originals = lanrurugi_scanner::archive_format::list_pages(&path)?;
+        Ok::<_, lanrurugi_scanner::archive_format::ArchiveFormatError>(
+            lanrurugi_scanner::patch::effective_pages_checked(&path, &originals),
+        )
+    })
+    .await
+    .ok()?
+    .ok()?;
+    match pages.get(page.checked_sub(1)?)? {
+        lanrurugi_scanner::patch::EffectivePage::Original(name) => Some(name.clone()),
+        lanrurugi_scanner::patch::EffectivePage::Patched(name) => Some(patch_entry_key(name)),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -3914,6 +3963,46 @@ async fn page_file_etag(path: &str, key: &str) -> Option<String> {
     Some(format!("W/\"{}-{}-{}\"", meta.len(), mtime, key))
 }
 
+/// The answer for a page whose own bytes cannot be decoded: a grey 600×840 SVG saying so, instead
+/// of a broken-image icon the reader cannot tell apart from a network failure.
+fn corrupted_page_placeholder() -> FetchedPage {
+    FetchedPage {
+        content_type: "image/svg+xml",
+        body: crate::state::PageBody::Bytes(bytes::Bytes::from_static(CORRUPTED_PAGE_PLACEHOLDER)),
+        resized: false,
+        orig_size: 0,
+        orig_width: 0,
+        orig_height: 0,
+        etag: None,
+    }
+}
+
+/// The `Archive::corrupted_pages` key for a page that lives in the sidecar patch rather than in
+/// the archive file: patch entry names are independent of the archive's own, so the same name can
+/// exist in both, and without the prefix one bad patch page would suppress a healthy original.
+fn patch_entry_key(path: &str) -> String {
+    format!("patch:{path}")
+}
+
+/// Remembers one page as undecodable, keyed by its entry name, so later requests short-circuit to
+/// the placeholder above instead of repeating the failed decode — the same sticky list
+/// `generate_page_thumbnails` fills in bulk (see `Archive::corrupted_pages`).
+async fn mark_page_corrupted(state: &AppState, id: &str, entry: &str) {
+    let archive_id = ArchiveId(id.to_string());
+    let updated = state
+        .repos
+        .archives
+        .update(&archive_id, |archive| {
+            if !archive.corrupted_pages.iter().any(|page| page == entry) {
+                archive.corrupted_pages.push(entry.to_string());
+            }
+        })
+        .await;
+    if let Err(error) = updated {
+        tracing::warn!(%id, entry, error = %error, "could not record a corrupted page");
+    }
+}
+
 /// The actual per-`(archive, entry path)` work [`AppState::page_singleflight`] collapses
 /// concurrent duplicate calls onto — see [`get_page`]'s own doc comment.
 ///
@@ -3939,17 +4028,44 @@ async fn fetch_page(
     jxl_threads: usize,
 ) -> Result<FetchedPage, String> {
     if is_patch {
+        let corrupt_key = patch_entry_key(path);
+        if corrupted_pages.contains(&corrupt_key) {
+            return Ok(corrupted_page_placeholder());
+        }
         let archive_file_owned = archive_file.to_string();
         let entry_name = path.to_string();
-        let raw = lanrurugi_core::concurrency::run_blocking(move || {
+        let raw = match lanrurugi_core::concurrency::run_blocking(move || {
             lanrurugi_scanner::patch::read_page(
                 std::path::Path::new(&archive_file_owned),
                 &lanrurugi_scanner::patch::EffectivePage::Patched(entry_name),
             )
         })
         .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
+        {
+            Ok(Ok(raw)) => raw,
+            // This one patch page cannot be extracted at all — that is the page's own damage, not
+            // the patch's (a patch this broken fails `load` in `/files` first), so it is remembered
+            // exactly like an archive entry that cannot be read.
+            Ok(Err(lanrurugi_scanner::patch::PatchError::Archive(error)))
+                if error.is_permanent() =>
+            {
+                mark_page_corrupted(state, id, &corrupt_key).await;
+                return Ok(corrupted_page_placeholder());
+            }
+            Ok(Err(error)) => return Err(error.to_string()),
+            Err(error) => return Err(error.to_string()),
+        };
+        // Patch pages never take the resize/convert path below (their bytes are served as stored),
+        // so parsing the header here is the only place this page's own bytes get checked — the same
+        // "cannot decode" verdict `ResizeError::Decode` gives for entries inside the archive.
+        let decodable = lanrurugi_scanner::image_decode::image_reader(std::io::Cursor::new(&raw))
+            .with_guessed_format()
+            .map(|reader| reader.into_dimensions().is_ok())
+            .unwrap_or(false);
+        if !decodable {
+            mark_page_corrupted(state, id, &corrupt_key).await;
+            return Ok(corrupted_page_placeholder());
+        }
         let content_type = image_content_type(&raw);
         let orig_size = raw.len() as u64;
         return Ok(FetchedPage {
@@ -3969,17 +4085,7 @@ async fn fetch_page(
     // from the same `Archive` fetch `get_page` already did (not a second Redis round trip here).
     // See `Archive::corrupted_pages`'s own docs for why this is keyed by entry name, not index.
     if corrupted_pages.iter().any(|p| p == path) {
-        return Ok(FetchedPage {
-            content_type: "image/svg+xml",
-            body: crate::state::PageBody::Bytes(bytes::Bytes::from_static(
-                CORRUPTED_PAGE_PLACEHOLDER,
-            )),
-            resized: false,
-            orig_size: 0,
-            orig_width: 0,
-            orig_height: 0,
-            etag: None,
-        });
+        return Ok(corrupted_page_placeholder());
     }
 
     // `read_entry` does blocking libarchive FFI + file IO (constitution Principle III: never run
@@ -3987,15 +4093,24 @@ async fn fetch_page(
     // `run_blocking` internally, this call didn't before this change.
     let archive_file_owned = archive_file.to_string();
     let entry_path = path.to_string();
-    let raw = lanrurugi_core::concurrency::run_blocking(move || {
+    let read = lanrurugi_core::concurrency::run_blocking(move || {
         lanrurugi_scanner::archive_format::read_entry(
             std::path::Path::new(&archive_file_owned),
             &entry_path,
         )
     })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())?;
+    .await;
+    let raw = match read {
+        Ok(Ok(raw)) => raw,
+        // The entry itself cannot be extracted — that is this page's own damage, not the
+        // container's, so remember it and answer with the placeholder from now on.
+        Ok(Err(error)) if error.is_permanent() => {
+            mark_page_corrupted(state, id, path).await;
+            return Ok(corrupted_page_placeholder());
+        }
+        Ok(Err(error)) => return Err(error.to_string()),
+        Err(error) => return Err(error.to_string()),
+    };
     // Refcounted from here on: the resize call needs to hand the bytes to a blocking task while
     // this function may still have to serve them (the unchanged and the failed-conversion paths),
     // and cloning a `Vec` for that would copy the whole page.
@@ -4249,6 +4364,21 @@ async fn fetch_page(
             }
             Ok(None) => Ok(serve_original_page(archive_file, path, raw, content_type).await),
             Err(error) => {
+                // A decode failure is the page's own bytes being unreadable; anything else (encoder
+                // out of memory, worker gone) is worth retrying on the next request. Only claim the
+                // page when the client could not have rendered the original either — otherwise the
+                // unchanged bytes are still a better answer than a placeholder.
+                if client_cannot_decode_source
+                    && matches!(
+                        &error,
+                        lanrurugi_scanner::animation::AnimationError::GifDecode(_)
+                            | lanrurugi_scanner::animation::AnimationError::WebpDecode(_)
+                            | lanrurugi_scanner::animation::AnimationError::JxlDecode(_)
+                    )
+                {
+                    mark_page_corrupted(state, id, path).await;
+                    return Ok(corrupted_page_placeholder());
+                }
                 tracing::warn!(
                     %id,
                     path = %path,
@@ -4433,6 +4563,14 @@ async fn fetch_page(
         // not become an error response when the original bytes are right there (a JPEG 2000 page
         // in the sYCC colour space did exactly that before the JP2 path handled it).
         Err(error) => {
+            // A decode failure is the page's own bytes: the thumbnail path already treats the same
+            // `image` error as "damaged" (`ThumbnailError::Decode`), so the full-size page answers
+            // the same way instead of leaving a broken-image icon — and remembers it, so the
+            // overview grid and every later read agree without another attempt.
+            if matches!(&error, lanrurugi_scanner::resize::ResizeError::Decode(_)) {
+                mark_page_corrupted(state, id, path).await;
+                return Ok(corrupted_page_placeholder());
+            }
             tracing::warn!(
                 %id,
                 path = %path,
@@ -4640,7 +4778,25 @@ pub(crate) async fn get_files(
     let opt_suffix = "&optimize=1";
     match lanrurugi_scanner::archive_format::list_pages(archive_path) {
         Ok(pages) => {
-            let effective = lanrurugi_scanner::patch::effective_pages(archive_path, &pages);
+            // Opening an archive is the one moment every read passes through: a file that now lists
+            // its pages is no longer damaged, whatever an earlier scan or read concluded. The count
+            // is the archive's own — a patch's pages are merged in below, not stored on the record.
+            let own_pages = pages.len() as u32;
+            if own_pages == 0 {
+                // The container opened but holds nothing: the reader has nothing to show, so this
+                // is damage like any other, and the damaged list should say so.
+                crate::integrity_scan::note_damage(
+                    &state,
+                    &archive,
+                    crate::integrity_scan::Problem::NoPages,
+                    "the container lists no pages".to_string(),
+                )
+                .await;
+            } else {
+                crate::integrity_scan::note_readable(&state, &archive, own_pages).await;
+            }
+            let (effective, patch_error) =
+                lanrurugi_scanner::patch::effective_pages_checked(archive_path, &pages);
             let pages: Vec<serde_json::Value> = effective
                 .iter()
                 .map(|p| match p {
@@ -4652,9 +4808,37 @@ pub(crate) async fn get_files(
                     }
                 })
                 .collect();
-            axum::Json(json!({ "job": 0, "pages": pages })).into_response()
+            // A patch that cannot be read is reported here, once, while the archive itself is
+            // untouched: the reader gets the reason and the pages that used to be patched (so it
+            // can hide bookmarks/stamps sitting on them), and the record's progress and chapter
+            // markers are shifted past the pages that no longer exist.
+            let patch_damage = match patch_error {
+                Some(error) => {
+                    crate::patch_provenance::report_damage(&state, &archive, &error.to_string())
+                        .await
+                }
+                None => None,
+            };
+            axum::Json(json!({ "job": 0, "pages": pages, "patch_damage": patch_damage }))
+                .into_response()
         }
-        Err(e) => unreadable_archive_response("get_file_list", &id, archive_path, &e),
+        Err(e) => {
+            // Likewise the moment damage shows: record it (and clear it again on the next
+            // successful listing) so the damaged list, the library badge and `is:damaged` learn
+            // about a file nobody has scanned.
+            if e.is_permanent() {
+                use lanrurugi_scanner::archive_format::ArchiveFormatError;
+                let missing = matches!(&e, ArchiveFormatError::Io(io) if io.kind() == std::io::ErrorKind::NotFound)
+                    || !archive_path.exists();
+                let problem = if missing {
+                    crate::integrity_scan::Problem::Missing
+                } else {
+                    crate::integrity_scan::Problem::Unreadable
+                };
+                crate::integrity_scan::note_damage(&state, &archive, problem, e.to_string()).await;
+            }
+            unreadable_archive_response("get_file_list", &id, archive_path, &e)
+        }
     }
 }
 

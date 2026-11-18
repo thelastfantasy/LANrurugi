@@ -484,7 +484,14 @@ export function ArchiveOverviewOverlay({
   return (
     <>
       <div id="overlay-shade" style={{ display: "block", opacity: 0.6 }} onClick={onClose} />
-      <div id="archivePagesOverlay" className="id1 base-overlay page-overlay" style={{ padding: "0 16px", boxSizing: "border-box", overscrollBehavior: "contain" }}>
+      <div
+        id="archivePagesOverlay"
+        className="id1 base-overlay page-overlay"
+        // Same lock as the reader's other overlays: the panel has its own scroller, and the reader
+        // page behind it must not move while this is open.
+        data-overlay="modal"
+        style={{ padding: "0 16px", boxSizing: "border-box", overscrollBehavior: "contain" }}
+      >
         <h2 className="ih" style={{ textAlign: "center" }}>
           {t("reader.archiveOverview")}
         </h2>

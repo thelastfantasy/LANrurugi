@@ -1082,9 +1082,31 @@ export interface ArchivePage {
   is_patch: boolean
 }
 
+/**
+ * Why an archive's `.patch.zip` could not be used, reported by `/files` the first time it happens.
+ * The archive itself still reads (the patch's pages are simply gone), so this is a warning, not an
+ * error: `pages` are the 1-based merged-list positions those pages used to occupy, which is what
+ * the reader uses to hide the bookmarks and stamps sitting on them.
+ */
+export interface PatchDamage {
+  reason: string
+  pages: number[]
+  sources: PatchSource[]
+}
+
+/** One archive whose pages a patch was built from, snapshotted when the patch was created. */
+export interface PatchSource {
+  archive_id: string
+  name: string
+  title: string
+  crc32: string
+  sites: string[]
+}
+
 export interface ArchiveFilesResponse {
   job: number
   pages: ArchivePage[]
+  patch_damage?: PatchDamage | null
 }
 
 export interface PageDimensionsResponse {

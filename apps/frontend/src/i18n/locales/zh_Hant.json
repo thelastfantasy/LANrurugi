@@ -1127,14 +1127,8 @@
   "components.layout.thisSourceWasAlreadyImported": "該來源已入庫：",
   "upload.forceDownload": "強制下載",
   "components.layout.thisSourceIsAlreadyDownloading": "該來源正在下載中；如需另下可以強制下載。",
-  "upload": {
-    "reingest": "重新入庫（不重新下載）"
-  },
-  "components": {
-    "layout": {
-      "ingestFailed": "已下載完成，但入庫失敗："
-    }
-  },
+  "upload.reingest": "重新入庫（不重新下載）",
+  "components.layout.ingestFailed": "已下載完成，但入庫失敗：",
   "duplicates.pageN": "第 {{page}} 頁",
   "duplicates.avgSharpness": "平均清晰度 {{score}}",
   "duplicates.suggestKeep": "建議保留",

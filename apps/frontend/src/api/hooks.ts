@@ -468,9 +468,18 @@ export function useUpdateProgress(id: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (page: number) => sendJson("PUT", `/archives/${id}/progress/${page}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["archive", id] })
-      queryClient.invalidateQueries({ queryKey: ["archives"] })
+    onSuccess: (_data, page) => {
+      // The reader saves on every page turn, so refetching here made each turn cost a
+      // `/metadata` round trip — a long scroll read as a request loop in the dev overlay (#dev).
+      // The new values are already known, so write them into the cache instead.
+      if (id !== null) {
+        const lastreadtime = Math.floor(Date.now() / 1000)
+        queryClient.setQueryData<ArchiveMetadata>(["archive", id], (previous) =>
+          previous === undefined ? previous : { ...previous, progress: page, lastreadtime },
+        )
+      }
+      // `['archives']` is left alone on purpose: it has no staleTime, so the library refetches it
+      // when it next mounts rather than on every page turned in the reader.
     },
   })
 }
@@ -1068,9 +1077,18 @@ export function useUpdateTankoubonProgress(id: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (page: number) => sendJson("PUT", `/tankoubons/${id}/progress/${page}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tankoubon", id] })
-      queryClient.invalidateQueries({ queryKey: ["tankoubons"] })
+    onSuccess: (_data, page) => {
+      // Same reasoning as `useUpdateProgress`: a Tankoubon turn must not refetch its metadata.
+      if (id !== null) {
+        queryClient.setQueryData<TankoubonMetadata>(["tankoubon", id], (previous) =>
+          previous === undefined ? previous : { ...previous, progress: page },
+        )
+        queryClient.setQueryData<TankoubonFullResponse>(["tankoubon-full", id], (previous) =>
+          previous === undefined
+            ? previous
+            : { ...previous, result: { ...previous.result, progress: page } },
+        )
+      }
     },
   })
 }

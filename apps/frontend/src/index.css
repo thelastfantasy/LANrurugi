@@ -476,20 +476,25 @@ input[type="checkbox"].lrr-checkbox-bare::after {
   line-height: 1.5;
 }
 
+/* Two real columns rather than `column-count`: a section can't be split (`break-inside: avoid`),
+   so the automatic balance pushed the two longest ones into the first column and left the second
+   half of the sheet empty while the whole thing scrolled. The reader's `helpContent` decides which
+   sections share a side (paging/display on the left, touch/navigation/bookmarks on the right). */
 #reader-help.reader-help-panel .reader-help-sections {
-  column-count: 2;
-  column-gap: 48px;
+  display: flex;
+  align-items: flex-start;
+  gap: 48px;
 }
 
-@media (max-width: 1000px) {
-  #reader-help.reader-help-panel .reader-help-sections {
-    column-count: 2;
-  }
+#reader-help.reader-help-panel .reader-help-column {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 @media (max-width: 680px) {
   #reader-help.reader-help-panel .reader-help-sections {
-    column-count: 1;
+    flex-direction: column;
+    gap: 0;
   }
 }
 
@@ -1176,6 +1181,33 @@ input[type="checkbox"].lrr-checkbox-bare::after {
 @media all and (max-width: 560px) {
   .overview-page-cell {
     width: 139px;
+  }
+
+  /* legacy's overlay bar is one non-wrapping row: a long chapter name at 200px wide leaves the
+     "chapters" heading squeezed against the panel edge. Put the selector on its own line and keep
+     the heading on the first one. */
+  #archivePagesOverlay .overlay-bar {
+    flex-wrap: wrap;
+  }
+  #archivePagesOverlay .overlay-bar-left {
+    flex: 1 1 100%;
+    padding-left: 0;
+  }
+  #archivePagesOverlay .overlay-bar-left:empty {
+    display: none;
+  }
+  #archivePagesOverlay .chapter-selector {
+    display: flex;
+    flex: 1 1 100%;
+    align-items: center;
+    gap: 8px;
+    padding-right: 0;
+    text-align: left;
+  }
+  #archivePagesOverlay #chapter-select {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: auto;
   }
 }
 

@@ -77,7 +77,7 @@ pub(crate) struct Finding {
     pub size_on_disk: Option<u64>,
 }
 
-fn now_secs() -> i64 {
+pub(crate) fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -168,6 +168,74 @@ pub(crate) async fn recorded_finding(state: &AppState, id: &ArchiveId) -> Option
     let mut conn = state.redis.config.get().await.ok()?;
     let raw: Option<String> = conn.hget(FINDINGS_KEY, id.as_str()).await.ok()?;
     serde_json::from_str(&raw?).ok()
+}
+
+/// Records damage noticed outside a scan — an ingest that produced no pages, or a read that found
+/// the container unreadable — so the settings list, the library badge and `is:damaged` learn about
+/// it at the moment it shows, without waiting for the next scan. Idempotent: the same problem
+/// recorded twice writes nothing.
+pub(crate) async fn note_damage(
+    state: &AppState,
+    archive: &lanrurugi_core::entities::Archive,
+    problem: Problem,
+    detail: String,
+) {
+    if recorded_finding(state, &archive.id)
+        .await
+        .is_some_and(|existing| existing.problem == problem)
+    {
+        return;
+    }
+    let size_on_disk = tokio::fs::metadata(&archive.file)
+        .await
+        .ok()
+        .map(|metadata| metadata.len());
+    let finding = Finding {
+        problem,
+        detail,
+        checked_at: now_secs(),
+        size_on_disk,
+    };
+    if let Ok(mut conn) = state.redis.config.get().await {
+        let _: Result<(), _> = conn
+            .hset(
+                FINDINGS_KEY,
+                archive.id.as_str(),
+                serde_json::to_string(&finding).unwrap_or_default(),
+            )
+            .await;
+    }
+    apply_to_record(state, &archive.id, &Inspection::Damaged(finding)).await;
+}
+
+/// The container opened, so an earlier verdict against it no longer holds: drop the finding and
+/// clear `heal_failed_at`. Only called when the record still carries a mark, so a healthy archive
+/// costs nothing.
+pub(crate) async fn note_readable(
+    state: &AppState,
+    archive: &lanrurugi_core::entities::Archive,
+    pages: u32,
+) {
+    // A listing with no pages is damage, not health — never clear a mark on the strength of it.
+    if pages == 0 || (archive.heal_failed_at.is_none() && archive.pagecount > 0) {
+        return;
+    }
+    if let Ok(mut conn) = state.redis.config.get().await {
+        let _: Result<(), _> = conn.hdel(FINDINGS_KEY, archive.id.as_str()).await;
+    }
+    let size = tokio::fs::metadata(&archive.file)
+        .await
+        .map(|metadata| metadata.len())
+        .unwrap_or(archive.arcsize);
+    apply_to_record(
+        state,
+        &archive.id,
+        &Inspection::Readable {
+            pages: pages.max(1) as usize,
+            size,
+        },
+    )
+    .await;
 }
 
 async fn store_finding(

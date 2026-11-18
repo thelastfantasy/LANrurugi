@@ -51,6 +51,7 @@ fn system_actor(subsystem: &str) -> Actor {
         "metadata_plugin" => "Metadata Plugin (auto)",
         "translation" => "Translation Pipeline (auto)",
         "share" => "Share Transfer (auto)",
+        "reader" => "Reader (auto)",
         _ => subsystem,
     };
     Actor {

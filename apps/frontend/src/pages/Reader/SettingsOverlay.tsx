@@ -7,6 +7,8 @@ import { RadioGroup, RadioItem } from "@/components/common-ui/Form/Radio";
 import { Switch } from "@/components/common-ui/Form/Switch";
 import { useIsNarrowViewport } from "@/hooks/useIsNarrowViewport";
 import {
+  CLICK_ACTION,
+  type ClickAction,
   FIT_MODE,
   type FitMode,
   J_SCROLL_UNIT,
@@ -147,6 +149,10 @@ export function SettingsOverlay({
       <div
         id="settingsOverlay"
         className="id1 base-overlay"
+        // A wheel over the backdrop used to scroll the reader behind this panel: nothing here
+        // locked the page while the overlay was open. `data-overlay="modal"` is the same switch
+        // `common-ui`'s `Modal` throws, and the panel's own scroller contains its chain.
+        data-overlay="modal"
         style={{
           display: "flex",
           flexDirection: "column",
@@ -162,6 +168,7 @@ export function SettingsOverlay({
             width: "100%",
             boxSizing: "border-box",
             overflowY: "auto",
+            overscrollBehavior: "contain",
             padding: "0 16px",
           }}
         >
@@ -486,6 +493,32 @@ export function SettingsOverlay({
               </RadioItem>
               <RadioItem value={K_BEHAVIOR.BACK}>
                 {t("reader.kBehaviorDefault")}
+              </RadioItem>
+            </RadioGroup>
+          </SettingSection>
+
+          <SettingSection
+            title={t("reader.clickAction") ?? ""}
+            description={t("reader.clickActionHint") ?? undefined}
+          >
+            <RadioGroup<ClickAction>
+              value={settings.clickAction}
+              onValueChange={(v) => update({ clickAction: v })}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                fontSize: FONT_SIZE_MD,
+              }}
+            >
+              <RadioItem value={CLICK_ACTION.TURN}>
+                {t("reader.clickActionTurn")}
+              </RadioItem>
+              <RadioItem value={CLICK_ACTION.KEYS}>
+                {t("reader.clickActionKeys")}
+              </RadioItem>
+              <RadioItem value={CLICK_ACTION.SCROLL}>
+                {t("reader.clickActionScroll")}
               </RadioItem>
             </RadioGroup>
           </SettingSection>

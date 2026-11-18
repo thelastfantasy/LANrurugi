@@ -59,6 +59,11 @@ pub mod action_types {
     pub const ARCHIVE_PATCH_DELETE: &str = "archive.patch_delete";
     /// Pages from another copy were merged into an archive's `.patch.zip` (duplicate review).
     pub const ARCHIVE_PATCH_CREATE: &str = "archive.patch_create";
+    /// An archive's `.patch.zip` can no longer be read: its pages are gone from the merged page
+    /// list, the archive's own progress and chapter markers were shifted down, and `after` carries
+    /// the patch's source archives (id, name, crc32, `source:` sites) — the zip's own
+    /// `metadata.json` is exactly what broke, so this entry is the only surviving provenance.
+    pub const ARCHIVE_PATCH_UNREADABLE: &str = "archive.patch_unreadable";
     pub const ARCHIVE_THUMB_REGEN: &str = "archive.thumb_regen";
     pub const ARCHIVE_UPLOAD: &str = "archive.upload";
     /// 019 recycle bin: an archive was moved into the bin (the user-visible delete).

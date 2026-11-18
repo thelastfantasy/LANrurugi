@@ -1,6 +1,9 @@
 #!/bin/sh
 # Fetches the pinned CPU ONNX Runtime shared library (official microsoft/onnxruntime release) and
-# verifies it. The embedding, OCR and inpaint models load it at run time through `ort`'s
+# verifies it. Falls back to an npmmirror copy of the same release asset: in 2026-11 the upstream
+# `microsoft/onnxruntime` GitHub repository stopped answering (404, including every release asset),
+# and no official replacement host serves these tarballs. The checksum below is what makes the
+# mirror safe to use -- do not drop it. The embedding, OCR and inpaint models load it at run time through `ort`'s
 # `load-dynamic` feature, so its version only has to satisfy `ort`'s minimum.
 #
 # Usage: fetch-onnxruntime.sh <linux-x86_64|linux-aarch64|macos-arm64> <dest-dir>
@@ -29,7 +32,9 @@ sha256_of() {
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 curl -fsSL -o "$work/ort.tgz" \
-    "https://github.com/microsoft/onnxruntime/releases/download/v${VERSION}/onnxruntime-${name}-${VERSION}.tgz"
+    "https://github.com/microsoft/onnxruntime/releases/download/v${VERSION}/onnxruntime-${name}-${VERSION}.tgz" \
+    || curl -fsSL -o "$work/ort.tgz" \
+        "https://registry.npmmirror.com/-/binary/onnxruntime/v${VERSION}/onnxruntime-${name}-${VERSION}.tgz"
 actual="$(sha256_of "$work/ort.tgz")"
 if [ "$actual" != "$sha256" ]; then
     echo "fetch-onnxruntime: checksum mismatch for onnxruntime-${name}-${VERSION}.tgz (got $actual)" >&2

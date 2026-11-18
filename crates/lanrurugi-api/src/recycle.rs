@@ -29,9 +29,10 @@ use crate::AppState;
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 use lanrurugi_storage::keys::{CONFIG_KEY, FILEMAP_KEY, SAFETY_PASSWORD_HASH_FIELD};
 use lanrurugi_storage::recycle::{
-    entry_dir, move_into_bin, move_out_of_bin, payload_size, remove_entry_dir, scan_entry_dirs,
-    write_meta, RecycleActor, RecycleConflict, RecycleEntry, RecycleEntryView, RecycleKind,
-    RecycleMemberView, RecycleRepository, RecycleSnapshot, RecycleTank, RECYCLE_SCHEMA,
+    entry_dir, move_into_bin, move_out_of_bin, payload_dir, payload_size, read_meta,
+    remove_entry_dir, scan_entry_dirs, write_meta, RecycleActor, RecycleConflict, RecycleEntry,
+    RecycleEntryView, RecycleKind, RecycleMemberView, RecycleRepository, RecycleSnapshot,
+    RecycleTank, RECYCLE_SCHEMA,
 };
 
 pub fn router() -> Router<AppState> {
@@ -218,6 +219,43 @@ fn entry_from_record(
         deleted_by,
         snapshot,
     }
+}
+
+/// Moves a recycled archive's stored `.patch.zip` out of the bin to `destination`, leaving the
+/// archive itself recoverable — "delete and download again" wants the patch's pages on the fresh
+/// copy, while a plain delete keeps moving both into the bin (and out of the library) together.
+/// Returns whether a patch was moved; the bin entry stops claiming it either way.
+pub(crate) async fn take_patch_out_of_bin(
+    state: &AppState,
+    id: &ArchiveId,
+    destination: &std::path::Path,
+) -> bool {
+    let dir = entry_dir(&state.library.archive_dir, id);
+    let Some(mut entry) = read_meta(&dir).await else {
+        return false;
+    };
+    let Some(name) = entry.patch_file_name.clone() else {
+        return false;
+    };
+    let source = payload_dir(&state.library.archive_dir, id).join(&name);
+    if !source.is_file() {
+        return false;
+    }
+    if let Some(parent) = destination.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    if let Err(e) = tokio::fs::rename(&source, destination).await {
+        tracing::warn!(%id, error = %e, "could not move a recycled archive's patch onto its replacement");
+        return false;
+    }
+    entry.patch_file_name = None;
+    if let Err(e) = write_meta(&dir, &entry).await {
+        tracing::warn!(%id, error = %e, "could not update a recycle entry after moving its patch");
+    }
+    if let Err(e) = repository(state).put(&entry).await {
+        tracing::warn!(%id, error = %e, "could not update a recycle entry after moving its patch");
+    }
+    true
 }
 
 /// Recycle one archive: snapshot, move bytes, record the entry, then drop the live record.

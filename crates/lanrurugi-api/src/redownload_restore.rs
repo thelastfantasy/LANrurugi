@@ -37,6 +37,11 @@ pub(crate) struct Plan {
     pub progress: u32,
     pub pagecount: u32,
     pub tanks: Vec<TankSlot>,
+    /// The archive had a sidecar `.patch.zip`. Recycling takes it into the bin with the archive; the
+    /// replacement gets it back, because a damaged main file is exactly the case where the patch is
+    /// the part still worth keeping.
+    #[serde(default)]
+    pub patch: bool,
     pub created_at: u64,
 }
 
@@ -84,6 +89,8 @@ pub(crate) async fn capture(state: &AppState, archive: &lanrurugi_core::entities
         progress: archive.lastreadpage,
         pagecount: archive.pagecount,
         tanks,
+        patch: lanrurugi_scanner::patch::patch_path_for(std::path::Path::new(&archive.file))
+            .is_file(),
         created_at: now_secs(),
     }
 }
@@ -157,6 +164,16 @@ pub(crate) async fn apply(state: &AppState, queue_item_id: &str, new_id: &Archiv
                 tracing::warn!(%new_id, error = %e, "could not restore the re-downloaded archive's progress");
             }
         }
+    }
+
+    // The patch came from the file that was just replaced, so it belongs beside the new one. Taken
+    // out of the bin rather than copied: the still-recycled archive keeps everything else, and a
+    // second copy of the same pages would only drift.
+    if plan.patch && !new_archive.file.trim().is_empty() {
+        let destination =
+            lanrurugi_scanner::patch::patch_path_for(std::path::Path::new(&new_archive.file));
+        crate::recycle::take_patch_out_of_bin(state, &ArchiveId(plan.old_id.clone()), &destination)
+            .await;
     }
 
     // Tanks whose member list still names the old ID get the new one in the same slot; a member

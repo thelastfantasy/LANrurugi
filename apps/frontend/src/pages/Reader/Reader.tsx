@@ -59,6 +59,7 @@ import {
   computeSpread,
 } from "@/hooks/useReaderNavigation";
 import {
+  CLICK_ACTION,
   FIT_MODE,
   J_SCROLL_UNIT,
   K_BEHAVIOR,
@@ -147,6 +148,43 @@ function servedInfoKb(info: ResizedPageInfo | null | undefined): number | undefi
 const PAGINATOR_PAGECOUNT_FONT_SIZE = "1.25rem";
 /** Matches `toast.tsx`'s own `AUTO_CLOSE_TIME.info` default. */
 const TOAST_DURATION_MS = 5000;
+
+/** Reader diagnostics. A shortcut that quietly does nothing (a `j` that fails to scroll, a click
+ * that turns instead of scrolling) leaves no trace otherwise, and reproducing it on a phone means
+ * reading this in the remote console. `console.debug` stays behind devtools' verbose level, and
+ * `localStorage.readerDebug = "0"` silences it entirely. */
+function readerDebugEnabled(): boolean {
+  try {
+    return localStorage.getItem("readerDebug") !== "0";
+  } catch {
+    return false;
+  }
+}
+
+function readerLog(kind: string, data: Record<string, unknown>): void {
+  if (!readerDebugEnabled()) return;
+  // eslint-disable-next-line no-console -- these lines are the whole point of the switch above.
+  console.debug(`[reader] ${kind}`, data);
+}
+
+/** How long a `j`/`k` step counts as the committed scroll position. Covers the smooth animation
+ * (a few hundred ms) plus a generous margin for a lagging frame clock. */
+const SCROLL_INTENT_MS = 900;
+
+/** `performance.now()` through a helper: the steps below only ever run from input handlers, but a
+ * bare call inside the component body reads as render-time impurity to the hooks lint. */
+function nowMs(): number {
+  return performance.now();
+}
+
+/** Where the viewport sits now, for the diagnostics above and for the edge test `j`/`k` share. */
+function scrollPosition() {
+  return {
+    y: Math.round(window.scrollY),
+    max: Math.round(document.documentElement.scrollHeight - window.innerHeight),
+    viewport: Math.round(window.innerHeight),
+  };
+}
 /** The preview sweep moves at a constant speed; the clamp keeps tiny and poster-sized pages sane. */
 const WIPE_SPEED_PX_PER_MS = 1.6;
 const WIPE_MIN_MS = 200;
@@ -292,6 +330,43 @@ export function Reader() {
         }) ?? undefined,
     });
   }, [unreadableChapters, t]);
+  // A patch that could not be read: the archive still opens, but the pages the patch contributed
+  // are gone, so say so once instead of letting the book silently look shorter. The pages the
+  // backend lists are the ones that vanished — markers and bookmark state on them are suppressed
+  // below rather than pointing at whichever page inherited the number.
+  const patchDamage = isTank ? null : (singlePages.data?.patch_damage ?? null);
+  const patchDamageNoticeShown = useRef(false);
+  useEffect(() => {
+    if (!patchDamage || patchDamageNoticeShown.current) return;
+    patchDamageNoticeShown.current = true;
+    toast({
+      icon: "warning",
+      text:
+        t("reader.patchUnreadable", {
+          count: patchDamage.pages.length,
+          sources: patchDamage.sources.map((s) => s.title || s.name).join("、"),
+        }) ?? undefined,
+    });
+  }, [patchDamage, t]);
+  // Tankoubon members report their own damaged patches; the book still reads, so say which
+  // chapters lost pages rather than leaving the reader to wonder where they went.
+  const tankDamagedPatches = useMemo(
+    () => (isTank ? tankReading.damagedPatches : []),
+    [isTank, tankReading.damagedPatches],
+  );
+  const tankPatchNoticeShown = useRef(false);
+  useEffect(() => {
+    if (tankDamagedPatches.length === 0 || tankPatchNoticeShown.current) return;
+    tankPatchNoticeShown.current = true;
+    toast({
+      icon: "warning",
+      text:
+        t("reader.tankPatchUnreadable", {
+          count: tankDamagedPatches.length,
+          names: tankDamagedPatches.map((p) => p.title).join("、"),
+        }) ?? undefined,
+    });
+  }, [tankDamagedPatches, t]);
   useDocumentTitle(metadata.data?.title);
   const settings = useSettings();
   const updateSettings = useUpdateSettings();
@@ -831,6 +906,11 @@ export function Reader() {
   ]);
 
   const lastSpreadHeightRef = useRef<number | null>(null);
+  // Where the last `j`/`k` step committed the viewport to, while its smooth animation is still
+  // running. `window.scrollY` lags that by a few frames, which made a `k` pressed right after a `j`
+  // see the pre-`j` position, call itself at the top edge, and turn the page backwards instead of
+  // scrolling up.
+  const scrollIntentRef = useRef<{ position: number; at: number } | null>(null);
   const lastFileInfoRef = useRef<string | null>(null);
   // Tracks pages whose Content-Length has already been requested, so the UI can show the file-size
   // part of the file-info bar while the actual image is still transferring (it used to wait for
@@ -1397,6 +1477,8 @@ export function Reader() {
   }, [archiveId]);
 
   function goTo(target: Parameters<typeof computeNextPage>[0]) {
+    // The page about to render is a different height, so any step still in flight is meaningless.
+    scrollIntentRef.current = null;
     const isSpread = spread.right !== null;
     const next = computeNextPage(
       target,
@@ -1452,6 +1534,80 @@ export function Reader() {
         window.scrollTo({ top: 0, behavior: "smooth" });
       }
     }
+  }
+
+  /** One `j`/`k` step: scroll by the configured distance while the page still has room to move in
+   * that direction, and turn only at the edge. Clicks run through here too, so a click on the page
+   * behaves like the key the reader options describe by default rather than like a bare page turn;
+   * `clickAction` decides which of the three click behaviors that is. */
+  function stepOrTurn(direction: "next" | "prev", origin: "key" | "click" = "key") {
+    if (readerSettings.infiniteScroll) {
+      goToInfiniteScrollPage(currentPage, direction);
+      return;
+    }
+    if (origin === "click" && readerSettings.clickAction === CLICK_ACTION.TURN) {
+      readerLog("step", {
+        direction,
+        turned: true,
+        reason: "clickAction turn",
+        ...scrollPosition(),
+      });
+      goTo(direction);
+      return;
+    }
+    // `BACK` is `k`'s own escape hatch; only the click behaviors that follow the keys inherit it.
+    const followKeys =
+      origin === "key" || readerSettings.clickAction === CLICK_ACTION.KEYS;
+    if (
+      direction === "prev" &&
+      followKeys &&
+      readerSettings.kBehavior === K_BEHAVIOR.BACK
+    ) {
+      readerLog("step", { direction, turned: true, reason: "kBehavior", ...scrollPosition() });
+      goTo("prev");
+      return;
+    }
+    const intent = scrollIntentRef.current;
+    const pending = intent !== null && nowMs() - intent.at < SCROLL_INTENT_MS;
+    const from = pending ? intent.position : window.scrollY;
+    const maxScroll = Math.max(
+      0,
+      document.documentElement.scrollHeight - window.innerHeight,
+    );
+    const step =
+      readerSettings.jScrollUnit === J_SCROLL_UNIT.PX
+        ? readerSettings.jScrollAmount
+        : (window.innerHeight * readerSettings.jScrollAmount) / 100;
+    const atEdge = direction === "next" ? from >= maxScroll - 1 : from <= 0;
+    // A zero step is the one way `j` can look like a dead key: `scrollBy(0)` moves nothing and the
+    // page is not at its edge either. Turning is the useful reading of an explicit zero.
+    if (atEdge || step <= 0) {
+      scrollIntentRef.current = null;
+      readerLog("step", {
+        direction,
+        turned: true,
+        atEdge,
+        step,
+        from: Math.round(from),
+        ...scrollPosition(),
+      });
+      goTo(direction);
+      return;
+    }
+    const target = Math.min(
+      maxScroll,
+      Math.max(0, from + (direction === "next" ? step : -step)),
+    );
+    scrollIntentRef.current = { position: target, at: nowMs() };
+    readerLog("step", {
+      direction,
+      turned: false,
+      step: Math.round(step),
+      from: Math.round(from),
+      to: Math.round(target),
+      ...scrollPosition(),
+    });
+    window.scrollTo({ top: target, behavior: "smooth" });
   }
 
   /** Touch infinite scroll reads vertically, so a tap on the lower half scrolls forward by the `j`
@@ -1571,13 +1727,13 @@ export function Reader() {
   // whole viewport becomes the turn target, split down the middle like the page itself. The image
   // link already turns pages and calls `preventDefault`, the loading placeholder does the same, and
   // the floating fit control stays out of the exclusion list, so nothing turns twice or fights the
-  // mode menu. A click there does what a click on the page would: in infinite scroll that is the
-  // page images' own scroll-then-turn, not a plain page turn. It closes over this render's page,
-  // hence the ref instead of re-subscribing.
+  // mode menu. A click there does what a click on the page would: scroll by the `j`/`k` step and
+  // turn only at the edge, and in infinite scroll the page images' own scroll-then-turn. It closes
+  // over this render's page, hence the ref instead of re-subscribing.
   function turnFromOutside(clientX: number, clientY: number) {
     const target = clientX < window.innerWidth / 2 ? "prev" : "next";
     if (!readerSettings.infiniteScroll) {
-      goTo(target);
+      stepOrTurn(target, "click");
     } else if (!supportsHover) {
       onInfiniteScrollTap(clientY);
     } else {
@@ -2020,11 +2176,44 @@ export function Reader() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [archiveId, totalPages]);
 
+  // A real scroll input takes over from a step that is still animating: without this, the next
+  // `j`/`k` would measure from the stale committed position and jump.
+  useEffect(() => {
+    function release() {
+      scrollIntentRef.current = null;
+    }
+    window.addEventListener("wheel", release, { passive: true });
+    window.addEventListener("touchmove", release, { passive: true });
+    return () => {
+      window.removeEventListener("wheel", release);
+      window.removeEventListener("touchmove", release);
+    };
+  }, []);
+
   useEffect(() => releaseWakeLock, []);
 
-  const currentBookmark = (bookmarks.data ?? []).find(
-    (b) => b.page === currentPage,
-  );
+  useEffect(() => {
+    if (!readerDebugEnabled()) return;
+    let lastY = Math.round(window.scrollY);
+    let timer: number | undefined;
+    function onScroll() {
+      if (timer !== undefined) return;
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        const position = scrollPosition();
+        if (position.y === lastY) return;
+        lastY = position.y;
+        readerLog("scroll", position);
+      }, 150);
+    }
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, []);
+
+  const currentBookmark = (bookmarks.data ?? []).find((b) => b.page === currentPage);
   const isPageBookmarked = currentBookmark !== undefined;
 
   async function toggleBookmark() {
@@ -2049,6 +2238,18 @@ export function Reader() {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if ((e.target as HTMLElement)?.tagName === "INPUT") return;
+      // Logged before any branch handles the key: the question these diagnostics answer is "did
+      // the key arrive at all", which a log inside `j`'s own case would answer falsely.
+      readerLog("key", {
+        key: e.key,
+        shift: e.shiftKey,
+        modifier: e.ctrlKey || e.metaKey || e.altKey,
+        repeat: e.repeat,
+        overlay,
+        headless,
+        page: currentPage,
+        ...scrollPosition(),
+      });
 
       // The chapter OSD owns the keyboard while it is open: arrows/space must not fall through to
       // the page-turning shortcuts on the reader behind it.
@@ -2153,35 +2354,10 @@ export function Reader() {
           });
           return;
         case "j":
-          if (readerSettings.infiniteScroll) {
-            goToInfiniteScrollPage(currentPage, "next");
-          } else if (
-            window.innerHeight + window.scrollY >=
-            document.documentElement.scrollHeight - 1
-          ) {
-            goTo("next");
-          } else {
-            const step =
-              readerSettings.jScrollUnit === J_SCROLL_UNIT.PX
-                ? readerSettings.jScrollAmount
-                : window.innerHeight * (readerSettings.jScrollAmount / 100);
-            window.scrollBy({ top: step, behavior: "smooth" });
-          }
+          stepOrTurn("next");
           return;
         case "k":
-          if (readerSettings.infiniteScroll) {
-            goToInfiniteScrollPage(currentPage, "prev");
-          } else if (readerSettings.kBehavior === K_BEHAVIOR.BACK) {
-            goTo("prev");
-          } else if (window.scrollY <= 0) {
-            goTo("prev");
-          } else {
-            const step =
-              readerSettings.jScrollUnit === J_SCROLL_UNIT.PX
-                ? readerSettings.jScrollAmount
-                : window.innerHeight * (readerSettings.jScrollAmount / 100);
-            window.scrollBy({ top: -step, behavior: "smooth" });
-          }
+          stepOrTurn("prev");
           return;
         case "ArrowLeft":
         case "a":
@@ -2222,11 +2398,17 @@ export function Reader() {
           setOverlay((prev) => (prev === "help" ? null : "help"));
           return;
         case "m":
-          updateReaderSettings({ mangaMode: !readerSettings.mangaMode });
-          return;
         case "M": {
-          // Headless only, and no-op in endless scroll where the fit modes have nothing to size:
-          // the page column there is already full width and scrolls.
+          // Branch on the modifier, not on `e.key`: Caps Lock (and layouts that report the
+          // shifted character) can turn a plain `m` into "M" and vice versa, so keying off the
+          // character sent Shift+M to the manga toggle whenever it arrived as "m" — the
+          // "Shift+M sometimes does nothing" report.
+          if (!e.shiftKey) {
+            updateReaderSettings({ mangaMode: !readerSettings.mangaMode });
+            return;
+          }
+          // Headless only (deliberate: the fit modes belong to the no-chrome reading view), and a
+          // no-op in endless scroll where the page column already sizes itself.
           if (!headless || readerSettings.infiniteScroll) return;
           e.preventDefault();
           const cycle = [FIT_MODE.CONTAINER, FIT_MODE.FIT_WIDTH, FIT_MODE.FIT_HEIGHT] as const;
@@ -2640,6 +2822,7 @@ export function Reader() {
   const helpContent = (
     <div className="reader-help-body">
       <div className="reader-help-sections">
+        <div className="reader-help-column">
         <section className="reader-help-section">
           <h5 className="reader-help-section-title">{t("reader.helpSectionPaging")}</h5>
           <p className="reader-help-lead">{t("reader.youCanNavigateBetweenPages")}</p>
@@ -2682,28 +2865,6 @@ export function Reader() {
                 <Key>.</Key>
               </span>
               <span>{t("reader.readingPastTheFirstLast")}</span>
-            </li>
-          </ul>
-        </section>
-
-        <section className="reader-help-section">
-          <h5 className="reader-help-section-title">{t("reader.helpSectionTouch")}</h5>
-          <ul className="reader-help-gesture-grid">
-            <li className="reader-help-gesture-tile">
-              <TouchSwipeDemo direction="up" />
-              <span>{t("reader.twoFingerSwipeUp")}</span>
-            </li>
-            <li className="reader-help-gesture-tile">
-              <TouchSwipeDemo direction="down" />
-              <span>{t("reader.twoFingerSwipeDown")}</span>
-            </li>
-            <li className="reader-help-gesture-tile">
-              <TapSidesDemo />
-              <span>{t("reader.helpTapSides")}</span>
-            </li>
-            <li className="reader-help-gesture-tile">
-              <LongPressDemo />
-              <span>{t("reader.longPressExitsHeadless")}</span>
             </li>
           </ul>
         </section>
@@ -2769,6 +2930,30 @@ export function Reader() {
                 <span>{t("reader.sSetAStamp")}</span>
               </li>
             )}
+          </ul>
+        </section>
+
+        </div>
+        <div className="reader-help-column">
+        <section className="reader-help-section">
+          <h5 className="reader-help-section-title">{t("reader.helpSectionTouch")}</h5>
+          <ul className="reader-help-gesture-grid">
+            <li className="reader-help-gesture-tile">
+              <TouchSwipeDemo direction="up" />
+              <span>{t("reader.twoFingerSwipeUp")}</span>
+            </li>
+            <li className="reader-help-gesture-tile">
+              <TouchSwipeDemo direction="down" />
+              <span>{t("reader.twoFingerSwipeDown")}</span>
+            </li>
+            <li className="reader-help-gesture-tile">
+              <TapSidesDemo />
+              <span>{t("reader.helpTapSides")}</span>
+            </li>
+            <li className="reader-help-gesture-tile">
+              <LongPressDemo />
+              <span>{t("reader.longPressExitsHeadless")}</span>
+            </li>
           </ul>
         </section>
 
@@ -2860,6 +3045,7 @@ export function Reader() {
             </li>
           </ul>
         </section>
+        </div>
       </div>
 
       <p className="reader-help-lead" style={{ marginTop: 12 }}>
@@ -3736,7 +3922,7 @@ export function Reader() {
                   // The stamp layer now lives inside this page link, so its own clicks would
                   // otherwise bubble up here and turn the page.
                   if ((e.target as HTMLElement).closest?.("[data-marker-layer]")) return;
-                  goTo(isLeftHalf ? "prev" : "next");
+                  stepOrTurn(isLeftHalf ? "prev" : "next", "click");
                 }}
                 className="reader-page-frame"
                 style={{ position: "relative", display: "inline-flex" }}
@@ -4063,6 +4249,9 @@ export function Reader() {
             <div
               id="reader-help"
               className="id1 base-overlay small-overlay reader-help-panel"
+              // Marks the layer so `index.css`'s `html:has([data-overlay="modal"])` lock keeps the
+              // reader behind from scrolling; the panel's own scroller stops the chain at its ends.
+              data-overlay="modal"
             >
               <div className="navigation-help-toast">{helpContent}</div>
             </div>

@@ -46,25 +46,38 @@ use lanrurugi_storage::thumbnail_failures::{forget_all, forget_archive, forget_p
 
 use crate::AppState;
 
-/// `reason|size|mtime_ms` — the failure text plus the file fingerprint it was observed at. Split
-/// from the right when decoding so an error message containing `|` still round-trips.
-fn encode_entry(reason: &str, size: u64, mtime_ms: Option<u128>) -> String {
+/// `damaged|reason|size|mtime_ms` — whether the page's own bytes are the problem, the failure text,
+/// and the file fingerprint it was observed at. Split from the right when decoding so an error
+/// message containing `|` still round-trips. Entries written before the flag existed are
+/// `reason|size|mtime_ms` and decode as undamaged.
+fn encode_entry(damaged: bool, reason: &str, size: u64, mtime_ms: Option<u128>) -> String {
+    let flag = if damaged { '1' } else { '0' };
     match mtime_ms {
-        Some(mtime) => format!("{reason}|{size}|{mtime}"),
-        None => format!("{reason}|{size}|"),
+        Some(mtime) => format!("{flag}|{reason}|{size}|{mtime}"),
+        None => format!("{flag}|{reason}|{size}|"),
     }
 }
 
 fn decode_entry(raw: &str) -> Option<(&str, u64, Option<u128>)> {
     let (rest, mtime) = raw.rsplit_once('|')?;
-    let (reason, size) = rest.rsplit_once('|')?;
+    let (rest, size) = rest.rsplit_once('|')?;
     let size: u64 = size.parse().ok()?;
     let mtime = if mtime.is_empty() {
         None
     } else {
         Some(mtime.parse().ok()?)
     };
+    // Drop the leading damage flag; an entry from before it existed has none.
+    let reason = match rest.split_once('|') {
+        Some(("0" | "1", reason)) => reason,
+        _ => rest,
+    };
     Some((reason, size, mtime))
+}
+
+/// Same split as [`decode_entry`], keeping the damage flag.
+fn decode_flag(raw: &str) -> bool {
+    matches!(raw.split_once('|'), Some(("1", _)))
 }
 
 /// The file's current size and mtime in milliseconds — the "did this file change?" fingerprint.
@@ -92,10 +105,18 @@ fn fingerprint_matches(
     }
 }
 
+/// What a remembered failure means for the caller deciding which placeholder to serve.
+#[derive(Debug, Clone)]
+pub struct Block {
+    /// The page's own bytes cannot produce a thumbnail (a decode failure): the corrupted-page
+    /// placeholder is the honest answer, and not just a stand-in that goes away on the next try.
+    pub damaged: bool,
+    /// The remembered error text, for logs/diagnostics.
+    pub reason: String,
+}
+
 /// Why generation should be skipped right now, if it should. `None` means "try it".
-///
-/// The returned text is for logs/diagnostics — callers treat any `Some` as "serve the placeholder".
-pub async fn blocked(state: &AppState, archive_id: &str, page: u32, file: &Path) -> Option<String> {
+pub async fn blocked(state: &AppState, archive_id: &str, page: u32, file: &Path) -> Option<Block> {
     let Ok(mut conn) = state.redis.config.get().await else {
         return None;
     };
@@ -115,7 +136,10 @@ pub async fn blocked(state: &AppState, archive_id: &str, page: u32, file: &Path)
                 None => false,
             };
             if unchanged {
-                return Some(reason.to_string());
+                return Some(Block {
+                    damaged: decode_flag(&raw),
+                    reason: reason.to_string(),
+                });
             }
             // The file changed since the failure (re-imported, repaired, replaced): its entry no
             // longer describes it. Drop it and let this attempt be the deciding one.
@@ -130,7 +154,10 @@ pub async fn blocked(state: &AppState, archive_id: &str, page: u32, file: &Path)
         .await
         .ok()
         .flatten();
-    retry
+    retry.map(|reason| Block {
+        damaged: false,
+        reason,
+    })
 }
 
 /// Records a failed generation in the layer its classification calls for.
@@ -146,7 +173,15 @@ pub async fn note_failure(
     };
     if error.is_permanent() {
         let (size, mtime) = fingerprint(file).await.unwrap_or((0, None));
-        let entry = encode_entry(&error.to_string(), size, mtime);
+        // A decode failure is the one permanent kind that says "this page's bytes are unreadable"
+        // rather than "this container cannot be opened" — the distinction the caller needs to pick
+        // the corrupted-page placeholder over the generic one.
+        let entry = encode_entry(
+            matches!(error, ThumbnailError::Decode(_)),
+            &error.to_string(),
+            size,
+            mtime,
+        );
         let _: Result<(), _> = conn
             .hset(THUMBNAIL_BLACKLIST_KEY, slot(archive_id, page), entry)
             .await;
@@ -193,20 +228,32 @@ mod tests {
 
     #[test]
     fn an_entry_round_trips_even_when_the_reason_contains_a_pipe() {
-        let raw = encode_entry("libarchive error: a|b|c", 42, Some(1_700_000_000_123));
+        let raw = encode_entry(true, "libarchive error: a|b|c", 42, Some(1_700_000_000_123));
         let (reason, size, mtime) = decode_entry(&raw).expect("decodes");
         assert_eq!(reason, "libarchive error: a|b|c");
         assert_eq!(size, 42);
         assert_eq!(mtime, Some(1_700_000_000_123));
+        assert!(decode_flag(&raw), "a decode failure keeps its damage flag");
     }
 
     #[test]
     fn an_entry_without_an_mtime_still_decodes() {
-        let raw = encode_entry("I/O error: denied", 7, None);
+        let raw = encode_entry(false, "I/O error: denied", 7, None);
         let (reason, size, mtime) = decode_entry(&raw).expect("decodes");
         assert_eq!(reason, "I/O error: denied");
         assert_eq!(size, 7);
         assert_eq!(mtime, None);
+        assert!(!decode_flag(&raw));
+    }
+
+    #[test]
+    fn an_entry_written_before_the_damage_flag_existed_still_decodes() {
+        let (reason, size, mtime) =
+            decode_entry("worker crashed|11|1700000000123").expect("decodes");
+        assert_eq!(reason, "worker crashed");
+        assert_eq!(size, 11);
+        assert_eq!(mtime, Some(1_700_000_000_123));
+        assert!(!decode_flag("worker crashed|11|1700000000123"));
     }
 
     #[test]

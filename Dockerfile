@@ -302,7 +302,8 @@ RUN curl -fsSL -o /tmp/geoipupdate.deb \
 # ONNX Runtime CPU (`libonnxruntime.so`) — `lanrurugi-recommend`'s embedding model loads it via
 # `ort`'s `load-dynamic` feature (dlopen at runtime). Pinned to the same 1.26.0 version
 # jellyfin-suite's frame-forge validates against; CPU flavor from the official GitHub release
-# tarball. Extracted as the real `.so.1.26.0` file (the tarball's `libonnxruntime.so` is a
+# tarball, with an npmmirror binary mirror as fallback (the upstream repository started answering
+# 404 in 2026-11, which would otherwise break every image build). Extracted as the real `.so.1.26.0` file (the tarball's `libonnxruntime.so` is a
 # symlink) with the two symlinks recreated, then `ldconfig` for the soname.
 ARG ORT_VERSION=1.27.0
 RUN case "${TARGETARCH:-amd64}" in \
@@ -310,7 +311,8 @@ RUN case "${TARGETARCH:-amd64}" in \
         arm64) ort_arch=aarch64 ;; \
         *) echo "no ONNX Runtime build for ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
-    && curl -fsSL -o /tmp/ort.tgz https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-${ort_arch}-${ORT_VERSION}.tgz \
+    && (curl -fsSL -o /tmp/ort.tgz https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-${ort_arch}-${ORT_VERSION}.tgz \
+        || curl -fsSL -o /tmp/ort.tgz https://registry.npmmirror.com/-/binary/onnxruntime/v${ORT_VERSION}/onnxruntime-linux-${ort_arch}-${ORT_VERSION}.tgz) \
     && tar xzf /tmp/ort.tgz -C /tmp onnxruntime-linux-${ort_arch}-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} \
     && cp /tmp/onnxruntime-linux-${ort_arch}-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} /usr/local/lib/ \
     && ln -sf libonnxruntime.so.${ORT_VERSION} /usr/local/lib/libonnxruntime.so.1 \

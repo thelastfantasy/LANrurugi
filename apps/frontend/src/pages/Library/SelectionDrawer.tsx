@@ -182,7 +182,7 @@ export function SelectionDrawer({
             onClick={onSelectResults}
           >
             {selectingResults ? <i className="fa fa-cog fa-spin" aria-hidden="true" /> : <FaSquareCheck aria-hidden="true" />}
-            {t("Select All {{n}} Results", { n: filteredCount })}
+            {t("library.selectAllResults", { n: filteredCount })}
           </button>
           <button type="button" className="stdbtn" style={FOOTER_BUTTON} disabled={count === 0} onClick={onClear}>
             <FaEject aria-hidden="true" />
@@ -199,12 +199,12 @@ export function SelectionDrawer({
             className="stdbtn"
             style={{ ...FOOTER_BUTTON, gridColumn: "1 / -1" }}
             disabled={!canMerge}
-            title={mergeBlockedByTank ? t("Merge takes at most one existing Tankoubon") ?? undefined : undefined}
+            title={mergeBlockedByTank ? t("library.mergeBlockedByTank") ?? undefined : undefined}
             onClick={onMerge}
           >
             <FaCompress aria-hidden="true" />
             {t("Merge into Tankoubon")}
-            {mergeBlockedByTank && ` · ${t("{{n}} Tankoubon selected", { n: tankCount })}`}
+            {mergeBlockedByTank && ` · ${t("library.tankoubonSelectedCount", { n: tankCount })}`}
           </button>
         </div>
       </DrawerFooter>

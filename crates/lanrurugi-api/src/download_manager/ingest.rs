@@ -770,6 +770,22 @@ pub(crate) async fn catalogue_staged_file(
     // The record exists and its file is flushed, so a source left by a copy is redundant now.
     undo.succeeded().await;
 
+    // A file that catalogued with no pages is one the reader cannot open, and this is the moment
+    // every upload, download and share import passes through — the damaged list learns about it
+    // here instead of waiting for a scan. Cheap: one record read, and nothing is written unless
+    // the count really is zero.
+    if let Ok(Some(record)) = state.repos.archives.get(&archive_id).await {
+        if record.pagecount == 0 {
+            crate::integrity_scan::note_damage(
+                state,
+                &record,
+                crate::integrity_scan::Problem::NoPages,
+                "catalogued with no readable pages".to_string(),
+            )
+            .await;
+        }
+    }
+
     Ok(IngestedDownload {
         archive_id: archive_id.into_string(),
         is_new,
