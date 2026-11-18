@@ -137,6 +137,7 @@ pub(crate) async fn create_tankoubon_with(
         summary: summary.to_string(),
         tags: tags.to_string(),
         progress: 0,
+        lastreadtime: None,
         archives,
         thumbnail_manual: false,
         thumbnail_source_archive: None,
@@ -373,6 +374,7 @@ async fn create_or_rename_tankoubon(
                     summary: String::new(),
                     tags: String::new(),
                     progress: 0,
+                    lastreadtime: None,
                     archives: Vec::new(),
                     thumbnail_manual: false,
                     thumbnail_source_archive: None,
@@ -1191,24 +1193,6 @@ pub(crate) async fn reindex_tankoubon(state: &AppState, id: &TankId, old: Groupi
     }
 }
 
-/// The member archive holding a Tankoubon-global page number (1-based, spanning every member in
-/// volume order — legacy's `translate_global_page`), clamped to the last member when the marker sits
-/// past the end of the list.
-async fn member_at_page(state: &AppState, grouping: &Grouping, page: u32) -> Option<ArchiveId> {
-    let mut remaining = page.max(1);
-    for id in &grouping.archives {
-        let Ok(Some(archive)) = state.repos.archives.get(id).await else {
-            continue;
-        };
-        let pages = archive.pagecount.max(1);
-        if remaining <= pages {
-            return Some(id.clone());
-        }
-        remaining -= pages;
-    }
-    grouping.archives.last().cloned()
-}
-
 async fn update_tankoubon_progress(
     State(state): State<AppState>,
     Path((id, page)): Path<(TankId, u32)>,
@@ -1220,34 +1204,27 @@ async fn update_tankoubon_progress(
     match state
         .repos
         .groupings
-        .update(&id, |g| g.progress = page)
+        .update(&id, |g| {
+            g.progress = page;
+            // `sortby=lastread` (the library's "recently read" panel) ranks a Tankoubon by its own
+            // `lastreadtime`: reading a tank says nothing about reading one of its volumes
+            // standalone, so the members' own timestamps stay untouched.
+            g.lastreadtime = Some(now as i64);
+        })
         .await
     {
         Ok(None) => not_found(
             "update_tank_progress",
             format!("{id} doesn't exist in the database!"),
         ),
-        Ok(Some(grouping)) => {
-            // `sortby=lastread` (the library's "recently read" panel) sorts archives by their own
-            // `lastreadtime`; a Tankoubon has no such field, so the search engine ranks it by the
-            // newest one among its members. Touch the member the reader is actually on, otherwise
-            // opening a tank never moves it up that list.
-            if let Some(member) = member_at_page(&state, &grouping, page).await {
-                let _ = state
-                    .repos
-                    .archives
-                    .update(&member, |a| a.lastreadtime = now)
-                    .await;
-            }
-            axum::Json(json!({
-                "id": id,
-                "operation": "update_tank_progress",
-                "page": page,
-                "lastreadtime": now,
-                "success": 1,
-            }))
-            .into_response()
-        }
+        Ok(Some(_grouping)) => axum::Json(json!({
+            "id": id,
+            "operation": "update_tank_progress",
+            "page": page,
+            "lastreadtime": now,
+            "success": 1,
+        }))
+        .into_response(),
         Err(e) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "update_tank_progress",

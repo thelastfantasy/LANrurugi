@@ -843,6 +843,7 @@ async fn import_from_legacy_inner(
             summary: legacy_tank.summary.clone(),
             tags: legacy_tank.tags.clone(),
             progress,
+            lastreadtime: None,
             archives: legacy_tank
                 .archives
                 .iter()

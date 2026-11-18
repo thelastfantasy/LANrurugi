@@ -173,6 +173,13 @@ pub struct Grouping {
     /// The tank's own reading-progress marker (a global page number spanning all archives, per
     /// legacy `translate_global_page`) — distinct from any single archive's `lastreadpage`.
     pub progress: u32,
+    /// When this Tankoubon itself was last opened, independent of its members' own `lastreadtime`:
+    /// reading a tank says nothing about reading one of its volumes standalone, and the library's
+    /// "recently read" order ranks a tank by this value. `None` on records written before the field
+    /// existed — the search side then falls back to the MAX `lastreadtime` across members, which is
+    /// what it had to impute for every tank before this field existed.
+    #[serde(default)]
+    pub lastreadtime: Option<i64>,
     /// Ordered archive IDs (order is significant: volume order).
     pub archives: Vec<ArchiveId>,
     /// `true` once someone has explicitly picked a cover via `PUT /tankoubons/{id}/thumbnail`

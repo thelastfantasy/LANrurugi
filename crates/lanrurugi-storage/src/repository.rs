@@ -871,6 +871,8 @@ const SCORE_THUMBNAIL_SOURCE_PAGE: isize = -6;
 const SCORE_CHAPTER_NAMES: isize = -7;
 const SCORE_CREATED_AT: isize = -8;
 const SCORE_UPDATED_AT: isize = -9;
+/// The tank's own `lastreadtime` — additive beyond legacy, see `Grouping::lastreadtime`.
+const SCORE_LASTREADTIME: isize = -10;
 
 impl GroupingRepository {
     pub fn new(pool: Pool) -> Self {
@@ -885,7 +887,7 @@ impl GroupingRepository {
         }
 
         let metadata_members: Vec<String> = conn
-            .zrangebyscore(tankid.as_str(), SCORE_UPDATED_AT, SCORE_NAME)
+            .zrangebyscore(tankid.as_str(), SCORE_LASTREADTIME, SCORE_NAME)
             .await?;
         let mut name = String::new();
         let mut summary = String::new();
@@ -897,6 +899,7 @@ impl GroupingRepository {
         let mut chapter_names = String::new();
         let mut created_at = None;
         let mut updated_at = None;
+        let mut lastreadtime = None;
         for member in metadata_members {
             if let Some(v) = member.strip_prefix("name_") {
                 name = v.to_string();
@@ -918,6 +921,8 @@ impl GroupingRepository {
                 created_at = v.parse().ok();
             } else if let Some(v) = member.strip_prefix("updated_at_") {
                 updated_at = v.parse().ok();
+            } else if let Some(v) = member.strip_prefix("lastreadtime_") {
+                lastreadtime = v.parse().ok();
             }
         }
 
@@ -933,6 +938,7 @@ impl GroupingRepository {
             summary,
             tags,
             progress,
+            lastreadtime,
             archives,
             thumbnail_manual,
             thumbnail_source_archive,
@@ -1043,6 +1049,16 @@ impl GroupingRepository {
             (SCORE_SUMMARY, format!("summary_{}", grouping.summary)),
             (SCORE_TAGS, format!("tags_{}", grouping.tags)),
             (SCORE_PROGRESS, format!("progress_{}", grouping.progress)),
+            (
+                SCORE_LASTREADTIME,
+                format!(
+                    "lastreadtime_{}",
+                    grouping
+                        .lastreadtime
+                        .map(|v| v.to_string())
+                        .unwrap_or_default()
+                ),
+            ),
             (
                 SCORE_THUMBNAIL_MANUAL,
                 format!(
@@ -1643,6 +1659,8 @@ mod tests {
             summary: "series summary".to_string(),
             tags: "series:my series".to_string(),
             progress: 42,
+            // Round-trips through the metadata member at score -10, not a struct field of its own.
+            lastreadtime: Some(1_700_000_123),
             archives: vec![
                 ArchiveId("b".repeat(40)),
                 ArchiveId("c".repeat(40)),
@@ -2015,6 +2033,7 @@ mod tests {
             summary: String::new(),
             tags: String::new(),
             progress: 0,
+            lastreadtime: None,
             archives: vec![a1.clone(), a2.clone(), a3_unscanned.clone(), a4.clone()],
             thumbnail_manual: false,
             thumbnail_source_archive: None,
@@ -2116,6 +2135,7 @@ mod tests {
             summary: String::new(),
             tags: String::new(),
             progress: 0,
+            lastreadtime: None,
             archives: vec![a2.clone()],
             thumbnail_manual: false,
             thumbnail_source_archive: None,

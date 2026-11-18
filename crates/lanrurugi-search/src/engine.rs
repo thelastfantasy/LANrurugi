@@ -2099,28 +2099,7 @@ async fn sort_ids(
         let mut pairs: Vec<(String, u64)> = Vec::new();
         for id in filtered {
             let t: u64 = if id.starts_with("TANK") {
-                // A Tankoubon has no `lastreadtime` field of its own — matches legacy's own
-                // Lua-scripted sort (`Model/Search.pm`'s `sort_results`): its effective sort key
-                // is the MAX `lastreadtime` across its member archives (`ZRANGEBYSCORE id 1
-                // '+inf'`, the same score range `GroupingRepository::get` uses to read real
-                // member archive ids back out of the tank's own zset — scores 0 and below are
-                // reserved for the tank's own name/summary/tags/progress fields).
-                let members: Vec<String> = archive_conn
-                    .zrangebyscore(id, 1, "+inf")
-                    .await
-                    .unwrap_or_default();
-                let member_ids: Vec<&str> = members.iter().map(String::as_str).collect();
-                hmget_many(archive_conn, &member_ids, &["lastreadtime"])
-                    .await
-                    .unwrap_or_default()
-                    .iter()
-                    .filter_map(|row| {
-                        row.first()
-                            .and_then(|v| v.as_deref())
-                            .and_then(|v| v.trim().parse::<u64>().ok())
-                    })
-                    .max()
-                    .unwrap_or(0)
+                tank_lastread_value(archive_conn, id).await
             } else {
                 lastread.get(id.as_str()).copied().unwrap_or(0)
             };
@@ -2225,6 +2204,43 @@ async fn sort_ids(
     let mut result: Vec<String> = keyed.into_iter().map(|(id, _)| id).collect();
     result.extend(unkeyed);
     Ok(result)
+}
+
+/// A Tankoubon's effective `lastread` sort key. Its own `lastreadtime` (score -10 in the tank's
+/// zset, `Grouping::lastreadtime`) wins; records written before that field existed carry no such
+/// member, so impute the MAX `lastreadtime` across member archives — legacy's own Lua-scripted sort
+/// (`Model/Search.pm`'s `sort_results`), and still the right answer for a tank nobody has opened
+/// since the upgrade (`ZRANGEBYSCORE id 1 '+inf'` is the score range holding real member archive
+/// ids; scores 0 and below are the tank's own metadata fields).
+async fn tank_lastread_value(archive_conn: &mut deadpool_redis::Connection, tank_id: &str) -> u64 {
+    use deadpool_redis::redis::AsyncCommands;
+    let own: Vec<String> = archive_conn
+        .zrangebyscore(tank_id, -10, -10)
+        .await
+        .unwrap_or_default();
+    if let Some(value) = own
+        .iter()
+        .find_map(|m| m.strip_prefix("lastreadtime_"))
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        return value;
+    }
+    let members: Vec<String> = archive_conn
+        .zrangebyscore(tank_id, 1, "+inf")
+        .await
+        .unwrap_or_default();
+    let member_ids: Vec<&str> = members.iter().map(String::as_str).collect();
+    hmget_many(archive_conn, &member_ids, &["lastreadtime"])
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|row| {
+            row.first()
+                .and_then(|v| v.as_deref())
+                .and_then(|v| v.trim().parse::<u64>().ok())
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// Imputes a Tankoubon's `date_added`/`timestamp` sort value (legacy `_impute_tank_date_tags` /
@@ -2567,6 +2583,44 @@ mod tests {
             .srem(TANKGROUPED_KEY, &[tank, member.as_str()])
             .await
             .unwrap();
+    }
+
+    /// A Tankoubon's own `lastreadtime` (score -10 metadata member) must win over the MAX across
+    /// its members, and a record without one must still fall back to that MAX — otherwise every
+    /// tank written before the field existed would suddenly drop out of "recently read".
+    #[tokio::test]
+    async fn tank_lastread_prefers_its_own_timestamp_over_its_members() {
+        let Some((archive_pool, _search_pool, _bookmarks)) = test_pools().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let mut conn = archive_pool.get().await.unwrap();
+        let member = "e".repeat(40);
+        let tank = "TANK_1785750098";
+        let _: () = conn.hset(&member, "lastreadtime", 100_u64).await.unwrap();
+        let _: () = conn
+            .zadd_multiple(tank, &[(1, member.as_str())])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            tank_lastread_value(&mut conn, tank).await,
+            100,
+            "with no own timestamp the newest member stands in"
+        );
+
+        let _: () = conn
+            .zadd_multiple(tank, &[(-10, "lastreadtime_300")])
+            .await
+            .unwrap();
+        assert_eq!(
+            tank_lastread_value(&mut conn, tank).await,
+            300,
+            "the tank's own timestamp wins"
+        );
+
+        let _: () = conn.del(tank).await.unwrap();
+        let _: () = conn.del(&member).await.unwrap();
     }
 
     /// Spec 025: an archive in the pending set is absent from every search shape — admin grouped

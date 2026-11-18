@@ -1366,6 +1366,7 @@ mod tests {
                 summary: String::new(),
                 tags: String::new(),
                 progress: 0,
+                lastreadtime: None,
                 archives: vec![],
                 thumbnail_manual: false,
                 thumbnail_source_archive: None,

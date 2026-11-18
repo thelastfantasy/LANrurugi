@@ -430,6 +430,7 @@ async fn create_tankoubon_from_folder(
         summary: String::new(),
         tags: tags.clone(),
         progress: 0,
+        lastreadtime: None,
         archives: archive_ids.clone(),
         thumbnail_manual: false,
         thumbnail_source_archive: None,

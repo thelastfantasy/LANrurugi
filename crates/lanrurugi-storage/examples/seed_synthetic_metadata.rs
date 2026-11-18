@@ -246,6 +246,7 @@ async fn main() {
                 summary: String::new(),
                 tags: String::new(),
                 progress: 0,
+                lastreadtime: None,
                 archives: std::mem::take(&mut tank_members),
                 thumbnail_manual: false,
                 thumbnail_source_archive: None,

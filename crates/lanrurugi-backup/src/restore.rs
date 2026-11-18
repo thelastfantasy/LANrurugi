@@ -89,6 +89,7 @@ pub async fn restore(
                 summary: backup_tank.summary.clone(),
                 tags: backup_tank.tags.clone(),
                 progress: 0,
+                lastreadtime: None,
                 archives: backup_tank
                     .archives
                     .iter()

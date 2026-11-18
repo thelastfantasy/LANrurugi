@@ -123,6 +123,7 @@ mod tests {
             summary: String::new(),
             tags: String::new(),
             progress,
+            lastreadtime: None,
             archives: Vec::new(),
             thumbnail_manual: false,
             thumbnail_source_archive: None,
