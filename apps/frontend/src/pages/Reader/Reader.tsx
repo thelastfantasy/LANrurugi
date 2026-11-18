@@ -791,6 +791,8 @@ export function Reader() {
    * real one; without this, every such swap drags the text the reader is on up or down.
    */
   const infiniteScrollAnchorRef = useRef<{ el: HTMLElement; offset: number } | null>(null);
+  /** The resumed page while it is still being held under the viewport, across effect re-runs. */
+  const infiniteScrollPinPageRef = useRef<number | null>(null);
   const infiniteScrollCurrentPageRef = useRef<number | null>(null);
   const infiniteScrollResumedRef = useRef(false);
   const infiniteScrollResumePageRef = useRef<number | null>(null);
@@ -2517,31 +2519,40 @@ export function Reader() {
     // the tracker attaches after it fires so its first read doesn't stomp currentPage back to 1.
     const alreadyResumed = infiniteScrollResumedRef.current;
     // Pages above the resumed one settle from their reserved to their real height a few pixels at
-    // a time; until the reader touches anything, every such change re-pins the resumed page.
-    let pinned: HTMLElement | null = null;
-    // The resumed page's centre must land on the viewport's centre, always — including a page taller
-    // than the viewport, where `scrollIntoView({block:"center"})` is left to the browser's own
-    // rounding and can be off. Computed here so every re-pin lands on the same pixel.
-    const pin = (el: HTMLElement) => {
+    // a time; until the reader touches anything, every such change re-pins the resumed page. The page
+    // number lives in a ref because this effect re-runs whenever `pages.data` changes (a member of a
+    // Tankoubon finishing its listing, say) — a local would drop the pin mid-settle and leave the
+    // reader parked wherever the placeholder heights happened to put it.
+    const pinnedPage = () => infiniteScrollPinPageRef.current;
+    // A page that fits the viewport is centred on it; a page taller than the viewport — which cannot
+    // be centred without cutting off both ends — lands with its own top edge on the viewport's top,
+    // i.e. the reader starts at the beginning of that page. Computed rather than left to
+    // `scrollIntoView`, whose `block:"center"` silently top-aligns the tall case and rounds the rest.
+    const alignFor = (rect: DOMRect) =>
+      rect.height > window.innerHeight ? rect.top : rect.top + rect.height / 2 - window.innerHeight / 2;
+    const pin = (el: HTMLElement | null) => {
+      // A re-render can replace the column's nodes, leaving the element we pinned against detached:
+      // its rect is all zeroes, which would silently scroll the reader away instead of re-pinning.
+      if (!el || !el.isConnected) return;
       const rect = el.getBoundingClientRect();
-      const top = window.scrollY + rect.top - (window.innerHeight - rect.height) / 2;
-      window.scrollTo({ top: Math.max(0, Math.round(top)) });
+      window.scrollTo({ top: Math.max(0, Math.round(window.scrollY + alignFor(rect))) });
     };
     if (!alreadyResumed) {
       if (!infiniteScrollResumeReady) return;
       infiniteScrollResumedRef.current = true;
       infiniteScrollCurrentPageRef.current = currentPage;
-      pinned = root.querySelector<HTMLElement>(`[data-page="${currentPage}"]`);
-      if (pinned) pin(pinned);
+      infiniteScrollPinPageRef.current = currentPage;
+      const resumed = root.querySelector<HTMLElement>(`[data-page="${currentPage}"]`);
+      if (resumed) pin(resumed);
       // The resumed flag is a ref, so no render follows to drop `infiniteScrollResumeHidden`.
       root.style.removeProperty("visibility");
     }
     const PIN_EVENTS = ["pointerdown", "touchstart", "wheel", "keydown"] as const;
     const unpin = () => {
-      pinned = null;
+      infiniteScrollPinPageRef.current = null;
       PIN_EVENTS.forEach((type) => window.removeEventListener(type, unpin, true));
     };
-    if (pinned) {
+    if (pinnedPage() !== null) {
       PIN_EVENTS.forEach((type) =>
         window.addEventListener(type, unpin, { capture: true, passive: true }),
       );
@@ -2566,7 +2577,7 @@ export function Reader() {
         if (rect.top > viewportMid || rect.bottom < viewportMid) continue;
         infiniteScrollAnchorRef.current = {
           el: img,
-          offset: rect.top + rect.height / 2 - viewportMid,
+          offset: alignFor(rect),
         };
         const page = Number(img.dataset.page);
         if (
@@ -2588,17 +2599,20 @@ export function Reader() {
     // Delivered after layout and before paint, so a re-pin here never shows the shifted frame.
     const resizeObserver = new ResizeObserver(() => {
       reflowGuardUntil = performance.now() + REFLOW_GUARD_MS;
-      if (pinned) {
-        pin(pinned);
+      const page = pinnedPage();
+      if (page !== null) {
+        const el = root.querySelector<HTMLElement>(`[data-page="${page}"]`);
+        if (el) pin(el);
         return;
       }
       // Scrolling manually: hold whatever page is under the viewport centre still, so a page above
       // that finishes loading cannot pull the reader away from what they are looking at.
       const anchor = infiniteScrollAnchorRef.current;
-      if (!anchor || !anchor.el.isConnected) return;
-      const mid = window.innerHeight / 2;
-      const rect = anchor.el.getBoundingClientRect();
-      const delta = rect.top + rect.height / 2 - mid - anchor.offset;
+      if (!anchor || !anchor.el.isConnected) {
+        infiniteScrollAnchorRef.current = null;
+        return;
+      }
+      const delta = alignFor(anchor.el.getBoundingClientRect()) - anchor.offset;
       if (Math.abs(delta) >= 1) window.scrollBy(0, delta);
     });
     root
