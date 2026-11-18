@@ -2596,8 +2596,7 @@ export function Reader() {
     }
     window.addEventListener("scroll", onScroll, { passive: true });
 
-    // Delivered after layout and before paint, so a re-pin here never shows the shifted frame.
-    const resizeObserver = new ResizeObserver(() => {
+    const reflow = () => {
       reflowGuardUntil = performance.now() + REFLOW_GUARD_MS;
       const page = pinnedPage();
       if (page !== null) {
@@ -2614,15 +2613,26 @@ export function Reader() {
       }
       const delta = alignFor(anchor.el.getBoundingClientRect()) - anchor.offset;
       if (Math.abs(delta) >= 1) window.scrollBy(0, delta);
-    });
+    };
+
+    // Delivered after layout and before paint, so a re-pin here never shows the shifted frame.
+    const resizeObserver = new ResizeObserver(reflow);
     root
       .querySelectorAll<HTMLElement>("[data-page]")
       .forEach((img) => resizeObserver.observe(img));
+
+    // A phone's viewport height is not constant: the address bar comes and goes, and every change
+    // moves the page under the viewport centre by half the difference. Re-applying the same
+    // alignment on resize keeps the resumed (or anchored) page where the reader left it.
+    window.addEventListener("resize", reflow);
+    window.visualViewport?.addEventListener("resize", reflow);
 
     return () => {
       unpin();
       window.clearTimeout(unpinTimer);
       window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", reflow);
+      window.visualViewport?.removeEventListener("resize", reflow);
       if (rafId !== null) cancelAnimationFrame(rafId);
       resizeObserver.disconnect();
     };
