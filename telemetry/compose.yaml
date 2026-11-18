@@ -32,10 +32,13 @@ services:
       retries: 5
 
   ingest:
-    # Must be an image built from this repository: the released `:latest` predates the
-    # `telemetry-ingest` subcommand it is asked to run.
-    #   podman build -t lanrurugi-telemetry:local .     (or: docker build …)
-    image: ${LANRURUGI_IMAGE:?put LANRURUGI_IMAGE in .env — build it locally, it is not released yet}
+    # Its own image, not the application image: `.github/workflows/telemetry.yml` publishes this
+    # when the sink's code changes, so a program release does not republish it. Point
+    # LANRURUGI_IMAGE at it; the application image would also work (the subcommand is in it), but
+    # it is republished on every release and would drag this container along.
+    #   LANRURUGI_IMAGE=ghcr.io/thelastfantasy/lanrurugi-telemetry:latest
+    # Building it locally instead is fine — see README.md, "Building it from source".
+    image: ${LANRURUGI_IMAGE:?put LANRURUGI_IMAGE in .env — lanrurugi-telemetry:latest, or a local build}
     # The image's own entrypoint would start a bundled Redis and `serve`; this service wants neither.
     entrypoint: ["lanrurugi-server"]
     command: ["telemetry-ingest", "--bind", "0.0.0.0:8099"]
