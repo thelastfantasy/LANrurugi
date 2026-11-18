@@ -714,17 +714,22 @@ async fn fold_tanks(
         .collect();
     let mut reasons: HashMap<String, Vec<String>> = HashMap::new();
     for tank in grouped.iter().filter(|id| id.starts_with("TANK_")) {
-        if out.contains(tank) {
-            continue;
-        }
         let members: Vec<String> = archive_conn
             .zrangebyscore(tank.as_str(), 1, "+inf")
             .await
             .unwrap_or_default();
         let hits: Vec<String> = members
-            .into_iter()
-            .filter(|id| matched.contains(id))
+            .iter()
+            .filter(|id| matched.contains(*id))
+            .cloned()
             .collect();
+        // Unconditionally, even for a tank already in `out`: a member left in `grouped` after the
+        // membership change that folded it (a writer that updated the tank's own list without
+        // `sync_tank_membership`) would otherwise be emitted as its own row *and* folded into the
+        // tank — the same archive appearing twice, once on its own and once inside its Tankoubon.
+        for member in &members {
+            out.remove(member);
+        }
         if !hits.is_empty() {
             out.insert(tank.clone());
             reasons.insert(tank.clone(), hits);
@@ -2126,10 +2131,13 @@ async fn sort_ids(
         // Unlike the tag-namespace branch below there is no unkeyed tail to leave behind: every
         // candidate carries a number here (0 for a never-opened archive), so the direction
         // applies to the whole list.
+        // Ties fall back to the id: `filtered` comes out of Redis set iteration, whose order is
+        // not stable between calls, so two archives read at the same second (or two never-opened
+        // ones under `lastread_all`) would otherwise swap places on every refresh.
         if order_desc {
-            pairs.sort_by_key(|p| std::cmp::Reverse(p.1));
+            pairs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         } else {
-            pairs.sort_by_key(|p| p.1);
+            pairs.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
         }
         return Ok(pairs.into_iter().map(|(id, _)| id).collect());
     }
@@ -2518,6 +2526,47 @@ mod tests {
         for id in [&id_old, &member_new, &tank.to_string()] {
             let _: () = aconn.del(id).await.unwrap();
         }
+    }
+
+    /// A member still left in `LRR_TANKGROUPED` after being folded into a Tankoubon — a writer
+    /// that updated the tank's own member list without `sync_tank_membership` — must not come out
+    /// as a second, standalone row for the same content next to its tank.
+    #[tokio::test]
+    async fn fold_tanks_drops_a_member_that_is_still_marked_grouped() {
+        let Some((archive_pool, search_pool, _bookmarks)) = test_pools().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let mut aconn = archive_pool.get().await.unwrap();
+        let mut sconn = search_pool.get().await.unwrap();
+        let member = "f".repeat(40);
+        let tank = "TANK_1785750099";
+        let _: () = aconn
+            .zadd_multiple(tank, &[(1, member.as_str())])
+            .await
+            .unwrap();
+        let _: () = sconn
+            .sadd(TANKGROUPED_KEY, &[tank, member.as_str()])
+            .await
+            .unwrap();
+
+        let matched: HashSet<String> = vec![member.clone(), tank.to_string()].into_iter().collect();
+        let (out, reasons) = fold_tanks(&mut aconn, &mut sconn, matched).await.unwrap();
+        assert!(out.contains(tank), "the tank stands in for its member");
+        assert!(
+            !out.contains(&member),
+            "a folded member must not also be a standalone row"
+        );
+        assert_eq!(
+            reasons.get(tank).map(|v| v.as_slice()),
+            Some([member.clone()].as_slice())
+        );
+
+        let _: () = aconn.del(tank).await.unwrap();
+        let _: () = sconn
+            .srem(TANKGROUPED_KEY, &[tank, member.as_str()])
+            .await
+            .unwrap();
     }
 
     /// Spec 025: an archive in the pending set is absent from every search shape — admin grouped
