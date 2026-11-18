@@ -785,6 +785,12 @@ export function Reader() {
   const rightImgRef = useRef<HTMLImageElement>(null);
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
   const infiniteScrollRootRef = useRef<HTMLDivElement>(null);
+  /**
+   * The page the reader is looking at, plus where its centre sits relative to the viewport centre.
+   * Pages above finish decoding while the reader scrolls, swapping their placeholder height for the
+   * real one; without this, every such swap drags the text the reader is on up or down.
+   */
+  const infiniteScrollAnchorRef = useRef<{ el: HTMLElement; offset: number } | null>(null);
   const infiniteScrollCurrentPageRef = useRef<number | null>(null);
   const infiniteScrollResumedRef = useRef(false);
   const infiniteScrollResumePageRef = useRef<number | null>(null);
@@ -969,8 +975,13 @@ export function Reader() {
     infiniteScrollResumePageRef.current = currentPage;
   }
 
+  // A Tankoubon is not an archive on disk, so `/archives/{TANK_...}/page-dimensions` answers 500 —
+  // and the resume used to wait for that query to finish retrying (four attempts, ~9 s on a fast
+  // connection) before it could scroll to the saved page. Skip the request for tanks and let the
+  // resume happen straight away; the column's placeholder heights plus the re-pin-on-reflow below
+  // cover the pages whose real size is not known yet.
   const infiniteScrollResumeDimensions = usePageDimensions(
-    archiveId,
+    isTank ? null : archiveId,
     infiniteScrollResumePageRef.current ?? 0,
     readerSettings.infiniteScroll,
   );
@@ -1066,8 +1077,11 @@ export function Reader() {
       : !!pageTinyBlobs[spread.left] && !!pageTinyBlobs[spread.right]);
 
   // A failed dimensions request still resumes (with estimated heights) rather than never: the
-  // column stays hidden until the resume happens, so "never" would mean a blank reader.
+  // column stays hidden until the resume happens, so "never" would mean a blank reader. A Tankoubon
+  // never asks for dimensions at all (its id is not an archive), so it resumes straight away: the
+  // column has placeholder heights from the first paint and the re-pin below absorbs the settling.
   const infiniteScrollResumeReady =
+    isTank ||
     infiniteScrollResumePageRef.current === null ||
     infiniteScrollResumePageRef.current <= 1 ||
     infiniteScrollResumeDimensions.isSuccess ||
@@ -2505,12 +2519,14 @@ export function Reader() {
     // Pages above the resumed one settle from their reserved to their real height a few pixels at
     // a time; until the reader touches anything, every such change re-pins the resumed page.
     let pinned: HTMLElement | null = null;
-    // Centred in the viewport; a page taller than the viewport starts at its top instead, so the
-    // reader is not dropped into its middle.
-    const pin = (el: HTMLElement) =>
-      el.scrollIntoView({
-        block: el.getBoundingClientRect().height > window.innerHeight ? "start" : "center",
-      });
+    // The resumed page's centre must land on the viewport's centre, always — including a page taller
+    // than the viewport, where `scrollIntoView({block:"center"})` is left to the browser's own
+    // rounding and can be off. Computed here so every re-pin lands on the same pixel.
+    const pin = (el: HTMLElement) => {
+      const rect = el.getBoundingClientRect();
+      const top = window.scrollY + rect.top - (window.innerHeight - rect.height) / 2;
+      window.scrollTo({ top: Math.max(0, Math.round(top)) });
+    };
     if (!alreadyResumed) {
       if (!infiniteScrollResumeReady) return;
       infiniteScrollResumedRef.current = true;
@@ -2530,7 +2546,11 @@ export function Reader() {
         window.addEventListener(type, unpin, { capture: true, passive: true }),
       );
     }
-    const unpinTimer = window.setTimeout(unpin, 10_000);
+    // Pages above the resumed one keep swapping their placeholder height for a real one for as long
+    // as the reader keeps loading them; re-pinning for a full minute keeps the resumed page under the
+    // viewport instead of letting those upstream changes drag it away. Any real interaction unpins
+    // immediately, so this never fights the reader.
+    const unpinTimer = window.setTimeout(unpin, 60_000);
     const REFLOW_GUARD_MS = 400;
     let reflowGuardUntil = performance.now() + REFLOW_GUARD_MS;
 
@@ -2544,6 +2564,10 @@ export function Reader() {
       for (const img of images) {
         const rect = img.getBoundingClientRect();
         if (rect.top > viewportMid || rect.bottom < viewportMid) continue;
+        infiniteScrollAnchorRef.current = {
+          el: img,
+          offset: rect.top + rect.height / 2 - viewportMid,
+        };
         const page = Number(img.dataset.page);
         if (
           !Number.isNaN(page) &&
@@ -2564,7 +2588,18 @@ export function Reader() {
     // Delivered after layout and before paint, so a re-pin here never shows the shifted frame.
     const resizeObserver = new ResizeObserver(() => {
       reflowGuardUntil = performance.now() + REFLOW_GUARD_MS;
-      if (pinned) pin(pinned);
+      if (pinned) {
+        pin(pinned);
+        return;
+      }
+      // Scrolling manually: hold whatever page is under the viewport centre still, so a page above
+      // that finishes loading cannot pull the reader away from what they are looking at.
+      const anchor = infiniteScrollAnchorRef.current;
+      if (!anchor || !anchor.el.isConnected) return;
+      const mid = window.innerHeight / 2;
+      const rect = anchor.el.getBoundingClientRect();
+      const delta = rect.top + rect.height / 2 - mid - anchor.offset;
+      if (Math.abs(delta) >= 1) window.scrollBy(0, delta);
     });
     root
       .querySelectorAll<HTMLElement>("[data-page]")

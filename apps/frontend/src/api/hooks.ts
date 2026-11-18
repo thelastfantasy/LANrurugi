@@ -1226,6 +1226,12 @@ export function useLogin() {
     // Login page could mount the library with the cached pre-login `logged_in:false` status and
     // bounce straight back; with it, the provider observes the new cookies first.
     onSuccess: async () => {
+      // A guest-mode browser already populated identity-scoped caches with guest answers — notably
+      // `["settings"]`, whose `theme` is the *guest* theme. Those stay fresh for their staleTime,
+      // so the admin's own theme/settings were never fetched after logging in (the page kept the
+      // guest theme until a reload). Dropping every identity-dependent result matches what logout
+      // does; the session query is kept and invalidated below so guards still see it.
+      queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== SESSION_QUERY_KEY[0] })
       await queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY })
       // A browser that loaded the login page had no session, so the boot-time attempt found
       // capture disabled. This is what actually starts diagnostics for a fresh login.
