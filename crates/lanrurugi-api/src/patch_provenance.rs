@@ -7,11 +7,13 @@
 //! So the provenance (source archive id, name, title, `source:` sites, CRC32) and the merged-list
 //! positions of the patch's pages live here, written when the patch is created.
 //!
-//! When the patch stops being readable ([`report_damage`]) the archive's own reading progress and
-//! chapter markers are shifted down past the vanished pages — once, guarded by `damaged_at`, since
-//! this runs from a read path. Bookmarks and stamps are left alone in storage (they become valid
-//! again the moment the patch is restored) and are hidden by the reader for the affected pages,
-//! which is why the damaged page numbers are handed back to it.
+//! When the patch is found permanently unreadable ([`report_damage`]) everything that numbers pages
+//! follows the pictures past the vanished ones: reading progress, chapter markers, bookmarks and
+//! stamps move down, and those that sat on a vanished page are dropped. That rewrites user data from
+//! a read path, so it happens only for damage that re-reading cannot fix (a transient I/O error is
+//! ignored), and only once per patch file — decided under the archive's record lock, so two reads
+//! arriving together cannot shift everything twice. The damaged page numbers are handed back to the
+//! reader as well.
 
 use deadpool_redis::redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -160,15 +162,29 @@ pub struct PatchDamage {
 pub async fn report_damage(
     state: &AppState,
     archive: &Archive,
-    reason: &str,
+    error: &lanrurugi_scanner::patch::PatchError,
 ) -> Option<PatchDamage> {
-    let archive_id = archive.id.as_str();
-    let mut record = read(state, archive_id).await?;
-    if record.damaged_at.is_some() {
+    // A read that failed for a reason that may pass must not rewrite progress, chapters, bookmarks
+    // and stamps for good.
+    if !error.is_permanent() {
+        tracing::warn!(archive = %archive.id, %error, "patch could not be read this time; not treating it as damaged");
         return None;
     }
-    record.damaged_at = Some(crate::integrity_scan::now_secs());
-    store(state, archive_id, &record).await;
+    let reason = error.to_string();
+    let reason = reason.as_str();
+    let archive_id = archive.id.as_str();
+    let record = {
+        // The reader and the overview ask for the page list together: only one of them may claim
+        // the report, or the shifts below would run twice.
+        let _guard = lanrurugi_storage::record_lock::lock(&format!("patch:{archive_id}")).await;
+        let mut record = read(state, archive_id).await?;
+        if record.damaged_at.is_some() {
+            return None;
+        }
+        record.damaged_at = Some(crate::integrity_scan::now_secs());
+        store(state, archive_id, &record).await;
+        record
+    };
 
     shift_progress_and_toc(state, archive, &record.pages).await;
     shift_bookmarks_and_stamps(state, archive, &record.pages).await;

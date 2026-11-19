@@ -438,14 +438,18 @@ export function ArchiveOverviewOverlay({
   })()
 
   const [highlightedPage, setHighlightedPage] = useState<number | null>(null)
-  // The `scrollTop` this effect last set, or null while it has not centred anything yet. Kept in a
-  // ref rather than a local because the effect re-runs on every batch load.
+  // The `scrollTop` this effect last set — or, before it has centred anything, the one the overlay
+  // opened at. Kept in a ref rather than a local because the effect re-runs on every batch load.
   const appliedTopRef = useRef<number | null>(null)
   useEffect(() => {
     if (!autoFocus) return
     const section = document.getElementById("pages-section")
     const overlay = document.getElementById("archivePagesOverlay")
     if (!section || !overlay) return
+    // A drag that starts before the current page's batch has arrived is the reader taking over just
+    // as much as one after it: without a baseline, the first centring yanked the panel to the
+    // current page in the middle of that drag (a slow drag would suddenly jump a long way).
+    if (appliedTopRef.current === null) appliedTopRef.current = overlay.scrollTop
 
     // `scrollIntoView({ block: "center" })` centres against the overlay's box as it is at that one
     // instant. On a phone that box's height changes whenever the browser's own toolbar slides in or
@@ -455,7 +459,8 @@ export function ArchiveOverviewOverlay({
     const centreOnPage = () => {
       const cell = document.querySelector<HTMLElement>(`[data-page-cell="${currentPage}"]`)
       if (!cell) return false
-      // Anything but our own last write means the reader took over: never fight a manual scroll.
+      // Anything but our own last write (or the opening position) means the reader took over: never
+      // fight a manual scroll.
       if (appliedTopRef.current !== null && Math.abs(overlay.scrollTop - appliedTopRef.current) > 1) return true
       const box = overlay.getBoundingClientRect()
       const rect = cell.getBoundingClientRect()

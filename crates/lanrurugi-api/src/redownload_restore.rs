@@ -197,22 +197,28 @@ pub(crate) async fn apply(state: &AppState, queue_item_id: &str, new_id: &Archiv
             .repos
             .groupings
             .update(&tank_id, move |g| {
-                if let Some(pos) = g.archives.iter().position(|a| a.as_str() == old_id) {
-                    g.archives[pos] = ArchiveId(new_id_owned.clone());
-                    if let Some(entry) = chapters.first() {
-                        match g.chapter_names.iter_mut().find(|c| c.id == old_id) {
-                            Some(existing) => {
-                                existing.id = entry.id.clone();
-                                existing.name = entry.name.clone();
-                            }
-                            None => g.chapter_names.push(entry.clone()),
+                // A member taken out of the tank meanwhile stays out, and its page marker is no
+                // longer this archive's business.
+                let Some(pos) = g.archives.iter().position(|a| a.as_str() == old_id) else {
+                    return;
+                };
+                g.archives[pos] = ArchiveId(new_id_owned.clone());
+                if let Some(entry) = chapters.first() {
+                    match g.chapter_names.iter_mut().find(|c| c.id == old_id) {
+                        Some(existing) => {
+                            existing.id = entry.id.clone();
+                            existing.name = entry.name.clone();
                         }
+                        None => g.chapter_names.push(entry.clone()),
                     }
                 }
-                // The marker the tank had while this archive was still readable: recycling moved
-                // it to a neighbour, and the archive coming back is where it should point again.
-                let inside = slot.progress >= start && slot.progress < start.saturating_add(before);
-                if inside {
+                // Recycling moved a marker that sat inside this archive to a neighbour. Put it back
+                // only while it is still exactly there: anything else is reading done since the
+                // delete, which a snapshot from back then must not undo.
+                let was_inside =
+                    slot.progress >= start && slot.progress < start.saturating_add(before);
+                let parked = recycled_marker(start, before, pos, g.archives.len());
+                if was_inside && g.progress == parked {
                     g.progress = slot
                         .progress
                         .min(start.saturating_add(new_pagecount).saturating_sub(1));
@@ -227,11 +233,24 @@ pub(crate) async fn apply(state: &AppState, queue_item_id: &str, new_id: &Archiv
     }
 }
 
+/// Where `tank_members::after_recycle` parks a marker that was inside the member at `index`
+/// (pages `start..start + pagecount`) of a tank with `members` members.
+fn recycled_marker(start: u32, pagecount: u32, index: usize, members: usize) -> u32 {
+    if index > 0 {
+        start.saturating_sub(1)
+    } else if index + 1 < members {
+        start.saturating_add(pagecount)
+    } else {
+        1
+    }
+}
+
 /// Moves a tank's own page marker by `delta` when the replaced member's page count changed. Pages
-/// at or before the member's last page keep their number; everything after it moves.
+/// up to the member's last page keep their number; everything from the next member on moves.
 fn shifted_progress(progress: u32, start_page: u32, old_pagecount: u32, delta: i64) -> u32 {
+    // The first page of the next member.
     let after = start_page.saturating_add(old_pagecount);
-    if progress > after {
+    if progress >= after {
         (i64::from(progress) + delta).max(0) as u32
     } else {
         progress
@@ -266,7 +285,21 @@ async fn redis_hdel(
 
 #[cfg(test)]
 mod tests {
-    use super::shifted_progress;
+    use super::{recycled_marker, shifted_progress};
+
+    #[test]
+    fn the_next_members_first_page_moves_too() {
+        // Member spans 100..=119; page 120 is the next member's first page.
+        assert_eq!(shifted_progress(120, 100, 20, -5), 115);
+        assert_eq!(shifted_progress(119, 100, 20, -5), 119);
+    }
+
+    #[test]
+    fn the_parked_marker_matches_where_recycling_puts_it() {
+        assert_eq!(recycled_marker(100, 20, 2, 3), 99);
+        assert_eq!(recycled_marker(1, 20, 0, 3), 21);
+        assert_eq!(recycled_marker(1, 20, 0, 1), 1);
+    }
 
     #[test]
     fn pages_after_the_member_move_by_the_difference() {
@@ -276,8 +309,9 @@ mod tests {
 
     #[test]
     fn pages_inside_or_before_the_member_stay() {
+        // The member spans 100..=119.
         assert_eq!(shifted_progress(100, 100, 20, -5), 100);
-        assert_eq!(shifted_progress(120, 100, 20, -5), 120);
+        assert_eq!(shifted_progress(119, 100, 20, -5), 119);
     }
 
     #[test]

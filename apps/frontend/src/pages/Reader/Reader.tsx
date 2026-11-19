@@ -921,6 +921,9 @@ export function Reader() {
   // see the pre-`j` position, call itself at the top edge, and turn the page backwards instead of
   // scrolling up.
   const scrollIntentRef = useRef<{ position: number; at: number } | null>(null);
+  // The same for infinite scroll, as a page: `currentPage` only moves once the smooth scroll reaches
+  // the next page, so a second `j` before then computed the same target and the key seemed to stall.
+  const infiniteIntentRef = useRef<{ page: number; at: number } | null>(null);
   const lastFileInfoRef = useRef<string | null>(null);
   // Tracks pages whose Content-Length has already been requested, so the UI can show the file-size
   // part of the file-info bar while the actual image is still transferring (it used to wait for
@@ -1652,8 +1655,16 @@ export function Reader() {
   function goToInfiniteScrollPage(fromPage: number, target: "prev" | "next") {
     let offset = target === "next" ? 1 : -1;
     if (readerSettings.mangaMode) offset = -offset;
-    const nextPage = fromPage + offset;
+    // Stepping from where the reader is (not from a page they picked): continue from the page the
+    // previous step is still scrolling to.
+    const intent = infiniteIntentRef.current;
+    const base =
+      fromPage === currentPage && intent !== null && nowMs() - intent.at < SCROLL_INTENT_MS
+        ? intent.page
+        : fromPage;
+    const nextPage = base + offset;
     if (nextPage < 1 || nextPage > totalPages) {
+      infiniteIntentRef.current = null;
       startArchiveTransition(offset > 0 ? "next" : "prev");
       return;
     }
@@ -1666,9 +1677,10 @@ export function Reader() {
             ? "start"
             : undefined
         : "start";
-    document
-      .querySelector(`[data-page="${nextPage}"]`)
-      ?.scrollIntoView({ behavior: "smooth", block });
+    const el = document.querySelector(`[data-page="${nextPage}"]`);
+    if (!el) return;
+    infiniteIntentRef.current = { page: nextPage, at: nowMs() };
+    el.scrollIntoView({ behavior: "smooth", block });
   }
 
   useEffect(() => {

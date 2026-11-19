@@ -33,6 +33,20 @@ pub enum PatchError {
     Io(#[from] std::io::Error),
 }
 
+impl PatchError {
+    /// Whether the patch stays unusable however often it is read again: its container or metadata is
+    /// broken, or it belongs to other bytes. A plain I/O failure says nothing about the file.
+    pub fn is_permanent(&self) -> bool {
+        match self {
+            PatchError::Archive(e) => e.is_permanent(),
+            PatchError::MissingMetadata
+            | PatchError::InvalidMetadata(_)
+            | PatchError::Crc32Mismatch { .. } => true,
+            PatchError::Io(_) => false,
+        }
+    }
+}
+
 type Result<T> = std::result::Result<T, PatchError>;
 
 /// One group of pages to splice in at a single anchor point — `files` are inserted, in array

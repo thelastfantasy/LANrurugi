@@ -92,6 +92,8 @@
  *
  * ## Versions
  *
+ * - **1.2.0** — {@linkcode PluginSkipException}: a metadata plugin can say an archive is not from its
+ *   site, which the host counts as declined rather than failed (no warning, no diagnostics event).
  * - **1.1.0** — {@linkcode MetadataResult.primary_source}: a metadata plugin can name the one source
  *   the archive is known to be downloadable from.
  * - **1.0.0** — everything before versions were recorded.
@@ -101,7 +103,7 @@
 
 /** This SDK's version ({@link https://semver.org semver}): a minor step adds optional fields a plugin
  * may use, a major step changes what an existing plugin has to do. See the module docs' changelog. */
-export const SDK_VERSION = "1.1.0";
+export const SDK_VERSION = "1.2.0";
 
 /** The four plugin categories the host recognizes (`lanrurugi-api::plugins::PLUGIN_CATEGORIES`) —
  * also the fixed set of subdirectories under `plugins/` (`metadata/`, `login/`, `download/`,

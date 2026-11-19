@@ -39,21 +39,27 @@ pub(crate) async fn after_recycle(state: &AppState, archive: &Archive) {
         };
         let start = start_page(state, &grouping, index).await;
         let last = start.saturating_add(archive.pagecount.saturating_sub(1));
-        if grouping.progress < start || grouping.progress > last {
-            continue;
-        }
-        let moved = if index > 0 {
-            start - 1
-        } else if index + 1 < grouping.archives.len() {
-            last + 1
-        } else {
-            1
-        };
+        let member = archive.id.clone();
         let tank_id = grouping.tankid.clone();
+        // Decided on the tank as it is now: the reader may have moved on since the listing above.
         let result = state
             .repos
             .groupings
-            .update(&tank_id, move |g| g.progress = moved)
+            .update(&tank_id, move |g| {
+                if g.archives.iter().position(|a| *a == member) != Some(index) {
+                    return;
+                }
+                if g.progress < start || g.progress > last {
+                    return;
+                }
+                g.progress = if index > 0 {
+                    start - 1
+                } else if index + 1 < g.archives.len() {
+                    last + 1
+                } else {
+                    1
+                };
+            })
             .await;
         if let Err(e) = result {
             tracing::warn!(tank = %grouping.tankid, error = %e, "failed to move a tank's page marker out of a recycled member");
@@ -79,14 +85,7 @@ pub(crate) async fn after_permanent_delete_with(state: &AppState, id: &ArchiveId
             continue;
         };
         let tank_id = grouping.tankid.clone();
-        if grouping.archives.len() <= 1 {
-            if let Err(e) = state.repos.groupings.delete(&tank_id).await {
-                tracing::warn!(tank = %tank_id, error = %e, "failed to delete a tank whose only member was deleted");
-            }
-            continue;
-        }
         let start = start_page(state, &grouping, index).await;
-        let last = start.saturating_add(pagecount.saturating_sub(1));
 
         let removed_id = old_id.clone();
         let removed_str = old_id.to_string();
@@ -94,61 +93,55 @@ pub(crate) async fn after_permanent_delete_with(state: &AppState, id: &ArchiveId
             .repos
             .groupings
             .update(&tank_id, move |g| {
+                // Decided on the tank as it is now. The page numbers come from the listing above,
+                // so a member that moved since is only taken out, its marker left alone.
+                let same_slot = g.archives.iter().position(|a| *a == removed_id) == Some(index);
                 // Move the marker before the member disappears from the listing: after it, "the
                 // previous member's last page" is no longer `start - 1`.
-                if g.progress > last {
-                    g.progress = g.progress.saturating_sub(pagecount);
-                } else if g.progress >= start {
-                    g.progress = if index > 0 { start - 1 } else { start };
+                if same_slot {
+                    g.progress = marker_after_removal(g.progress, start, pagecount, index);
                 }
                 g.archives.retain(|a| *a != removed_id);
                 g.chapter_names.retain(|c| c.id != removed_str);
             })
             .await;
-        if let Err(e) = result {
-            tracing::warn!(tank = %grouping.tankid, error = %e, "failed to remove a deleted archive from its tank");
+        match result {
+            // The tank's last member is gone, so the tank goes too. Judged after the removal, not
+            // from the listing: a member added in the meantime keeps the tank.
+            Ok(Some(g)) if g.archives.is_empty() => {
+                if let Err(e) = state.repos.groupings.delete(&tank_id).await {
+                    tracing::warn!(tank = %tank_id, error = %e, "failed to delete a tank whose only member was deleted");
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(tank = %grouping.tankid, error = %e, "failed to remove a deleted archive from its tank")
+            }
         }
+    }
+}
+
+/// Where a tank's marker goes when the member at `index` (pages `start..start + pagecount`) is taken
+/// out: later pages move down by its length, a marker inside it lands on the previous member's last
+/// page (or, for the first member, on the page the next member now starts at).
+fn marker_after_removal(progress: u32, start: u32, pagecount: u32, index: usize) -> u32 {
+    let last = start.saturating_add(pagecount.saturating_sub(1));
+    if progress > last {
+        progress.saturating_sub(pagecount)
+    } else if progress >= start {
+        if index > 0 {
+            start - 1
+        } else {
+            start
+        }
+    } else {
+        progress
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use lanrurugi_core::ids::TankId;
-
-    fn grouping(progress: u32) -> Grouping {
-        Grouping {
-            tankid: TankId("TANK_0000000001".to_string()),
-            name: String::new(),
-            summary: String::new(),
-            tags: String::new(),
-            progress,
-            lastreadtime: None,
-            archives: Vec::new(),
-            thumbnail_manual: false,
-            thumbnail_source_archive: None,
-            thumbnail_source_page: None,
-            chapter_names: Vec::new(),
-            created_at: None,
-            updated_at: None,
-        }
-    }
-
-    /// The arithmetic both paths rely on, without a Redis round trip.
-    fn marker_after_removal(progress: u32, start: u32, pagecount: u32, index: usize) -> u32 {
-        let last = start + pagecount - 1;
-        if progress > last {
-            progress - pagecount
-        } else if progress >= start {
-            if index > 0 {
-                start - 1
-            } else {
-                start
-            }
-        } else {
-            progress
-        }
-    }
+    use super::marker_after_removal;
 
     #[test]
     fn markers_inside_the_deleted_member_land_on_a_neighbour() {
@@ -166,10 +159,5 @@ mod tests {
     #[test]
     fn markers_before_the_member_stay() {
         assert_eq!(marker_after_removal(50, 101, 60, 1), 50);
-    }
-
-    #[test]
-    fn an_empty_tank_still_round_trips_its_marker() {
-        assert_eq!(grouping(7).progress, 7);
     }
 }

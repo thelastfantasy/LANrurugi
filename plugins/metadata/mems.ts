@@ -108,7 +108,9 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   } else {
     let source_error = 'No matching EH gallery found. The archive title may have incorrect gallery identifiers.';
     logger.error(source_error);
-    throw new PluginSkipException(source_error);
+    // The title carries gallery identifiers, so this is the archive's own gallery failing to
+    // answer: a failure, not an archive from somewhere else.
+    throw new PluginErrorException(source_error);
   }
 }
 

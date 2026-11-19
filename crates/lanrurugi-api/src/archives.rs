@@ -4814,8 +4814,7 @@ pub(crate) async fn get_files(
             // markers are shifted past the pages that no longer exist.
             let patch_damage = match patch_error {
                 Some(error) => {
-                    crate::patch_provenance::report_damage(&state, &archive, &error.to_string())
-                        .await
+                    crate::patch_provenance::report_damage(&state, &archive, &error).await
                 }
                 None => None,
             };

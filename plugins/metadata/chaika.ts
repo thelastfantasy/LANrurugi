@@ -118,6 +118,10 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   // use (SDK 1.1 `primary_source`). Only an archive id: the downloader takes no gallery links, and a
   // title search finds galleries. The e-hentai source added alongside is never primary.
   let primary_source: string | undefined;
+  // Only a title search that finds nothing means "not a Chaika archive". With an id in hand, an
+  // empty answer is Chaika failing (its API returns nothing on an HTTP error), which must still be
+  // reported as a failure.
+  let searched = false;
   const archive_page = (type: string, id: string) =>
     type === "archive" ? `${chaika_url}/archive/${id}/` : undefined;
   if ((match = oneshotarg.match(/^(?:https?:\/\/)?panda\.chaika\.moe\/(gallery|archive)\/([0-9]+)\/?.*/))) {
@@ -131,13 +135,15 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     apply_result(await tags_from_chaika_id(tagged.type, tagged.id, addextra, addother, addsource, jpntitle));
     primary_source = archive_page(tagged.type, tagged.id);
   } else {
+    searched = true;
     logger.info("No Chaika id on the archive, falling back to text search.");
     apply_result(await search_for_archive(lrr_info["archive_title"], lrr_info["existing_tags"], addextra, addother, addsource, jpntitle));
   }
   if (newtags === "") {
     let message = "No matching Chaika Archive Found!";
     logger.info(message);
-    throw new PluginSkipException(message);
+    if (searched) throw new PluginSkipException(message);
+    throw new PluginErrorException(message);
   } else {
     logger.info(`Sending the following tags to LRR: ${newtags}`);
     return { tags: newtags, title: newtitle, primary_source };
