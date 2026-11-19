@@ -572,6 +572,7 @@ mod tests {
             has_patch: false,
             blake3: None,
             primary_source: None,
+            progress_pages: None,
         }
     }
 

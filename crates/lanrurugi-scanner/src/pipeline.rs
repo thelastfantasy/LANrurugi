@@ -698,6 +698,7 @@ async fn catalogue_new_archive(
         has_patch,
         blake3: Some(blake3.to_string()),
         primary_source: None,
+        progress_pages: None,
     };
     archives.create_or_replace(&archive).await?;
     // The sidecar is written after the record exists and the bytes are final, never before: a

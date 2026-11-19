@@ -1,9 +1,11 @@
 version: 2
 
-# NOTE, and the reason nothing here has ever run: Dependabot reads this file **only from the
-# repository's default branch**. It currently sits at the repository's first commit while all real
-# work lives elsewhere, so the dependency graph is empty and no update — version or security — can be
-# produced until that is addressed. See the repository's own notes before editing this file's shape.
+# Dependabot reads this file only from the repository's default branch (`dev`), so a change here
+# takes effect once it is merged there.
+#
+# A security alert with no PR usually means the fix is out of reach of a compatible update: the
+# vulnerable version is pinned by another crate's requirement (`zip` 8 through `oar-ocr` 0.10, whose
+# fixed release also needs a newer `ort`). Those are handled by hand.
 #
 # Grouping policy, applied to both language ecosystems below:
 #   - minor + patch updates are batched into one PR per ecosystem per week. CI here takes ~12 minutes

@@ -270,6 +270,10 @@ impl ArchiveRepository {
             ("has_patch", flag(archive.has_patch)),
             ("blake3", archive.blake3.clone()),
             ("primary_source", archive.primary_source.clone()),
+            (
+                "progress_pages",
+                archive.progress_pages.map(|n| n.to_string()),
+            ),
             ("thumbhash", archive.thumbhash.clone()),
             (
                 "heal_failed_at",
@@ -293,13 +297,13 @@ impl ArchiveRepository {
         let mut pipe = deadpool_redis::redis::pipe();
         for (field, value) in Self::stored_fields(archive)? {
             match (field, value) {
-                ("progress" | "lastreadtime", Some(value)) => {
+                ("progress" | "lastreadtime" | "progress_pages", Some(value)) => {
                     pipe.hset_nx(key, field, value).ignore();
                 }
                 (_, Some(value)) => {
                     pipe.hset(key, field, value).ignore();
                 }
-                ("blake3" | "thumbhash" | "primary_source", None) => {}
+                ("blake3" | "thumbhash" | "primary_source" | "progress_pages", None) => {}
                 // `heal_failed_at`: a fresh catalogue must not inherit an old failure marker.
                 (_, None) => {
                     pipe.hdel(key, field).ignore();
@@ -505,13 +509,33 @@ impl ArchiveRepository {
     /// Reading-progress accessors: legacy stores this as plain fields on the Archive hash, not a
     /// separate entity (verified: `Utils::Database::build_json` reads `progress`/`lastreadtime`
     /// straight off the archive's own hash).
-    pub async fn set_progress(&self, id: &ArchiveId, page: u32, read_at_unix: u64) -> Result<()> {
+    /// Records the reader's page, with the length of the page list it was counted in when the
+    /// caller knows it (`pages`; `None` clears a length left by an earlier save, which no longer
+    /// describes this page). Under the record's lock: an [`Self::update`] that moves the page (a
+    /// patch's pages dropping out) must not interleave with it.
+    pub async fn set_progress(
+        &self,
+        id: &ArchiveId,
+        page: u32,
+        pages: Option<u32>,
+        read_at_unix: u64,
+    ) -> Result<()> {
+        let _guard = crate::record_lock::lock(&format!("archive:{id}")).await;
         let mut conn = self.pool.get().await?;
-        let fields: Vec<(&str, String)> = vec![
-            ("progress", page.to_string()),
-            ("lastreadtime", read_at_unix.to_string()),
-        ];
-        let _: () = conn.hset_multiple(id.as_str(), &fields).await?;
+        let mut pipe = deadpool_redis::redis::pipe();
+        pipe.hset_multiple(
+            id.as_str(),
+            &[
+                ("progress", page.to_string()),
+                ("lastreadtime", read_at_unix.to_string()),
+            ],
+        )
+        .ignore();
+        match pages {
+            Some(pages) => pipe.hset(id.as_str(), "progress_pages", pages).ignore(),
+            None => pipe.hdel(id.as_str(), "progress_pages").ignore(),
+        };
+        let _: () = pipe.query_async(&mut conn).await?;
         Ok(())
     }
 
@@ -596,6 +620,7 @@ fn archive_from_fields(
         has_patch,
         blake3: fields.remove("blake3").filter(|v| !v.is_empty()),
         primary_source: fields.remove("primary_source").filter(|v| !v.is_empty()),
+        progress_pages: fields.remove("progress_pages").and_then(|v| v.parse().ok()),
     })
 }
 
@@ -1420,6 +1445,7 @@ mod tests {
             has_patch: true,
             blake3: None,
             primary_source: None,
+            progress_pages: None,
         };
 
         repo.create_or_replace(&archive).await.unwrap();
@@ -1460,13 +1486,16 @@ mod tests {
             has_patch: false,
             blake3: None,
             primary_source: None,
+            progress_pages: None,
         };
         repo.create_or_replace(&archive).await.unwrap();
 
         // The reader's interleaving: a snapshot is read, the first page is saved, and then the
         // snapshot is written back with only `isnew` changed.
         let mut stale = repo.get(&id).await.unwrap().unwrap();
-        repo.set_progress(&id, 1, 1_794_797_658).await.unwrap();
+        repo.set_progress(&id, 1, None, 1_794_797_658)
+            .await
+            .unwrap();
         stale.isnew = false;
         repo.create_or_replace(&stale).await.unwrap();
         let after = repo.get(&id).await.unwrap().unwrap();
@@ -1474,7 +1503,9 @@ mod tests {
         assert!(!after.isnew);
 
         // The narrow flag write leaves progress alone too, and never recreates a deleted record.
-        repo.set_progress(&id, 4, 1_794_800_000).await.unwrap();
+        repo.set_progress(&id, 4, None, 1_794_800_000)
+            .await
+            .unwrap();
         assert!(repo.set_isnew(&id, true).await.unwrap());
         let after = repo.get(&id).await.unwrap().unwrap();
         assert_eq!((after.lastreadpage, after.isnew), (4, true));
@@ -1514,6 +1545,7 @@ mod tests {
             has_patch: false,
             blake3: None,
             primary_source: None,
+            progress_pages: None,
         })
         .await
         .unwrap();
@@ -1539,7 +1571,9 @@ mod tests {
             assert!(writer.await.unwrap().is_some());
         }
         // Progress written outside `update` is not touched by one that does not change it.
-        repo.set_progress(&id, 3, 1_794_797_658).await.unwrap();
+        repo.set_progress(&id, 3, None, 1_794_797_658)
+            .await
+            .unwrap();
         repo.update(&id, |a| a.heal_failed_at = None).await.unwrap();
         let after = repo.get(&id).await.unwrap().unwrap();
         assert_eq!(after.tags.split(',').count(), 20);
@@ -1631,6 +1665,7 @@ mod tests {
             has_patch: false,
             blake3: None,
             primary_source: None,
+            progress_pages: None,
         };
         repo.create_or_replace(&archive).await.unwrap();
         assert!(repo.set_blake3(&id, &"ab".repeat(32)).await.unwrap());
@@ -1848,6 +1883,7 @@ mod tests {
             has_patch: false,
             blake3: None,
             primary_source: None,
+            progress_pages: None,
         };
         archive_repo.create_or_replace(&archive).await.unwrap();
 
@@ -1930,6 +1966,7 @@ mod tests {
             has_patch: false,
             blake3: None,
             primary_source: None,
+            progress_pages: None,
         };
         archive_repo.create_or_replace(&archive).await.unwrap();
 
@@ -1986,6 +2023,7 @@ mod tests {
             has_patch: false,
             blake3: None,
             primary_source: None,
+            progress_pages: None,
         }
     }
 

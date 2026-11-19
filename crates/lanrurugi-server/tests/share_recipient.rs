@@ -45,6 +45,7 @@ fn archive(id: &str, file: &std::path::Path) -> Archive {
         has_patch: false,
         blake3: None,
         primary_source: None,
+        progress_pages: None,
     }
 }
 

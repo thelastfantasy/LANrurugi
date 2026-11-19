@@ -467,8 +467,11 @@ export function usePageDimensions(id: string | null, count: number, enabled: boo
 export function useUpdateProgress(id: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (page: number) => sendJson("PUT", `/archives/${id}/progress/${page}`),
-    onSuccess: (_data, page) => {
+    // `pages`: the length of the list `page` was counted in, so the server can tell old page
+    // numbers from new ones when an unreadable patch's pages drop out of the list.
+    mutationFn: ({ page, pages }: { page: number; pages: number }) =>
+      sendJson("PUT", `/archives/${id}/progress/${page}?pages=${pages}`),
+    onSuccess: (_data, { page }) => {
       // The reader saves on every page turn, so refetching here made each turn cost a
       // `/metadata` round trip — a long scroll read as a request loop in the dev overlay (#dev).
       // The new values are already known, so write them into the cache instead.

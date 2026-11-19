@@ -89,6 +89,11 @@ pub struct Archive {
     /// which a metadata plugin may add for other sites (and which may not work) (#302).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primary_source: Option<String>,
+    /// How many pages the reader's list held when it saved `lastreadpage`; `None` when the writer
+    /// did not say (an older client, the library's "mark as read"). When an unreadable patch's pages
+    /// drop out, it tells which numbering a saved page is in — before or after (#302).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_pages: Option<u32>,
 }
 
 impl Archive {

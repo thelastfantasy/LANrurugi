@@ -2484,9 +2484,17 @@ async fn set_isnew(state: &AppState, id: &lanrurugi_core::ids::ArchiveId, isnew:
     }
 }
 
+/// `?pages=` on `PUT /archives/{id}/progress/{page}`: the length of the page list the reader
+/// counted `page` in. Optional (legacy clients do not send it).
+#[derive(Debug, Default, serde::Deserialize)]
+struct ProgressQuery {
+    pages: Option<u32>,
+}
+
 async fn update_progress(
     State(state): State<AppState>,
     Path((id, page)): Path<(lanrurugi_core::ids::ArchiveId, u32)>,
+    Query(query): Query<ProgressQuery>,
 ) -> Response {
     if state.repos.archives.get(&id).await.ok().flatten().is_none() {
         return not_found("update_progress", format!("{id} does not exist."));
@@ -2495,7 +2503,12 @@ async fn update_progress(
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    match state.repos.archives.set_progress(&id, page, now).await {
+    match state
+        .repos
+        .archives
+        .set_progress(&id, page, query.pages, now)
+        .await
+    {
         Ok(()) => {
             // Matches legacy exactly (`Controller/Api/Archive.pm`: `$redis_cfg->incr("LRR_TOTALPAGESTAT")`)
             // — incremented unconditionally on every successful call, not just forward progress.
@@ -4814,7 +4827,13 @@ pub(crate) async fn get_files(
             // markers are shifted past the pages that no longer exist.
             let patch_damage = match patch_error {
                 Some(error) => {
-                    crate::patch_provenance::report_damage(&state, &archive, &error).await
+                    crate::patch_provenance::report_damage(
+                        &state,
+                        &archive,
+                        &error,
+                        pages.len() as u32,
+                    )
+                    .await
                 }
                 None => None,
             };
@@ -5408,6 +5427,7 @@ mod tests {
             has_patch: false,
             blake3: None,
             primary_source: None,
+            progress_pages: None,
         }
     }
 

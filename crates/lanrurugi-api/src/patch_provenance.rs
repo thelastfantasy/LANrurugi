@@ -76,6 +76,12 @@ pub struct PatchRecord {
 pub struct ProgressShift {
     pub from_page: u32,
     pub to_page: u32,
+    /// The page list's length with the patch's pages, and without them: a progress saved with one
+    /// of them says which numbering it is in (`Archive::progress_pages`). `0` when not known.
+    #[serde(default)]
+    pub pages_before: u32,
+    #[serde(default)]
+    pub pages_after: u32,
     pub from_toc: Vec<lanrurugi_core::entities::TocEntry>,
     pub to_toc: Vec<lanrurugi_core::entities::TocEntry>,
 }
@@ -204,10 +210,13 @@ pub struct PatchDamage {
 ///
 /// Lock order: `patch:<id>` is taken first and `archive:<id>` (through `archives.update`) inside it.
 /// Never call this while holding `archive:<id>`.
+///
+/// `listed` is the length of the page list this read serves (the patch's pages already left out).
 pub async fn report_damage(
     state: &AppState,
     archive: &Archive,
     error: &lanrurugi_scanner::patch::PatchError,
+    listed: u32,
 ) -> Option<PatchDamage> {
     // A read that failed for a reason that may pass must not rewrite progress, chapters, bookmarks
     // and stamps for good.
@@ -227,6 +236,14 @@ pub async fn report_damage(
     let mut record = read(state, archive_id).await?;
     let (progress_pending, marks_pending) = record.shifts_pending();
     if !progress_pending && !marks_pending {
+        // Long done — but a reader still holding the list from before the damage (another tab)
+        // keeps saving pages in the old numbering. It says so with the list length it saved, and
+        // such a page is moved like the original was.
+        if let Some(shift) = record.progress_shift.clone() {
+            if shift.pages_before > 0 && archive.progress_pages == Some(shift.pages_before) {
+                apply_progress_shift(state, archive, shift, &record.pages).await;
+            }
+        }
         return None;
     }
     let first_report = record.damaged_at.is_none();
@@ -244,13 +261,14 @@ pub async fn report_damage(
     if progress_pending {
         // Decide the shift once and keep it; applying it is a compare-and-set, safe to repeat.
         if record.progress_shift.is_none() {
-            record.progress_shift = plan_progress_shift(state, archive, &record.pages).await;
+            record.progress_shift =
+                plan_progress_shift(state, archive, &record.pages, listed).await;
             if record.progress_shift.is_some() && !store(state, archive_id, &record).await {
                 record.progress_shift = None;
             }
         }
         if let Some(shift) = record.progress_shift.clone() {
-            if apply_progress_shift(state, archive, shift).await {
+            if apply_progress_shift(state, archive, shift, &record.pages).await {
                 record.progress_shifted = Some(true);
                 progress_done = store(state, archive_id, &record).await;
             }
@@ -312,14 +330,10 @@ async fn plan_progress_shift(
     state: &AppState,
     archive: &Archive,
     patch_pages: &[u32],
+    listed: u32,
 ) -> Option<ProgressShift> {
     let current = state.repos.archives.get(&archive.id).await.ok()??;
-    let to_page = if current.lastreadpage > 0 && !patch_pages.is_empty() {
-        surviving_page(current.lastreadpage, patch_pages)
-            .unwrap_or_else(|| fallback_page(current.lastreadpage, patch_pages))
-    } else {
-        current.lastreadpage
-    };
+    let to_page = progress_after(current.lastreadpage, patch_pages);
     let to_toc = current
         .toc
         .iter()
@@ -333,27 +347,57 @@ async fn plan_progress_shift(
     Some(ProgressShift {
         from_page: current.lastreadpage,
         to_page,
+        pages_before: listed + patch_pages.len() as u32,
+        pages_after: listed,
         from_toc: current.toc,
         to_toc,
     })
 }
 
-/// Applies a planned shift where the record still holds what it was planned from. `true` once the
-/// write went through (including when there was nothing left to change).
+/// A reading position once the patch's pages are gone: the same picture, or the last surviving
+/// one before it (page 1 when the patch opened the archive). `0` (never read) stays.
+fn progress_after(page: u32, patch_pages: &[u32]) -> u32 {
+    if page == 0 || patch_pages.is_empty() {
+        return page;
+    }
+    surviving_page(page, patch_pages).unwrap_or_else(|| fallback_page(page, patch_pages))
+}
+
+/// Applies a planned shift. `true` once the write went through (including when there was nothing
+/// left to change).
 ///
-/// A value that no longer equals `from` is left as it is, not remapped. Whoever changed it was
-/// reading the page list this report goes out with, which no longer has the patch's pages — the
-/// apply that failed is retried on a later read, and in that gap the reader keeps saving progress
-/// in the new numbering. Remapping it would shift it a second time; so would remapping a value
-/// after a lost completion flag. (A reader that still holds the list from before the damage saves
-/// old-numbered pages at any time, before or after this runs; no check here can tell them apart.)
-async fn apply_progress_shift(state: &AppState, archive: &Archive, shift: ProgressShift) -> bool {
+/// Which numbering the saved page is in decides it, and the list length saved with it
+/// (`Archive::progress_pages`) says so: the old one is moved, whatever page it is; the new one
+/// (the reader got this read's list, or this shift already ran) is left alone. Without a length
+/// (an older client), the page is moved only while it is still the one the shift was planned
+/// from — a different one was most likely saved by the reader holding the new list, and moving it
+/// would shift it twice. A moved page is stamped with the new length, which is what makes a repeat
+/// a no-op.
+///
+/// Chapter markers carry no such length, so they keep the compare-and-set: they change only while
+/// they are still what the plan saw.
+async fn apply_progress_shift(
+    state: &AppState,
+    archive: &Archive,
+    shift: ProgressShift,
+    patch_pages: &[u32],
+) -> bool {
+    let patch_pages = patch_pages.to_vec();
     let updated = state
         .repos
         .archives
         .update(&archive.id, move |record| {
-            if record.lastreadpage == shift.from_page {
+            let known = shift.pages_before > 0 && shift.pages_before != shift.pages_after;
+            let saved_in_old = known && record.progress_pages == Some(shift.pages_before);
+            let saved_in_new = known && record.progress_pages == Some(shift.pages_after);
+            if saved_in_old {
+                record.lastreadpage = progress_after(record.lastreadpage, &patch_pages);
+                record.progress_pages = Some(shift.pages_after);
+            } else if !saved_in_new && record.lastreadpage == shift.from_page {
                 record.lastreadpage = shift.to_page;
+                if known {
+                    record.progress_pages = Some(shift.pages_after);
+                }
             }
             if record.toc == shift.from_toc {
                 record.toc = shift.to_toc;
@@ -371,10 +415,6 @@ async fn apply_progress_shift(state: &AppState, archive: &Archive, shift: Progre
     true
 }
 
-/// Keeps an archive's bookmarks and stamps pointing at the pictures they marked after a patch's own
-/// pages vanish: the ones further down move down with those pictures, and the ones that sat *on* a
-/// vanished page are removed, since the page they marked no longer exists (and after the shift the
-/// number they held belongs to something else).
 /// Runs at most once per report (see `report_damage`): every move here is relative to where the
 /// mark is now, so a retry would move the ones that already moved a second time. Because nothing retries
 /// it, it is not part of `PatchDamage::pending` either. A bookmark or stamp
@@ -522,6 +562,7 @@ mod tests {
             has_patch: false,
             blake3: None,
             primary_source: None,
+            progress_pages: None,
         }
     }
 
@@ -616,7 +657,7 @@ mod tests {
         state
             .repos
             .archives
-            .set_progress(&archive.id, 6, 1)
+            .set_progress(&archive.id, 6, None, 1)
             .await
             .unwrap();
         assert!(
@@ -642,13 +683,15 @@ mod tests {
         };
 
         let transient = lanrurugi_scanner::patch::PatchError::Io(std::io::Error::other("busy"));
-        assert!(report_damage(&state, &archive, &transient).await.is_none());
+        assert!(report_damage(&state, &archive, &transient, 8)
+            .await
+            .is_none());
         assert_eq!(progress(state.clone(), archive.id.clone()).await, 6);
 
         let broken = lanrurugi_scanner::patch::PatchError::MissingMetadata;
-        assert!(report_damage(&state, &archive, &broken).await.is_some());
+        assert!(report_damage(&state, &archive, &broken, 8).await.is_some());
         assert_eq!(progress(state.clone(), archive.id.clone()).await, 4);
-        assert!(report_damage(&state, &archive, &broken).await.is_none());
+        assert!(report_damage(&state, &archive, &broken, 8).await.is_none());
         assert_eq!(progress(state.clone(), archive.id.clone()).await, 4);
 
         // The shift was applied but its completion flag never got written: the next read finds it
@@ -656,7 +699,7 @@ mod tests {
         let mut record = read(&state, archive.id.as_str()).await.unwrap();
         record.progress_shifted = Some(false);
         assert!(store(&state, archive.id.as_str(), &record).await);
-        assert!(report_damage(&state, &archive, &broken).await.is_none());
+        assert!(report_damage(&state, &archive, &broken, 8).await.is_none());
         assert_eq!(progress(state.clone(), archive.id.clone()).await, 4);
         assert_eq!(
             read(&state, archive.id.as_str())
@@ -665,6 +708,55 @@ mod tests {
                 .progress_shifted,
             Some(true)
         );
+
+        forget(&state, archive.id.as_str()).await;
+        let _ = state.repos.archives.delete(&archive.id).await;
+    }
+
+    /// The list length saved with a page says which numbering it is in: a page counted in the list
+    /// from before the damage is moved, even after the shift (another tab still holding the old
+    /// list); one counted in the new list stays, even when it equals the page the shift planned from.
+    #[tokio::test]
+    async fn the_saved_list_length_decides_whether_a_page_moves() {
+        let Some(state) = crate::plugins::tests::test_state().await else {
+            return;
+        };
+        let mut archive = archive_named("B.zip", "B");
+        archive.id = lanrurugi_core::ids::ArchiveId("3026".repeat(10));
+        archive.pagecount = 10;
+        let archives = &state.repos.archives;
+        archives.create_or_replace(&archive).await.unwrap();
+        async fn reload(state: &AppState, id: &lanrurugi_core::ids::ArchiveId) -> Archive {
+            state.repos.archives.get(id).await.unwrap().unwrap()
+        }
+        let broken = lanrurugi_scanner::patch::PatchError::MissingMetadata;
+        // Patch pages 2 and 3: the list goes from 10 pages to 8.
+        let patch = PatchRecord {
+            pages: vec![2, 3],
+            ..PatchRecord::default()
+        };
+
+        // Counted in the new list already: left alone although it is the planned-from page.
+        archives
+            .set_progress(&archive.id, 6, Some(8), 1)
+            .await
+            .unwrap();
+        assert!(store(&state, archive.id.as_str(), &patch).await);
+        let current = reload(&state, &archive.id).await;
+        assert!(report_damage(&state, &current, &broken, 8).await.is_some());
+        assert_eq!(reload(&state, &archive.id).await.lastreadpage, 6);
+
+        // Afterwards, a tab with the old list saves page 7 of 10: moved to 5 of 8, once.
+        archives
+            .set_progress(&archive.id, 7, Some(10), 2)
+            .await
+            .unwrap();
+        let current = reload(&state, &archive.id).await;
+        assert!(report_damage(&state, &current, &broken, 8).await.is_none());
+        let moved = reload(&state, &archive.id).await;
+        assert_eq!((moved.lastreadpage, moved.progress_pages), (5, Some(8)));
+        assert!(report_damage(&state, &moved, &broken, 8).await.is_none());
+        assert_eq!(reload(&state, &archive.id).await.lastreadpage, 5);
 
         forget(&state, archive.id.as_str()).await;
         let _ = state.repos.archives.delete(&archive.id).await;

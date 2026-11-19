@@ -1495,7 +1495,7 @@ export function Reader() {
     } else if (isTank) {
       updateTankoubonProgress.mutate(currentPage);
     } else {
-      updateProgress.mutate(currentPage);
+      updateProgress.mutate({ page: currentPage, pages: totalPages });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [archiveId, currentPage, totalPages]);

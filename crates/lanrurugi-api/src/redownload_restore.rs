@@ -158,7 +158,7 @@ pub(crate) async fn apply(state: &AppState, queue_item_id: &str, new_id: &Archiv
             if let Err(e) = state
                 .repos
                 .archives
-                .set_progress(new_id, page, now_secs())
+                .set_progress(new_id, page, None, now_secs())
                 .await
             {
                 tracing::warn!(%new_id, error = %e, "could not restore the re-downloaded archive's progress");
@@ -306,6 +306,7 @@ mod tests {
             has_patch: false,
             blake3: None,
             primary_source: None,
+            progress_pages: None,
         };
         state
             .repos

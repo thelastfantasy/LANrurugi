@@ -53,6 +53,7 @@ fn test_archive(id: &str, title: &str) -> lanrurugi_core::entities::Archive {
         has_patch: false,
         blake3: None,
         primary_source: None,
+        progress_pages: None,
     }
 }
 

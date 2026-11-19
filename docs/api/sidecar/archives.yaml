@@ -1,0 +1,58 @@
+# Archive endpoints whose LANrurugi behaviour goes beyond the upstream contract. A sidecar entry
+# replaces the upstream operation as a whole, so each one here restates it in full.
+"/api/archives/{id}/progress/{page}":
+  put:
+    operationId: updateArchiveProgress
+    summary: Update reading progression
+    description: |
+      Records the page of this archive the reader is showing, and the current server time as the
+      date it was last read. Call it only for a page the user is actually reading, not while
+      preloading images.
+
+      Optional `pages`, LANrurugi only: the length of the page list `page` was counted in (the
+      reader sends the length of the list it got from `/files`). When an archive's patch later
+      becomes unreadable, its pages drop out of the list and every page after them moves up; the
+      length tells the server whether a saved page was counted before or after that, so it can be
+      moved to the same picture instead of guessing. A client that leaves it out gets the upstream
+      behaviour.
+
+      Fails when the server is configured for client-side progress tracking; check `/api/info`
+      first.
+    tags: [archives]
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+        description: The archive id.
+      - name: page
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+        description: The page now being read (1-based), at most the archive's page count.
+      - name: pages
+        in: query
+        required: false
+        schema: { type: integer, minimum: 1 }
+        description: |
+          The length of the page list `page` was counted in. Omitting it clears a length saved
+          earlier.
+    responses:
+      "200":
+        description: Saved.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                operation: { type: string, enum: [update_progress] }
+                id: { type: string }
+                page: { type: integer }
+                lastreadtime: { type: integer, description: Unix seconds. }
+                success: { type: integer, enum: [1] }
+      "400":
+        description: Server-side progress tracking is disabled on this instance.
+      "401":
+        description: Authentication is required for progress (`authprogress`).
+      "404":
+        description: No archive with this id.

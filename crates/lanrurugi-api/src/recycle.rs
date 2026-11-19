@@ -186,6 +186,7 @@ async fn build_snapshot(state: &AppState, archive: &Archive) -> RecycleSnapshot 
         has_patch: archive.has_patch,
         blake3: archive.blake3.clone(),
         primary_source: archive.primary_source.clone(),
+        progress_pages: archive.progress_pages,
         corrupted_pages: archive.corrupted_pages.clone(),
         heal_failed_at: archive.heal_failed_at,
         version_history,
@@ -1022,6 +1023,7 @@ async fn restore_record(
         has_patch: entry.patch_file_name.is_some(),
         blake3: snap.blake3.clone(),
         primary_source: snap.primary_source.clone(),
+        progress_pages: snap.progress_pages,
     };
     state
         .repos

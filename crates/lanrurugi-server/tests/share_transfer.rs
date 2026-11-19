@@ -104,6 +104,7 @@ async fn an_archive_transfers_verified_and_revocation_stops_renewal() {
             has_patch: false,
             blake3: None,
             primary_source: None,
+            progress_pages: None,
         })
         .await
         .unwrap();
@@ -333,6 +334,7 @@ fn archive_record(id: &str, file: &std::path::Path, size: u64) -> Archive {
         has_patch: false,
         blake3: None,
         primary_source: None,
+        progress_pages: None,
     }
 }
 

@@ -179,6 +179,7 @@ fn test_archive(id: &str, title: &str, tags: &str) -> lanrurugi_core::entities::
         has_patch: false,
         blake3: None,
         primary_source: None,
+        progress_pages: None,
     }
 }
 

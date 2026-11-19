@@ -155,6 +155,7 @@ mod tests {
                 has_patch: false,
                 blake3: None,
                 primary_source: primary.map(str::to_string),
+                progress_pages: None,
             };
         let downloaded = "302c".repeat(10);
         let retagged = "302d".repeat(10);

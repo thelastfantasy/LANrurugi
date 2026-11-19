@@ -75,6 +75,9 @@ pub struct RecycleSnapshot {
     pub blake3: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primary_source: Option<String>,
+    /// Travels with `lastreadpage`: the page list length it was counted in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_pages: Option<u32>,
     #[serde(default)]
     pub corrupted_pages: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -463,6 +466,7 @@ mod tests {
                 has_patch: false,
                 blake3: None,
                 primary_source: None,
+                progress_pages: None,
                 corrupted_pages: vec![],
                 heal_failed_at: None,
                 version_history: vec![],
