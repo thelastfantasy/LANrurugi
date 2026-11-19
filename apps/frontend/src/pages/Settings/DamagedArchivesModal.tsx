@@ -146,7 +146,7 @@ export function DamagedArchivesModal({ onClose }: { onClose: () => void }) {
                     </a>
                     <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.85 }}>{problemText(t, a)}</div>
                     <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.7, userSelect: "all" }}>{a.file}</div>
-                    {a.sources.length > 0 && <SourceLine t={t} a={a} />}
+                    {(a.sources ?? []).length > 0 && <SourceLine t={t} a={a} />}
                     <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.7 }}>
                       {sizeText(t, a)}
                       {detectedAt(a) && ` · ${t("settings.integrityFirstSeen", { time: detectedAt(a) })}`}
@@ -229,10 +229,11 @@ type TFn = ReturnType<typeof useTranslation>["t"]
 
 /** The archive's sources, the one "delete and download again" would use in bold with its plugin. */
 function SourceLine({ t, a }: { t: TFn; a: DamagedArchive }) {
+  const sources = a.sources ?? []
   return (
     <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.85 }}>
       {t("settings.integritySources")}
-      {a.sources.map((url, i) => {
+      {sources.map((url, i) => {
         const chosen = a.redownload?.url === url
         return (
           <span key={url}>

@@ -947,6 +947,7 @@ async fn finalize_staged_upload(
                 Some(json!({
                     "metadata_plugins_ran": plugin_summary.successes,
                     "metadata_plugins_failed": plugin_summary.failures,
+                    "metadata_plugins_declined": plugin_summary.declined,
                     "tags_added": plugin_summary.added_tags,
                     "title_updated": plugin_summary.new_title,
                 })),

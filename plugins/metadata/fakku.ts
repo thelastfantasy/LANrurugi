@@ -94,14 +94,14 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   if (!fakku_URL) {
     const message = "No matching FAKKU Gallery Found!";
     logger.info(message);
-    throw new PluginErrorException(message);
+    throw new PluginSkipException(message);
   }
   logger.debug(`Detected FAKKU URL: ${fakku_URL}`);
   const [newtags, newtitle, newSummary] = await get_tags_from_fakku(fakku_URL, ua, add_source);
   const current_title = lrr_info.archive_title;
   if (safe_mode && !URL_safe && newtitle !== current_title) {
     logger.info(`Found FAKKU Gallery '${newtitle}', but it does not match current title '${current_title}' exactly`);
-    throw new PluginErrorException("Exact title match not found");
+    throw new PluginSkipException("Exact title match not found");
   }
   logger.info(`Sending the following tags to LRR: ${newtags}`);
   return { tags: newtags, title: newtitle, summary: newSummary };

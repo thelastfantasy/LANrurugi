@@ -188,6 +188,13 @@ pub async fn run(
                 }
                 tracing::info!(?path, ?outcome, "ingested file")
             }
+            Ok(Err(e)) if !path.exists() => {
+                // The file was removed between the watcher's event and this read (a cancelled or
+                // replaced download, the recycle bin, another ingest that renamed it). There is
+                // nothing to catalogue and nothing went wrong, so it must not reach the watcher's
+                // failure channel or the log at warning level.
+                tracing::debug!(?path, error = %e, "watched file vanished before it could be ingested");
+            }
             Ok(Err(e)) => {
                 if let Some(tx) = &new_archive_tx {
                     let _ = tx.send(IngestEvent::Failed {
@@ -1341,7 +1348,7 @@ mod tests {
     /// valid archive and one nonexistent path through the real loop and asserts the exact events
     /// the server consumes.
     #[tokio::test]
-    async fn run_reports_catalogued_and_failed_ingest_events() {
+    async fn run_reports_the_catalogued_event_and_ignores_a_vanished_path() {
         let Some((archive_pool, config_pool, search_pool)) = test_pools(26).await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
@@ -1350,11 +1357,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let thumb_dir = tempfile::tempdir().unwrap();
         let good = make_zip_with_pages(dir.path(), "good-event.zip", 2);
-        let missing = dir.path().join("missing-event.zip");
+        // A path the watcher saw whose file is already gone by the time it is ingested (a cancelled
+        // download, the recycle bin). Not a failure: nothing was there to catalogue.
+        let vanished = dir.path().join("vanished-event.zip");
 
         let (path_tx, path_rx) = mpsc::unbounded_channel();
         path_tx.send(good.clone()).unwrap();
-        path_tx.send(missing.clone()).unwrap();
+        path_tx.send(vanished.clone()).unwrap();
         drop(path_tx);
 
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -1382,12 +1391,10 @@ mod tests {
         }
 
         let id = catalogued.expect("the valid archive must produce a Catalogued event");
-        let (failed_path, reason) = failed.expect("the missing file must produce a Failed event");
-        assert_eq!(
-            failed_path.as_deref(),
-            Some(missing.to_string_lossy().as_ref())
+        assert!(
+            failed.is_none(),
+            "a vanished path must not be reported as a failure, got {failed:?}"
         );
-        assert!(!reason.is_empty());
 
         archives.delete(&ArchiveId(id)).await.unwrap();
         let mut conn = config_pool.get().await.unwrap();

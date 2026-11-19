@@ -90,9 +90,25 @@ impl Sidecar {
 /// one, which the rebuild path would otherwise have to defend against.
 pub fn write(library: &Path, sidecar: &Sidecar) -> std::io::Result<()> {
     let dest = paths::sidecar_path(library, &sidecar.id);
+    // Retried once on `NotFound`: a flat-library conversion prunes a bucket directory the moment
+    // its last archive leaves, which can happen between `create_dir_all` below and the temp file
+    // being created. Recreating the directory is the whole recovery — the bytes were not the
+    // problem (issue seen four times on 2026-11-10 during a relocation pass).
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    match write_inner(&dest, sidecar) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            write_inner(&dest, sidecar)
+        }
+        other => other,
+    }
+}
+
+fn write_inner(dest: &Path, sidecar: &Sidecar) -> std::io::Result<()> {
     let tmp = dest.with_extension("json.tmp");
     // Always stamp the version we actually emit: a sidecar read back from an older file would
     // otherwise be rewritten with the current field shapes while still claiming to be version 1.
@@ -108,7 +124,7 @@ pub fn write(library: &Path, sidecar: &Sidecar) -> std::io::Result<()> {
         f.write_all(&bytes)?;
         f.sync_all()?;
     }
-    std::fs::rename(&tmp, &dest)?;
+    std::fs::rename(&tmp, dest)?;
     Ok(())
 }
 
@@ -144,6 +160,29 @@ pub fn read(library: &Path, id: &str) -> Option<Sidecar> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_write_recreates_a_bucket_directory_that_a_conversion_just_pruned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library = tmp.path();
+        let id = "a".repeat(40);
+        let archive = library.join(format!("{id}.zip"));
+        std::fs::write(
+            &archive,
+            b"PK\x05\x06\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+        )
+        .unwrap();
+        let sidecar = Sidecar::for_archive(&id, &archive, "x.zip", "X").expect("build");
+        let bucket = paths::sidecar_path(library, &id)
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::create_dir_all(&bucket).unwrap();
+        // The prune that races this write removes the directory it was about to write into.
+        std::fs::remove_dir(&bucket).unwrap();
+        write(library, &sidecar).expect("write recreates the directory");
+        assert!(paths::sidecar_path(library, &id).is_file());
+    }
 
     #[test]
     fn a_sidecar_round_trips_and_lands_next_to_its_archive() {

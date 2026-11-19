@@ -91,7 +91,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   if (!galleryID) {
     const message = "No matching Hitomi Gallery Found!";
     logger.info(message);
-    throw new PluginErrorException(message);
+    throw new PluginSkipException(message);
   }
   logger.debug(`Detected Hitomi gallery id is ${galleryID}`);
   const hashdata = await get_tags_from_Hitomi(galleryID);

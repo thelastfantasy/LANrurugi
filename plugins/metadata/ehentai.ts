@@ -106,7 +106,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   if (gID === "") {
     let message = "No matching EH Gallery Found!";
     logger.info(message);
-    throw new PluginErrorException(message);
+    throw new PluginSkipException(message);
   } else {
     logger.debug(`EH API Tokens are ${gID} / ${gToken}`);
   }

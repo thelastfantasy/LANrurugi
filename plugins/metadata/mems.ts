@@ -95,7 +95,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     if (gallery_id === '' || gallery_token === '') {
       let file_error = 'Skipping archive without connecting to EH, because the archive title does not have valid ' + 'gallery identifiers from Mayriad\'s EH Master Script.';
       logger.error(file_error);
-      throw new PluginErrorException(file_error);
+      throw new PluginSkipException(file_error);
     }
   }
   logger.info('Source identified. Calling E-Hentai metadata plugin to retrieve metadata from EH API.');
@@ -108,7 +108,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   } else {
     let source_error = 'No matching EH gallery found. The archive title may have incorrect gallery identifiers.';
     logger.error(source_error);
-    throw new PluginErrorException(source_error);
+    throw new PluginSkipException(source_error);
   }
 }
 

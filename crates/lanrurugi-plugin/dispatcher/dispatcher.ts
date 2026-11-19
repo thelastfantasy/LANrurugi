@@ -46,7 +46,7 @@
  * boundary doesn't cover it.
  */
 
-import { PluginErrorException } from "./plugin-sdk.ts";
+import { PluginErrorException, PluginSkipException } from "./plugin-sdk.ts";
 
 interface PluginRequest {
   request_id: string;
@@ -585,6 +585,8 @@ globalThis.legacyCompat = {
 // its own `import` (see this file's own top-of-file comment on the import right above for why a
 // plugin file can't statically `import` `plugin-sdk.ts` at all).
 globalThis.PluginErrorException = PluginErrorException;
+// Same reason: `throw new PluginSkipException("this is not a Chaika archive")` from a plugin file.
+globalThis.PluginSkipException = PluginSkipException;
 
 const [pluginsDir, namespace] = Deno.args;
 if (!pluginsDir || !namespace) {

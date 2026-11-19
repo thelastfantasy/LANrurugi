@@ -1570,6 +1570,12 @@ async fn apply_foldertocat_categories(state: &AppState, plugin: &str, data: &Val
 pub struct AutoPluginSummary {
     pub successes: u32,
     pub failures: u32,
+    /// Plugins that reported back "this archive is not mine to describe" (a structured
+    /// `PluginErrorException`, e.g. the EH metadata plugin's own "Skipping archive without
+    /// connecting to EH" on an archive whose title has no gallery id). Counted apart from
+    /// `failures`: nothing broke, the plugin simply declined, and a declined plugin is the normal
+    /// case for every archive outside that plugin's site.
+    pub declined: u32,
     pub added_tags: u32,
     /// The last plugin-returned non-empty title, if any (later plugins in run order win, matching
     /// legacy's own `$newtitle` being reassigned on every plugin that returns one).
@@ -1600,6 +1606,7 @@ pub async fn run_enabled_metadata_plugins_on_archive(
     let mut summary = AutoPluginSummary {
         successes: 0,
         failures: 0,
+        declined: 0,
         added_tags: 0,
         new_title: None,
     };
@@ -1670,8 +1677,19 @@ pub async fn run_enabled_metadata_plugins_on_archive(
         {
             Ok(data) => data,
             Err(e) => {
-                tracing::warn!(%archive_id, plugin = %ns, error = %e, "auto-run metadata plugin failed");
-                summary.failures += 1;
+                // `PluginSkipException` = "this archive is not mine to describe": the routine
+                // answer for every archive outside the plugin's own site, so it is counted apart
+                // and logged at info. Everything else — a crash, a timeout, a login/API failure,
+                // an unparseable reply — stays a warning, a failure count, and a diagnostics
+                // event, exactly as before.
+                if plugin_declined(&e) {
+                    tracing::info!(%archive_id, plugin = %ns, reason = %e, "auto-run metadata plugin declined the archive");
+                    summary.declined += 1;
+                } else {
+                    tracing::warn!(%archive_id, plugin = %ns, error = %e, "auto-run metadata plugin failed");
+                    crate::diagnostics::capture_plugin_error(&ns, &e.to_string());
+                    summary.failures += 1;
+                }
                 continue;
             }
         };
@@ -1944,8 +1962,12 @@ async fn use_plugin_sync(
             .await;
             // A failed manual run is a defect the administrator wants to report, so it also becomes
             // a diagnostics event (specs/018). Plugin failures log at `warn`, below the bridge's
-            // error level, hence the explicit capture here.
-            crate::diagnostics::capture_plugin_error(&plugin, &e.to_string());
+            // error level, hence the explicit capture here. A plugin *declining* the archive
+            // (`PluginSkipException`) is not a defect — the message still goes back to the user,
+            // but there is nothing to report to diagnostics.
+            if !plugin_declined(&e) {
+                crate::diagnostics::capture_plugin_error(&plugin, &e.to_string());
+            }
             axum::Json(json!({
                 "operation": "use_plugin",
                 "success": 0,
@@ -3036,6 +3058,20 @@ const MAX_DOWNLOAD_RETRIES: u32 = 4;
     });
 
     job_id
+}
+
+/// The `error_code` a plugin's `PluginSkipException` (`plugin-sdk.ts`) carries when it is merely
+/// declining an archive rather than failing.
+const PLUGIN_SKIP_CODE: &str = "NOT_APPLICABLE";
+
+/// Whether `e` is a plugin *declining* the archive (`PluginSkipException`) rather than a real
+/// failure — the one distinction that decides info-versus-warning and counted-versus-not.
+fn plugin_declined(e: &lanrurugi_plugin::pool::PoolError) -> bool {
+    matches!(
+        e,
+        lanrurugi_plugin::pool::PoolError::PluginError(err)
+            if err.error_code.as_deref() == Some(PLUGIN_SKIP_CODE)
+    )
 }
 
 /// Builds a [`lanrurugi_core::queue_error::QueueError`] from a plugin-execution failure
@@ -4428,6 +4464,36 @@ pub(crate) mod tests {
     use super::*;
     use lanrurugi_plugin::protocol::PluginParameter;
     use lanrurugi_storage::plugin_options::DomainRuleOverride;
+
+    #[test]
+    fn only_the_skip_code_counts_as_declining() {
+        use lanrurugi_plugin::pool::PoolError;
+        use lanrurugi_plugin::protocol::ResponseError;
+
+        let declined = PoolError::PluginError(ResponseError {
+            message: "Skipping archive without connecting to EH".to_string(),
+            kind: "plugin_error".to_string(),
+            error_code: Some(PLUGIN_SKIP_CODE.to_string()),
+            data: None,
+        });
+        assert!(plugin_declined(&declined));
+
+        // Everything else stays a failure: a plugin's own real error, and a crash.
+        let failed = PoolError::PluginError(ResponseError {
+            message: "Search gallery by title failed".to_string(),
+            kind: "plugin_error".to_string(),
+            error_code: Some("Search gallery by title failed".to_string()),
+            data: None,
+        });
+        assert!(!plugin_declined(&failed));
+        let crashed = PoolError::PluginError(ResponseError {
+            message: "boom".to_string(),
+            kind: "internal".to_string(),
+            error_code: None,
+            data: None,
+        });
+        assert!(!plugin_declined(&crashed));
+    }
 
     #[test]
     fn source_urls_restore_the_scheme_the_tag_drops_and_skip_other_tags() {

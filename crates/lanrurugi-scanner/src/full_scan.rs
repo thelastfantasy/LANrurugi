@@ -115,6 +115,9 @@ pub struct ScanSummary {
     pub rekeyed: usize,
     pub unchanged: usize,
     pub errors: usize,
+    /// Files that disappeared between the walk and their own ingest — a racing delete or a
+    /// download that was cancelled, not a failure (nothing was expected to exist by then).
+    pub vanished: usize,
     /// Archives moved under `_byname/` by the relocation pass at the end of this scan (020).
     pub relocated: usize,
     /// Relocation candidates left in place for any reason other than failure: a destination that
@@ -375,6 +378,10 @@ pub async fn full_scan(
             // already tracked. Counted alongside `unchanged` rather than `errors`: nothing went
             // wrong, there's just nothing new to catalogue.
             Ok(IngestOutcome::Rejected { .. }) => summary.unchanged += 1,
+            Err(e) if !path.exists() => {
+                summary.vanished += 1;
+                tracing::debug!(?path, error = %e, "full_scan: file vanished before it could be ingested");
+            }
             Err(e) => {
                 tracing::warn!(?path, error = %e, "full_scan: failed to ingest file");
                 summary.errors += 1;

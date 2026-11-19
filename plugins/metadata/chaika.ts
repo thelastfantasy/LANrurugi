@@ -137,7 +137,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   if (newtags === "") {
     let message = "No matching Chaika Archive Found!";
     logger.info(message);
-    throw new PluginErrorException(message);
+    throw new PluginSkipException(message);
   } else {
     logger.info(`Sending the following tags to LRR: ${newtags}`);
     return { tags: newtags, title: newtitle, primary_source };

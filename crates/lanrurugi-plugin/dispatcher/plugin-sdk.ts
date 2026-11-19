@@ -251,6 +251,24 @@ export class PluginErrorException extends Error {
   }
 }
 
+/** The `error_code` [`PluginSkipException`] carries: "this archive is not mine to describe". */
+export const NOT_APPLICABLE = "NOT_APPLICABLE";
+
+/**
+ * Thrown when a plugin has nothing to say about an archive because the archive simply is not from
+ * that plugin's site — the normal case for every archive outside it. Distinct from
+ * [`PluginErrorException`], which means something went wrong and must stay an error: the host
+ * counts a skip as "declined" (and only logs it at info) while a real failure stays a failure, a
+ * warning, and a diagnostics event.
+ */
+export class PluginSkipException extends PluginErrorException {
+  constructor(reason: string, data?: Record<string, string | number>) {
+    super(NOT_APPLICABLE, { reason, ...(data ?? {}) });
+    this.name = "PluginSkipException";
+    this.message = reason;
+  }
+}
+
 /** `execMetadata`'s return shape. This is the real, verified-against-every-converted-plugin
  * contract: every one of this repo's 21 converted `Metadata/*.pm` plugins (and every legacy `.pm`
  * source they came from) returns exactly `(tags => ..., title => ...)` from its own `get_tags`

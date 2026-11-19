@@ -1743,8 +1743,9 @@ export interface DamagedArchive {
   /** Set when the archive's self-heal already failed — known broken without a scan. */
   heal_failed_at: number | null
   finding: IntegrityFinding | null
-  /** The archive's `source:` tags, as URLs. */
-  sources: string[]
+  /** The archive's `source:` tags, as URLs. Absent when the server answering is older than the
+   * field (a rebuild in progress) — callers must treat a missing list as empty. */
+  sources?: string[]
   /** The one source it is known to be downloadable from (where it was downloaded, or what its
    * metadata plugin vouched for); preferred by "delete and download again". */
   primary_source: string | null

@@ -757,7 +757,12 @@ pub(crate) async fn catalogue_staged_file(
     // before ever reaching here), so no extra `is_new` guard is needed. Runs *after* the source
     // tag above is saved, so a plugin like `mems.ts`/`ehentai.ts` that falls back to parsing
     // `existing_tags` for a `source:` tag actually finds the one just added.
-    crate::plugins::run_enabled_metadata_plugins_on_archive(state, archive_id.as_str()).await;
+    // Skipped when the caller defers publication: that caller (the upload path) runs its own
+    // plugin pass *after* the user's own title/tags are saved — which is the pass whose results
+    // actually matter — so running one here as well made every upload pay for two full passes.
+    if !defer_publication {
+        crate::plugins::run_enabled_metadata_plugins_on_archive(state, archive_id.as_str()).await;
+    }
 
     // Published: the archive now carries whatever the plugins found (a failure inside the run is
     // already non-fatal and logged there). An upload publishes after its own second plugin pass.
