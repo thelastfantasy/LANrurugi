@@ -1107,7 +1107,9 @@ mod tests {
             "The Book",
         )
         .unwrap();
-        lanrurugi_storage::sidecar::write(dir.path(), &sidecar).unwrap();
+        lanrurugi_storage::sidecar::write(dir.path(), &sidecar)
+            .await
+            .unwrap();
 
         // By-name layout: the filename already says everything, and it gets no sidecar.
         let byname_dir = lanrurugi_storage::paths::byname_dir(dir.path()).join("Series");

@@ -384,10 +384,9 @@ pub async fn move_out_of_bin(
     destination: &Path,
 ) -> Result<Option<PathBuf>> {
     let payload = payload_dir(library, id);
-    if let Some(parent) = destination.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    tokio::fs::rename(payload.join(file_name), destination).await?;
+    // Restoring into a bucket directory that a prune elsewhere may remove the moment it is empty.
+    let source = payload.join(file_name);
+    crate::fsutil::in_dir(destination, || tokio::fs::rename(&source, destination)).await?;
     let mut patch_dest = None;
     if let Some(name) = patch_file_name {
         let dest = destination.with_file_name(name);

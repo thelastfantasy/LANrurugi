@@ -49,9 +49,14 @@ pub struct Sidecar {
     /// When this sidecar was written, RFC 3339 UTC with milliseconds.
     pub written: String,
     /// The whole-file BLAKE3 (lowercase hex), as the record holds it. A rebuild uses it instead of
-    /// reading the file again while `size` and `mtime` still match ([`Self::matches_file`]).
+    /// reading the file again while the file still matches ([`Self::matches_file`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blake3: Option<String>,
+    /// BLAKE3 of the file's first and last 64 KiB ([`sample_of`]). Size and mtime alone do not
+    /// prove the bytes are the same: a restore with `rsync -a`/`cp -p` keeps the mtime, and some
+    /// mounts store it to the second only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample: Option<String>,
     /// The record's `primary_source`: where the archive was downloaded from, or what its metadata
     /// plugin vouched for. Nothing in the file itself can give it back after Redis is lost.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -86,22 +91,70 @@ impl Sidecar {
             mtime,
             written: stamp(SystemTime::now()),
             blake3: None,
+            sample: sample_of(path).ok(),
             primary_source: None,
         })
     }
 
-    /// Whether the file at `path` still has the size and modification time this sidecar recorded —
-    /// the condition for trusting its `blake3` without reading the bytes again.
+    /// Whether the file at `path` still has the size, modification time and sampled bytes this
+    /// sidecar recorded — the condition for trusting its `blake3` without reading the whole file.
+    /// A sidecar without a sample never matches.
     pub fn matches_file(&self, path: &Path) -> bool {
         let Ok(meta) = std::fs::metadata(path) else {
             return false;
         };
-        meta.len() == self.size && meta.modified().map(stamp).ok().as_deref() == Some(&*self.mtime)
+        let Some(sample) = &self.sample else {
+            return false;
+        };
+        meta.len() == self.size
+            && meta.modified().map(stamp).ok().as_deref() == Some(&*self.mtime)
+            && sample_of(path).ok().as_ref() == Some(sample)
     }
 
     pub fn to_json(&self) -> Value {
         serde_json::to_value(self).unwrap_or(Value::Null)
     }
+}
+
+/// The bytes [`Sidecar::sample`] covers from each end of the file.
+const SAMPLE_BYTES: u64 = 64 * 1024;
+
+/// BLAKE3 (lowercase hex) of `path`'s first and last [`SAMPLE_BYTES`] (the whole file when it is
+/// shorter than both together).
+pub fn sample_of(path: &Path) -> std::io::Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    let mut hasher = blake3::Hasher::new();
+    let mut buf = Vec::new();
+    (&mut file).take(SAMPLE_BYTES).read_to_end(&mut buf)?;
+    hasher.update(&buf);
+    let tail_start = len.saturating_sub(SAMPLE_BYTES).max(SAMPLE_BYTES.min(len));
+    if tail_start < len {
+        buf.clear();
+        file.seek(SeekFrom::Start(tail_start))?;
+        file.read_to_end(&mut buf)?;
+        hasher.update(&buf);
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// The lock every write of `id`'s sidecar holds: a read-modify-write ([`amend`], [`rewrite`]) and
+/// a whole write ([`write`]) that interleave would otherwise drop each other's fields.
+async fn lock(id: &str) -> impl Send + 'static {
+    crate::record_lock::lock(&format!("sidecar:{id}")).await
+}
+
+/// Builds `id`'s sidecar from its current one (`None` when there is none) and writes the result,
+/// under the sidecar's lock.
+pub async fn rewrite(
+    library: &Path,
+    id: &str,
+    build: impl FnOnce(Option<Sidecar>) -> std::io::Result<Sidecar>,
+) -> std::io::Result<()> {
+    let _guard = lock(id).await;
+    let sidecar = build(read(library, id))?;
+    write_unlocked(library, &sidecar)
 }
 
 /// Changes fields of an existing sidecar (a value its record gained after cataloguing), under the
@@ -112,7 +165,7 @@ pub async fn amend(
     id: &str,
     change: impl FnOnce(&mut Sidecar),
 ) -> std::io::Result<bool> {
-    let _guard = crate::record_lock::lock(&format!("sidecar:{id}")).await;
+    let _guard = lock(id).await;
     let Some(mut sidecar) = read(library, id) else {
         return Ok(false);
     };
@@ -122,14 +175,19 @@ pub async fn amend(
         return Ok(true);
     }
     sidecar.written = stamp(SystemTime::now());
-    write(library, &sidecar)?;
+    write_unlocked(library, &sidecar)?;
     Ok(true)
 }
 
 /// Writes (or replaces) the sidecar for `id` next to its archive. Atomic: a `.tmp` file is renamed
 /// over the destination, so a crash leaves either the old snapshot or the new one — never half of
 /// one, which the rebuild path would otherwise have to defend against.
-pub fn write(library: &Path, sidecar: &Sidecar) -> std::io::Result<()> {
+pub async fn write(library: &Path, sidecar: &Sidecar) -> std::io::Result<()> {
+    let _guard = lock(&sidecar.id).await;
+    write_unlocked(library, sidecar)
+}
+
+fn write_unlocked(library: &Path, sidecar: &Sidecar) -> std::io::Result<()> {
     let dest = paths::sidecar_path(library, &sidecar.id);
     // Retried once on `NotFound`: a flat-library conversion prunes a bucket directory the moment
     // its last archive leaves, which can happen between `create_dir_all` below and the temp file
@@ -202,8 +260,8 @@ pub fn read(library: &Path, id: &str) -> Option<Sidecar> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_write_recreates_a_bucket_directory_that_a_conversion_just_pruned() {
+    #[tokio::test]
+    async fn a_write_recreates_a_bucket_directory_that_a_conversion_just_pruned() {
         let tmp = tempfile::tempdir().unwrap();
         let library = tmp.path();
         let id = "a".repeat(40);
@@ -221,7 +279,9 @@ mod tests {
         std::fs::create_dir_all(&bucket).unwrap();
         // The prune that races this write removes the directory it was about to write into.
         std::fs::remove_dir(&bucket).unwrap();
-        write(library, &sidecar).expect("write recreates the directory");
+        write(library, &sidecar)
+            .await
+            .expect("write recreates the directory");
         assert!(paths::sidecar_path(library, &id).is_file());
     }
 
@@ -235,7 +295,7 @@ mod tests {
         let archive = library.join(format!("{id}.zip"));
         std::fs::write(&archive, b"first bytes").unwrap();
         let sidecar = Sidecar::for_archive(&id, &archive, "x.zip", "X").unwrap();
-        write(library, &sidecar).unwrap();
+        write(library, &sidecar).await.unwrap();
         // Written before the fields existed: no `blake3`/`primary_source` on disk at all.
         let raw = std::fs::read_to_string(paths::sidecar_path(library, &id)).unwrap();
         assert!(!raw.contains("blake3") && !raw.contains("primary_source"));
@@ -253,6 +313,18 @@ mod tests {
         assert_eq!(read_back.primary_source.as_deref(), Some("example.org/a"));
         assert!(read_back.matches_file(&archive));
 
+        // Same size, mtime put back (what `rsync -a` from a backup does), different bytes: only
+        // the sample tells.
+        let mtime = std::fs::metadata(&archive).unwrap().modified().unwrap();
+        std::fs::write(&archive, b"FIRST BYTES").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&archive)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        assert!(!read_back.matches_file(&archive));
+
         // Different bytes (and size): the recorded fingerprint no longer describes the file.
         std::fs::write(&archive, b"other bytes, longer").unwrap();
         assert!(!read_back.matches_file(&archive));
@@ -262,8 +334,8 @@ mod tests {
             .unwrap());
     }
 
-    #[test]
-    fn a_sidecar_round_trips_and_lands_next_to_its_archive() {
+    #[tokio::test]
+    async fn a_sidecar_round_trips_and_lands_next_to_its_archive() {
         let tmp = tempfile::tempdir().unwrap();
         let library = tmp.path();
         let id = "5fff1a46220b45cf8db24c1721062b7e20fdb8dc";
@@ -272,7 +344,7 @@ mod tests {
         std::fs::write(&archive, b"bytes").unwrap();
 
         let sidecar = Sidecar::for_archive(id, &archive, "[Circle] Book.zip", "Book").unwrap();
-        write(library, &sidecar).unwrap();
+        write(library, &sidecar).await.unwrap();
 
         assert!(paths::sidecar_path(library, id).is_file());
         let read_back = read(library, id).unwrap();

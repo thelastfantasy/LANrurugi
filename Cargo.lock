@@ -4655,6 +4655,7 @@ dependencies = [
 name = "lanrurugi-storage"
 version = "1.0.0-beta.6"
 dependencies = [
+ "blake3",
  "chrono",
  "deadpool-redis",
  "ipnet",

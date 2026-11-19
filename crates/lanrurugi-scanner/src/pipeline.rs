@@ -452,6 +452,7 @@ fn sidecar_fingerprint(path: &Path, id: &ArchiveId) -> Option<String> {
     if !sidecar.matches_file(path) {
         return None;
     }
+    tracing::info!(%id, "reusing the sidecar's BLAKE3 (size, mtime and sampled bytes unchanged)");
     sidecar.blake3
 }
 
@@ -700,37 +701,38 @@ async fn catalogue_new_archive(
         if lanrurugi_storage::paths::is_hash_layout_path(library, path, id.as_str()) {
             // On a rebuild there is no `title_filename`: the name on disk is the id. Falling back
             // to it would overwrite the only copy of the original name with `<id>.zip`, so an
-            // existing sidecar wins. Its `original_path` is preserved for the same reason.
-            let previous = lanrurugi_storage::sidecar::read(library, id.as_str());
-            let original_filename = title_filename
-                .map(str::to_string)
-                .or_else(|| previous.as_ref().map(|s| s.original_filename.clone()))
-                .or_else(|| {
-                    path.file_name()
-                        .and_then(|f| f.to_str())
-                        .map(str::to_string)
-                })
-                .unwrap_or_default();
-            match lanrurugi_storage::sidecar::Sidecar::for_archive(
-                id.as_str(),
-                path,
-                &original_filename,
-                &archive.title,
-            ) {
-                Ok(mut sidecar) => {
-                    sidecar.blake3 = archive.blake3.clone();
-                    // A fresh record has no primary source yet; a rebuild keeps the one the old
-                    // sidecar remembered.
-                    sidecar.primary_source = archive
-                        .primary_source
-                        .clone()
-                        .or_else(|| previous.as_ref().and_then(|s| s.primary_source.clone()));
-                    sidecar.original_path = previous.map(|s| s.original_path).unwrap_or_default();
-                    if let Err(e) = lanrurugi_storage::sidecar::write(library, &sidecar) {
-                        tracing::warn!(%id, error = %e, "failed to write the archive sidecar");
-                    }
-                }
-                Err(e) => tracing::warn!(%id, error = %e, "failed to build the archive sidecar"),
+            // existing sidecar wins. Its `original_path` is preserved for the same reason. Read
+            // and written under the sidecar's lock: a download's primary source can be amended
+            // into it concurrently.
+            let written = lanrurugi_storage::sidecar::rewrite(library, id.as_str(), |previous| {
+                let original_filename = title_filename
+                    .map(str::to_string)
+                    .or_else(|| previous.as_ref().map(|s| s.original_filename.clone()))
+                    .or_else(|| {
+                        path.file_name()
+                            .and_then(|f| f.to_str())
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_default();
+                let mut sidecar = lanrurugi_storage::sidecar::Sidecar::for_archive(
+                    id.as_str(),
+                    path,
+                    &original_filename,
+                    &archive.title,
+                )?;
+                sidecar.blake3 = archive.blake3.clone();
+                // A fresh record has no primary source yet; a rebuild keeps the one the old
+                // sidecar remembered.
+                sidecar.primary_source = archive
+                    .primary_source
+                    .clone()
+                    .or_else(|| previous.as_ref().and_then(|s| s.primary_source.clone()));
+                sidecar.original_path = previous.map(|s| s.original_path).unwrap_or_default();
+                Ok(sidecar)
+            })
+            .await;
+            if let Err(e) = written {
+                tracing::warn!(%id, error = %e, "failed to write the archive sidecar");
             }
         }
     }

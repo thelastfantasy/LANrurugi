@@ -195,12 +195,18 @@ where
                 Ok(hash) => match state.repos.archives.set_blake3(&id, &hash.to_hex()).await {
                     Ok(true) => {
                         summary.filled += 1;
-                        // The sidecar keeps a copy for a rebuild (absent on by-name archives).
+                        // The sidecar keeps a copy for a rebuild (absent on by-name archives), with
+                        // the sample that lets the rebuild trust it.
                         let hex = hash.to_hex().to_string();
                         let _ = lanrurugi_storage::sidecar::amend(
                             &state.library.archive_dir,
                             id.as_str(),
-                            |s| s.blake3 = Some(hex),
+                            |s| {
+                                s.blake3 = Some(hex);
+                                if s.sample.is_none() {
+                                    s.sample = lanrurugi_storage::sidecar::sample_of(&path).ok();
+                                }
+                            },
                         )
                         .await;
                     }

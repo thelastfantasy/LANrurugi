@@ -406,8 +406,12 @@ async fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
                 let _ = tokio::fs::remove_file(&staging).await;
                 return Err(e);
             }
-            tokio::fs::remove_file(from).await?;
-            Ok(())
+            match tokio::fs::remove_file(from).await {
+                // Someone else removed the source meanwhile; the copy is already in place, so the
+                // move happened. Reporting it as failed would leave the record on the old path.
+                Err(e) if e.kind() != ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            }
         }
         Err(e) => Err(e),
     }

@@ -14,8 +14,9 @@ use std::path::Path;
 const ATTEMPTS: usize = 3;
 
 /// Creates `target`'s parent directory and runs `op` (the write or move that puts `target` there),
-/// recreating the directory and running `op` again when it fails with `NotFound`. `op` must be safe
-/// to repeat after a `NotFound` — a rename or a fresh write is.
+/// recreating the directory and running `op` again when it fails with `NotFound` *and* that
+/// directory is gone. Any other `NotFound` (a missing source) is `op`'s own failure and is returned
+/// as is. `op` must be safe to repeat after a `NotFound` — a rename or a fresh write is.
 pub async fn in_dir<T, F, Fut>(target: &Path, mut op: F) -> std::io::Result<T>
 where
     F: FnMut() -> Fut,
@@ -27,7 +28,13 @@ where
             tokio::fs::create_dir_all(parent).await?;
         }
         match op().await {
-            Err(e) if e.kind() == ErrorKind::NotFound && attempt < ATTEMPTS => attempt += 1,
+            Err(e)
+                if e.kind() == ErrorKind::NotFound
+                    && attempt < ATTEMPTS
+                    && target.parent().is_some_and(|p| !p.exists()) =>
+            {
+                attempt += 1
+            }
             result => return result,
         }
     }
@@ -61,13 +68,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_missing_source_still_fails_after_the_retries() {
+    async fn a_missing_source_fails_without_a_retry() {
         let tmp = tempfile::tempdir().unwrap();
         let target = tmp.path().join("ab").join("file.zip");
         let missing = tmp.path().join("gone.zip");
-        let err = in_dir(&target, || tokio::fs::rename(&missing, &target))
-            .await
-            .unwrap_err();
+        let calls = AtomicUsize::new(0);
+        let err = in_dir(&target, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            tokio::fs::rename(&missing, &target)
+        })
+        .await
+        .unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        // The directory is there: the source is what is missing, which no retry fixes.
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }

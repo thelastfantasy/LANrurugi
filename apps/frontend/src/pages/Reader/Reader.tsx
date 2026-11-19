@@ -204,12 +204,20 @@ function animateScrollTo(top: number, cancelled: () => boolean): Promise<void> {
   });
 }
 
-/** Resolves on the first frame `ready()` holds, or after `timeoutMs` regardless. */
+/** Resolves on the first frame `ready()` holds, or after `timeoutMs` regardless — the timer too,
+ * since a background tab stops running animation frames. */
 function waitFor(ready: () => boolean, timeoutMs: number): Promise<void> {
   return new Promise((resolve) => {
-    const startedAt = performance.now();
-    const frame = (now: number) => {
-      if (ready() || now - startedAt > timeoutMs) resolve();
+    let done = false;
+    const finish = () => {
+      done = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    const frame = () => {
+      if (done) return;
+      if (ready()) finish();
       else requestAnimationFrame(frame);
     };
     requestAnimationFrame(frame);
@@ -1816,12 +1824,11 @@ export function Reader() {
       await waitFor(() => {
         still = Math.abs(window.scrollY - lastY) < 1 ? still + 1 : 0;
         lastY = window.scrollY;
-        const img = leftImgRef.current;
-        return (
-          currentPageRef.current !== pageBefore &&
-          (!img || (img.complete && img.naturalHeight > 0)) &&
-          still >= 3
+        // Both pictures in a two-page spread: the new page can be either one.
+        const decoded = [leftImgRef.current, rightImgRef.current].every(
+          (img) => !img || (img.complete && img.naturalHeight > 0),
         );
+        return currentPageRef.current !== pageBefore && decoded && still >= 3;
       }, TURN_SETTLE_TIMEOUT_MS);
       return;
     }

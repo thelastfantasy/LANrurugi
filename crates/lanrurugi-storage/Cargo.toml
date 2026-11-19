@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+blake3.workspace = true
 lanrurugi-core.workspace = true
 lanrurugi-share-proto.workspace = true
 chrono.workspace = true

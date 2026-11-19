@@ -340,6 +340,13 @@ async fn plan_progress_shift(
 
 /// Applies a planned shift where the record still holds what it was planned from. `true` once the
 /// write went through (including when there was nothing left to change).
+///
+/// A value that no longer equals `from` is left as it is, not remapped. Whoever changed it was
+/// reading the page list this report goes out with, which no longer has the patch's pages — the
+/// apply that failed is retried on a later read, and in that gap the reader keeps saving progress
+/// in the new numbering. Remapping it would shift it a second time; so would remapping a value
+/// after a lost completion flag. (A reader that still holds the list from before the damage saves
+/// old-numbered pages at any time, before or after this runs; no check here can tell them apart.)
 async fn apply_progress_shift(state: &AppState, archive: &Archive, shift: ProgressShift) -> bool {
     let updated = state
         .repos
@@ -369,7 +376,8 @@ async fn apply_progress_shift(state: &AppState, archive: &Archive, shift: Progre
 /// vanished page are removed, since the page they marked no longer exists (and after the shift the
 /// number they held belongs to something else).
 /// Runs at most once per report (see `report_damage`): every move here is relative to where the
-/// mark is now, so a retry would move the ones that already moved a second time. A bookmark or stamp
+/// mark is now, so a retry would move the ones that already moved a second time. Because nothing retries
+/// it, it is not part of `PatchDamage::pending` either. A bookmark or stamp
 /// that fails to move is logged and left on its old page rather than retried. `false` when the
 /// stamp index could not be rewritten.
 async fn shift_bookmarks_and_stamps(
