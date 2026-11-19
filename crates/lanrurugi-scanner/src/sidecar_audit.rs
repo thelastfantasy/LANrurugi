@@ -89,24 +89,29 @@ pub async fn audit_sidecars(
             } else {
                 format!("{}.{extension}", archive.name)
             };
-            match lanrurugi_storage::sidecar::Sidecar::for_archive(
-                archive.id.as_str(),
-                &path,
-                &original_filename,
-                &archive.title,
-            ) {
-                Ok(mut sidecar) => {
-                    sidecar.blake3 = archive.blake3.clone();
-                    sidecar.primary_source = archive.primary_source.clone();
-                    if lanrurugi_storage::sidecar::write(library, &sidecar)
-                        .await
-                        .is_ok()
-                    {
-                        audit.repaired += 1
-                    } else {
-                        tracing::warn!(id = %archive.id, "could not rewrite the sidecar")
-                    }
-                }
+            // Under the sidecar's lock, from what is on disk now: a fingerprint or primary source
+            // amended in since `archive` was read is kept rather than replaced by its absence.
+            let rebuilt =
+                lanrurugi_storage::sidecar::rewrite(library, archive.id.as_str(), |previous| {
+                    let mut sidecar = lanrurugi_storage::sidecar::Sidecar::for_archive(
+                        archive.id.as_str(),
+                        &path,
+                        &original_filename,
+                        &archive.title,
+                    )?;
+                    sidecar.blake3 = archive
+                        .blake3
+                        .clone()
+                        .or_else(|| previous.as_ref().and_then(|s| s.blake3.clone()));
+                    sidecar.primary_source = archive
+                        .primary_source
+                        .clone()
+                        .or_else(|| previous.and_then(|s| s.primary_source));
+                    Ok(sidecar)
+                })
+                .await;
+            match rebuilt {
+                Ok(()) => audit.repaired += 1,
                 Err(e) => {
                     tracing::warn!(id = %archive.id, error = %e, "could not rebuild the sidecar")
                 }

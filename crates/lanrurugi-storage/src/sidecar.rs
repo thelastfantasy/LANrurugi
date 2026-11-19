@@ -54,7 +54,8 @@ pub struct Sidecar {
     pub blake3: Option<String>,
     /// BLAKE3 of the file's first and last 64 KiB ([`sample_of`]). Size and mtime alone do not
     /// prove the bytes are the same: a restore with `rsync -a`/`cp -p` keeps the mtime, and some
-    /// mounts store it to the second only.
+    /// mounts store it to the second only. Its limit: a file over 128 KiB changed only in the
+    /// middle, with size and mtime kept, still matches — nothing but a deliberate forgery does that.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample: Option<String>,
     /// The record's `primary_source`: where the archive was downloaded from, or what its metadata
@@ -129,7 +130,9 @@ pub fn sample_of(path: &Path) -> std::io::Result<String> {
     let mut buf = Vec::new();
     (&mut file).take(SAMPLE_BYTES).read_to_end(&mut buf)?;
     hasher.update(&buf);
-    let tail_start = len.saturating_sub(SAMPLE_BYTES).max(SAMPLE_BYTES.min(len));
+    // The tail starts where the head ended at the earliest, so a short file is read once, whole.
+    let head_end = SAMPLE_BYTES.min(len);
+    let tail_start = len.saturating_sub(SAMPLE_BYTES).max(head_end);
     if tail_start < len {
         buf.clear();
         file.seek(SeekFrom::Start(tail_start))?;
@@ -230,6 +233,10 @@ fn write_inner(dest: &Path, sidecar: &Sidecar) -> std::io::Result<()> {
 /// Removes the sidecar for `id` (a no-op when there is none). Callers use this when the archive
 /// leaves the library — a permanent delete or a move into the recycle bin — so the snapshot does
 /// not outlive the bytes it describes.
+///
+/// Not under the sidecar's lock: a writer that read the sidecar before this ran would put it back
+/// afterwards regardless. Such a leftover is harmless — the orphan sweep (`sidecar_audit`) removes
+/// it, and an archive restored from the bin has the same bytes it describes.
 pub fn remove(library: &Path, id: &str) -> std::io::Result<()> {
     match std::fs::remove_file(paths::sidecar_path(library, id)) {
         Ok(()) => Ok(()),

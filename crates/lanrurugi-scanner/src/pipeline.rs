@@ -409,10 +409,16 @@ pub async fn ingest_file_with_policy(
     // Cataloguing a hash-named file with no record (a rebuild after Redis was lost): its sidecar
     // still has the fingerprint, valid while the file has not changed — reading a whole library
     // again just to recompute it is the slow part of a rebuild.
-    let remembered = blake3
-        .is_none()
-        .then(|| sidecar_fingerprint(path, &id))
-        .flatten();
+    let remembered = if blake3.is_none() {
+        // Reads up to 128 KiB per archive: off the reactor, like `fingerprint`.
+        let (path, id) = (path.to_path_buf(), id.clone());
+        lanrurugi_core::concurrency::run_blocking(move || sidecar_fingerprint(&path, &id))
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
     let fingerprint = fingerprint(path, blake3.or(remembered.as_deref())).await?;
     catalogue_new_archive(
         archives,
