@@ -148,6 +148,9 @@ async function get_json_from_EH(ua: any, gID: any, gToken: any) {
   let uri = 'https://api.e-hentai.org/api.php';
   let logger = legacyCompat.getLogger("Mayriad's EH Master Script", "plugins");
   let rep = (await ua.post(uri, "json", {method: "gdata", gidlist: [[gID, gToken]], namespace: 1})).result;
+  if (rep.is_error) {
+    throw new PluginErrorException(`E-H API request failed (HTTP ${rep.code})`);
+  }
   let textrep = rep.body;
   logger.debug(`E-H API returned this JSON: ${textrep}`);
   let jsonresponse = rep.json;

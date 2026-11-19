@@ -15,6 +15,8 @@ import {
   type JScrollUnit,
   K_BEHAVIOR,
   type KBehavior,
+  KEY_REPEAT,
+  type KeyRepeat,
   type ReaderSettings,
 } from "@/hooks/useReaderSettings";
 import { ensureLink, FONT_SIZE_MD, FONT_SIZE_XS, removeLink } from "@/theme";
@@ -519,6 +521,27 @@ export function SettingsOverlay({
               </RadioItem>
               <RadioItem value={CLICK_ACTION.SCROLL}>
                 {t("reader.clickActionScroll")}
+              </RadioItem>
+            </RadioGroup>
+          </SettingSection>
+
+          <SettingSection
+            title={t("reader.keyRepeat") ?? ""}
+            description={t("reader.keyRepeatHint") ?? undefined}
+          >
+            <RadioGroup<KeyRepeat>
+              value={settings.keyRepeat}
+              onValueChange={(v) => update({ keyRepeat: v })}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                fontSize: FONT_SIZE_MD,
+              }}
+            >
+              <RadioItem value={KEY_REPEAT.MERGE}>{t("reader.keyRepeatMerge")}</RadioItem>
+              <RadioItem value={KEY_REPEAT.SEQUENTIAL}>
+                {t("reader.keyRepeatSequential")}
               </RadioItem>
             </RadioGroup>
           </SettingSection>

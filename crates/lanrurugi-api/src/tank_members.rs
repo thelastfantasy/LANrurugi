@@ -52,13 +52,7 @@ pub(crate) async fn after_recycle(state: &AppState, archive: &Archive) {
                 if g.progress < start || g.progress > last {
                     return;
                 }
-                g.progress = if index > 0 {
-                    start - 1
-                } else if index + 1 < g.archives.len() {
-                    last + 1
-                } else {
-                    1
-                };
+                g.progress = recycled_marker(start, index);
             })
             .await;
         if let Err(e) = result {
@@ -121,6 +115,18 @@ pub(crate) async fn after_permanent_delete_with(state: &AppState, id: &ArchiveId
     }
 }
 
+/// Where a marker that sat inside the member at `index` (starting at global page `start`) is parked
+/// when that member goes to the recycle bin: the previous member's last page, or — for the first
+/// member — `start` itself. A member without a live record counts as 0 pages in the tank's numbering
+/// (`resolve_global_page`), so once it is recycled `start` is already the next member's first page.
+pub(crate) fn recycled_marker(start: u32, index: usize) -> u32 {
+    if index > 0 {
+        start.saturating_sub(1)
+    } else {
+        start
+    }
+}
+
 /// Where a tank's marker goes when the member at `index` (pages `start..start + pagecount`) is taken
 /// out: later pages move down by its length, a marker inside it lands on the previous member's last
 /// page (or, for the first member, on the page the next member now starts at).
@@ -142,6 +148,131 @@ fn marker_after_removal(progress: u32, start: u32, pagecount: u32, index: usize)
 #[cfg(test)]
 mod tests {
     use super::marker_after_removal;
+
+    use crate::AppState;
+    use lanrurugi_core::entities::{Archive, Grouping};
+    use lanrurugi_core::ids::{ArchiveId, TankId};
+
+    fn archive(id: &str, pagecount: u32) -> Archive {
+        Archive {
+            id: ArchiveId(id.to_string()),
+            name: "n".into(),
+            title: "t".into(),
+            file: "/x.zip".into(),
+            tags: String::new(),
+            summary: String::new(),
+            arcsize: 1,
+            pagecount,
+            isnew: false,
+            lastreadpage: 0,
+            lastreadtime: 0,
+            thumbhash: None,
+            toc: vec![],
+            stamp_ids: vec![],
+            heal_failed_at: None,
+            corrupted_pages: vec![],
+            has_patch: false,
+            blake3: None,
+            primary_source: None,
+        }
+    }
+
+    fn tank(id: &str, progress: u32, members: &[&Archive]) -> Grouping {
+        Grouping {
+            tankid: TankId(id.to_string()),
+            name: String::new(),
+            summary: String::new(),
+            tags: String::new(),
+            progress,
+            lastreadtime: None,
+            archives: members.iter().map(|a| a.id.clone()).collect(),
+            thumbnail_manual: false,
+            thumbnail_source_archive: None,
+            thumbnail_source_page: None,
+            chapter_names: Vec::new(),
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
+    /// A tank's marker after one of its members is recycled, `recycled` being the member whose live
+    /// record goes (as `recycle_archive` drops it before calling `after_recycle`).
+    async fn marker_after_recycle(
+        state: &AppState,
+        tank_id: &str,
+        progress: u32,
+        members: &[&Archive],
+        recycled: &Archive,
+    ) -> u32 {
+        for a in members {
+            state.repos.archives.create_or_replace(a).await.unwrap();
+        }
+        state
+            .repos
+            .groupings
+            .create_or_replace(&tank(tank_id, progress, members))
+            .await
+            .unwrap();
+        state.repos.archives.delete(&recycled.id).await.unwrap();
+        super::after_recycle(state, recycled).await;
+        let tank_id = TankId(tank_id.to_string());
+        let marker = state
+            .repos
+            .groupings
+            .get(&tank_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .progress;
+        let _ = state.repos.groupings.delete(&tank_id).await;
+        for a in members {
+            let _ = state.repos.archives.delete(&a.id).await;
+        }
+        marker
+    }
+
+    #[tokio::test]
+    async fn a_marker_inside_a_recycled_member_lands_on_the_neighbouring_page() {
+        let Some(state) = crate::plugins::tests::test_state().await else {
+            return;
+        };
+        let a = archive(&"302f".repeat(10), 20);
+        let b = archive(&"3030".repeat(10), 30);
+        // First member recycled: B now numbers 1..=30, so the marker goes to its first page.
+        assert_eq!(
+            marker_after_recycle(&state, "TANK_3020000001", 5, &[&a, &b], &a).await,
+            1
+        );
+        // Second member recycled: the marker goes to A's last page.
+        assert_eq!(
+            marker_after_recycle(&state, "TANK_3020000002", 25, &[&a, &b], &b).await,
+            20
+        );
+        // A marker outside the member is left alone.
+        assert_eq!(
+            marker_after_recycle(&state, "TANK_3020000003", 7, &[&a, &b], &b).await,
+            7
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_the_last_member_deletes_the_tank() {
+        let Some(state) = crate::plugins::tests::test_state().await else {
+            return;
+        };
+        let a = archive(&"3031".repeat(10), 10);
+        state.repos.archives.create_or_replace(&a).await.unwrap();
+        let tank_id = TankId("TANK_3020000004".to_string());
+        state
+            .repos
+            .groupings
+            .create_or_replace(&tank(tank_id.as_str(), 3, &[&a]))
+            .await
+            .unwrap();
+        super::after_permanent_delete(&state, &a).await;
+        assert!(state.repos.groupings.get(&tank_id).await.unwrap().is_none());
+        let _ = state.repos.archives.delete(&a.id).await;
+    }
 
     #[test]
     fn markers_inside_the_deleted_member_land_on_a_neighbour() {

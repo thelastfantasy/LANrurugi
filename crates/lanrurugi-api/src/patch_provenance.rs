@@ -56,6 +56,26 @@ pub struct PatchRecord {
     /// the patch is rewritten or removed, so a repaired patch is reported again if it breaks anew.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub damaged_at: Option<i64>,
+    /// Whether the two shifts that follow a damage report have run: progress and chapters, then
+    /// bookmarks and stamps. Each is set only once its step completed, so a report interrupted
+    /// between recording the damage and finishing the shifts is resumed by the next read. `None`
+    /// on a record written before these existed, whose shifts always ran with the report: done.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_shifted: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marks_shifted: Option<bool>,
+}
+
+impl PatchRecord {
+    fn shifts_pending(&self) -> (bool, bool) {
+        if self.damaged_at.is_none() {
+            return (true, true);
+        }
+        (
+            self.progress_shifted == Some(false),
+            self.marks_shifted == Some(false),
+        )
+    }
 }
 
 async fn read(state: &AppState, archive_id: &str) -> Option<PatchRecord> {
@@ -101,6 +121,8 @@ pub async fn record_merge(
     record.sources.push(source);
     record.pages = pages;
     record.damaged_at = None;
+    record.progress_shifted = None;
+    record.marks_shifted = None;
     store(state, archive_id, &record).await;
     record
 }
@@ -167,27 +189,41 @@ pub async fn report_damage(
     // A read that failed for a reason that may pass must not rewrite progress, chapters, bookmarks
     // and stamps for good.
     if !error.is_permanent() {
-        tracing::warn!(archive = %archive.id, %error, "patch could not be read this time; not treating it as damaged");
+        // Info, not a warning: this runs on every read, and a flaky mount would otherwise file a
+        // tracker event per page list.
+        tracing::info!(archive = %archive.id, %error, "patch could not be read this time; not treating it as damaged");
         return None;
     }
     let reason = error.to_string();
     let reason = reason.as_str();
     let archive_id = archive.id.as_str();
-    let record = {
-        // The reader and the overview ask for the page list together: only one of them may claim
-        // the report, or the shifts below would run twice.
-        let _guard = lanrurugi_storage::record_lock::lock(&format!("patch:{archive_id}")).await;
-        let mut record = read(state, archive_id).await?;
-        if record.damaged_at.is_some() {
-            return None;
-        }
+    // Held through the shifts: the reader and the overview ask for the page list together, and only
+    // one of them may run them. Each step is recorded as it completes, so one interrupted midway
+    // is finished by a later read instead of being skipped for good.
+    let _guard = lanrurugi_storage::record_lock::lock(&format!("patch:{archive_id}")).await;
+    let mut record = read(state, archive_id).await?;
+    let (progress_pending, marks_pending) = record.shifts_pending();
+    if !progress_pending && !marks_pending {
+        return None;
+    }
+    let first_report = record.damaged_at.is_none();
+    if first_report {
         record.damaged_at = Some(crate::integrity_scan::now_secs());
+        record.progress_shifted = Some(false);
+        record.marks_shifted = Some(false);
         store(state, archive_id, &record).await;
-        record
-    };
-
-    shift_progress_and_toc(state, archive, &record.pages).await;
-    shift_bookmarks_and_stamps(state, archive, &record.pages).await;
+    }
+    if progress_pending && shift_progress_and_toc(state, archive, &record.pages).await {
+        record.progress_shifted = Some(true);
+        store(state, archive_id, &record).await;
+    }
+    if marks_pending && shift_bookmarks_and_stamps(state, archive, &record.pages).await {
+        record.marks_shifted = Some(true);
+        store(state, archive_id, &record).await;
+    }
+    if !first_report {
+        return None;
+    }
 
     crate::activity::record_automatic(
         state,
@@ -227,9 +263,10 @@ pub async fn report_damage(
 /// contribute. Progress lands on the last surviving page before it (page 1 when the patch opened
 /// the archive); a chapter marker that pointed at a patch page is dropped rather than moved, since
 /// which surviving page it "meant" is unknowable.
-async fn shift_progress_and_toc(state: &AppState, archive: &Archive, patch_pages: &[u32]) {
+/// `true` once done (or nothing to do), `false` when the write failed and must be retried.
+async fn shift_progress_and_toc(state: &AppState, archive: &Archive, patch_pages: &[u32]) -> bool {
     if patch_pages.is_empty() {
-        return;
+        return true;
     }
     let pages = patch_pages.to_vec();
     let updated = state
@@ -260,14 +297,22 @@ async fn shift_progress_and_toc(state: &AppState, archive: &Archive, patch_pages
             error = %e,
             "could not shift reading progress past an unreadable patch"
         );
+        return false;
     }
+    true
 }
 
 /// Keeps an archive's bookmarks and stamps pointing at the pictures they marked after a patch's own
 /// pages vanish: the ones further down move down with those pictures, and the ones that sat *on* a
 /// vanished page are removed, since the page they marked no longer exists (and after the shift the
 /// number they held belongs to something else).
-async fn shift_bookmarks_and_stamps(state: &AppState, archive: &Archive, patch_pages: &[u32]) {
+/// `true` once the archive's stamp index points at the moved stamps (or nothing had to move).
+/// Bookmarks are moved one by one; a failure there is logged and not retried.
+async fn shift_bookmarks_and_stamps(
+    state: &AppState,
+    archive: &Archive,
+    patch_pages: &[u32],
+) -> bool {
     let archive_id = archive.id.as_str();
 
     match state.bookmarks.list_for_archive(archive_id).await {
@@ -340,7 +385,7 @@ async fn shift_bookmarks_and_stamps(state: &AppState, archive: &Archive, patch_p
         moved.push((stamp_id.clone(), new_id));
     }
     if moved.is_empty() && vanished.is_empty() {
-        return;
+        return true;
     }
 
     let mapping: std::collections::HashMap<StampId, StampId> = moved.iter().cloned().collect();
@@ -365,7 +410,7 @@ async fn shift_bookmarks_and_stamps(state: &AppState, archive: &Archive, patch_p
             error = %error,
             "could not reindex stamps moved past an unreadable patch"
         );
-        return;
+        return false;
     }
     // Old keys go only once the index already points at the new ones.
     let mut stale: Vec<StampId> = moved.into_iter().map(|(old, _)| old).collect();
@@ -377,6 +422,7 @@ async fn shift_bookmarks_and_stamps(state: &AppState, archive: &Archive, patch_p
             "could not remove the superseded stamp records"
         );
     }
+    true
 }
 
 #[cfg(test)]
@@ -454,11 +500,84 @@ mod tests {
                 sites: vec!["https://example.org/b".to_string()],
             }],
             pages: vec![3, 4],
-            damaged_at: None,
+            ..PatchRecord::default()
         };
         let raw = serde_json::to_string(&record).unwrap();
         assert_eq!(serde_json::from_str::<PatchRecord>(&raw).unwrap(), record);
         // No damage field at all on the wire until there is damage.
         assert!(!raw.contains("damaged_at"));
+    }
+
+    #[test]
+    fn a_report_from_before_the_shift_flags_counts_as_shifted() {
+        let legacy = PatchRecord {
+            damaged_at: Some(1),
+            ..PatchRecord::default()
+        };
+        assert_eq!(legacy.shifts_pending(), (false, false));
+        let interrupted = PatchRecord {
+            damaged_at: Some(1),
+            progress_shifted: Some(true),
+            marks_shifted: Some(false),
+            ..PatchRecord::default()
+        };
+        assert_eq!(interrupted.shifts_pending(), (false, true));
+        assert_eq!(PatchRecord::default().shifts_pending(), (true, true));
+    }
+
+    /// A transient read failure changes nothing; a permanent one shifts progress once, however
+    /// many reads report it.
+    #[tokio::test]
+    async fn damage_shifts_progress_once_and_only_for_a_permanent_failure() {
+        let Some(state) = crate::plugins::tests::test_state().await else {
+            return;
+        };
+        let mut archive = archive_named("A.zip", "A");
+        archive.id = lanrurugi_core::ids::ArchiveId("3025".repeat(10));
+        archive.pagecount = 10;
+        state
+            .repos
+            .archives
+            .create_or_replace(&archive)
+            .await
+            .unwrap();
+        state
+            .repos
+            .archives
+            .set_progress(&archive.id, 6, 1)
+            .await
+            .unwrap();
+        store(
+            &state,
+            archive.id.as_str(),
+            &PatchRecord {
+                pages: vec![2, 3],
+                ..PatchRecord::default()
+            },
+        )
+        .await;
+        let progress = |state: AppState, id: lanrurugi_core::ids::ArchiveId| async move {
+            state
+                .repos
+                .archives
+                .get(&id)
+                .await
+                .unwrap()
+                .unwrap()
+                .lastreadpage
+        };
+
+        let transient = lanrurugi_scanner::patch::PatchError::Io(std::io::Error::other("busy"));
+        assert!(report_damage(&state, &archive, &transient).await.is_none());
+        assert_eq!(progress(state.clone(), archive.id.clone()).await, 6);
+
+        let broken = lanrurugi_scanner::patch::PatchError::MissingMetadata;
+        assert!(report_damage(&state, &archive, &broken).await.is_some());
+        assert_eq!(progress(state.clone(), archive.id.clone()).await, 4);
+        assert!(report_damage(&state, &archive, &broken).await.is_none());
+        assert_eq!(progress(state.clone(), archive.id.clone()).await, 4);
+
+        forget(&state, archive.id.as_str()).await;
+        let _ = state.repos.archives.delete(&archive.id).await;
     }
 }

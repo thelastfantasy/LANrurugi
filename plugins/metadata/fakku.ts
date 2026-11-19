@@ -135,6 +135,11 @@ async function get_search_result_dom(title: string, ua: LegacyUserAgent): Promis
   const url = `${FAKKU_HOST}/search/` + encodeURIComponent(title);
   logger.debug(`Using URL ${url} to search on FAKKU.`);
   const res = (await ua.max_redirects(5).get(url)).result;
+  // A failed search page (an outage, a Cloudflare block) has no results either; it must not pass
+  // for "this is not a FAKKU work".
+  if (res.is_error) {
+    throw new PluginErrorException(`FAKKU search failed (HTTP ${res.code})`);
+  }
   return res.dom;
 }
 

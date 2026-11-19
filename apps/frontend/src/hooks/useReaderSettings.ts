@@ -42,6 +42,16 @@ export const CLICK_ACTION = {
 
 export type ClickAction = (typeof CLICK_ACTION)[keyof typeof CLICK_ACTION];
 
+/** Pressing `j`/`k` again before the last step finished: `MERGE` (the default, like a browser's
+ * own key scrolling) moves the one target and glides there; `SEQUENTIAL` runs every press in full,
+ * in order, so a `k` among the `j`s visibly scrolls back. */
+export const KEY_REPEAT = {
+  MERGE: "merge",
+  SEQUENTIAL: "sequential",
+} as const;
+
+export type KeyRepeat = (typeof KEY_REPEAT)[keyof typeof KEY_REPEAT];
+
 export interface ReaderSettings {
   hideHeader: boolean;
   mangaMode: boolean;
@@ -60,6 +70,7 @@ export interface ReaderSettings {
   jScrollAmount: number;
   kBehavior: KBehavior;
   clickAction: ClickAction;
+  keyRepeat: KeyRepeat;
 }
 
 const DEFAULTS: ReaderSettings = {
@@ -80,6 +91,7 @@ const DEFAULTS: ReaderSettings = {
   jScrollAmount: 80,
   kBehavior: K_BEHAVIOR.BACK_BOTTOM,
   clickAction: CLICK_ACTION.TURN,
+  keyRepeat: KEY_REPEAT.MERGE,
 };
 
 function readBool(key: string, fallback: boolean): boolean {
@@ -128,6 +140,12 @@ function readFromLocalStorage(): ReaderSettings {
       return (Object.values(K_BEHAVIOR) as string[]).includes(raw ?? "")
         ? (raw as KBehavior)
         : DEFAULTS.kBehavior;
+    })(),
+    keyRepeat: (() => {
+      const raw = localStorage.getItem("keyRepeat");
+      return (Object.values(KEY_REPEAT) as string[]).includes(raw ?? "")
+        ? (raw as KeyRepeat)
+        : DEFAULTS.keyRepeat;
     })(),
     clickAction: (() => {
       const raw = localStorage.getItem("clickAction");
@@ -197,6 +215,9 @@ function writeToLocalStorage(partial: Partial<ReaderSettings>) {
   }
   if (partial.clickAction !== undefined) {
     localStorage.setItem("clickAction", partial.clickAction);
+  }
+  if (partial.keyRepeat !== undefined) {
+    localStorage.setItem("keyRepeat", partial.keyRepeat);
   }
 }
 

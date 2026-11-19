@@ -217,7 +217,7 @@ pub(crate) async fn apply(state: &AppState, queue_item_id: &str, new_id: &Archiv
                 // delete, which a snapshot from back then must not undo.
                 let was_inside =
                     slot.progress >= start && slot.progress < start.saturating_add(before);
-                let parked = recycled_marker(start, before, pos, g.archives.len());
+                let parked = crate::tank_members::recycled_marker(start, pos);
                 if was_inside && g.progress == parked {
                     g.progress = slot
                         .progress
@@ -230,18 +230,6 @@ pub(crate) async fn apply(state: &AppState, queue_item_id: &str, new_id: &Archiv
         if let Err(e) = result {
             tracing::warn!(tank = %slot.tank_id, error = %e, "could not put the re-downloaded archive back into its Tankoubon");
         }
-    }
-}
-
-/// Where `tank_members::after_recycle` parks a marker that was inside the member at `index`
-/// (pages `start..start + pagecount`) of a tank with `members` members.
-fn recycled_marker(start: u32, pagecount: u32, index: usize, members: usize) -> u32 {
-    if index > 0 {
-        start.saturating_sub(1)
-    } else if index + 1 < members {
-        start.saturating_add(pagecount)
-    } else {
-        1
     }
 }
 
@@ -285,20 +273,97 @@ async fn redis_hdel(
 
 #[cfg(test)]
 mod tests {
-    use super::{recycled_marker, shifted_progress};
+    use super::shifted_progress;
+
+    /// A member taken out of the tank while it was being downloaded again stays out, and the tank's
+    /// marker is not touched.
+    #[tokio::test]
+    async fn a_member_removed_meanwhile_is_not_put_back() {
+        use lanrurugi_core::entities::Grouping;
+        use lanrurugi_core::ids::{ArchiveId, TankId};
+        let Some(state) = crate::plugins::tests::test_state().await else {
+            return;
+        };
+        let old_id = "3032".repeat(10);
+        let other = ArchiveId("3033".repeat(10));
+        let fresh = lanrurugi_core::entities::Archive {
+            id: ArchiveId("3034".repeat(10)),
+            name: "n".into(),
+            title: "t".into(),
+            file: String::new(),
+            tags: String::new(),
+            summary: String::new(),
+            arcsize: 1,
+            pagecount: 12,
+            isnew: false,
+            lastreadpage: 0,
+            lastreadtime: 0,
+            thumbhash: None,
+            toc: vec![],
+            stamp_ids: vec![],
+            heal_failed_at: None,
+            corrupted_pages: vec![],
+            has_patch: false,
+            blake3: None,
+            primary_source: None,
+        };
+        state
+            .repos
+            .archives
+            .create_or_replace(&fresh)
+            .await
+            .unwrap();
+        let tank_id = TankId("TANK_3020000005".to_string());
+        state
+            .repos
+            .groupings
+            .create_or_replace(&Grouping {
+                tankid: tank_id.clone(),
+                name: String::new(),
+                summary: String::new(),
+                tags: String::new(),
+                progress: 9,
+                lastreadtime: None,
+                archives: vec![other.clone()],
+                thumbnail_manual: false,
+                thumbnail_source_archive: None,
+                thumbnail_source_page: None,
+                chapter_names: Vec::new(),
+                created_at: None,
+                updated_at: None,
+            })
+            .await
+            .unwrap();
+        super::store(
+            &state,
+            "queue-3020",
+            &super::Plan {
+                old_id: old_id.clone(),
+                progress: 0,
+                pagecount: 10,
+                tanks: vec![super::TankSlot {
+                    tank_id: tank_id.to_string(),
+                    chapter_name: None,
+                    start_page: 1,
+                    progress: 3,
+                }],
+                patch: false,
+                created_at: super::now_secs(),
+            },
+        )
+        .await;
+        super::apply(&state, "queue-3020", &fresh.id).await;
+        let tank = state.repos.groupings.get(&tank_id).await.unwrap().unwrap();
+        assert_eq!((tank.progress, tank.archives), (9, vec![other]));
+        let _ = state.repos.groupings.delete(&tank_id).await;
+        let _ = state.repos.archives.delete(&fresh.id).await;
+    }
 
     #[test]
     fn the_next_members_first_page_moves_too() {
         // Member spans 100..=119; page 120 is the next member's first page.
         assert_eq!(shifted_progress(120, 100, 20, -5), 115);
         assert_eq!(shifted_progress(119, 100, 20, -5), 119);
-    }
-
-    #[test]
-    fn the_parked_marker_matches_where_recycling_puts_it() {
-        assert_eq!(recycled_marker(100, 20, 2, 3), 99);
-        assert_eq!(recycled_marker(1, 20, 0, 3), 21);
-        assert_eq!(recycled_marker(1, 20, 0, 1), 1);
     }
 
     #[test]

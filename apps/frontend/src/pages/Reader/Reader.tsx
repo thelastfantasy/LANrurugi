@@ -63,6 +63,7 @@ import {
   FIT_MODE,
   J_SCROLL_UNIT,
   K_BEHAVIOR,
+  KEY_REPEAT,
   useReaderSettings,
 } from "@/hooks/useReaderSettings";
 import { useSupportsHover } from "@/hooks/useSupportsHover";
@@ -170,6 +171,33 @@ function readerLog(kind: string, data: Record<string, unknown>): void {
 /** How long a `j`/`k` step counts as the committed scroll position. Covers the smooth animation
  * (a few hundred ms) plus a generous margin for a lagging frame clock. */
 const SCROLL_INTENT_MS = 900;
+
+/** The sequential key mode: presses waiting at most, one step's animation, and the pause after a
+ * page turn before the next press measures the new page. */
+const STEP_QUEUE_LIMIT = 10;
+const SEQUENTIAL_STEP_MS = 140;
+const TURN_SETTLE_MS = 250;
+
+/** Scrolls the window to `top` over `SEQUENTIAL_STEP_MS` (ease-out), resolving when it gets there.
+ * A native smooth scroll cannot be awaited, and its length is the browser's to pick. */
+function animateScrollTo(top: number): Promise<void> {
+  return new Promise((resolve) => {
+    const start = window.scrollY;
+    const distance = top - start;
+    if (Math.abs(distance) < 1) {
+      resolve();
+      return;
+    }
+    const startedAt = performance.now();
+    const frame = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / SEQUENTIAL_STEP_MS);
+      window.scrollTo(0, start + distance * (1 - (1 - progress) ** 3));
+      if (progress < 1) requestAnimationFrame(frame);
+      else resolve();
+    };
+    requestAnimationFrame(frame);
+  });
+}
 
 /** `performance.now()` through a helper: the steps below only ever run from input handlers, but a
  * bare call inside the component body reads as render-time impurity to the hooks lint. */
@@ -924,6 +952,11 @@ export function Reader() {
   // The same for infinite scroll, as a page: `currentPage` only moves once the smooth scroll reaches
   // the next page, so a second `j` before then computed the same target and the key seemed to stall.
   const infiniteIntentRef = useRef<{ page: number; at: number } | null>(null);
+  // The sequential key mode's queue: presses waiting their turn, whether one is running, and (in
+  // infinite scroll) the page the last finished step landed on — `currentPage` lags behind it.
+  const stepQueueRef = useRef<("next" | "prev")[]>([]);
+  const stepRunningRef = useRef(false);
+  const stepPageRef = useRef<number | null>(null);
   const lastFileInfoRef = useRef<string | null>(null);
   // Tracks pages whose Content-Length has already been requested, so the UI can show the file-size
   // part of the file-info bar while the actual image is still transferring (it used to wait for
@@ -1561,10 +1594,16 @@ export function Reader() {
    * that direction, and turn only at the edge. Clicks run through here too, so a click on the page
    * behaves like the key the reader options describe by default rather than like a bare page turn;
    * `clickAction` decides which of the three click behaviors that is. */
-  function stepOrTurn(direction: "next" | "prev", origin: "key" | "click" = "key") {
+  function stepOrTurn(
+    direction: "next" | "prev",
+    origin: "key" | "click" = "key",
+    /** The sequential key mode runs each press to completion itself: it wants this step's target
+     * (`null` when the step turned the page instead) and scrolls there, not merging with the last. */
+    sequential = false,
+  ): number | null {
     if (readerSettings.infiniteScroll) {
-      goToInfiniteScrollPage(currentPage, direction);
-      return;
+      goToInfiniteScrollPage(currentPage, direction, { fromKey: origin === "key" });
+      return null;
     }
     if (origin === "click" && readerSettings.clickAction === CLICK_ACTION.TURN) {
       readerLog("step", {
@@ -1574,7 +1613,7 @@ export function Reader() {
         ...scrollPosition(),
       });
       goTo(direction);
-      return;
+      return null;
     }
     // `BACK` is `k`'s own escape hatch; only the click behaviors that follow the keys inherit it.
     const followKeys =
@@ -1586,10 +1625,10 @@ export function Reader() {
     ) {
       readerLog("step", { direction, turned: true, reason: "kBehavior", ...scrollPosition() });
       goTo("prev");
-      return;
+      return null;
     }
     const intent = scrollIntentRef.current;
-    const pending = intent !== null && nowMs() - intent.at < SCROLL_INTENT_MS;
+    const pending = !sequential && intent !== null && nowMs() - intent.at < SCROLL_INTENT_MS;
     const from = pending ? intent.position : window.scrollY;
     const maxScroll = Math.max(
       0,
@@ -1613,12 +1652,13 @@ export function Reader() {
         ...scrollPosition(),
       });
       goTo(direction);
-      return;
+      return null;
     }
     const target = Math.min(
       maxScroll,
       Math.max(0, from + (direction === "next" ? step : -step)),
     );
+    if (sequential) return target;
     scrollIntentRef.current = { position: target, at: nowMs() };
     readerLog("step", {
       direction,
@@ -1629,6 +1669,7 @@ export function Reader() {
       ...scrollPosition(),
     });
     window.scrollTo({ top: target, behavior: "smooth" });
+    return null;
   }
 
   /** Touch infinite scroll reads vertically, so a tap on the lower half scrolls forward by the `j`
@@ -1652,21 +1693,32 @@ export function Reader() {
     window.scrollBy({ top: forward ? step : -step, behavior: "smooth" });
   }
 
-  function goToInfiniteScrollPage(fromPage: number, target: "prev" | "next") {
+  function goToInfiniteScrollPage(
+    fromPage: number,
+    target: "prev" | "next",
+    {
+      fromKey = false,
+      sequential = false,
+    }: {
+      /** A key press continues from the page the previous press is still scrolling to; a click
+       * counts from the page it landed on. */
+      fromKey?: boolean;
+      /** Return the step (its page and scroll position) instead of scrolling there. */
+      sequential?: boolean;
+    } = {},
+  ): { page: number; top: number } | null {
     let offset = target === "next" ? 1 : -1;
     if (readerSettings.mangaMode) offset = -offset;
-    // Stepping from where the reader is (not from a page they picked): continue from the page the
-    // previous step is still scrolling to.
     const intent = infiniteIntentRef.current;
     const base =
-      fromPage === currentPage && intent !== null && nowMs() - intent.at < SCROLL_INTENT_MS
+      fromKey && !sequential && intent !== null && nowMs() - intent.at < SCROLL_INTENT_MS
         ? intent.page
         : fromPage;
     const nextPage = base + offset;
     if (nextPage < 1 || nextPage > totalPages) {
       infiniteIntentRef.current = null;
       startArchiveTransition(offset > 0 ? "next" : "prev");
-      return;
+      return null;
     }
     // kBehavior only configures `prev`; next always lands at the top. BACK omits block ("nearest").
     const block: ScrollIntoViewOptions["block"] =
@@ -1678,9 +1730,84 @@ export function Reader() {
             : undefined
         : "start";
     const el = document.querySelector(`[data-page="${nextPage}"]`);
-    if (!el) return;
+    if (!el) return null;
+    if (sequential) {
+      const rect = el.getBoundingClientRect();
+      const toStart = window.scrollY + rect.top;
+      const toEnd = window.scrollY + rect.bottom - window.innerHeight;
+      // `scrollIntoView`'s own placement for each `block`; "nearest" moves only as far as needed.
+      const top =
+        block === "start"
+          ? toStart
+          : block === "end"
+            ? toEnd
+            : rect.top < 0
+              ? toStart
+              : rect.bottom > window.innerHeight
+                ? toEnd
+                : window.scrollY;
+      return { page: nextPage, top };
+    }
     infiniteIntentRef.current = { page: nextPage, at: nowMs() };
     el.scrollIntoView({ behavior: "smooth", block });
+    return null;
+  }
+
+  /** A `j`/`k` press. In the sequential key mode (a reader option) every press runs in full and in
+   * order — a `k` among `j`s visibly scrolls back — with a short animation so a burst does not lag
+   * far behind the keys; otherwise presses merge into one moving target (`stepOrTurn`). */
+  function pressStepKey(direction: "next" | "prev") {
+    if (readerSettings.keyRepeat !== KEY_REPEAT.SEQUENTIAL) {
+      stepOrTurn(direction);
+      return;
+    }
+    // Bounded, so holding a key down cannot queue a scroll that goes on long after it is released.
+    if (stepQueueRef.current.length >= STEP_QUEUE_LIMIT) return;
+    stepQueueRef.current.push(direction);
+    if (!stepRunningRef.current) void runStepQueue();
+  }
+
+  /** Runs one queued press with the reader's state as of this render (hence the ref below). */
+  async function runQueuedStep(direction: "next" | "prev") {
+    if (readerSettings.infiniteScroll) {
+      const from = stepPageRef.current ?? currentPage;
+      const step = goToInfiniteScrollPage(from, direction, { sequential: true });
+      if (!step) {
+        stepPageRef.current = null;
+        return;
+      }
+      stepPageRef.current = step.page;
+      await animateScrollTo(step.top);
+      return;
+    }
+    const target = stepOrTurn(direction, "key", true);
+    if (target === null) {
+      // The page turned: let the new page render before the next press measures it.
+      await new Promise((resolve) => setTimeout(resolve, TURN_SETTLE_MS));
+      return;
+    }
+    await animateScrollTo(target);
+  }
+  const runQueuedStepRef = useRef(runQueuedStep);
+  useEffect(() => {
+    runQueuedStepRef.current = runQueuedStep;
+  });
+  useEffect(() => {
+    // Presses queued for one archive must not carry over into the next.
+    stepQueueRef.current = [];
+    stepPageRef.current = null;
+  }, [archiveId]);
+
+  async function runStepQueue() {
+    stepRunningRef.current = true;
+    try {
+      for (let next = stepQueueRef.current.shift(); next; next = stepQueueRef.current.shift()) {
+        await runQueuedStepRef.current(next);
+      }
+    } finally {
+      stepRunningRef.current = false;
+      stepPageRef.current = null;
+    }
   }
 
   useEffect(() => {
@@ -1706,6 +1833,8 @@ export function Reader() {
   }, [archiveId, queryClient, isTank]);
 
   function startArchiveTransition(direction: "prev" | "next") {
+    // Queued key presses belonged to the archive being left.
+    stepQueueRef.current = [];
     // Cached (prefetched) shortlist opens instantly; otherwise show the skeleton while the
     // fetch runs.
     const cached = archiveId
@@ -2385,16 +2514,16 @@ export function Reader() {
           });
           return;
         case "j":
-          stepOrTurn("next");
+          pressStepKey("next");
           return;
         case "k":
-          stepOrTurn("prev");
+          pressStepKey("prev");
           return;
         case "ArrowLeft":
         case "a":
           if (readerSettings.infiniteScroll) {
             if (e.shiftKey) selectPage(1);
-            else goToInfiniteScrollPage(currentPage, "prev");
+            else goToInfiniteScrollPage(currentPage, "prev", { fromKey: true });
           } else {
             goTo(e.shiftKey ? "first" : "prev");
           }
@@ -2403,7 +2532,7 @@ export function Reader() {
         case "d":
           if (readerSettings.infiniteScroll) {
             if (e.shiftKey) selectPage(totalPages);
-            else goToInfiniteScrollPage(currentPage, "next");
+            else goToInfiniteScrollPage(currentPage, "next", { fromKey: true });
           } else {
             goTo(e.shiftKey ? "last" : "next");
           }

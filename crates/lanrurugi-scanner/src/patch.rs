@@ -406,6 +406,24 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn only_a_failure_that_rereading_cannot_fix_is_permanent() {
+        assert!(!PatchError::Io(std::io::Error::other("busy")).is_permanent());
+        assert!(PatchError::MissingMetadata.is_permanent());
+        assert!(PatchError::Crc32Mismatch {
+            expected: "a".into(),
+            actual: "b".into()
+        }
+        .is_permanent());
+        assert!(
+            PatchError::Archive(ArchiveFormatError::Libarchive("truncated".into())).is_permanent()
+        );
+        assert!(
+            !PatchError::Archive(ArchiveFormatError::Io(std::io::Error::other("busy")))
+                .is_permanent()
+        );
+    }
+
     fn write_zip(entries: &[(&str, &[u8])]) -> tempfile::NamedTempFile {
         let file = tempfile::NamedTempFile::with_suffix(".zip").unwrap();
         let mut writer = zip::ZipWriter::new(file.reopen().unwrap());

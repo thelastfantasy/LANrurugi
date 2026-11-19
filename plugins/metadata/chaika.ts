@@ -306,8 +306,13 @@ async function get_json_from_chaika(type: string, value: string): Promise<unknow
   let URL = `${chaika_url}/jsearch/?${type}=${value}`;
   let ua = legacyCompat.userAgent();
   let res = (await ua.get(URL)).result;
-  if (res.is_error) {
+  // Only "no such id" is a miss; any other error is Chaika failing, and must be reported as one
+  // instead of passing for "not a Chaika archive".
+  if (res.code === 404) {
     return undefined;
+  }
+  if (res.is_error) {
+    throw new PluginErrorException(`Chaika lookup failed (HTTP ${res.code})`);
   }
   logger.debug(`Chaika API returned this JSON: ${res.body}`);
   return res.json;

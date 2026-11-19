@@ -1311,5 +1311,9 @@
   "batch.noResults": "沒有可新增的項目。",
   "components.layout.downloadedWebPage": "伺服器回傳的是一個網頁而不是檔案，所以沒有入庫。網頁內容：「{{excerpt}}」。等檔案準備好後點重試。",
   "components.layout.downloadedNotArchive": "下載到的檔案不是有效的檔案，所以沒有入庫：{{detail}}",
-  "E-Hentai is still preparing this archive. Retry in a minute or two.": "E-Hentai 還在準備這個壓縮檔，請過一兩分鐘再重試。"
+  "E-Hentai is still preparing this archive. Retry in a minute or two.": "E-Hentai 還在準備這個壓縮檔，請過一兩分鐘再重試。",
+  "reader.keyRepeat": "連續按 J / K 時",
+  "reader.keyRepeatHint": "上一次捲動還沒結束就再次按鍵時的處理方式。",
+  "reader.keyRepeatMerge": "合併到終點，一次滑過去（預設）",
+  "reader.keyRepeatSequential": "逐個執行，每次按鍵都完整捲動一次（最多排隊 10 次）"
 }
