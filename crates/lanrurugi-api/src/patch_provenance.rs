@@ -45,7 +45,7 @@ pub struct PatchSource {
 }
 
 /// Everything remembered about one archive's patch.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PatchRecord {
     #[serde(default)]
     pub sources: Vec<PatchSource>,
@@ -64,6 +64,20 @@ pub struct PatchRecord {
     pub progress_shifted: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marks_shifted: Option<bool>,
+    /// The progress/chapter shift, decided before it is applied: what the record held and what it
+    /// becomes. Applying it is then a compare-and-set, so a retry after a lost completion flag is
+    /// a no-op rather than a second shift (and a reader who moved on meanwhile is left alone).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_shift: Option<ProgressShift>,
+}
+
+/// See [`PatchRecord::progress_shift`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProgressShift {
+    pub from_page: u32,
+    pub to_page: u32,
+    pub from_toc: Vec<lanrurugi_core::entities::TocEntry>,
+    pub to_toc: Vec<lanrurugi_core::entities::TocEntry>,
 }
 
 impl PatchRecord {
@@ -88,14 +102,16 @@ pub async fn load(state: &AppState, archive_id: &str) -> Option<PatchRecord> {
     read(state, archive_id).await
 }
 
-pub async fn store(state: &AppState, archive_id: &str, record: &PatchRecord) {
+/// `false` when the record could not be written — the damage report depends on that knowledge.
+pub async fn store(state: &AppState, archive_id: &str, record: &PatchRecord) -> bool {
     let Ok(mut conn) = state.redis.archive.get().await else {
-        return;
+        return false;
     };
     let Ok(raw) = serde_json::to_string(record) else {
-        return;
+        return false;
     };
-    let _: Result<(), _> = conn.hset(KEY, archive_id, raw).await;
+    let written: Result<(), _> = conn.hset(KEY, archive_id, raw).await;
+    written.is_ok()
 }
 
 /// Drops the record — the patch is gone, so nothing about it is true any more.
@@ -123,6 +139,7 @@ pub async fn record_merge(
     record.damaged_at = None;
     record.progress_shifted = None;
     record.marks_shifted = None;
+    record.progress_shift = None;
     store(state, archive_id, &record).await;
     record
 }
@@ -174,6 +191,9 @@ pub struct PatchDamage {
     /// bookmarks and stamps sitting on them.
     pub pages: Vec<u32>,
     pub sources: Vec<PatchSource>,
+    /// The progress/chapter shift did not complete on this read: it is retried by the next one, so
+    /// the notice must not say it already happened.
+    pub pending: bool,
 }
 
 /// Reports a patch that cannot be read, once per patch file: records the damage, shifts the
@@ -181,6 +201,9 @@ pub struct PatchDamage {
 /// entry that carries the provenance (it is the only place that survives, since the zip's own
 /// `metadata.json` is what broke). Returns what the reader should be told, or `None` when there is
 /// nothing to say (no record: the patch was never created here, or it was already reported).
+///
+/// Lock order: `patch:<id>` is taken first and `archive:<id>` (through `archives.update`) inside it.
+/// Never call this while holding `archive:<id>`.
 pub async fn report_damage(
     state: &AppState,
     archive: &Archive,
@@ -211,15 +234,36 @@ pub async fn report_damage(
         record.damaged_at = Some(crate::integrity_scan::now_secs());
         record.progress_shifted = Some(false);
         record.marks_shifted = Some(false);
-        store(state, archive_id, &record).await;
+        // Nothing moves before the damage is on record: a shift whose bookkeeping could not be
+        // written would run again on the next read.
+        if !store(state, archive_id, &record).await {
+            return None;
+        }
     }
-    if progress_pending && shift_progress_and_toc(state, archive, &record.pages).await {
-        record.progress_shifted = Some(true);
-        store(state, archive_id, &record).await;
+    let mut progress_done = !progress_pending;
+    if progress_pending {
+        // Decide the shift once and keep it; applying it is a compare-and-set, safe to repeat.
+        if record.progress_shift.is_none() {
+            record.progress_shift = plan_progress_shift(state, archive, &record.pages).await;
+            if record.progress_shift.is_some() && !store(state, archive_id, &record).await {
+                record.progress_shift = None;
+            }
+        }
+        if let Some(shift) = record.progress_shift.clone() {
+            if apply_progress_shift(state, archive, shift).await {
+                record.progress_shifted = Some(true);
+                progress_done = store(state, archive_id, &record).await;
+            }
+        }
     }
-    if marks_pending && shift_bookmarks_and_stamps(state, archive, &record.pages).await {
+    if marks_pending {
+        // Bookmarks and stamps move relative to where they are, so a second run would move them
+        // twice: the step is recorded as done *before* it runs, and runs only if that stuck. A
+        // crash in between loses the move, which is the lesser harm.
         record.marks_shifted = Some(true);
-        store(state, archive_id, &record).await;
+        if store(state, archive_id, &record).await {
+            shift_bookmarks_and_stamps(state, archive, &record.pages).await;
+        }
     }
     if !first_report {
         return None;
@@ -256,39 +300,57 @@ pub async fn report_damage(
         reason: reason.to_string(),
         pages: record.pages,
         sources: record.sources,
+        pending: !progress_done,
     })
 }
 
-/// Moves the archive's own reading position and chapter markers off the pages the patch used to
-/// contribute. Progress lands on the last surviving page before it (page 1 when the patch opened
-/// the archive); a chapter marker that pointed at a patch page is dropped rather than moved, since
-/// which surviving page it "meant" is unknowable.
-/// `true` once done (or nothing to do), `false` when the write failed and must be retried.
-async fn shift_progress_and_toc(state: &AppState, archive: &Archive, patch_pages: &[u32]) -> bool {
-    if patch_pages.is_empty() {
-        return true;
-    }
-    let pages = patch_pages.to_vec();
+/// Where the archive's own reading position and chapter markers go once the patch's pages are
+/// gone. Progress lands on the last surviving page before it (page 1 when the patch opened the
+/// archive); a chapter marker that pointed at a patch page is dropped rather than moved, since which
+/// surviving page it "meant" is unknowable. `None` when the record cannot be read.
+async fn plan_progress_shift(
+    state: &AppState,
+    archive: &Archive,
+    patch_pages: &[u32],
+) -> Option<ProgressShift> {
+    let current = state.repos.archives.get(&archive.id).await.ok()??;
+    let to_page = if current.lastreadpage > 0 && !patch_pages.is_empty() {
+        surviving_page(current.lastreadpage, patch_pages)
+            .unwrap_or_else(|| fallback_page(current.lastreadpage, patch_pages))
+    } else {
+        current.lastreadpage
+    };
+    let to_toc = current
+        .toc
+        .iter()
+        .filter_map(|entry| {
+            surviving_page(entry.page, patch_pages).map(|page| lanrurugi_core::entities::TocEntry {
+                page,
+                name: entry.name.clone(),
+            })
+        })
+        .collect();
+    Some(ProgressShift {
+        from_page: current.lastreadpage,
+        to_page,
+        from_toc: current.toc,
+        to_toc,
+    })
+}
+
+/// Applies a planned shift where the record still holds what it was planned from. `true` once the
+/// write went through (including when there was nothing left to change).
+async fn apply_progress_shift(state: &AppState, archive: &Archive, shift: ProgressShift) -> bool {
     let updated = state
         .repos
         .archives
         .update(&archive.id, move |record| {
-            if record.lastreadpage > 0 {
-                record.lastreadpage = surviving_page(record.lastreadpage, &pages)
-                    .unwrap_or_else(|| fallback_page(record.lastreadpage, &pages));
+            if record.lastreadpage == shift.from_page {
+                record.lastreadpage = shift.to_page;
             }
-            record.toc = record
-                .toc
-                .iter()
-                .filter_map(|entry| {
-                    surviving_page(entry.page, &pages).map(|page| {
-                        lanrurugi_core::entities::TocEntry {
-                            page,
-                            name: entry.name.clone(),
-                        }
-                    })
-                })
-                .collect();
+            if record.toc == shift.from_toc {
+                record.toc = shift.to_toc;
+            }
         })
         .await;
     if let Err(e) = updated {
@@ -306,8 +368,10 @@ async fn shift_progress_and_toc(state: &AppState, archive: &Archive, patch_pages
 /// pages vanish: the ones further down move down with those pictures, and the ones that sat *on* a
 /// vanished page are removed, since the page they marked no longer exists (and after the shift the
 /// number they held belongs to something else).
-/// `true` once the archive's stamp index points at the moved stamps (or nothing had to move).
-/// Bookmarks are moved one by one; a failure there is logged and not retried.
+/// Runs at most once per report (see `report_damage`): every move here is relative to where the
+/// mark is now, so a retry would move the ones that already moved a second time. A bookmark or stamp
+/// that fails to move is logged and left on its old page rather than retried. `false` when the
+/// stamp index could not be rewritten.
 async fn shift_bookmarks_and_stamps(
     state: &AppState,
     archive: &Archive,
@@ -547,15 +611,17 @@ mod tests {
             .set_progress(&archive.id, 6, 1)
             .await
             .unwrap();
-        store(
-            &state,
-            archive.id.as_str(),
-            &PatchRecord {
-                pages: vec![2, 3],
-                ..PatchRecord::default()
-            },
-        )
-        .await;
+        assert!(
+            store(
+                &state,
+                archive.id.as_str(),
+                &PatchRecord {
+                    pages: vec![2, 3],
+                    ..PatchRecord::default()
+                },
+            )
+            .await
+        );
         let progress = |state: AppState, id: lanrurugi_core::ids::ArchiveId| async move {
             state
                 .repos
@@ -576,6 +642,21 @@ mod tests {
         assert_eq!(progress(state.clone(), archive.id.clone()).await, 4);
         assert!(report_damage(&state, &archive, &broken).await.is_none());
         assert_eq!(progress(state.clone(), archive.id.clone()).await, 4);
+
+        // The shift was applied but its completion flag never got written: the next read finds it
+        // pending and runs it again, which must change nothing.
+        let mut record = read(&state, archive.id.as_str()).await.unwrap();
+        record.progress_shifted = Some(false);
+        assert!(store(&state, archive.id.as_str(), &record).await);
+        assert!(report_damage(&state, &archive, &broken).await.is_none());
+        assert_eq!(progress(state.clone(), archive.id.clone()).await, 4);
+        assert_eq!(
+            read(&state, archive.id.as_str())
+                .await
+                .unwrap()
+                .progress_shifted,
+            Some(true)
+        );
 
         forget(&state, archive.id.as_str()).await;
         let _ = state.repos.archives.delete(&archive.id).await;

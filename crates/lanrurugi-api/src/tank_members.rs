@@ -29,6 +29,11 @@ async fn start_page(state: &AppState, grouping: &Grouping, index: usize) -> u32 
 }
 
 /// The archive went to the recycle bin: it keeps its place, but a marker inside it must not stay.
+///
+/// While it is in the bin it counts as 0 pages (it has no live record), so markers *after* it point
+/// that many pages too far until it is restored, when the numbering — and they — are right again.
+/// They are deliberately left alone: moving them here would need the inverse on restore and on a
+/// re-download, all three agreeing.
 pub(crate) async fn after_recycle(state: &AppState, archive: &Archive) {
     let Ok(groupings) = state.repos.groupings.for_archive(&archive.id).await else {
         return;
@@ -46,6 +51,8 @@ pub(crate) async fn after_recycle(state: &AppState, archive: &Archive) {
             .repos
             .groupings
             .update(&tank_id, move |g| {
+                // The member moved since the listing: the page range above no longer describes it,
+                // so the marker is left where it is rather than moved on a guess.
                 if g.archives.iter().position(|a| *a == member) != Some(index) {
                     return;
                 }

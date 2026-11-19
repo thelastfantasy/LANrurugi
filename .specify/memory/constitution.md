@@ -1,6 +1,15 @@
 <!--
 Sync Impact Report
 ===================
+Version change: 1.9.0 → 1.10.0 (MINOR — the 1.9.0 bullet extended, nothing removed)
+Added (2026-11-19): shared library directories in Principle III's "Changing a stored record"
+bullet. A bucket directory pruned the moment it emptied was removed between another task's
+`create_dir_all` and its write (the sidecar ENOENT of 2026-11-10); the record lock does not cover a
+directory. Writes and moves into the library now go through `lanrurugi_storage::fsutil::in_dir`.
+Developer guide: `docs/dev/data-writes.md` (also a checklist for finding races).
+
+Previous amendment
+------------------
 Version change: 1.8.0 → 1.9.0 (MINOR — one bullet added to Principle III, nothing removed)
 Added (2026-11-17, issue #302): Principle III's "Changing a stored record" bullet. Clearing an
 archive's "new" flag read the whole record, and its write put back the reading progress the reader
@@ -165,7 +174,10 @@ the legacy Perl implementation had none, not just a byproduct of switching langu
   legacy import's overwrite). Slow work — network calls, rendering, LLM calls, a subscription's
   paging — MUST happen before `update`, never inside its closure, since every other writer of that
   record waits on the lock. A new kind of stored record MUST get the same `update` entry point
-  before its first writer ships. How-to: `docs/dev/data-writes.md`.
+  before its first writer ships. The same holds for a shared library directory, which another task
+  may prune the moment it empties: a write or move into it MUST go through
+  `lanrurugi_storage::fsutil::in_dir`, never `create_dir_all` followed by a separate write. How-to,
+  and a checklist for finding races beyond record writes: `docs/dev/data-writes.md`.
 
 ### IV. Sandboxed, Language-Agnostic Plugin Extensibility
 
@@ -462,4 +474,4 @@ convention and the language already used throughout the `001`/`002`/`003` artifa
 technical design documents, not chat communication, and English keeps them consistent with the
 Rust/TypeScript code, comments, and commit history they describe.
 
-**Version**: 1.9.0 | **Ratified**: 2026-07-05 | **Last Amended**: 2026-11-17
+**Version**: 1.10.0 | **Ratified**: 2026-07-05 | **Last Amended**: 2026-11-19

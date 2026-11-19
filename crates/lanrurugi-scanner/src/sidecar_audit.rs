@@ -95,10 +95,15 @@ pub async fn audit_sidecars(
                 &original_filename,
                 &archive.title,
             ) {
-                Ok(sidecar) if lanrurugi_storage::sidecar::write(library, &sidecar).is_ok() => {
-                    audit.repaired += 1
+                Ok(mut sidecar) => {
+                    sidecar.blake3 = archive.blake3.clone();
+                    sidecar.primary_source = archive.primary_source.clone();
+                    if lanrurugi_storage::sidecar::write(library, &sidecar).is_ok() {
+                        audit.repaired += 1
+                    } else {
+                        tracing::warn!(id = %archive.id, "could not rewrite the sidecar")
+                    }
                 }
-                Ok(_) => tracing::warn!(id = %archive.id, "could not rewrite the sidecar"),
                 Err(e) => {
                     tracing::warn!(id = %archive.id, error = %e, "could not rebuild the sidecar")
                 }

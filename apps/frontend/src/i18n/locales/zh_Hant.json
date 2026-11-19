@@ -1017,6 +1017,7 @@
   "library.archivesWithASourceTag": "帶有 source: 標籤的檔案（has:source）",
   "library.archivesWithoutASourceTag": "沒有任何 source: 標籤的檔案（-has:source）",
   "library.tankMatchedThroughMembers": "這本單行本本身沒有命中，是其中這些卷命中了目前條件：{{members}}",
+  "library.tankMatchedThroughMembersHeading": "這本單行本本身沒有命中，是其中這些卷命中了目前條件：",
   "library.aiGroupingEmptyTitle": "暫時沒有可合併的分組",
   "library.aiGroupingEmptyHintSameSeries": "同一個系列至少要有兩本還沒併入單行本",
   "library.aiGroupingEmptyHintTags": "標題或標籤裡能看出同系列（藝術家、系列名、卷號）",
@@ -1315,5 +1316,6 @@
   "reader.keyRepeat": "連續按 J / K 時",
   "reader.keyRepeatHint": "上一次捲動還沒結束就再次按鍵時的處理方式。",
   "reader.keyRepeatMerge": "合併到終點，一次滑過去（預設）",
-  "reader.keyRepeatSequential": "逐個執行，每次按鍵都完整捲動一次（最多排隊 10 次）"
+  "reader.keyRepeatSequential": "逐個執行，每次按鍵都完整捲動一次（最多排隊 10 次）",
+  "reader.patchUnreadablePending": "這個檔案的補丁無法讀取，已跳過其中的 {{count}} 頁（來源：{{sources}}）。閱讀進度和目錄會在下次開啟時調整。"
 }

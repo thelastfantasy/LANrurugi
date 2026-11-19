@@ -108,10 +108,7 @@ pub async fn relocate_file(
     if tokio::fs::try_exists(&dest).await.unwrap_or(false) {
         return Ok((RelocationOutcome::Occupied, None));
     }
-    if let Some(parent) = dest.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    move_file(path, &dest).await?;
+    lanrurugi_storage::fsutil::in_dir(&dest, || move_file(path, &dest)).await?;
 
     // A patch is addressed by its archive's own path, so it has to travel with it. Either half of
     // a pair that cannot move together leaves the archive in place: relocation never revisits a
@@ -361,10 +358,7 @@ async fn save_record(
 }
 
 async fn move_back(from: &Path, to: &Path) -> std::io::Result<()> {
-    if let Some(parent) = to.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    move_file(from, to).await?;
+    lanrurugi_storage::fsutil::in_dir(to, || move_file(from, to)).await?;
     let moved_patch = crate::patch::patch_path_for(from);
     if tokio::fs::try_exists(&moved_patch).await.unwrap_or(false) {
         let original_patch = crate::patch::patch_path_for(to);

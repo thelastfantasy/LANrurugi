@@ -540,11 +540,6 @@ pub(crate) async fn catalogue_staged_file(
         }
         // A record without bytes (an interrupted overwrite, or a restored dump): adopt the copy
         // just made instead of leaving a record pointing at nothing.
-        if let Some(parent) = dest.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(IngestDownloadError::Io)?;
-        }
         if let Err(e) = rename_into_bucket(&incoming, &dest).await {
             undo.failed(&incoming).await;
             return Err(e);
@@ -577,13 +572,6 @@ pub(crate) async fn catalogue_staged_file(
     let hidden_id = id.clone();
     let mut pending = crate::visibility::PendingGuard::new(state, id.as_str());
 
-    if let Some(parent) = dest.parent() {
-        if let Err(e) = tokio::fs::create_dir_all(parent).await {
-            pending.publish().await;
-            undo.failed(&incoming).await;
-            return Err(IngestDownloadError::Io(e));
-        }
-    }
     // `dest` can still exist without a record: an ingest killed between its rename and its save.
     // The bytes are identical by construction (the id is a hash of them), so replacing it is right;
     // a directory or other non-file in the way is a real error.
@@ -734,7 +722,10 @@ pub(crate) async fn catalogue_staged_file(
             )
             .await;
         match updated {
-            Ok(Some(_)) => break,
+            Ok(Some(archive)) => {
+                crate::download_sources::sync_sidecar_primary(state, &archive).await;
+                break;
+            }
             Ok(None) => {
                 tracing::error!(%archive_id, "archive record vanished during file-path fixup");
                 break;
@@ -1069,8 +1060,10 @@ impl Undo<'_> {
 
 /// Renames the flushed `.ingest-*` copy into its bucket and flushes the bucket directory, so the
 /// record written next never points at a name a crash could lose (027 FR-003).
+/// Creates the bucket directory itself (`fsutil::in_dir`): a prune of empty buckets can remove it
+/// between creating it and the rename.
 async fn rename_into_bucket(incoming: &Path, dest: &Path) -> Result<(), IngestDownloadError> {
-    tokio::fs::rename(incoming, dest)
+    lanrurugi_storage::fsutil::in_dir(dest, || tokio::fs::rename(incoming, dest))
         .await
         .map_err(IngestDownloadError::Io)?;
     if let Some(parent) = dest.parent() {
@@ -1769,8 +1762,10 @@ async fn stamp_source_tag(state: &AppState, archive_id: &str, source_url: Option
             |old, new| crate::archives::reindex_title_and_tags(state, old, new),
         )
         .await;
-    if let Err(e) = updated {
-        tracing::warn!(archive_id, error = %e, "failed to stamp the download source tag");
+    match updated {
+        Ok(Some(archive)) => crate::download_sources::sync_sidecar_primary(state, &archive).await,
+        Ok(None) => {}
+        Err(e) => tracing::warn!(archive_id, error = %e, "failed to stamp the download source tag"),
     }
 }
 

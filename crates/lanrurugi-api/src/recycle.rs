@@ -241,10 +241,10 @@ pub(crate) async fn take_patch_out_of_bin(
     if !source.is_file() {
         return false;
     }
-    if let Some(parent) = destination.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-    }
-    if let Err(e) = tokio::fs::rename(&source, destination).await {
+    if let Err(e) =
+        lanrurugi_storage::fsutil::in_dir(destination, || tokio::fs::rename(&source, destination))
+            .await
+    {
         tracing::warn!(%id, error = %e, "could not move a recycled archive's patch onto its replacement");
         return false;
     }

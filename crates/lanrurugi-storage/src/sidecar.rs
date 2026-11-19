@@ -48,6 +48,14 @@ pub struct Sidecar {
     pub mtime: String,
     /// When this sidecar was written, RFC 3339 UTC with milliseconds.
     pub written: String,
+    /// The whole-file BLAKE3 (lowercase hex), as the record holds it. A rebuild uses it instead of
+    /// reading the file again while `size` and `mtime` still match ([`Self::matches_file`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blake3: Option<String>,
+    /// The record's `primary_source`: where the archive was downloaded from, or what its metadata
+    /// plugin vouched for. Nothing in the file itself can give it back after Redis is lost.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_source: Option<String>,
 }
 
 impl Sidecar {
@@ -77,12 +85,45 @@ impl Sidecar {
             size: meta.len(),
             mtime,
             written: stamp(SystemTime::now()),
+            blake3: None,
+            primary_source: None,
         })
+    }
+
+    /// Whether the file at `path` still has the size and modification time this sidecar recorded —
+    /// the condition for trusting its `blake3` without reading the bytes again.
+    pub fn matches_file(&self, path: &Path) -> bool {
+        let Ok(meta) = std::fs::metadata(path) else {
+            return false;
+        };
+        meta.len() == self.size && meta.modified().map(stamp).ok().as_deref() == Some(&*self.mtime)
     }
 
     pub fn to_json(&self) -> Value {
         serde_json::to_value(self).unwrap_or(Value::Null)
     }
+}
+
+/// Changes fields of an existing sidecar (a value its record gained after cataloguing), under the
+/// sidecar's own lock so two such changes cannot drop each other. `Ok(false)` when there is no
+/// sidecar to change (a by-name archive, or one not written yet).
+pub async fn amend(
+    library: &Path,
+    id: &str,
+    change: impl FnOnce(&mut Sidecar),
+) -> std::io::Result<bool> {
+    let _guard = crate::record_lock::lock(&format!("sidecar:{id}")).await;
+    let Some(mut sidecar) = read(library, id) else {
+        return Ok(false);
+    };
+    let before = sidecar.clone();
+    change(&mut sidecar);
+    if sidecar == before {
+        return Ok(true);
+    }
+    sidecar.written = stamp(SystemTime::now());
+    write(library, &sidecar)?;
+    Ok(true)
 }
 
 /// Writes (or replaces) the sidecar for `id` next to its archive. Atomic: a `.tmp` file is renamed
@@ -182,6 +223,43 @@ mod tests {
         std::fs::remove_dir(&bucket).unwrap();
         write(library, &sidecar).expect("write recreates the directory");
         assert!(paths::sidecar_path(library, &id).is_file());
+    }
+
+    /// The fingerprint and primary source added after cataloguing reach the sidecar, a sidecar from
+    /// before these fields still reads, and the fingerprint is trusted only for an unchanged file.
+    #[tokio::test]
+    async fn amend_adds_the_fingerprint_and_it_is_trusted_only_for_an_unchanged_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library = tmp.path();
+        let id = "b".repeat(40);
+        let archive = library.join(format!("{id}.zip"));
+        std::fs::write(&archive, b"first bytes").unwrap();
+        let sidecar = Sidecar::for_archive(&id, &archive, "x.zip", "X").unwrap();
+        write(library, &sidecar).unwrap();
+        // Written before the fields existed: no `blake3`/`primary_source` on disk at all.
+        let raw = std::fs::read_to_string(paths::sidecar_path(library, &id)).unwrap();
+        assert!(!raw.contains("blake3") && !raw.contains("primary_source"));
+        assert_eq!(read(library, &id).unwrap().blake3, None);
+
+        assert!(amend(library, &id, |s| s.blake3 = Some("ab".repeat(32)))
+            .await
+            .unwrap());
+        assert!(amend(library, &id, |s| s.primary_source =
+            Some("example.org/a".into()))
+        .await
+        .unwrap());
+        let read_back = read(library, &id).unwrap();
+        assert_eq!(read_back.blake3, Some("ab".repeat(32)));
+        assert_eq!(read_back.primary_source.as_deref(), Some("example.org/a"));
+        assert!(read_back.matches_file(&archive));
+
+        // Different bytes (and size): the recorded fingerprint no longer describes the file.
+        std::fs::write(&archive, b"other bytes, longer").unwrap();
+        assert!(!read_back.matches_file(&archive));
+        // No sidecar to amend.
+        assert!(!amend(library, &"c".repeat(40), |s| s.blake3 = None)
+            .await
+            .unwrap());
     }
 
     #[test]

@@ -1092,6 +1092,8 @@ export interface PatchDamage {
   reason: string
   pages: number[]
   sources: PatchSource[]
+  /** The progress/chapter adjustment did not complete yet; the next open retries it. */
+  pending?: boolean
 }
 
 /** One archive whose pages a patch was built from, snapshotted when the patch was created. */

@@ -239,6 +239,11 @@ async function search_for_archive(
   logger.debug(`Calling ${URL}`);
   let ua = legacyCompat.userAgent();
   let res = (await ua.get(URL)).result;
+  // A search with no hits is a 200 with an empty list; an error status is Chaika failing, not
+  // "not a Chaika archive".
+  if (res.is_error) {
+    throw new PluginErrorException(`Chaika search failed (HTTP ${res.code})`);
+  }
   logger.debug(`Chaika API returned this JSON: ${res.body}`);
   const galleries = (res.json as { galleries?: ChaikaGallery[] } | undefined)?.galleries;
   if (!galleries || galleries.length === 0) return "";
@@ -296,11 +301,10 @@ function ehentai_source(json: ChaikaGallery): string {
   return "";
 }
 
-/** Calls Chaika's own jsearch API — `undefined` on an HTTP error response (mirrors legacy's own
- * bare `return;`). Every caller checks for `undefined`/an empty result and returns `""`
- * (parse_chaika_json's own "no usable match" sentinel) instead of dereferencing it — a real bug
- * found live: an unchecked miss threw `Cannot read properties of undefined (reading 'tags')`,
- * aborting the whole metadata fetch instead of falling through to the text-search fallback. */
+/** Calls Chaika's own jsearch API — `undefined` when the id does not exist (Chaika answers 404),
+ * a thrown `PluginErrorException` on any other error status. Every caller checks for `undefined`
+ * and returns `""` (parse_chaika_json's own "no usable match" sentinel) instead of dereferencing
+ * it — an unchecked miss once threw `Cannot read properties of undefined (reading 'tags')`. */
 async function get_json_from_chaika(type: string, value: string): Promise<unknown> {
   let logger = legacyCompat.getLogger("Chaika.moe", "plugins");
   let URL = `${chaika_url}/jsearch/?${type}=${value}`;

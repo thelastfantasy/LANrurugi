@@ -238,7 +238,8 @@ actually been run and the values shown to agree — not assumed, not eyeballed f
 - `docs/dev/data-writes.md` — changing a stored archive/category/tankoubon/subscription goes through
   the repository's `update` / `update_then` (per-record lock, re-read, write only what changed);
   `create_or_replace` is for new records and deliberate whole replacements only (constitution
-  Principle III, #302).
+  Principle III, #302). Writes/moves into library directories go through `fsutil::in_dir` (a
+  concurrent prune can remove a bucket directory); the file also has a race-hunting checklist.
 - `docs/dev/labels.md` — every issue and PR gets one `type:` label and at least one `area:` label;
   apply them when creating the issue/PR (`gh issue create --label …`, `gh pr create --label …`).
 

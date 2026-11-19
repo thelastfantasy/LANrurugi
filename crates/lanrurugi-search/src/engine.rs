@@ -732,7 +732,11 @@ async fn fold_tanks(
         }
         if !hits.is_empty() {
             out.insert(tank.clone());
-            reasons.insert(tank.clone(), hits);
+            // "Matched through these volumes" only when the tank's own record did not match: with
+            // no query every tank matches by itself, and the note would show on all of them.
+            if !matched.contains(tank) {
+                reasons.insert(tank.clone(), hits);
+            }
         }
     }
     Ok((out, reasons))
@@ -2573,6 +2577,14 @@ mod tests {
             !out.contains(&member),
             "a folded member must not also be a standalone row"
         );
+        // The tank matched by itself (an empty query matches everything): no "through its
+        // volumes" note.
+        assert!(!reasons.contains_key(tank));
+
+        // Only the member matched: the tank comes in through it, and says so.
+        let matched: HashSet<String> = vec![member.clone()].into_iter().collect();
+        let (out, reasons) = fold_tanks(&mut aconn, &mut sconn, matched).await.unwrap();
+        assert!(out.contains(tank));
         assert_eq!(
             reasons.get(tank).map(|v| v.as_slice()),
             Some([member.clone()].as_slice())

@@ -73,6 +73,23 @@ function matchReasonText(
   return t("library.tankMatchedThroughMembers", { members: names })
 }
 
+/** The same as a tooltip: the explanation, then one volume per line — a run-on list of long
+ *  titles joined by 、 was unreadable. */
+function MatchReason({ members, t }: { members: { name: string }[]; t: TFunction }) {
+  return (
+    <div style={{ textAlign: "left" }}>
+      <div>{t("library.tankMatchedThroughMembersHeading")}</div>
+      <ul style={{ margin: "4px 0 0", paddingLeft: "1.2em" }}>
+        {members.map((m, i) => (
+          <li key={i} style={{ listStyle: "disc" }}>
+            {m.name || "?"}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 /** Thumbnail URLs that have loaded at least once this session. A remounted card (the carousel
  * collapsed and reopened, a page revisited) starts from these instead of flashing the "wait warmly"
  * placeholder over an image the browser already has. */
@@ -146,7 +163,7 @@ export function ArchiveCard({
         </Link>
         <StatusIcons archive={archive} />
         {archive.match_reason?.kind === "members" && (
-          <Tooltip label={matchReasonText(archive.match_reason.members, t)}>
+          <Tooltip label={<MatchReason members={archive.match_reason.members} t={t} />}>
             <span
               className="match-reason-icon"
               // Focusable so the tooltip is reachable without a mouse; the icon itself is

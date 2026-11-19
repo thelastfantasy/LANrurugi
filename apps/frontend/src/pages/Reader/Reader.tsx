@@ -176,11 +176,12 @@ const SCROLL_INTENT_MS = 900;
  * page turn before the next press measures the new page. */
 const STEP_QUEUE_LIMIT = 10;
 const SEQUENTIAL_STEP_MS = 140;
-const TURN_SETTLE_MS = 250;
+const TURN_SETTLE_TIMEOUT_MS = 2000;
 
-/** Scrolls the window to `top` over `SEQUENTIAL_STEP_MS` (ease-out), resolving when it gets there.
- * A native smooth scroll cannot be awaited, and its length is the browser's to pick. */
-function animateScrollTo(top: number): Promise<void> {
+/** Scrolls the window to `top` over `SEQUENTIAL_STEP_MS` (ease-out), resolving when it gets there —
+ * or as soon as `cancelled()` says the reader took over, leaving the scroll where it is. A native
+ * smooth scroll cannot be awaited, and its length is the browser's to pick. */
+function animateScrollTo(top: number, cancelled: () => boolean): Promise<void> {
   return new Promise((resolve) => {
     const start = window.scrollY;
     const distance = top - start;
@@ -190,10 +191,26 @@ function animateScrollTo(top: number): Promise<void> {
     }
     const startedAt = performance.now();
     const frame = (now: number) => {
+      if (cancelled()) {
+        resolve();
+        return;
+      }
       const progress = Math.min(1, (now - startedAt) / SEQUENTIAL_STEP_MS);
       window.scrollTo(0, start + distance * (1 - (1 - progress) ** 3));
       if (progress < 1) requestAnimationFrame(frame);
       else resolve();
+    };
+    requestAnimationFrame(frame);
+  });
+}
+
+/** Resolves on the first frame `ready()` holds, or after `timeoutMs` regardless. */
+function waitFor(ready: () => boolean, timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const startedAt = performance.now();
+    const frame = (now: number) => {
+      if (ready() || now - startedAt > timeoutMs) resolve();
+      else requestAnimationFrame(frame);
     };
     requestAnimationFrame(frame);
   });
@@ -370,7 +387,7 @@ export function Reader() {
     toast({
       icon: "warning",
       text:
-        t("reader.patchUnreadable", {
+        t(patchDamage.pending ? "reader.patchUnreadablePending" : "reader.patchUnreadable", {
           count: patchDamage.pages.length,
           sources: patchDamage.sources.map((s) => s.title || s.name).join("、"),
         }) ?? undefined,
@@ -957,6 +974,14 @@ export function Reader() {
   const stepQueueRef = useRef<("next" | "prev")[]>([]);
   const stepRunningRef = useRef(false);
   const stepPageRef = useRef<number | null>(null);
+  // Set when the reader touches, clicks or wheels while the queue runs: the queue is dropped and
+  // the running step stops where it is instead of pulling the page out from under the input.
+  const stepCancelledRef = useRef(false);
+  // This render's page, for the queue to see a turn land after its own `await`.
+  const currentPageRef = useRef(currentPage);
+  useEffect(() => {
+    currentPageRef.current = currentPage;
+  });
   const lastFileInfoRef = useRef<string | null>(null);
   // Tracks pages whose Content-Length has already been requested, so the UI can show the file-size
   // part of the file-info bar while the actual image is still transferring (it used to wait for
@@ -1777,16 +1802,30 @@ export function Reader() {
         return;
       }
       stepPageRef.current = step.page;
-      await animateScrollTo(step.top);
+      await animateScrollTo(step.top, () => stepCancelledRef.current);
       return;
     }
+    const pageBefore = currentPageRef.current;
     const target = stepOrTurn(direction, "key", true);
     if (target === null) {
-      // The page turned: let the new page render before the next press measures it.
-      await new Promise((resolve) => setTimeout(resolve, TURN_SETTLE_MS));
+      // The page turned: the next press must measure the new page, so wait until it is the
+      // current one, its picture has decoded and the scroll has come to rest (bounded, in case a
+      // turn went nowhere — the first page's `k`).
+      let lastY = -1;
+      let still = 0;
+      await waitFor(() => {
+        still = Math.abs(window.scrollY - lastY) < 1 ? still + 1 : 0;
+        lastY = window.scrollY;
+        const img = leftImgRef.current;
+        return (
+          currentPageRef.current !== pageBefore &&
+          (!img || (img.complete && img.naturalHeight > 0)) &&
+          still >= 3
+        );
+      }, TURN_SETTLE_TIMEOUT_MS);
       return;
     }
-    await animateScrollTo(target);
+    await animateScrollTo(target, () => stepCancelledRef.current);
   }
   const runQueuedStepRef = useRef(runQueuedStep);
   useEffect(() => {
@@ -1800,11 +1839,24 @@ export function Reader() {
 
   async function runStepQueue() {
     stepRunningRef.current = true;
+    stepCancelledRef.current = false;
+    // The reader's own touch, click or wheel takes over from the queue (keys keep queueing).
+    const takeOver = () => {
+      stepCancelledRef.current = true;
+      stepQueueRef.current = [];
+    };
+    const INPUT_EVENTS = ["pointerdown", "touchstart", "wheel"] as const;
+    INPUT_EVENTS.forEach((type) =>
+      window.addEventListener(type, takeOver, { capture: true, passive: true }),
+    );
     try {
       for (let next = stepQueueRef.current.shift(); next; next = stepQueueRef.current.shift()) {
         await runQueuedStepRef.current(next);
       }
     } finally {
+      INPUT_EVENTS.forEach((type) =>
+        window.removeEventListener(type, takeOver, { capture: true }),
+      );
       stepRunningRef.current = false;
       stepPageRef.current = null;
     }

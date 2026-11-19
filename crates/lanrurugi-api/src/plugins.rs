@@ -1782,7 +1782,12 @@ pub async fn run_enabled_metadata_plugins_on_archive(
 
         match updated {
             Ok(None) => summary.failures += 1,
-            Ok(Some(_)) => summary.successes += 1,
+            Ok(Some(archive)) => {
+                summary.successes += 1;
+                if declared_primary.is_some() {
+                    crate::download_sources::sync_sidecar_primary(state, &archive).await;
+                }
+            }
             Err(e) => {
                 tracing::warn!(%archive_id, plugin = %ns, error = %e, "failed to persist auto-run plugin's metadata");
                 summary.failures += 1;

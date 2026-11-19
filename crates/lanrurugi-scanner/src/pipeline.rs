@@ -406,7 +406,14 @@ pub async fn ingest_file_with_policy(
         date_added: read_date_added_settings(&mut config_conn).await,
         defer_file_path,
     };
-    let fingerprint = fingerprint(path, blake3).await?;
+    // Cataloguing a hash-named file with no record (a rebuild after Redis was lost): its sidecar
+    // still has the fingerprint, valid while the file has not changed — reading a whole library
+    // again just to recompute it is the slow part of a rebuild.
+    let remembered = blake3
+        .is_none()
+        .then(|| sidecar_fingerprint(path, &id))
+        .flatten();
+    let fingerprint = fingerprint(path, blake3.or(remembered.as_deref())).await?;
     catalogue_new_archive(
         archives,
         search_pool,
@@ -433,6 +440,19 @@ pub async fn ingest_file_with_policy(
 struct DateAddedSettings {
     enabled: bool,
     use_last_modified: bool,
+}
+
+/// The fingerprint a hash-named file's sidecar recorded, while the file still matches it.
+fn sidecar_fingerprint(path: &Path, id: &ArchiveId) -> Option<String> {
+    let library = path.parent()?.parent()?;
+    if !lanrurugi_storage::paths::is_hash_layout_path(library, path, id.as_str()) {
+        return None;
+    }
+    let sidecar = lanrurugi_storage::sidecar::read(library, id.as_str())?;
+    if !sidecar.matches_file(path) {
+        return None;
+    }
+    sidecar.blake3
 }
 
 /// The caller's fingerprint, or one read from `path` off the async reactor (027 FR-010).
@@ -698,6 +718,13 @@ async fn catalogue_new_archive(
                 &archive.title,
             ) {
                 Ok(mut sidecar) => {
+                    sidecar.blake3 = archive.blake3.clone();
+                    // A fresh record has no primary source yet; a rebuild keeps the one the old
+                    // sidecar remembered.
+                    sidecar.primary_source = archive
+                        .primary_source
+                        .clone()
+                        .or_else(|| previous.as_ref().and_then(|s| s.primary_source.clone()));
                     sidecar.original_path = previous.map(|s| s.original_path).unwrap_or_default();
                     if let Err(e) = lanrurugi_storage::sidecar::write(library, &sidecar) {
                         tracing::warn!(%id, error = %e, "failed to write the archive sidecar");

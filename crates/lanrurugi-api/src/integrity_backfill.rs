@@ -193,7 +193,17 @@ where
         for (id, path, hash) in hashed {
             match hash {
                 Ok(hash) => match state.repos.archives.set_blake3(&id, &hash.to_hex()).await {
-                    Ok(true) => summary.filled += 1,
+                    Ok(true) => {
+                        summary.filled += 1;
+                        // The sidecar keeps a copy for a rebuild (absent on by-name archives).
+                        let hex = hash.to_hex().to_string();
+                        let _ = lanrurugi_storage::sidecar::amend(
+                            &state.library.archive_dir,
+                            id.as_str(),
+                            |s| s.blake3 = Some(hex),
+                        )
+                        .await;
+                    }
                     // Deleted while it was being read: nothing to fill in.
                     Ok(false) => {}
                     Err(e) => {

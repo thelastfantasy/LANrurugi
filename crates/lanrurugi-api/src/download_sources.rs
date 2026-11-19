@@ -52,6 +52,25 @@ pub async fn lookup(state: &AppState, url: &str) -> Option<String> {
     (!archive.file.trim().is_empty()).then_some(id)
 }
 
+/// Copies an archive's primary source into its sidecar, the copy a rebuild after a lost Redis reads
+/// back. A no-op for an archive without one, or without a sidecar (by-name archives).
+pub(crate) async fn sync_sidecar_primary(
+    state: &AppState,
+    archive: &lanrurugi_core::entities::Archive,
+) {
+    let Some(primary) = archive.primary_source.clone() else {
+        return;
+    };
+    if let Err(e) =
+        lanrurugi_storage::sidecar::amend(&state.library.archive_dir, archive.id.as_str(), |s| {
+            s.primary_source = Some(primary)
+        })
+        .await
+    {
+        tracing::warn!(archive = %archive.id, error = %e, "could not record the primary source in the sidecar");
+    }
+}
+
 /// Set once [`backfill_primary_sources`] has run, so later startups skip it.
 const PRIMARY_BACKFILLED_KEY: &str = "LANRURUGI_PRIMARY_SOURCE_BACKFILLED";
 
@@ -74,7 +93,7 @@ pub async fn backfill_primary_sources(state: &AppState) -> usize {
         let source = crate::plugins::trim_url(&url);
         let tag = format!("source:{source}");
         let mut set = false;
-        let _ = state
+        let updated = state
             .repos
             .archives
             .update(&lanrurugi_core::ids::ArchiveId::from(id), |a| {
@@ -84,6 +103,9 @@ pub async fn backfill_primary_sources(state: &AppState) -> usize {
                 }
             })
             .await;
+        if let (true, Ok(Some(archive))) = (set, &updated) {
+            sync_sidecar_primary(state, archive).await;
+        }
         marked += usize::from(set);
     }
     if let Ok(mut conn) = state.redis.config.get().await {
