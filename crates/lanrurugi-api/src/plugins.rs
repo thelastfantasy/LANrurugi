@@ -2229,6 +2229,44 @@ async fn download_url(
     .into_response()
 }
 
+/// Ends a download whose token was cancelled, as `Paused` or `Cancelled`. Pause and Stop cancel the
+/// same token; the pause handler writes `Paused` before cancelling, so which state to keep is read
+/// back here rather than guessed. Overwriting a paused item with `Cancelled` would lose the
+/// "resume me" state the row renders.
+async fn finish_cancelled_download(
+    state: &AppState,
+    queue_link: Option<&(
+        Arc<lanrurugi_storage::download_queue::DownloadQueueRepository>,
+        String,
+    )>,
+    jobs: &lanrurugi_core::jobs::JobRegistry,
+    job_id: &str,
+) {
+    let mut paused = false;
+    if let Some((repo, item_id)) = queue_link {
+        paused = repo.get(item_id).await.ok().flatten().is_some_and(|item| {
+            item.state == lanrurugi_storage::download_queue::DownloadQueueState::Paused
+        });
+        if !paused {
+            update_queue_item_state(
+                repo,
+                state.download_queue_tx.as_ref(),
+                item_id,
+                lanrurugi_storage::download_queue::DownloadQueueState::Cancelled,
+                None,
+                None,
+                None,
+            )
+            .await;
+        }
+    }
+    jobs.fail(
+        job_id,
+        if paused { "paused" } else { "cancelled" }.to_string(),
+    )
+    .await
+}
+
 /// Launches one download (single- or multi-resource) as a background job, exactly as
 /// `download_url` always has — extracted so the download-queue's own `start`/`start_all`/
 /// `start_selected` endpoints can reuse the identical dispatch/execute/ingest sequence rather
@@ -2283,6 +2321,16 @@ pub(crate) async fn start_download(
             .insert(item_id.clone(), cancel.clone());
     }
     let cancel_for_task = cancel.clone();
+    // The "defer" button's signal, live only until this job holds its plugin slot (removed right
+    // after the acquire below, and again in the cleanup in case the task ended before reaching it).
+    let defer = Arc::new(tokio::sync::Notify::new());
+    if let Some((_, item_id)) = &queue_link {
+        state
+            .download_deferrals
+            .lock()
+            .await
+            .insert(item_id.clone(), defer.clone());
+    }
     // Taken before the spawn so jobs reach this plugin's concurrency limit in the order they were
     // started, not in whatever order their pre-permit work happens to finish.
     let job_turn = download_manager_for(&state, &plugin_namespace)
@@ -2443,14 +2491,29 @@ pub(crate) async fn start_download(
             // `blocks_in_conditions` (denied workspace-wide) rejects a block there, and the named
             // value reads better than the alternative of threading the permit through by hand.
             let plugin_call = {
-                // A cancelled acquire falls through to the plugin call rather than returning early:
-                // this task's own cancellation handling (the transfer phase's, and the
-                // `Err(_) if cancel_for_task.is_cancelled()` branch below) is what writes the item's
-                // terminal state, and a bare `return` here would leave the row stuck in `Starting`.
-                let _job_permit = negotiation_manager
-                    .acquire_job(job_capacity, job_turn, &cancel_for_task)
-                    .await
-                    .ok();
+                // Stopped or paused while queued for a slot (or before reaching it): finish here.
+                // Falling through to the plugin call used to run `execDownload` anyway — E-Hentai's
+                // archiver request included — so the button only took effect once the transfer
+                // phase noticed the token, and the `Starting` write below overwrote a pause.
+                let acquired = negotiation_manager
+                    .acquire_job_deferrable(job_capacity, job_turn, &cancel_for_task, Some(&defer))
+                    .await;
+                if let Some((_, item_id)) = &queue_link {
+                    state_for_task.download_deferrals.lock().await.remove(item_id);
+                }
+                let _job_permit = match acquired {
+                    Ok(permit) if !cancel_for_task.is_cancelled() => permit,
+                    _ => {
+                        finish_cancelled_download(
+                            &state_for_task,
+                            queue_link.as_ref(),
+                            &jobs,
+                            &job_id_for_task,
+                        )
+                        .await;
+                        return;
+                    }
+                };
                 if negotiation_waits {
                     if let Some((repo, item_id)) = &queue_link {
                         update_queue_item_state(
@@ -2951,37 +3014,11 @@ const MAX_DOWNLOAD_RETRIES: u32 = 4;
                     // transient mutation state) instead of `Error` (which `jobs.fail` + a stored
                     // `QueueError` would otherwise imply this was a real failure).
                     Err(_) if cancel_for_task.is_cancelled() => {
-                        // Pause and Stop cancel the same token; the pause handler writes `Paused`
-                        // before cancelling, so which state to keep is read back here rather than
-                        // guessed. Overwriting a paused item with `Cancelled` would lose the
-                        // "resume me" state the row renders.
-                        let mut paused = false;
-                        if let Some((repo, item_id)) = &queue_link {
-                            paused = repo
-                                .get(item_id)
-                                .await
-                                .ok()
-                                .flatten()
-                                .is_some_and(|item| {
-                                    item.state
-                                        == lanrurugi_storage::download_queue::DownloadQueueState::Paused
-                                });
-                            if !paused {
-                                update_queue_item_state(
-                                    repo,
-                                    state_for_task.download_queue_tx.as_ref(),
-                                    item_id,
-                                    lanrurugi_storage::download_queue::DownloadQueueState::Cancelled,
-                                    None,
-                                    None,
-                                    None,
-                                )
-                                .await;
-                            }
-                        }
-                        jobs.fail(
+                        finish_cancelled_download(
+                            &state_for_task,
+                            queue_link.as_ref(),
+                            &jobs,
                             &job_id_for_task,
-                            if paused { "paused" } else { "cancelled" }.to_string(),
                         )
                         .await
                     }
@@ -3056,6 +3093,11 @@ const MAX_DOWNLOAD_RETRIES: u32 = 4;
         if let Some((_, item_id)) = &queue_link_for_cleanup {
             state_for_cleanup
                 .download_cancellations
+                .lock()
+                .await
+                .remove(item_id);
+            state_for_cleanup
+                .download_deferrals
                 .lock()
                 .await
                 .remove(item_id);
@@ -4765,6 +4807,7 @@ pub(crate) mod tests {
             )),
             new_archive_tx: tokio::sync::mpsc::unbounded_channel().0,
             download_cancellations: Default::default(),
+            download_deferrals: Default::default(),
             pending_generate_requests: Default::default(),
         split_progress_tx: Default::default(),
         translation_runtime: Default::default(),
@@ -4809,6 +4852,49 @@ pub(crate) mod tests {
     /// it, guaranteeing the second `run_managed_downloads` call is genuinely blocked on
     /// `DownloadManager::acquire` (not just fast enough to race past it) when this test inspects
     /// its queue item's state.
+    /// A download stopped while it waits for a slot ends as `Cancelled`; one paused there keeps the
+    /// `Paused` the pause handler wrote before cancelling, so it can still be resumed.
+    #[tokio::test]
+    async fn a_cancelled_wait_keeps_a_pause_and_otherwise_ends_cancelled() {
+        let Some(state) = test_state().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        use lanrurugi_storage::download_queue::DownloadQueueState;
+
+        for (written_by_handler, expected) in [
+            (DownloadQueueState::Waiting, DownloadQueueState::Cancelled),
+            (DownloadQueueState::Paused, DownloadQueueState::Paused),
+        ] {
+            let mut item = state
+                .download_queue
+                .add(lanrurugi_storage::download_queue::NewQueueItem {
+                    subscription_id: None,
+                    origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
+                    url: format!("https://example.com/{}", uuid::Uuid::new_v4()),
+                    plugin_namespace: "test/cancelled-wait".to_string(),
+                    file_size: None,
+                    category: None,
+                    metadata_tags: Vec::new(),
+                    auto_fetch_metadata: false,
+                    overwrite_on_duplicate: false,
+                    state: DownloadQueueState::Queued,
+                })
+                .await
+                .unwrap();
+            item.state = written_by_handler;
+            state.download_queue.update(&item).await.unwrap();
+            let job_id = state.jobs.create("download_url").await;
+
+            let link = (state.download_queue.clone(), item.id.clone());
+            finish_cancelled_download(&state, Some(&link), &state.jobs, &job_id).await;
+
+            let after = state.download_queue.get(&item.id).await.unwrap().unwrap();
+            assert_eq!(after.state, expected);
+            state.download_queue.delete(&item.id).await.unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn waiting_state_is_set_while_blocked_on_a_busy_domain_permit() {
         /// A real one-page zip, unique per `marker`: a download that is not an archive is refused

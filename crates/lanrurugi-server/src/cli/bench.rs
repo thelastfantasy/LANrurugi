@@ -159,6 +159,7 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new(models_dir)),
         new_archive_tx,
         download_cancellations: Default::default(),
+        download_deferrals: Default::default(),
         pending_generate_requests: Default::default(),
         split_progress_tx: Default::default(),
         translation_runtime: Default::default(),

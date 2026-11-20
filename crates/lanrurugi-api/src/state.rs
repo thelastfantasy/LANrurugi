@@ -201,6 +201,10 @@ pub struct AppState {
     /// that task actually finishes (success, error, or real cancellation) — see
     /// `download_queue::stop_one` and `plugins::start_download`.
     pub download_cancellations: Arc<Mutex<HashMap<String, tokio_util::sync::CancellationToken>>>,
+    /// Queue item id → the "defer" signal of a download still waiting for its plugin's job slot.
+    /// Present only during that wait (inserted with the cancellation token, removed once the slot is
+    /// held), so `download_queue::defer_one` can tell a deferrable wait from any other state.
+    pub download_deferrals: Arc<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>,
     /// Guards the check-then-write window in `download_manager::ingest::catalogue_staged_file`
     /// (filename-collision check against the catalog, through to the new archive record actually
     /// being saved) against two concurrent downloads that resolve to the *same* destination

@@ -42,6 +42,7 @@ pub fn router() -> Router<AppState> {
         .route("/download_queue/{id}/start", post(start_queue_item))
         .route("/download_queue/{id}/stop", post(stop_queue_item))
         .route("/download_queue/{id}/pause", post(pause_queue_item))
+        .route("/download_queue/{id}/defer", post(defer_queue_item))
         .route(
             "/download_queue/{id}/confirm-older",
             post(confirm_older_revision),
@@ -1488,6 +1489,26 @@ async fn stop_one(state: &AppState, id: &str) -> Result<(), StopError> {
             Ok(())
         }
         None => Err(StopError::NotRunning),
+    }
+}
+
+/// `POST /download_queue/{id}/defer` — sends a download that is still waiting for its plugin's job
+/// slot to the back of that line. Nothing about the row changes (its place in the list is its
+/// `created_at`), and nothing the job already did is redone; it just lets every job behind it go
+/// first. `409` once the job holds its slot — from then on Pause/Stop are the actions that apply.
+async fn defer_queue_item(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let signal = state.download_deferrals.lock().await.get(&id).cloned();
+    match signal {
+        Some(defer) => {
+            defer.notify_one();
+            axum::Json(json!({ "operation": "defer_download_queue_item", "success": 1 }))
+                .into_response()
+        }
+        None => error(
+            StatusCode::CONFLICT,
+            "defer_download_queue_item",
+            format!("Item {id} is not waiting for a download slot."),
+        ),
     }
 }
 

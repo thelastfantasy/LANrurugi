@@ -556,6 +556,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         recommender: recommender.clone(),
         new_archive_tx: new_archive_tx.clone(),
         download_cancellations: Default::default(),
+        download_deferrals: Default::default(),
         pending_generate_requests: Default::default(),
         split_progress_tx: Default::default(),
         translation_runtime: Default::default(),

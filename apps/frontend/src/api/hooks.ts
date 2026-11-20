@@ -2485,6 +2485,15 @@ export function useStopQueueItem() {
 
 /** Pause an in-flight transfer (issue #88). Cooperative like Stop, so the optimistic flip keeps
  *  the row from looking stale until the server confirms; the partial file is kept for a resume. */
+/** Sends a download still waiting for its plugin's slot to the back of that line. The row keeps
+ *  its place in the list (that is its creation order); only the order jobs start in changes. */
+export function useDeferQueueItem() {
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson("POST", `/download_queue/${encodeURIComponent(id)}/defer`),
+  })
+}
+
 export function usePauseQueueItem() {
   const queryClient = useQueryClient()
   return useMutation({
