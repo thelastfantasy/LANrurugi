@@ -55,13 +55,15 @@ if [ -z "$ready" ]; then
 fi
 
 # Started from another directory on purpose: resources must be found from the install prefix.
+# `--no-telemetry`: a release build carries the heartbeat endpoint, and without it every release's
+# smoke runs showed up on the telemetry dashboard as new installs from GitHub's runners.
 (
     cd /
     exec "$prefix/bin/lanrurugi-server" serve \
         --redis-url "redis://127.0.0.1:$redis_port" \
         --library-path "$data/content" --thumb-dir "$data/thumb" \
         --temp-dir "$data/temp" --log-dir "$data/log" \
-        --bind "127.0.0.1:$http_port" --disable-update-check
+        --bind "127.0.0.1:$http_port" --disable-update-check --no-telemetry
 ) >"$work/server.log" 2>&1 &
 server_pid=$!
 

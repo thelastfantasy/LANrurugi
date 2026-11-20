@@ -1164,6 +1164,39 @@ impl SubscriptionRepository {
         Ok(out)
     }
 
+    /// The pending entries for these ids, in the order given, skipping ids that no longer exist.
+    /// One MGET, so answering a batch costs the same as answering one.
+    pub async fn get_pending_many(&self, ids: &[String]) -> Result<Vec<PendingApproval>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.pool.get().await?;
+        let keys: Vec<String> = ids.iter().map(|id| pending_key(id)).collect();
+        let raws: Vec<Option<String>> = conn.mget(&keys).await?;
+        let mut out = Vec::with_capacity(ids.len());
+        for (key, raw) in keys.into_iter().zip(raws) {
+            let Some(raw) = raw else { continue };
+            out.push(serde_json::from_str(&raw).map_err(|e| SubscriptionsError::Json(key, e))?);
+        }
+        Ok(out)
+    }
+
+    /// `delete_pending` for a batch, in one round trip.
+    pub async fn delete_pending_many(&self, ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let mut pipe = deadpool_redis::redis::pipe();
+        pipe.atomic()
+            .del(ids.iter().map(|id| pending_key(id)).collect::<Vec<_>>())
+            .ignore()
+            .srem(PENDING_INDEX, ids)
+            .ignore();
+        let mut conn = self.pool.get().await?;
+        let _: () = pipe.query_async(&mut conn).await?;
+        Ok(())
+    }
+
     pub async fn delete_pending(&self, id: &str) -> Result<()> {
         let mut conn = self.pool.get().await?;
         let _: () = conn.del(pending_key(id)).await?;
@@ -1474,6 +1507,43 @@ mod tests {
             .unwrap()
             .iter()
             .any(|e| e.id == "pa-rt-1"));
+    }
+
+    /// Answering a batch: one read returns the entries that exist (in the order asked), one write
+    /// removes them from both their records and the index.
+    #[tokio::test]
+    async fn reads_and_deletes_pending_approvals_as_a_batch() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = SubscriptionRepository::new(pool);
+        let a = pending("pa-batch-1", "sub-batch", "https://example.test/g/1");
+        let b = pending("pa-batch-2", "sub-batch", "https://example.test/g/2");
+        repo.save_pending(&a).await.unwrap();
+        repo.save_pending(&b).await.unwrap();
+
+        let ids = vec![
+            "pa-batch-2".to_string(),
+            "pa-batch-missing".to_string(),
+            "pa-batch-1".to_string(),
+        ];
+        assert_eq!(
+            repo.get_pending_many(&ids).await.unwrap(),
+            vec![b, a],
+            "existing entries, in the order asked; a missing id is skipped"
+        );
+        assert!(repo.get_pending_many(&[]).await.unwrap().is_empty());
+
+        repo.delete_pending_many(&ids).await.unwrap();
+        assert!(repo.get_pending_many(&ids).await.unwrap().is_empty());
+        assert!(!repo
+            .list_pending()
+            .await
+            .unwrap()
+            .iter()
+            .any(|e| e.subscription_id == "sub-batch"));
+        repo.delete_pending_many(&[]).await.unwrap();
     }
 
     /// The guard that stops the approval list growing by one copy of the same work every cycle.

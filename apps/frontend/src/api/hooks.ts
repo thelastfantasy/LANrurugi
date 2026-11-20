@@ -1573,6 +1573,26 @@ export function useApproveAllPending() {
   })
 }
 
+/** Answered rows leave the approval list (and every count read from it) the moment the button is
+ *  pressed, not as the server works through the batch. A row the server could not take comes back
+ *  with the refetch that follows; a failed request puts the whole list back. */
+function removePendingOptimistically(queryClient: ReturnType<typeof useQueryClient>) {
+  return {
+    onMutate: async (ids: string[]) => {
+      await queryClient.cancelQueries({ queryKey: ["subscription-pending"] })
+      const previous = queryClient.getQueryData<PendingApproval[]>(["subscription-pending"])
+      const answered = new Set(ids)
+      queryClient.setQueryData<PendingApproval[]>(["subscription-pending"], (list) =>
+        list?.filter((p) => !answered.has(p.id)),
+      )
+      return { previous }
+    },
+    onError: (_error: unknown, _ids: string[], context: { previous?: PendingApproval[] } | undefined) => {
+      if (context?.previous) queryClient.setQueryData(["subscription-pending"], context.previous)
+    },
+  }
+}
+
 export function useApprovePending() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -1582,9 +1602,10 @@ export function useApprovePending() {
         "/subscriptions/pending/approve",
         { ids },
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["subscription-pending"] })
-      queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+    ...removePendingOptimistically(queryClient),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["subscription-pending"] })
+      void queryClient.invalidateQueries({ queryKey: ["download-queue"] })
     },
   })
 }
@@ -1595,7 +1616,8 @@ export function useDismissPending() {
   return useMutation({
     mutationFn: (ids: string[]) =>
       sendJson<{ dismissed: number }>("POST", "/subscriptions/pending/dismiss", { ids }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["subscription-pending"] }),
+    ...removePendingOptimistically(queryClient),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["subscription-pending"] }),
   })
 }
 

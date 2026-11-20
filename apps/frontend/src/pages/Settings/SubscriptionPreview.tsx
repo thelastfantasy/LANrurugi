@@ -43,18 +43,6 @@ export function bandOf(
   }
 }
 
-/** A pair of row actions has to read as a pair: the block button is a 24×24 icon
- *  (`ICON_BUTTON_STYLE`), so the text button beside it is given that same height and centred text —
- *  otherwise the two sit at 24px and 21px and the row looks misaligned, which is exactly what it did
- *  on a phone-sized window. */
-const ROW_ACTION_BUTTON_STYLE: React.CSSProperties = {
-  height: 24,
-  boxSizing: "border-box",
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-}
-
 const ROW_CLASS = {
   match: "preview-row-match",
   waiting: "preview-row-waiting",
@@ -446,19 +434,25 @@ export function SubscriptionPreview({
                       // been widened — both were recorded as seen, so both need the same escape
                       // hatch. `rejected` candidates are not shown this: they are being rejected by
                       // the current rules, not blocked by a previous "seen" decision.
-                      <input
-                        type="button"
-                        className="stdbtn"
-                        style={ROW_ACTION_BUTTON_STYLE}
-                        disabled={forget.isPending}
-                        value={t("subscriptions.reconsider") ?? undefined}
-                        onClick={() => {
-                          void forget.mutateAsync({
-                            id: subscriptionId,
-                            sources: [r.source_url],
-                          })
-                        }}
-                      />
+                      // An icon beside the block icon, as the match history shows it: a text button
+                      // here was wider than the column and got clipped.
+                      <Tooltip label={t("subscriptions.reconsider") ?? ""} zIndex={9700}>
+                        <button
+                          type="button"
+                          className="stdbtn"
+                          style={ICON_BUTTON_STYLE}
+                          aria-label={t("subscriptions.reconsider") ?? "Reconsider"}
+                          disabled={forget.isPending}
+                          onClick={() => {
+                            void forget.mutateAsync({
+                              id: subscriptionId,
+                              sources: [r.source_url],
+                            })
+                          }}
+                        >
+                          <i className="fa fa-rotate-left" aria-hidden="true"></i>
+                        </button>
+                      </Tooltip>
                     )}
                   </span>
                 )}

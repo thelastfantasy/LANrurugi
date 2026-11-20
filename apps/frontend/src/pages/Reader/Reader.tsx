@@ -178,6 +178,28 @@ const STEP_QUEUE_LIMIT = 10;
 const SEQUENTIAL_STEP_MS = 140;
 const TURN_SETTLE_TIMEOUT_MS = 2000;
 
+/**
+ * The box an infinite-scroll page of `dim` will occupy once loaded, for its `<img>` before then.
+ * A loaded page is `width: auto; max-width: 100%` (legacy's `.reader-image`), i.e. its natural width
+ * capped by the column and, in fit-height, by the height cap times its ratio — an image with no
+ * bytes yet has no natural width, so that cap is spelled out here. `auto` in the ratio lets the
+ * image's own ratio win as soon as it is known, so a wrong estimate never stretches the pixels.
+ */
+function infinitePlaceholderBox(
+  dim: { width: number; height: number },
+  imageStyle: React.CSSProperties,
+): React.CSSProperties {
+  const ratio = dim.width / dim.height;
+  const caps = ["100%", `${dim.width}px`];
+  if (imageStyle.maxHeight !== undefined) caps.push(`calc(${imageStyle.maxHeight} * ${ratio})`);
+  return {
+    aspectRatio: `auto ${dim.width} / ${dim.height}`,
+    // The skeleton's `min-height` is only for a page of unknown size.
+    minHeight: 0,
+    ...(imageStyle.width === undefined ? { width: `min(${caps.join(", ")})` } : {}),
+  };
+}
+
 /** Scrolls the window to `top` over `SEQUENTIAL_STEP_MS` (ease-out), resolving when it gets there —
  * or as soon as `cancelled()` says the reader took over, leaving the scroll where it is. A native
  * smooth scroll cannot be awaited, and its length is the browser's to pick. */
@@ -851,6 +873,22 @@ export function Reader() {
   const infiniteScrollCurrentPageRef = useRef<number | null>(null);
   const infiniteScrollResumedRef = useRef(false);
   const infiniteScrollResumePageRef = useRef<number | null>(null);
+  /**
+   * The page the infinite column loads around: the page under the viewport centre, but only once
+   * the scroll has slowed to reading speed. A `loading="lazy"` image starts its request as soon as
+   * it comes near the viewport and nothing cancels it, so a fast fling past thirty 6 MB pages used to
+   * queue thirty downloads in front of the page the reader finally stopped on. `first`/`last` are
+   * the pages then on screen, which load before any of their neighbours do.
+   */
+  /** Infinite scroll: pages whose `<img>` currently has a `src`. */
+  const infiniteRequestedRef = useRef<Set<number>>(new Set());
+  /** Infinite scroll: pages whose image failed, so the load tiers below them do not wait forever. */
+  const [infiniteFailedPages, setInfiniteFailedPages] = useState<Record<number, true>>({});
+  const [infiniteLoadView, setInfiniteLoadView] = useState<{
+    centre: number;
+    first: number;
+    last: number;
+  } | null>(null);
   const [archiveTransition, setArchiveTransition] = useState<{
     direction: "prev" | "next";
     /** Whether the finished work had *no* rating when this sheet opened. Snapshotted on purpose:
@@ -1055,7 +1093,9 @@ export function Reader() {
   // cover the pages whose real size is not known yet.
   const infiniteScrollResumeDimensions = usePageDimensions(
     isTank ? null : archiveId,
-    infiniteScrollResumePageRef.current ?? 0,
+    // At least one page even when reading from the start: its ratio is the estimate every page
+    // below is reserved at until it loads (see the column below).
+    infiniteScrollResumePageRef.current === null ? 0 : Math.max(infiniteScrollResumePageRef.current, 1),
     readerSettings.infiniteScroll,
   );
 
@@ -1458,6 +1498,9 @@ export function Reader() {
   // image itself is still being downloaded; dimensions fill in later when `onImageLoad` fires.
   useEffect(() => {
     if (!pages.data || !pages.data.pages.length) return
+    // Infinite scroll: a fling passes a page every frame, and two HEADs each tied up the connections
+    // the page it stops on needs. Ask only about the page under the viewport once it settles.
+    if (readerSettings.infiniteScroll && infiniteLoadView?.centre !== spread.left) return
     const pageNumbers =
       spread.right === null ? [spread.left] : [spread.left, spread.right]
     for (const page of pageNumbers) {
@@ -1486,7 +1529,7 @@ export function Reader() {
         }
       })
     }
-  }, [spread.left, spread.right, pageStreamUrl, pages.data]);
+  }, [spread.left, spread.right, pageStreamUrl, pages.data, readerSettings.infiniteScroll, infiniteLoadView?.centre]);
 
   useEffect(() => {
     if (!archiveId || totalPages === 0) return;
@@ -2047,6 +2090,7 @@ export function Reader() {
     if (page > 0) {
       mainReadyRef.current[page] = true;
       setMainReady((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
+      setInfiniteFailedPages((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
     }
     // A failed JXL load means the capability probe lied (Firefox Android decodes some samples but
     // not every page). Downgrade this tab to WebP and retry the same URL once, so the reader never
@@ -2758,6 +2802,9 @@ export function Reader() {
       // it, but hooking `load` makes the correction land on that exact frame instead of the next one.
       const target0 = targetOf();
       target0?.addEventListener("load", () => {
+        // On a slow link the resumed page can finish long after the reader has scrolled elsewhere;
+        // re-pinning then yanked them back to where the reader opened.
+        if (pinnedPage() === null) return;
         const el = targetOf();
         if (el) pin(el);
       }, { once: true });
@@ -2768,6 +2815,9 @@ export function Reader() {
           ? []
           : all.filter((img) => Number((img.closest("[data-page]") ?? img).getAttribute("data-page")) < pin);
       };
+      // A page outside the load window has no `src` and nothing left to settle.
+      const settled = (img: HTMLImageElement) =>
+        !img.getAttribute("src") || (img.complete && img.naturalHeight > 0);
       const tick = () => {
         if (pinnedPage() === null) {
           holding = false;
@@ -2788,7 +2838,7 @@ export function Reader() {
         // Keep holding until everything above the target has actually decoded: on a phone that is
         // several seconds, and stopping on a fixed timer just lets the last images drag the page
         // away after the fact. A page still loading keeps `steadyFrames` reset anyway.
-        const aboveSettled = pagesAbove().every((img) => img.complete && img.naturalHeight > 0);
+        const aboveSettled = pagesAbove().every(settled);
         if (steadyFrames >= 45 && aboveSettled) {
           holding = false;
           return;
@@ -2891,7 +2941,47 @@ export function Reader() {
         break;
       }
     }
+    // Moves the load window to the pages on screen. Called directly while the scroll is slow enough
+    // to read along, and only after it comes to rest during a fling.
+    function settleLoadPage() {
+      if (!root) return;
+      const viewportMid = window.innerHeight / 2;
+      let centre: number | null = null;
+      let first: number | null = null;
+      let last: number | null = null;
+      for (const img of root.querySelectorAll<HTMLElement>("[data-page]")) {
+        const rect = img.getBoundingClientRect();
+        if (rect.bottom <= 0) continue;
+        if (rect.top >= window.innerHeight) break;
+        const page = Number(img.dataset.page);
+        if (Number.isNaN(page)) continue;
+        first ??= page;
+        last = page;
+        if (rect.top <= viewportMid && rect.bottom >= viewportMid) centre = page;
+      }
+      if (first === null || last === null) return;
+      const view = { centre: centre ?? first, first, last };
+      setInfiniteLoadView((prev) =>
+        prev?.centre === view.centre && prev.first === view.first && prev.last === view.last
+          ? prev
+          : view,
+      );
+    }
+    /** Faster than this (viewport heights per second) is skimming, not reading. */
+    const SKIM_SPEED = 1.5;
+    const LOAD_SETTLE_MS = 150;
+    let lastScrollY = window.scrollY;
+    let lastScrollAt = performance.now();
+    let settleTimer: number | undefined;
     function onScroll() {
+      const now = performance.now();
+      const speed =
+        (Math.abs(window.scrollY - lastScrollY) / Math.max(1, now - lastScrollAt)) * 1000;
+      lastScrollY = window.scrollY;
+      lastScrollAt = now;
+      window.clearTimeout(settleTimer);
+      if (speed < window.innerHeight * SKIM_SPEED) settleLoadPage();
+      else settleTimer = window.setTimeout(settleLoadPage, LOAD_SETTLE_MS);
       if (rafId !== null) return;
       rafId = requestAnimationFrame(updateCurrentPageFromScroll);
     }
@@ -2957,6 +3047,7 @@ export function Reader() {
       unpin();
       window.clearTimeout(unpinTimer);
       window.removeEventListener("scroll", onScroll);
+      window.clearTimeout(settleTimer);
       GESTURE_EVENTS.forEach((type) =>
         window.removeEventListener(type, markGesture, { capture: true }),
       );
@@ -3163,6 +3254,39 @@ export function Reader() {
   } else {
     outerStyle.maxWidth = "1200px";
   }
+
+  // Infinite scroll: the ratio reserved for pages nobody has measured yet, and the pages whose
+  // images may request bytes (see `infiniteLoadView`). Loaded pages keep their `src` regardless.
+  const resumeDims = infiniteScrollResumeDimensions.data?.dimensions;
+  const infiniteFallbackDim =
+    lastDimsRef.current ?? resumeDims?.findLast((dim) => dim != null) ?? null;
+  const infiniteResumePage = infiniteScrollResumePageRef.current ?? currentPage;
+  const loadView = infiniteLoadView ?? {
+    centre: infiniteResumePage,
+    first: infiniteResumePage - 1,
+    last: infiniteResumePage + 1,
+  };
+  // The page under the viewport centre goes first, then the rest of the screen, then the
+  // neighbours — each tier with the whole link to itself. Started together they split the
+  // bandwidth, and the page the reader is looking at took as long as all of them.
+  const infiniteLoaded = (from: number, to: number) => {
+    for (let page = Math.max(1, from); page <= Math.min(totalPages, to); page++) {
+      if (pageDimensions[page] === undefined && !infiniteFailedPages[page]) return false;
+    }
+    return true;
+  };
+  const infiniteCentreLoaded = infiniteLoaded(loadView.centre, loadView.centre);
+  const infiniteViewLoaded = infiniteCentreLoaded && infiniteLoaded(loadView.first, loadView.last);
+  const infiniteLoadRadius = Math.max(3, effectivePreload);
+  const infiniteInReach = (page: number) =>
+    page >= loadView.first - infiniteLoadRadius && page <= loadView.last + infiniteLoadRadius;
+  const infiniteMayLoad = (page: number) =>
+    // A request already under way is only cancelled once its page drops out of reach: reading
+    // slowly past a half-loaded page would otherwise throw away the bytes and start it over.
+    (infiniteRequestedRef.current.has(page) && infiniteInReach(page)) ||
+    page === loadView.centre ||
+    (infiniteCentreLoaded && page >= loadView.first && page <= loadView.last) ||
+    (infiniteViewLoaded && infiniteInReach(page));
 
   /** The tiny preview, pinned under the streaming page in the same box: it costs ~10 KB and paints
    * long before a full page does (the first frame of a 20 MB animation needs ~76 KB, a static scan
@@ -4255,15 +4379,23 @@ export function Reader() {
             >
               {pages.data.pages.map((url, i) => {
                 const hasRealHeight = pageDimensions[i + 1] !== undefined;
-                const resumeDim =
-                  infiniteScrollResumeDimensions.data?.dimensions[i];
+                // The box a page will end up in, reserved before it loads: its measured size, or
+                // the last page that did load (archives are nearly always uniform). A placeholder
+                // of any other height changed size on load, and with the column anchored on the
+                // page under the viewport centre, that shrink is what sank the page being read;
+                // the bytes already painted were also stretched to the wrong box until then.
+                const knownDim =
+                  infiniteScrollResumeDimensions.data?.dimensions[i] ?? infiniteFallbackDim;
                 const style: React.CSSProperties =
-                  !hasRealHeight && resumeDim
+                  !hasRealHeight && knownDim
                     ? {
                         ...imageStyle,
-                        aspectRatio: `${resumeDim.width} / ${resumeDim.height}`,
+                        ...infinitePlaceholderBox(knownDim, imageStyle),
                       }
                     : imageStyle;
+                const src = hasRealHeight || infiniteMayLoad(i + 1) ? url.url : undefined;
+                if (src) infiniteRequestedRef.current.add(i + 1);
+                else infiniteRequestedRef.current.delete(i + 1);
                 return (
                   <img
                     key={url.url}
@@ -4273,8 +4405,9 @@ export function Reader() {
                         ? "reader-image"
                         : "reader-image loading-placeholder"
                     }
-                    src={url.url}
-                    alt={`${t("reader.page")} ${i + 1}`}
+                    src={src}
+                    // Without a `src` the browser paints the alt text inside the reserved box.
+                    alt={src ? `${t("reader.page")} ${i + 1}` : ""}
                     loading="lazy"
                     draggable={false}
                     style={style}

@@ -1104,6 +1104,33 @@ pub(crate) async fn start_item_from_subscription(
         .map_err(|e| start_error_message(&e))
 }
 
+/// [`start_item_from_subscription`] for a batch the user approved at once, reading the queue once
+/// for the whole batch instead of once per item (the duplicate check needs every row). The snapshot
+/// is kept current as items start, so two approved works with the same source still see each other.
+pub(crate) async fn start_items_from_subscription(
+    state: &AppState,
+    item_ids: &[String],
+) -> Vec<(String, Result<String, String>)> {
+    let mut snapshot = match state.download_queue.list_all().await {
+        Ok(items) => items,
+        Err(e) => {
+            let message = start_error_message(&StartError::Storage(e.to_string()));
+            return item_ids
+                .iter()
+                .map(|id| (id.clone(), Err(message.clone())))
+                .collect();
+        }
+    };
+    let mut results = Vec::with_capacity(item_ids.len());
+    for id in item_ids {
+        let result = start_one_in(state, None, id, None, false, Some(&mut snapshot))
+            .await
+            .map_err(|e| start_error_message(&e));
+        results.push((id.clone(), result));
+    }
+    results
+}
+
 /// `from_revision_confirmation` is set only by `confirm_older_revision`, and means "the user just
 /// answered the older-revision prompt for this exact run" — it preserves the `revision_confirmed`
 /// flag that would otherwise be cleared here as a stale approval. See the clearing logic below.
@@ -1113,6 +1140,27 @@ async fn start_one(
     id: &str,
     activity_entry_id: Option<String>,
     from_revision_confirmation: bool,
+) -> Result<String, StartError> {
+    start_one_in(
+        state,
+        auth,
+        id,
+        activity_entry_id,
+        from_revision_confirmation,
+        None,
+    )
+    .await
+}
+
+/// `start_one`, optionally against a caller-held snapshot of the whole queue (see
+/// [`start_items_from_subscription`]); `None` reads the queue fresh.
+async fn start_one_in(
+    state: &AppState,
+    auth: Option<&AuthContext>,
+    id: &str,
+    activity_entry_id: Option<String>,
+    from_revision_confirmation: bool,
+    snapshot: Option<&mut Vec<lanrurugi_storage::download_queue::DownloadQueueItem>>,
 ) -> Result<String, StartError> {
     let mut item = state
         .download_queue
@@ -1133,12 +1181,20 @@ async fn start_one(
     // by mistake, or a retry-after-error alongside a fresh add) — this only blocks starting a
     // second one while an earlier one for that same URL is actually in flight, not from existing
     // side by side in the queue.
-    let all_items = state
-        .download_queue
-        .list_all()
-        .await
-        .map_err(|e| StartError::Storage(e.to_string()))?;
-    if !item.forced && has_running_duplicate(&item, &all_items) {
+    let fresh;
+    let all_items: &[lanrurugi_storage::download_queue::DownloadQueueItem] =
+        match snapshot.as_deref() {
+            Some(items) => items,
+            None => {
+                fresh = state
+                    .download_queue
+                    .list_all()
+                    .await
+                    .map_err(|e| StartError::Storage(e.to_string()))?;
+                &fresh
+            }
+        };
+    if !item.forced && has_running_duplicate(&item, all_items) {
         // Refuse on the row itself, not just as a 409: the row then shows the same
         // "download anyway" action the already-imported block offers.
         item.state = DownloadQueueState::Error;
@@ -1263,6 +1319,12 @@ async fn start_one(
         .update(&item)
         .await
         .map_err(|e| StartError::Storage(e.to_string()))?;
+    if let Some(snapshot) = snapshot {
+        match snapshot.iter_mut().find(|i| i.id == item.id) {
+            Some(slot) => *slot = item.clone(),
+            None => snapshot.push(item.clone()),
+        }
+    }
 
     // Fire-and-forget: populate the title/tooltip while the item is still in flight, not only
     // once it reaches `Done` — regressed when metadata caching moved server-side (2cbe2ce), whose
