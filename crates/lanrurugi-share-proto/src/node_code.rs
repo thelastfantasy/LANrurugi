@@ -22,6 +22,7 @@ use crate::code::ALPHABET;
 /// Characters in a node code.
 pub const NODE_CODE_LEN: usize = 16;
 
+/// A public domain separator for HKDF, not a secret: the key material is the node code itself.
 const NODE_LOOKUP_SALT: &[u8] = b"lrrg-node-lookup-v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

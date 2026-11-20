@@ -238,7 +238,9 @@ pub async fn report_damage(
     if !progress_pending && !marks_pending {
         // Long done — but a reader still holding the list from before the damage (another tab)
         // keeps saving pages in the old numbering. It says so with the list length it saved, and
-        // such a page is moved like the original was.
+        // such a page is moved like the original was. While the patch stays unreadable the server
+        // only hands out lists of `pages_after`, so a `pages_before` here can only come from a list
+        // fetched before the damage.
         if let Some(shift) = record.progress_shift.clone() {
             if shift.pages_before > 0 && archive.progress_pages == Some(shift.pages_before) {
                 apply_progress_shift(state, archive, shift, &record.pages).await;

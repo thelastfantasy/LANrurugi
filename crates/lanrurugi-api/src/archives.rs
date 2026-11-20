@@ -2506,7 +2506,7 @@ async fn update_progress(
     match state
         .repos
         .archives
-        .set_progress(&id, page, query.pages, now)
+        .set_progress(&id, page, query.pages.filter(|p| *p > 0), now)
         .await
     {
         Ok(()) => {

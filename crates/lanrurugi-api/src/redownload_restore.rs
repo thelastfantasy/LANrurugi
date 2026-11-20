@@ -158,6 +158,7 @@ pub(crate) async fn apply(state: &AppState, queue_item_id: &str, new_id: &Archiv
             if let Err(e) = state
                 .repos
                 .archives
+                // No list length: the patch is reattached after this, which changes the list.
                 .set_progress(new_id, page, None, now_secs())
                 .await
             {
