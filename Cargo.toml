@@ -166,7 +166,7 @@ bcrypt = "0.19"
 hmac = "0.13"
 sha2 = "0.11"
 woothee = "0.13"
-maxminddb = "0.32"
+maxminddb = "0.33"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 regex = "1.13"
