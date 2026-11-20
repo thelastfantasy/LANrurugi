@@ -56,3 +56,72 @@
         description: Authentication is required for progress (`authprogress`).
       "404":
         description: No archive with this id.
+
+# Batch "which archives carry these source tags?" (`source_lookup.rs`). Additive and deliberately
+# outside the legacy-mirroring `/search*` group: no query syntax, no Tankoubon folding, no
+# pagination — the question a userscript asks about a whole clipboard list.
+"/api/archives/lookup":
+  post:
+    operationId: lookupSources
+    summary: Look up archives by source tag, in bulk
+    description: |
+      Answers "which archives carry this `source:` tag?" for a whole list at once. The bulk form of
+      `GET /api/search?filter=source:<url>`, which costs a full library scan per URL and, being a
+      GET, cannot carry a few hundred URLs at all.
+
+      Archive-level by construction: an archive filed into a Tankoubon is still reported, and a
+      Tankoubon's own aggregate id is never reported as an archive. Records a reader cannot open yet
+      — catalogued but not yet published, or with the file still arriving — are omitted.
+
+      At most 500 sources per request; a larger list is rejected rather than truncated. Reachable
+      with a read-only (guest) token despite the POST: nothing is written.
+    tags: [archives]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [sources]
+            properties:
+              sources:
+                type: array
+                maxItems: 500
+                items: { type: string }
+                description: |
+                  Sources in any spelling a plugin may have stored: `host/path`, a full URL with
+                  either scheme, with or without a trailing slash, optionally already prefixed with
+                  `source:`. Duplicates are collapsed, and each distinct string is answered once.
+    responses:
+      "200":
+        description: One entry per distinct source, keyed by the string as sent.
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation, success, matches]
+              properties:
+                operation: { type: string, enum: [lookup_sources] }
+                success: { type: integer, enum: [1] }
+                matches:
+                  type: object
+                  description: |
+                    Keyed by the exact source string from the request. A source nothing answers is
+                    present with an empty `arcids`, never omitted.
+                  additionalProperties:
+                    type: object
+                    required: [arcids, title]
+                    properties:
+                      arcids:
+                        type: array
+                        items: { type: string }
+                        description: |
+                          Every archive carrying this source tag — a list, because a duplicate
+                          import can leave the same source on more than one record.
+                      title: { type: [string, "null"], description: The first match's own title. }
+      "400":
+        description: No sources given, or more than 500.
+      "401":
+        description: Authentication is required.
+      "403":
+        description: A credential that may not read the library.

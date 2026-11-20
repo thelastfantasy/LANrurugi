@@ -2579,3 +2579,118 @@ async fn recycling_a_tankoubon_keeps_it_as_one_restorable_entry() {
         vec![ArchiveId(id_one), ArchiveId(id_two)]
     );
 }
+
+/// `POST /archives/lookup` — the batch counterpart of `GET /search?filter=source:<url>`.
+///
+/// What matters is that it answers at the *archive* level: a member archive removed from
+/// `LRR_TANKGROUPED` (folded into a Tankoubon) is hidden from grouped search, but the tag index
+/// still has it, and that is exactly the answer a "is this gallery already here?" client needs.
+/// Also pins the spellings a client may send (scheme, trailing slash) and the miss shape.
+#[tokio::test]
+async fn source_lookup_answers_at_the_archive_level_for_a_batch() {
+    use deadpool_redis::redis::AsyncCommands;
+    use lanrurugi_search::keys::TANKGROUPED_KEY;
+
+    let Some((app, redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    let cookie = login_cookie(&app).await;
+    let eq = lanrurugi_search::Equivalence::default();
+
+    let id = "c0ffee00".repeat(5);
+    let title = "Batch Source Lookup Fixture";
+    let source = "e-hentai.org/g/987654/batchfixture";
+    let tags = format!("source:{source},artist:batchfixture");
+    let repo = lanrurugi_storage::repository::ArchiveRepository::new(redis.archive.clone());
+    repo.create_or_replace(&Archive {
+        id: lanrurugi_core::ids::ArchiveId(id.clone()),
+        name: title.to_string(),
+        title: title.to_string(),
+        file: format!("/nonexistent/{id}.zip"),
+        tags: tags.clone(),
+        summary: String::new(),
+        arcsize: 9,
+        pagecount: 3,
+        isnew: false,
+        lastreadpage: 0,
+        lastreadtime: 0,
+        thumbhash: None,
+        toc: vec![],
+        stamp_ids: vec![],
+        heal_failed_at: None,
+        corrupted_pages: vec![],
+        has_patch: false,
+        blake3: None,
+        primary_source: None,
+        progress_pages: None,
+    })
+    .await
+    .unwrap();
+    lanrurugi_search::indexer::index_new_archive(&redis.search, &eq, &id, title)
+        .await
+        .unwrap();
+    lanrurugi_search::indexer::update_tag_indexes(&redis.search, &eq, &id, "", &tags)
+        .await
+        .unwrap();
+
+    // Fold it into a Tankoubon: grouped search no longer lists the archive itself. The lookup reads
+    // the tag index instead, so this must not change its answer.
+    {
+        let mut conn = redis.search.get().await.unwrap();
+        let _: () = conn.srem(TANKGROUPED_KEY, &id).await.unwrap();
+    }
+
+    let (status, body) = json_call(
+        &app,
+        "POST",
+        "/api/archives/lookup",
+        &cookie,
+        Some(serde_json::json!({
+            "sources": [
+                source,
+                format!("https://{source}/"),
+                "e-hentai.org/g/this-one-is-not-in-the-library",
+            ],
+        })),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    let matches = body["matches"].as_object().expect("matches object");
+    assert_eq!(matches.len(), 3, "one entry per distinct source: {body}");
+
+    for key in [source.to_string(), format!("https://{source}/")] {
+        let entry = &matches[&key];
+        assert_eq!(
+            entry["arcids"],
+            serde_json::json!([id]),
+            "the scheme and a trailing slash must not matter: {body}"
+        );
+        assert_eq!(entry["title"], title);
+    }
+    assert_eq!(
+        matches["e-hentai.org/g/this-one-is-not-in-the-library"]["arcids"],
+        serde_json::json!([]),
+        "a miss is an empty list, never an omitted key: {body}"
+    );
+
+    // Oversized batches are refused rather than silently truncated.
+    let too_many: Vec<String> = (0..501).map(|n| format!("e-hentai.org/g/{n}/x")).collect();
+    let (status, _) = json_call(
+        &app,
+        "POST",
+        "/api/archives/lookup",
+        &cookie,
+        Some(serde_json::json!({ "sources": too_many })),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+
+    let repo = lanrurugi_storage::repository::ArchiveRepository::new(redis.archive.clone());
+    repo.delete(&lanrurugi_core::ids::ArchiveId(id.clone()))
+        .await
+        .unwrap();
+    lanrurugi_search::indexer::remove_archive_index(&redis.search, &eq, &id, title, &tags)
+        .await
+        .unwrap();
+}

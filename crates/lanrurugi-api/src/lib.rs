@@ -57,6 +57,7 @@ pub mod search;
 pub mod search_history;
 pub mod sessions;
 pub mod settings;
+pub mod source_lookup;
 pub mod tank_members;
 pub use lanrurugi_share::attempts as share_attempts;
 pub mod share_host;
@@ -121,6 +122,7 @@ pub fn router() -> Router<AppState> {
         .merge(shinobu::router())
         .merge(upload::router())
         .merge(search::router())
+        .merge(source_lookup::router())
         .merge(stats::router())
         .merge(opds::router())
         .merge(plugins::router())
