@@ -177,14 +177,15 @@ jobs:
       # PRs and `dev` merges: a compile-only check (`--all-targets` still covers every test and
       # bench target). `main`: the full lint gate, since that is the only place a lint can still
       # stop a release. The pre-commit hook runs clippy locally, so a warning usually never gets
-      # this far.
+      # this far. `--locked` as in `release.yml`: two lockfile PRs merged one after the other can
+      # leave a `Cargo.lock` cargo would silently rewrite, and the release build refuses it.
       - name: cargo check
         if: github.ref != 'refs/heads/main'
-        run: cargo check --workspace --all-targets
+        run: cargo check --locked --workspace --all-targets
 
       - name: cargo clippy
         if: github.ref == 'refs/heads/main'
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       # Three tiers, because the expensive part of this job is *linking* test binaries, not running
       # them (620 s on a warm cache: 175 s executing, the rest linking 80+ integration binaries):
