@@ -51,8 +51,10 @@ describe("SubscriptionStatus", () => {
     state.failed = 2
     renderRow()
 
-    expect(screen.getByText(/waiting/i)).toBeTruthy()
-    expect(screen.getByRole("button", { name: /2 failed downloads/i })).toBeTruthy()
+    // The counts are spelled out only in the button's label (and its tooltip, which may not be
+    // mounted), so query the label rather than visible text.
+    const button = screen.getByRole("button", { name: /1 awaiting approval/i })
+    expect(button.getAttribute("aria-label")).toMatch(/2 failed downloads/i)
   })
 
   it("renders nothing at all with no subscriptions", () => {
