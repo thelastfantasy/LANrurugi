@@ -23,7 +23,12 @@ export function pluginInfo() {
     author: "thelastfantasy",
     description:
       "Finds new galleries matching a subscription's creator/tag criteria, for the subscription orchestrator.",
-    version: "0.1",
+    version: "0.2",
+    // 2: tags, rating, the main title and page count come from `gdata` rather than the listing row.
+    // The host compares snapshot entries only within one data version, so this bump keeps the first
+    // check after an upgrade from reporting every work's tags and title as changed.
+    data_version: 2,
+    capabilities: ["refresh_sources"],
     login_from: "ehlogin",
     url_pattern: "e-?hentai\\.org|exhentai\\.org",
     domain_match: ["e-hentai.org", "exhentai.org"],
@@ -128,14 +133,21 @@ function looksLikeBotChallenge(html: string): boolean {
 
 /** Decodes E-Hentai's star rating, which the listing encodes as a sprite offset rather than a number.
  *
- * `background-position: Xpx Ypx` — X moves left 16px per missing star, and Y of -1 (instead of -21)
- * marks a half star. Verified against a live listing: `0px -21px` is 5, `-32px -21px` is 3,
- * `-64px -1px` is 0.5. */
-function parseRating(style: string): number | undefined {
+ * `background-position: Xpx Ypx`: X moves left 16px per full star missing, and Y picks the sprite
+ * row — `-21` is the half-star row, `-1` the whole-star one. Counter-intuitive, which is why the
+ * test was inverted until 2026-11-20: every rating then read 0.5 high or 0.5 low depending on the
+ * row, so a rating floor rejected works the site itself showed as qualifying.
+ *
+ * Verified live by pairing each sprite with that gallery's own `Average: N` figure: `0px -21px` is
+ * 4.5 (averages 4.37–4.69), `0px -1px` 5.0 (4.75), `-16px -21px` 3.5 (3.60), `-16px -1px` 4.0
+ * (3.84–4.01), `-32px -21px` 2.5 (2.52), `-32px -1px` 3.0 (2.78), `-48px -21px` 1.5 (1.70),
+ * `-48px -1px` 2.0 (2.24). Exported so that table can be checked from a script — the host only ever
+ * calls `pluginInfo`/`discover`/`canonicalizeSource`, so an extra export changes nothing it does. */
+export function parseRating(style: string): number | undefined {
   const x = Number(style.match(/background-position:\s*(-?\d+)px/)?.[1]);
   const y = Number(style.match(/px\s+(-?\d+)px/)?.[1]);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return undefined;
-  const rating = 5 - Math.abs(x) / 16 - (y === -1 ? 0.5 : 0);
+  const rating = 5 - Math.abs(x) / 16 - (y === -21 ? 0.5 : 0);
   return rating >= 0 && rating <= 5 ? rating : undefined;
 }
 
@@ -147,23 +159,36 @@ function decodeEntities(text: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
     .replace(/&amp;/g, "&");
 }
 
-/** Fills in each candidate's own-language title and authoritative post time from the JSON API.
+/** Replaces what the listing row only approximates with `gdata`'s own values.
  *
- * The listing carries exactly one title per work — whichever the uploader chose — and its visible
- * posted-at text has no timezone attached. `gdata` supplies the Japanese title, `posted` as a Unix
- * timestamp (so no dependence on how the listing rendered a local date), and the **uploader** —
- * which the signed-in listing itself does not carry at all (only the guest 25-per-page layout links
- * `uploader/<name>`, and a check runs signed in). Reading it from here is what keeps `uploader`
- * populated for the layout a subscription actually sees, at no extra request. It also carries the
- * gallery's whole size (`filesize`, bytes), which no listing row shows — the one value a "not bigger
- * than N MB" rule needs.
+ * Everything here is free: this one call already ran for the original titles, and `gdata` answers
+ * with the whole record per gallery. What the listing row carries and what it cannot:
+ *
+ * - **tags** — the row shows 1–4 of them (measured: 2.3 on average against 19.7 from the API), and
+ *   the missing ones are exactly the namespaces rules use: `language` on essentially every work,
+ *   `artist` on most. A required-tag rule therefore failed works that carry the tag, and an
+ *   excluded-tag rule silently let them through.
+ * - **rating** — the row is a star sprite quantised to half a star; the API returns the gallery's
+ *   own average to two decimals (`"4.01"`, verified live). "Not above 4" then means what the gallery
+ *   page shows, instead of needing 4.5 to clear 4.0.
+ * - **title** (English) — the row shows whichever title the uploader picked, so a work listed in
+ *   Japanese had no English title at all; `title_jpn` alone does not cover a rule written in romaji.
+ * - **posted** — the row's text has no timezone; the API gives Unix seconds.
+ * - **uploader** — absent from the signed-in grid entirely (only the guest 25-per-page layout links
+ *   it), and a creator-scoped subscription matches on it.
+ * - **size** / **pages** — `filesize` bytes that no row shows, and `filecount` instead of the row's
+ *   own rendered text.
+ *
+ * The listing stays the source for `source`, `category` and as the fallback for anything this call
+ * did not answer — a batch that failed still yields real candidates.
  *
  * Failure is swallowed: a missing original title is worth less than the listing itself, and losing
  * the whole check over it would be the wrong trade. */
-async function addOriginalTitles(
+async function addApiMetadata(
   candidates: DiscoveredCandidateResult[],
   criteria: DiscoveryCriteriaArgs,
   logger: { warn: (m: string) => void },
@@ -188,7 +213,18 @@ async function addOriginalTitles(
   const GDATA_CONCURRENCY = 4;
   const metaByGid = new Map<
     string,
-    { jpn?: string; posted?: string; uploader?: string; size?: number }
+    {
+      title?: string;
+      jpn?: string;
+      posted?: string;
+      uploader?: string;
+      size?: number;
+      pages?: number;
+      rating?: number;
+      tags?: string[];
+      expunged?: boolean;
+      category?: string;
+    }
   >();
 
   const batches: [number, string][][] = [];
@@ -212,7 +248,13 @@ async function addOriginalTitles(
       for (const entry of data?.gmetadata ?? []) {
         const gid = String(entry.gid);
         const meta = metaByGid.get(gid) ?? {};
-        if (entry?.title_jpn) meta.jpn = entry.title_jpn;
+        // The gallery's own title, whichever language the row happened to display.
+        // `gdata` escapes both titles (`&amp;`, `&#039;`), which a `title contains` rule would
+        // then fail to match.
+        if (entry?.title) meta.title = decodeEntities(String(entry.title));
+        if (entry?.title_jpn) meta.jpn = decodeEntities(String(entry.title_jpn));
+        if (entry?.expunged === true) meta.expunged = true;
+        if (entry?.category) meta.category = String(entry.category);
         // Always seconds since the Unix epoch in UTC, irrespective of the listing's own display.
         if (entry?.posted) meta.posted = String(entry.posted);
         if (entry?.uploader) meta.uploader = String(entry.uploader);
@@ -222,6 +264,23 @@ async function addOriginalTitles(
         if (entry?.filesize) {
           const bytes = Number(entry.filesize);
           if (Number.isFinite(bytes)) meta.size = bytes;
+        }
+        // Whole-gallery page count, as a string on the wire. Taken from here rather than the row's
+        // rendered "N pages" so nothing depends on how that text was formatted.
+        if (entry?.filecount) {
+          const pages = Number(entry.filecount);
+          if (Number.isFinite(pages)) meta.pages = pages;
+        }
+        // Every tag, namespaced (`namespace: 1` keeps the prefix) — the row shows only a handful.
+        if (Array.isArray(entry?.tags) && entry.tags.length > 0) {
+          meta.tags = entry.tags.filter((t: unknown): t is string => typeof t === "string");
+        }
+        // The gallery's own average, e.g. `"4.01"` (the listing's sprite only ever shows a half-star
+        // step). A gallery nobody has voted on answers `"0.00"`; that is applied below together
+        // with the sprite, since only both agreeing means "not rated" rather than a real 0.
+        if (entry?.rating !== undefined && entry?.rating !== null && entry?.rating !== "") {
+          const rating = Number(entry.rating);
+          if (Number.isFinite(rating) && rating >= 0 && rating <= 5) meta.rating = rating;
         }
         metaByGid.set(gid, meta);
       }
@@ -238,7 +297,6 @@ async function addOriginalTitles(
   for (const c of candidates) {
     const gid = c.source.match(/\/g\/(\d+)\//)?.[1];
     const meta = gid ? metaByGid.get(gid) : undefined;
-    if (meta?.jpn && c.title && typeof c.title === "object") c.title.ja = meta.jpn;
     if (meta?.posted) c.posted_at = meta.posted;
     // The listing's own `uploader/<name>` link is kept when it had one (guest layout); the API is
     // authoritative otherwise. A rule over `uploader` is only answerable if this is populated.
@@ -246,6 +304,32 @@ async function addOriginalTitles(
     // In bytes. A rule over `size` is only answerable once this is populated, and the host treats a
     // missing value as "cannot tell yet" rather than as "does not match".
     if (meta?.size !== undefined) c.size = meta.size;
+    // Replaces the sprite's half-star estimate with the real average — see this function's own docs.
+    // No votes reads as "not rated" (absent), so a rating rule waits for votes instead of rejecting
+    // the work as a 0.
+    if (meta?.rating === 0 && !c.rating) c.rating = undefined;
+    else if (meta?.rating !== undefined) c.rating = meta.rating;
+    if (meta?.expunged) {
+      // Not filtered here: what to do with a withdrawn gallery is the host's call. Logged so a
+      // download that then fails has an explanation.
+      logger.warn(`${c.source} is expunged on E-Hentai; a download of it may fail`);
+    }
+    // The row's handful of tags replaced by the complete list, which is what tag rules need.
+    if (meta?.tags) c.tags = meta.tags;
+    // The gallery's main title (usually English or romaji), which a row listing the work in
+    // Japanese never carries. Only added when it differs from what the row showed, so a work listed
+    // under its main title does not carry the same string twice. The protocol still accepts a bare
+    // string here, so that shape is promoted rather than overwritten.
+    if (meta?.title || meta?.jpn) {
+      const titles: Record<string, string> =
+        typeof c.title === "string" ? { origin: c.title } : { ...(c.title ?? {}) };
+      if (meta.title && titles.origin !== meta.title) titles.en = meta.title;
+      if (meta.jpn) titles.ja = meta.jpn;
+      c.title = titles;
+    }
+    if (meta?.pages !== undefined) c.pages = meta.pages;
+    // The row's own `.cn` label wins; only a refresh, which has no row, takes the API's.
+    if (!c.category && meta?.category) c.category = meta.category;
   }
 }
 
@@ -281,7 +365,7 @@ function parsePage(html: string, seen: Set<string>): DiscoveredCandidateResult[]
     const posted = row.match(/id="posted_\d+">([^<]+)</)?.[1];
     const category = row.match(/class="cn[^"]*"[^>]*>([^<]+)</)?.[1];
     // Best-effort from the row: the guest layout links `uploader/<name>` (and some variants carry
-    // `?uploader=`), while the signed-in grid carries none. `addOriginalTitles` fills the gap from
+    // `?uploader=`), while the signed-in grid carries none. `addApiMetadata` fills the gap from
     // the API, which has the uploader for every work either way — a missing one here is therefore
     // not final, and the host treats it as "unknown" rather than as "no uploader" regardless.
     const uploader = row.match(/uploader\/([^"'<>]+)/)?.[1] ?? row.match(/[?&]uploader=([^"'&<>]+)/)?.[1];
@@ -296,12 +380,14 @@ function parsePage(html: string, seen: Set<string>): DiscoveredCandidateResult[]
       // place the original title exists.
       title: title ? { origin: decodeEntities(title) } : undefined,
       posted_at: posted?.trim(),
+      // Half-star estimate from the sprite, replaced by the API's exact average afterwards — kept as
+      // the fallback so a batch the API did not answer still carries something to compare against.
       rating: ratingStyle ? parseRating(ratingStyle) : undefined,
       tags,
       category: category?.trim(),
       uploader: uploader ? decodeURIComponent(uploader) : undefined,
       pages: pages ? Number(pages) : undefined,
-      // Declared here, filled in below: the listing itself never shows a size, `addOriginalTitles`
+      // Declared here, filled in below: the listing itself never shows a size, `addApiMetadata`
       // reads it from `gdata`. The key has to be written where a candidate is built, because the
       // host's field introspection is static — it scans this file for the property name, so a field
       // only ever assigned from inside that helper would never be offered in the settings form.
@@ -335,6 +421,29 @@ function postedSeconds(value: unknown): number | undefined {
   const zoned = /([zZ]|[+-]\d{2}:?\d{2})$/.test(iso) ? iso : `${iso}Z`;
   const parsed = Date.parse(zoned);
   return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : undefined;
+}
+
+/** Re-reads specific galleries straight from `gdata`, without paging a listing.
+ *
+ * The host calls this for works a rule rejected earlier, so a rating that rose or a tag added later
+ * is noticed even once the work has left the subscription's window, or sits past where the listing
+ * scan stopped. Sources that are not E-Hentai gallery URLs are skipped. */
+export async function refreshSources(
+  args: DiscoveryCriteriaArgs & { sources?: string[] },
+): Promise<DiscoveryResultShape> {
+  const logger = legacyCompat.getLogger("EH Discovery", "plugins");
+  const candidates: DiscoveredCandidateResult[] = [];
+  const seen = new Set<string>();
+  for (const raw of args.sources ?? []) {
+    const source = canonicalizeSource(String(raw));
+    if (seen.has(source) || !/\/g\/\d+\/[0-9a-f]{10}$/.test(source)) continue;
+    seen.add(source);
+    candidates.push({ source, tags: [], size: undefined });
+  }
+  await addApiMetadata(candidates, args, logger);
+  // A gallery `gdata` did not answer has nothing to judge; returning it bare would read as a work
+  // whose tags were all removed.
+  return { candidates: candidates.filter((c) => c.posted_at !== undefined), degraded: false };
 }
 
 export async function discover(
@@ -410,7 +519,7 @@ export async function discover(
     if (looksSignedOut(html)) degraded = true;
 
     const pageCandidates = parsePage(html, seen);
-    await addOriginalTitles(pageCandidates, criteria, logger);
+    await addApiMetadata(pageCandidates, criteria, logger);
 
     // The window bounds what a check *acts on*, not what the pane may show: a page that straddles
     // the boundary is returned whole, old rows included, so the preview can grey them out and

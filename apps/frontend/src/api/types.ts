@@ -630,6 +630,11 @@ export interface CheckCycle {
   finished_at: number
   outcome: CycleOutcome
   candidates_seen: number
+  /** Position in the subscription's sequence; absent on cycles stored before summaries. */
+  seq?: number
+  /** Candidates per verdict tag. Absent on cycles stored before summaries. */
+  verdict_counts?: Record<string, number>
+  /** Always filled by the detail endpoint, rebuilt from the snapshot for a summary. */
   candidates: CandidateRecord[]
 }
 

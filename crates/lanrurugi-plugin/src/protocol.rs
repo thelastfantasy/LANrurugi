@@ -164,6 +164,25 @@ pub struct PluginInfo {
     /// host-mediated file contents).
     #[serde(default)]
     pub sidecar_files: Vec<String>,
+    /// Version of the shape of what a discovery plugin reports per candidate. A plugin bumps it when
+    /// a field's source changes (e.g. tags from an API instead of a listing row), so the host does
+    /// not read the first check after an upgrade as every work having changed. `1` when undeclared.
+    #[serde(default = "default_data_version")]
+    pub data_version: u32,
+    /// Optional calls this plugin answers beyond what its `type` implies. Declared rather than found
+    /// by scanning the source. Known: `"refresh_sources"` (see `PluginPool::refresh_sources`).
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
+
+fn default_data_version() -> u32 {
+    1
+}
+
+impl PluginInfo {
+    pub fn has_capability(&self, name: &str) -> bool {
+        self.capabilities.iter().any(|c| c == name)
+    }
 }
 
 /// Mirrors `crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts`'s `DomainRule` field-for-field —

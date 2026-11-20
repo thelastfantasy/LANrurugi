@@ -1302,6 +1302,7 @@
   "subscriptions.queueRetentionUnit": "天後",
   "subscriptions.approveWaitingOnAuto": "這個訂閱還有 {{count}} 部作品等待確認。改為自動下載後，它們不會自動開始。要一起下載嗎？會先重新檢查一次訂閱，確保包含最新進入待確認的作品。",
   "subscriptions.approveWaitingStarted": "正在重新檢查訂閱，完成後會下載等待確認的作品。進度可在下載佇列中查看。",
+  "subscriptions.ratingRuleHint": "站點上的平均分（兩位小數，如 4.01）。還沒人投票的作品算未評定：評分條件會等有票後再判定，不會直接拒掉。",
   "batch.selectedN": "已選擇（{{n}}）",
   "batch.addArchives": "新增檔案",
   "batch.hidePicker": "收起檔案清單",

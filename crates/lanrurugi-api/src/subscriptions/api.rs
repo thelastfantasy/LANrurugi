@@ -14,8 +14,9 @@ use serde::Deserialize;
 use serde_json::json;
 
 use lanrurugi_storage::subscriptions::{
-    CreditPolicy, Criteria, Filters, ReservationStatus, ScanWindow, SourceChangePolicy,
-    SourceRemovalPolicy, Subscription, SubscriptionState, MAX_SCAN_DAYS, MAX_SCAN_PAGES,
+    CreditPolicy, Criteria, CycleOutcome, Filters, ReservationStatus, ScanWindow,
+    SourceChangePolicy, SourceRemovalPolicy, Subscription, SubscriptionState, MAX_SCAN_DAYS,
+    MAX_SCAN_PAGES,
 };
 
 use futures_util::StreamExt;
@@ -324,11 +325,20 @@ async fn create(
 async fn detail(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match state.subscriptions.get(&id).await {
         Ok(Some(s)) => {
-            let cycles = state
+            let mut cycles = state
                 .subscriptions
                 .recent_cycles(&id, 20)
                 .await
                 .unwrap_or_default();
+            // A summary stores no rows; they are rebuilt here so the history view is unchanged.
+            if cycles.iter().any(|c| c.seq.is_some()) {
+                let snapshot = state.subscriptions.snapshot(&id).await.unwrap_or_default();
+                for cycle in &mut cycles {
+                    if let Some(seq) = cycle.seq {
+                        cycle.candidates = super::snapshot::records_at(&snapshot, seq);
+                    }
+                }
+            }
             axum::Json(json!({ "subscription": s, "cycles": cycles })).into_response_owned()
         }
         Ok(None) => not_found("get_subscription", format!("{id} does not exist.")),
@@ -547,7 +557,37 @@ async fn combined_history(
                 work.clone(),
             ));
         }
-        for cycle in cycles {
+        // Summaries carry no rows: each work's latest verdict comes from the snapshot instead, which
+        // is the same "newest record per work" this view keeps anyway.
+        let outcome_by_seq: std::collections::HashMap<u64, &CycleOutcome> = cycles
+            .iter()
+            .filter_map(|c| c.seq.map(|seq| (seq, &c.outcome)))
+            .collect();
+        if !outcome_by_seq.is_empty() {
+            let snapshot = state
+                .subscriptions
+                .snapshot(&subscription.id)
+                .await
+                .unwrap_or_default();
+            for entry in snapshot.values() {
+                let Some(last) = entry.runs.last() else {
+                    continue;
+                };
+                let Some(record) = super::snapshot::record_at(entry, last.to_seq) else {
+                    continue;
+                };
+                entries.push(json!({
+                    "skipped": skipped.contains_key(&record.source_url),
+                    "subscription_id": subscription.id,
+                    "subscription_name": subscription.name,
+                    "checked_at": entry.last_verdict_at.unwrap_or(entry.last_seen_at),
+                    "outcome": outcome_by_seq.get(&last.to_seq).copied().unwrap_or(&CycleOutcome::Completed),
+                    "download": outcome_by_source.get(&record.source_url),
+                    "candidate": record,
+                }));
+            }
+        }
+        for cycle in cycles.iter().filter(|c| c.seq.is_none()) {
             for record in &cycle.candidates {
                 entries.push(json!({
                     "skipped": skipped.contains_key(&record.source_url),
@@ -640,10 +680,9 @@ async fn combined_history(
     axum::Json(json!({ "history": entries })).into_response_owned()
 }
 
-/// How far back to read per subscription before merging. A ceiling rather than everything: history is
-/// bounded by age anyway, and reading all of it for every subscription to then discard most of it
-/// would cost more the longer the install has been running.
-const CYCLES_PER_SUBSCRIPTION: isize = 20;
+/// How many cycles to read per subscription before merging: every kept one. Summaries are small, and
+/// at most a few older full-detail cycles remain after the upgrade trims them.
+const CYCLES_PER_SUBSCRIPTION: isize = lanrurugi_storage::subscriptions::CYCLE_HISTORY_LIMIT;
 
 #[derive(Debug, Deserialize)]
 struct HistoryQuery {

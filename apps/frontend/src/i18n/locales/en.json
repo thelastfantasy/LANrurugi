@@ -2179,6 +2179,7 @@
   "subscriptions.outcomeDownloadFailed": "Download failed",
   "subscriptions.verdictSuperseded": "A newer revision is already in the library ({{source}})",
   "subscriptions.ratingValue": "Rating: {{rating}}",
+  "subscriptions.ratingRuleHint": "The source's average rating (to two decimals, e.g. 4.01). A work with no votes yet is unrated: a rating rule waits for votes rather than rejecting it.",
   "subscriptions.openSource": "Open the source page",
   "pluginWizard.type.discovery": "Discovery (subscription source)",
   "pluginWizard.sharedLinksHintDiscovery": "Links (one per line; at least 1 when only the discovery type is selected) — a discovery plugin answers \"what exists on this site\", so put a **listing/search URL or a creator name** here: anything URL-shaped is probed as a listing, anything else as a creator. Leaving it empty is allowed (one unfiltered listing probe). The AI really does fetch these pages to learn the site's structure.",

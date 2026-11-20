@@ -4577,6 +4577,8 @@ pub(crate) mod tests {
             domain_match: Vec::new(),
             generated_by_wizard: false,
             sidecar_files: Vec::new(),
+            data_version: 1,
+            capabilities: Vec::new(),
         }
     }
 

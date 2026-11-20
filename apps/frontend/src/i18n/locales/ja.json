@@ -2122,6 +2122,7 @@
   "subscriptions.outcomeDownloadFailed": "ダウンロード失敗",
   "subscriptions.verdictSuperseded": "より新しい版が既にライブラリにあります（{{source}}）",
   "subscriptions.ratingValue": "評価：{{rating}}",
+  "subscriptions.ratingRuleHint": "サイト上の平均評価（小数第2位まで、例：4.01）。まだ投票のない作品は未評価として扱い、評価条件は投票が入るまで判定を保留します。",
   "subscriptions.openSource": "元のページを開く",
   "pluginWizard.type.discovery": "ディスカバリー（購読ソース）",
   "pluginWizard.sharedLinksHintDiscovery": "リンク（1 行に 1 つ。ディスカバリーのみ選択時は 1 つ以上）——ディスカバリーは「このサイトに何があるか」を答えるプラグインなので、ここには**一覧/検索ページの URL か作者名**を入れてください。URL 形式は一覧として、それ以外は作者名として試行されます。空でも構いません（フィルタなしの一覧を 1 回試行）。AI は実際にこれらのページを取得して構造を解析します。",

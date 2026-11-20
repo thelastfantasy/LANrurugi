@@ -29,6 +29,28 @@ pub enum SubscriptionsError {
 
 type Result<T> = std::result::Result<T, SubscriptionsError>;
 
+/// Moves a pre-timestamp reconsiderable set into [`rejected_at_key`], dated now. A no-op once done.
+async fn migrate_rejected(
+    conn: &mut deadpool_redis::Connection,
+    subscription_id: &str,
+) -> Result<()> {
+    let old = rejected_key(subscription_id);
+    let members: Vec<String> = conn.smembers(&old).await?;
+    if members.is_empty() {
+        return Ok(());
+    }
+    let at = now_ms();
+    let mut pipe = deadpool_redis::redis::pipe();
+    pipe.atomic();
+    for source in &members {
+        pipe.hset_nx(rejected_at_key(subscription_id), source, at)
+            .ignore();
+    }
+    pipe.del(&old).ignore();
+    let _: () = pipe.query_async(&mut **conn).await?;
+    Ok(())
+}
+
 fn subscription_key(id: &str) -> String {
     format!("LANRURUGI_SUBSCRIPTION_{id}")
 }
@@ -45,6 +67,19 @@ fn seen_key(subscription_id: &str) -> String {
 /// be considered again — see [`SubscriptionRepository::mark_rejected`].
 fn rejected_key(subscription_id: &str) -> String {
     format!("LANRURUGI_SUBSCRIPTION_REJECTED_{subscription_id}")
+}
+
+/// The reconsiderable set with the time each work was first rejected, `source -> epoch ms`. Replaces
+/// the plain set at [`rejected_key`], which is migrated into it on first touch: without a time a
+/// rejection stays reconsiderable forever, and every one of them costs a refresh each check.
+fn rejected_at_key(subscription_id: &str) -> String {
+    format!("LANRURUGI_SUBSCRIPTION_REJECTED_AT_{subscription_id}")
+}
+
+/// The last cycle sequence number handed out (`INCR`). Snapshot entries record their verdicts as
+/// ranges of these numbers, which is how one cycle's whole listing is rebuilt from the snapshot.
+fn cycle_seq_key(subscription_id: &str) -> String {
+    format!("LANRURUGI_SUBSCRIPTION_CYCLE_SEQ_{subscription_id}")
 }
 
 /// Which works the user blocked, and when — a hash so the list can be shown newest-first.
@@ -91,7 +126,16 @@ const PENDING_INDEX: &str = "LANRURUGI_SUBSCRIPTION_PENDING";
 
 /// How many past cycles to keep per subscription. History is for diagnosing "why didn't this
 /// download?", which is a recent-past question — unbounded growth would cost more than it answers.
-const CYCLE_HISTORY_LIMIT: isize = 50;
+pub const CYCLE_HISTORY_LIMIT: isize = 50;
+
+/// How many full-detail cycles written before cycles became summaries are kept on upgrade. Older ones
+/// are dropped at once rather than waiting fifty checks to roll off; they are the bulk of a
+/// subscription's Redis use.
+const LEGACY_CYCLES_KEPT: isize = 12;
+
+/// How long a rejected work stays reconsiderable. Past this it is simply seen: a rating that has not
+/// moved in a week is unlikely to, and every reconsiderable work costs a refresh each check.
+pub const RECONSIDER_DAYS: i64 = 7;
 
 // ── Subscription ────────────────────────────────────────────────────────────────────────────────
 
@@ -594,8 +638,70 @@ pub struct CheckCycle {
     pub finished_at: i64,
     pub outcome: CycleOutcome,
     pub candidates_seen: u32,
+    /// Position of this cycle in its subscription's sequence; `None` for a cycle written before
+    /// summaries. A summary's rows are rebuilt from the snapshot by this number
+    /// (`SnapshotEntry::runs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
+    /// How many candidates got each verdict, keyed by the verdict's tag (`queued`, `rejected`, ...).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub verdict_counts: std::collections::BTreeMap<String, u32>,
+    /// The rows themselves. Stored only by cycles written before summaries; a summary carries none
+    /// here and they are rebuilt on read instead.
     #[serde(default)]
     pub candidates: Vec<CandidateRecord>,
+}
+
+impl CandidateVerdict {
+    /// The serde tag, for counting verdicts without serializing them.
+    pub fn tag(&self) -> &'static str {
+        match self {
+            CandidateVerdict::Queued => "queued",
+            CandidateVerdict::AwaitingApproval => "awaiting_approval",
+            CandidateVerdict::Reserved { .. } => "reserved",
+            CandidateVerdict::Rejected { .. } => "rejected",
+            CandidateVerdict::AlreadyHeld { .. } => "already_held",
+            CandidateVerdict::Superseded { .. } => "superseded",
+            CandidateVerdict::AlreadySeen => "already_seen",
+            CandidateVerdict::OutOfWindow => "out_of_window",
+            CandidateVerdict::TooSoon { .. } => "too_soon",
+        }
+    }
+}
+
+/// One verdict a work kept over consecutive cycles `from_seq..=to_seq`.
+///
+/// History is stored this way rather than as one row per work per cycle: a work sits in a window for
+/// many cycles with the same verdict, and repeating its whole record each time was over 90% of a
+/// subscription's Redis use.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VerdictRun {
+    pub verdict: CandidateVerdict,
+    pub from_seq: u64,
+    pub to_seq: u64,
+}
+
+/// Which field a [`ValueChange`] is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangedField {
+    Title,
+    Tags,
+    Rating,
+    Pages,
+    Uploader,
+    Category,
+}
+
+/// A field's value before cycle `seq`, so an older cycle's row can be rebuilt with the values it saw.
+///
+/// `before` is the previous value as JSON, except for tags, which store only the difference
+/// (`{"added": [...], "removed": [...]}`) because a full tag list is most of an entry's size.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ValueChange {
+    pub seq: u64,
+    pub field: ChangedField,
+    pub before: serde_json::Value,
 }
 
 // ── Reservation ─────────────────────────────────────────────────────────────────────────────────
@@ -657,9 +763,10 @@ pub struct SnapshotEntry {
     /// is new (that is `Seen Work` membership).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub posted_at: Option<String>,
-    /// **Truncated by the listing** (verified live: 19 of 25 e-hentai rows carried exactly 12 tags).
-    /// Usable only to judge "does this still match the subscription" — never to write onto an
-    /// archive, which would delete real tags.
+    /// Whatever the source plugin reports, which may be a listing's truncated subset (e-hentai's rows
+    /// show 1–4; its plugin now reads the full list from its API instead). Usable only to judge "does
+    /// this still match the subscription" — never to write onto an archive, which would delete real
+    /// tags.
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -686,6 +793,29 @@ pub struct SnapshotEntry {
     /// The previous title, kept so a change can be shown as old to new rather than silently applied.
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
     pub title_changed_from: std::collections::HashMap<String, String>,
+    /// The source plugin's `data_version` this entry was written under. Entries from another version
+    /// are updated without being compared, since a field whose source changed is not a change to
+    /// the work.
+    #[serde(default = "default_data_version")]
+    pub data_version: u32,
+    /// This work's verdicts, oldest first, trimmed to the cycles still kept.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<VerdictRun>,
+    /// Earlier values of fields that have changed, oldest first, trimmed like `runs`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changes: Vec<ValueChange>,
+    /// The rating last written to `changes`, at 0.1. Compared against instead of the previous cycle's
+    /// value: an exact average moves a little on nearly every check, and recording each move would
+    /// grow `changes` by one per cycle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rating_logged: Option<f32>,
+    /// Unix seconds of the cycle that last gave this work a verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_verdict_at: Option<i64>,
+}
+
+fn default_data_version() -> u32 {
+    1
 }
 
 /// A matched work waiting for the user's go-ahead.
@@ -793,6 +923,8 @@ impl SubscriptionRepository {
         let _: () = conn.del(cycles_key(id)).await?;
         let _: () = conn.del(seen_key(id)).await?;
         let _: () = conn.del(rejected_key(id)).await?;
+        let _: () = conn.del(rejected_at_key(id)).await?;
+        let _: () = conn.del(cycle_seq_key(id)).await?;
         let _: () = conn.del(blocked_key(id)).await?;
         let _: () = conn.del(skipped_key(id)).await?;
         let _: () = conn.del(snapshot_key(id)).await?;
@@ -814,12 +946,63 @@ impl SubscriptionRepository {
     // Cycle history
 
     pub async fn record_cycle(&self, cycle: &CheckCycle) -> Result<()> {
+        self.record_cycle_with_snapshot(cycle, &[], &[]).await
+    }
+
+    /// The next cycle number for this subscription.
+    ///
+    /// Taken before the cycle's writes rather than inside their transaction, which cannot hand back a
+    /// value mid-way. A cycle whose writes then fail just leaves a gap in the numbering.
+    pub async fn next_cycle_seq(&self, subscription_id: &str) -> Result<u64> {
+        let mut conn = self.pool.get().await?;
+        Ok(conn.incr(cycle_seq_key(subscription_id), 1).await?)
+    }
+
+    /// Writes one cycle's summary together with the snapshot entries it updated and removed, in one
+    /// transaction, so a summary never exists without the verdicts its rows are rebuilt from.
+    ///
+    /// The first summary trims the full-detail cycles written before summaries to
+    /// [`LEGACY_CYCLES_KEPT`].
+    pub async fn record_cycle_with_snapshot(
+        &self,
+        cycle: &CheckCycle,
+        entries: &[SnapshotEntry],
+        removed: &[String],
+    ) -> Result<()> {
         let mut conn = self.pool.get().await?;
         let key = cycles_key(&cycle.subscription_id);
+        let snapshot = snapshot_key(&cycle.subscription_id);
         let raw =
             serde_json::to_string(cycle).map_err(|e| SubscriptionsError::Json(key.clone(), e))?;
-        let _: () = conn.lpush(&key, raw).await?;
-        let _: () = conn.ltrim(&key, 0, CYCLE_HISTORY_LIMIT - 1).await?;
+        let mut pairs: Vec<(String, String)> = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let value = serde_json::to_string(entry)
+                .map_err(|e| SubscriptionsError::Json(snapshot.clone(), e))?;
+            pairs.push((entry.source.clone(), value));
+        }
+
+        // A summary is the newest entry once any exists, so a list whose head still carries rows has
+        // never seen one.
+        let head: Option<String> = conn.lindex(&key, 0).await?;
+        let first_summary = cycle.seq.is_some()
+            && head
+                .and_then(|h| serde_json::from_str::<CheckCycle>(&h).ok())
+                .is_some_and(|h| h.seq.is_none());
+
+        let mut pipe = deadpool_redis::redis::pipe();
+        pipe.atomic();
+        if !pairs.is_empty() {
+            pipe.hset_multiple(&snapshot, &pairs).ignore();
+        }
+        if !removed.is_empty() {
+            pipe.hdel(&snapshot, removed).ignore();
+        }
+        if first_summary {
+            pipe.ltrim(&key, 0, LEGACY_CYCLES_KEPT - 1).ignore();
+        }
+        pipe.lpush(&key, raw).ignore();
+        pipe.ltrim(&key, 0, CYCLE_HISTORY_LIMIT - 1).ignore();
+        let _: () = pipe.query_async(&mut *conn).await?;
         Ok(())
     }
 
@@ -858,12 +1041,22 @@ impl SubscriptionRepository {
     /// the one outcome the user cannot observe, since nothing reports a work that was never offered.
     /// A work that was instead *handled* (queued, approved, discarded) is deliberately absent here:
     /// that decision was the user's, and reconsidering it would re-offer what they already answered.
+    ///
+    /// Only the first rejection's time is kept, so re-rejecting does not extend the
+    /// [`RECONSIDER_DAYS`] window.
     pub async fn mark_rejected(&self, subscription_id: &str, sources: &[String]) -> Result<()> {
         if sources.is_empty() {
             return Ok(());
         }
         let mut conn = self.pool.get().await?;
-        let _: () = conn.sadd(rejected_key(subscription_id), sources).await?;
+        migrate_rejected(&mut conn, subscription_id).await?;
+        let at = now_ms();
+        let mut pipe = deadpool_redis::redis::pipe();
+        for source in sources {
+            pipe.hset_nx(rejected_at_key(subscription_id), source, at)
+                .ignore();
+        }
+        let _: () = pipe.query_async(&mut *conn).await?;
         Ok(())
     }
 
@@ -874,15 +1067,48 @@ impl SubscriptionRepository {
             return Ok(());
         }
         let mut conn = self.pool.get().await?;
-        let _: () = conn.srem(rejected_key(subscription_id), sources).await?;
+        migrate_rejected(&mut conn, subscription_id).await?;
+        let _: () = conn.hdel(rejected_at_key(subscription_id), sources).await?;
         Ok(())
     }
 
-    /// Every work this subscription may consider again. Read once per cycle, alongside the seen set.
+    /// Every work this subscription may consider again: rejected less than [`RECONSIDER_DAYS`] ago.
+    /// Read once per cycle, alongside the seen set.
     pub async fn rejected_all(&self, subscription_id: &str) -> Result<Vec<String>> {
         let mut conn = self.pool.get().await?;
-        let members: Vec<String> = conn.smembers(rejected_key(subscription_id)).await?;
-        Ok(members)
+        migrate_rejected(&mut conn, subscription_id).await?;
+        let all: std::collections::HashMap<String, i64> =
+            conn.hgetall(rejected_at_key(subscription_id)).await?;
+        let cutoff = now_ms() - RECONSIDER_DAYS * 86_400_000;
+        let mut out: Vec<String> = all
+            .into_iter()
+            .filter(|(_, at)| *at >= cutoff)
+            .map(|(source, _)| source)
+            .collect();
+        out.sort();
+        Ok(out)
+    }
+
+    /// Drops rejections older than `cutoff_ms` from the reconsiderable set; they stay seen. Returns
+    /// how many went.
+    pub async fn prune_rejected_before(
+        &self,
+        subscription_id: &str,
+        cutoff_ms: i64,
+    ) -> Result<usize> {
+        let mut conn = self.pool.get().await?;
+        migrate_rejected(&mut conn, subscription_id).await?;
+        let key = rejected_at_key(subscription_id);
+        let all: std::collections::HashMap<String, i64> = conn.hgetall(&key).await?;
+        let stale: Vec<String> = all
+            .into_iter()
+            .filter(|(_, at)| *at < cutoff_ms)
+            .map(|(source, _)| source)
+            .collect();
+        if !stale.is_empty() {
+            let _: () = conn.hdel(&key, &stale).await?;
+        }
+        Ok(stale.len())
     }
 
     /// Settles works by the user's own decision: never downloaded again, and never reconsidered.
@@ -901,7 +1127,8 @@ impl SubscriptionRepository {
         let mut conn = self.pool.get().await?;
         let _: () = conn.sadd(seen_key(subscription_id), sources).await?;
         // Also drops any provisional rejection it carried: an answered "no" outranks a guessed one.
-        let _: () = conn.srem(rejected_key(subscription_id), sources).await?;
+        migrate_rejected(&mut conn, subscription_id).await?;
+        let _: () = conn.hdel(rejected_at_key(subscription_id), sources).await?;
         // Recorded so the block can be *listed* — and therefore undone — rather than being
         // indistinguishable from every other seen work.
         let at = now_ms().to_string();
@@ -1027,7 +1254,8 @@ impl SubscriptionRepository {
         }
         let mut conn = self.pool.get().await?;
         let _: () = conn.srem(seen_key(subscription_id), sources).await?;
-        let _: () = conn.srem(rejected_key(subscription_id), sources).await?;
+        migrate_rejected(&mut conn, subscription_id).await?;
+        let _: () = conn.hdel(rejected_at_key(subscription_id), sources).await?;
         // A blocked work that is being reconsidered stops being blocked, by definition — and a
         // skipped one stops being skipped.
         let _: () = conn.hdel(blocked_key(subscription_id), sources).await?;
@@ -1044,6 +1272,7 @@ impl SubscriptionRepository {
         let mut conn = self.pool.get().await?;
         let _: () = conn.del(seen_key(subscription_id)).await?;
         let _: () = conn.del(rejected_key(subscription_id)).await?;
+        let _: () = conn.del(rejected_at_key(subscription_id)).await?;
         let _: () = conn.del(blocked_key(subscription_id)).await?;
         let _: () = conn.del(skipped_key(subscription_id)).await?;
         Ok(())
@@ -1412,6 +1641,89 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    /// A reconsiderable set written before rejections carried a time is moved over on first touch,
+    /// and a rejection past `RECONSIDER_DAYS` stops being reconsiderable.
+    #[tokio::test]
+    async fn old_rejections_migrate_and_expire() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let id = "sub-rejected-migrate";
+        let repo = SubscriptionRepository::new(pool.clone());
+        let source = "e-hentai.org/g/9201/aaaaaaaaaa".to_string();
+        {
+            let mut conn = pool.get().await.unwrap();
+            let _: () = conn.del(rejected_at_key(id)).await.unwrap();
+            let _: () = conn.sadd(rejected_key(id), &source).await.unwrap();
+        }
+        assert_eq!(repo.rejected_all(id).await.unwrap(), vec![source.clone()]);
+        {
+            let mut conn = pool.get().await.unwrap();
+            let old: bool = conn.exists(rejected_key(id)).await.unwrap();
+            assert!(!old, "the plain set is gone once migrated");
+            // Dated past the reconsideration window.
+            let stale = now_ms() - (RECONSIDER_DAYS + 1) * 86_400_000;
+            let _: () = conn
+                .hset(rejected_at_key(id), &source, stale)
+                .await
+                .unwrap();
+        }
+        assert!(repo.rejected_all(id).await.unwrap().is_empty());
+        assert_eq!(
+            repo.prune_rejected_before(id, now_ms() - 86_400_000)
+                .await
+                .unwrap(),
+            1
+        );
+        repo.delete(id).await.unwrap();
+    }
+
+    /// The first summary trims the full-detail cycles written before summaries; later ones only roll
+    /// the list.
+    #[tokio::test]
+    async fn the_first_summary_trims_legacy_cycles() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let id = "sub-cycles-migrate";
+        let repo = SubscriptionRepository::new(pool.clone());
+        repo.delete(id).await.unwrap();
+        let cycle = |seq: Option<u64>| CheckCycle {
+            id: format!("c-{seq:?}"),
+            subscription_id: id.to_string(),
+            started_at: 0,
+            finished_at: 0,
+            outcome: CycleOutcome::Completed,
+            candidates_seen: 0,
+            seq,
+            verdict_counts: Default::default(),
+            candidates: Vec::new(),
+        };
+        for _ in 0..20 {
+            repo.record_cycle(&cycle(None)).await.unwrap();
+        }
+        assert_eq!(repo.recent_cycles(id, 100).await.unwrap().len(), 20);
+        let seq = repo.next_cycle_seq(id).await.unwrap();
+        repo.record_cycle_with_snapshot(&cycle(Some(seq)), &[], &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            repo.recent_cycles(id, 100).await.unwrap().len(),
+            LEGACY_CYCLES_KEPT as usize + 1
+        );
+        let seq = repo.next_cycle_seq(id).await.unwrap();
+        repo.record_cycle_with_snapshot(&cycle(Some(seq)), &[], &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            repo.recent_cycles(id, 100).await.unwrap().len(),
+            LEGACY_CYCLES_KEPT as usize + 2
+        );
+        repo.delete(id).await.unwrap();
     }
 
     /// Clearing everything is a separate request from forgetting named works: on a long-running

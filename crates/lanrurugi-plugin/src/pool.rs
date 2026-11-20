@@ -537,6 +537,23 @@ impl PluginPool {
         Ok(Some(serde_json::from_value(value)?))
     }
 
+    /// Re-reads specific works straight from the source, without paging a listing.
+    ///
+    /// For a plugin declaring the `refresh_sources` capability. `args` is the same signed-in
+    /// criteria object `discover` gets, plus `sources`. `Ok(None)` when the plugin has no such
+    /// export.
+    pub async fn refresh_sources(
+        &self,
+        namespace: &str,
+        args: serde_json::Value,
+    ) -> Result<Option<DiscoveryResult>> {
+        let value = self.execute(namespace, "refresh_sources", args).await?;
+        if value.is_null() {
+            return Ok(None);
+        }
+        Ok(Some(serde_json::from_value(value)?))
+    }
+
     /// Executes `method` against `namespace`'s persistent worker, starting it (with exactly its
     /// declared permissions) on first use, and respawning it if the plugin file's `mtime` has
     /// advanced since (a running worker never reloads its module on its own).

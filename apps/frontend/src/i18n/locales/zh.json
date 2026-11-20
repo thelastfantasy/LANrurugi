@@ -2179,6 +2179,7 @@
   "subscriptions.outcomeDownloadFailed": "下载失败",
   "subscriptions.verdictSuperseded": "库中已有更新的版本（{{source}}）",
   "subscriptions.ratingValue": "评分：{{rating}}",
+  "subscriptions.ratingRuleHint": "站点上的平均分（两位小数，如 4.01）。还没人投票的作品算未评定：评分条件会等有票后再判定，不会直接拒掉。",
   "subscriptions.openSource": "打开源链接",
   "pluginWizard.type.discovery": "发现（订阅来源）",
   "pluginWizard.sharedLinksHintDiscovery": "链接（每行一个；只选发现类型时至少 1 个）——发现插件要回答的是“这个站点上现有哪些作品”，所以这里填**列表页/搜索页 URL 或作者名**：看起来像 URL 的会被当作列表页探测，其余当作作者名探测；一份都不填也可以（会做一次不带过滤的列表探测）。AI 会实际抓取这些页面来分析真实结构。",
