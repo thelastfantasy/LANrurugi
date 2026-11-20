@@ -4,3 +4,4 @@
 
 - [修改已存储的记录](data-writes.md)
 - [Issue / PR 标签](labels.md)
+- [发布新版本](release.md)
