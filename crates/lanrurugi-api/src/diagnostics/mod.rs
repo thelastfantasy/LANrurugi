@@ -123,7 +123,7 @@ pub fn init_server_capture() {
         .and_then(|value| value.trim().parse::<f32>().ok())
         .map(|rate| rate.clamp(0.0, 1.0))
         .unwrap_or(0.01);
-    options = options.traces_sample_rate(trace_rate);
+    options = options.traces_sampler(move |context| transaction_rate(context.name(), trace_rate));
     let _ = CAPTURE_RUNTIME.set(tokio::runtime::Handle::current());
     let _ = CAPTURE_GUARD.set(sentry::init(options));
     // Release health: one session per process lifetime is what puts this deployment's release on
@@ -139,6 +139,19 @@ pub fn init_server_capture() {
             scope.set_tag("release", release);
         }
     });
+}
+
+/// Routes that are never traced. The ingest route: each of its transactions would be posted
+/// through the same route, a loop of one request per second while a forwarding window was open
+/// (#282). The health probe: polled by the container runtime, it was most of a dev project's
+/// transactions and says nothing about performance.
+fn transaction_rate(name: &str, rate: f32) -> f32 {
+    let untraced = name.contains(" /api/diagnostics/envelope") || name.ends_with(" /health");
+    if untraced {
+        0.0
+    } else {
+        rate
+    }
 }
 
 /// Records a 5xx response as one event. Handlers answer with a `Response` (not `Result`), so a
@@ -1648,5 +1661,22 @@ pub async fn envelope(State(state): State<AppState>, body: axum::body::Bytes) ->
             "diagnostics_envelope",
             message,
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::transaction_rate;
+
+    #[test]
+    fn ingest_route_is_never_traced() {
+        assert_eq!(transaction_rate("POST /api/diagnostics/envelope", 1.0), 0.0);
+        assert_eq!(
+            transaction_rate("POST /api/diagnostics/envelope/", 1.0),
+            0.0
+        );
+        assert_eq!(transaction_rate("GET /health", 1.0), 0.0);
+        assert_eq!(transaction_rate("GET /api/archives", 1.0), 1.0);
+        assert_eq!(transaction_rate("GET /api/archives", 0.01), 0.01);
     }
 }

@@ -95,7 +95,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     if (gallery_id === '' || gallery_token === '') {
       let file_error = 'Skipping archive without connecting to EH, because the archive title does not have valid ' + 'gallery identifiers from Mayriad\'s EH Master Script.';
       logger.error(file_error);
-      throw new PluginErrorException(file_error);
+      throw new PluginSkipException(file_error);
     }
   }
   logger.info('Source identified. Calling E-Hentai metadata plugin to retrieve metadata from EH API.');
@@ -108,6 +108,8 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   } else {
     let source_error = 'No matching EH gallery found. The archive title may have incorrect gallery identifiers.';
     logger.error(source_error);
+    // The title carries gallery identifiers, so this is the archive's own gallery failing to
+    // answer: a failure, not an archive from somewhere else.
     throw new PluginErrorException(source_error);
   }
 }
@@ -146,6 +148,9 @@ async function get_json_from_EH(ua: any, gID: any, gToken: any) {
   let uri = 'https://api.e-hentai.org/api.php';
   let logger = legacyCompat.getLogger("Mayriad's EH Master Script", "plugins");
   let rep = (await ua.post(uri, "json", {method: "gdata", gidlist: [[gID, gToken]], namespace: 1})).result;
+  if (rep.is_error) {
+    throw new PluginErrorException(`E-H API request failed (HTTP ${rep.code})`);
+  }
   let textrep = rep.body;
   logger.debug(`E-H API returned this JSON: ${textrep}`);
   let jsonresponse = rep.json;

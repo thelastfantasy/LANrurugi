@@ -325,6 +325,7 @@ export const QUICK_FILTERS: readonly QuickFilter[] = [
   { token: "read:>=100%", hint: "library.quickFilterHintReadAtLeast100" },
   { token: "is:incomplete", hint: "library.quickFilterHintIsIncomplete" },
   { token: "is:untagged", hint: "library.quickFilterHintIsUntagged" },
+  { token: "is:damaged", hint: "library.quickFilterHintIsDamaged" },
   // `has:` — associated state.
   { token: "has:patch", hint: "library.quickFilterHintHasPatch" },
   { token: "has:bookmark", hint: "library.quickFilterHintHasBookmark" },

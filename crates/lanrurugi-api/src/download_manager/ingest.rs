@@ -62,6 +62,84 @@ pub enum IngestDownloadError {
         existing_id: String,
         filename: String,
     },
+    /// What arrived is not an archive with pages — typically a web page the server answered with
+    /// (a "still being prepared" notice) under a 200. Refused before cataloguing (#300); the bytes
+    /// are dropped, so a retry downloads again.
+    #[error("the downloaded file is not an archive: {detail}")]
+    NotAnArchive {
+        detail: String,
+        /// The page's own text, when it was a web page: usually the server saying why.
+        page_excerpt: Option<String>,
+    },
+}
+
+/// Refuses a staged download that cannot be opened as an archive or has no pages. A library scan
+/// still catalogues such a file (with 0 pages) because it is already on disk; a download is not
+/// the user's file yet, and keeping it would only add a broken record (#300). A momentary I/O
+/// failure is not judged here — cataloguing reports that itself.
+fn check_is_archive(path: &std::path::Path) -> Result<(), IngestDownloadError> {
+    let detail = match lanrurugi_scanner::archive_format::list_pages(path) {
+        Ok(pages) if !pages.is_empty() => return Ok(()),
+        Ok(_) => "it contains no pages".to_string(),
+        Err(e) if !e.is_permanent() => return Ok(()),
+        Err(e) => e.to_string(),
+    };
+    let head = std::fs::read(path)
+        .map(|bytes| bytes.into_iter().take(64 * 1024).collect::<Vec<u8>>())
+        .unwrap_or_default();
+    Err(IngestDownloadError::NotAnArchive {
+        detail,
+        page_excerpt: html_excerpt(&head),
+    })
+}
+
+/// The visible text at the start of `bytes`, when they are an HTML page; `None` otherwise.
+pub(crate) fn html_excerpt(bytes: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(bytes);
+    let lower = text
+        .trim_start_matches('\u{feff}')
+        .trim_start()
+        .to_ascii_lowercase();
+    if !(lower.starts_with("<!doctype html")
+        || lower.starts_with("<html")
+        || lower.contains("<html"))
+    {
+        return None;
+    }
+    // Drop scripts and styles whole, then every tag, then collapse whitespace.
+    let mut out = String::new();
+    let mut rest = text.as_ref();
+    while let Some(start) = rest.find('<') {
+        out.push_str(&rest[..start]);
+        let tag = &rest[start..];
+        let lower_tag = tag.get(..8).unwrap_or(tag).to_ascii_lowercase();
+        let skip_to = if lower_tag.starts_with("<script") {
+            tag.to_ascii_lowercase()
+                .find("</script>")
+                .map(|i| i + "</script>".len())
+        } else if lower_tag.starts_with("<style") {
+            tag.to_ascii_lowercase()
+                .find("</style>")
+                .map(|i| i + "</style>".len())
+        } else {
+            tag.find('>').map(|i| i + 1)
+        };
+        match skip_to {
+            Some(n) => {
+                out.push(' ');
+                rest = &tag[n..];
+            }
+            None => {
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    let collapsed = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+    Some(collapsed.chars().take(300).collect())
 }
 
 /// Converts to the structured, translatable `QueueError` the frontend actually renders — logs
@@ -134,6 +212,16 @@ impl From<&IngestDownloadError> for lanrurugi_core::queue_error::QueueError {
                 existing_id: existing_id.clone(),
                 reason: (*reason).into(),
             },
+            IngestDownloadError::NotAnArchive {
+                detail,
+                page_excerpt,
+            } => {
+                tracing::warn!(%detail, excerpt = ?page_excerpt, "downloaded file is not an archive");
+                QueueError::DownloadedNotArchive {
+                    detail: detail.clone(),
+                    page_excerpt: page_excerpt.clone(),
+                }
+            }
             IngestDownloadError::PendingRename(conflict) => QueueError::DuplicateFilename {
                 existing_id: conflict.existing_id.clone(),
                 filename: conflict.original_filename.clone(),
@@ -276,16 +364,21 @@ pub(crate) async fn record_ingest_result(
 /// the same content is replaced (`DuplicatePolicy::Overwrite`) or reported
 /// (`DuplicatePolicy::Reject`).
 ///
-/// `_queue_item_id` is kept for the call sites that still carry the queue item id; ingestion no
-/// longer needs it now that nothing stages a filename conflict.
+/// `queue_item_id` is what a "delete and download again" restore is keyed by: when this item is the
+/// one that recorded a plan, the archive goes back into its Tankoubons once it is catalogued.
 pub async fn ingest_downloaded_file(
     state: &AppState,
     downloaded: &DownloadedFile,
     overwrite: bool,
     source_url: Option<&str>,
-    _queue_item_id: Option<&str>,
+    queue_item_id: Option<&str>,
 ) -> Result<IngestedDownload, IngestDownloadError> {
-    ingest_staged_download(state, downloaded, overwrite, source_url, false).await
+    let ingested = ingest_staged_download(state, downloaded, overwrite, source_url, false).await?;
+    if let Some(item_id) = queue_item_id {
+        let archive_id = lanrurugi_core::ids::ArchiveId(ingested.archive_id.clone());
+        crate::redownload_restore::apply(state, item_id, &archive_id).await;
+    }
+    Ok(ingested)
 }
 
 /// [`ingest_downloaded_file`] for an upload, which runs a second plugin pass for the user's own
@@ -306,6 +399,10 @@ async fn ingest_staged_download(
     source_url: Option<&str>,
     defer_publication: bool,
 ) -> Result<IngestedDownload, IngestDownloadError> {
+    let staged = downloaded.path.clone();
+    lanrurugi_core::concurrency::run_blocking(move || check_is_archive(&staged))
+        .await
+        .map_err(|e| IngestDownloadError::Io(std::io::Error::other(e.to_string())))??;
     let duplicate_policy = if overwrite {
         DuplicatePolicy::Overwrite
     } else {
@@ -443,24 +540,19 @@ pub(crate) async fn catalogue_staged_file(
         }
         // A record without bytes (an interrupted overwrite, or a restored dump): adopt the copy
         // just made instead of leaving a record pointing at nothing.
-        if let Some(parent) = dest.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(IngestDownloadError::Io)?;
-        }
         if let Err(e) = rename_into_bucket(&incoming, &dest).await {
             undo.failed(&incoming).await;
             return Err(e);
         }
-        let mut repaired = existing;
-        repaired.file = dest.to_string_lossy().to_string();
-        if repaired.blake3.is_none() {
-            repaired.blake3 = fingerprint.clone();
-        }
         state
             .repos
             .archives
-            .save(&repaired)
+            .update(&existing.id, |a| {
+                a.file = dest.to_string_lossy().to_string();
+                if a.blake3.is_none() {
+                    a.blake3 = fingerprint.clone();
+                }
+            })
             .await
             .map_err(|e| IngestDownloadError::Io(std::io::Error::other(e)))?;
         undo.succeeded().await;
@@ -480,13 +572,6 @@ pub(crate) async fn catalogue_staged_file(
     let hidden_id = id.clone();
     let mut pending = crate::visibility::PendingGuard::new(state, id.as_str());
 
-    if let Some(parent) = dest.parent() {
-        if let Err(e) = tokio::fs::create_dir_all(parent).await {
-            pending.publish().await;
-            undo.failed(&incoming).await;
-            return Err(IngestDownloadError::Io(e));
-        }
-    }
     // `dest` can still exist without a record: an ingest killed between its rename and its save.
     // The bytes are identical by construction (the id is a hash of them), so replacing it is right;
     // a directory or other non-file in the way is a real error.
@@ -600,67 +685,57 @@ pub(crate) async fn catalogue_staged_file(
     const RETRIES: u32 = 3;
     const BACKOFF_MS: [u64; RETRIES as usize] = [200, 500, 1000];
     for (i, &delay) in BACKOFF_MS.iter().enumerate() {
-        match state.repos.archives.get(&archive_id).await {
-            Ok(Some(mut archive)) => {
-                archive.file = dest.to_string_lossy().to_string();
-                // Indexing below diffs against this: without the diff, the appended `source:`
-                // would never get its `INDEX_source:…` set and `source:` search would not find it.
-                let old_tags = archive.tags.clone();
-                // `None` for a local upload (its callers pass the queue item's own filename-as-`url`
-                // through nothing — see `upload.rs`/`download_queue.rs::resolve_conflict`) — there's no
-                // real external source for a file the user picked off their own disk, so stamping one
-                // would be fabricated data, not metadata. Legacy's own `Utils::Minion::download_url` task
-                // (verified against source) computes `$og_url = trim_url($url)` from the URL the *user
-                // originally gave* (the gallery page, never whatever internal download link a plugin
-                // transformed it into) and passes `"source:$og_url"` into `handle_incoming_file` *before*
-                // cataloguing — this is host-side download-task code, not something a metadata plugin adds
-                // itself, and has no equivalent at all for an upload. Appended here (not a blind overwrite)
-                // since a plugin's own `execDownload` could in principle have already supplied tags via
-                // some other path; deduped the same way `set_tags(..., append=1)` does.
-                if let Some(source_url) = source_url {
-                    let source_tag = format!("source:{}", crate::plugins::trim_url(source_url));
-                    if !archive.tags.split(',').any(|t| t.trim() == source_tag) {
-                        archive.tags = if archive.tags.is_empty() {
-                            source_tag
-                        } else {
-                            format!("{},{source_tag}", archive.tags)
-                        };
-                    }
-                }
-                match state.repos.archives.save(&archive).await {
-                    Ok(()) => {
-                        if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
-                            &state.redis.search,
-                            &state.equivalence,
-                            archive_id.as_str(),
-                            &old_tags,
-                            &archive.tags,
-                        )
-                        .await
-                        {
-                            tracing::warn!(%archive_id, error = %e, "failed to index the download source tag");
+        // Re-indexed from the old tags, under the lock: without the diff, the appended `source:`
+        // would never get its `INDEX_source:…` set and `source:` search would not find it.
+        let updated = state
+            .repos
+            .archives
+            .update_then(
+                &archive_id,
+                |archive| {
+                    archive.file = dest.to_string_lossy().to_string();
+                    // `None` for a local upload (its callers pass the queue item's own filename-as-`url`
+                    // through nothing — see `upload.rs`/`download_queue.rs::resolve_conflict`) — there's no
+                    // real external source for a file the user picked off their own disk, so stamping one
+                    // would be fabricated data, not metadata. Legacy's own `Utils::Minion::download_url` task
+                    // (verified against source) computes `$og_url = trim_url($url)` from the URL the *user
+                    // originally gave* (the gallery page, never whatever internal download link a plugin
+                    // transformed it into) and passes `"source:$og_url"` into `handle_incoming_file` *before*
+                    // cataloguing — this is host-side download-task code, not something a metadata plugin adds
+                    // itself, and has no equivalent at all for an upload. Appended here (not a blind overwrite)
+                    // since a plugin's own `execDownload` could in principle have already supplied tags via
+                    // some other path; deduped the same way `set_tags(..., append=1)` does.
+                    if let Some(source_url) = source_url {
+                        // The URL this download actually came from is the one known to work.
+                        archive.primary_source = Some(crate::plugins::trim_url(source_url));
+                        let source_tag = format!("source:{}", crate::plugins::trim_url(source_url));
+                        if !archive.tags.split(',').any(|t| t.trim() == source_tag) {
+                            archive.tags = if archive.tags.is_empty() {
+                                source_tag
+                            } else {
+                                format!("{},{source_tag}", archive.tags)
+                            };
                         }
-                        break;
                     }
-                    Err(e) if i + 1 < RETRIES as usize => {
-                        tracing::warn!(%archive_id, attempt = i + 1, delay_ms = delay, error = %e, "failed to fix up archive file path, retrying");
-                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                    }
-                    Err(e) => {
-                        tracing::error!(%archive_id, error = %e, "failed to fix up archive file path after {RETRIES} attempts — startup zombie sweep will repair");
-                    }
-                }
+                },
+                |old, new| crate::archives::reindex_title_and_tags(state, old, new),
+            )
+            .await;
+        match updated {
+            Ok(Some(archive)) => {
+                crate::download_sources::sync_sidecar_primary(state, &archive).await;
+                break;
             }
             Ok(None) => {
                 tracing::error!(%archive_id, "archive record vanished during file-path fixup");
                 break;
             }
             Err(e) if i + 1 < RETRIES as usize => {
-                tracing::warn!(%archive_id, attempt = i + 1, delay_ms = delay, error = %e, "failed to load archive for file-path fixup, retrying");
+                tracing::warn!(%archive_id, attempt = i + 1, delay_ms = delay, error = %e, "failed to fix up archive file path, retrying");
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
             Err(e) => {
-                tracing::error!(%archive_id, error = %e, "failed to load archive for file-path fixup after {RETRIES} attempts — startup zombie sweep will repair");
+                tracing::error!(%archive_id, error = %e, "failed to fix up archive file path after {RETRIES} attempts — startup zombie sweep will repair");
             }
         }
     }
@@ -673,7 +748,12 @@ pub(crate) async fn catalogue_staged_file(
     // before ever reaching here), so no extra `is_new` guard is needed. Runs *after* the source
     // tag above is saved, so a plugin like `mems.ts`/`ehentai.ts` that falls back to parsing
     // `existing_tags` for a `source:` tag actually finds the one just added.
-    crate::plugins::run_enabled_metadata_plugins_on_archive(state, archive_id.as_str()).await;
+    // Skipped when the caller defers publication: that caller (the upload path) runs its own
+    // plugin pass *after* the user's own title/tags are saved — which is the pass whose results
+    // actually matter — so running one here as well made every upload pay for two full passes.
+    if !defer_publication {
+        crate::plugins::run_enabled_metadata_plugins_on_archive(state, archive_id.as_str()).await;
+    }
 
     // Published: the archive now carries whatever the plugins found (a failure inside the run is
     // already non-fatal and logged there). An upload publishes after its own second plugin pass.
@@ -685,6 +765,22 @@ pub(crate) async fn catalogue_staged_file(
 
     // The record exists and its file is flushed, so a source left by a copy is redundant now.
     undo.succeeded().await;
+
+    // A file that catalogued with no pages is one the reader cannot open, and this is the moment
+    // every upload, download and share import passes through — the damaged list learns about it
+    // here instead of waiting for a scan. Cheap: one record read, and nothing is written unless
+    // the count really is zero.
+    if let Ok(Some(record)) = state.repos.archives.get(&archive_id).await {
+        if record.pagecount == 0 {
+            crate::integrity_scan::note_damage(
+                state,
+                &record,
+                crate::integrity_scan::Problem::NoPages,
+                "catalogued with no readable pages".to_string(),
+            )
+            .await;
+        }
+    }
 
     Ok(IngestedDownload {
         archive_id: archive_id.into_string(),
@@ -964,8 +1060,10 @@ impl Undo<'_> {
 
 /// Renames the flushed `.ingest-*` copy into its bucket and flushes the bucket directory, so the
 /// record written next never points at a name a crash could lose (027 FR-003).
+/// Creates the bucket directory itself (`fsutil::in_dir`): a prune of empty buckets can remove it
+/// between creating it and the rename.
 async fn rename_into_bucket(incoming: &Path, dest: &Path) -> Result<(), IngestDownloadError> {
-    tokio::fs::rename(incoming, dest)
+    lanrurugi_storage::fsutil::in_dir(dest, || tokio::fs::rename(incoming, dest))
         .await
         .map_err(IngestDownloadError::Io)?;
     if let Some(parent) = dest.parent() {
@@ -1189,6 +1287,54 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    /// #300: an E-Hentai "still being prepared" page saved under the archive's `.zip` name.
+    const PREPARING_PAGE: &str = "<!DOCTYPE html><html><head><title>Archiver</title><style>div{margin:0}</style></head><body><p>The file is already being processed. Please contact staff if it is not ready within a few minutes.</p><script>function gotonext(){document.location = \"/archive/1/x/2\";}</script></body></html>";
+
+    #[test]
+    fn a_web_page_reads_back_as_its_visible_text() {
+        let excerpt = html_excerpt(PREPARING_PAGE.as_bytes()).unwrap();
+        assert!(
+            excerpt.starts_with("Archiver The file is already being processed."),
+            "{excerpt}"
+        );
+        assert!(
+            !excerpt.contains("gotonext") && !excerpt.contains("margin"),
+            "{excerpt}"
+        );
+        assert_eq!(html_excerpt(b"PK\x03\x04 not a page"), None);
+    }
+
+    /// #300: a download that is not an archive is refused before anything is catalogued.
+    #[tokio::test]
+    async fn a_web_page_saved_as_a_zip_is_refused_before_cataloguing() {
+        let root = tempfile::tempdir().unwrap();
+        let Some(state) = state_with_temp_dirs(root.path()).await else {
+            return;
+        };
+        let path = state.library.temp_dir.join("3313403_token.zip");
+        std::fs::write(&path, PREPARING_PAGE).unwrap();
+        let downloaded = crate::download_manager::stream::DownloadedFile {
+            path: path.clone(),
+            filename: "3313403_token.zip".into(),
+            bytes_downloaded: PREPARING_PAGE.len() as u64,
+            blake3: None,
+        };
+
+        let outcome = ingest_downloaded_file(&state, &downloaded, false, None, None).await;
+
+        match outcome {
+            Err(IngestDownloadError::NotAnArchive { page_excerpt, .. }) => {
+                assert!(page_excerpt.unwrap().contains("already being processed"));
+            }
+            other => panic!("expected NotAnArchive, got {:?}", other.as_ref().err()),
+        }
+        let catalogued: Vec<_> = std::fs::read_dir(&state.library.archive_dir)
+            .unwrap()
+            .flatten()
+            .collect();
+        assert!(catalogued.is_empty(), "nothing reaches the library");
     }
 
     /// 027 US3: a copied file is checked against the fingerprint taken when it arrived.
@@ -1597,37 +1743,29 @@ async fn stamp_source_tag(state: &AppState, archive_id: &str, source_url: Option
         return;
     };
     let source_tag = format!("source:{}", crate::plugins::trim_url(source_url));
-    let Ok(Some(mut archive)) = state
+    let updated = state
         .repos
         .archives
-        .get(&ArchiveId(archive_id.to_string()))
-        .await
-    else {
-        return;
-    };
-    if archive.tags.split(',').any(|t| t.trim() == source_tag) {
-        return;
-    }
-    let old_tags = archive.tags.clone();
-    archive.tags = if archive.tags.is_empty() {
-        source_tag
-    } else {
-        format!("{},{source_tag}", archive.tags)
-    };
-    if let Err(e) = state.repos.archives.save(&archive).await {
-        tracing::warn!(archive_id, error = %e, "failed to stamp the download source tag");
-        return;
-    }
-    if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
-        &state.redis.search,
-        &state.equivalence,
-        archive_id,
-        &old_tags,
-        &archive.tags,
-    )
-    .await
-    {
-        tracing::warn!(archive_id, error = %e, "failed to index a stamped download source tag");
+        .update_then(
+            &ArchiveId(archive_id.to_string()),
+            |archive| {
+                archive.primary_source = Some(crate::plugins::trim_url(source_url));
+                if archive.tags.split(',').any(|t| t.trim() == source_tag) {
+                    return;
+                }
+                archive.tags = if archive.tags.is_empty() {
+                    source_tag
+                } else {
+                    format!("{},{source_tag}", archive.tags)
+                };
+            },
+            |old, new| crate::archives::reindex_title_and_tags(state, old, new),
+        )
+        .await;
+    match updated {
+        Ok(Some(archive)) => crate::download_sources::sync_sidecar_primary(state, &archive).await,
+        Ok(None) => {}
+        Err(e) => tracing::warn!(archive_id, error = %e, "failed to stamp the download source tag"),
     }
 }
 

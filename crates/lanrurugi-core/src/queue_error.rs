@@ -201,6 +201,13 @@ pub enum QueueError {
         expected_blake3: String,
         actual_blake3: String,
     },
+    /// #300: what the download produced is not an archive with pages — usually a web page the
+    /// server sent under a 200 ("the file is still being prepared"). `page_excerpt` is that page's
+    /// own text, which is what tells the user why. Nothing was catalogued; a retry downloads again.
+    DownloadedNotArchive {
+        detail: String,
+        page_excerpt: Option<String>,
+    },
     /// 027 FR-014: strict verification read a block back from the library and it differed from
     /// what was written. The source is kept.
     VerifyReadbackMismatch {
@@ -242,6 +249,44 @@ impl QueueError {
             QueueError::DurabilityFailed { .. } => 1015,
             QueueError::StagedContentCorrupted { .. } => 1016,
             QueueError::VerifyReadbackMismatch { .. } => 1017,
+            QueueError::DownloadedNotArchive { .. } => 1018,
+        }
+    }
+
+    /// Whether downloading the same URL again could end differently. `false` for an outcome the
+    /// library or the source has already settled (it is already held, a newer revision is, the
+    /// URL itself is invalid) and for one that needs a choice rather than a retry (a filename
+    /// conflict). Exhaustive on purpose: a new kind has to decide.
+    pub fn retryable(&self) -> bool {
+        match self {
+            QueueError::PluginReported { .. }
+            | QueueError::PluginExecutionFailed { .. }
+            | QueueError::MalformedPluginResponse { .. }
+            | QueueError::EmptyPluginResult { .. }
+            | QueueError::HttpRequestFailed { .. }
+            | QueueError::HttpStatus { .. }
+            | QueueError::WriteFailed
+            | QueueError::BundleFailed
+            | QueueError::TruncatedDownload { .. }
+            | QueueError::EgressUnavailable { .. }
+            | QueueError::SourceDownloadInProgress
+            | QueueError::IngestFailed { .. }
+            | QueueError::Internal
+            | QueueError::StaleAfterRestart
+            | QueueError::DuplicateFilenameCleaned { .. }
+            | QueueError::ShareImport { .. }
+            | QueueError::CopyLengthMismatch { .. }
+            | QueueError::DurabilityFailed { .. }
+            | QueueError::StagedContentCorrupted { .. }
+            | QueueError::VerifyReadbackMismatch { .. }
+            | QueueError::DownloadedNotArchive { .. } => true,
+            QueueError::InvalidUrl { .. }
+            | QueueError::InvalidHttpMethod { .. }
+            | QueueError::DuplicateArchive { .. }
+            | QueueError::DuplicateFilename { .. }
+            | QueueError::AlreadyPatched { .. }
+            | QueueError::SourceAlreadyImported { .. }
+            | QueueError::SupersededByNewerRevision { .. } => false,
         }
     }
 }
@@ -249,6 +294,24 @@ impl QueueError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_settled_outcome_is_not_offered_a_retry() {
+        assert!(!QueueError::SourceAlreadyImported {
+            existing_id: "a".into()
+        }
+        .retryable());
+        assert!(!QueueError::SupersededByNewerRevision {
+            archive_id: "a".into()
+        }
+        .retryable());
+        assert!(QueueError::HttpStatus {
+            status: 503,
+            url: "u".into()
+        }
+        .retryable());
+        assert!(QueueError::StaleAfterRestart.retryable());
+    }
 
     #[test]
     fn code_covers_every_variant_with_a_stable_number() {

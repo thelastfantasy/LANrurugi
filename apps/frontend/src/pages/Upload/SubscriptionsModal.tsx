@@ -1,75 +1,132 @@
 import type { TFunction } from "i18next"
-import { useMemo, useState } from "react"
+import { type CSSProperties, Fragment, useCallback, useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import {
-  useDownloadQueue,
+  useBlockedWorks,
+  useBlockSubscriptionSources,
+  useDiscardReservation,
+  useForgetSeen,
   usePendingApprovals,
   useReservations,
+  useRetryReservation,
   useSettings,
   useStartQueueItem,
+  useSubscriptionFailedCount,
+  useSubscriptionHistory,
   useSubscriptions,
+  useUnskipSubscriptionSources,
   useUpdateSettings,
 } from "@/api/hooks"
-import type { DownloadQueueItem, DownloadQueueState } from "@/api/types"
-import { Modal, Tooltip } from "@/components/common-ui/Display"
+import type { CandidateRecord, HistoryEntry, QueueError, ReservationListItem } from "@/api/types"
+import { Drawer, Modal, Tooltip } from "@/components/common-ui/Display"
+import { CheckboxField, Select } from "@/components/common-ui/Form"
 import { NumberInput } from "@/components/common-ui/Form/NumberInput"
+import { TagTable } from "@/components/Display/TagTable"
+import { QueueErrorText } from "@/components/Layout"
+import { useIsNarrowViewport } from "@/hooks"
+import { useLanguageOrder } from "@/i18n/useLanguageOrder"
 import { routes } from "@/lib/routes"
 import { FONT_SIZE_XS } from "@/theme"
 import { toast } from "@/toast"
 
-import { sourceHref } from "../Settings/preferredTitle"
-import { useIsTruncated } from "../Settings/SubscriptionPreview"
-import { PendingApprovals } from "../Settings/SubscriptionsSection"
-import { ReservationGroup } from "./ReservationGroup"
+import { CandidateTitleLink } from "../Settings/CandidateTitleLink"
+import { PendingApprovals } from "../Settings/PendingApprovals"
+import { SubscriptionGroupHead, useCollapsedGroups } from "../Settings/SubscriptionGroupHead"
+import {
+  PostedCell,
+  RatingCell,
+  SUBSCRIPTION_LIST_COLUMNS,
+  UploaderCell,
+} from "../Settings/SubscriptionPreview"
+import { groupBySubscription, reservationReasonText, tooSoonText } from "../Settings/subscriptionVerdicts"
+import { ICON_BUTTON_STYLE } from "./shared"
 
-/** A subscription's name, with a tooltip when the column is too narrow for it — the same treatment
- *  the preview gives a truncated uploader, so a clipped name is still readable (and copyable). */
-function SubscriptionName({ name }: { name: string }) {
-  const { ref, truncated } = useIsTruncated<HTMLSpanElement>()
-  const cell = (
-    // `display: block` on both the cell and the tooltip's own wrapper: an inline box reports a zero
-    // width, which is what makes a measurement-driven tooltip oscillate.
-    <span ref={ref} className="history-subscription" style={{ display: "block" }}>
-      {name}
-    </span>
-  )
-  if (!truncated) return cell
-  return (
-    <Tooltip label={name} zIndex={9700} wrapperStyle={{ display: "block", minWidth: 0 }}>
-      {cell}
-    </Tooltip>
-  )
-}
+export type SubscriptionsBand = "pending" | "all" | "match" | "failed" | "blocked"
+type Band = SubscriptionsBand
+/** In the order a match moves through them: waiting on you, everything, taken, did not download,
+ *  refused. */
+const BANDS: readonly Band[] = ["pending", "all", "match", "failed", "blocked"]
 
-/** Which band a queued record is drawn in — taken / still in flight / went wrong — reusing the
- *  preview's own three bands so a colour means the same thing here as everywhere else. */
-function bandOfState(state: DownloadQueueState): "match" | "waiting" | "excluded" {
-  switch (state) {
-    case "done":
+/** Icons rather than colours, so the state reads in every theme. */
+const STATE_ICON = { enabled: "fa-toggle-on", disabled: "fa-toggle-off", paused: "fa-circle-pause" } as const
+
+/** A failed row: a work that never reached the queue carries its reservation, one that failed in
+ *  the queue its queue item. Both are "download failed"; the reason says which. */
+type Row = HistoryEntry & { reservation?: ReservationListItem }
+
+/** Which band a candidate falls into — the same three the preview uses, so a verdict reads the same
+ *  wherever it appears. */
+function bandOf(record: CandidateRecord): "match" | "waiting" | "excluded" | "held" {
+  switch (record.verdict.verdict) {
+    case "queued":
+    case "awaiting_approval":
       return "match"
-    case "error":
-    case "cancelled":
-      return "excluded"
-    default:
+    case "too_soon":
       return "waiting"
+    // Already held (this work or a newer revision of it): a fact about the library, not a rejection.
+    case "already_held":
+    case "superseded":
+      return "held"
+    default:
+      return "excluded"
   }
 }
 
-const BAND_CLASS = {
+/** What actually became of an entry, once a download exists for it.
+ *
+ * The cycle records the *decision* ("queued"), which stops being the whole truth the moment the
+ * download finishes: a row that reads "added to the download queue" while the archive has already
+ * been catalogued is the modal contradicting the library. The outcome takes over as the label, and
+ * with it the band — green while it is still in flight, blue once it is in the library like any other
+ * already-held work, red if it failed. */
+function outcomeOf(entry: HistoryEntry): { key: string; band: keyof typeof ROW_CLASS } | null {
+  // Answered "no" from the approval list, and never queued: the cycle's "awaiting approval" is stale.
+  if (entry.skipped && !entry.download) return { key: "subscriptions.outcomeSkipped", band: "excluded" }
+  const state = entry.download?.state
+  switch (state) {
+    case "done":
+      return { key: "subscriptions.outcomeCatalogued", band: "held" }
+    case "error":
+      return { key: "subscriptions.outcomeDownloadFailed", band: "excluded" }
+    case "cancelled":
+      return { key: "upload.cancelled", band: "excluded" }
+    case "awaiting_revision_confirmation":
+      return { key: "subscriptions.verdictAwaitingApproval", band: "waiting" }
+    default:
+      return null
+  }
+}
+
+/** One Font Awesome class per queue state. Shape carries the state and the tooltip names it — no new
+ *  colours, so nothing here needs per-theme variants. */
+/** Green once the work is in the library, blue while it is still in flight (or failed — the shape
+ *  and the tooltip carry that, not the colour). */
+function stateIconClass(state: string): string {
+  return state === "done" ? "history-state-done" : "history-state-running"
+}
+
+const DOWNLOAD_STATE_ICON: Record<string, string> = {
+  done: "fa-check",
+  downloading: "fa-download",
+  starting: "fa-hourglass-start",
+  waiting: "fa-clock",
+  queued: "fa-clock",
+  error: "fa-exclamation-triangle",
+  cancelled: "fa-ban",
+  awaiting_revision_confirmation: "fa-question-circle",
+}
+
+const ROW_CLASS = {
   match: "preview-row-match",
   waiting: "preview-row-waiting",
   excluded: "preview-row-excluded",
+  held: "preview-row-held",
 } as const
 
-/** Only the states the queue itself offers a start button for. */
-function canRetry(state: DownloadQueueState): boolean {
-  return state === "error" || state === "cancelled"
-}
-
-/** A queue item's own state in one word, for a list that has no room for the queue's own progress
- * bars and buttons. `needsDecision` states are called what they are — the question, not the wait. */
-function stateLabel(state: DownloadQueueState, t: TFunction) {
+/** A queue item's own state in one word — the same vocabulary the subscription modal uses, so a
+ *  state reads the same wherever it appears. */
+function stateLabel(state: string, t: TFunction) {
   switch (state) {
     case "done":
       return t("upload.done")
@@ -89,188 +146,634 @@ function stateLabel(state: DownloadQueueState, t: TFunction) {
   }
 }
 
-/** What the subscriptions have matched, without leaving the queue those matches land in.
- *
- * The matched records rather than a list of the subscriptions themselves: the rules are
- * configuration, they live in Settings, and the counts above are already enough to know how many
- * there are. What this page's user cannot otherwise see is where each match ended up — still in the
- * download queue, waiting for a go-ahead, or set aside because it could not be fetched at all.
- * Those three are disjoint and together cover everything a rule matched, so the modal shows them in
- * that order. The full page is one click away, pinned to the bottom of the modal so it stays
- * reachable however long the lists get. */
-export function SubscriptionsModal({ onClose }: { onClose: () => void }) {
+function Verdict({ record }: { record: CandidateRecord }) {
   const { t } = useTranslation()
-  const subscriptions = useSubscriptions()
-  const queue = useDownloadQueue()
-  // Failed downloads are restartable, and the item is right here — hunting for it on the queue
-  // behind the modal is exactly the trip this list exists to save.
-  const retry = useStartQueueItem()
+  const v = record.verdict
+  switch (v.verdict) {
+    case "queued":
+      return <>{t("subscriptions.verdictQueued")}</>
+    case "awaiting_approval":
+      return <>{t("subscriptions.verdictAwaitingApproval")}</>
+    case "too_soon":
+      return <>{tooSoonText(t, v.reason)}</>
+    case "rejected":
+      return <>{t("subscriptions.verdictRejected", { rule: v.rule })}</>
+    case "reserved":
+      return <>{t("subscriptions.verdictReserved", { reason: v.reason })}</>
+    case "already_held":
+      return <>{t("subscriptions.verdictAlreadyHeld")}</>
+    case "superseded":
+      return (
+        <span style={{ opacity: 0.85 }}>
+          {t("subscriptions.verdictSuperseded", { source: v.newer_source })}
+        </span>
+      )
+    default:
+      return <>{t("subscriptions.verdictAlreadySeen")}</>
+  }
+}
+
+/** A "keep for N days" setting in the dialog's footer (`0` keeps everything). Saved shortly after the
+ *  value settles, not on blur: the input's stepper buttons change it without ever focusing the
+ *  input, so a blur-only save never fired for them. Leaving the field saves at once. */
+function RetentionField({
+  field,
+  icon,
+  label,
+  hint,
+}: {
+  field: "download_queue_retention_days" | "skipped_retention_days"
+  icon: string
+  label: string
+  hint: string
+}) {
+  const { t } = useTranslation()
   const settings = useSettings()
   const updateSettings = useUpdateSettings()
-  // Local draft so typing does not fire a request per keystroke; committed on blur. `null` means
-  // "follow the server", which is what the input shows until the user touches it.
-  const [retentionDraft, setRetentionDraft] = useState<number | null>(null)
-  const retentionDays = retentionDraft ?? settings.data?.download_queue_retention_days ?? 30
+  const [draft, setDraft] = useState<number | null>(null)
+  const saved = settings.data?.[field] ?? 30
+  const days = draft ?? saved
 
-  const pending = usePendingApprovals()
-  const reservations = useReservations()
-
-  const all = subscriptions.data ?? []
-  const waiting = pending.data?.length ?? 0
-  const reserved = reservations.data?.length ?? 0
-  // What the rules actually fetched: everyone forgets that an auto-downloading subscription never
-  // produces approvals, so "nothing waiting" reads as "nothing matched" unless the queued items are
-  // shown here too.
-  const queued = useMemo(
-    () =>
-      (queue.data ?? [])
-        .filter((i) => i.subscription_id)
-        .sort((a, b) => b.created_at - a.created_at),
-    [queue.data],
+  const commit = useCallback(
+    (value: number) => {
+      if (!settings.data || value === saved) {
+        setDraft(null)
+        return
+      }
+      // Leaving the field right after a pause would otherwise send the same value twice.
+      if (updateSettings.isPending) return
+      void updateSettings.mutateAsync({ [field]: value }).then(() => {
+        setDraft(null)
+        toast({ text: t("subscriptions.queueRetentionSaved") ?? undefined, icon: "success" })
+      })
+    },
+    [field, saved, settings.data, t, updateSettings],
   )
-  // Queue items are never pruned on their own — a `Done` one stays until someone deletes it or
-  // presses "clear completed" — so this list would otherwise grow without bound for as long as the
-  // server runs. Capped for reading, not truncated in storage: the count says how many there are, and
-  // the full queue (with its own delete affordances) is one modal away on the same page.
-  const QUEUE_RECORDS_SHOWN = 50
-  const shownQueued = queued.slice(0, QUEUE_RECORDS_SHOWN)
 
-  const nameOf = (id: string | null | undefined) =>
-    all.find((s) => s.id === id)?.name ?? t("upload.fromSubscriptionUnknown") ?? ""
+  // One save per pause, so a run of stepper clicks is one request.
+  useEffect(() => {
+    if (draft === null) return
+    const timer = window.setTimeout(() => commit(draft), 800)
+    return () => window.clearTimeout(timer)
+  }, [draft, commit])
 
   return (
-    <Modal onClose={onClose} width={720} textAlign="left">
-      <h3 className="ih" style={{ fontSize: "1.1em", margin: "0 0 4px" }}>
-        {t("subscriptions.title")}
-      </h3>
-      <p style={{ fontSize: FONT_SIZE_XS, opacity: 0.8, margin: "0 0 10px" }}>
+    <label style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", fontSize: FONT_SIZE_XS }}>
+      <i className={`fa ${icon}`} aria-hidden="true"></i>
+      {label}
+      <NumberInput
+        className="stdinput"
+        min={0}
+        value={days}
+        disabled={settings.isPending}
+        onValueChange={(v) => setDraft(Math.max(0, v))}
+        onBlur={() => {
+          if (draft !== null) commit(draft)
+        }}
+        style={{ width: 64, height: 21 }}
+      />
+      {t("subscriptions.queueRetentionUnit")}
+      <span style={{ opacity: 0.7 }} title={hint}>
+        <i className="fa fa-circle-info" aria-hidden="true"></i>
+      </span>
+    </label>
+  )
+}
+
+/** A row action as an icon button, its name in the tooltip (and for screen readers). */
+function RowIconButton({
+  icon,
+  label,
+  disabled,
+  onClick,
+}: {
+  icon: string
+  label: string
+  disabled?: boolean
+  onClick: () => void
+}) {
+  return (
+    // Above `Modal`'s own 9001, or the portalled bubble renders behind this dialog.
+    <Tooltip label={label} zIndex={9700}>
+      <button
+        type="button"
+        className="stdbtn"
+        style={ICON_BUTTON_STYLE}
+        aria-label={label}
+        disabled={disabled}
+        onClick={onClick}
+      >
+        <i className={`fa ${icon}`} aria-hidden="true"></i>
+      </button>
+    </Tooltip>
+  )
+}
+
+/** Stand-in rows while the first history page loads.
+ *
+ * The same grid and column headers as the real list with bars where the rows will be, so the modal
+ * does not open as a one-line "loading…" and then jump to a 65vh table. */
+function HistorySkeleton() {
+  const { t } = useTranslation()
+  return (
+    <div
+      className="preview-grid sub-modal-preview"
+      style={{ "--preview-grid-columns": SUBSCRIPTION_LIST_COLUMNS } as CSSProperties}
+      role="status"
+      aria-label={t("common.loading") ?? "Loading"}
+    >
+      <div className="preview-row preview-head" aria-hidden="true">
+        <span className="preview-index">#</span>
+        <span className="preview-title">{t("subscriptions.colWork")}</span>
+        <span className="preview-posted">{t("subscriptions.field.posted_at")}</span>
+        <span className="preview-uploader">{t("subscriptions.colUploader")}</span>
+        <span className="preview-rating">{t("subscriptions.field.rating")}</span>
+        <span className="preview-verdict">{t("subscriptions.colVerdict")}</span>
+      </div>
+      {Array.from({ length: 12 }, (_, row) => (
+        <div className="preview-row subscriptions-skeleton-row" key={row} aria-hidden="true">
+          <span className="preview-index" />
+          <span className="preview-title">
+            <span className="skeleton-bar" style={{ display: "block", width: `${50 + ((row * 11) % 40)}%` }} />
+            <span className="skeleton-bar" style={{ display: "block", width: `${40 + ((row * 7) % 30)}%`, marginTop: 4 }} />
+          </span>
+          {[0, 1, 2].map((cell) => (
+            <span key={cell}>
+              <span className="skeleton-bar" style={{ display: "block", width: "4em" }} />
+            </span>
+          ))}
+          <span className="preview-verdict">
+            <span className="skeleton-bar" style={{ display: "block", width: "5em", marginLeft: "auto" }} />
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** Everything the subscriptions matched and what became of it, in one dialog: the works waiting on
+ * the user's go-ahead, the full match history, what was taken (and its download state), what did not
+ * download and why, and what was refused. Tabs over one stream rather than separate dialogs, since
+ * each is the same kind of record at a different stage; a subscription filter applies to all of
+ * them. Rules themselves are configuration and stay in Settings, one click away at the bottom. */
+export function SubscriptionsModal({
+  onClose,
+  initialBand = "all",
+  initialSubscription = "",
+}: {
+  onClose: () => void
+  initialBand?: Band
+  /** Opens filtered to one subscription; `""` shows them all. */
+  initialSubscription?: string
+}) {
+  const { t } = useTranslation()
+  const history = useSubscriptionHistory()
+  const reservations = useReservations()
+  const retryReservation = useRetryReservation()
+  const discardReservation = useDiscardReservation()
+  const blocked = useBlockedWorks()
+  const forget = useForgetSeen()
+  const block = useBlockSubscriptionSources()
+  const unskip = useUnskipSubscriptionSources()
+  const titleOrder = useLanguageOrder()
+  const [band, setBand] = useState<Band>(initialBand)
+  const narrow = useIsNarrowViewport()
+  // Opened a frame after mount so the drawer's entry slide plays; closing waits for the exit slide.
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setDrawerOpen(true))
+    return () => cancelAnimationFrame(frame)
+  }, [])
+  const pending = usePendingApprovals()
+  const failedCount = useSubscriptionFailedCount()
+  // Narrows every tab to one subscription; the grouping below already separates them otherwise.
+  const [subscriptionFilter, setSubscriptionFilter] = useState(initialSubscription)
+  // Each tab's list is grouped by subscription, newest first inside each group, like the approval
+  // list; a fold is kept per subscription across tabs.
+  const groupsState = useCollapsedGroups()
+  /** "All" tab only: just the works skipped from the approval list, the one outcome no other tab
+   *  collects. */
+  const [skippedOnly, setSkippedOnly] = useState(false)
+  const subscriptions = useSubscriptions()
+  const stateText = (state: "enabled" | "disabled" | "paused") =>
+    state === "enabled"
+      ? t("subscriptions.enabled")
+      : state === "disabled"
+        ? t("subscriptions.disabled")
+        : t("subscriptions.paused")
+  // Failed downloads are restartable (`is_startable` covers Error and Cancelled), so offering the
+  // retry here saves hunting for the item on the downloads page.
+  const retry = useStartQueueItem()
+
+  const blockedRows = useMemo<HistoryEntry[]>(() => {
+    // Shaped like a history entry so the same grid and the same "reconsider" action render it: the
+    // block list answers "what did I say no to", and the verdict is what it is because the user
+    // said so. Titles are looked up in the history when it still carries the work (it may not, once
+    // the work has aged out of the retained cycles), falling back to its source URL.
+    const bySource = new Map((history.data ?? []).map((e) => [e.candidate.source_url, e.candidate]))
+    return (blocked.data ?? []).map((b) => ({
+      subscription_id: b.subscription_id,
+      subscription_name: b.subscription_name,
+      checked_at: Math.floor(b.blocked_at / 1000),
+      outcome: "completed",
+      candidate:
+        bySource.get(b.source_url) ??
+        ({
+          source_url: b.source_url,
+          title: undefined,
+          tags: [],
+          verdict: { verdict: "rejected", rule: "blocked" },
+        } as HistoryEntry["candidate"]),
+      download: null,
+    }))
+  }, [blocked.data, history.data])
+
+  // Every tab needs to know which rows are blocked: the history itself cannot say — a blocked work
+  // and a merely-handled one are both just "seen" in it — so the two lists are joined here.
+  const blockedKeys = useMemo(
+    () => new Set((blocked.data ?? []).map((b) => `${b.subscription_id}\u0000${b.source_url}`)),
+    [blocked.data],
+  )
+  const isBlocked = (e: HistoryEntry) =>
+    blockedKeys.has(`${e.subscription_id}\u0000${e.candidate.source_url}`)
+
+  const unfilteredRows = useMemo<Row[]>(() => {
+    if (band === "blocked") return blockedRows
+    const all = history.data ?? []
+    if (band === "all") return all
+    if (band === "failed") {
+      // Failed in the queue, and failed before reaching it: one list, since to the reader both are
+      // simply "it did not download". Each row's own reason tells them apart.
+      const queued = all.filter((e) => e.download?.state === "error")
+      const bySource = new Map(all.map((e) => [`${e.subscription_id}\u0000${e.candidate.source_url}`, e]))
+      const unqueued = (reservations.data ?? []).map((r): Row => {
+        const seen = bySource.get(`${r.subscription_id}\u0000${r.source_url}`)
+        return {
+          subscription_id: r.subscription_id,
+          subscription_name: seen?.subscription_name ?? r.subscription_id,
+          checked_at: r.created_at,
+          outcome: "completed",
+          candidate: seen?.candidate ?? {
+            source_url: r.source_url,
+            title: undefined,
+            tags: [],
+            verdict: { verdict: "reserved", reason: r.reason },
+          },
+          download: null,
+          reservation: r,
+        }
+      })
+      return [...queued, ...unqueued].sort((a, b) => b.checked_at - a.checked_at)
+    }
+    // "Accepted" is about what happened, not about what the cycle's verdict says *now*: a work that
+    // was queued and has since been catalogued reads `already_held`, and one still sitting in the
+    // queue reads `queued` — both were accepted, and the queue record is the evidence of it. Without
+    // the `download` half this tab is empty whenever nothing happens to be in flight at this second.
+    if (band === "match")
+      return all.filter((e) => (bandOf(e.candidate) === "match" && !e.skipped) || e.download != null)
+    return all.filter((e) => bandOf(e.candidate) === "excluded")
+  }, [history.data, band, blockedRows, reservations.data])
+  const rows = unfilteredRows.filter(
+    (e) =>
+      (!subscriptionFilter || e.subscription_id === subscriptionFilter) &&
+      (band !== "all" || !skippedOnly || (e.skipped && !e.download)),
+  )
+  const all = subscriptions.data ?? []
+  const pendingShown = (pending.data ?? []).filter(
+    (p) => !subscriptionFilter || p.subscription_id === subscriptionFilter,
+  ).length
+  const counts: Partial<Record<Band, number>> = { pending: pending.data?.length ?? 0, failed: failedCount }
+
+  const body = (
+    <>
+      <p style={{ fontSize: FONT_SIZE_XS, opacity: 0.8, margin: "0 0 10px", textAlign: "center" }}>
         {t("upload.subscriptionsSummary", {
           enabled: all.filter((s) => s.state.state === "enabled").length,
           total: all.length,
         })}
-        {waiting > 0 && ` · ${t("upload.subscriptionsWaiting", { count: waiting })}`}
-        {reserved > 0 && ` · ${t("upload.subscriptionsReserved", { count: reserved })}`}
       </p>
 
-      {/* Each renders nothing when it has nothing to say, so the empty state below is the only
-          thing shown when a rule has matched nothing — and nothing here costs attention when there
-          are no rules at all. */}
-      {queued.length > 0 && (
-        <div style={{ marginBottom: 12 }}>
-          <h3 className="ih" style={{ fontSize: "1.0em", margin: "0 0 6px" }}>
-            {t("subscriptions.queuedHeading", { count: queued.length })}
-          </h3>
-          {/* The same grid, bands and per-row actions the matching history uses: these are the same
-              kind of record (a matched work and what became of it), so they read the same way. */}
-          <div className="preview-grid queue-records-grid">
-            <div className="preview-row preview-head">
-              <span className="preview-title">{t("subscriptions.colWork")}</span>
-              <span>{t("subscriptions.colSubscription")}</span>
-              <span className="preview-verdict">{t("subscriptions.state")}</span>
-            </div>
-            {shownQueued.map((item: DownloadQueueItem) => (
-              <div key={item.id} className={`preview-row ${BAND_CLASS[bandOfState(item.state)]}`}>
-                <span className="preview-title">
-                  {/* `sourceHref`, not the raw stored URL: sources are stored without a scheme,
-                      and a bare `href` reads as a path relative to this app (404). */}
-                  <a href={sourceHref(item.url)} target="_blank" rel="noreferrer">
-                    {item.title ?? item.url}
-                  </a>
-                </span>
-                <SubscriptionName name={nameOf(item.subscription_id)} />
-                <span className="preview-verdict">
-                  {stateLabel(item.state, t)}
-                  {canRetry(item.state) && (
-                    <>
-                      {" "}
-                      <input
-                        type="button"
-                        className="stdbtn"
-                        disabled={retry.isPending}
-                        value={t("subscriptions.retryDownload") ?? undefined}
-                        onClick={() => {
-                          void retry.mutateAsync(item.id).then(() => {
-                            toast({
-                              text: t("subscriptions.retryStarted") ?? undefined,
-                              icon: "info",
-                            })
-                          })
-                        }}
-                      />
-                    </>
-                  )}
-                </span>
-              </div>
-            ))}
-          </div>
-          {queued.length > shownQueued.length && (
-            <p style={{ fontSize: FONT_SIZE_XS, opacity: 0.8, margin: "6px 0 0" }}>
-              {t("subscriptions.queueRecordsCapped", {
-                shown: shownQueued.length,
-                total: queued.length,
-              })}
-            </p>
-          )}
+      {/* Filtered rather than paginated: the two useful questions are "what came in" and "what was
+          turned away", and both are a filter over the same stream. */}
+      <div className="sub-modal-tabs" role="tablist">
+        {BANDS.map((b) => (
+          <button
+            key={b}
+            type="button"
+            role="tab"
+            aria-selected={band === b}
+            className={band === b ? "stdbtn is-active" : "stdbtn"}
+            onClick={() => setBand(b)}
+          >
+            {t(`subscriptions.historyBand.${b}`)}
+            {(counts[b] ?? 0) > 0 && ` (${counts[b]})`}
+          </button>
+        ))}
+      </div>
+      <div className="sub-modal-filters">
+        {band === "all" && (
+          <CheckboxField checked={skippedOnly} onCheckedChange={setSkippedOnly}>
+            {t("subscriptions.skippedOnly")}
+          </CheckboxField>
+        )}
+      {(subscriptions.data?.length ?? 0) > 1 && (
+        <div style={{ marginLeft: "auto" }}>
+          <Select
+            ariaLabel={t("subscriptions.historySubscriptionFilter")}
+            value={subscriptionFilter}
+            onValueChange={setSubscriptionFilter}
+            // Above `Modal`'s own 9001, or the popup renders behind this dialog.
+            popupZIndex={9700}
+            items={[
+              { value: "", label: t("subscriptions.historyAllSubscriptions") },
+              ...(subscriptions.data ?? []).map((sub) => ({
+                value: sub.id,
+                label: (
+                  // The switch state beside the name: a filter on a disabled subscription is a common
+                  // "why is nothing new here" question, answered before it is asked.
+                  <span className="history-sub-option">
+                    <i className={`fa ${STATE_ICON[sub.state.state]}`} aria-hidden="true" />
+                    <span>{sub.name}</span>
+                    <span className="history-sub-state">{stateText(sub.state.state)}</span>
+                  </span>
+                ),
+              })),
+            ]}
+          />
         </div>
       )}
-      <PendingApprovals subscriptions={all} />
-      <ReservationGroup />
-
-      {/* The queue never expires anything by itself, and this list is where its growth is visible —
-          so the retention setting belongs here rather than three pages away in Settings. Written
-          straight through, since it is a single number with no draft state worth keeping. */}
-      <div style={{ marginTop: 12, fontSize: FONT_SIZE_XS, opacity: 0.9 }}>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          <i className="fa fa-broom" aria-hidden="true"></i>
-          {t("subscriptions.queueRetentionLabel")}
-          <NumberInput
-            className="stdinput"
-            min={0}
-            value={retentionDays}
-            disabled={updateSettings.isPending || settings.isPending}
-            onValueChange={(v) => setRetentionDraft(Math.max(0, v))}
-            onBlur={() => {
-              if (!settings.data || retentionDays === settings.data.download_queue_retention_days) return
-              void updateSettings
-                .mutateAsync({ download_queue_retention_days: retentionDays })
-                .then(() => {
-                  setRetentionDraft(null)
-                  toast({ text: t("subscriptions.queueRetentionSaved") ?? undefined, icon: "success" })
-                })
-            }}
-            style={{ width: 64, height: 21 }}
-          />
-          {t("subscriptions.queueRetentionUnit")}
-        </label>
-        <p style={{ margin: "4px 0 0", opacity: 0.75 }}>{t("subscriptions.queueRetentionHint")}</p>
       </div>
-      {waiting === 0 && reserved === 0 && queued.length === 0 && (
-        <p style={{ fontSize: FONT_SIZE_XS, opacity: 0.8 }}>
-          {t("subscriptions.noMatchedRecords")}
-        </p>
-      )}
 
-      {/* Sticky rather than part of the flow: a long list would otherwise push the way to the full
-          page (editing rules, check history, deletion) off the bottom, which is exactly the case it
-          is for. `backgroundColor: inherit` keeps whichever theme's modal colour behind it — no
-          colour of its own to keep in sync across the five themes. */}
-      <div
-        style={{
-          position: "sticky",
-          bottom: 0,
-          display: "flex",
-          justifyContent: "flex-end",
-          marginTop: 12,
-          padding: "8px 0",
-          borderTop: "1px solid rgba(128, 128, 128, 0.35)",
-          backgroundColor: "inherit",
-        }}
-      >
+      {/* One height for every tab and filter, so switching between them does not resize the dialog. */}
+      <div className="history-body">
+      {band === "pending" ? (
+        pendingShown === 0 ? (
+          <p className="sub-form-hint">{t("subscriptions.pendingEmpty")}</p>
+        ) : (
+          <div className="sub-modal-preview">
+            <PendingApprovals subscriptions={all} subscriptionId={subscriptionFilter} heading={false} />
+          </div>
+        )
+      ) : history.isPending || (band === "blocked" && blocked.isPending) ? (
+        <HistorySkeleton />
+      ) : rows.length === 0 ? (
+        <p className="sub-form-hint">
+          {t(
+            band === "blocked"
+              ? "subscriptions.blockedEmpty"
+              : band === "failed"
+                ? "subscriptions.failedEmpty"
+                : band === "match"
+                  ? "subscriptions.matchEmpty"
+                  : skippedOnly
+                    ? "subscriptions.skippedEmpty"
+                    : "subscriptions.historyEmpty",
+          )}
+        </p>
+      ) : (
+        // The edit form's preview columns, so a work reads the same here as where its rule is edited.
+        <div
+          className="preview-grid sub-modal-preview"
+          style={{ "--preview-grid-columns": SUBSCRIPTION_LIST_COLUMNS } as CSSProperties}
+        >
+          <div className="preview-row preview-head">
+            <span className="preview-index">#</span>
+            <span className="preview-title">{t("subscriptions.colWork")}</span>
+            <span className="preview-posted">{t("subscriptions.field.posted_at")}</span>
+            <span className="preview-uploader">{t("subscriptions.colUploader")}</span>
+            <span className="preview-rating">{t("subscriptions.field.rating")}</span>
+            <span className="preview-verdict">{t("subscriptions.colVerdict")}</span>
+          </div>
+
+          {groupBySubscription(rows, (e) => e.subscription_id).map((group) => (
+            <Fragment key={group.subscriptionId}>
+              <SubscriptionGroupHead
+                name={
+                  subscriptions.data?.find((sub) => sub.id === group.subscriptionId)?.name ??
+                  group.items[0]?.subscription_name ??
+                  group.subscriptionId
+                }
+                count={group.items.length}
+                collapsed={groupsState.isCollapsed(group.subscriptionId)}
+                onToggle={() => groupsState.toggle(group.subscriptionId)}
+              />
+              {!groupsState.isCollapsed(group.subscriptionId) &&
+                group.items.map((e: Row, i) => {
+            const reservation = e.reservation
+            const download = e.download
+            const outcome = e.reservation
+              ? { key: "subscriptions.outcomeDownloadFailed", band: "excluded" as const }
+              : outcomeOf(e)
+            const failure = e.reservation
+              ? reservationReasonText(t, e.reservation.reason)
+              : e.download?.error
+                ? <QueueErrorText error={e.download.error as QueueError} />
+                : null
+            return (
+            <div
+              key={`${e.subscription_id}-${e.candidate.source_url}-${e.checked_at}-${i}`}
+              // A blocked work is a "no" the user gave, so it reads red whatever the work's own
+              // verdict happens to be now (it is almost always `already_held`, which would paint it
+              // blue — the colour of something in the library, not of something refused).
+              className={`preview-row ${
+                band === "blocked" ? ROW_CLASS.excluded : ROW_CLASS[outcome?.band ?? bandOf(e.candidate)]
+              }`}
+            >
+              <span className="preview-index">{i + 1}</span>
+              <span className="preview-title">
+                {/* The queue state leads the row, where a status marker is read first. Its slot is
+                    fixed-width and always present: only downloaded works have a state, and letting
+                    their titles start further right than everyone else's would be worse than the
+                    icon is good. */}
+                {e.download && (
+                  <span className="history-title-state">
+                    <Tooltip label={stateLabel(e.download.state, t)} zIndex={9700}>
+                      <i
+                        className={`fa ${DOWNLOAD_STATE_ICON[e.download.state] ?? "fa-circle"} history-state-icon ${stateIconClass(e.download.state)}`}
+                        aria-label={stateLabel(e.download.state, t) ?? undefined}
+                      ></i>
+                    </Tooltip>
+                  </span>
+                )}
+                <CandidateTitleLink record={e.candidate} order={titleOrder} />
+                {(e.candidate.tags?.length ?? 0) > 0 && (
+                  <Tooltip
+                    label={<TagTable tags={(e.candidate.tags ?? []).join(",")} links={false} />}
+                    wrapperStyle={{ display: "block", minWidth: 0 }}
+                    // Above `Modal`'s own 9001, or the portaled bubble renders behind this dialog.
+                    zIndex={9700}
+                  >
+                    <span className="tags">{(e.candidate.tags ?? []).join(", ")}</span>
+                  </Tooltip>
+                )}
+              </span>
+              <PostedCell postedAt={e.candidate.posted_at} />
+              <UploaderCell name={e.candidate.uploader ?? ""} />
+              <RatingCell rating={e.candidate.rating} />
+              <span className="preview-verdict">
+                {band === "blocked" ? (
+                    <>{t("subscriptions.blockedWork")}</>
+                  ) : outcome ? (
+                    <>
+                      {t(outcome.key)}
+                      {failure && <span className="history-failure-reason">{failure}</span>}
+                    </>
+                  ) : (
+                    <Verdict record={e.candidate} />
+                  )}
+                <span className="history-when" title={t("subscriptions.colWhen")}>
+                  {new Date(e.checked_at * 1000).toLocaleString()}
+                </span>
+                {/* Both directions from the row itself. The history cannot mark a blocked work by
+                    itself — in it, a blocked work reads exactly like any other seen one — so the
+                    block list is joined in and the row offers whichever action still applies. */}
+                {/* One line of icon buttons, each named by its tooltip — the same shape as the
+                    approval list's, so every tab's row actions read alike. */}
+                <span className="preview-row-actions">
+                  {reservation?.retryable && (
+                    <RowIconButton
+                      icon="fa-rotate-right"
+                      label={t("subscriptions.retryDownload")}
+                      disabled={retryReservation.isPending}
+                      onClick={() => {
+                        void retryReservation
+                          .mutateAsync(reservation.id)
+                          .then(() => toast({ text: t("subscriptions.retryStarted") ?? undefined, icon: "info" }))
+                          .catch((err: unknown) =>
+                            toast({ text: err instanceof Error ? err.message : String(err), icon: "error" }),
+                          )
+                      }}
+                    />
+                  )}
+                  {download?.can_retry && (
+                    <RowIconButton
+                      icon="fa-rotate-right"
+                      label={t("subscriptions.retryDownload")}
+                      disabled={retry.isPending}
+                      onClick={() => {
+                        void retry
+                          .mutateAsync(download.id)
+                          .then(() => toast({ text: t("subscriptions.retryStarted") ?? undefined, icon: "info" }))
+                          .catch((err: unknown) =>
+                            toast({ text: err instanceof Error ? err.message : String(err), icon: "error" }),
+                          )
+                      }}
+                    />
+                  )}
+                  {e.skipped && !download && (
+                    // A skipped work that is wanted after all: download it straight away (if that
+                    // fails it lands back on the approval list), or return it there to decide later.
+                    <RowIconButton
+                      icon="fa-download"
+                      label={t("subscriptions.approve")}
+                      disabled={unskip.isPending}
+                      onClick={() =>
+                        void unskip
+                          .mutateAsync({ id: e.subscription_id, sources: [e.candidate.source_url], download: true })
+                          .then(() => toast({ text: t("subscriptions.retryStarted") ?? undefined, icon: "info" }))
+                      }
+                    />
+                  )}
+                  {e.skipped && !download && (
+                    <RowIconButton
+                      icon="fa-reply"
+                      label={t("subscriptions.unskip")}
+                      disabled={unskip.isPending}
+                      onClick={() =>
+                        void unskip
+                          .mutateAsync({ id: e.subscription_id, sources: [e.candidate.source_url] })
+                          .then(() => toast({ text: t("subscriptions.unskipped") ?? undefined, icon: "info" }))
+                      }
+                    />
+                  )}
+                  {reservation && (
+                    // Never queued, so there is no queue row to delete: this is how it goes away,
+                    // and later checks remember the answer.
+                    <RowIconButton
+                      icon="fa-xmark"
+                      label={`${t("reservations.discard")}: ${t("reservations.discardIsRemembered")}`}
+                      disabled={discardReservation.isPending}
+                      onClick={() => void discardReservation.mutateAsync(reservation.id)}
+                    />
+                  )}
+                  {isBlocked(e) ? (
+                    <>
+                      {band !== "blocked" && <span className="history-blocked-mark">{t("subscriptions.blockedWork")}</span>}
+                      <RowIconButton
+                        icon="fa-rotate-left"
+                        label={t("subscriptions.reconsider")}
+                        disabled={forget.isPending}
+                        onClick={() =>
+                          void forget.mutateAsync({ id: e.subscription_id, sources: [e.candidate.source_url] })
+                        }
+                      />
+                    </>
+                  ) : (
+                    <RowIconButton
+                      icon="fa-ban"
+                      label={t("subscriptions.blockWork")}
+                      disabled={block.isPending}
+                      onClick={() =>
+                        void block.mutateAsync({ id: e.subscription_id, sources: [e.candidate.source_url] })
+                      }
+                    />
+                  )}
+                </span>
+              </span>
+            </div>
+            )
+          })}
+            </Fragment>
+          ))}
+        </div>
+      )}
+      </div>
+
+      {/* The queue never expires anything by itself, and the accepted tab is where its growth shows —
+          so the retention setting belongs here rather than three pages away in Settings. */}
+      <div className="sub-modal-footer">
+        <div className="sub-modal-retention">
+          <RetentionField
+            field="download_queue_retention_days"
+            icon="fa-broom"
+            label={t("subscriptions.queueRetentionLabel")}
+            hint={t("subscriptions.queueRetentionHint")}
+          />
+          <RetentionField
+            field="skipped_retention_days"
+            icon="fa-forward"
+            label={t("subscriptions.skippedRetentionLabel")}
+            hint={t("subscriptions.skippedRetentionHint")}
+          />
+        </div>
         <a className="stdbtn btn-with-icon" href={routes.settings("subscriptions")}>
-          <i className="fa fa-external-link" aria-hidden="true"></i>{" "}
-          {t("subscriptions.openFullSettings")}
+          <i className="fa fa-external-link" aria-hidden="true"></i> {t("subscriptions.openFullSettings")}
         </a>
       </div>
+    </>
+  )
+
+  // A phone gets the drawer the library's AI tankoubon panel uses: the tabs, filters and a list
+  // were squeezed into a centred dialog there.
+  if (narrow) {
+    return (
+      <Drawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        onExited={onClose}
+        title={t("subscriptions.title")}
+        width={980}
+      >
+        <div className="sub-drawer-body">{body}</div>
+      </Drawer>
+    )
+  }
+  return (
+    <Modal onClose={onClose} width={980} textAlign="left">
+      <h3 className="ih" style={{ fontSize: "1.1em", margin: "0 0 4px", textAlign: "center" }}>
+        {t("subscriptions.title")}
+      </h3>
+      {body}
     </Modal>
   )
 }

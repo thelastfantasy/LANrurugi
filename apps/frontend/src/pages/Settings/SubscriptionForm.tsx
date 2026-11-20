@@ -3,8 +3,10 @@ import { useTranslation } from "react-i18next"
 
 import { ValidationError } from "@/api/client"
 import {
+  useApproveAllPending,
   useCategories,
   useCreateSubscription,
+  usePendingApprovals,
   useStats,
   useUpdateSubscription,
 } from "@/api/hooks"
@@ -16,6 +18,7 @@ import type {
 } from "@/api/types"
 import { NumberInput, RadioGroup, RadioItem, Switch } from "@/components/common-ui/Form"
 import { TagInput } from "@/components/Form"
+import { confirmDialog } from "@/dialog"
 import { toast } from "@/toast"
 
 import { FieldRuleEditor, TAG_NAMESPACES } from "./FieldRuleEditor"
@@ -110,6 +113,8 @@ export function SubscriptionForm({
   const { t } = useTranslation()
   const create = useCreateSubscription()
   const update = useUpdateSubscription(subscriptionId ?? "")
+  const pendingApprovals = usePendingApprovals()
+  const approveAll = useApproveAllPending()
   const isEdit = subscriptionId != null
 
   const [draft, setDraft] = useState<SubscriptionBody>(initial)
@@ -169,6 +174,18 @@ export function SubscriptionForm({
       if (isEdit) {
         await update.mutateAsync(body)
         toast({ text: t("subscriptions.saved") ?? undefined, icon: "success" })
+        // Switching to automatic download does not reach the works already waiting for approval,
+        // so offer to take them too. The count only words the question; the server re-checks and
+        // decides which works that is, so one that arrived a moment ago is not left behind.
+        if (subscriptionId && !initial.auto_download && body.auto_download) {
+          const waiting = ((await pendingApprovals.refetch()).data ?? []).filter(
+            (p) => p.subscription_id === subscriptionId,
+          ).length
+          if (waiting > 0 && (await confirmDialog(t("subscriptions.approveWaitingOnAuto", { count: waiting })))) {
+            await approveAll.mutateAsync(subscriptionId)
+            toast({ text: t("subscriptions.approveWaitingStarted") ?? undefined, icon: "info" })
+          }
+        }
       } else {
         await create.mutateAsync(body)
         toast({ text: t("subscriptions.created") ?? undefined, icon: "success" })

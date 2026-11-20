@@ -158,11 +158,19 @@ mod tests {
             corrupted_pages: vec![],
             has_patch: false,
             blake3: None,
+            primary_source: None,
+            progress_pages: None,
         };
         let id_a = ArchiveId("a".repeat(40));
         let id_b = ArchiveId("b".repeat(40));
-        archives.save(&mk(id_a.as_str(), &path_a)).await.unwrap();
-        archives.save(&mk(id_b.as_str(), &path_b)).await.unwrap();
+        archives
+            .create_or_replace(&mk(id_a.as_str(), &path_a))
+            .await
+            .unwrap();
+        archives
+            .create_or_replace(&mk(id_b.as_str(), &path_b))
+            .await
+            .unwrap();
 
         let jobs = JobRegistry::new();
         let job_id = jobs.create("verify").await;

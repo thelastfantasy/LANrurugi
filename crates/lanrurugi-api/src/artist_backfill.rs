@@ -393,62 +393,42 @@ pub async fn backfill_artist_tag(state: &AppState, archive_id: &str, title: &str
         return;
     }
 
-    let Ok(Some(mut archive)) = state
+    // Checked and merged against the archive's current tags, under its lock (not the `tags`
+    // snapshot passed in): this runs fire-and-forget, after the LLM call.
+    let updated = state
         .repos
         .archives
-        .get(&lanrurugi_core::ids::ArchiveId(archive_id.to_string()))
-        .await
-    else {
-        return;
-    };
-    // Re-check against the archive's current tags (not the `tags` snapshot passed in) — this call
-    // runs fire-and-forget after the caller's own function returns, so another concurrent write
-    // could have landed in between.
-    let already_has_any = new_tags.iter().any(|new_tag| {
-        let ns = new_tag.split(':').next().unwrap_or(new_tag);
-        archive
-            .tags
-            .split(',')
-            .map(str::trim)
-            .any(|t| t.starts_with(&format!("{ns}:")))
-    });
-    if already_has_any {
-        return;
-    }
-    let old_tags = archive.tags.clone();
-    let mut seen: std::collections::HashSet<String> = old_tags
-        .split(',')
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .map(str::to_string)
-        .collect();
-    let mut merged: Vec<String> = old_tags
-        .split(',')
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .map(str::to_string)
-        .collect();
-    for tag in new_tags {
-        if seen.insert(tag.clone()) {
-            merged.push(tag);
-        }
-    }
-    archive.tags = merged.join(",");
-
-    if let Err(e) = state.repos.archives.save(&archive).await {
+        .update_then(
+            &lanrurugi_core::ids::ArchiveId(archive_id.to_string()),
+            |archive| {
+                let already_has_any = new_tags.iter().any(|new_tag| {
+                    let ns = new_tag.split(':').next().unwrap_or(new_tag);
+                    archive
+                        .tags
+                        .split(',')
+                        .map(str::trim)
+                        .any(|t| t.starts_with(&format!("{ns}:")))
+                });
+                if already_has_any {
+                    return;
+                }
+                let mut seen = std::collections::HashSet::new();
+                let merged: Vec<String> = archive
+                    .tags
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .chain(new_tags.iter().map(String::as_str))
+                    .filter(|t| seen.insert(t.to_string()))
+                    .map(str::to_string)
+                    .collect();
+                archive.tags = merged.join(",");
+            },
+            |old, new| crate::archives::reindex_title_and_tags(state, old, new),
+        )
+        .await;
+    if let Err(e) = updated {
         tracing::warn!(%archive_id, error = %e, "failed to save LLM-backfilled artist/cosplayer tag");
-        return;
-    }
-    if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
-        &state.redis.search,
-        &state.equivalence,
-        archive_id,
-        &old_tags,
-        &archive.tags,
-    )
-    .await
-    {
-        tracing::warn!(%archive_id, error = %e, "failed to update tag search index after artist/cosplayer backfill");
     }
 }
 

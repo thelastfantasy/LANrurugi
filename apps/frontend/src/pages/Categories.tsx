@@ -9,6 +9,7 @@ import { useArchives, useCategories, useCreateCategory, useTankoubons } from "@/
 import type { TankoubonMetadata } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
 import { Button, Checkbox, Select } from "@/components/common-ui/Form"
+import { isPlainLinkClick } from "@/components/common-ui/Link"
 import { ArchiveChecklistItem, FormatBadge, SearchSyntaxHelp } from "@/components/Display"
 import { confirmDialog, newCategoryDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
@@ -325,6 +326,7 @@ export function Categories() {
                                   <a
                                     href={routes.tankoubonEdit(tank.id)}
                                     onClick={(e) => {
+                                      if (!isPlainLinkClick(e)) return
                                       e.preventDefault()
                                       e.stopPropagation()
                                       navigate(routes.tankoubonEdit(tank.id))

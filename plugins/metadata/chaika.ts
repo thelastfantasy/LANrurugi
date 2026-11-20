@@ -114,24 +114,39 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   // onto the archive (`source:panda.chaika.moe/archive/<id>`). That is the one exact identifier an
   // auto-run start has for a freshly ingested archive, whose title is still the bare filename.
   const tagged = chaika_id_from_tags(lrr_info["existing_tags"] ?? "");
+  // The Chaika archive page this archive was identified as — the source "download again" should
+  // use (SDK 1.1 `primary_source`). Only an archive id: the downloader takes no gallery links, and a
+  // title search finds galleries. The e-hentai source added alongside is never primary.
+  let primary_source: string | undefined;
+  // Only a title search that finds nothing means "not a Chaika archive". With an id in hand, an
+  // empty answer is Chaika failing (its API returns nothing on an HTTP error), which must still be
+  // reported as a failure.
+  let searched = false;
+  const archive_page = (type: string, id: string) =>
+    type === "archive" ? `${chaika_url}/archive/${id}/` : undefined;
   if ((match = oneshotarg.match(/^(?:https?:\/\/)?panda\.chaika\.moe\/(gallery|archive)\/([0-9]+)\/?.*/))) {
     apply_result(await tags_from_chaika_id(match[1], match[2], addextra, addother, addsource, jpntitle));
+    primary_source = archive_page(match[1], match[2]);
   } else if ((match = oneshotarg.match(/^([0-9]+)$/))) {
     apply_result(await tags_from_chaika_id("archive", match[1], addextra, addother, addsource, jpntitle));
+    primary_source = archive_page("archive", match[1]);
   } else if (tagged !== null) {
     logger.info(`Using the Chaika id from the archive's own tags: ${tagged.type}/${tagged.id}`);
     apply_result(await tags_from_chaika_id(tagged.type, tagged.id, addextra, addother, addsource, jpntitle));
+    primary_source = archive_page(tagged.type, tagged.id);
   } else {
+    searched = true;
     logger.info("No Chaika id on the archive, falling back to text search.");
     apply_result(await search_for_archive(lrr_info["archive_title"], lrr_info["existing_tags"], addextra, addother, addsource, jpntitle));
   }
   if (newtags === "") {
     let message = "No matching Chaika Archive Found!";
     logger.info(message);
+    if (searched) throw new PluginSkipException(message);
     throw new PluginErrorException(message);
   } else {
     logger.info(`Sending the following tags to LRR: ${newtags}`);
-    return { tags: newtags, title: newtitle };
+    return { tags: newtags, title: newtitle, primary_source };
   }
 }
 
@@ -224,6 +239,11 @@ async function search_for_archive(
   logger.debug(`Calling ${URL}`);
   let ua = legacyCompat.userAgent();
   let res = (await ua.get(URL)).result;
+  // A search with no hits is a 200 with an empty list; an error status is Chaika failing, not
+  // "not a Chaika archive".
+  if (res.is_error) {
+    throw new PluginErrorException(`Chaika search failed (HTTP ${res.code})`);
+  }
   logger.debug(`Chaika API returned this JSON: ${res.body}`);
   const galleries = (res.json as { galleries?: ChaikaGallery[] } | undefined)?.galleries;
   if (!galleries || galleries.length === 0) return "";
@@ -281,18 +301,22 @@ function ehentai_source(json: ChaikaGallery): string {
   return "";
 }
 
-/** Calls Chaika's own jsearch API — `undefined` on an HTTP error response (mirrors legacy's own
- * bare `return;`). Every caller checks for `undefined`/an empty result and returns `""`
- * (parse_chaika_json's own "no usable match" sentinel) instead of dereferencing it — a real bug
- * found live: an unchecked miss threw `Cannot read properties of undefined (reading 'tags')`,
- * aborting the whole metadata fetch instead of falling through to the text-search fallback. */
+/** Calls Chaika's own jsearch API — `undefined` when the id does not exist (Chaika answers 404),
+ * a thrown `PluginErrorException` on any other error status. Every caller checks for `undefined`
+ * and returns `""` (parse_chaika_json's own "no usable match" sentinel) instead of dereferencing
+ * it — an unchecked miss once threw `Cannot read properties of undefined (reading 'tags')`. */
 async function get_json_from_chaika(type: string, value: string): Promise<unknown> {
   let logger = legacyCompat.getLogger("Chaika.moe", "plugins");
   let URL = `${chaika_url}/jsearch/?${type}=${value}`;
   let ua = legacyCompat.userAgent();
   let res = (await ua.get(URL)).result;
-  if (res.is_error) {
+  // Only "no such id" is a miss; any other error is Chaika failing, and must be reported as one
+  // instead of passing for "not a Chaika archive".
+  if (res.code === 404) {
     return undefined;
+  }
+  if (res.is_error) {
+    throw new PluginErrorException(`Chaika lookup failed (HTTP ${res.code})`);
   }
   logger.debug(`Chaika API returned this JSON: ${res.body}`);
   return res.json;

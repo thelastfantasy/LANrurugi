@@ -199,6 +199,13 @@ jobs:
       # failing binary, silently skipping every crate still queued behind it (confirmed live
       # 2026-08-28: a `lanrurugi-server` failure cut a run off before `lanrurugi-storage`'s own
       # tests ever ran). `mise run test` carries the same flag for the same reason.
+      # #284: frontend API types generated from the Rust structs (ts-rs). Regenerated on every run,
+      # PRs included, and a difference means a Rust change was not carried over to the frontend.
+      - name: generated frontend API types are in sync
+        run: |
+          cargo test -p lanrurugi-storage --lib export_bindings
+          git diff --exit-code -- apps/frontend/src/api/generated
+
       - name: cargo test (unit subset)
         if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
         run: cargo test --workspace --no-fail-fast --lib --bins
@@ -257,6 +264,56 @@ jobs:
         if: github.ref == 'refs/heads/main'
         run: pnpm --filter lanrurugi-frontend run test:unit
 
+  # #286: every main page opened with the seed data (`tests/seed/seed.mjs`) loaded. Only the
+  # `@smoke` specs, Chromium only, one worker: the full Playwright suite (4 workers, two browsers)
+  # was dropped from CI after GitHub runners OOM-killed it (f40856e).
+  e2e-smoke:
+    name: Frontend smoke (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: jdx/mise-action@v5
+        with:
+          install: true
+          cache: true
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
+          save-if: false
+
+      - name: Install libarchive build dependencies + redis-server
+        run: |
+          scripts/ci-apt-update.sh
+          sudo apt-get install -y --no-install-recommends \
+            zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev libxml2-dev libacl1-dev \
+            nasm libopenjp2-7-dev redis-server
+          sudo systemctl stop redis-server || true
+
+      - name: Build backend (debug)
+        run: cargo build -p lanrurugi-server
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm --filter lanrurugi-frontend exec playwright install --with-deps chromium
+
+      - name: Build frontend
+        run: pnpm --filter lanrurugi-frontend run build
+
+      - name: playwright smoke
+        run: pnpm --filter lanrurugi-frontend exec playwright test --project=chromium --grep @smoke --workers=1
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-smoke-report
+          path: apps/frontend/playwright-report/
+          retention-days: 7
+
   # 011-api-docs-site. Split into generate and build on purpose rather than run as one job:
   # `docs-generate` is the enforceable gate — a cheap Rust-only run whose failure means the
   # generated API reference and the server's own route table disagree — while `docs-build` owns the
@@ -266,7 +323,10 @@ jobs:
     name: Docs (generate + gate)
     runs-on: ubuntu-latest
     steps:
+      # Full history: `docs-sdk` builds every earlier SDK version from the release tags.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: jdx/mise-action@v5
         with:

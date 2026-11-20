@@ -45,6 +45,9 @@ pub(crate) const DEFAULT_SIZE_THRESHOLD: i64 = 1536;
 pub(crate) const DEFAULT_READER_QUALITY: i64 = 85;
 /// See `NUMBER_FIELDS`' own entry for what this bounds.
 pub(crate) const DEFAULT_QUEUE_RETENTION_DAYS: i64 = 30;
+/// How long a work skipped from the approval list keeps its "skipped" record. Only the label and
+/// the history row go: the work stays seen, so a later check still does not offer it again.
+pub(crate) const DEFAULT_SKIPPED_RETENTION_DAYS: i64 = 30;
 pub(crate) const DEFAULT_WEBP_QUALITY: i64 = 85;
 /// specs/019: how long a recycled archive stays recoverable. `0` means "keep forever".
 pub(crate) const DEFAULT_RECYCLE_RETENTION_DAYS: i64 = 30;
@@ -237,6 +240,20 @@ pub(crate) async fn read_queue_retention_days(state: &AppState) -> i64 {
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(DEFAULT_QUEUE_RETENTION_DAYS),
         Err(_) => DEFAULT_QUEUE_RETENTION_DAYS,
+    }
+}
+
+/// How many days a skip record is kept; `0` keeps them indefinitely. Read by the same hourly sweep.
+pub(crate) async fn read_skipped_retention_days(state: &AppState) -> i64 {
+    match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "skipped_retention_days")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(DEFAULT_SKIPPED_RETENTION_DAYS),
+        Err(_) => DEFAULT_SKIPPED_RETENTION_DAYS,
     }
 }
 
@@ -580,6 +597,9 @@ const NUMBER_FIELDS: &[(&str, i64)] = &[
         "download_queue_retention_days",
         DEFAULT_QUEUE_RETENTION_DAYS,
     ),
+    // Skip records (the "skipped" label in the subscription history) older than this are swept by
+    // the same scheduler. `0` keeps them all.
+    ("skipped_retention_days", DEFAULT_SKIPPED_RETENTION_DAYS),
     // specs/019 — the recycle bin's two bounds, enforced by `recycle::sweep`.
     ("recycle_retention_days", DEFAULT_RECYCLE_RETENTION_DAYS),
     ("recycle_max_size_gb", DEFAULT_RECYCLE_MAX_SIZE_GB),

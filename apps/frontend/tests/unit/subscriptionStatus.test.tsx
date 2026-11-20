@@ -2,18 +2,18 @@ import { render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { PendingApproval, ReservationEntry, Subscription } from "@/api/types"
+import type { PendingApproval, Subscription } from "@/api/types"
 
 const state = {
   subscriptions: [] as Subscription[],
   pending: [] as PendingApproval[],
-  reservations: [] as ReservationEntry[],
+  failed: 0,
 }
 
 vi.mock("@/api/hooks", () => ({
   useSubscriptions: () => ({ data: state.subscriptions }),
   usePendingApprovals: () => ({ data: state.pending }),
-  useReservations: () => ({ data: state.reservations }),
+  useSubscriptionFailedCount: () => state.failed,
 }))
 
 const { SubscriptionStatus } = await import("@/pages/Upload/SubscriptionStatus")
@@ -34,7 +34,7 @@ describe("SubscriptionStatus", () => {
   beforeEach(() => {
     state.subscriptions = [subscription()]
     state.pending = []
-    state.reservations = []
+    state.failed = 0
   })
 
   it("shows the button alone when nothing needs acting on", () => {
@@ -42,18 +42,17 @@ describe("SubscriptionStatus", () => {
 
     // The count lives on the button; a "0/1 enabled" caption beside it would repeat it.
     expect(screen.getByRole("button", { name: "Manage subscriptions" }).textContent).toBe("1")
-    expect(screen.queryByText(/次检查|待确认|预约/)).toBeNull()
+    expect(screen.queryByText(/次检查|待确认|failed/i)).toBeNull()
   })
 
   it("keeps a line for the counts that do need acting on", () => {
     state.pending = [{ id: "p1", subscription_id: "s1", source_url: "https://e/x", created_at: 1 }]
-    state.reservations = [
-      { id: "r1", subscription_id: "s1", source_url: "https://e/y", reason: "insufficient_credit", status: "waiting", created_at: 2 },
-    ]
+    // Failed in the queue or before reaching it: one count either way.
+    state.failed = 2
     renderRow()
 
     expect(screen.getByText(/waiting/i)).toBeTruthy()
-    expect(screen.getByText(/Reserved/i)).toBeTruthy()
+    expect(screen.getByRole("button", { name: /2 failed downloads/i })).toBeTruthy()
   })
 
   it("renders nothing at all with no subscriptions", () => {

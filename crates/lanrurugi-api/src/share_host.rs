@@ -210,56 +210,45 @@ impl ImportHost for AppState {
     /// as a book's own outline does. Bookmarks and stamps are the sharer's own and are not carried.
     fn apply_shared_metadata(&self, id: ArchiveId, shared: SharedMetadata) -> BoxFuture<'_, ()> {
         Box::pin(async move {
-            if let Ok(Some(mut archive)) = self.repos.archives.get(&id).await {
-                let old_title = archive.title.clone();
-                if !shared.title.is_empty() {
-                    archive.title = shared.title.clone();
-                }
-                if !shared.summary.is_empty() {
-                    archive.summary = shared.summary.clone();
-                }
-                if archive.toc.is_empty() {
-                    archive.toc = shared
-                        .toc
-                        .iter()
-                        .filter(|c| c.page >= 1 && c.page <= archive.pagecount.max(1))
-                        .map(|c| lanrurugi_core::entities::TocEntry {
-                            page: c.page,
-                            name: c.name.clone(),
-                        })
-                        .collect();
-                }
-                if self.repos.archives.save(&archive).await.is_ok() && old_title != archive.title {
-                    let _ = lanrurugi_search::indexer::update_title_index(
-                        &self.redis.search,
-                        &self.equivalence,
-                        id.as_str(),
-                        &old_title,
-                        &archive.title,
-                    )
-                    .await;
-                }
-            }
+            let updated = self.repos.archives.update_then(
+                &id,
+                |archive| {
+                    if !shared.title.is_empty() {
+                        archive.title = shared.title.clone();
+                    }
+                    if !shared.summary.is_empty() {
+                        archive.summary = shared.summary.clone();
+                    }
+                    if archive.toc.is_empty() {
+                        archive.toc = shared
+                            .toc
+                            .iter()
+                            .filter(|c| c.page >= 1 && c.page <= archive.pagecount.max(1))
+                            .map(|c| lanrurugi_core::entities::TocEntry {
+                                page: c.page,
+                                name: c.name.clone(),
+                            })
+                            .collect();
+                    }
+                },
+                |old, new| crate::archives::reindex_title_and_tags(self, old, new),
+            );
+            let _ = updated.await;
             crate::plugins::apply_metadata_tags(self, id.as_str(), &shared.tags).await;
         })
     }
 
     fn set_archive_tags(&self, id: ArchiveId, tags: String) -> BoxFuture<'_, ()> {
         Box::pin(async move {
-            let Ok(Some(mut archive)) = self.repos.archives.get(&id).await else {
-                return;
-            };
-            let old_tags = std::mem::replace(&mut archive.tags, tags);
-            if self.repos.archives.save(&archive).await.is_ok() {
-                let _ = lanrurugi_search::indexer::update_tag_indexes(
-                    &self.redis.search,
-                    &self.equivalence,
-                    id.as_str(),
-                    &old_tags,
-                    &archive.tags,
+            let _ = self
+                .repos
+                .archives
+                .update_then(
+                    &id,
+                    |archive| archive.tags = tags,
+                    |old, new| crate::archives::reindex_title_and_tags(self, old, new),
                 )
                 .await;
-            }
         })
     }
 
@@ -396,24 +385,5 @@ impl ImportHost for AppState {
             "id": queue_item_id,
             "import": crate::share_imports::detail(record, false),
         }));
-    }
-
-    /// `tempmaxsize` in bytes (the setting is in MB).
-    fn temp_quota_bytes(&self) -> BoxFuture<'_, Option<u64>> {
-        Box::pin(async move {
-            let mut conn = self.redis.config.get().await.ok()?;
-            let megabytes: Option<String> = deadpool_redis::redis::AsyncCommands::hget(
-                &mut conn,
-                lanrurugi_storage::keys::CONFIG_KEY,
-                "tempmaxsize",
-            )
-            .await
-            .ok()?;
-            let megabytes = megabytes
-                .and_then(|v| v.parse::<i64>().ok())
-                .unwrap_or(crate::download_manager::ingest::DEFAULT_TEMP_MAX_SIZE_MB)
-                .max(0) as u64;
-            Some(megabytes * 1024 * 1024)
-        })
     }
 }

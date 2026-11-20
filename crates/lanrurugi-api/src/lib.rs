@@ -30,6 +30,7 @@ pub mod gpu_worker_client;
 pub mod health;
 pub mod heartbeat;
 pub mod integrity_backfill;
+pub mod integrity_scan;
 pub mod jobs;
 pub mod llm_prompts;
 pub mod llm_usage;
@@ -39,6 +40,7 @@ pub mod misc;
 pub mod mojibake;
 pub mod opds;
 pub mod opensearch;
+pub mod patch_provenance;
 pub mod plugin_wizard;
 pub mod plugins;
 pub mod preferences;
@@ -47,6 +49,7 @@ pub mod recommend;
 pub mod recommend_llm;
 pub mod recommend_precompute;
 pub mod recycle;
+pub mod redownload_restore;
 pub mod repair;
 pub mod safety_password;
 pub mod scripts;
@@ -54,6 +57,7 @@ pub mod search;
 pub mod search_history;
 pub mod sessions;
 pub mod settings;
+pub mod tank_members;
 pub use lanrurugi_share::attempts as share_attempts;
 pub mod share_host;
 pub mod share_imports;
@@ -101,6 +105,7 @@ pub fn router() -> Router<AppState> {
         .merge(archive_split::router())
         .merge(archives::router())
         .merge(integrity_backfill::router())
+        .merge(integrity_scan::router())
         .merge(direct_download::router())
         .merge(bench::router())
         .merge(bookmarks::router())

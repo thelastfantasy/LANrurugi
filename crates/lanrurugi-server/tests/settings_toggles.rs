@@ -178,6 +178,8 @@ fn test_archive(id: &str, title: &str, tags: &str) -> lanrurugi_core::entities::
         corrupted_pages: vec![],
         has_patch: false,
         blake3: None,
+        primary_source: None,
+        progress_pages: None,
     }
 }
 
@@ -348,7 +350,7 @@ async fn guest_mode_and_category_visibility_matrix() {
     let archive_id = "6".repeat(40);
     repos
         .archives
-        .save(&test_archive(&archive_id, "Guest Visible Archive", ""))
+        .create_or_replace(&test_archive(&archive_id, "Guest Visible Archive", ""))
         .await
         .unwrap();
     let category = lanrurugi_core::entities::Category {
@@ -359,7 +361,7 @@ async fn guest_mode_and_category_visibility_matrix() {
         pinned: false,
         visible_to_guest: true,
     };
-    repos.categories.save(&category).await.unwrap();
+    repos.categories.create_or_replace(&category).await.unwrap();
 
     // Now an unauthenticated caller reaches the ordinary protected route as a guest.
     let resp = request(&app, "GET", "/api/categories").await;
@@ -409,19 +411,19 @@ async fn guest_search_excludes_out_of_scope_archive_sharing_a_tag() {
     let out_of_scope_id = "2".repeat(40);
     repos
         .archives
-        .save(&test_archive(&in_scope_id, "In Scope", "shared_tag"))
+        .create_or_replace(&test_archive(&in_scope_id, "In Scope", "shared_tag"))
         .await
         .unwrap();
     repos
         .archives
-        .save(&test_archive(
+        .create_or_replace(&test_archive(
             &out_of_scope_id,
             "Out Of Scope",
             "shared_tag",
         ))
         .await
         .unwrap();
-    // `ArchiveRepository::save` itself never touches any search index — only the real
+    // `ArchiveRepository::create_or_replace` itself never touches any search index — only the real
     // `PUT /archives/{id}/metadata` handler does (`archives.rs::update_archive_metadata`'s own
     // `indexer::index_new_archive`/`update_tag_indexes` calls). A test that writes archives
     // straight through the repository (as this one does, to control both ids precisely) must
@@ -465,7 +467,7 @@ async fn guest_search_excludes_out_of_scope_archive_sharing_a_tag() {
         pinned: false,
         visible_to_guest: true,
     };
-    repos.categories.save(&category).await.unwrap();
+    repos.categories.create_or_replace(&category).await.unwrap();
     set_config_field(&redis, "guestmode", "1").await;
 
     let resp = request(
@@ -525,7 +527,7 @@ async fn guest_metadata_request_for_out_of_scope_archive_404s_like_nonexistent()
     let out_of_scope_id = "3".repeat(40);
     repos
         .archives
-        .save(&test_archive(&out_of_scope_id, "Out Of Scope", ""))
+        .create_or_replace(&test_archive(&out_of_scope_id, "Out Of Scope", ""))
         .await
         .unwrap();
     // Guest mode on, but with a guest-visible category that does NOT include this archive — the
@@ -537,7 +539,7 @@ async fn guest_metadata_request_for_out_of_scope_archive_404s_like_nonexistent()
     let in_scope_id = "7".repeat(40);
     repos
         .archives
-        .save(&test_archive(&in_scope_id, "In Scope", ""))
+        .create_or_replace(&test_archive(&in_scope_id, "In Scope", ""))
         .await
         .unwrap();
     let category = lanrurugi_core::entities::Category {
@@ -548,7 +550,7 @@ async fn guest_metadata_request_for_out_of_scope_archive_404s_like_nonexistent()
         pinned: false,
         visible_to_guest: true,
     };
-    repos.categories.save(&category).await.unwrap();
+    repos.categories.create_or_replace(&category).await.unwrap();
     set_config_field(&redis, "guestmode", "1").await;
 
     let nonexistent_id = "4".repeat(40);
@@ -621,7 +623,7 @@ async fn guest_cannot_bookmark_save_progress_or_download_an_in_scope_archive() {
     let archive_id = "5".repeat(40);
     repos
         .archives
-        .save(&test_archive(&archive_id, "In Scope", ""))
+        .create_or_replace(&test_archive(&archive_id, "In Scope", ""))
         .await
         .unwrap();
     let category = lanrurugi_core::entities::Category {
@@ -632,7 +634,7 @@ async fn guest_cannot_bookmark_save_progress_or_download_an_in_scope_archive() {
         pinned: false,
         visible_to_guest: true,
     };
-    repos.categories.save(&category).await.unwrap();
+    repos.categories.create_or_replace(&category).await.unwrap();
     set_config_field(&redis, "guestmode", "1").await;
 
     let metadata_resp = request(&app, "GET", &format!("/api/archives/{archive_id}/metadata")).await;
@@ -708,7 +710,7 @@ async fn guest_cannot_reach_plugins_activity_or_stats_regardless_of_guest_mode()
         pinned: false,
         visible_to_guest: true,
     };
-    repos.categories.save(&category).await.unwrap();
+    repos.categories.create_or_replace(&category).await.unwrap();
     set_config_field(&redis, "guestmode", "1").await;
 
     for path in ["/api/plugins", "/api/activity", "/api/stats"] {
@@ -749,7 +751,7 @@ async fn guest_eligibility_change_takes_effect_on_the_very_next_request() {
     let archive_id = "8".repeat(40);
     repos
         .archives
-        .save(&test_archive(&archive_id, "Guest Visible Archive", ""))
+        .create_or_replace(&test_archive(&archive_id, "Guest Visible Archive", ""))
         .await
         .unwrap();
     let category = lanrurugi_core::entities::Category {
@@ -760,7 +762,7 @@ async fn guest_eligibility_change_takes_effect_on_the_very_next_request() {
         pinned: false,
         visible_to_guest: true,
     };
-    repos.categories.save(&category).await.unwrap();
+    repos.categories.create_or_replace(&category).await.unwrap();
     set_config_field(&redis, "guestmode", "1").await;
 
     let eligible_resp = request(&app, "GET", "/api/categories").await;
@@ -779,7 +781,7 @@ async fn guest_eligibility_change_takes_effect_on_the_very_next_request() {
     set_config_field(&redis, "guestmode", "1").await;
     let mut unmarked = category.clone();
     unmarked.visible_to_guest = false;
-    repos.categories.save(&unmarked).await.unwrap();
+    repos.categories.create_or_replace(&unmarked).await.unwrap();
     let after_unmark = request(&app, "GET", "/api/categories").await;
     assert_eq!(
         after_unmark.status(),

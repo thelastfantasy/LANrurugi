@@ -154,7 +154,7 @@ fn window_is_open(deadline: i64, now: i64, always: bool) -> bool {
 /// pointing it at a tracker is that an error is waiting when you go looking, rather than requiring
 /// a window to be re-opened before every attempt. Unset/false leaves production behaviour exactly
 /// as it was.
-fn always_forward() -> bool {
+pub(crate) fn always_forward() -> bool {
     static ALWAYS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ALWAYS.get_or_init(|| {
         std::env::var("LANRURUGI_TRACKER_ALWAYS_FORWARD")

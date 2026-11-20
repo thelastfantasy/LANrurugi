@@ -56,6 +56,11 @@ fn blocked_key(subscription_id: &str) -> String {
     format!("LANRURUGI_SUBSCRIPTION_BLOCKED_{subscription_id}")
 }
 
+/// Works the user skipped from the approval list, `source -> epoch ms`.
+fn skipped_key(subscription_id: &str) -> String {
+    format!("LANRURUGI_SUBSCRIPTION_SKIPPED_{subscription_id}")
+}
+
 /// Epoch milliseconds, for ordering the blocked list. Local helper rather than a dependency on the
 /// jobs crate's own clock: this is the only timestamp this file needs.
 fn now_ms() -> i64 {
@@ -596,6 +601,11 @@ pub struct CheckCycle {
 // ── Reservation ─────────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../apps/frontend/src/api/generated/")
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ReservationStatus {
     Waiting,
@@ -605,6 +615,11 @@ pub enum ReservationStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../apps/frontend/src/api/generated/")
+)]
 pub struct ReservationEntry {
     pub id: String,
     pub subscription_id: String,
@@ -612,7 +627,17 @@ pub struct ReservationEntry {
     /// Why it could not be downloaded, in the user's terms.
     pub reason: String,
     pub status: ReservationStatus,
+    #[cfg_attr(test, ts(type = "number"))]
     pub created_at: i64,
+}
+
+/// A work skipped from the approval list: when, and under what title.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkippedWork {
+    /// Epoch milliseconds.
+    pub at: i64,
+    #[serde(default)]
+    pub title: std::collections::HashMap<String, String>,
 }
 
 /// One work as a listing last showed it.
@@ -670,6 +695,11 @@ pub struct SnapshotEntry {
 /// being, from the user's point of view, an unanswered question. It also needs to be addressable on
 /// its own — "approve this one" has to name something.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    test,
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../apps/frontend/src/api/generated/")
+)]
 pub struct PendingApproval {
     pub id: String,
     pub subscription_id: String,
@@ -677,7 +707,12 @@ pub struct PendingApproval {
     pub source_url: String,
     /// By language, as the source supplied them.
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    #[cfg_attr(
+        test,
+        ts(as = "Option<std::collections::HashMap<String, String>>", optional)
+    )]
     pub title: std::collections::HashMap<String, String>,
+    #[cfg_attr(test, ts(type = "number"))]
     pub created_at: i64,
 }
 
@@ -695,7 +730,9 @@ impl SubscriptionRepository {
 
     // Subscriptions
 
-    pub async fn save(&self, subscription: &Subscription) -> Result<()> {
+    /// Writes a new subscription. An existing one is changed through [`Self::update`]: a check can
+    /// run for minutes, and saving the copy it started from would undo an edit made meanwhile.
+    pub async fn create_or_replace(&self, subscription: &Subscription) -> Result<()> {
         let mut conn = self.pool.get().await?;
         let key = subscription_key(&subscription.id);
         let raw = serde_json::to_string(subscription)
@@ -703,6 +740,21 @@ impl SubscriptionRepository {
         let _: () = conn.set(&key, raw).await?;
         let _: () = conn.sadd(SUBSCRIPTION_INDEX, &subscription.id).await?;
         Ok(())
+    }
+
+    /// Changes an existing subscription under its lock (#302): reads it as it is now, applies
+    /// `change`, writes it back. `None` when it does not exist (or was deleted meanwhile).
+    pub async fn update<F>(&self, id: &str, change: F) -> Result<Option<Subscription>>
+    where
+        F: FnOnce(&mut Subscription),
+    {
+        let _guard = crate::record_lock::lock(&subscription_key(id)).await;
+        let Some(mut subscription) = self.get(id).await? else {
+            return Ok(None);
+        };
+        change(&mut subscription);
+        self.create_or_replace(&subscription).await?;
+        Ok(Some(subscription))
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<Subscription>> {
@@ -734,12 +786,15 @@ impl SubscriptionRepository {
     /// or seen-set behind would be the same class of orphan this project fixed for archives in
     /// issue #102.
     pub async fn delete(&self, id: &str) -> Result<()> {
+        // Waits for an update in flight, so it cannot write the subscription back after this.
+        let _guard = crate::record_lock::lock(&subscription_key(id)).await;
         let mut conn = self.pool.get().await?;
         let _: () = conn.del(subscription_key(id)).await?;
         let _: () = conn.del(cycles_key(id)).await?;
         let _: () = conn.del(seen_key(id)).await?;
         let _: () = conn.del(rejected_key(id)).await?;
         let _: () = conn.del(blocked_key(id)).await?;
+        let _: () = conn.del(skipped_key(id)).await?;
         let _: () = conn.del(snapshot_key(id)).await?;
         let _: () = conn.srem(SUBSCRIPTION_INDEX, id).await?;
         drop(conn);
@@ -857,6 +912,99 @@ impl SubscriptionRepository {
         Ok(())
     }
 
+    /// Records works the user skipped from the approval list, with the title the approval carried.
+    /// They are seen like any handled work; this is so the history can say "skipped" (instead of a
+    /// stale "awaiting approval") and still list a skip whose check has aged out of it.
+    pub async fn mark_skipped(
+        &self,
+        subscription_id: &str,
+        works: &[(String, std::collections::HashMap<String, String>)],
+    ) -> Result<()> {
+        if works.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.pool.get().await?;
+        let at = now_ms();
+        let fields: Vec<(String, String)> = works
+            .iter()
+            .map(|(source, title)| {
+                let record = SkippedWork {
+                    at,
+                    title: title.clone(),
+                };
+                (
+                    source.clone(),
+                    serde_json::to_string(&record).unwrap_or_default(),
+                )
+            })
+            .collect();
+        let _: () = conn
+            .hset_multiple(skipped_key(subscription_id), &fields)
+            .await?;
+        Ok(())
+    }
+
+    /// Removes these works' skip records and returns them, for putting them back on the approval list.
+    pub async fn take_skipped(
+        &self,
+        subscription_id: &str,
+        sources: &[String],
+    ) -> Result<Vec<(String, SkippedWork)>> {
+        let mut all = self.skipped_all(subscription_id).await?;
+        let taken: Vec<(String, SkippedWork)> = sources
+            .iter()
+            .filter_map(|source| all.remove(source).map(|work| (source.clone(), work)))
+            .collect();
+        if !taken.is_empty() {
+            let mut conn = self.pool.get().await?;
+            let keys: Vec<&str> = taken.iter().map(|(source, _)| source.as_str()).collect();
+            let _: () = conn.hdel(skipped_key(subscription_id), keys).await?;
+        }
+        Ok(taken)
+    }
+
+    /// Drops skip records made before `cutoff_ms`; returns how many went. The works stay seen.
+    pub async fn prune_skipped_before(
+        &self,
+        subscription_id: &str,
+        cutoff_ms: i64,
+    ) -> Result<usize> {
+        let old: Vec<String> = self
+            .skipped_all(subscription_id)
+            .await?
+            .into_iter()
+            .filter(|(_, work)| work.at < cutoff_ms)
+            .map(|(source, _)| source)
+            .collect();
+        if old.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.pool.get().await?;
+        let _: () = conn.hdel(skipped_key(subscription_id), &old).await?;
+        Ok(old.len())
+    }
+
+    /// The works this subscription's user skipped, by source.
+    pub async fn skipped_all(
+        &self,
+        subscription_id: &str,
+    ) -> Result<std::collections::HashMap<String, SkippedWork>> {
+        let mut conn = self.pool.get().await?;
+        let raw: std::collections::HashMap<String, String> =
+            conn.hgetall(skipped_key(subscription_id)).await?;
+        Ok(raw
+            .into_iter()
+            .map(|(source, value)| {
+                // A bare timestamp is what an earlier build of this record held.
+                let work = serde_json::from_str(&value).unwrap_or_else(|_| SkippedWork {
+                    at: value.parse().unwrap_or(0),
+                    title: Default::default(),
+                });
+                (source, work)
+            })
+            .collect())
+    }
+
     /// Every work this subscription has blocked, newest first.
     pub async fn blocked_all(&self, subscription_id: &str) -> Result<Vec<(String, i64)>> {
         let mut conn = self.pool.get().await?;
@@ -880,8 +1028,10 @@ impl SubscriptionRepository {
         let mut conn = self.pool.get().await?;
         let _: () = conn.srem(seen_key(subscription_id), sources).await?;
         let _: () = conn.srem(rejected_key(subscription_id), sources).await?;
-        // A blocked work that is being reconsidered stops being blocked, by definition.
+        // A blocked work that is being reconsidered stops being blocked, by definition — and a
+        // skipped one stops being skipped.
         let _: () = conn.hdel(blocked_key(subscription_id), sources).await?;
+        let _: () = conn.hdel(skipped_key(subscription_id), sources).await?;
         Ok(())
     }
 
@@ -895,6 +1045,7 @@ impl SubscriptionRepository {
         let _: () = conn.del(seen_key(subscription_id)).await?;
         let _: () = conn.del(rejected_key(subscription_id)).await?;
         let _: () = conn.del(blocked_key(subscription_id)).await?;
+        let _: () = conn.del(skipped_key(subscription_id)).await?;
         Ok(())
     }
 
@@ -1130,6 +1281,37 @@ mod tests {
         );
     }
 
+    /// #302: a check that finishes after the user disabled the subscription records its time
+    /// without turning it back on, and nothing brings back a deleted subscription.
+    #[tokio::test]
+    async fn a_finishing_check_keeps_an_edit_made_while_it_ran() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = SubscriptionRepository::new(pool);
+        let started = sub("sub-302-edit", 60, SubscriptionState::Enabled, None);
+        repo.create_or_replace(&started).await.unwrap();
+
+        repo.update(&started.id, |s| s.state = SubscriptionState::Disabled)
+            .await
+            .unwrap();
+        repo.update(&started.id, |s| s.last_checked_at = Some(42))
+            .await
+            .unwrap();
+        let after = repo.get(&started.id).await.unwrap().unwrap();
+        assert_eq!(after.state, SubscriptionState::Disabled);
+        assert_eq!(after.last_checked_at, Some(42));
+
+        repo.delete(&started.id).await.unwrap();
+        assert!(repo
+            .update(&started.id, |s| s.last_checked_at = Some(43))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(repo.get(&started.id).await.unwrap().is_none());
+    }
+
     /// The behaviour a user depends on: deleting a downloaded archive must NOT cause the subscription
     /// to fetch it again. Deletion deliberately does not touch the seen set, so this asserts the set
     /// keeps the record — the archive being gone is not evidence the user wants it back.
@@ -1346,7 +1528,7 @@ mod tests {
         };
         let repo = SubscriptionRepository::new(pool);
         let s = sub("sub-del-1", 3600, SubscriptionState::Enabled, None);
-        repo.save(&s).await.unwrap();
+        repo.create_or_replace(&s).await.unwrap();
         repo.save_pending(&pending(
             "pa-del-1",
             "sub-del-1",

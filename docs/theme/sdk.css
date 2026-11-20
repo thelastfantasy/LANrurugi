@@ -719,3 +719,38 @@ body:has(.lr-home) .toc {
     display: none;
   }
 }
+
+/* Version switcher (theme-sdk.mjs): the GitHub link's pill, holding a native select. Hidden until
+   `versions.json` lists more than one version — a lone version has nothing to switch to. */
+.lr-version {
+  display: none;
+  flex-shrink: 0;
+  height: 45px;
+  box-sizing: border-box;
+  padding: 0 14px;
+  border: var(--lr-border);
+  border-radius: 999px;
+  background: var(--lr-card);
+  color: var(--lr-text);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.lr-version.is-ready {
+  display: inline-block;
+}
+
+/* An old version's pages say so above everything else. */
+.lr-old-version {
+  padding: 10px 16px;
+  background: var(--lr-hi);
+  color: var(--lr-hi-text);
+  font-weight: 700;
+  text-align: center;
+}
+
+.lr-old-version a {
+  color: inherit;
+  text-decoration: underline;
+}

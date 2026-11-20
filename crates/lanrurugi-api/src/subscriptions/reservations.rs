@@ -18,6 +18,8 @@ pub enum ReservationReason {
     SourceUnreachable,
     /// The source reported the user is out of download credit.
     InsufficientCredit,
+    /// No installed download plugin handles this URL.
+    NoDownloadPlugin,
     /// Anything else the download path reported.
     DownloadFailed(String),
 }
@@ -29,7 +31,39 @@ impl ReservationReason {
         match self {
             ReservationReason::SourceUnreachable => "source_unreachable".to_string(),
             ReservationReason::InsufficientCredit => "insufficient_credit".to_string(),
+            ReservationReason::NoDownloadPlugin => "no_download_plugin".to_string(),
             ReservationReason::DownloadFailed(detail) => format!("download_failed:{detail}"),
+        }
+    }
+
+    /// The reverse of [`Self::as_key`]. An unknown key reads as a generic failure with that text.
+    pub fn from_key(key: &str) -> Self {
+        match key {
+            "source_unreachable" => ReservationReason::SourceUnreachable,
+            "insufficient_credit" => ReservationReason::InsufficientCredit,
+            "no_download_plugin" => ReservationReason::NoDownloadPlugin,
+            // Written before this kind had its own key.
+            "download_failed:no installed download plugin matches this source URL" => {
+                ReservationReason::NoDownloadPlugin
+            }
+            other => ReservationReason::DownloadFailed(
+                other
+                    .strip_prefix("download_failed:")
+                    .unwrap_or(other)
+                    .to_string(),
+            ),
+        }
+    }
+
+    /// Whether trying the same work again could succeed. Every reason today is a condition that
+    /// changes (the source comes back, credit refills, a plugin is installed), so all are; the
+    /// match is exhaustive so a reason that cannot change has to say so.
+    pub fn retryable(&self) -> bool {
+        match self {
+            ReservationReason::SourceUnreachable
+            | ReservationReason::InsufficientCredit
+            | ReservationReason::NoDownloadPlugin
+            | ReservationReason::DownloadFailed(_) => true,
         }
     }
 
@@ -147,5 +181,17 @@ mod tests {
         ];
         let order = prune_order(&entries);
         assert_eq!(order[0].id, "older");
+    }
+
+    #[test]
+    fn keys_read_back_as_the_reason_they_name() {
+        for reason in [
+            ReservationReason::SourceUnreachable,
+            ReservationReason::InsufficientCredit,
+            ReservationReason::NoDownloadPlugin,
+            ReservationReason::DownloadFailed("timed out".into()),
+        ] {
+            assert_eq!(ReservationReason::from_key(&reason.as_key()), reason);
+        }
     }
 }

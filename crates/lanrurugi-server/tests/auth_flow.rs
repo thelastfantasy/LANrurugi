@@ -52,6 +52,8 @@ fn test_archive(id: &str, title: &str) -> lanrurugi_core::entities::Archive {
         corrupted_pages: vec![],
         has_patch: false,
         blake3: None,
+        primary_source: None,
+        progress_pages: None,
     }
 }
 
@@ -723,7 +725,7 @@ async fn guest_visitor_reaches_ordinary_routes_but_not_session_only_ones() {
     let repos = lanrurugi_api::Repositories::new(&redis);
     repos
         .archives
-        .save(&test_archive(&archive_id, "Guest Visible Archive"))
+        .create_or_replace(&test_archive(&archive_id, "Guest Visible Archive"))
         .await
         .unwrap();
 
@@ -741,7 +743,7 @@ async fn guest_visitor_reaches_ordinary_routes_but_not_session_only_ones() {
         pinned: false,
         visible_to_guest: true,
     };
-    repos.categories.save(&category).await.unwrap();
+    repos.categories.create_or_replace(&category).await.unwrap();
 
     let categories_resp = request(&app, "GET", "/api/categories", None, None).await;
     assert_eq!(
@@ -755,7 +757,7 @@ async fn guest_visitor_reaches_ordinary_routes_but_not_session_only_ones() {
     let out_of_scope_id = "a".repeat(40);
     repos
         .archives
-        .save(&test_archive(&out_of_scope_id, "Admin Only Archive"))
+        .create_or_replace(&test_archive(&out_of_scope_id, "Admin Only Archive"))
         .await
         .unwrap();
 

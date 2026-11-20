@@ -119,8 +119,13 @@ async fn main() {
         }
 
         if changed {
+            // Only the two fields this repairs, onto the record as it is now.
+            let (pagecount, tags) = (archive.pagecount, archive.tags.clone());
             archives
-                .save(&archive)
+                .update(&archive.id, |a| {
+                    a.pagecount = pagecount;
+                    a.tags = tags;
+                })
                 .await
                 .expect("failed to save archive");
         }

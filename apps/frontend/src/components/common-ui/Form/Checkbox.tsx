@@ -7,14 +7,21 @@ import { FaCheck, FaMinus } from "react-icons/fa6";
 export function Checkbox({
   checked,
   onCheckedChange,
+  indeterminate = false,
   ...rootProps
-}: { checked: boolean; onCheckedChange: (checked: boolean) => void } & Omit<
+}: {
+  checked: boolean
+  onCheckedChange: (checked: boolean) => void
+  /** "Some, not all": renders a dash instead of a tick, as `CheckboxField` does. */
+  indeterminate?: boolean
+} & Omit<
   ComponentProps<typeof BaseCheckbox.Root>,
-  "checked" | "onCheckedChange" | "className" | "children"
+  "checked" | "onCheckedChange" | "className" | "children" | "indeterminate"
 >) {
   return (
     <BaseCheckbox.Root
       checked={checked}
+      indeterminate={indeterminate}
       onCheckedChange={onCheckedChange}
       className="common-form-control-bg relative inline-flex size-[13px] shrink-0 -translate-y-[2px] cursor-pointer items-center justify-center border border-solid border-current p-0 align-middle outline-none data-checked:border-[#1a73e8] data-checked:bg-[#1a73e8] data-checked:text-white"
       {...rootProps}
@@ -23,7 +30,7 @@ export function Checkbox({
         className="flex items-center justify-center text-[11px] leading-none"
         keepMounted={false}
       >
-        <FaCheck aria-hidden="true" />
+        {indeterminate ? <FaMinus aria-hidden="true" /> : <FaCheck aria-hidden="true" />}
       </BaseCheckbox.Indicator>
     </BaseCheckbox.Root>
   );

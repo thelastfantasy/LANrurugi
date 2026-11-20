@@ -2,6 +2,8 @@ import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
 import type { QueueError } from "@/api/types"
+import { Link } from "@/components/common-ui/Link"
+import { formatBytes } from "@/lib/formatBytes"
 import { routes } from "@/lib/routes"
 
 /** Renders a structured `QueueError` as translated text, mapping `.kind` to an i18n key. A
@@ -61,6 +63,15 @@ export function QueueErrorText({ error }: { error: QueueError }) {
           {t("components.layout.verifyReadbackMismatch", { offset: error.offset, len: error.len })}
         </span>
       )
+    case "downloaded_not_archive":
+      // The page's own words are what explain it (a "still being prepared" notice, a login wall).
+      return (
+        <span title={error.detail}>
+          {error.page_excerpt
+            ? t("components.layout.downloadedWebPage", { excerpt: error.page_excerpt })
+            : t("components.layout.downloadedNotArchive", { detail: error.detail })}
+        </span>
+      )
     case "egress_unavailable":
       return (
         <span>{t("components.layout.egressInterfaceUnavailable", { interface: error.interface })}</span>
@@ -77,30 +88,18 @@ export function QueueErrorText({ error }: { error: QueueError }) {
               ? "A matching archive already exists"
               : "An archive with this filename already exists",
           )}{" "}
-          <a
-            href={routes.reader(error.existing_id)}
-            onClick={(e) => {
-              e.preventDefault()
-              navigate(routes.reader(error.existing_id))
-            }}
-          >
+          <Link to={routes.reader(error.existing_id)}>
             {error.existing_id}
-          </a>
+          </Link>
         </span>
       )
     case "duplicate_filename":
       return (
         <span>
           {t("components.layout.theFilenameFilenameIsAlready", { filename: error.filename })}{" "}
-          <a
-            href={routes.reader(error.existing_id)}
-            onClick={(e) => {
-              e.preventDefault()
-              navigate(routes.reader(error.existing_id))
-            }}
-          >
+          <Link to={routes.reader(error.existing_id)}>
             {error.existing_id}
-          </a>
+          </Link>
         </span>
       )
     case "duplicate_filename_cleaned":
@@ -109,22 +108,28 @@ export function QueueErrorText({ error }: { error: QueueError }) {
       return <span>{t("components.layout.anInternalErrorOccurred")}</span>
     case "stale_after_restart":
       return <span>{t("components.layout.downloadWasInterruptedByA")}</span>
-    case "share_import":
+    case "share_import": {
+      // `not_enough_disk:<needed>:<available>` is this instance's own refusal (#280).
+      const disk = /^not_enough_disk:(\d+):(\d+)$/.exec(error.reason)
+      if (disk)
+        return (
+          <span>
+            {t("share.importRow.notEnoughDisk", {
+              needed: formatBytes(Number(disk[1])),
+              available: formatBytes(Number(disk[2])),
+            })}
+          </span>
+        )
       // A sharer's refusal has a translated message; anything else is shown as reported.
       return <span>{t(`share.refusal.${error.reason}`, { defaultValue: error.reason })}</span>
+    }
     case "superseded_by_newer_revision":
       return (
         <span>
           {t("components.layout.aNewerRevisionIsAlreadyInLibrary")}{" "}
-          <a
-            href={routes.reader(error.archive_id)}
-            onClick={(e) => {
-              e.preventDefault()
-              navigate(routes.reader(error.archive_id))
-            }}
-          >
+          <Link to={routes.reader(error.archive_id)}>
             {error.archive_id}
-          </a>
+          </Link>
         </span>
       )
     case "ingest_failed":
@@ -140,15 +145,9 @@ export function QueueErrorText({ error }: { error: QueueError }) {
       return (
         <span>
           {t("components.layout.thisSourceWasAlreadyImported")}{" "}
-          <a
-            href={routes.reader(error.existing_id)}
-            onClick={(e) => {
-              e.preventDefault()
-              navigate(routes.reader(error.existing_id))
-            }}
-          >
+          <Link to={routes.reader(error.existing_id)}>
             {error.existing_id}
-          </a>
+          </Link>
         </span>
       )
     case "already_patched":

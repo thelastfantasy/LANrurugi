@@ -430,10 +430,9 @@ async fn clear_new_all(
         }
     };
     let mut cleared = 0u32;
-    for mut archive in archives {
+    for archive in archives {
         if archive.isnew {
-            archive.isnew = false;
-            let _ = state.repos.archives.save(&archive).await;
+            let _ = state.repos.archives.set_isnew(&archive.id, false).await;
             let _ =
                 lanrurugi_search::indexer::set_isnew_index(&state.redis.search, &archive.id, false)
                     .await;
@@ -525,7 +524,27 @@ async fn drop_database(
 /// another import or restore, and re-running it on a clean library is a read-only scan that writes
 /// nothing back. That matters more than the few seconds it costs on a large library.
 async fn tidy_tags(State(state): State<AppState>) -> Response {
-    let report = match lanrurugi_storage::tidy_tags::tidy_tags(&state.repos.archives).await {
+    // Dropping an empty-value tag removes its `INDEX_<namespace>:` key; every other rewrite folds
+    // to the same key, so this is a no-op for them. Warnings rather than a failure: the archive is
+    // already written, and re-running the tidy does not repair a stale index.
+    let reindex = |id: String, old_tags: String, new_tags: String| {
+        let state = state.clone();
+        async move {
+            if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
+                &state.redis.search,
+                &state.equivalence,
+                &id,
+                &old_tags,
+                &new_tags,
+            )
+            .await
+            {
+                tracing::warn!(%id, error = %e, "tidy tags: search index update failed");
+            }
+        }
+    };
+    let report = match lanrurugi_storage::tidy_tags::tidy_tags(&state.repos.archives, reindex).await
+    {
         Ok(report) => report,
         Err(e) => {
             return error(
@@ -535,23 +554,6 @@ async fn tidy_tags(State(state): State<AppState>) -> Response {
             )
         }
     };
-
-    // Dropping an empty-value tag removes its `INDEX_<namespace>:` key; every other rewrite folds
-    // to the same key, so this is a no-op for them. Warnings rather than a failure: the archives
-    // are already written, and re-running the tidy does not repair a stale index.
-    for change in &report.changes {
-        if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
-            &state.redis.search,
-            &state.equivalence,
-            &change.id,
-            &change.old_tags,
-            &change.new_tags,
-        )
-        .await
-        {
-            tracing::warn!(id = %change.id, error = %e, "tidy tags: search index update failed");
-        }
-    }
 
     axum::Json(json!({
         "scanned": report.scanned,
@@ -583,7 +585,7 @@ async fn clean_database(
 
     let mut deleted = 0u32;
     let mut unlinked = 0u32;
-    for mut archive in archives {
+    for archive in archives {
         if archive.file.is_empty() {
             // Reuses the single-delete path rather than repeating a subset of it (issue #102).
             // Deleting the record plus the recommend cache — all this branch used to do — left the
@@ -609,8 +611,11 @@ async fn clean_database(
             continue;
         }
         if !std::path::Path::new(&archive.file).exists() {
-            archive.file.clear();
-            let _ = state.repos.archives.save(&archive).await;
+            let _ = state
+                .repos
+                .archives
+                .update(&archive.id, |a| a.file.clear())
+                .await;
             unlinked += 1;
         }
     }

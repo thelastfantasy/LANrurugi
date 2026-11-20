@@ -315,12 +315,13 @@ input[type="checkbox"].lrr-checkbox-bare::after {
   }
 }
 
+/* Wraps instead of truncating, so a long title can be read in full (#298); the block's own
+   max-width keeps it off most of the page. */
 .reader-headless-title {
   font-size: 0.88rem;
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* Chapter jump OSD (headless, `t`). Deliberately neutral: a grey translucent sheet over the
@@ -455,7 +456,9 @@ input[type="checkbox"].lrr-checkbox-bare::after {
 
 #reader-help.reader-help-panel {
   width: min(1100px, 94vw) !important;
-  left: 50%;
+  /* `!important` to answer legacy's `.small-overlay { left: 0 !important }` at ≤560px, which
+   * otherwise leaves the translate(-50%) centring to push the panel half off-screen. */
+  left: 50% !important;
   transform: translate(-50%, -50%);
   box-sizing: border-box;
   padding: 18px 24px;
@@ -473,20 +476,25 @@ input[type="checkbox"].lrr-checkbox-bare::after {
   line-height: 1.5;
 }
 
+/* Two real columns rather than `column-count`: a section can't be split (`break-inside: avoid`),
+   so the automatic balance pushed the two longest ones into the first column and left the second
+   half of the sheet empty while the whole thing scrolled. The reader's `helpContent` decides which
+   sections share a side (paging/display on the left, touch/navigation/bookmarks on the right). */
 #reader-help.reader-help-panel .reader-help-sections {
-  column-count: 2;
-  column-gap: 48px;
+  display: flex;
+  align-items: flex-start;
+  gap: 48px;
 }
 
-@media (max-width: 1000px) {
-  #reader-help.reader-help-panel .reader-help-sections {
-    column-count: 2;
-  }
+#reader-help.reader-help-panel .reader-help-column {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 @media (max-width: 680px) {
   #reader-help.reader-help-panel .reader-help-sections {
-    column-count: 1;
+    flex-direction: column;
+    gap: 0;
   }
 }
 
@@ -1072,21 +1080,25 @@ input[type="checkbox"].lrr-checkbox-bare::after {
   opacity: 0.9;
 }
 
-/* Headless on a phone leaves nothing but the page, so it is centred in the viewport instead of
- * hugging the top edge with the rest of the screen empty below it. */
-@media all and (max-width: 1000px) {
-  #i1.reader-headless {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    /* `div.sni` carries the legacy 2px/6px vertical margins and `body` a 2px padding; a 100dvh
-       box plus those pushes the container past the viewport and clips its bottom border, so the
-       height is measured against the body's content box and the margins are dropped. */
-    min-height: calc(100dvh - 4px);
-    box-sizing: border-box;
-    margin: 0;
-  }
+/* Headless leaves nothing but the page, so it is centred in the viewport at every width instead of
+ * hugging the top edge with the rest of the screen empty below it — a page shorter than the screen
+ * used to sit at the top on a desktop. */
+#i1.reader-headless {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  /* `div.sni` carries the legacy 2px/6px vertical margins and `body` a 2px padding; a 100dvh
+     box plus those pushes the container past the viewport and clips its bottom border, so the
+     height is measured against the body's content box and the margins are dropped. */
+  min-height: calc(100dvh - 4px);
+  box-sizing: border-box;
+  /* Vertical margins only: on a desktop the container hugs the page and is centred by legacy's
+     own horizontal `auto` margins, which a plain `margin: 0` took away. */
+  margin-top: 0;
+  margin-bottom: 0;
+}
 
+@media all and (max-width: 1000px) {
   #i1.reader-headless #display {
     width: 100%;
   }
@@ -1144,6 +1156,58 @@ input[type="checkbox"].lrr-checkbox-bare::after {
     font-weight: 600;
     line-height: 1.35;
     overflow-wrap: anywhere;
+  }
+}
+
+/* The reader overview's page grid. Legacy sizes each cell from its own image's aspect ratio
+ * (`div.id3 img { height: 100%; width: auto }`), so a cell's width is not final until the image has
+ * decoded — every arriving thumbnail can re-pack the row it sits in, and one batch load shortens the
+ * whole grid by hundreds of pixels, which on a phone reads as the page jumping while you drag.
+ * Fixing the width to a 1:√2 page box derived from legacy's own cell height (280px → 198px, and the
+ * 196px height `lrr.css` sets below 560px → 139px) makes the grid's geometry depend on nothing but
+ * the page count. `object-fit: contain` keeps each image's own ratio inside that box, so a
+ * double-page spread is letterboxed instead of widening its cell. */
+.overview-page-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.overview-page-cell {
+  width: 198px;
+}
+
+@media all and (max-width: 560px) {
+  .overview-page-cell {
+    width: 139px;
+  }
+
+  /* legacy's overlay bar is one non-wrapping row: a long chapter name at 200px wide leaves the
+     "chapters" heading squeezed against the panel edge. Put the selector on its own line and keep
+     the heading on the first one. */
+  #archivePagesOverlay .overlay-bar {
+    flex-wrap: wrap;
+  }
+  #archivePagesOverlay .overlay-bar-left {
+    flex: 1 1 100%;
+    padding-left: 0;
+  }
+  #archivePagesOverlay .overlay-bar-left:empty {
+    display: none;
+  }
+  #archivePagesOverlay .chapter-selector {
+    display: flex;
+    flex: 1 1 100%;
+    align-items: center;
+    gap: 8px;
+    padding-right: 0;
+    text-align: left;
+  }
+  #archivePagesOverlay #chapter-select {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: auto;
   }
 }
 
@@ -2663,6 +2727,19 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 
 .sub-modal-tabs > .stdbtn {
   flex: 1;
+  /* The themes give `.stdbtn` a 150px minimum: five tabs then needed 750px and pushed the whole
+     dialog sideways on a phone. */
+  min-width: 0;
+}
+
+/* Phones: the tabs wrap, three to a row. */
+@media (max-width: 760px) {
+  .sub-modal-tabs {
+    flex-wrap: wrap;
+  }
+  .sub-modal-tabs > .stdbtn {
+    flex: 1 1 calc(33.333% - 6px);
+  }
 }
 
 .sub-modal-tabs > .stdbtn.is-active {
@@ -2728,6 +2805,9 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 
 .preview-title {
   min-width: 0;
+  /* A title with no break opportunity (a long run of one character, a bare URL) wraps inside its
+     column instead of spilling over the others. */
+  overflow-wrap: anywhere;
 }
 
 /* Date and time stacked by `DateTimeStack`, in the viewer's own local formatting. */
@@ -3186,7 +3266,8 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 .preview-row-actions {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  /* Icon buttons, so they fit one line: a row's actions never stack. */
+  flex-wrap: nowrap;
   justify-content: flex-end;
   gap: 2px 4px;
   margin-top: 2px;
@@ -3230,14 +3311,6 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   text-align: center;
 }
 
-.queue-records-grid {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 10em) minmax(0, 14em);
-  /* Its own scroll box rather than `.sub-modal-preview`'s fixed 65vh pane: that one is a twin of
-     the form modal's fields, and in this list it stretched every row to fill the height. */
-  max-height: 40vh;
-  overflow-y: auto;
-  padding-right: 4px;
-}
 
 /* One subscription's check history: the cycle picker, then work | uploader | verdict. */
 .check-history-head {
@@ -3279,13 +3352,96 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   max-height: 65vh;
 }
 
-.history-subscription,
 .history-when {
   font-size: 0.85em;
   opacity: 0.75;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The match history's body keeps one height whatever the tab or filter shows; the grid inside
+   scrolls, and starts at the top rather than stretching its rows to fill the space. */
+.history-body {
+  height: 65vh;
+}
+.history-body > .sub-modal-preview {
+  max-height: 100%;
+  align-content: start;
+}
+@media (max-width: 760px) {
+  .history-body {
+    height: 70vh;
+  }
+}
+
+/* In the phone drawer the list takes whatever height the drawer has left under the tabs and filters,
+   rather than a fixed 70vh: that box ran past the drawer's bottom, so its last rows sat below the
+   fold even with the list scrolled to its end. */
+.sub-drawer-body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.sub-drawer-body > * {
+  flex-shrink: 0;
+}
+.sub-drawer-body > .history-body {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sub-drawer-body > .history-body > .sub-modal-preview {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+.history-sub-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.history-sub-state {
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
+/* Above the list: a tab's own filter on the left, the subscription picker on the right. One height
+   whether or not either is shown, so switching tabs does not move the list. */
+.sub-modal-filters {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 28px;
+  margin-bottom: 8px;
+}
+
+.sub-modal-retention {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* When the check ran, under the outcome in a subscription list's last column. */
+.preview-verdict .history-when {
+  display: block;
+}
+
+.history-blocked-mark {
+  font-size: 0.85em;
+  opacity: 0.8;
+  margin-right: 2px;
+}
+
+/* Why a download failed, under the verdict: the reason is what tells one failure from another. */
+.history-failure-reason {
+  display: block;
+  font-size: 0.85em;
+  opacity: 0.8;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 760px) {
@@ -3439,6 +3595,17 @@ body div.ido {
  * `!important`, so that is what this uses; the breakpoint keeps every desktop layout exactly as it
  * was, and `max-width` (rather than `width`) leaves narrow content untouched.
  */
+/* Reader overview's two admin buttons (edit / delete). `.stdbtn`'s theme-given 150px minimum
+ * cannot fit two of them in the panel's ~281px inner column on a phone, so they used to stack.
+ * Letting them share the row only below the phone breakpoint keeps the desktop pair legacy-sized.
+ * `!important` because an archive with a patch passes its own inline `min-width: 110px`. */
+@media (max-width: 768px) {
+  .admin-actions > .stdbtn {
+    flex: 1 1 0;
+    min-width: 0 !important;
+  }
+}
+
 @media (max-width: 768px) {
   body div.id1,
   body .left-column,
@@ -3793,4 +3960,217 @@ body div.ido {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Tag chips (`div.gt`) holding one value. With `line-height: normal` a CJK value falls back to a
+ * font with different ascent/descent, and the two fonts' baselines stretched its line box, so the
+ * chip came out taller than a Latin one beside it. A fixed-height text box makes every chip the
+ * same height whatever font draws it. Source URLs keep wrapping and are not marked with this. */
+div.gt.gt-single {
+  line-height: 1.25em;
+}
+div.gt.gt-single > a,
+div.gt.gt-single > span {
+  display: inline-block;
+  height: 1.25em;
+  line-height: 1.25em;
+  vertical-align: top;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A subscription's heading inside the approval list when several subscriptions have works waiting:
+   spans every column; neutral rule so it fits every theme. */
+.preview-group-head {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-weight: bold;
+  /* Colour and the 3px edge come from each theme (`.preview-group-head` in the theme files); the
+     8px matches the rows' cell padding, so the group's checkbox sits over theirs. */
+  padding: 6px 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.preview-group-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* Leads the row, before the checkbox, the way an expander does in a tree. */
+.preview-group-toggle {
+  flex: none;
+  width: 1em;
+  margin-right: 4px;
+  text-align: center;
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+.pending-row {
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+/* The approval checkbox in the state-icon slot: room for the 13px box plus a gap before the title,
+   which the icon-sized slot alone does not leave. */
+.pending-check {
+  width: 1.6em;
+  margin-right: 2px;
+  text-align: left;
+  vertical-align: top;
+  padding-top: 2px;
+}
+.preview-group-head > .pending-check {
+  padding-top: 0;
+}
+
+/* Grouped subscription lists have no subscription column: the title takes that track too. */
+.preview-title-wide {
+  grid-column: span 2;
+}
+.pending-title {
+  display: flex;
+  align-items: flex-start;
+}
+.pending-title > .pending-check {
+  flex: none;
+}
+.pending-title-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pending-batch {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+
+/* The subscriptions dialog's footer: the queue's retention setting and the way to the full page. */
+.sub-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(128, 128, 128, 0.35);
+}
+
+/* Batch operations: operations | selected | divider | picker. The picker column only exists once
+   the divider's button opens it; both lists fill the height the page gives them and scroll inside. */
+.batch-page {
+  text-align: left;
+}
+.batch-layout {
+  display: grid;
+  grid-template-columns: 340px minmax(260px, 1fr) 20px;
+  gap: 0 8px;
+  height: max(420px, calc(100vh - 230px));
+  margin-bottom: 12px;
+}
+.batch-layout.is-picker-open {
+  grid-template-columns: 340px minmax(240px, 1fr) 20px minmax(300px, 1.2fr);
+}
+.batch-ops {
+  overflow-y: auto;
+  min-width: 0;
+}
+.batch-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+}
+.batch-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+}
+.batch-head-btn {
+  width: auto;
+  margin: 0;
+  padding: 0 8px;
+}
+.batch-list {
+  flex: 1;
+  min-height: 0;
+}
+.batch-empty {
+  padding: 12px;
+  opacity: 0.75;
+}
+.batch-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 8px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.15);
+}
+.batch-row-pick {
+  cursor: pointer;
+}
+.batch-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.batch-row-loading {
+  opacity: 0.6;
+  font-family: monospace;
+}
+.batch-row-kind {
+  opacity: 0.7;
+}
+.batch-row-remove {
+  flex: none;
+}
+/* Full height, so it reads as the edge between two columns; the button sits in its middle. */
+.batch-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-left: 1px solid rgba(128, 128, 128, 0.35);
+  border-right: 1px solid rgba(128, 128, 128, 0.35);
+}
+.batch-divider-btn {
+  width: 20px;
+  min-width: 0;
+  height: 48px;
+  margin: 0;
+  padding: 0;
+}
+
+/* Phone: the selection fills the page; the operations bar is pinned to the bottom. */
+.batch-mobile .batch-selected {
+  height: calc(100dvh - 260px);
+  min-height: 300px;
+}
+.batch-mobile-bar {
+  position: sticky;
+  bottom: 0;
+  padding: 8px 0;
+  background-color: inherit;
+}
+.batch-mobile-bar .stdbtn {
+  width: 100%;
+  margin: 0;
+}
+/* The windowed list needs a height to window against; the drawer's own body only scrolls. */
+.batch-drawer-body .batch-picker {
+  height: calc(100dvh - 140px);
+}
+.batch-ops-sheet {
+  padding: 8px 12px;
+  text-align: left;
 }

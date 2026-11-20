@@ -59,6 +59,49 @@ fn storage_error(e: &std::io::Error) -> String {
     format!("{code}: {e}")
 }
 
+/// Left free on the temp filesystem on top of what an import needs, so an import never fills the
+/// disk the rest of the instance writes to.
+const DISK_RESERVE: u64 = 1 << 30;
+
+/// Bytes the temp filesystem can still take for an import, after [`DISK_RESERVE`]. `None` when the
+/// platform cannot say, in which case nothing is refused up front and a full disk surfaces as the
+/// write error it is.
+///
+/// Imports are bounded by the real disk rather than `tempmaxsize`: that setting sizes the
+/// regenerable page cache, and as an admission cap it refused any archive larger than it (#280).
+fn import_space(dir: &Path) -> Option<u64> {
+    free_bytes(dir).map(|free| free.saturating_sub(DISK_RESERVE))
+}
+
+#[cfg(unix)]
+fn free_bytes(dir: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt as _;
+    // The import directory may not exist yet; its nearest existing ancestor is on the same disk.
+    let existing = dir.ancestors().find(|p| p.exists())?;
+    let path = std::ffi::CString::new(existing.as_os_str().as_bytes()).ok()?;
+    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: `path` is NUL-terminated and `stat` is written by the call before it is read.
+    if unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let stat = unsafe { stat.assume_init() };
+    #[allow(clippy::unnecessary_cast)]
+    Some(stat.f_bavail as u64 * stat.f_frsize as u64)
+}
+
+#[cfg(not(unix))]
+fn free_bytes(_dir: &Path) -> Option<u64> {
+    None
+}
+
+/// What an import needs on disk before it starts: the `concurrency` largest archives still to
+/// fetch, since only that many are written at once.
+fn space_needed(sizes: impl IntoIterator<Item = u64>, concurrency: usize) -> u64 {
+    let mut sizes: Vec<u64> = sizes.into_iter().collect();
+    sizes.sort_unstable_by(|a, b| b.cmp(a));
+    sizes.into_iter().take(concurrency.max(1)).sum()
+}
+
 /// One piece: the 1 MiB the protocol's contract names, in those chunks.
 const PIECE_CHUNKS: u64 = (1024 * 1024) / CHUNK_BYTES;
 /// How long an import keeps trying to reach a sharer whose endpoint is being rebuilt.
@@ -246,8 +289,6 @@ struct Run {
     record: tokio::sync::Mutex<ShareImport>,
     job_id: String,
     queue_item_id: String,
-    /// Bytes this import may still write into `<temp>/share` before `tempmaxsize` is reached.
-    budget: u64,
     /// What to do when an archive's filename belongs to a different local archive.
     filename_policy: FilenamePolicy,
     /// Bytes decoded and hash-verified so far, cumulative for the claim. Reported to the sharer so
@@ -328,17 +369,10 @@ impl Run {
             .import_progress(&self.queue_item_id, &self.job_id, record, done, total);
     }
 
-    /// Whether this import has written past its share of `tempmaxsize`.
-    async fn over_budget(&self) -> bool {
-        let written: u64 = self
-            .record
-            .lock()
-            .await
-            .archives
-            .iter()
-            .map(|a| a.bytes_done)
-            .sum();
-        written > self.budget
+    /// Whether the temp disk is down to its reserve, which stops the transfer before the disk
+    /// itself is full.
+    fn disk_low(&self) -> bool {
+        import_space(&self.dir) == Some(0)
     }
 
     async fn update(&self, sharer_archive_id: &str, f: impl FnOnce(&mut ImportArchive)) {
@@ -671,29 +705,7 @@ fn hash_file(path: &Path) -> std::io::Result<blake3::Hash> {
     Ok(hasher.finalize())
 }
 
-/// Bytes under `<temp>/share` now: partial imports, merged patch copies and outboards. All three
-/// live in the temp tree, so all three count against `tempmaxsize`.
-async fn share_temp_bytes(host: &Host) -> u64 {
-    fn walk(dir: &Path) -> u64 {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return 0;
-        };
-        entries
-            .filter_map(|entry| entry.ok())
-            .map(|entry| match entry.file_type() {
-                Ok(kind) if kind.is_dir() => walk(&entry.path()),
-                Ok(_) => entry.metadata().map(|m| m.len()).unwrap_or(0),
-                Err(_) => 0,
-            })
-            .sum()
-    }
-    let dir = host.temp_dir().join("share");
-    tokio::task::spawn_blocking(move || walk(&dir))
-        .await
-        .unwrap_or(0)
-}
-
-/// Apparent size of one directory tree — the same accounting `share_temp_bytes` uses.
+/// Apparent size of one directory tree.
 fn dir_bytes(dir: &Path) -> u64 {
     fn walk(dir: &Path) -> u64 {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -786,11 +798,12 @@ async fn transfer_archive(run: Arc<Run>, entry: ImportArchive) -> ArchiveOutcome
     // A resume only needs room for what is still missing; the pieces already on disk are in the
     // temp tree already.
     let missing = size.saturating_sub(already);
-    if missing > run.budget {
-        return ArchiveOutcome::Failed(format!(
-            "not enough temp space: {missing} more bytes needed, {} available",
-            run.budget
-        ));
+    if let Some(available) = import_space(&run.dir) {
+        if missing > available {
+            return ArchiveOutcome::Failed(format!(
+                "disk_full: {missing} more bytes needed, {available} available on the temp disk"
+            ));
+        }
     }
     run.update(&id, |a| a.bytes_done = already.min(size)).await;
     // Pieces verified in an earlier run were counted then; resume from that high-water mark so a
@@ -934,9 +947,9 @@ async fn fetch_pieces(
                 run.note_verified(bytes);
                 run.update(id, |a| a.bytes_done = (a.bytes_done + bytes).min(size))
                     .await;
-                if run.over_budget().await {
+                if run.disk_low() {
                     return Some(ArchiveOutcome::Failed(
-                        "temp space ran out: the import reached tempmaxsize".into(),
+                        "disk_full: the temp disk is down to its reserve".into(),
                     ));
                 }
             }
@@ -1421,27 +1434,28 @@ async fn run_import(
         .join("import")
         .join(import_id.as_str());
     let concurrency = record.concurrency.max(1) as usize;
-    // Partial files, merged patch copies and outboards all live under `<temp>/share`, so the import
-    // is bounded by `tempmaxsize` like every other temp consumer — announced sizes first (so a
-    // share that obviously cannot fit is refused before it touches the disk), then the bytes
-    // actually written, below.
-    let used = share_temp_bytes(host).await;
-    // This import's own directory counts toward `used`, but its `.part` is pre-sized to the whole
-    // archive, so leaving it in double-counts a resume: an interrupted import then looks like it
-    // needs twice its size and is refused for want of room it already occupies.
+    // Refused before it touches the disk when the archives written at once obviously cannot fit.
+    // A resume (its directory already holds data) is let through: its `.part` files are sparse,
+    // so what they occupy cannot be told from their length, and each archive checks again below.
     let own = dir_bytes(&dir);
-    let elsewhere = used.saturating_sub(own);
-    let announced = record.archives.iter().map(|a| a.size).sum::<u64>();
-    let quota = host.imports().temp_quota_bytes().await;
-    let budget = match quota {
-        Some(quota) if own == 0 && elsewhere.saturating_add(announced) > quota => {
-            return Err(format!(
-                "not enough temp space: {elsewhere} bytes in use, {announced} more announced, tempmaxsize {quota}"
-            ))
+    let needed = space_needed(
+        record
+            .archives
+            .iter()
+            .filter(|a| {
+                matches!(
+                    a.state,
+                    ImportArchiveState::Pending | ImportArchiveState::Transferring
+                )
+            })
+            .map(|a| a.size),
+        concurrency,
+    );
+    if let Some(available) = import_space(&dir) {
+        if own == 0 && needed > available {
+            return Err(format!("not_enough_disk:{needed}:{available}"));
         }
-        Some(quota) => quota.saturating_sub(elsewhere),
-        None => u64::MAX,
-    };
+    }
     let filename_policy = record.filename_policy;
     let run = Arc::new(Run {
         host: host.clone(),
@@ -1457,7 +1471,6 @@ async fn run_import(
         record: tokio::sync::Mutex::new(record),
         job_id: job_id.to_string(),
         queue_item_id: queue_item_id.to_string(),
-        budget,
         filename_policy,
         verified: AtomicU64::new(0),
         link: std::sync::Mutex::new(crate::runtime::link::of(&opened.conn)),
@@ -1675,6 +1688,22 @@ mod tests {
     use super::*;
 
     use std::io::{Error, ErrorKind};
+
+    /// #280: only the archives written at once need room, not the whole share's total.
+    #[test]
+    fn space_needed_counts_only_the_largest_concurrent_archives() {
+        assert_eq!(space_needed([5, 1, 3, 2], 2), 8);
+        assert_eq!(space_needed([5, 1], 4), 6);
+        assert_eq!(space_needed([], 3), 0);
+        assert_eq!(space_needed([7, 9], 0), 9);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn free_space_is_read_from_the_nearest_existing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(free_bytes(&dir.path().join("not/yet/created")).is_some());
+    }
 
     /// A full piece is a mebibyte, but the last one is short: counting it as full overshot the
     /// archive, and with it the share's ratio.

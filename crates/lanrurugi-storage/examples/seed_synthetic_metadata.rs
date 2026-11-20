@@ -164,6 +164,8 @@ fn synthetic_archive(index: usize, templates: &[SeriesTemplate]) -> Archive {
         corrupted_pages: Vec::new(),
         has_patch: false,
         blake3: None,
+        primary_source: None,
+        progress_pages: None,
     }
 }
 
@@ -233,7 +235,7 @@ async fn main() {
             tank_members.push(archive.id.clone());
         }
         archives
-            .save(&archive)
+            .create_or_replace(&archive)
             .await
             .unwrap_or_else(|e| panic!("failed to save archive {i}: {e}"));
 
@@ -245,6 +247,7 @@ async fn main() {
                 summary: String::new(),
                 tags: String::new(),
                 progress: 0,
+                lastreadtime: None,
                 archives: std::mem::take(&mut tank_members),
                 thumbnail_manual: false,
                 thumbnail_source_archive: None,
@@ -254,7 +257,7 @@ async fn main() {
                 updated_at: None,
             };
             groupings
-                .save(&tank)
+                .create_or_replace(&tank)
                 .await
                 .unwrap_or_else(|e| panic!("failed to save tankoubon {tank_index}: {e}"));
         }

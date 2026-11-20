@@ -1,9 +1,9 @@
 import type { CSSProperties } from "react"
 import type { IconType } from "react-icons"
-import { FaBandage, FaBook, FaCrown, FaTag } from "react-icons/fa6"
+import { FaBandage, FaBook, FaCrown, FaFileCircleExclamation, FaTag } from "react-icons/fa6"
 import { MdFiberNew } from "react-icons/md"
 
-export type StatusKind = "new" | "read" | "tankoubon" | "patch" | "untagged"
+export type StatusKind = "new" | "read" | "tankoubon" | "patch" | "untagged" | "damaged"
 
 /** `MdFiberNew` carries its own padding, so it is drawn larger to match the others. */
 const ICONS: Record<StatusKind, { icon: IconType; size: string }> = {
@@ -12,6 +12,7 @@ const ICONS: Record<StatusKind, { icon: IconType; size: string }> = {
   tankoubon: { icon: FaBook, size: "1em" },
   patch: { icon: FaBandage, size: "1em" },
   untagged: { icon: FaTag, size: "1em" },
+  damaged: { icon: FaFileCircleExclamation, size: "1em" },
 }
 
 /** Archive status marks. Icons rather than emoji (🆕 👑 📚 🩹 🏷️): CJK fonts ship monochrome glyphs

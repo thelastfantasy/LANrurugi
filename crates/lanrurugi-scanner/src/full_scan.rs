@@ -115,6 +115,9 @@ pub struct ScanSummary {
     pub rekeyed: usize,
     pub unchanged: usize,
     pub errors: usize,
+    /// Files that disappeared between the walk and their own ingest — a racing delete or a
+    /// download that was cancelled, not a failure (nothing was expected to exist by then).
+    pub vanished: usize,
     /// Archives moved under `_byname/` by the relocation pass at the end of this scan (020).
     pub relocated: usize,
     /// Relocation candidates left in place for any reason other than failure: a destination that
@@ -375,6 +378,10 @@ pub async fn full_scan(
             // already tracked. Counted alongside `unchanged` rather than `errors`: nothing went
             // wrong, there's just nothing new to catalogue.
             Ok(IngestOutcome::Rejected { .. }) => summary.unchanged += 1,
+            Err(e) if !path.exists() => {
+                summary.vanished += 1;
+                tracing::debug!(?path, error = %e, "full_scan: file vanished before it could be ingested");
+            }
             Err(e) => {
                 tracing::warn!(?path, error = %e, "full_scan: failed to ingest file");
                 summary.errors += 1;
@@ -492,7 +499,7 @@ pub async fn heal_pagecounts(archives: &ArchiveRepository) -> HealSummary {
     };
 
     let mut summary = HealSummary::default();
-    for mut archive in all {
+    for archive in all {
         if archive.pagecount != 0 || archive.file.is_empty() || !Path::new(&archive.file).exists() {
             continue;
         }
@@ -523,13 +530,22 @@ pub async fn heal_pagecounts(archives: &ArchiveRepository) -> HealSummary {
                     .unwrap_or(archive.arcsize);
                 let old_pagecount = archive.pagecount;
                 let new_pagecount = pages.len() as u32;
-                archive.pagecount = new_pagecount;
-                archive.arcsize = new_arcsize;
-                archive.heal_failed_at = None;
-                if is_book && archive.toc.is_empty() {
-                    archive.toc = crate::pipeline::book_outline_toc(Path::new(&archive.file));
-                }
-                if let Err(e) = archives.save(&archive).await {
+                let outline = (is_book && archive.toc.is_empty())
+                    .then(|| crate::pipeline::book_outline_toc(Path::new(&archive.file)));
+                // Onto the record as it is now: listing the pages took a while.
+                let healed = archives
+                    .update(&archive.id, |a| {
+                        a.pagecount = new_pagecount;
+                        a.arcsize = new_arcsize;
+                        a.heal_failed_at = None;
+                        if let Some(outline) = outline {
+                            if a.toc.is_empty() {
+                                a.toc = outline;
+                            }
+                        }
+                    })
+                    .await;
+                if let Err(e) = healed {
                     tracing::warn!(archive_id = %archive.id, error = %e, "heal_pagecounts: failed to save healed archive");
                     summary.failed += 1;
                     summary.details.push(HealDetail {
@@ -574,8 +590,10 @@ pub async fn heal_pagecounts(archives: &ArchiveRepository) -> HealSummary {
                 // fixtures left in a library turned into 173 identical warning events in a few
                 // hours, which drowns the issues list (2026-11-01).
                 let already_failing = archive.heal_failed_at.is_some();
-                archive.heal_failed_at = Some(now_unix_secs());
-                if let Err(e) = archives.save(&archive).await {
+                let marked = archives
+                    .update(&archive.id, |a| a.heal_failed_at = Some(now_unix_secs()))
+                    .await;
+                if let Err(e) = marked {
                     tracing::warn!(archive_id = %archive.id, error = %e, "heal_pagecounts: failed to persist heal_failed_at marker");
                 }
                 if already_failing {
@@ -696,7 +714,7 @@ mod tests {
         // keyed by the shared legacy id, whose `file` field points at B (scanned "last") while
         // metadata (tags) reflects whatever was set while the record still looked like A/B mixed.
         archives
-            .save(&Archive {
+            .create_or_replace(&Archive {
                 id: lanrurugi_core::ids::ArchiveId(legacy_id.clone()),
                 name: "b".into(),
                 title: "Legacy Title".into(),
@@ -715,6 +733,8 @@ mod tests {
                 corrupted_pages: vec![],
                 has_patch: false,
                 blake3: None,
+                primary_source: None,
+                progress_pages: None,
             })
             .await
             .unwrap();
@@ -831,7 +851,7 @@ mod tests {
         // prunes entries whose archive is gone (the debris of an ingest that died between writing
         // the mapping and writing the record), so this test needs a real record behind it.
         archives
-            .save(&Archive {
+            .create_or_replace(&Archive {
                 id: lanrurugi_core::ids::ArchiveId(placeholder_id.to_string()),
                 name: "known".into(),
                 title: "Known".into(),
@@ -850,6 +870,8 @@ mod tests {
                 corrupted_pages: vec![],
                 has_patch: false,
                 blake3: None,
+                primary_source: None,
+                progress_pages: None,
             })
             .await
             .unwrap();
@@ -1087,7 +1109,9 @@ mod tests {
             "The Book",
         )
         .unwrap();
-        lanrurugi_storage::sidecar::write(dir.path(), &sidecar).unwrap();
+        lanrurugi_storage::sidecar::write(dir.path(), &sidecar)
+            .await
+            .unwrap();
 
         // By-name layout: the filename already says everything, and it gets no sidecar.
         let byname_dir = lanrurugi_storage::paths::byname_dir(dir.path()).join("Series");
@@ -1192,6 +1216,8 @@ mod tests {
             corrupted_pages: vec![],
             has_patch: false,
             blake3: None,
+            primary_source: None,
+            progress_pages: None,
         }
     }
 
@@ -1208,7 +1234,7 @@ mod tests {
 
         let id = lanrurugi_core::ids::ArchiveId("1".repeat(40));
         archives
-            .save(&archive_with_zero_pagecount(id.as_str(), &path))
+            .create_or_replace(&archive_with_zero_pagecount(id.as_str(), &path))
             .await
             .unwrap();
 
@@ -1252,7 +1278,7 @@ mod tests {
 
         let id = lanrurugi_core::ids::ArchiveId("2".repeat(40));
         archives
-            .save(&archive_with_zero_pagecount(id.as_str(), &path))
+            .create_or_replace(&archive_with_zero_pagecount(id.as_str(), &path))
             .await
             .unwrap();
 

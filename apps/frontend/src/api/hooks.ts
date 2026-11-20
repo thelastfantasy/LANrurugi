@@ -58,6 +58,8 @@ import type {
   HistoryEntry,
   HoverPageOrderResponse,
   ImportSnapshotMetadata,
+  IntegrityFinding,
+  IntegrityScanStatus,
   JobRecord,
   JobsResponse,
   LibraryStatus,
@@ -75,7 +77,7 @@ import type {
   PublicThemeSettings,
   RandomArchivesResponse,
   RecycleBinView,
-  ReservationEntry,
+  ReservationListItem,
   RestoreResult,
   SafetyPasswordStatus,
   SearchResponse,
@@ -153,6 +155,10 @@ export function useSettings(options?: { enabled?: boolean }) {
     queryKey: ["settings"],
     queryFn: () => fetchJson<Settings>("/settings"),
     enabled: options?.enabled,
+    // Read by two dozen components, some once per row (a tag table's timezone): with the default
+    // staleTime of 0 every newly mounted row refetched it — 20 requests in 10 s opening one modal.
+    // Saving settings invalidates this key, so a minute of reuse never shows a stale value here.
+    staleTime: 60_000,
   })
 }
 
@@ -432,11 +438,12 @@ export function useFilterCounts(filters: readonly string[], base: SearchOptions)
   })
 }
 
-export function useArchiveMetadata(id: string | null) {
+/** `enabled: false` defers the request — long lists only fetch for rows that come into view. */
+export function useArchiveMetadata(id: string | null, enabled = true) {
   return useQuery({
     queryKey: ["archive", id],
     queryFn: () => fetchJson<ArchiveMetadata>(`/archives/${id}/metadata`),
-    enabled: id !== null,
+    enabled: id !== null && enabled,
   })
 }
 
@@ -460,10 +467,22 @@ export function usePageDimensions(id: string | null, count: number, enabled: boo
 export function useUpdateProgress(id: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (page: number) => sendJson("PUT", `/archives/${id}/progress/${page}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["archive", id] })
-      queryClient.invalidateQueries({ queryKey: ["archives"] })
+    // `pages`: the length of the list `page` was counted in, so the server can tell old page
+    // numbers from new ones when an unreadable patch's pages drop out of the list.
+    mutationFn: ({ page, pages }: { page: number; pages: number }) =>
+      sendJson("PUT", `/archives/${id}/progress/${page}?pages=${pages}`),
+    onSuccess: (_data, { page }) => {
+      // The reader saves on every page turn, so refetching here made each turn cost a
+      // `/metadata` round trip — a long scroll read as a request loop in the dev overlay (#dev).
+      // The new values are already known, so write them into the cache instead.
+      if (id !== null) {
+        const lastreadtime = Math.floor(Date.now() / 1000)
+        queryClient.setQueryData<ArchiveMetadata>(["archive", id], (previous) =>
+          previous === undefined ? previous : { ...previous, progress: page, lastreadtime },
+        )
+      }
+      // `['archives']` is left alone on purpose: it has no staleTime, so the library refetches it
+      // when it next mounts rather than on every page turned in the reader.
     },
   })
 }
@@ -505,6 +524,26 @@ export function useSearch(options: SearchOptions) {
     queryFn: () => fetchJson<SearchResponse>(`/search?${params.toString()}`),
     enabled: options.enabled ?? true,
   })
+}
+
+/** `/search` one 100-result page at a time, for a list that loads more as it is scrolled. */
+export function useSearchPages(options: Omit<SearchOptions, "start">) {
+  return useInfiniteQuery({
+    queryKey: ["search-pages", options],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      fetchJson<SearchResponse>(`/search?${searchParams({ ...options, start: pageParam }).toString()}`),
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((n, page) => n + page.data.length, 0)
+      return last.data.length > 0 && loaded < last.recordsFiltered ? loaded : undefined
+    },
+    enabled: options.enabled ?? true,
+  })
+}
+
+/** Every `/search` result at once (`start=-1`) — for "add all matches", an explicit action. */
+export function fetchAllSearchResults(options: Omit<SearchOptions, "start" | "enabled">) {
+  return fetchJson<SearchResponse>(`/search?${searchParams({ ...options, start: -1 }).toString()}`)
 }
 
 export function useUpdateArchiveMetadata(id: string) {
@@ -1041,9 +1080,18 @@ export function useUpdateTankoubonProgress(id: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (page: number) => sendJson("PUT", `/tankoubons/${id}/progress/${page}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tankoubon", id] })
-      queryClient.invalidateQueries({ queryKey: ["tankoubons"] })
+    onSuccess: (_data, page) => {
+      // Same reasoning as `useUpdateProgress`: a Tankoubon turn must not refetch its metadata.
+      if (id !== null) {
+        queryClient.setQueryData<TankoubonMetadata>(["tankoubon", id], (previous) =>
+          previous === undefined ? previous : { ...previous, progress: page },
+        )
+        queryClient.setQueryData<TankoubonFullResponse>(["tankoubon-full", id], (previous) =>
+          previous === undefined
+            ? previous
+            : { ...previous, result: { ...previous.result, progress: page } },
+        )
+      }
     },
   })
 }
@@ -1181,6 +1229,12 @@ export function useLogin() {
     // Login page could mount the library with the cached pre-login `logged_in:false` status and
     // bounce straight back; with it, the provider observes the new cookies first.
     onSuccess: async () => {
+      // A guest-mode browser already populated identity-scoped caches with guest answers — notably
+      // `["settings"]`, whose `theme` is the *guest* theme. Those stay fresh for their staleTime,
+      // so the admin's own theme/settings were never fetched after logging in (the page kept the
+      // guest theme until a reload). Dropping every identity-dependent result matches what logout
+      // does; the session query is kept and invalidated below so guards still see it.
+      queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== SESSION_QUERY_KEY[0] })
       await queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY })
       // A browser that loaded the login page had no session, so the boot-time attempt found
       // capture disabled. This is what actually starts diagnostics for a fresh login.
@@ -1409,6 +1463,23 @@ export function useSubscriptionCheckProgress() {
   return progress
 }
 
+/** Puts skipped works back on the approval list, to be answered again. */
+export function useUnskipSubscriptionSources() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, sources, download = false }: { id: string; sources: string[]; download?: boolean }) =>
+      sendJson<{ restored: number }>("POST", `/subscriptions/${encodeURIComponent(id)}/unskip`, {
+        sources,
+        download,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+      void queryClient.invalidateQueries({ queryKey: ["subscription-pending"] })
+      void queryClient.invalidateQueries({ queryKey: ["subscription-history"] })
+    },
+  })
+}
+
 export function useBlockSubscriptionSources() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -1488,6 +1559,20 @@ export function usePendingApprovals() {
 /** Approving puts the works in the normal download queue, so the Downloads page is where their
  *  progress is then followed — nothing further happens on the Subscriptions page. Takes a list
  *  because FR-007b requires approving individually *or* together; one item is a list of one. */
+/** After switching a subscription to automatic download: the server checks it once more, then
+ *  approves everything still waiting on it. Runs in the background; the queue shows the result. */
+export function useApproveAllPending() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (subscriptionId: string) =>
+      sendJson<{ started: boolean }>("POST", `/subscriptions/${encodeURIComponent(subscriptionId)}/approve-pending`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["subscription-pending"] })
+      void queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+    },
+  })
+}
+
 export function useApprovePending() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -1518,7 +1603,33 @@ export function useReservations() {
   return useQuery({
     queryKey: ["reservations"],
     queryFn: () =>
-      fetchJson<{ reservations: ReservationEntry[] }>("/reservations").then((r) => r.reservations),
+      fetchJson<{ reservations: ReservationListItem[] }>("/reservations").then((r) => r.reservations),
+  })
+}
+
+/** Subscription works that did not download: those that failed in the queue plus those that never
+ *  reached it. One number, since to the reader both are "download failed". */
+export function useSubscriptionFailedCount(): number {
+  const reservations = useReservations()
+  const queue = useDownloadQueue()
+  const inQueue = (queue.data ?? []).filter((i) => i.subscription_id && i.state === "error").length
+  return inQueue + (reservations.data?.length ?? 0)
+}
+
+/** Tries a work that never reached the download queue once more; on success it is queued. */
+export function useRetryReservation() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<{ started: boolean; error?: string | null }>(
+        "POST",
+        `/reservations/${encodeURIComponent(id)}/retry`,
+      ),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["reservations"] })
+      void queryClient.invalidateQueries({ queryKey: ["download-queue"] })
+      void queryClient.invalidateQueries({ queryKey: ["subscription-history"] })
+    },
   })
 }
 
@@ -1890,6 +2001,65 @@ export function useBlake3Backfill() {
 export function useStopBlake3Backfill() {
   return useMutation({
     mutationFn: () => sendJson<{ stopped: boolean }>("DELETE", "/database/blake3-backfill"),
+  })
+}
+
+/** #292: the damaged-archive scan and its findings. Polled while a scan runs. */
+export function useIntegrityScan(enabled = true) {
+  return useQuery({
+    queryKey: ["integrity-scan"],
+    queryFn: () => fetchJson<IntegrityScanStatus>("/database/integrity-scan"),
+    enabled,
+    refetchInterval: (query) => (query.state.data?.running ? 2000 : false),
+  })
+}
+
+export function useStartIntegrityScan() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () =>
+      sendJson<{ job: string; already_running?: boolean }>("POST", "/database/integrity-scan"),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["integrity-scan"] }),
+  })
+}
+
+export function useStopIntegrityScan() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => sendJson<{ stopped: boolean }>("DELETE", "/database/integrity-scan"),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["integrity-scan"] }),
+  })
+}
+
+/** Checks one damaged archive again; clears its mark when the file opens now (#291). */
+/** Moves a damaged archive to the recycle bin and queues its source for download again. */
+export function useRedownloadDamagedArchive() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<{ url: string; plugin: string; queue_item: string; start_error: string | null }>(
+        "POST",
+        `/database/integrity-scan/archives/${encodeURIComponent(id)}/redownload`,
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["integrity-scan"] })
+      void queryClient.invalidateQueries({ queryKey: ["archives"] })
+    },
+  })
+}
+
+export function useRecheckArchive() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<{ damaged: boolean; finding: IntegrityFinding | null }>(
+        "POST",
+        `/database/integrity-scan/archives/${encodeURIComponent(id)}`,
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["integrity-scan"] })
+      void queryClient.invalidateQueries({ queryKey: ["archives"] })
+    },
   })
 }
 

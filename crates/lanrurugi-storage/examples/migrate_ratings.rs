@@ -63,7 +63,8 @@ async fn main() {
             "  {} ({}): rating tag -> rating:{new_value}",
             archive.id, archive.title
         );
-        repo.save(&archive)
+        let tags = archive.tags.clone();
+        repo.update(&archive.id, |a| a.tags = tags)
             .await
             .expect("failed to save migrated archive");
         migrated += 1;

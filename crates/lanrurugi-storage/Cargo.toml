@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+blake3.workspace = true
 lanrurugi-core.workspace = true
 lanrurugi-share-proto.workspace = true
 chrono.workspace = true
@@ -12,6 +13,7 @@ ipnet.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+lockable.workspace = true
 redis.workspace = true
 deadpool-redis.workspace = true
 sha1.workspace = true
@@ -22,5 +24,6 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+ts-rs.workspace = true
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 tempfile = "3"

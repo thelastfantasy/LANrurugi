@@ -35,6 +35,27 @@ export function buildSearchToken(namespace: string, value: string, exact = false
   return exact ? `${namespacedTag}$` : namespacedTag
 }
 
+/** Strips one pair of surrounding double quotes. */
+function unquote(text: string): string {
+  return text.length >= 2 && text.startsWith('"') && text.endsWith('"') ? text.slice(1, -1).trim() : text
+}
+
+/** Turns a tag copied as a search token — this app's own or e-hentai's, `female:"hair buns$"` — into
+ * the stored form `female:hair buns` (#297): the quotes and the exact-match `$` are search syntax,
+ * not part of the tag. Only a surrounding pair of quotes and a trailing `$` are removed; anything
+ * inside the value is kept. Returns `""` when nothing is left. */
+export function normalizeTag(raw: string): string {
+  const tag = unquote(raw.trim())
+  const colon = tag.indexOf(":")
+  const namespace = colon > 0 ? tag.slice(0, colon).trim().toLowerCase() : ""
+  let value = colon > 0 ? tag.slice(colon + 1).trim() : tag
+  value = unquote(value)
+  if (value.endsWith("$")) value = value.slice(0, -1).trim()
+  value = unquote(value)
+  if (!value) return ""
+  return buildNamespacedTag(namespace, value)
+}
+
 export const TIMESTAMP_NAMESPACE = /^(date|time)/i
 
 export function displayNamespace(key: string): string {

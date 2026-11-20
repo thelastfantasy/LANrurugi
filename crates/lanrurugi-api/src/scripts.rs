@@ -260,7 +260,13 @@ async fn subfolders_to_categories(
             pinned: false,
             visible_to_guest: false,
         };
-        if state.repos.categories.save(&category).await.is_ok() {
+        if state
+            .repos
+            .categories
+            .create_or_replace(&category)
+            .await
+            .is_ok()
+        {
             created_categories.push(catid.into_string());
         }
     }
@@ -424,6 +430,7 @@ async fn create_tankoubon_from_folder(
         summary: String::new(),
         tags: tags.clone(),
         progress: 0,
+        lastreadtime: None,
         archives: archive_ids.clone(),
         thumbnail_manual: false,
         thumbnail_source_archive: None,
@@ -436,7 +443,7 @@ async fn create_tankoubon_from_folder(
     state
         .repos
         .groupings
-        .save(&grouping)
+        .create_or_replace(&grouping)
         .await
         .map_err(|e| e.to_string())?;
 

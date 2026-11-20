@@ -1,5 +1,6 @@
 import { useSettings } from "@/api/hooks"
 import { StarRatingDisplay } from "@/components/common-ui/Form"
+import { isPlainLinkClick } from "@/components/common-ui/Link"
 import {
   BARE_TAG_NAMESPACE,
   displayNamespace,
@@ -54,6 +55,7 @@ export function TagTable({
                 <a
                   href={links ? getTagSearchURL(displayKey, byNamespace[namespace][0] ?? "", timezone) : undefined}
                   onClick={(e) => {
+                    if (!isPlainLinkClick(e)) return
                     if (!links || !onSearchTag) return
                     e.preventDefault()
                     e.stopPropagation()
@@ -72,13 +74,18 @@ export function TagTable({
               byNamespace[namespace].map((value, i) => (
                 <div
                   key={i}
-                  className="gt"
+                  // `gt-single` (index.css) keeps CJK and Latin chips the same height; a source URL
+                  // is left out so it can still wrap.
+                  className={displayKey === "source" ? "gt" : "gt gt-single"}
                   style={{ maxWidth: "100%", whiteSpace: "normal", overflow: "visible", textOverflow: "clip" }}
                 >
                   {!links ? (
                     // Same chip, same text, no destination: `.gt` carries the styling, so a plain
                     // span is visually identical to the anchor it replaces.
-                    <span style={{ wordBreak: "break-all" }}>
+                    <span
+                      style={{ wordBreak: "break-all" }}
+                      title={displayKey === "source" ? value : formatTagValue(displayKey, value, timezone)}
+                    >
                       {displayKey === "source"
                         ? value
                         : formatTagValue(displayKey, value, timezone)}
@@ -97,12 +104,14 @@ export function TagTable({
                     <a
                       href={getTagSearchURL(displayKey, value, timezone)}
                       onClick={(e) => {
+                        if (!isPlainLinkClick(e)) return
                         if (!onSearchTag) return
                         e.preventDefault()
                         e.stopPropagation()
                         onSearchTag(displayKey, tagValueForSearch(displayKey, value, timezone))
                       }}
                       style={{ wordBreak: "break-all", cursor: onSearchTag ? "pointer" : undefined }}
+                      title={formatTagValue(displayKey, value, timezone)}
                     >
                       {formatTagValue(displayKey, value, timezone)}
                     </a>

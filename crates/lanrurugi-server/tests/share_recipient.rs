@@ -44,6 +44,8 @@ fn archive(id: &str, file: &std::path::Path) -> Archive {
         corrupted_pages: vec![],
         has_patch: false,
         blake3: None,
+        primary_source: None,
+        progress_pages: None,
     }
 }
 
@@ -159,18 +161,23 @@ async fn library(redis: &RedisDbs) -> Library {
         let id = format!("{name}{suffix}");
         let path = dir.path().join(format!("{id}.cbz"));
         std::fs::write(&path, format!("bytes of {id}")).unwrap();
-        repos.archives.save(&archive(&id, &path)).await.unwrap();
+        repos
+            .archives
+            .create_or_replace(&archive(&id, &path))
+            .await
+            .unwrap();
         ids.push(ArchiveId(id));
     }
     let tank = TankId(format!("TANK_{suffix}"));
     repos
         .groupings
-        .save(&Grouping {
+        .create_or_replace(&Grouping {
             tankid: tank.clone(),
             name: "tank".into(),
             summary: String::new(),
             tags: String::new(),
             progress: 0,
+            lastreadtime: None,
             archives: vec![ids[1].clone()],
             thumbnail_manual: false,
             thumbnail_source_archive: None,

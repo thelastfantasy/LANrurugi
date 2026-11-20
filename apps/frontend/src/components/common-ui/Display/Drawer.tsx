@@ -27,6 +27,7 @@ export function Drawer({
   swipeToClose = true,
   headerActions,
   onCloseButton,
+  onExited,
 }: {
   open: boolean
   onClose: () => void
@@ -42,10 +43,17 @@ export function Drawer({
   /** What the title bar's ✕ does, when it means more than a swipe, Escape or the backdrop
    * (`onClose`) — e.g. leaving a mode, where those only minimize. */
   onCloseButton?: () => void
+  /** After the exit slide has finished — for a caller that unmounts the drawer once it is closed. */
+  onExited?: () => void
 }) {
   const [footer, setFooter] = useState<HTMLDivElement | null>(null)
   return (
-    <BaseDrawer.Root open={open} onOpenChange={(next) => !next && onClose()} swipeDirection="right">
+    <BaseDrawer.Root
+      open={open}
+      onOpenChange={(next) => !next && onClose()}
+      onOpenChangeComplete={(next) => !next && onExited?.()}
+      swipeDirection="right"
+    >
       <BaseDrawer.Portal>
         <BaseDrawer.Backdrop
           className="fixed inset-0 bg-black opacity-[calc(0.6*(1-var(--drawer-swipe-progress)))] transition-opacity duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 data-[swiping]:duration-0"

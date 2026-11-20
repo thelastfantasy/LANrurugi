@@ -79,7 +79,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   if (! galleryID) {
     let message = "No matching nHentai Gallery Found!";
     logger.info(message);
-    throw new PluginErrorException(message);
+    throw new PluginSkipException(message);
   }
   logger.debug(`Detected nHentai gallery ID is ${galleryID}`);
   let hashdata = await get_tags_from_nh(galleryID, ua, add_uploaded, prefer_japanese_title);

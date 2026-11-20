@@ -714,20 +714,29 @@ async fn fold_tanks(
         .collect();
     let mut reasons: HashMap<String, Vec<String>> = HashMap::new();
     for tank in grouped.iter().filter(|id| id.starts_with("TANK_")) {
-        if out.contains(tank) {
-            continue;
-        }
         let members: Vec<String> = archive_conn
             .zrangebyscore(tank.as_str(), 1, "+inf")
             .await
             .unwrap_or_default();
         let hits: Vec<String> = members
-            .into_iter()
-            .filter(|id| matched.contains(id))
+            .iter()
+            .filter(|id| matched.contains(*id))
+            .cloned()
             .collect();
+        // Unconditionally, even for a tank already in `out`: a member left in `grouped` after the
+        // membership change that folded it (a writer that updated the tank's own list without
+        // `sync_tank_membership`) would otherwise be emitted as its own row *and* folded into the
+        // tank — the same archive appearing twice, once on its own and once inside its Tankoubon.
+        for member in &members {
+            out.remove(member);
+        }
         if !hits.is_empty() {
             out.insert(tank.clone());
-            reasons.insert(tank.clone(), hits);
+            // "Matched through these volumes" only when the tank's own record did not match: with
+            // no query every tank matches by itself, and the note would show on all of them.
+            if !matched.contains(tank) {
+                reasons.insert(tank.clone(), hits);
+            }
         }
     }
     Ok((out, reasons))
@@ -800,6 +809,24 @@ async fn state_filter(
     match value {
         "new" => intersect_members(search_conn, NEW_KEY, scope).await,
         "untagged" => intersect_members(search_conn, UNTAGGED_KEY, scope).await,
+        // The file is known to be unreadable: self-heal failed on it, or a damaged-archive scan
+        // found it (#291). Both write the same field on the archive hash.
+        "damaged" => {
+            let mut ids = HashSet::new();
+            for id in scope {
+                if id.starts_with("TANK") {
+                    continue;
+                }
+                let marked: bool = archive_conn
+                    .hexists(id, "heal_failed_at")
+                    .await
+                    .unwrap_or(false);
+                if marked {
+                    ids.insert(id.clone());
+                }
+            }
+            Ok(ids)
+        }
         "tank" => Ok(scope
             .iter()
             .filter(|id| id.starts_with("TANK_"))
@@ -2076,28 +2103,7 @@ async fn sort_ids(
         let mut pairs: Vec<(String, u64)> = Vec::new();
         for id in filtered {
             let t: u64 = if id.starts_with("TANK") {
-                // A Tankoubon has no `lastreadtime` field of its own — matches legacy's own
-                // Lua-scripted sort (`Model/Search.pm`'s `sort_results`): its effective sort key
-                // is the MAX `lastreadtime` across its member archives (`ZRANGEBYSCORE id 1
-                // '+inf'`, the same score range `GroupingRepository::get` uses to read real
-                // member archive ids back out of the tank's own zset — scores 0 and below are
-                // reserved for the tank's own name/summary/tags/progress fields).
-                let members: Vec<String> = archive_conn
-                    .zrangebyscore(id, 1, "+inf")
-                    .await
-                    .unwrap_or_default();
-                let member_ids: Vec<&str> = members.iter().map(String::as_str).collect();
-                hmget_many(archive_conn, &member_ids, &["lastreadtime"])
-                    .await
-                    .unwrap_or_default()
-                    .iter()
-                    .filter_map(|row| {
-                        row.first()
-                            .and_then(|v| v.as_deref())
-                            .and_then(|v| v.trim().parse::<u64>().ok())
-                    })
-                    .max()
-                    .unwrap_or(0)
+                tank_lastread_value(archive_conn, id).await
             } else {
                 lastread.get(id.as_str()).copied().unwrap_or(0)
             };
@@ -2108,10 +2114,13 @@ async fn sort_ids(
         // Unlike the tag-namespace branch below there is no unkeyed tail to leave behind: every
         // candidate carries a number here (0 for a never-opened archive), so the direction
         // applies to the whole list.
+        // Ties fall back to the id: `filtered` comes out of Redis set iteration, whose order is
+        // not stable between calls, so two archives read at the same second (or two never-opened
+        // ones under `lastread_all`) would otherwise swap places on every refresh.
         if order_desc {
-            pairs.sort_by_key(|p| std::cmp::Reverse(p.1));
+            pairs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         } else {
-            pairs.sort_by_key(|p| p.1);
+            pairs.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
         }
         return Ok(pairs.into_iter().map(|(id, _)| id).collect());
     }
@@ -2199,6 +2208,43 @@ async fn sort_ids(
     let mut result: Vec<String> = keyed.into_iter().map(|(id, _)| id).collect();
     result.extend(unkeyed);
     Ok(result)
+}
+
+/// A Tankoubon's effective `lastread` sort key. Its own `lastreadtime` (score -10 in the tank's
+/// zset, `Grouping::lastreadtime`) wins; records written before that field existed carry no such
+/// member, so impute the MAX `lastreadtime` across member archives — legacy's own Lua-scripted sort
+/// (`Model/Search.pm`'s `sort_results`), and still the right answer for a tank nobody has opened
+/// since the upgrade (`ZRANGEBYSCORE id 1 '+inf'` is the score range holding real member archive
+/// ids; scores 0 and below are the tank's own metadata fields).
+async fn tank_lastread_value(archive_conn: &mut deadpool_redis::Connection, tank_id: &str) -> u64 {
+    use deadpool_redis::redis::AsyncCommands;
+    let own: Vec<String> = archive_conn
+        .zrangebyscore(tank_id, -10, -10)
+        .await
+        .unwrap_or_default();
+    if let Some(value) = own
+        .iter()
+        .find_map(|m| m.strip_prefix("lastreadtime_"))
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        return value;
+    }
+    let members: Vec<String> = archive_conn
+        .zrangebyscore(tank_id, 1, "+inf")
+        .await
+        .unwrap_or_default();
+    let member_ids: Vec<&str> = members.iter().map(String::as_str).collect();
+    hmget_many(archive_conn, &member_ids, &["lastreadtime"])
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|row| {
+            row.first()
+                .and_then(|v| v.as_deref())
+                .and_then(|v| v.trim().parse::<u64>().ok())
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// Imputes a Tankoubon's `date_added`/`timestamp` sort value (legacy `_impute_tank_date_tags` /
@@ -2500,6 +2546,93 @@ mod tests {
         for id in [&id_old, &member_new, &tank.to_string()] {
             let _: () = aconn.del(id).await.unwrap();
         }
+    }
+
+    /// A member still left in `LRR_TANKGROUPED` after being folded into a Tankoubon — a writer
+    /// that updated the tank's own member list without `sync_tank_membership` — must not come out
+    /// as a second, standalone row for the same content next to its tank.
+    #[tokio::test]
+    async fn fold_tanks_drops_a_member_that_is_still_marked_grouped() {
+        let Some((archive_pool, search_pool, _bookmarks)) = test_pools().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let mut aconn = archive_pool.get().await.unwrap();
+        let mut sconn = search_pool.get().await.unwrap();
+        let member = "f".repeat(40);
+        let tank = "TANK_1785750099";
+        let _: () = aconn
+            .zadd_multiple(tank, &[(1, member.as_str())])
+            .await
+            .unwrap();
+        let _: () = sconn
+            .sadd(TANKGROUPED_KEY, &[tank, member.as_str()])
+            .await
+            .unwrap();
+
+        let matched: HashSet<String> = vec![member.clone(), tank.to_string()].into_iter().collect();
+        let (out, reasons) = fold_tanks(&mut aconn, &mut sconn, matched).await.unwrap();
+        assert!(out.contains(tank), "the tank stands in for its member");
+        assert!(
+            !out.contains(&member),
+            "a folded member must not also be a standalone row"
+        );
+        // The tank matched by itself (an empty query matches everything): no "through its
+        // volumes" note.
+        assert!(!reasons.contains_key(tank));
+
+        // Only the member matched: the tank comes in through it, and says so.
+        let matched: HashSet<String> = vec![member.clone()].into_iter().collect();
+        let (out, reasons) = fold_tanks(&mut aconn, &mut sconn, matched).await.unwrap();
+        assert!(out.contains(tank));
+        assert_eq!(
+            reasons.get(tank).map(|v| v.as_slice()),
+            Some([member.clone()].as_slice())
+        );
+
+        let _: () = aconn.del(tank).await.unwrap();
+        let _: () = sconn
+            .srem(TANKGROUPED_KEY, &[tank, member.as_str()])
+            .await
+            .unwrap();
+    }
+
+    /// A Tankoubon's own `lastreadtime` (score -10 metadata member) must win over the MAX across
+    /// its members, and a record without one must still fall back to that MAX — otherwise every
+    /// tank written before the field existed would suddenly drop out of "recently read".
+    #[tokio::test]
+    async fn tank_lastread_prefers_its_own_timestamp_over_its_members() {
+        let Some((archive_pool, _search_pool, _bookmarks)) = test_pools().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let mut conn = archive_pool.get().await.unwrap();
+        let member = "e".repeat(40);
+        let tank = "TANK_1785750098";
+        let _: () = conn.hset(&member, "lastreadtime", 100_u64).await.unwrap();
+        let _: () = conn
+            .zadd_multiple(tank, &[(1, member.as_str())])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            tank_lastread_value(&mut conn, tank).await,
+            100,
+            "with no own timestamp the newest member stands in"
+        );
+
+        let _: () = conn
+            .zadd_multiple(tank, &[(-10, "lastreadtime_300")])
+            .await
+            .unwrap();
+        assert_eq!(
+            tank_lastread_value(&mut conn, tank).await,
+            300,
+            "the tank's own timestamp wins"
+        );
+
+        let _: () = conn.del(tank).await.unwrap();
+        let _: () = conn.del(&member).await.unwrap();
     }
 
     /// Spec 025: an archive in the pending set is absent from every search shape — admin grouped
@@ -3667,7 +3800,7 @@ mod tests {
             ),
         ] {
             // The `title` field is written here as well as into the title *index* below, exactly as
-            // a real archive record is (`ArchiveRepository::save` writes both): the `phrase:`
+            // a real archive record is (`ArchiveRepository::create_or_replace` writes both): the `phrase:`
             // operator scans the archive's own hash, so a fixture with only the index entry would
             // silently test nothing.
             let _: () = aconn
@@ -3770,6 +3903,27 @@ mod tests {
         // `is:new` (all three were just indexed as new), `is:untagged` (none are).
         assert_eq!(search_ids("artist:alpha is:new").await, vec![id_a.clone()]);
         assert!(search_ids("artist:alpha is:untagged").await.is_empty());
+
+        // `is:damaged` reads the archive's own `heal_failed_at` marker.
+        assert!(search_ids("artist:beta is:damaged").await.is_empty());
+        {
+            let mut conn = archive_pool.get().await.unwrap();
+            let _: () =
+                deadpool_redis::redis::AsyncCommands::hset(&mut conn, &id_b, "heal_failed_at", 1)
+                    .await
+                    .unwrap();
+        }
+        assert_eq!(
+            search_ids("(artist:alpha | artist:beta) is:damaged").await,
+            vec![id_b.clone()]
+        );
+        {
+            let mut conn = archive_pool.get().await.unwrap();
+            let _: () =
+                deadpool_redis::redis::AsyncCommands::hdel(&mut conn, &id_b, "heal_failed_at")
+                    .await
+                    .unwrap();
+        }
 
         // `has:patch`.
         assert_eq!(
@@ -4002,7 +4156,7 @@ mod tests {
         let category_id = lanrurugi_core::ids::CategoryId("SET_9999000001".to_string());
         let dynamic_id = lanrurugi_core::ids::CategoryId("SET_9999000002".to_string());
         categories
-            .save(&lanrurugi_core::entities::Category {
+            .create_or_replace(&lanrurugi_core::entities::Category {
                 catid: category_id.clone(),
                 name: "Fixture Static".to_string(),
                 search: None,
@@ -4013,7 +4167,7 @@ mod tests {
             .await
             .unwrap();
         categories
-            .save(&lanrurugi_core::entities::Category {
+            .create_or_replace(&lanrurugi_core::entities::Category {
                 catid: dynamic_id.clone(),
                 name: "Fixture Dynamic".to_string(),
                 search: Some("artist:alpha".to_string()),

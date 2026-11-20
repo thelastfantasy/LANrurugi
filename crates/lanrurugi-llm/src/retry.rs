@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use deadpool_redis::Pool;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::info;
 
 use crate::error::LlmError;
 use crate::prefix::Conversation;
@@ -111,7 +111,9 @@ where
                     let Some(wait) = retry_delay(&err, attempts, remaining) else {
                         return Err(err);
                     };
-                    warn!(
+                    // Info, not a warning: a retry that then succeeds is the normal case (and was most of
+                    // the tracker's events); a call that still fails is reported by its caller.
+                    info!(
                         feature = spec.feature.as_str(),
                         class = err.class().as_str(),
                         "retrying model call once"

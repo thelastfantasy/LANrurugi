@@ -106,7 +106,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   if (gID === "") {
     let message = "No matching EH Gallery Found!";
     logger.info(message);
-    throw new PluginErrorException(message);
+    throw new PluginSkipException(message);
   } else {
     logger.debug(`EH API Tokens are ${gID} / ${gToken}`);
   }
@@ -187,6 +187,10 @@ async function search_gallery(url: any, ua: any) {
   if (res.body.indexOf("Your IP address has been") != -1) {
     throw new PluginErrorException("Temporarily banned from EH for excessive pageloads.");
   }
+  // A failed search page has no gallery links either; it must not pass for "no matching gallery".
+  if (res.is_error) {
+    throw new PluginErrorException(`E-H search failed (HTTP ${res.code})`);
+  }
   return res.dom;
 }
 
@@ -218,6 +222,9 @@ async function get_json_from_EH(ua: any, gID: any, gToken: any) {
   let uri = 'https://api.e-hentai.org/api.php';
   let logger = legacyCompat.getLogger("E-Hentai", "plugins");
   let rep = (await ua.post(uri, "json", {method: "gdata", gidlist: [[gID, gToken]], namespace: 1})).result;
+  if (rep.is_error) {
+    throw new PluginErrorException(`E-H API request failed (HTTP ${rep.code})`);
+  }
   let textrep = rep.body;
   logger.debug(`E-H API returned this JSON: ${textrep}`);
   let jsonresponse = rep.json;

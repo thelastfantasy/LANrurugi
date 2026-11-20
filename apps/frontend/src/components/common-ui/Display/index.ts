@@ -10,6 +10,8 @@ export * from "./Drawer"
 
 export * from "./ErrorBoundary"
 
+export * from "./SectionErrorBoundary"
+
 export * from "./Menu"
 
 export * from "./Modal"

@@ -3,6 +3,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
+import { unreadableArchiveCode } from "@/api/apiError";
 import { ApiError } from "@/api/client";
 import { startDownload } from "@/api/download";
 import {
@@ -39,6 +40,7 @@ import { Badge } from "@/components/common-ui/Display"
 import { Keycap as Key } from "@/components/common-ui/Display/Keycap";
 import { IconButton, ToggleButtonMenu } from "@/components/common-ui/Form";
 import { currentRating,RatingWidget } from "@/components/common-ui/Form/RatingWidget";
+import { isPlainLinkClick } from "@/components/common-ui/Link"
 import {
   ForbiddenPage,
   FormatBadge,
@@ -57,13 +59,15 @@ import {
   computeSpread,
 } from "@/hooks/useReaderNavigation";
 import {
+  CLICK_ACTION,
   FIT_MODE,
   J_SCROLL_UNIT,
   K_BEHAVIOR,
+  KEY_REPEAT,
   useReaderSettings,
 } from "@/hooks/useReaderSettings";
 import { useSupportsHover } from "@/hooks/useSupportsHover";
-import { useSwipeDownToDismiss } from "@/hooks/useSwipeDownToDismiss";
+import { useSwipeToDismiss } from "@/hooks/useSwipeToDismiss";
 import { useTankoubonReading } from "@/hooks/useTankoubonReading";
 import { routes } from "@/lib/routes";
 import { getTagSearchURL } from "@/lib/tagFormat";
@@ -109,6 +113,7 @@ import {
 import { MarkerLayer } from "./MarkerLayer";
 import { SettingsOverlay } from "./SettingsOverlay";
 import { TankoubonSplitModal } from "./TankoubonSplitModal";
+import { UnreadableArchivePage } from "./UnreadableArchivePage";
 
 // Loaded only when someone shares, keeping the share dialog out of the reader chunk.
 const ShareDialog = lazy(() => import("@/share/ShareDialog").then((m) => ({ default: m.ShareDialog })));
@@ -144,6 +149,95 @@ function servedInfoKb(info: ResizedPageInfo | null | undefined): number | undefi
 const PAGINATOR_PAGECOUNT_FONT_SIZE = "1.25rem";
 /** Matches `toast.tsx`'s own `AUTO_CLOSE_TIME.info` default. */
 const TOAST_DURATION_MS = 5000;
+
+/** Reader diagnostics. A shortcut that quietly does nothing (a `j` that fails to scroll, a click
+ * that turns instead of scrolling) leaves no trace otherwise, and reproducing it on a phone means
+ * reading this in the remote console. `console.debug` stays behind devtools' verbose level, and
+ * `localStorage.readerDebug = "0"` silences it entirely. */
+function readerDebugEnabled(): boolean {
+  try {
+    return localStorage.getItem("readerDebug") !== "0";
+  } catch {
+    return false;
+  }
+}
+
+function readerLog(kind: string, data: Record<string, unknown>): void {
+  if (!readerDebugEnabled()) return;
+  // eslint-disable-next-line no-console -- these lines are the whole point of the switch above.
+  console.debug(`[reader] ${kind}`, data);
+}
+
+/** How long a `j`/`k` step counts as the committed scroll position. Covers the smooth animation
+ * (a few hundred ms) plus a generous margin for a lagging frame clock. */
+const SCROLL_INTENT_MS = 900;
+
+/** The sequential key mode: presses waiting at most, one step's animation, and the pause after a
+ * page turn before the next press measures the new page. */
+const STEP_QUEUE_LIMIT = 10;
+const SEQUENTIAL_STEP_MS = 140;
+const TURN_SETTLE_TIMEOUT_MS = 2000;
+
+/** Scrolls the window to `top` over `SEQUENTIAL_STEP_MS` (ease-out), resolving when it gets there —
+ * or as soon as `cancelled()` says the reader took over, leaving the scroll where it is. A native
+ * smooth scroll cannot be awaited, and its length is the browser's to pick. */
+function animateScrollTo(top: number, cancelled: () => boolean): Promise<void> {
+  return new Promise((resolve) => {
+    const start = window.scrollY;
+    const distance = top - start;
+    if (Math.abs(distance) < 1) {
+      resolve();
+      return;
+    }
+    const startedAt = performance.now();
+    const frame = (now: number) => {
+      if (cancelled()) {
+        resolve();
+        return;
+      }
+      const progress = Math.min(1, (now - startedAt) / SEQUENTIAL_STEP_MS);
+      window.scrollTo(0, start + distance * (1 - (1 - progress) ** 3));
+      if (progress < 1) requestAnimationFrame(frame);
+      else resolve();
+    };
+    requestAnimationFrame(frame);
+  });
+}
+
+/** Resolves on the first frame `ready()` holds, or after `timeoutMs` regardless — the timer too,
+ * since a background tab stops running animation frames. */
+function waitFor(ready: () => boolean, timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      done = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    const frame = () => {
+      if (done) return;
+      if (ready()) finish();
+      else requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  });
+}
+
+/** `performance.now()` through a helper: the steps below only ever run from input handlers, but a
+ * bare call inside the component body reads as render-time impurity to the hooks lint. */
+function nowMs(): number {
+  return performance.now();
+}
+
+/** Where the viewport sits now, for the diagnostics above and for the edge test `j`/`k` share. */
+function scrollPosition() {
+  return {
+    y: Math.round(window.scrollY),
+    max: Math.round(document.documentElement.scrollHeight - window.innerHeight),
+    viewport: Math.round(window.innerHeight),
+  };
+}
 /** The preview sweep moves at a constant speed; the clamp keeps tiny and poster-sized pages sane. */
 const WIPE_SPEED_PX_PER_MS = 1.6;
 const WIPE_MIN_MS = 200;
@@ -273,6 +367,59 @@ export function Reader() {
   const metadata = isTank ? tankReading.metadata : singleMetadata;
   const tankSplitCandidates = tankFull.data?.result.full_data.filter((m) => m.has_split_suggestion) ?? []
   const pages = isTank ? tankReading.pages : singlePages;
+  // Members whose pages could not be listed are skipped rather than failing the whole book, so say
+  // so once: silently losing a chapter would look like the tankoubon is shorter than it is.
+  const unreadableChapters = tankReading.unreadableChapters;
+  const unreadableNoticeShown = useRef(false);
+  useEffect(() => {
+    if (unreadableChapters.length === 0 || unreadableNoticeShown.current) return;
+    unreadableNoticeShown.current = true;
+    toast({
+      icon: "warning",
+      text:
+        t("reader.tankChaptersUnreadable", {
+          count: unreadableChapters.length,
+          names: unreadableChapters.map((c) => c.title).join("、"),
+        }) ?? undefined,
+    });
+  }, [unreadableChapters, t]);
+  // A patch that could not be read: the archive still opens, but the pages the patch contributed
+  // are gone, so say so once instead of letting the book silently look shorter. The pages the
+  // backend lists are the ones that vanished — markers and bookmark state on them are suppressed
+  // below rather than pointing at whichever page inherited the number.
+  const patchDamage = isTank ? null : (singlePages.data?.patch_damage ?? null);
+  const patchDamageNoticeShown = useRef(false);
+  useEffect(() => {
+    if (!patchDamage || patchDamageNoticeShown.current) return;
+    patchDamageNoticeShown.current = true;
+    toast({
+      icon: "warning",
+      text:
+        t(patchDamage.pending ? "reader.patchUnreadablePending" : "reader.patchUnreadable", {
+          count: patchDamage.pages.length,
+          sources: patchDamage.sources.map((s) => s.title || s.name).join("、"),
+        }) ?? undefined,
+    });
+  }, [patchDamage, t]);
+  // Tankoubon members report their own damaged patches; the book still reads, so say which
+  // chapters lost pages rather than leaving the reader to wonder where they went.
+  const tankDamagedPatches = useMemo(
+    () => (isTank ? tankReading.damagedPatches : []),
+    [isTank, tankReading.damagedPatches],
+  );
+  const tankPatchNoticeShown = useRef(false);
+  useEffect(() => {
+    if (tankDamagedPatches.length === 0 || tankPatchNoticeShown.current) return;
+    tankPatchNoticeShown.current = true;
+    toast({
+      icon: "warning",
+      text:
+        t("reader.tankPatchUnreadable", {
+          count: tankDamagedPatches.length,
+          names: tankDamagedPatches.map((p) => p.title).join("、"),
+        }) ?? undefined,
+    });
+  }, [tankDamagedPatches, t]);
   useDocumentTitle(metadata.data?.title);
   const settings = useSettings();
   const updateSettings = useUpdateSettings();
@@ -588,10 +735,18 @@ export function Reader() {
   }, [headless, currentPage]);
   useEffect(() => {
     if (!headless || !supportsHover) return;
+    // The bottom-left 20% corner, widened to the block's own extent: a long title reaches past
+    // that corner, and pointing at its far end should reveal it too (#298).
+    const margin = 16;
     function onMove(e: MouseEvent) {
-      setHeadlessInfoRevealed(
-        e.clientX < window.innerWidth * 0.2 && e.clientY > window.innerHeight * 0.8,
-      );
+      const inCorner =
+        e.clientX < window.innerWidth * 0.2 && e.clientY > window.innerHeight * 0.8;
+      const r = headlessInfoRef.current?.getBoundingClientRect();
+      const onBlock =
+        !!r &&
+        e.clientX <= r.right + margin &&
+        e.clientY >= r.top - margin;
+      setHeadlessInfoRevealed(inCorner || onBlock);
     }
     window.addEventListener("mousemove", onMove);
     return () => window.removeEventListener("mousemove", onMove);
@@ -627,7 +782,20 @@ export function Reader() {
       blockContextMenu: (el) => el.closest(".infinite-scroll img[data-page]") !== null,
     },
   );
-  useSwipeDownToDismiss(infiniteToolbarEl, () => setInfiniteToolbarPage(null));
+  // Long-pressing the toolbar's overview button opens the grid where the reader is, with no
+  // auto-scroll: a tap asks to be taken to the current page, a hold only asks to look around.
+  useLongPress(
+    document,
+    () => {
+      overviewAutoScroll.current = false;
+      setOverlay((prev) => (prev === "archive" ? null : "archive"));
+    },
+    {
+      enabled: !supportsHover,
+      match: (el) => el.closest("[data-overview-longpress]"),
+    },
+  );
+  useSwipeToDismiss(infiniteToolbarEl, () => setInfiniteToolbarPage(null), "down");
   useEffect(() => {
     if (infiniteToolbarPage === null) return;
     const img = infiniteScrollRootRef.current?.querySelector(
@@ -670,6 +838,16 @@ export function Reader() {
   const rightImgRef = useRef<HTMLImageElement>(null);
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
   const infiniteScrollRootRef = useRef<HTMLDivElement>(null);
+  /**
+   * The page the reader is looking at, plus where its centre sits relative to the viewport centre.
+   * Pages above finish decoding while the reader scrolls, swapping their placeholder height for the
+   * real one; without this, every such swap drags the text the reader is on up or down.
+   */
+  const infiniteScrollAnchorRef = useRef<{ el: HTMLElement; offset: number } | null>(null);
+  /** The resumed page while it is still being held under the viewport, across effect re-runs. */
+  const infiniteScrollPinPageRef = useRef<number | null>(null);
+  /** When the reader last touched the screen or the wheel — a drag changes the viewport height too. */
+  const infiniteScrollGestureRef = useRef(0);
   const infiniteScrollCurrentPageRef = useRef<number | null>(null);
   const infiniteScrollResumedRef = useRef(false);
   const infiniteScrollResumePageRef = useRef<number | null>(null);
@@ -718,7 +896,9 @@ export function Reader() {
     const bottomChrome = (area: HTMLElement): number => {
       let total = 0;
       let node: HTMLElement | null = area;
-      while (node && node !== document.body) {
+      // Stops at the fullscreen element: what lies outside it is still laid out but not shown, and
+      // counting it kept fit-height at the windowed height after entering fullscreen.
+      while (node && node !== document.body && node !== document.fullscreenElement) {
         const parent: HTMLElement | null = node.parentElement;
         if (!parent) break;
         const nodeBottom = node.getBoundingClientRect().bottom;
@@ -746,8 +926,11 @@ export function Reader() {
       // The slack covers what a siblings-only walk cannot see: the ancestors' bottom padding and
       // the footer's own margins (~15px measured, 20 leaves a few pixels of headroom so rounding
       // never reintroduces a scrollbar).
-      const available = Math.round(
-        window.innerHeight - box.top - bottomChrome(area) - 20,
+      // In fullscreen there is nothing around the area for the slack to cover, and keeping it left a
+      // 20px strip under the page; flooring alone keeps a fraction from adding a scrollbar.
+      const slack = document.fullscreenElement ? 0 : 20;
+      const available = Math.floor(
+        window.innerHeight - box.top - bottomChrome(area) - slack,
       );
       setFitHeightPx(available > 160 ? available : null);
     };
@@ -786,6 +969,27 @@ export function Reader() {
   ]);
 
   const lastSpreadHeightRef = useRef<number | null>(null);
+  // Where the last `j`/`k` step committed the viewport to, while its smooth animation is still
+  // running. `window.scrollY` lags that by a few frames, which made a `k` pressed right after a `j`
+  // see the pre-`j` position, call itself at the top edge, and turn the page backwards instead of
+  // scrolling up.
+  const scrollIntentRef = useRef<{ position: number; at: number } | null>(null);
+  // The same for infinite scroll, as a page: `currentPage` only moves once the smooth scroll reaches
+  // the next page, so a second `j` before then computed the same target and the key seemed to stall.
+  const infiniteIntentRef = useRef<{ page: number; at: number } | null>(null);
+  // The sequential key mode's queue: presses waiting their turn, whether one is running, and (in
+  // infinite scroll) the page the last finished step landed on — `currentPage` lags behind it.
+  const stepQueueRef = useRef<("next" | "prev")[]>([]);
+  const stepRunningRef = useRef(false);
+  const stepPageRef = useRef<number | null>(null);
+  // Set when the reader touches, clicks or wheels while the queue runs: the queue is dropped and
+  // the running step stops where it is instead of pulling the page out from under the input.
+  const stepCancelledRef = useRef(false);
+  // This render's page, for the queue to see a turn land after its own `await`.
+  const currentPageRef = useRef(currentPage);
+  useEffect(() => {
+    currentPageRef.current = currentPage;
+  });
   const lastFileInfoRef = useRef<string | null>(null);
   // Tracks pages whose Content-Length has already been requested, so the UI can show the file-size
   // part of the file-info bar while the actual image is still transferring (it used to wait for
@@ -844,8 +1048,13 @@ export function Reader() {
     infiniteScrollResumePageRef.current = currentPage;
   }
 
+  // A Tankoubon is not an archive on disk, so `/archives/{TANK_...}/page-dimensions` answers 500 —
+  // and the resume used to wait for that query to finish retrying (four attempts, ~9 s on a fast
+  // connection) before it could scroll to the saved page. Skip the request for tanks and let the
+  // resume happen straight away; the column's placeholder heights plus the re-pin-on-reflow below
+  // cover the pages whose real size is not known yet.
   const infiniteScrollResumeDimensions = usePageDimensions(
-    archiveId,
+    isTank ? null : archiveId,
     infiniteScrollResumePageRef.current ?? 0,
     readerSettings.infiniteScroll,
   );
@@ -941,8 +1150,11 @@ export function Reader() {
       : !!pageTinyBlobs[spread.left] && !!pageTinyBlobs[spread.right]);
 
   // A failed dimensions request still resumes (with estimated heights) rather than never: the
-  // column stays hidden until the resume happens, so "never" would mean a blank reader.
+  // column stays hidden until the resume happens, so "never" would mean a blank reader. A Tankoubon
+  // never asks for dimensions at all (its id is not an archive), so it resumes straight away: the
+  // column has placeholder heights from the first paint and the re-pin below absorbs the settling.
   const infiniteScrollResumeReady =
+    isTank ||
     infiniteScrollResumePageRef.current === null ||
     infiniteScrollResumePageRef.current <= 1 ||
     infiniteScrollResumeDimensions.isSuccess ||
@@ -1283,7 +1495,7 @@ export function Reader() {
     } else if (isTank) {
       updateTankoubonProgress.mutate(currentPage);
     } else {
-      updateProgress.mutate(currentPage);
+      updateProgress.mutate({ page: currentPage, pages: totalPages });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [archiveId, currentPage, totalPages]);
@@ -1352,6 +1564,8 @@ export function Reader() {
   }, [archiveId]);
 
   function goTo(target: Parameters<typeof computeNextPage>[0]) {
+    // The page about to render is a different height, so any step still in flight is meaningless.
+    scrollIntentRef.current = null;
     const isSpread = spread.right !== null;
     const next = computeNextPage(
       target,
@@ -1409,6 +1623,88 @@ export function Reader() {
     }
   }
 
+  /** One `j`/`k` step: scroll by the configured distance while the page still has room to move in
+   * that direction, and turn only at the edge. Clicks run through here too, so a click on the page
+   * behaves like the key the reader options describe by default rather than like a bare page turn;
+   * `clickAction` decides which of the three click behaviors that is. */
+  function stepOrTurn(
+    direction: "next" | "prev",
+    origin: "key" | "click" = "key",
+    /** The sequential key mode runs each press to completion itself: it wants this step's target
+     * (`null` when the step turned the page instead) and scrolls there, not merging with the last. */
+    sequential = false,
+  ): number | null {
+    if (readerSettings.infiniteScroll) {
+      goToInfiniteScrollPage(currentPage, direction, { fromKey: origin === "key" });
+      return null;
+    }
+    if (origin === "click" && readerSettings.clickAction === CLICK_ACTION.TURN) {
+      readerLog("step", {
+        direction,
+        turned: true,
+        reason: "clickAction turn",
+        ...scrollPosition(),
+      });
+      goTo(direction);
+      return null;
+    }
+    // `BACK` is `k`'s own escape hatch; only the click behaviors that follow the keys inherit it.
+    const followKeys =
+      origin === "key" || readerSettings.clickAction === CLICK_ACTION.KEYS;
+    if (
+      direction === "prev" &&
+      followKeys &&
+      readerSettings.kBehavior === K_BEHAVIOR.BACK
+    ) {
+      readerLog("step", { direction, turned: true, reason: "kBehavior", ...scrollPosition() });
+      goTo("prev");
+      return null;
+    }
+    const intent = scrollIntentRef.current;
+    const pending = !sequential && intent !== null && nowMs() - intent.at < SCROLL_INTENT_MS;
+    const from = pending ? intent.position : window.scrollY;
+    const maxScroll = Math.max(
+      0,
+      document.documentElement.scrollHeight - window.innerHeight,
+    );
+    const step =
+      readerSettings.jScrollUnit === J_SCROLL_UNIT.PX
+        ? readerSettings.jScrollAmount
+        : (window.innerHeight * readerSettings.jScrollAmount) / 100;
+    const atEdge = direction === "next" ? from >= maxScroll - 1 : from <= 0;
+    // A zero step is the one way `j` can look like a dead key: `scrollBy(0)` moves nothing and the
+    // page is not at its edge either. Turning is the useful reading of an explicit zero.
+    if (atEdge || step <= 0) {
+      scrollIntentRef.current = null;
+      readerLog("step", {
+        direction,
+        turned: true,
+        atEdge,
+        step,
+        from: Math.round(from),
+        ...scrollPosition(),
+      });
+      goTo(direction);
+      return null;
+    }
+    const target = Math.min(
+      maxScroll,
+      Math.max(0, from + (direction === "next" ? step : -step)),
+    );
+    if (sequential) return target;
+    scrollIntentRef.current = { position: target, at: nowMs() };
+    readerLog("step", {
+      direction,
+      turned: false,
+      step: Math.round(step),
+      from: Math.round(from),
+      to: Math.round(target),
+      ...scrollPosition(),
+    });
+    window.scrollTo({ top: target, behavior: "smooth" });
+    return null;
+  }
+
   /** Touch infinite scroll reads vertically, so a tap on the lower half scrolls forward by the `j`
    * step and one on the upper half back; the toolbar is a long press instead (see below). */
   function onInfiniteScrollTap(clientY: number) {
@@ -1430,13 +1726,32 @@ export function Reader() {
     window.scrollBy({ top: forward ? step : -step, behavior: "smooth" });
   }
 
-  function goToInfiniteScrollPage(fromPage: number, target: "prev" | "next") {
+  function goToInfiniteScrollPage(
+    fromPage: number,
+    target: "prev" | "next",
+    {
+      fromKey = false,
+      sequential = false,
+    }: {
+      /** A key press continues from the page the previous press is still scrolling to; a click
+       * counts from the page it landed on. */
+      fromKey?: boolean;
+      /** Return the step (its page and scroll position) instead of scrolling there. */
+      sequential?: boolean;
+    } = {},
+  ): { page: number; top: number } | null {
     let offset = target === "next" ? 1 : -1;
     if (readerSettings.mangaMode) offset = -offset;
-    const nextPage = fromPage + offset;
+    const intent = infiniteIntentRef.current;
+    const base =
+      fromKey && !sequential && intent !== null && nowMs() - intent.at < SCROLL_INTENT_MS
+        ? intent.page
+        : fromPage;
+    const nextPage = base + offset;
     if (nextPage < 1 || nextPage > totalPages) {
+      infiniteIntentRef.current = null;
       startArchiveTransition(offset > 0 ? "next" : "prev");
-      return;
+      return null;
     }
     // kBehavior only configures `prev`; next always lands at the top. BACK omits block ("nearest").
     const block: ScrollIntoViewOptions["block"] =
@@ -1447,9 +1762,111 @@ export function Reader() {
             ? "start"
             : undefined
         : "start";
-    document
-      .querySelector(`[data-page="${nextPage}"]`)
-      ?.scrollIntoView({ behavior: "smooth", block });
+    const el = document.querySelector(`[data-page="${nextPage}"]`);
+    if (!el) return null;
+    if (sequential) {
+      const rect = el.getBoundingClientRect();
+      const toStart = window.scrollY + rect.top;
+      const toEnd = window.scrollY + rect.bottom - window.innerHeight;
+      // `scrollIntoView`'s own placement for each `block`; "nearest" moves only as far as needed.
+      const top =
+        block === "start"
+          ? toStart
+          : block === "end"
+            ? toEnd
+            : rect.top < 0
+              ? toStart
+              : rect.bottom > window.innerHeight
+                ? toEnd
+                : window.scrollY;
+      return { page: nextPage, top };
+    }
+    infiniteIntentRef.current = { page: nextPage, at: nowMs() };
+    el.scrollIntoView({ behavior: "smooth", block });
+    return null;
+  }
+
+  /** A `j`/`k` press. In the sequential key mode (a reader option) every press runs in full and in
+   * order — a `k` among `j`s visibly scrolls back — with a short animation so a burst does not lag
+   * far behind the keys; otherwise presses merge into one moving target (`stepOrTurn`). */
+  function pressStepKey(direction: "next" | "prev") {
+    if (readerSettings.keyRepeat !== KEY_REPEAT.SEQUENTIAL) {
+      stepOrTurn(direction);
+      return;
+    }
+    // Bounded, so holding a key down cannot queue a scroll that goes on long after it is released.
+    if (stepQueueRef.current.length >= STEP_QUEUE_LIMIT) return;
+    stepQueueRef.current.push(direction);
+    if (!stepRunningRef.current) void runStepQueue();
+  }
+
+  /** Runs one queued press with the reader's state as of this render (hence the ref below). */
+  async function runQueuedStep(direction: "next" | "prev") {
+    if (readerSettings.infiniteScroll) {
+      const from = stepPageRef.current ?? currentPage;
+      const step = goToInfiniteScrollPage(from, direction, { sequential: true });
+      if (!step) {
+        stepPageRef.current = null;
+        return;
+      }
+      stepPageRef.current = step.page;
+      await animateScrollTo(step.top, () => stepCancelledRef.current);
+      return;
+    }
+    const pageBefore = currentPageRef.current;
+    const target = stepOrTurn(direction, "key", true);
+    if (target === null) {
+      // The page turned: the next press must measure the new page, so wait until it is the
+      // current one, its picture has decoded and the scroll has come to rest (bounded, in case a
+      // turn went nowhere — the first page's `k`).
+      let lastY = -1;
+      let still = 0;
+      await waitFor(() => {
+        still = Math.abs(window.scrollY - lastY) < 1 ? still + 1 : 0;
+        lastY = window.scrollY;
+        // Both pictures in a two-page spread: the new page can be either one.
+        const decoded = [leftImgRef.current, rightImgRef.current].every(
+          (img) => !img || (img.complete && img.naturalHeight > 0),
+        );
+        return currentPageRef.current !== pageBefore && decoded && still >= 3;
+      }, TURN_SETTLE_TIMEOUT_MS);
+      return;
+    }
+    await animateScrollTo(target, () => stepCancelledRef.current);
+  }
+  const runQueuedStepRef = useRef(runQueuedStep);
+  useEffect(() => {
+    runQueuedStepRef.current = runQueuedStep;
+  });
+  useEffect(() => {
+    // Presses queued for one archive must not carry over into the next.
+    stepQueueRef.current = [];
+    stepPageRef.current = null;
+  }, [archiveId]);
+
+  async function runStepQueue() {
+    stepRunningRef.current = true;
+    stepCancelledRef.current = false;
+    // The reader's own touch, click or wheel takes over from the queue (keys keep queueing).
+    const takeOver = () => {
+      stepCancelledRef.current = true;
+      stepQueueRef.current = [];
+    };
+    const INPUT_EVENTS = ["pointerdown", "touchstart", "wheel"] as const;
+    INPUT_EVENTS.forEach((type) =>
+      window.addEventListener(type, takeOver, { capture: true, passive: true }),
+    );
+    try {
+      for (let next = stepQueueRef.current.shift(); next; next = stepQueueRef.current.shift()) {
+        await runQueuedStepRef.current(next);
+      }
+    } finally {
+      INPUT_EVENTS.forEach((type) =>
+        window.removeEventListener(type, takeOver, { capture: true }),
+      );
+      stepRunningRef.current = false;
+      stepPageRef.current = null;
+    }
   }
 
   useEffect(() => {
@@ -1475,6 +1892,8 @@ export function Reader() {
   }, [archiveId, queryClient, isTank]);
 
   function startArchiveTransition(direction: "prev" | "next") {
+    // Queued key presses belonged to the archive being left.
+    stepQueueRef.current = [];
     // Cached (prefetched) shortlist opens instantly; otherwise show the skeleton while the
     // fetch runs.
     const cached = archiveId
@@ -1526,10 +1945,22 @@ export function Reader() {
   // whole viewport becomes the turn target, split down the middle like the page itself. The image
   // link already turns pages and calls `preventDefault`, the loading placeholder does the same, and
   // the floating fit control stays out of the exclusion list, so nothing turns twice or fights the
-  // mode menu. `goTo` closes over this render's page, hence the ref instead of re-subscribing.
-  const goToRef = useRef(goTo);
+  // mode menu. A click there does what a click on the page would: scroll by the `j`/`k` step and
+  // turn only at the edge, and in infinite scroll the page images' own scroll-then-turn. It closes
+  // over this render's page, hence the ref instead of re-subscribing.
+  function turnFromOutside(clientX: number, clientY: number) {
+    const target = clientX < window.innerWidth / 2 ? "prev" : "next";
+    if (!readerSettings.infiniteScroll) {
+      stepOrTurn(target, "click");
+    } else if (!supportsHover) {
+      onInfiniteScrollTap(clientY);
+    } else {
+      goToInfiniteScrollPage(currentPage, target);
+    }
+  }
+  const turnFromOutsideRef = useRef(turnFromOutside);
   useEffect(() => {
-    goToRef.current = goTo;
+    turnFromOutsideRef.current = turnFromOutside;
   });
   // Where the gesture started decides whether it may turn a page. A backdrop that dismisses its
   // modal on press deletes it before the click is dispatched, and the browser then delivers that
@@ -1571,7 +2002,7 @@ export function Reader() {
       if (overlay !== null) return;
       if (e.defaultPrevented) return;
       if (inOtherLayer(e.target as HTMLElement | null)) return;
-      goToRef.current(e.clientX < window.innerWidth / 2 ? "prev" : "next");
+      turnFromOutsideRef.current(e.clientX, e.clientY);
     }
     document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("click", onClick);
@@ -1963,11 +2394,45 @@ export function Reader() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [archiveId, totalPages]);
 
+  // A real scroll input takes over from a step that is still animating: without this, the next
+  // `j`/`k` would measure from the stale committed position and jump.
+  useEffect(() => {
+    function release() {
+      scrollIntentRef.current = null;
+    }
+    window.addEventListener("wheel", release, { passive: true });
+    window.addEventListener("touchmove", release, { passive: true });
+    return () => {
+      window.removeEventListener("wheel", release);
+      window.removeEventListener("touchmove", release);
+    };
+  }, []);
+
   useEffect(() => releaseWakeLock, []);
 
-  const currentBookmark = (bookmarks.data ?? []).find(
-    (b) => b.page === currentPage,
-  );
+  useEffect(() => {
+    if (!readerDebugEnabled()) return;
+    let lastY = Math.round(window.scrollY);
+    let timer: number | undefined;
+    function onScroll() {
+      if (timer !== undefined) return;
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        const position = scrollPosition();
+        if (position.y === lastY) return;
+        lastY = position.y;
+        readerLog("scroll", position);
+      }, 150);
+    }
+    window.addEventListener("scroll", onScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, []);
+
+  const currentBookmark = (bookmarks.data ?? []).find((b) => b.page === currentPage);
   const isPageBookmarked = currentBookmark !== undefined;
 
   async function toggleBookmark() {
@@ -1992,6 +2457,18 @@ export function Reader() {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if ((e.target as HTMLElement)?.tagName === "INPUT") return;
+      // Logged before any branch handles the key: the question these diagnostics answer is "did
+      // the key arrive at all", which a log inside `j`'s own case would answer falsely.
+      readerLog("key", {
+        key: e.key,
+        shift: e.shiftKey,
+        modifier: e.ctrlKey || e.metaKey || e.altKey,
+        repeat: e.repeat,
+        overlay,
+        headless,
+        page: currentPage,
+        ...scrollPosition(),
+      });
 
       // The chapter OSD owns the keyboard while it is open: arrows/space must not fall through to
       // the page-turning shortcuts on the reader behind it.
@@ -2096,41 +2573,16 @@ export function Reader() {
           });
           return;
         case "j":
-          if (readerSettings.infiniteScroll) {
-            goToInfiniteScrollPage(currentPage, "next");
-          } else if (
-            window.innerHeight + window.scrollY >=
-            document.documentElement.scrollHeight - 1
-          ) {
-            goTo("next");
-          } else {
-            const step =
-              readerSettings.jScrollUnit === J_SCROLL_UNIT.PX
-                ? readerSettings.jScrollAmount
-                : window.innerHeight * (readerSettings.jScrollAmount / 100);
-            window.scrollBy({ top: step, behavior: "smooth" });
-          }
+          pressStepKey("next");
           return;
         case "k":
-          if (readerSettings.infiniteScroll) {
-            goToInfiniteScrollPage(currentPage, "prev");
-          } else if (readerSettings.kBehavior === K_BEHAVIOR.BACK) {
-            goTo("prev");
-          } else if (window.scrollY <= 0) {
-            goTo("prev");
-          } else {
-            const step =
-              readerSettings.jScrollUnit === J_SCROLL_UNIT.PX
-                ? readerSettings.jScrollAmount
-                : window.innerHeight * (readerSettings.jScrollAmount / 100);
-            window.scrollBy({ top: -step, behavior: "smooth" });
-          }
+          pressStepKey("prev");
           return;
         case "ArrowLeft":
         case "a":
           if (readerSettings.infiniteScroll) {
             if (e.shiftKey) selectPage(1);
-            else goToInfiniteScrollPage(currentPage, "prev");
+            else goToInfiniteScrollPage(currentPage, "prev", { fromKey: true });
           } else {
             goTo(e.shiftKey ? "first" : "prev");
           }
@@ -2139,7 +2591,7 @@ export function Reader() {
         case "d":
           if (readerSettings.infiniteScroll) {
             if (e.shiftKey) selectPage(totalPages);
-            else goToInfiniteScrollPage(currentPage, "next");
+            else goToInfiniteScrollPage(currentPage, "next", { fromKey: true });
           } else {
             goTo(e.shiftKey ? "last" : "next");
           }
@@ -2165,8 +2617,28 @@ export function Reader() {
           setOverlay((prev) => (prev === "help" ? null : "help"));
           return;
         case "m":
-          updateReaderSettings({ mangaMode: !readerSettings.mangaMode });
+        case "M": {
+          // Branch on the modifier, not on `e.key`: Caps Lock (and layouts that report the
+          // shifted character) can turn a plain `m` into "M" and vice versa, so keying off the
+          // character sent Shift+M to the manga toggle whenever it arrived as "m" — the
+          // "Shift+M sometimes does nothing" report.
+          if (!e.shiftKey) {
+            updateReaderSettings({ mangaMode: !readerSettings.mangaMode });
+            return;
+          }
+          // Headless only (deliberate: the fit modes belong to the no-chrome reading view), and a
+          // no-op in endless scroll where the page column already sizes itself.
+          if (!headless || readerSettings.infiniteScroll) return;
+          e.preventDefault();
+          const cycle = [FIT_MODE.CONTAINER, FIT_MODE.FIT_WIDTH, FIT_MODE.FIT_HEIGHT] as const;
+          const next = cycle[(cycle.indexOf(readerSettings.fitMode) + 1) % cycle.length];
+          updateReaderSettings({ fitMode: next });
+          // The toolbar's split control highlights `fitAction`, which is a separate piece of state:
+          // without this the menu keeps ticking whatever was chosen there last.
+          setFitAction(next);
+          storeFitAction(next);
           return;
+        }
         case "n":
           toggleAutoNextPage();
           return;
@@ -2219,6 +2691,7 @@ export function Reader() {
     totalPages,
     readerSettings.mangaMode,
     readerSettings.doublePageMode,
+    readerSettings.fitMode,
     readerSettings.infiniteScroll,
     readerSettings.jScrollUnit,
     readerSettings.jScrollAmount,
@@ -2249,35 +2722,148 @@ export function Reader() {
     // the tracker attaches after it fires so its first read doesn't stomp currentPage back to 1.
     const alreadyResumed = infiniteScrollResumedRef.current;
     // Pages above the resumed one settle from their reserved to their real height a few pixels at
-    // a time; until the reader touches anything, every such change re-pins the resumed page.
-    let pinned: HTMLElement | null = null;
-    // Centred in the viewport; a page taller than the viewport starts at its top instead, so the
-    // reader is not dropped into its middle.
-    const pin = (el: HTMLElement) =>
-      el.scrollIntoView({
-        block: el.getBoundingClientRect().height > window.innerHeight ? "start" : "center",
-      });
+    // a time; until the reader touches anything, every such change re-pins the resumed page. The page
+    // number lives in a ref because this effect re-runs whenever `pages.data` changes (a member of a
+    // Tankoubon finishing its listing, say) — a local would drop the pin mid-settle and leave the
+    // reader parked wherever the placeholder heights happened to put it.
+    const pinnedPage = () => infiniteScrollPinPageRef.current;
+    let holding = false;
+    // A page that fits the viewport is centred on it; a page taller than the viewport — which cannot
+    // be centred without cutting off both ends — lands with its own top edge on the viewport's top,
+    // i.e. the reader starts at the beginning of that page. Computed rather than left to
+    // `scrollIntoView`, whose `block:"center"` silently top-aligns the tall case and rounds the rest.
+    const alignFor = (rect: DOMRect) =>
+      rect.height > window.innerHeight ? rect.top : rect.top + rect.height / 2 - window.innerHeight / 2;
+    const pin = (el: HTMLElement | null) => {
+      // A re-render can replace the column's nodes, leaving the element we pinned against detached:
+      // its rect is all zeroes, which would silently scroll the reader away instead of re-pinning.
+      if (!el || !el.isConnected) return;
+      const rect = el.getBoundingClientRect();
+      window.scrollTo({ top: Math.max(0, Math.round(window.scrollY + alignFor(rect))) });
+    };
+    /**
+     * Keeps re-applying the resume alignment frame by frame for a few seconds after the reader
+     * opens. A resize observer cannot cover everything that moves the target afterwards — the
+     * browser restoring its own scroll offset, a font or notification bar changing the toolbar
+     * height, a page above finishing its decode between two observations — and each of those is a
+     * jump the reader sees. Correcting every frame until the layout stops moving costs a rect read
+     * and, only when it is actually off, one scroll call.
+     */
+    const holdResumePage = (targetOf: () => HTMLElement | null) => {
+      if (holding) return;
+      holding = true;
+      const startedAt = performance.now();
+      let steadyFrames = 0;
+      // The target's own decode is the moment its box becomes final; the frame loop already notices
+      // it, but hooking `load` makes the correction land on that exact frame instead of the next one.
+      const target0 = targetOf();
+      target0?.addEventListener("load", () => {
+        const el = targetOf();
+        if (el) pin(el);
+      }, { once: true });
+      const pagesAbove = () => {
+        const pin = pinnedPage();
+        const all = [...root.querySelectorAll<HTMLImageElement>("[data-page] img, img[data-page]")];
+        return pin === null
+          ? []
+          : all.filter((img) => Number((img.closest("[data-page]") ?? img).getAttribute("data-page")) < pin);
+      };
+      const tick = () => {
+        if (pinnedPage() === null) {
+          holding = false;
+          return;
+        }
+        const el = targetOf();
+        if (!el) {
+          if (performance.now() - startedAt > 6000) {
+            holding = false;
+            return;
+          }
+          requestAnimationFrame(tick);
+          return;
+        }
+        const before = window.scrollY;
+        pin(el);
+        steadyFrames = Math.abs(window.scrollY - before) >= 1 ? 0 : steadyFrames + 1;
+        // Keep holding until everything above the target has actually decoded: on a phone that is
+        // several seconds, and stopping on a fixed timer just lets the last images drag the page
+        // away after the fact. A page still loading keeps `steadyFrames` reset anyway.
+        const aboveSettled = pagesAbove().every((img) => img.complete && img.naturalHeight > 0);
+        if (steadyFrames >= 45 && aboveSettled) {
+          holding = false;
+          return;
+        }
+        if (performance.now() - startedAt > 30_000) {
+          holding = false;
+          return;
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    };
+    const resumeStartedAt = performance.now();
     if (!alreadyResumed) {
       if (!infiniteScrollResumeReady) return;
-      infiniteScrollResumedRef.current = true;
       infiniteScrollCurrentPageRef.current = currentPage;
-      pinned = root.querySelector<HTMLElement>(`[data-page="${currentPage}"]`);
-      if (pinned) pin(pinned);
+      infiniteScrollPinPageRef.current = currentPage;
+      const targetOf = () => root.querySelector<HTMLElement>(`[data-page="${currentPage}"]`);
       // The resumed flag is a ref, so no render follows to drop `infiniteScrollResumeHidden`.
-      root.style.removeProperty("visibility");
+      const reveal = () => {
+        infiniteScrollResumedRef.current = true;
+        root.style.removeProperty("visibility");
+      };
+      const resumed = targetOf();
+      if (resumed) {
+        pin(resumed);
+        reveal();
+        holdResumePage(targetOf);
+      } else if (!holding) {
+        // A Tankoubon is a list of archives, so the page the reader stopped on can belong to a
+        // member that has not been appended yet. Revealing the column before it exists is exactly
+        // how the reader ends up looking at the first page instead of their own: hold the (hidden)
+        // column until the target is in the DOM, with a hard stop so a genuinely missing page
+        // cannot leave the reader staring at nothing.
+        const startedAt = performance.now();
+        const settle = () => {
+          if (infiniteScrollResumedRef.current) return;
+          const el = targetOf();
+          if (el) {
+            pin(el);
+            reveal();
+            holdResumePage(targetOf);
+            return;
+          }
+          if (performance.now() - startedAt > 4000) {
+            reveal();
+            return;
+          }
+          requestAnimationFrame(settle);
+        };
+        requestAnimationFrame(settle);
+      }
     }
     const PIN_EVENTS = ["pointerdown", "touchstart", "wheel", "keydown"] as const;
     const unpin = () => {
-      pinned = null;
+      // Input that arrives while the reader is still opening belongs to the tap that navigated
+      // here, not to a decision to take over the scroll: honouring it drops the pin before the
+      // resume has even been applied, which is how the reader ends up wherever the column opened.
+      if (performance.now() - resumeStartedAt < 400) return;
+      infiniteScrollPinPageRef.current = null;
       PIN_EVENTS.forEach((type) => window.removeEventListener(type, unpin, true));
     };
-    if (pinned) {
+    if (pinnedPage() !== null) {
       PIN_EVENTS.forEach((type) =>
         window.addEventListener(type, unpin, { capture: true, passive: true }),
       );
     }
-    const unpinTimer = window.setTimeout(unpin, 10_000);
+    // Pages above the resumed one keep swapping their placeholder height for a real one for as long
+    // as the reader keeps loading them; re-pinning for a full minute keeps the resumed page under the
+    // viewport instead of letting those upstream changes drag it away. Any real interaction unpins
+    // immediately, so this never fights the reader.
+    const unpinTimer = window.setTimeout(unpin, 60_000);
     const REFLOW_GUARD_MS = 400;
+    /** How long after a touch or wheel the reflow must not scroll, only re-baseline. */
+    const GESTURE_QUIET_MS = 400;
     let reflowGuardUntil = performance.now() + REFLOW_GUARD_MS;
 
     let rafId: number | null = null;
@@ -2290,6 +2876,10 @@ export function Reader() {
       for (const img of images) {
         const rect = img.getBoundingClientRect();
         if (rect.top > viewportMid || rect.bottom < viewportMid) continue;
+        infiniteScrollAnchorRef.current = {
+          el: img,
+          offset: alignFor(rect),
+        };
         const page = Number(img.dataset.page);
         if (
           !Number.isNaN(page) &&
@@ -2307,20 +2897,73 @@ export function Reader() {
     }
     window.addEventListener("scroll", onScroll, { passive: true });
 
-    // Delivered after layout and before paint, so a re-pin here never shows the shifted frame.
-    const resizeObserver = new ResizeObserver(() => {
+    const reflow = () => {
       reflowGuardUntil = performance.now() + REFLOW_GUARD_MS;
-      if (pinned) pin(pinned);
+      const page = pinnedPage();
+      if (page !== null) {
+        const el = root.querySelector<HTMLElement>(`[data-page="${page}"]`);
+        if (el) pin(el);
+        return;
+      }
+      // Scrolling manually: hold whatever page is under the viewport centre still, so a page above
+      // that finishes loading cannot pull the reader away from what they are looking at.
+      const anchor = infiniteScrollAnchorRef.current;
+      if (!anchor || !anchor.el.isConnected) {
+        infiniteScrollAnchorRef.current = null;
+        return;
+      }
+      const delta = alignFor(anchor.el.getBoundingClientRect()) - anchor.offset;
+      if (Math.abs(delta) < 1) return;
+      // A drag on a phone collapses or reveals the address bar, which shrinks or grows the viewport
+      // in the middle of that same drag: scrolling to compensate then would fight the finger. Take
+      // the new position as the baseline instead, and let the next idle reflow correct from there.
+      if (performance.now() - infiniteScrollGestureRef.current < GESTURE_QUIET_MS) {
+        anchor.offset = alignFor(anchor.el.getBoundingClientRect());
+        return;
+      }
+      window.scrollBy(0, delta);
+    };
+
+    const markGesture = () => {
+      infiniteScrollGestureRef.current = performance.now();
+    };
+    const GESTURE_EVENTS = ["pointerdown", "touchstart", "touchmove", "wheel"] as const;
+    GESTURE_EVENTS.forEach((type) =>
+      window.addEventListener(type, markGesture, { capture: true, passive: true }),
+    );
+
+    // Delivered after layout and before paint, so a re-pin here never shows the shifted frame.
+    const resizeObserver = new ResizeObserver(reflow);
+    const observePages = () =>
+      root
+        .querySelectorAll<HTMLElement>("[data-page]")
+        .forEach((img) => resizeObserver.observe(img));
+    observePages();
+    // A Tankoubon appends each member's pages as its listing arrives; those nodes are not covered by
+    // the observer until they are, and a page appearing above the pin shifts it like any late load.
+    const columnObserver = new MutationObserver(() => {
+      observePages();
+      reflow();
     });
-    root
-      .querySelectorAll<HTMLElement>("[data-page]")
-      .forEach((img) => resizeObserver.observe(img));
+    columnObserver.observe(root, { childList: true, subtree: true });
+
+    // A phone's viewport height is not constant: the address bar comes and goes, and every change
+    // moves the page under the viewport centre by half the difference. Re-applying the same
+    // alignment on resize keeps the resumed (or anchored) page where the reader left it.
+    window.addEventListener("resize", reflow);
+    window.visualViewport?.addEventListener("resize", reflow);
 
     return () => {
       unpin();
       window.clearTimeout(unpinTimer);
       window.removeEventListener("scroll", onScroll);
+      GESTURE_EVENTS.forEach((type) =>
+        window.removeEventListener(type, markGesture, { capture: true }),
+      );
+      window.removeEventListener("resize", reflow);
+      window.visualViewport?.removeEventListener("resize", reflow);
       if (rafId !== null) cancelAnimationFrame(rafId);
+      columnObserver.disconnect();
       resizeObserver.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2351,6 +2994,16 @@ export function Reader() {
     if (firstError?.status === 403)
       return <ForbiddenPage reason={firstError.message} />;
     if (firstError?.status === 401) return null;
+    const unreadable = unreadableArchiveCode(pages.error);
+    if (unreadable && archiveId)
+      return (
+        <UnreadableArchivePage
+          archiveId={archiveId}
+          title={metadata.data?.title}
+          code={unreadable}
+          reason={(pages.error as ApiError).message}
+        />
+      );
 
     return (
       <div className="ido">
@@ -2558,6 +3211,7 @@ export function Reader() {
   const helpContent = (
     <div className="reader-help-body">
       <div className="reader-help-sections">
+        <div className="reader-help-column">
         <section className="reader-help-section">
           <h5 className="reader-help-section-title">{t("reader.helpSectionPaging")}</h5>
           <p className="reader-help-lead">{t("reader.youCanNavigateBetweenPages")}</p>
@@ -2605,28 +3259,6 @@ export function Reader() {
         </section>
 
         <section className="reader-help-section">
-          <h5 className="reader-help-section-title">{t("reader.helpSectionTouch")}</h5>
-          <ul className="reader-help-gesture-grid">
-            <li className="reader-help-gesture-tile">
-              <TouchSwipeDemo direction="up" />
-              <span>{t("reader.twoFingerSwipeUp")}</span>
-            </li>
-            <li className="reader-help-gesture-tile">
-              <TouchSwipeDemo direction="down" />
-              <span>{t("reader.twoFingerSwipeDown")}</span>
-            </li>
-            <li className="reader-help-gesture-tile">
-              <TapSidesDemo />
-              <span>{t("reader.helpTapSides")}</span>
-            </li>
-            <li className="reader-help-gesture-tile">
-              <LongPressDemo />
-              <span>{t("reader.longPressExitsHeadless")}</span>
-            </li>
-          </ul>
-        </section>
-
-        <section className="reader-help-section">
           <h5 className="reader-help-section-title">{t("reader.helpSectionDisplay")}</h5>
           <ul className="reader-help-list">
             <li>
@@ -2634,6 +3266,13 @@ export function Reader() {
                 <Key>M</Key>
               </span>
               <span>{t("reader.mToggleMangaModeRighttoleft")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Shift</Key>
+                <Key>M</Key>
+              </span>
+              <span>{t("reader.shiftMCyclesFitMode")}</span>
             </li>
             <li>
               <span className="reader-help-keys">
@@ -2680,6 +3319,30 @@ export function Reader() {
                 <span>{t("reader.sSetAStamp")}</span>
               </li>
             )}
+          </ul>
+        </section>
+
+        </div>
+        <div className="reader-help-column">
+        <section className="reader-help-section">
+          <h5 className="reader-help-section-title">{t("reader.helpSectionTouch")}</h5>
+          <ul className="reader-help-gesture-grid">
+            <li className="reader-help-gesture-tile">
+              <TouchSwipeDemo direction="up" />
+              <span>{t("reader.twoFingerSwipeUp")}</span>
+            </li>
+            <li className="reader-help-gesture-tile">
+              <TouchSwipeDemo direction="down" />
+              <span>{t("reader.twoFingerSwipeDown")}</span>
+            </li>
+            <li className="reader-help-gesture-tile">
+              <TapSidesDemo />
+              <span>{t("reader.helpTapSides")}</span>
+            </li>
+            <li className="reader-help-gesture-tile">
+              <LongPressDemo />
+              <span>{t("reader.longPressExitsHeadless")}</span>
+            </li>
           </ul>
         </section>
 
@@ -2771,6 +3434,7 @@ export function Reader() {
             </li>
           </ul>
         </section>
+        </div>
       </div>
 
       <p className="reader-help-lead" style={{ marginTop: 12 }}>
@@ -3214,6 +3878,9 @@ export function Reader() {
           title={t("reader.archiveOverview") ?? undefined}
           size={32}
           style={{ borderRadius: "50%" }}
+          // Long-pressable: opens the grid without scrolling to the current page (see the
+          // `useLongPress` registration next to the other touch gestures).
+          data-overview-longpress=""
           onClick={() => {
             overviewAutoScroll.current = true;
             setOverlay((prev) => (prev === "archive" ? null : "archive"));
@@ -3636,6 +4303,7 @@ export function Reader() {
                 id="imgLink"
                 href={leftUrl}
                 onClick={(e) => {
+                  if (!isPlainLinkClick(e)) return
                   const x = e.clientX;
                   const isLeftHalf = x < window.innerWidth / 2;
                   e.preventDefault();
@@ -3643,7 +4311,7 @@ export function Reader() {
                   // The stamp layer now lives inside this page link, so its own clicks would
                   // otherwise bubble up here and turn the page.
                   if ((e.target as HTMLElement).closest?.("[data-marker-layer]")) return;
-                  goTo(isLeftHalf ? "prev" : "next");
+                  stepOrTurn(isLeftHalf ? "prev" : "next", "click");
                 }}
                 className="reader-page-frame"
                 style={{ position: "relative", display: "inline-flex" }}
@@ -3970,6 +4638,9 @@ export function Reader() {
             <div
               id="reader-help"
               className="id1 base-overlay small-overlay reader-help-panel"
+              // Marks the layer so `index.css`'s `html:has([data-overlay="modal"])` lock keeps the
+              // reader behind from scrolling; the panel's own scroller stops the chain at its ends.
+              data-overlay="modal"
             >
               <div className="navigation-help-toast">{helpContent}</div>
             </div>

@@ -1084,8 +1084,8 @@ fn start_error_message(e: &StartError) -> String {
     }
 }
 
-/// Starts a queue item on the subscription orchestrator's behalf — server-side, with no request
-/// and nobody pressing Start behind it.
+/// Starts a queue item on the server's behalf — for the subscription orchestrator, or a damaged
+/// archive being downloaded again — with nobody pressing Start behind it.
 ///
 /// Needed because "download automatically" means exactly that (spec FR-007a and its own Q&A: the
 /// alternative to downloading automatically is the approval list, *not* a second click on Start),
@@ -1680,7 +1680,12 @@ pub(crate) async fn keep_failed_download<T>(
 ) {
     match result {
         Ok(_) => {}
-        Err(crate::download_manager::ingest::IngestDownloadError::StagedCorrupted { .. }) => {
+        // Damaged bytes (027 R7), or bytes that were never an archive (#300): nothing to keep —
+        // the retry downloads again.
+        Err(
+            crate::download_manager::ingest::IngestDownloadError::StagedCorrupted { .. }
+            | crate::download_manager::ingest::IngestDownloadError::NotAnArchive { .. },
+        ) => {
             let _ = tokio::fs::remove_file(&file.path).await;
         }
         Err(_) => {
@@ -1791,6 +1796,7 @@ async fn reingest(State(state): State<AppState>, Path(id): Path<String>) -> Resp
             if matches!(
                 e,
                 crate::download_manager::ingest::IngestDownloadError::StagedCorrupted { .. }
+                    | crate::download_manager::ingest::IngestDownloadError::NotAnArchive { .. }
             ) {
                 // The kept bytes are damaged (027 R7): drop them, so the row's retry downloads again.
                 remove_kept_bytes(Some(&item)).await;
@@ -2105,8 +2111,15 @@ mod tests {
             corrupted_pages: vec![],
             has_patch: false,
             blake3: None,
+            primary_source: None,
+            progress_pages: None,
         };
-        state.repos.archives.save(&archive).await.unwrap();
+        state
+            .repos
+            .archives
+            .create_or_replace(&archive)
+            .await
+            .unwrap();
         crate::download_sources::record(&state, &url, &archive_id).await;
 
         // `add` mints the row's id itself; keep what it returns rather than the placeholder.

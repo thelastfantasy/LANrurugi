@@ -22,6 +22,7 @@ import type {
 } from "@/api/types";
 import { Tooltip } from "@/components/common-ui/Display"
 ;
+import { isPlainLinkClick } from "@/components/common-ui/Link"
 import {
   computeEta,
   computeRemainingSpeed,
@@ -236,6 +237,7 @@ export function RowStats({
           <a
             href={routes.settings("subscriptions")}
             onClick={(e) => {
+              if (!isPlainLinkClick(e)) return
               e.preventDefault()
               onOpenSubscriptions()
             }}
@@ -540,6 +542,7 @@ export function QueueItemRow({
                 <a
                   href={archiveId ? routes.reader(archiveId) : undefined}
                   onClick={(e) => {
+                    if (!isPlainLinkClick(e)) return
                     if (!archiveId) return;
                     e.preventDefault();
                     navigate(routes.reader(archiveId));
@@ -691,6 +694,7 @@ export function QueueItemRow({
                   <a
                     href={routes.reader(newerRevisionId)}
                     onClick={(e) => {
+                      if (!isPlainLinkClick(e)) return
                       e.preventDefault()
                       navigate(routes.reader(newerRevisionId))
                     }}
@@ -834,10 +838,12 @@ export function QueueItemRow({
                 (needsReingest ? reingest.isPending : start.isPending)
               }
               onClick={() => {
+                // `mutate`, not `mutateAsync`: a refused start is shown by the row itself (the
+                // hook refetches the queue on error), so there is no rejection left to handle.
                 if (needsReingest) {
-                  void reingest.mutateAsync(item.id);
+                  reingest.mutate(item.id);
                 } else {
-                  void start.mutateAsync(item.id);
+                  start.mutate(item.id);
                 }
               }}
             >

@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 
 import {
   CheckboxField,
@@ -8,6 +9,8 @@ import {
   Switch,
 } from "@/components/common-ui/Form";
 import { DateTimeField } from "@/components/common-ui/Form/DateTimeField";
+import { ClickPopover } from "@/components/Display/ClickPopover";
+import { routes } from "@/lib/routes";
 import { Z_OVERLAY_ABOVE_LEGACY_MODAL } from "@/theme";
 
 import type { RatioAction, ShareFields, SharePermissions } from "./types";
@@ -114,6 +117,7 @@ export function permissionsChosen(f: ShareFormState): boolean {
 }
 
 /** The share settings editor used by the share dialog and the Settings → Sharing detail panel. */
+
 export function ShareFieldsForm({
   value,
   onChange,
@@ -125,6 +129,7 @@ export function ShareFieldsForm({
   embedAvailable: boolean;
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const set = (patch: Partial<ShareFormState>) =>
     onChange({ ...value, ...patch });
   const setPermission = (key: keyof SharePermissions, on: boolean) =>
@@ -269,16 +274,41 @@ export function ShareFieldsForm({
       <span className="share-form-hint">{t("share.form.expiryHint")}</span>
 
       <span>{t("share.form.embed")}</span>
-      <Switch
-        checked={value.embed && embedAvailable}
-        disabled={!embedAvailable}
-        onCheckedChange={(on) => set({ embed: on })}
-      />
-      {!embedAvailable && (
-        <span className="share-form-hint">
-          {t("share.form.embedNeedsPublicUrl")}
-        </span>
-      )}
+      <span className="share-embed-row">
+        <Switch
+          checked={value.embed && embedAvailable}
+          disabled={!embedAvailable}
+          onCheckedChange={(on) => set({ embed: on })}
+        />
+        {/* Why the switch is dead, next to the switch itself — the hint line under the row said
+            what was missing but could not take the reader anywhere (FR-030, m00892). */}
+        {!embedAvailable && (
+          <ClickPopover
+            zIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL + 10}
+            trigger={
+              <button
+                type="button"
+                className="share-embed-hint"
+                aria-label={t("share.form.embedNeedsPublicUrl")}
+              >
+                <i className="fas fa-circle-info" aria-hidden="true" />
+              </button>
+            }
+            label={
+              <>
+                <div>{t("share.form.embedNeedsPublicUrl")}</div>
+                <button
+                  type="button"
+                  className="share-embed-hint-link"
+                  onClick={() => navigate(routes.settings("sharing"))}
+                >
+                  {t("share.settings.section")} › {t("share.settings.publicUrl")}
+                </button>
+              </>
+            }
+          />
+        )}
+      </span>
 
       <span>{t("share.form.allowHelpers")}</span>
       <Switch

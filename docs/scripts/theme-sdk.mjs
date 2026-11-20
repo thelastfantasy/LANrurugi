@@ -12,6 +12,10 @@
 // Usage: node docs/scripts/theme-sdk.mjs <deno-doc-output-dir>
 // SDK_DOCS_URL sets where the guide links point (default the public docs site; the server image
 // passes `/docs/`).
+//
+// With SDK_VERSION set (`mise run docs-sdk` builds every version), each page also gets a version
+// switcher filled from the site root's `versions.json`; a version other than SDK_LATEST_VERSION lives
+// under SDK_VERSION_DIR, says so at the top, and is kept out of search results (`noindex`).
 
 import { copyFileSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative, sep } from 'node:path'
@@ -32,6 +36,11 @@ copyFileSync(join(themeDir, 'sdk.js'), join(outDir, 'lanrurugi-sdk.js'))
 copyFileSync(join(docsRoot, '..', 'apps', 'frontend', 'public', 'favicon.svg'), join(outDir, 'lanrurugi.svg'))
 
 const MARKER = 'lanrurugi-sdk.css'
+
+const sdkVersion = process.env.SDK_VERSION || ''
+const latestVersion = process.env.SDK_LATEST_VERSION || sdkVersion
+const versionDir = (process.env.SDK_VERSION_DIR || '').replace(/^\/|\/$/g, '')
+const isOld = sdkVersion !== '' && sdkVersion !== latestVersion
 
 const escapeHtml = (s) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -164,9 +173,13 @@ for (const entry of walk(outDir)) {
   const relativePath = relative(outDir, file).split(sep).join('/')
   // The page's public address: `index.html` is its directory, and Pages strips the `.html`.
   const pagePath = relativePath === '404.html' ? null : relativePath.replace(/(^|\/)index\.html$/, '$1').replace(/\.html$/, '')
-  const canonical = pagePath === null ? '' : `<link rel="canonical" href="${sdkSiteUrl}${pagePath}">`
+  const canonical =
+    pagePath === null ? '' : `<link rel="canonical" href="${sdkSiteUrl}${versionDir ? `${versionDir}/` : ''}${pagePath}">`
+  // An old version stays readable but out of search results: it would compete with the current one.
+  const robots = isOld ? '<meta name="robots" content="noindex">' : ''
   const links =
     canonical +
+    robots +
     `<link rel="icon" href="${prefix}lanrurugi.svg" type="image/svg+xml">` +
     `<link rel="stylesheet" href="${prefix}lanrurugi-tokens.css">` +
     `<link rel="stylesheet" href="${prefix}${MARKER}">` +
@@ -190,9 +203,25 @@ for (const entry of walk(outDir)) {
         m.startsWith('><') ? m : `><span class="lr-crumb">${text.trim()}</span>`,
       ),
     )
-    const switched = wrapped.replace(/(<input[^>]*\bid="searchbar"[^>]*\/>)/, `$1${THEME_SWITCH}${GITHUB_LINK}`)
+    // The switcher's options come from the site root's `versions.json` at run time (`lanrurugi-sdk.js`),
+    // so an old version's pages list versions published after it.
+    const siteRoot = prefix + (versionDir ? '../' : '')
+    const versionSwitch = sdkVersion
+      ? `<select class="lr-version" aria-label="SDK version" data-current="${escapeHtml(sdkVersion)}" data-root="${siteRoot}" data-page="${escapeHtml(pagePath ?? '')}"><option>${escapeHtml(sdkVersion)}</option></select>`
+      : ''
+    const switched = wrapped.replace(
+      /(<input[^>]*\bid="searchbar"[^>]*\/>)/,
+      `$1${versionSwitch}${THEME_SWITCH}${GITHUB_LINK}`,
+    )
     if (branded === html || switched === branded) throw new Error(`theme-sdk: top bar markup changed in ${file}`)
     html = switched
+  }
+  if (isOld) {
+    const latestHref = `${prefix}../${pagePath ?? ''}`
+    html = html.replace(
+      /<body([^>]*)>/,
+      `<body$1><div class="lr-old-version">SDK ${escapeHtml(sdkVersion)} — 这是旧版本的参考，最新版本是 ${escapeHtml(latestVersion)}。<a href="${latestHref}">查看最新版本的这一页</a>（如果它还存在）· This is SDK ${escapeHtml(sdkVersion)}; the latest is ${escapeHtml(latestVersion)}.</div>`,
+    )
   }
   if (depth === 0 && basename(file) === 'index.html') {
     if (!/<main>\s*<\/main>/.test(html)) throw new Error('theme-sdk: index.html main is no longer empty')

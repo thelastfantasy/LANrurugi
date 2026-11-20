@@ -1,4 +1,5 @@
 import { useSettings } from "@/api/hooks"
+import { isPlainLinkClick } from "@/components/common-ui/Link"
 import { useCustomColumnNamespace } from "@/hooks/useCustomColumnNamespace"
 import { buildSearchToken, formatTimestampForDisplay, getTagSearchURL, tagValueForSearch } from "@/lib/tagFormat"
 
@@ -25,6 +26,7 @@ export function CustomColumnCell({
               href={getTagSearchURL(namespace, raw, timezone)}
               style={{ cursor: "pointer" }}
               onClick={(e) => {
+                if (!isPlainLinkClick(e)) return
                 e.preventDefault()
                 onSearchTag(buildSearchToken(namespace, tagValueForSearch(namespace, raw, timezone), !isDate))
               }}

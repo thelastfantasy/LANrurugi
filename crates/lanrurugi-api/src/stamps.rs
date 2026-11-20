@@ -449,6 +449,8 @@ mod tests {
             corrupted_pages: vec![],
             has_patch: false,
             blake3: None,
+            primary_source: None,
+            progress_pages: None,
         }
     }
 
@@ -493,7 +495,7 @@ mod tests {
         state
             .repos
             .archives
-            .save(&test_archive(&archive_id, 5))
+            .create_or_replace(&test_archive(&archive_id, 5))
             .await
             .unwrap();
 
@@ -533,7 +535,7 @@ mod tests {
         state
             .repos
             .archives
-            .save(&test_archive(&archive_id, 5))
+            .create_or_replace(&test_archive(&archive_id, 5))
             .await
             .unwrap();
         state.bookmarks.add(&archive_id, 3, 0).await.unwrap();
@@ -582,7 +584,7 @@ mod tests {
         state
             .repos
             .archives
-            .save(&test_archive(&archive_id, 5))
+            .create_or_replace(&test_archive(&archive_id, 5))
             .await
             .unwrap();
         state.bookmarks.add(&archive_id, 4, 0).await.unwrap();
@@ -647,7 +649,7 @@ mod tests {
         state
             .repos
             .archives
-            .save(&test_archive(&archive_id, 5))
+            .create_or_replace(&test_archive(&archive_id, 5))
             .await
             .unwrap();
         state.bookmarks.add(&archive_id, 1, 0).await.unwrap();
@@ -694,7 +696,7 @@ mod tests {
         state
             .repos
             .archives
-            .save(&test_archive(&archive_id, 5))
+            .create_or_replace(&test_archive(&archive_id, 5))
             .await
             .unwrap();
         state.bookmarks.add(&archive_id, 2, 42).await.unwrap();

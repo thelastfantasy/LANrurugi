@@ -573,6 +573,20 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         import_snapshots,
     };
 
+    // #302: archives downloaded before `primary_source` existed get it from the download registry.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let marked = lanrurugi_api::download_sources::backfill_primary_sources(&state).await;
+            if marked > 0 {
+                tracing::info!(
+                    marked,
+                    "primary sources backfilled from the download registry"
+                );
+            }
+        });
+    }
+
     // specs/019: finish any delete interrupted by a crash, then enforce the bin's bounds once before
     // serving; failures are logged, never fatal.
     {
@@ -1307,29 +1321,38 @@ async fn resolve_pending_renames(state: &AppState) {
         let old_exists = tokio::fs::try_exists(old_path).await.unwrap_or(false);
 
         if new_exists {
-            if let Ok(Some(mut archive)) = state.repos.archives.get(&id).await {
-                archive.file = new_path.to_string();
-                if let Some(new_name) = std::path::Path::new(new_path)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                {
-                    archive.name = new_name.to_string();
-                }
-                if let Err(e) = state.repos.archives.save(&archive).await {
+            let renamed = state
+                .repos
+                .archives
+                .update(&id, |archive| {
+                    archive.file = new_path.to_string();
+                    if let Some(new_name) = std::path::Path::new(new_path)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                    {
+                        archive.name = new_name.to_string();
+                    }
+                })
+                .await;
+            match renamed {
+                Err(e) => {
                     tracing::warn!(%archive_id, error = %e, "resolve_pending_renames: failed to save recovered rename, will retry next startup");
                     continue;
                 }
-                let _: Result<(), _> = conn
-                    .hdel(lanrurugi_storage::keys::FILEMAP_KEY, old_path)
-                    .await;
-                let _: Result<(), _> = conn
-                    .hset(
-                        lanrurugi_storage::keys::FILEMAP_KEY,
-                        new_path,
-                        archive_id.as_str(),
-                    )
-                    .await;
-                tracing::info!(%archive_id, old_path, new_path, "resolve_pending_renames: completed a rename interrupted by restart");
+                Ok(None) => {}
+                Ok(Some(_)) => {
+                    let _: Result<(), _> = conn
+                        .hdel(lanrurugi_storage::keys::FILEMAP_KEY, old_path)
+                        .await;
+                    let _: Result<(), _> = conn
+                        .hset(
+                            lanrurugi_storage::keys::FILEMAP_KEY,
+                            new_path,
+                            archive_id.as_str(),
+                        )
+                        .await;
+                    tracing::info!(%archive_id, old_path, new_path, "resolve_pending_renames: completed a rename interrupted by restart");
+                }
             }
         } else if old_exists {
             tracing::info!(%archive_id, old_path, new_path, "resolve_pending_renames: disk rename never ran, discarding stale journal entry");
@@ -1411,7 +1434,12 @@ async fn repair_zombie_archives(state: &AppState) {
             );
             let old_file = std::mem::take(&mut archive.file);
             archive.file = candidate.to_string_lossy().to_string();
-            if let Err(e) = state.repos.archives.save(&archive).await {
+            if let Err(e) = state
+                .repos
+                .archives
+                .update(&archive.id, |a| a.file = archive.file.clone())
+                .await
+            {
                 tracing::warn!(id = %archive.id, error = %e, "failed to save repaired archive file path");
                 continue;
             }

@@ -130,6 +130,10 @@ async fn search_entry_json(
     // follow-on design — the library-grid patch badge) goes here instead, same pattern
     // `archive_count` above already established for a LANrurugi-only addition.
     obj.insert("has_patch".into(), json!(a.has_patch));
+    // #291: only when set, so an ordinary card carries nothing extra.
+    if a.heal_failed_at.is_some() {
+        obj.insert("damaged".into(), json!(true));
+    }
     // 027: the whole-file BLAKE3, when known. Same additive pattern as `has_patch`.
     if let Some(blake3) = &a.blake3 {
         obj.insert("blake3".into(), json!(blake3));
@@ -576,22 +580,44 @@ async fn search_archives_with_mode(
                     };
                     let mut titles: std::collections::HashMap<&str, String> =
                         std::collections::HashMap::new();
+                    // The title, as the library shows it; the filename only when there is none.
                     for (id, row) in ids.iter().zip(rows) {
                         let name = row
-                            .first()
+                            .get(1)
                             .and_then(|v| v.as_deref())
                             .filter(|v| !v.is_empty())
-                            .or_else(|| row.get(1).and_then(|v| v.as_deref()))
+                            .or_else(|| row.first().and_then(|v| v.as_deref()))
                             .unwrap_or_default()
                             .to_string();
                         titles.insert(id, name);
                     }
+                    // A volume's chapter name in its Tankoubon wins: it is what the tank itself calls
+                    // that volume (the edit page shows the same).
+                    let mut chapter_names: std::collections::HashMap<(String, String), String> =
+                        std::collections::HashMap::new();
+                    let tanks: std::collections::HashSet<&String> =
+                        wanted.iter().map(|(tank, _)| tank).collect();
+                    for tank in tanks {
+                        let id = lanrurugi_core::ids::TankId(tank.clone());
+                        if let Ok(Some(grouping)) = state.repos.groupings.get(&id).await {
+                            for entry in grouping.chapter_names {
+                                if !entry.name.trim().is_empty() {
+                                    chapter_names.insert((tank.clone(), entry.id), entry.name);
+                                }
+                            }
+                        }
+                    }
                     let mut by_tank: std::collections::HashMap<String, Vec<serde_json::Value>> =
                         std::collections::HashMap::new();
                     for (tank, member) in &wanted {
+                        let name = chapter_names
+                            .get(&(tank.clone(), member.clone()))
+                            .cloned()
+                            .or_else(|| titles.get(member.as_str()).cloned())
+                            .unwrap_or_default();
                         by_tank.entry(tank.clone()).or_default().push(json!({
                             "arcid": member,
-                            "name": titles.get(member.as_str()).cloned().unwrap_or_default(),
+                            "name": name,
                         }));
                     }
                     for entry in data.iter_mut() {

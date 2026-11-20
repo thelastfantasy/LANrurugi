@@ -74,7 +74,7 @@ export function PluginCard({
     }
   }
 
-  const { attributes, listeners, isDragging } = dragHandleProps
+  const { handleRef, isDragging } = dragHandleProps
 
   return (
     <div
@@ -91,8 +91,9 @@ export function PluginCard({
       }}
     >
       <span
-        {...attributes}
-        {...listeners}
+        ref={handleRef}
+        role="button"
+        tabIndex={0}
         style={{
           width: DRAG_HANDLE_COLUMN_WIDTH,
           flexShrink: 0,

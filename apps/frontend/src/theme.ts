@@ -117,6 +117,11 @@ export const Z_OVERLAY_ABOVE_LEGACY_MODAL = 9500
 // underneath it and look like nothing happened.
 export const Z_OVERLAY_ABOVE_DRAWER = 9200
 
+// The imperative dialogs (`confirmDialog`, `infoDialog`, … in `dialog.tsx`): they can be opened from
+// inside any modal or drawer, so they sit above all of them (`Modal` 9001, drawer 9200, the legacy
+// overview 9500). Below 9700, which tooltips inside a `Modal` use.
+export const Z_DIALOG = 9600
+
 const LEGACY_STRUCTURAL_CSS_ID = "legacy-structural-css"
 const LEGACY_THEME_CSS_ID = "legacy-theme-css"
 const LEGACY_FILEUPLOAD_CSS_ID = "legacy-fileupload-css"
@@ -133,6 +138,16 @@ export function ensureLink(id: string, href: string) {
     document.head.appendChild(link)
   }
   if (link.href !== href) link.href = href
+}
+
+// Dev only (see `legacyCssHotReload` in vite.config.ts): re-fetch a legacy stylesheet in place when
+// its file changes, since HMR does not reach these hand-added links.
+if (import.meta.hot) {
+  import.meta.hot.on("legacy-css-changed", ({ path }: { path: string }) => {
+    for (const link of document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')) {
+      if (new URL(link.href).pathname === path) link.href = `${path}?t=${Date.now()}`
+    }
+  })
 }
 
 /** Removes a `<link>` added by {@link ensureLink} — needed for page-scoped CSS an SPA route

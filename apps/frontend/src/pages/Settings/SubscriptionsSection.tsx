@@ -2,12 +2,9 @@ import { Fragment, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import {
-  useApprovePending,
   useCheckSubscriptionNow,
   useCreateSubscription,
   useDeleteSubscription,
-  useDismissPending,
-  usePendingApprovals,
   usePreviewSubscription,
   useSetSubscriptionState,
   useSubscriptionCheckProgress,
@@ -15,7 +12,6 @@ import {
   useSubscriptionSources,
 } from "@/api/hooks"
 import type {
-  PendingApproval,
   Subscription,
   SubscriptionBody,
   SubscriptionSource,
@@ -27,10 +23,10 @@ import { routes } from "@/lib/routes"
 import { toast } from "@/toast"
 
 import { ICON_BUTTON_STYLE } from "../Upload/shared"
-import { sourceHref } from "./preferredTitle"
+import { SubscriptionsModal } from "../Upload/SubscriptionsModal"
+import { PendingApprovals } from "./PendingApprovals"
 import { SubscriptionCheckHistoryModal } from "./SubscriptionCheckHistoryModal"
 import { PreviewSkeleton, SubscriptionFormModal } from "./SubscriptionFormModal"
-import { SubscriptionHistoryModal } from "./SubscriptionHistoryModal"
 import { SubscriptionPreview } from "./SubscriptionPreview"
 
 
@@ -139,7 +135,7 @@ export function SubscriptionsSection() {
         </span>
       }
     >
-      {historyOpen && <SubscriptionHistoryModal onClose={() => setHistoryOpen(false)} />}
+      {historyOpen && <SubscriptionsModal initialBand="all" onClose={() => setHistoryOpen(false)} />}
       {sources.isLoading || subscriptions.isLoading ? (
         <SubscriptionsSkeleton />
       ) : (sources.data?.length ?? 0) === 0 ? (
@@ -460,117 +456,6 @@ function SubscriptionsBody({
 /** Matched works awaiting a go-ahead. Shown above the subscription list, not inside each row: the
  * question "what is waiting for me" is the one a user opens this page to answer, and burying it one
  * expand-click deep in the row that produced it would hide it behind the thing they already know. */
-export function PendingApprovals({ subscriptions }: { subscriptions: Subscription[] }) {
-  const { t } = useTranslation()
-  const pending = usePendingApprovals()
-  const approve = useApprovePending()
-  const dismiss = useDismissPending()
-  /** Selection exists so a batch of matches can be answered in one go (FR-007b). Nothing is selected
-   * by default — pre-selecting would make "approve selected" a one-click way to spend credit on
-   * works the user has not looked at. */
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-
-  const items = pending.data ?? []
-  if (items.length === 0) return null
-
-  const nameOf = (id: string) => subscriptions.find((s) => s.id === id)?.name ?? id
-  const busy = approve.isPending || dismiss.isPending
-
-  function toggle(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
-  async function runApprove(ids: string[]) {
-    const result = await approve.mutateAsync(ids)
-    setSelected(new Set())
-    if (result.failures.length > 0) {
-      // Named rather than summarised: a partial batch is reported as-is, so the user knows which
-      // works did not make it into the queue instead of assuming all of them did.
-      toast({
-        text:
-          t("subscriptions.approvedPartially", {
-            approved: result.approved,
-            failed: result.failures.length,
-          }) ?? undefined,
-        icon: "warning",
-      })
-    } else {
-      toast({ text: t("subscriptions.queued", { count: result.approved }) ?? undefined, icon: "success" })
-    }
-  }
-
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <h3 className="ih" style={{ fontSize: "1.0em", margin: "0 0 6px" }}>
-        {t("subscriptions.awaitingApproval", { count: items.length })}
-      </h3>
-      <table className="itg" style={{ width: "100%" }}>
-        <tbody>
-          {items.map((p: PendingApproval) => (
-            <tr key={p.id} className="gtr1">
-              <td style={{ width: 24 }}>
-                <input
-                  type="checkbox"
-                  className="fa"
-                  checked={selected.has(p.id)}
-                  onChange={() => toggle(p.id)}
-                />
-              </td>
-              <td>
-                <a href={sourceHref(p.source_url)} target="_blank" rel="noreferrer">
-                  {p.title ?? p.source_url}
-                </a>
-                <span style={{ marginLeft: 8, opacity: 0.7 }}>{nameOf(p.subscription_id)}</span>
-              </td>
-              <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
-                <input
-                  type="button"
-                  className="stdbtn"
-                  disabled={busy}
-                  value={t("subscriptions.approve") ?? undefined}
-                  onClick={() => void runApprove([p.id])}
-                />{" "}
-                <input
-                  type="button"
-                  className="stdbtn"
-                  disabled={busy}
-                  value={t("subscriptions.dismiss") ?? undefined}
-                  onClick={() => void dismiss.mutateAsync([p.id])}
-                />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {selected.size > 0 && (
-        <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-          <input
-            type="button"
-            className="stdbtn"
-            disabled={busy}
-            value={t("subscriptions.approveSelected", { count: selected.size }) ?? undefined}
-            onClick={() => void runApprove([...selected])}
-          />
-          <input
-            type="button"
-            className="stdbtn"
-            disabled={busy}
-            value={t("subscriptions.dismissSelected", { count: selected.size }) ?? undefined}
-            onClick={() => {
-              void dismiss.mutateAsync([...selected]).then(() => setSelected(new Set()))
-            }}
-          />
-        </div>
-      )}
-    </div>
-  )
-}
-
 /** Stand-in rows while the list loads.
  *
  * The same table shell and column headers as the real list, with bars where the cells will be. A

@@ -34,7 +34,7 @@ for how to change the port.
 | `LANRURUGI_LIBRARY_PATH`<br>`--library-path` | `./library` | The library; may point straight at LANraragi's `content` |
 | `LANRURUGI_THUMB_DIR`<br>`--thumb-dir` | `./thumb` | Thumbnail cache |
 | `LANRURUGI_DATA_DIR` | unset | Puts thumbnails, the Redis database, models and logs under one directory, so the container needs a single volume (see below) |
-| `LANRURUGI_TEMP_DIR`<br>`--temp-dir` | `./temp` | Upload staging, transcoding and render cache; bounded by `tempmaxsize` |
+| `LANRURUGI_TEMP_DIR`<br>`--temp-dir` | `./temp` | Upload staging, transcoding and render cache (the cache is bounded by `tempmaxsize`); a share import's partial files also live here, bounded only by free disk space. In a container, mount it from the host: otherwise large files land in the container's writable layer and an import's progress is lost when the container is recreated |
 | `LANRURUGI_LOG_DIRECTORY`<br>`--log-dir` | `./log` | The categorised logs behind Settings → Logs |
 | `LANRURUGI_PLUGINS_DIR`<br>`--plugins-dir` | `./plugins` | Plugin `.ts` files, namespaced by subdirectory |
 | `LANRURUGI_STATIC_DIR`<br>`--static-dir` | unset | Built frontend. Unset serves the API only (the frontend runs from Vite's dev server during development) |

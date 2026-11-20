@@ -32,13 +32,13 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/thelastfantasy/LANrurugi"
 
 [workspace.dependencies]
-if-addrs = "0.13"
+if-addrs = "0.15"
 lanrurugi-core = { path = "crates/lanrurugi-core" }
 lanrurugi-storage = { path = "crates/lanrurugi-storage" }
 lanrurugi-scanner = { path = "crates/lanrurugi-scanner" }
@@ -84,6 +84,10 @@ libarchive2-sys = "0.2"
 chardetng = "1.0"
 encoding_rs = "0.8"
 libc = "0.2"
+# Per-record write locks (#302): one read-modify-write at a time per archive/subscription/category.
+lockable = { version = "0.2.0", default-features = false }
+# Frontend API types generated from the Rust structs the API returns (#284); test-time only.
+ts-rs = "12.0.1"
 # libwebp wrapper with a *streaming* animation API (`AnimationDecoder::next_frame` /
 # `AnimationEncoder::add_frame_rgba`). The previous `webp` crate exposed only an eager
 # decode-every-frame API, which cost ~4 GB on a 304-frame 1040x1568 page and OOM-killed the server.
@@ -132,7 +136,7 @@ ab_glyph = "0.2"
 # HarfBuzz's Rust port — shaping (glyph advances/offsets), including vertical (`Direction::
 # TopToBottom`) text runs for CJK compositing. Chosen over hand-rolling vertical-CJK punctuation
 # rules because it already implements the OpenType `vert`/`vrt2` vertical-alternate lookup.
-harfrust = "0.15"
+harfrust = "0.16"
 # Unicode UAX#14 line-breaking (`icu_segmenter`) — CJK text wraps without whitespace, which the
 # prior hand-written `wrap_text`'s `split_whitespace` couldn't do at all.
 icu_segmenter = "2.3"
@@ -162,7 +166,7 @@ bcrypt = "0.19"
 hmac = "0.13"
 sha2 = "0.11"
 woothee = "0.13"
-maxminddb = "0.32"
+maxminddb = "0.33"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 regex = "1.13"

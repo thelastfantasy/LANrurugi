@@ -797,19 +797,49 @@ fn downloads_automatically(subscription: &Subscription) -> bool {
     subscription.auto_download && subscription.state == SubscriptionState::Enabled
 }
 
-pub async fn run_check(state: &AppState, subscription_id: &str) {
+/// From this many unanswered approvals on, a check says so in the log.
+const PENDING_BACKLOG_NOTICE: usize = 20;
+
+/// What started a check, for its log lines.
+#[derive(Debug, Clone, Copy)]
+pub enum CheckTrigger {
+    Scheduled,
+    Manual,
+}
+
+/// Where this check's matches went, summarised in its "finished" log line (#294).
+#[derive(Debug, Default)]
+struct Routed {
+    queued: usize,
+    start_failed: usize,
+    pending: usize,
+    already_pending: usize,
+    reserved: usize,
+}
+
+pub async fn run_check(state: &AppState, subscription_id: &str, trigger: CheckTrigger) {
     let Ok(Some(mut subscription)) = state.subscriptions.get(subscription_id).await else {
         return;
     };
 
     let started_at = now_secs();
+    // One line when a check starts and one when it ends, so "when was it last checked, what did it
+    // find, why did nothing download" is answerable from the log alone (#294).
+    tracing::info!(
+        %subscription_id,
+        name = %subscription.name,
+        ?trigger,
+        window = ?subscription.scan,
+        auto_download = downloads_automatically(&subscription),
+        "subscription check started"
+    );
 
     // Discovery runs with whatever signed-in state the source declared it needs, exactly like a
     // metadata or download call — subscriptions introduce no second credential path.
     let base_args = match scan_base_args(state, &subscription).await {
         Ok(args) => args,
         Err(e) => {
-            tracing::warn!(%subscription_id, error = %e, "subscription source is no longer installed");
+            tracing::warn!(%subscription_id, error = %e, "subscription check failed: source is no longer installed");
             return;
         }
     };
@@ -859,7 +889,7 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
     {
         Ok(outcome) => outcome,
         Err(e) => {
-            tracing::warn!(%subscription_id, error = %e, "discovery call failed");
+            tracing::warn!(%subscription_id, error = %e, "subscription check failed: discovery call failed");
             emit_scan_progress(state, &subscription, 0, 0, true);
             return;
         }
@@ -933,12 +963,14 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
         .await
         .unwrap_or_default();
 
+    let mut routed = Routed::default();
     for source in &decision.actionable {
         if !downloads_automatically(&subscription) {
             // Nothing is spent until the user approves. Recorded as its own addressable entry
             // rather than left in the cycle log: that log is bounded by age, so an unanswered
             // question would quietly expire out of it.
             if pending_already.iter().any(|p| p == source) {
+                routed.already_pending += 1;
                 continue;
             }
             // Carried over from the cycle record rather than left empty: the approval list is
@@ -957,6 +989,7 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
                 created_at: now_secs(),
             };
             let _ = state.subscriptions.save_pending(&entry).await;
+            routed.pending += 1;
             continue;
         }
         // The subscription's own `source` is the *discovery* plugin, which has no `execDownload` —
@@ -974,14 +1007,12 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
                 id: uuid::Uuid::new_v4().to_string(),
                 subscription_id: subscription_id.to_string(),
                 source_url: source.clone(),
-                reason: super::reservations::ReservationReason::DownloadFailed(
-                    "no installed download plugin matches this source URL".to_string(),
-                )
-                .as_key(),
+                reason: super::reservations::ReservationReason::NoDownloadPlugin.as_key(),
                 status: ReservationStatus::Waiting,
                 created_at: now_secs(),
             };
             let _ = state.subscriptions.save_reservation(&entry).await;
+            routed.reserved += 1;
             continue;
         };
         let overwrite_on_duplicate =
@@ -1008,6 +1039,7 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
             .await;
         match queued {
             Ok(item) => {
+                routed.queued += 1;
                 // "Download automatically" means started, not merely enqueued: nothing would ever
                 // pick a `Queued` item up on its own (only the upload page's own Start buttons call
                 // into `start_one`). See `start_item_from_subscription`'s own docs.
@@ -1021,6 +1053,7 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
                         // Left queued and startable: the upload page's own Start button still
                         // works, so this is a warning rather than a lost work item.
                         tracing::warn!(%subscription_id, item = %item.id, error = %e, "subscription download could not be started automatically");
+                        routed.start_failed += 1;
                         e
                     });
                 crate::activity::record_manual(
@@ -1064,8 +1097,15 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
                     created_at: now_secs(),
                 };
                 let _ = state.subscriptions.save_reservation(&entry).await;
+                routed.reserved += 1;
             }
         }
+    }
+
+    // Unanswered approvals piling up is the usual reason "nothing downloads" (#294).
+    let waiting = pending_already.len() + routed.pending;
+    if !downloads_automatically(&subscription) && waiting >= PENDING_BACKLOG_NOTICE {
+        tracing::info!(%subscription_id, waiting, "subscription matches are waiting for approval; automatic download is off");
     }
 
     // The guard, enforced at the one place it matters: only an authoritative cycle may record works
@@ -1105,12 +1145,36 @@ pub async fn run_check(state: &AppState, subscription_id: &str) {
         &decision,
     );
     let _ = state.subscriptions.record_cycle(&cycle).await;
+    tracing::info!(
+        %subscription_id,
+        name = %subscription.name,
+        outcome = ?decision.outcome,
+        pages_read = result.pages_read,
+        candidates = result.candidates.as_ref().map_or(0, |c| c.len()),
+        matched = decision.actionable.len(),
+        queued = routed.queued,
+        start_failed = routed.start_failed,
+        pending = routed.pending,
+        already_pending = routed.already_pending,
+        reserved = routed.reserved,
+        filtered_or_held = decision.records.len().saturating_sub(decision.actionable.len()),
+        stop_reason = ?result.stop_reason,
+        stopped_by_cache,
+        secs = now_secs() - started_at,
+        "subscription check finished"
+    );
 
     // `last_checked_at` advances even for a degraded or failed cycle: the source *was* contacted,
     // and retrying immediately would hammer a source that is already struggling. The next scheduled
     // check will try again.
-    subscription.last_checked_at = Some(now_secs());
-    let _ = state.subscriptions.save(&subscription).await;
+    // Only this field, onto the subscription as it is now: an edit or a disable made while this
+    // check ran must stay.
+    let checked_at = now_secs();
+    subscription.last_checked_at = Some(checked_at);
+    let _ = state
+        .subscriptions
+        .update(&subscription.id, |s| s.last_checked_at = Some(checked_at))
+        .await;
 
     let _ = state
         .subscriptions
@@ -1286,6 +1350,7 @@ pub async fn scheduler_loop(state: AppState) {
             last_sweep = Some(std::time::Instant::now());
             let run = crate::diagnostics::report::reporter().cron("subscription-sweep");
             sweep_finished_queue(&state).await;
+            sweep_skipped(&state).await;
             run.ok();
         }
         let Ok(subscriptions) = state.subscriptions.list_all().await else {
@@ -1298,12 +1363,13 @@ pub async fn scheduler_loop(state: AppState) {
             }
             let Some(guard) = state.subscriptions_in_flight.claim(&subscription.id).await else {
                 // Still running from a previous tick. Normal on a slow source, not a fault.
+                tracing::debug!(subscription_id = %subscription.id, "subscription check skipped: previous check still running");
                 continue;
             };
             let state = state.clone();
             let id = subscription.id.clone();
             tokio::spawn(async move {
-                run_check(&state, &id).await;
+                run_check(&state, &id, CheckTrigger::Scheduled).await;
                 drop(guard);
             });
         }
@@ -1332,6 +1398,34 @@ async fn sweep_finished_queue(state: &AppState) {
         Ok(0) => {}
         Ok(removed) => tracing::info!(removed, days, "swept finished download-queue entries"),
         Err(e) => tracing::warn!(error = %e, "could not sweep the download queue"),
+    }
+}
+
+/// Deletes skip records older than the configured retention (`skipped_retention_days`; `0` keeps
+/// them all). Only the "skipped" label goes — each work stays seen, so it is still never re-offered.
+async fn sweep_skipped(state: &AppState) {
+    let days = crate::settings::read_skipped_retention_days(state).await;
+    if days <= 0 {
+        return;
+    }
+    let cutoff_ms = now_epoch_ms() - days * 24 * 60 * 60 * 1000;
+    let Ok(subscriptions) = state.subscriptions.list_all().await else {
+        return;
+    };
+    for subscription in subscriptions {
+        match state
+            .subscriptions
+            .prune_skipped_before(&subscription.id, cutoff_ms)
+            .await
+        {
+            Ok(0) => {}
+            Ok(removed) => {
+                tracing::info!(subscription_id = %subscription.id, removed, days, "swept skip records")
+            }
+            Err(e) => {
+                tracing::warn!(subscription_id = %subscription.id, error = %e, "could not sweep skip records")
+            }
+        }
     }
 }
 

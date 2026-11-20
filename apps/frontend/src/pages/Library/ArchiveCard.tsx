@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next"
 
 import type { ArchiveMetadata } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
+import { isPlainLinkClick,Link } from "@/components/common-ui/Link"
 import { FormatBadge, StatusIcon } from "@/components/Display"
 import { useLongPress } from "@/hooks/useLongPress"
 import { routes } from "@/lib/routes"
@@ -27,13 +28,15 @@ function StatusIcons({ archive }: { archive: ArchiveMetadata }) {
   const showCrown = isRead && (isTank || !showNew)
   // No legacy equivalent, so no mutual-exclusion with the other badges.
   const showPatch = archive.has_patch === true
+  const damaged = archive.damaged === true
 
   const isBook = isBookExtension(archive.extension)
-  if (!showNew && !showCrown && !isTank && !showPatch && !isBook) return null
+  if (!showNew && !showCrown && !isTank && !showPatch && !isBook && !damaged) return null
   return (
     // Inline flow rather than flex: the row aligns this box by its first baseline, and the marks
     // centre on the text's middle like any inline icon.
     <div className="status-icons" style={{ flexShrink: 0, whiteSpace: "nowrap" }}>
+      {damaged && <StatusIcon kind="damaged" title={t("library.damaged") ?? undefined} style={gap} />}
       {isBook && <FormatBadge extension={archive.extension} style={gap} />}
       {showNew && <StatusIcon kind="new" title={t("library.new") ?? undefined} style={gap} />}
       {showCrown && <StatusIcon kind="read" title={t("common.read") ?? undefined} style={gap} />}
@@ -68,6 +71,23 @@ function matchReasonText(
 ): string {
   const names = members.map((m) => m.name || "?").join("、")
   return t("library.tankMatchedThroughMembers", { members: names })
+}
+
+/** The same as a tooltip: the explanation, then one volume per line — a run-on list of long
+ *  titles joined by 、 was unreadable. */
+function MatchReason({ members, t }: { members: { name: string }[]; t: TFunction }) {
+  return (
+    <div style={{ textAlign: "left" }}>
+      <div>{t("library.tankMatchedThroughMembersHeading")}</div>
+      <ul style={{ margin: "4px 0 0", paddingLeft: "1.2em" }}>
+        {members.map((m, i) => (
+          <li key={i} style={{ listStyle: "disc" }}>
+            {m.name || "?"}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
 }
 
 /** Thumbnail URLs that have loaded at least once this session. A remounted card (the carousel
@@ -112,6 +132,10 @@ export function ArchiveCard({
   useLongPress(cardEl, (_, e) => onContextMenu(e, archive), { blockContextMenu: () => true })
 
   function handleOpen(e: MouseEvent) {
+    // Let the browser keep its own link gestures — Ctrl/Cmd/Shift for a new tab/window, Alt for
+    // Firefox's save-link — and ignore a click that only ended a text selection, which is what
+    // Alt-dragging part of the title produces.
+    if (!isPlainLinkClick(e)) return
     e.preventDefault()
     if (multiSelect) {
       onToggleSelect(id)
@@ -129,17 +153,17 @@ export function ArchiveCard({
       onContextMenu={(e) => onContextMenu(e, archive)}
     >
       <div className="id2" style={{ display: "flex", alignItems: "baseline", justifyContent: "center", gap: 2 }}>
-        <a
-          href={routes.reader(id)}
+        <Link
+          to={routes.reader(id)}
           title={archive.title}
           onClick={handleOpen}
           style={{ flex: "0 1 auto", minWidth: 0 }}
         >
           {highlightText(archive.title, highlightQuery)}
-        </a>
+        </Link>
         <StatusIcons archive={archive} />
         {archive.match_reason?.kind === "members" && (
-          <Tooltip label={matchReasonText(archive.match_reason.members, t)}>
+          <Tooltip label={<MatchReason members={archive.match_reason.members} t={t} />}>
             <span
               className="match-reason-icon"
               // Focusable so the tooltip is reachable without a mouse; the icon itself is
@@ -153,7 +177,11 @@ export function ArchiveCard({
           </Tooltip>
         )}
       </div>
-      <div className={cropThumbs ? "id3" : "id3 nocrop"} style={{ position: "relative" }}>
+      {/* A damaged file is greyed out: it is in the library but cannot be read (#291). */}
+      <div
+        className={cropThumbs ? "id3" : "id3 nocrop"}
+        style={{ position: "relative", opacity: archive.damaged ? 0.5 : undefined }}
+      >
         {multiSelect && (
           <input
             type="checkbox"
@@ -162,7 +190,7 @@ export function ArchiveCard({
             style={{ position: "absolute", top: 6, left: 6, zIndex: 1, width: 20, height: 20 }}
           />
         )}
-        <a href={routes.reader(id)} title={archive.title} onClick={handleOpen}>
+        <Link to={routes.reader(id)} title={archive.title} onClick={handleOpen}>
           {!thumbLoaded && !thumbFailed && (
             <>
               <img style={{ position: "relative" }} src="/legacy/img/wait_warmly.jpg" alt="" />
@@ -184,7 +212,7 @@ export function ArchiveCard({
             }}
             onError={() => setThumbFailed(true)}
           />
-        </a>
+        </Link>
       </div>
       <div className="id4">
         <PageCountBadge archive={archive} />
