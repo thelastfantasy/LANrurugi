@@ -1996,6 +1996,85 @@ export function Reader() {
       });
   }
 
+  // Infinite scroll: scrolling on past the bottom opens the end-of-archive overlay, as a tap there
+  // does. A fling that only arrives at the bottom must not: its momentum keeps sending scroll and
+  // wheel events, so a gesture counts only once the page has been still at the bottom for a moment.
+  const startArchiveTransitionRef = useRef(startArchiveTransition);
+  useEffect(() => {
+    startArchiveTransitionRef.current = startArchiveTransition;
+  });
+  useEffect(() => {
+    if (!readerSettings.infiniteScroll || archiveTransition || overlay) return;
+    /** Still at the bottom for this long before a new gesture counts. */
+    const SETTLED_MS = 250;
+    /** Finger travel, or summed wheel delta, past the bottom that opens the overlay. */
+    const PULL_PX = 48;
+    let lastMotion = performance.now();
+    let wheelPull = 0;
+    let touchStartY: number | null = null;
+    const atBottom = () =>
+      window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 1;
+    const settled = () => atBottom() && performance.now() - lastMotion >= SETTLED_MS;
+    // Only on the pages themselves: a sheet, menu or toolbar over them is its own surface.
+    // (`.infinite-scroll` is also on `<body>`, so the page column is tested by its ref.)
+    const onPages = (target: EventTarget | null) =>
+      target instanceof Node && infiniteScrollRootRef.current?.contains(target) === true;
+    const open = () => {
+      wheelPull = 0;
+      touchStartY = null;
+      startArchiveTransitionRef.current("next");
+    };
+
+    const onScroll = () => {
+      lastMotion = performance.now();
+      wheelPull = 0;
+    };
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY <= 0 || !onPages(e.target)) {
+        wheelPull = 0;
+        return;
+      }
+      if (!settled()) {
+        // A momentum stream at the bottom moves nothing, so it is its own motion.
+        lastMotion = performance.now();
+        wheelPull = 0;
+        return;
+      }
+      wheelPull += e.deltaMode === WheelEvent.DOM_DELTA_LINE ? e.deltaY * 16 : e.deltaY;
+      if (wheelPull >= PULL_PX) open();
+    };
+    const onTouchStart = (e: TouchEvent) => {
+      touchStartY =
+        e.touches.length === 1 && onPages(e.target) && settled() ? e.touches[0].clientY : null;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (touchStartY === null) return;
+      if (e.touches.length !== 1) {
+        touchStartY = null;
+        return;
+      }
+      if (touchStartY - e.touches[0].clientY >= PULL_PX) open();
+    };
+    const onTouchEnd = () => {
+      touchStartY = null;
+    };
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("wheel", onWheel, { passive: true });
+    window.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchmove", onTouchMove, { passive: true });
+    window.addEventListener("touchend", onTouchEnd, { passive: true });
+    window.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("wheel", onWheel);
+      window.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", onTouchEnd);
+      window.removeEventListener("touchcancel", onTouchEnd);
+    };
+  }, [readerSettings.infiniteScroll, archiveTransition, overlay]);
+
   // Headless hides the chrome, so the page's own click surface no longer covers the screen: the
   // whole viewport becomes the turn target, split down the middle like the page itself. The image
   // link already turns pages and calls `preventDefault`, the loading placeholder does the same, and

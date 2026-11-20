@@ -2878,6 +2878,13 @@ const MAX_DOWNLOAD_RETRIES: u32 = 4;
                             superseded_ids.clear();
                         }
                         for superseded in superseded_ids {
+                            // Read before the delete takes them: bookmarks, stamps, reading
+                            // position and categories move to the revision that replaces it.
+                            let carryover = crate::revision_carryover::capture(
+                                &state_for_task,
+                                &lanrurugi_core::ids::ArchiveId(superseded.clone()),
+                            )
+                            .await;
                             // Full user-delete path (file, search index, thumbnails, ...), not a
                             // bare record removal.
                             match crate::archives::purge_one_archive(
@@ -2910,6 +2917,15 @@ const MAX_DOWNLOAD_RETRIES: u32 = 4;
                                         replaced_by = ?ids,
                                         "removed archive superseded by a newer revision"
                                     );
+                                    if let (Some(carryover), Some(new_id)) = (carryover, ids.first())
+                                    {
+                                        crate::revision_carryover::apply(
+                                            &state_for_task,
+                                            carryover,
+                                            &lanrurugi_core::ids::ArchiveId(new_id.clone()),
+                                        )
+                                        .await;
+                                    }
                                 }
                             }
                         }

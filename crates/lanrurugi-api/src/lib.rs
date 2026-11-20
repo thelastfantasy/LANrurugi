@@ -51,6 +51,7 @@ pub mod recommend_precompute;
 pub mod recycle;
 pub mod redownload_restore;
 pub mod repair;
+pub(crate) mod revision_carryover;
 pub mod safety_password;
 pub mod scripts;
 pub mod search;

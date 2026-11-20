@@ -802,6 +802,47 @@ pub fn read_page_dimensions(path: &Path, count: usize) -> Result<Vec<Option<(u32
         .collect())
 }
 
+/// SHA-1 of each named entry's bytes, in the order given; `None` for a name not in the archive, and
+/// for every name of a book, whose pages are rendered rather than stored.
+///
+/// One forward pass reading one entry at a time, so memory stays at one page however large the
+/// archive is. Used to follow a page across two revisions of the same work when its name changed.
+pub fn hash_entries(path: &Path, names: &[String]) -> Result<Vec<Option<[u8; 20]>>> {
+    use sha1::{Digest, Sha1};
+
+    let mut out = vec![None; names.len()];
+    if names.is_empty() || is_book(path) {
+        return Ok(out);
+    }
+    if !is_supported_archive(path) {
+        return Err(ArchiveFormatError::UnsupportedExtension(extension_of(path)));
+    }
+    let mut wanted: std::collections::HashMap<&str, Vec<usize>> = std::collections::HashMap::new();
+    for (index, name) in names.iter().enumerate() {
+        wanted.entry(name.as_str()).or_default().push(index);
+    }
+    let mut remaining = wanted.len();
+    let mut archive = RawArchiveReader::open(path)?;
+    while let Some(entry) = archive.next_entry()? {
+        if entry.is_regular_file {
+            let name = decode_archive_name(&entry.name_bytes);
+            if let Some(indexes) = wanted.remove(name.as_str()) {
+                let digest: [u8; 20] = Sha1::digest(archive.read_data_to_vec()?).into();
+                for index in indexes {
+                    out[index] = Some(digest);
+                }
+                remaining -= 1;
+                if remaining == 0 {
+                    break;
+                }
+                continue;
+            }
+        }
+        archive.skip_data()?;
+    }
+    Ok(out)
+}
+
 /// Finds the first entry whose basename ends with `wanted_suffix` — matches legacy
 /// `is_file_in_archive`'s own matching rule exactly (`Utils/Archive.pm`: `"$name$suffix" =~
 /// /$wantedname$/`, i.e. a basename-suffix match, not a full-name equality check — so e.g.
@@ -1016,6 +1057,25 @@ mod tests {
         assert_eq!(
             list_pages(f.path()).unwrap(),
             vec!["page1.jpg", "page2.jpg", "page10.jpg"]
+        );
+    }
+
+    #[test]
+    fn hash_entries_hashes_each_named_entry_and_leaves_missing_ones_empty() {
+        use sha1::{Digest, Sha1};
+        let f = make_test_zip_with_ext("zip", &["a.jpg", "b.jpg"]);
+        let names = vec![
+            "b.jpg".to_string(),
+            "missing.jpg".to_string(),
+            "a.jpg".to_string(),
+        ];
+        let hashes = hash_entries(f.path(), &names).unwrap();
+        let expected = |name: &str| -> [u8; 20] {
+            Sha1::digest(format!("content of {name}").as_bytes()).into()
+        };
+        assert_eq!(
+            hashes,
+            vec![Some(expected("b.jpg")), None, Some(expected("a.jpg"))]
         );
     }
 
