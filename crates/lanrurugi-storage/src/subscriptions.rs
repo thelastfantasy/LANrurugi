@@ -30,11 +30,17 @@ pub enum SubscriptionsError {
 type Result<T> = std::result::Result<T, SubscriptionsError>;
 
 /// Moves a pre-timestamp reconsiderable set into [`rejected_at_key`], dated now. A no-op once done.
+///
+/// Safe to race: two migrations both `HSETNX` the same members and delete the same key, so whichever
+/// runs first sets the time.
 async fn migrate_rejected(
     conn: &mut deadpool_redis::Connection,
     subscription_id: &str,
 ) -> Result<()> {
     let old = rejected_key(subscription_id);
+    if !conn.exists::<_, bool>(&old).await? {
+        return Ok(());
+    }
     let members: Vec<String> = conn.smembers(&old).await?;
     if members.is_empty() {
         return Ok(());
@@ -1312,42 +1318,6 @@ impl SubscriptionRepository {
             }
         }
         Ok(out)
-    }
-
-    /// Replaces the listed entries, leaving the rest of the snapshot alone. Entries are upserted
-    /// rather than the hash being rewritten wholesale, so a work that this check did not see keeps
-    /// its `missing_count` and `disappeared_at` instead of being resurrected as brand new.
-    pub async fn save_snapshot_entries(
-        &self,
-        subscription_id: &str,
-        entries: &[SnapshotEntry],
-    ) -> Result<()> {
-        if entries.is_empty() {
-            return Ok(());
-        }
-        let mut conn = self.pool.get().await?;
-        let key = snapshot_key(subscription_id);
-        let mut pairs: Vec<(String, String)> = Vec::with_capacity(entries.len());
-        for entry in entries {
-            let raw = serde_json::to_string(entry)
-                .map_err(|e| SubscriptionsError::Json(key.clone(), e))?;
-            pairs.push((entry.source.clone(), raw));
-        }
-        let _: () = conn.hset_multiple(&key, &pairs).await?;
-        Ok(())
-    }
-
-    pub async fn delete_snapshot_entries(
-        &self,
-        subscription_id: &str,
-        sources: &[String],
-    ) -> Result<()> {
-        if sources.is_empty() {
-            return Ok(());
-        }
-        let mut conn = self.pool.get().await?;
-        let _: () = conn.hdel(snapshot_key(subscription_id), sources).await?;
-        Ok(())
     }
 
     // Pending approvals

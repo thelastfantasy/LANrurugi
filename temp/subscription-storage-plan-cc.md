@@ -98,7 +98,7 @@ export async function refreshSources(
 
 - 键名：沿用 `…_REJECTED_<id>` 会与旧的 SET 类型冲突，所以新建 `…_REJECTED_AT_<id>`（hash：`source → 首次被拒的毫秒时间`）。
 - 迁移：首次读取时，若旧 SET 存在，把所有成员写入新 hash（时间取迁移时刻），再 `DEL` 旧 SET。
-- 截止期：`reconsider_days`，默认 7 天，可在订阅设置里调。`rejected_all` 只返回未过期的成员；过期的在每小时的 sweep 里删掉（与 `sweep_skipped` 同一处）。
+- 截止期：固定 7 天（`RECONSIDER_DAYS`），暂不提供设置项。`rejected_all` 只返回未过期的成员；过期的在每小时的 sweep 里删掉（与 `sweep_skipped` 同一处）。
 - 只登记**可能变化**的拒绝，但只能做到单条规则这一级：条件树整组失败时，matcher 报的是 `field_rule:all`/`field_rule:any`，拿不到具体是哪条叶子规则。所以：
   - 只有当拒绝原因全部是不可变字段的单条规则（`FieldRule("category")`、`FieldRule("uploader")`、`ExcludedCategory`）时，才不登记；
   - 组级失败和其他原因照旧登记；

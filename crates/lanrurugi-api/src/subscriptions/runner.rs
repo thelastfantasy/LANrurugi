@@ -166,8 +166,12 @@ pub fn decide(
             .and_then(matcher::parse_posted_at);
         // Older than the subscription's window. The source stops at that bound for a real check, so
         // this can only be reached through a preview — which keeps the row to explain its own count.
-        let refreshed = ctx.refreshed.iter().any(|r| r == &source);
-        if let (Some(cutoff), Some(posted), false) = (ctx.window_cutoff, posted_secs, refreshed) {
+        // A reconsiderable work is decided wherever it was read, listed past the window edge
+        // included: being reconsidered is why it matters at all.
+        let reconsidering = ctx.refreshed.iter().any(|r| r == &source)
+            || ctx.reconsider.iter().any(|r| r == &source);
+        if let (Some(cutoff), Some(posted), false) = (ctx.window_cutoff, posted_secs, reconsidering)
+        {
             if posted < cutoff {
                 if ctx.keep_out_of_window {
                     records.push(CandidateRecord {
@@ -856,7 +860,13 @@ where
         if cursor.is_none() {
             break;
         }
-        chunk = 5;
+        // Past a settled run and only still reading for reconsiderable works: one page at a time,
+        // so the extra reading stops as soon as their time is passed.
+        chunk = if plan.stop_on_cache && cache_run >= SCAN_CACHE_RUN {
+            1
+        } else {
+            5
+        };
     }
 
     Ok(ScanOutcome {
@@ -968,7 +978,12 @@ pub async fn run_check(state: &AppState, subscription_id: &str, trigger: CheckTr
 
     let scan = subscription.scan;
     let (mut plan, _) = scan_plan(&subscription);
-    if let Some(cutoff) = plan.posted_after {
+    let can_refresh = source_info
+        .as_ref()
+        .is_some_and(|i| i.has_capability("refresh_sources"));
+    // A source that can re-read works directly covers every reconsiderable work the scan does not
+    // reach, so only one that cannot needs the scan to keep paging for them.
+    if let (Some(cutoff), false) = (plan.posted_after, can_refresh) {
         for source in &reconsider {
             let posted = previous_snapshot
                 .get(source)
@@ -1002,11 +1017,7 @@ pub async fn run_check(state: &AppState, subscription_id: &str, trigger: CheckTr
 
     // Reconsiderable works the listing did not show — out of the window now, or past where the scan
     // stopped — are read directly, so a rating that rose is still noticed.
-    let refreshed = if result.error.is_none()
-        && source_info
-            .as_ref()
-            .is_some_and(|i| i.has_capability("refresh_sources"))
-    {
+    let refreshed = if result.error.is_none() && can_refresh {
         refresh_unlisted(state, &subscription, &base_args, &reconsider, &mut result).await
     } else {
         Vec::new()
@@ -2284,7 +2295,8 @@ mod tests {
         assert_eq!(d.to_mark_rejected, vec![c.source.clone()]);
     }
 
-    /// A reconsiderable work read by `refreshSources` is decided even though it is out of the window.
+    /// A reconsiderable work is decided even though it is out of the window, whether the listing
+    /// showed it or `refreshSources` read it.
     #[test]
     fn a_refreshed_work_is_decided_outside_the_window() {
         let mut c = cand("e-hentai.org/g/1/aaaaaaaaaa", &[]);
@@ -2302,13 +2314,27 @@ mod tests {
                 },
             )
         };
-        assert!(
-            run(&[]).records.is_empty(),
-            "a listed row outside the window is dropped"
+        let listed = run(&[]);
+        assert_eq!(
+            listed.actionable,
+            vec![c.source.clone()],
+            "a reconsiderable row listed past the window edge is decided too"
         );
         let d = run(&refreshed);
         assert_eq!(d.actionable, vec![c.source.clone()]);
         assert_eq!(d.reconsidered, vec![c.source.clone()]);
+        let other = decide(
+            &sub(true, Filters::default()),
+            &result(vec![c.clone()], false),
+            &CycleContext {
+                window_cutoff: Some(1_700_000_000),
+                ..ctx(&[], &[], &[], NO_CATS)
+            },
+        );
+        assert!(
+            other.records.is_empty(),
+            "any other row past the window is dropped"
+        );
     }
 
     #[test]

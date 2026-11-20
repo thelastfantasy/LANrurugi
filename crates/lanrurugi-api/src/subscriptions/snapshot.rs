@@ -118,7 +118,8 @@ pub struct DiffContext<'a> {
     pub reconsider: &'a HashSet<String>,
 }
 
-/// Compares `candidates` against `previous`.
+/// Compares `candidates` against `previous`, recording no history. Tests only: a real cycle goes
+/// through [`diff_with`], which this calls with an empty context.
 ///
 /// `still_matches` answers, for one candidate, whether the subscription's own filters still accept
 /// it — passed in rather than evaluated here so this stays independent of the matcher.
@@ -127,6 +128,7 @@ pub struct DiffContext<'a> {
 /// challenge-blocked check saw a smaller world than the one asked about, so nothing may be counted
 /// as missing from it (FR-012e). Works it *did* return are still recorded, since those sightings are
 /// real.
+#[cfg(test)]
 pub fn diff(
     candidates: &[DiscoveredCandidate],
     previous: &HashMap<String, SnapshotEntry>,
@@ -168,6 +170,20 @@ pub fn diff_with(
 
     for candidate in candidates {
         let prior = previous.get(&candidate.source);
+        // A refresh has no listing row, so it carries no `origin` title. Keeping the listed titles
+        // underneath stops every switch between listing and refresh reading as a title change.
+        let merged;
+        let candidate = match prior {
+            Some(prior) if ctx.refreshed.contains(&candidate.source) => {
+                let mut c = candidate.clone();
+                for (lang, title) in &prior.title {
+                    c.title.entry(lang.clone()).or_insert_with(|| title.clone());
+                }
+                merged = c;
+                &merged
+            }
+            _ => candidate,
+        };
         let matches = (ctx.still_matches)(candidate);
         // An entry written under another data version describes the same work through different
         // fields; comparing the two would report a change on every work at once.
@@ -850,5 +866,56 @@ mod tests {
             &ctx,
         );
         assert_eq!(d.to_remove, vec!["gone".to_string()]);
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_listed_titles() {
+        let mut before = prior("a", Some("Listed"), &[], 10);
+        before.title.insert("ja".into(), "原題".into());
+        let refreshed = HashSet::from(["a".to_string()]);
+        let empty = HashSet::new();
+        let v = verdicts("a", CandidateVerdict::AlreadySeen);
+        let mut ctx = history_ctx(3, &v, 1, &empty);
+        ctx.refreshed = &refreshed;
+        let mut c = cand("a", None, &[]);
+        c.title = HashMap::from([("ja".to_string(), "原題".to_string())]);
+        let d = diff_with(std::slice::from_ref(&c), &snap(vec![before]), &ctx);
+        assert!(d.changed.is_empty());
+        assert!(d.to_save[0].changes.is_empty());
+        assert_eq!(
+            d.to_save[0].title.get("origin").map(String::as_str),
+            Some("Listed")
+        );
+    }
+
+    #[test]
+    fn several_changes_to_one_field_unwind_in_order() {
+        let c1 = cand("a", None, &["a", "b"]);
+        let c2 = cand("a", None, &["b", "c"]);
+        let c3 = cand("a", None, &["c", "d", "a"]);
+        let mut e = cycle(None, &c1, 1, CandidateVerdict::AlreadySeen);
+        e = cycle(Some(e), &c2, 2, CandidateVerdict::AlreadySeen);
+        e = cycle(Some(e), &c3, 3, CandidateVerdict::AlreadySeen);
+        let tags_at = |seq| {
+            let mut t = record_at(&e, seq).unwrap().tags;
+            t.sort();
+            t
+        };
+        assert_eq!(tags_at(1), vec!["a", "b"]);
+        assert_eq!(tags_at(2), vec!["b", "c"]);
+        assert_eq!(tags_at(3), vec!["a", "c", "d"]);
+    }
+
+    #[test]
+    fn a_rebuilt_cycle_lists_each_work_once_newest_first() {
+        let mut older = cand("older", None, &[]);
+        older.posted_at = Some("100".into());
+        let mut newer = cand("newer", None, &[]);
+        newer.posted_at = Some("200".into());
+        let a = cycle(None, &older, 1, CandidateVerdict::AlreadySeen);
+        let b = cycle(None, &newer, 1, CandidateVerdict::Queued);
+        let rows = records_at(&snap(vec![a, b]), 1);
+        let sources: Vec<&str> = rows.iter().map(|r| r.source_url.as_str()).collect();
+        assert_eq!(sources, vec!["newer", "older"]);
     }
 }

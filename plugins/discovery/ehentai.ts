@@ -276,8 +276,8 @@ async function addApiMetadata(
           meta.tags = entry.tags.filter((t: unknown): t is string => typeof t === "string");
         }
         // The gallery's own average, e.g. `"4.01"` (the listing's sprite only ever shows a half-star
-        // step). A gallery nobody has voted on answers `"0.00"`; that is applied below together
-        // with the sprite, since only both agreeing means "not rated" rather than a real 0.
+        // step). A gallery nobody has voted on answers `"0.00"`: the lowest vote is half a star, so
+        // an average of 0 can only mean no votes.
         if (entry?.rating !== undefined && entry?.rating !== null && entry?.rating !== "") {
           const rating = Number(entry.rating);
           if (Number.isFinite(rating) && rating >= 0 && rating <= 5) meta.rating = rating;
@@ -307,7 +307,7 @@ async function addApiMetadata(
     // Replaces the sprite's half-star estimate with the real average — see this function's own docs.
     // No votes reads as "not rated" (absent), so a rating rule waits for votes instead of rejecting
     // the work as a 0.
-    if (meta?.rating === 0 && !c.rating) c.rating = undefined;
+    if (meta?.rating === 0) c.rating = undefined;
     else if (meta?.rating !== undefined) c.rating = meta.rating;
     if (meta?.expunged) {
       // Not filtered here: what to do with a withdrawn gallery is the host's call. Logged so a
@@ -382,7 +382,8 @@ function parsePage(html: string, seen: Set<string>): DiscoveredCandidateResult[]
       posted_at: posted?.trim(),
       // Half-star estimate from the sprite, replaced by the API's exact average afterwards — kept as
       // the fallback so a batch the API did not answer still carries something to compare against.
-      rating: ratingStyle ? parseRating(ratingStyle) : undefined,
+      // An empty sprite (0) is an unrated gallery, as in the API.
+      rating: ratingStyle ? parseRating(ratingStyle) || undefined : undefined,
       tags,
       category: category?.trim(),
       uploader: uploader ? decodeURIComponent(uploader) : undefined,

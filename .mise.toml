@@ -94,6 +94,10 @@ for c in "$@"; do args+=(-p "$c"); done
 scripts/cargo-container-run.sh cargo test --no-fail-fast --lib --bins --tests "${args[@]}"
 """
 
+[tasks.test-plugins]
+description = "deno test for the hand-written plugins (tests/plugins/), kept outside plugins/ because every .ts there is loaded as a plugin"
+run = "deno test --config plugins/deno.json --allow-read tests/plugins/"
+
 [tasks.test-one]
 description = "cargo test -p <crate> --lib <name filter> inside the dev container — runs only the unit tests whose name contains the filter, e.g. `mise run test-one -- lanrurugi-api not_enabled_never_queues`"
 run = """

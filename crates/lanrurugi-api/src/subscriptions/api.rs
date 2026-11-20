@@ -570,7 +570,13 @@ async fn combined_history(
                 .await
                 .unwrap_or_default();
             for entry in snapshot.values() {
-                let Some(last) = entry.runs.last() else {
+                // Older than every kept summary: past what this history covers, as a full-detail
+                // cycle that rolled off the list used to be.
+                let Some((last, outcome)) = entry
+                    .runs
+                    .last()
+                    .and_then(|run| outcome_by_seq.get(&run.to_seq).map(|o| (run, *o)))
+                else {
                     continue;
                 };
                 let Some(record) = super::snapshot::record_at(entry, last.to_seq) else {
@@ -581,7 +587,7 @@ async fn combined_history(
                     "subscription_id": subscription.id,
                     "subscription_name": subscription.name,
                     "checked_at": entry.last_verdict_at.unwrap_or(entry.last_seen_at),
-                    "outcome": outcome_by_seq.get(&last.to_seq).copied().unwrap_or(&CycleOutcome::Completed),
+                    "outcome": outcome,
                     "download": outcome_by_source.get(&record.source_url),
                     "candidate": record,
                 }));
