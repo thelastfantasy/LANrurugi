@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 
-import { fetchJson, sendJson } from "@/api/client";
+import { ApiError, fetchJson, sendJson } from "@/api/client";
 import {
   useCategories,
   useCreateTankoubon,
@@ -282,6 +282,9 @@ const { t } = useTranslation();
   })();
   const [multiSelect, setMultiSelect] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // The "select everything the filter matches" walk can take several requests on a big library.
+  const [selectingAllResults, setSelectingAllResults] = useState(false);
+  const [sortingSelection, setSortingSelection] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{
     id: string;
@@ -540,6 +543,19 @@ const { t } = useTranslation();
     });
   }
 
+  /** Selects every archive the current filter matches, not just the 100 on screen. Same page walk
+   * as `runBatchOnFilter`, since `/search` has no id-only projection. */
+  async function selectAllResults() {
+    if (selectingAllResults || (search.data?.recordsFiltered ?? 0) === 0) return;
+    setSelectingAllResults(true);
+    try {
+      const ids = await fetchFilteredIds();
+      if (ids.length > 0) setSelectedIds(ids);
+    } finally {
+      setSelectingAllResults(false);
+    }
+  }
+
   function clearSelection() {
     setSelectedIds([]);
   }
@@ -567,12 +583,14 @@ const { t } = useTranslation();
    *  `/search` pages by a fixed `pagesize` (100 by default) and returns no id-only projection, so
    *  this walks the pages it already knows the count of rather than adding another endpoint for
    *  one button. Ids are handed to `/batch` through the same `MSM_SELECTION_KEY` handoff. */
-  async function runBatchOnFilter() {
+  async function fetchFilteredIds(
+    overrides?: { sortby?: string; order?: "asc" | "desc" },
+  ): Promise<string[]> {
     const total = search.data?.recordsFiltered ?? 0;
-    if (total === 0) return;
+    if (total === 0) return [];
     const options = {
-      sortby,
-      order: effectiveSortDir(sortby, order),
+      sortby: overrides?.sortby ?? sortby,
+      order: overrides?.order ?? effectiveSortDir(sortby, order),
       ...searchContext,
     };
     const ids: string[] = [];
@@ -583,10 +601,10 @@ const { t } = useTranslation();
       if (options.category) params.set("category", options.category)
       if (options.sortby) params.set("sortby", options.sortby)
       if (options.order) params.set("order", options.order)
-      if (options.newonly) params.set("newonly", "true")
-      if (options.untaggedonly) params.set("untaggedonly", "true")
-      if (options.tankonly) params.set("tankonly", "true")
-      if (options.hidecompleted) params.set("hidecompleted", "true")
+      if (searchContext.newonly) params.set("newonly", "true")
+      if (searchContext.untaggedonly) params.set("untaggedonly", "true")
+      if (searchContext.tankonly) params.set("tankonly", "true")
+      if (searchContext.hidecompleted) params.set("hidecompleted", "true")
       if (options.groupbyTanks === false) params.set("groupby_tanks", "false")
       params.set("start", String(start))
       const page = await fetchJson<{ data?: { arcid: string }[] }>(`/search?${params.toString()}`)
@@ -596,6 +614,39 @@ const { t } = useTranslation();
       for (const row of rows) ids.push(row.arcid)
       start += rows.length
     }
+    return ids;
+  }
+
+  /** Orders the current selection server-side instead of by hand — a selection gathered from every
+   *  result can be thousands of entries, which no one drags through. Ids the current filter does not
+   *  return (the selection survives searches) keep their relative order at the end. */
+  async function sortSelection(mode: "title" | "date_added" | "reverse") {
+    if (sortingSelection) return;
+    if (mode === "reverse") {
+      setSelectedIds((prev) => [...prev].reverse());
+      return;
+    }
+    setSortingSelection(true);
+    try {
+      const ordered = await fetchFilteredIds({
+        sortby: mode,
+        order: mode === "date_added" ? "desc" : "asc",
+      });
+      const rank = new Map(ordered.map((id, index) => [id, index]));
+      setSelectedIds((prev) => {
+        const matched = prev
+          .filter((id) => rank.has(id))
+          .sort((a, b) => (rank.get(a) ?? 0) - (rank.get(b) ?? 0));
+        const unmatched = prev.filter((id) => !rank.has(id));
+        return [...matched, ...unmatched];
+      });
+    } finally {
+      setSortingSelection(false);
+    }
+  }
+
+  async function runBatchOnFilter() {
+    const ids = await fetchFilteredIds();
     if (ids.length === 0) return;
     localStorage.setItem(MSM_SELECTION_KEY, JSON.stringify(ids));
     window.open("/batch", "_blank");
@@ -721,7 +772,22 @@ const { t } = useTranslation();
         toast({ heading: t("recycleBin.movedToBin"), icon: "success" });
       }
     } else {
-      await fetch(`/api/archives/${archiveId}`, { method: "DELETE" });
+      try {
+        await sendJson("DELETE", `/archives/${archiveId}`)
+      } catch (err) {
+        // The server refuses to delete a healthy archive that a Tankoubon still lists (it would
+        // silently reshuffle that book), and says why — that message is what the user needs.
+        toast({
+          heading:
+            err instanceof ApiError && err.status === 409
+              ? t("library.deleteTankMemberRefused")
+              : err instanceof Error
+                ? err.message
+                : String(err),
+          icon: "error",
+        })
+        return
+      };
       // Recoverable for the retention window: offer the undo right where the mistake happened
       // (spec 019 FR-034) instead of making the user open the bin page.
       toast({
@@ -855,6 +921,10 @@ const { t } = useTranslation();
     setSelectedIds,
     toggleSelected,
     selectAllOnPage,
+    selectAllResults,
+    selectingAllResults,
+    sortSelection,
+    sortingSelection,
     clearSelection,
     handleToggleMultiSelect,
     sortedCategories,

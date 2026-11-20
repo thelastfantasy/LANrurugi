@@ -76,6 +76,14 @@ pub struct PatchOutcome {
     /// Existing patch files renamed because a new page took their name.
     pub renamed: usize,
     pub patch_pages: usize,
+    /// CRC32 of the source file these pages came from — plumbing for the provenance record, not
+    /// part of the HTTP response shape.
+    #[serde(skip)]
+    pub source_crc32: String,
+    /// 1-based positions the patch's pages occupy in the merged page list, also plumbing for the
+    /// provenance record (`patch_pages` alone cannot say *where* they are).
+    #[serde(skip)]
+    pub patch_positions: Vec<u32>,
 }
 
 #[derive(Debug)]
@@ -188,14 +196,33 @@ pub async fn create_patch(
     };
 
     if outcome.added > 0 {
-        let mut target = target;
         if !target.has_patch {
-            target.has_patch = true;
-            if let Err(e) = state.repos.archives.save(&target).await {
+            if let Err(e) = state
+                .repos
+                .archives
+                .update(&target.id, |a| a.has_patch = true)
+                .await
+            {
                 tracing::warn!(id = %body.target, error = %e, "patch written but has_patch flag not saved");
             }
         }
         crate::archives::clear_page_thumbnails(&state, &body.target).await;
+        // The patch zip itself only carries CRC32s, and it is exactly what becomes unreadable when
+        // a patch breaks — so where these pages came from is recorded beside the archive instead.
+        let sources = crate::patch_provenance::source_sites(&source);
+        let record = crate::patch_provenance::record_merge(
+            &state,
+            &body.target,
+            crate::patch_provenance::PatchSource {
+                archive_id: source.id.as_str().to_string(),
+                name: source.name.clone(),
+                title: source.title.clone(),
+                crc32: outcome.source_crc32.clone(),
+                sites: sources.clone(),
+            },
+            outcome.patch_positions.clone(),
+        )
+        .await;
         crate::activity::record_manual(
             &state,
             auth.as_deref(),
@@ -203,7 +230,16 @@ pub async fn create_patch(
             activity_target,
             Outcome::Success,
             None,
-            Some(json!({ "source": body.source, "added": outcome.added, "skipped": outcome.skipped })),
+            Some(json!({
+                "source": body.source,
+                "added": outcome.added,
+                "skipped": outcome.skipped,
+                "source_name": source.name,
+                "source_title": source.title,
+                "source_sites": sources,
+                "source_crc32": outcome.source_crc32,
+                "patch_pages": record.pages,
+            })),
         )
         .await;
     }
@@ -291,6 +327,12 @@ fn merge_into_patch(
         .iter()
         .filter(|p| matches!(p, EffectivePage::Patched(_)))
         .count();
+    outcome.patch_positions = sequence
+        .iter()
+        .enumerate()
+        .filter(|(_, page)| matches!(page, EffectivePage::Patched(_)))
+        .map(|(index, _)| index as u32 + 1)
+        .collect();
     if outcome.added == 0 {
         return Ok(outcome);
     }
@@ -308,7 +350,7 @@ fn merge_into_patch(
         source_crc32: existing
             .as_ref()
             .and_then(|m| m.source_crc32.clone())
-            .or(Some(source_crc)),
+            .or(Some(source_crc.clone())),
         sources,
         insertions: insertions_for(&sequence),
     };
@@ -321,6 +363,7 @@ fn merge_into_patch(
         .collect();
     let bytes = patch::build_patch_zip_from(&metadata, &bundled)?;
     write_durably(&patch_path, &bytes)?;
+    outcome.source_crc32 = source_crc;
     Ok(outcome)
 }
 
@@ -518,14 +561,16 @@ mod tests {
             }],
         )
         .unwrap();
+        // Compared field by field: `PatchOutcome` also carries provenance the HTTP response hides
+        // (`source_crc32`, `patch_positions`), which this test is not about.
         assert_eq!(
-            outcome,
-            PatchOutcome {
-                added: 1,
-                skipped: 0,
-                renamed: 0,
-                patch_pages: 1
-            }
+            (
+                outcome.added,
+                outcome.skipped,
+                outcome.renamed,
+                outcome.patch_pages
+            ),
+            (1, 0, 0, 1)
         );
 
         let outcome = merge_into_patch(
@@ -544,13 +589,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            outcome,
-            PatchOutcome {
-                added: 1,
-                skipped: 1,
-                renamed: 1,
-                patch_pages: 2
-            }
+            (
+                outcome.added,
+                outcome.skipped,
+                outcome.renamed,
+                outcome.patch_pages
+            ),
+            (1, 1, 1, 2)
         );
 
         let originals = archive_format::list_pages(&target).unwrap();

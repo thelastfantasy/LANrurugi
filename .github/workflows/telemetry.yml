@@ -1,0 +1,146 @@
+name: 'Push Telemetry Image'
+
+# The heartbeat sink's image, published **only when the sink's own code changes**.
+#
+# `telemetry-ingest` is a subcommand of `lanrurugi-server`, not a separate program: the image the
+# NAS runs (`ix-lanrurugi-telemetry-ingest-1`) used to be the application image itself, so every
+# version bump republished it even when the sink had not changed a line. This workflow separates
+# the two: it fingerprints the handful of files that actually decide the sink's behaviour and
+# publishes `lanrurugi-telemetry:t-<fingerprint>` when that fingerprint is new, then moves
+# `:latest` onto it. Nothing else republishes it.
+#
+# Deliberately NOT in the fingerprint: `Cargo.toml`, `Cargo.lock`, crate versions or the workspace
+# version. Those change on every release; none of them changes what the sink does. If a dependency
+# bump ever does matter (an axum/redis upgrade with a behaviour change), run this workflow by hand
+# with `force` — that is what the dispatch input is for.
+#
+# One arch on purpose: the sink runs on one amd64 host, and a second architecture would double the
+# (cached, but still long) Rust build for an image nobody else pulls.
+
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - "crates/lanrurugi-server/src/cli/telemetry_ingest.rs"
+      - "crates/lanrurugi-server/src/cli/mod.rs"
+      - "crates/lanrurugi-server/src/main.rs"
+      - "crates/lanrurugi-api/src/heartbeat.rs"
+      - "telemetry/**"
+      - ".github/workflows/telemetry.yml"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Rebuild even if this fingerprint is already published"
+        type: boolean
+        default: false
+
+concurrency:
+  group: telemetry-image-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/thelastfantasy/lanrurugi-telemetry
+
+jobs:
+  publish:
+    name: publish
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      # The gate. `git ls-tree` over exactly these paths means a version bump, a changelog edit or
+      # a frontend change cannot produce a new sink image; a one-line edit inside `telemetry/`
+      # can. Changing which files feed the sink means changing this list too.
+      - name: Fingerprint the sink's inputs
+        id: fp
+        run: |
+          fingerprint=$(git ls-tree -r HEAD -- \
+              crates/lanrurugi-server/src/cli/telemetry_ingest.rs \
+              crates/lanrurugi-server/src/cli/mod.rs \
+              crates/lanrurugi-server/src/main.rs \
+              crates/lanrurugi-api/src/heartbeat.rs \
+              telemetry | sha256sum | cut -c1-16)
+          echo "value=$fingerprint" >> "$GITHUB_OUTPUT"
+          echo "fingerprint: $fingerprint"
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Is this fingerprint already published?
+        id: check
+        run: |
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "forced"
+          elif docker manifest inspect "$IMAGE:t-${{ steps.fp.outputs.value }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "already published — nothing to build"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "new fingerprint — building"
+          fi
+
+      - uses: docker/setup-buildx-action@v4
+        if: steps.check.outputs.exists == 'false'
+
+      # Reuses `Dockerfile`'s own `rust-builder` stage rather than a second, drifting definition of
+      # how the workspace is compiled. This is the expensive step, and it only runs when the
+      # fingerprint gate above let the job through.
+      - name: Build the server binary
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          docker buildx build --target rust-builder --load \
+            -t lrr-telemetry-builder \
+            --cache-from type=registry,ref="$IMAGE:buildcache" \
+            --cache-to type=registry,ref="$IMAGE:buildcache",mode=max \
+            .
+
+      - name: Build the dashboard
+        if: steps.check.outputs.exists == 'false'
+        run: docker buildx build --target telemetry-ui --load -t lrr-telemetry-ui .
+
+      # `Dockerfile.ingest` takes a prebuilt binary plus the dashboard bundle as its context — the
+      # repository itself is 2 GB of source that image must not contain.
+      - name: Assemble the build context
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          context="$RUNNER_TEMP/lanrurugi-ingest"
+          mkdir -p "$context"
+
+          docker create --name lrr-telemetry-server lrr-telemetry-builder
+          docker cp lrr-telemetry-server:/build/target/release/lanrurugi-server "$context/lanrurugi-server"
+          docker rm lrr-telemetry-server
+
+          docker create --name lrr-telemetry-dashboard lrr-telemetry-ui
+          docker cp lrr-telemetry-dashboard:/ui/dist "$context/ui"
+          docker rm lrr-telemetry-dashboard
+
+          cp telemetry/Dockerfile.ingest "$context/Dockerfile.ingest"
+          ls -la "$context"
+
+      - name: Build and push
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          docker buildx build --push --platform linux/amd64 \
+            -f "$RUNNER_TEMP/lanrurugi-ingest/Dockerfile.ingest" \
+            -t "$IMAGE:t-${{ steps.fp.outputs.value }}" \
+            -t "$IMAGE:latest" \
+            "$RUNNER_TEMP/lanrurugi-ingest"
+
+      - name: Summary
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          {
+            echo "### Telemetry sink image"
+            echo ""
+            echo "- fingerprint: \`${{ steps.fp.outputs.value }}\`"
+            echo "- tags: \`t-${{ steps.fp.outputs.value }}\`, \`latest\`"
+            echo "- commit: \`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

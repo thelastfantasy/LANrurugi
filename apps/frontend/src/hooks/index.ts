@@ -1,5 +1,7 @@
 export * from "./useHorizontalScroll"
 
+export * from "./useBackToClose"
+
 export * from "./useCustomColumnNamespace"
 
 export * from "./useDocumentTitle"
@@ -19,6 +21,8 @@ export * from "./useReaderSettings"
 export * from "./useSectionDeepLink"
 
 export * from "./useSupportsHover"
+
+export * from "./useSwipeToDismiss"
 
 export * from "./useTagCloudHighlight"
 

@@ -137,6 +137,7 @@ pub(crate) async fn create_tankoubon_with(
         summary: summary.to_string(),
         tags: tags.to_string(),
         progress: 0,
+        lastreadtime: None,
         archives,
         thumbnail_manual: false,
         thumbnail_source_archive: None,
@@ -148,7 +149,7 @@ pub(crate) async fn create_tankoubon_with(
     state
         .repos
         .groupings
-        .save(&grouping)
+        .create_or_replace(&grouping)
         .await
         .map_err(|e| e.to_string())?;
     let search = &state.redis.search;
@@ -373,6 +374,7 @@ async fn create_or_rename_tankoubon(
                     summary: String::new(),
                     tags: String::new(),
                     progress: 0,
+                    lastreadtime: None,
                     archives: Vec::new(),
                     thumbnail_manual: false,
                     thumbnail_source_archive: None,
@@ -386,10 +388,32 @@ async fn create_or_rename_tankoubon(
         }
     };
 
-    let old_name = grouping.name.clone();
-    grouping.name = params.name;
-    match state.repos.groupings.save(&grouping).await {
-        Ok(()) => {
+    let mut old_name = grouping.name.clone();
+    let requested_name = params.name.clone();
+    let saved = if is_new {
+        grouping.name = params.name;
+        state
+            .repos
+            .groupings
+            .create_or_replace(&grouping)
+            .await
+            .map(|()| Some(grouping))
+    } else {
+        // A rename of an existing tank changes only its name, onto the tank as it is now.
+        state
+            .repos
+            .groupings
+            .update(&tankid, |g| {
+                old_name = std::mem::replace(&mut g.name, params.name)
+            })
+            .await
+    };
+    match saved {
+        Ok(None) => not_found(
+            "create_tankoubon",
+            format!("{tankid} doesn't exist in the database!"),
+        ),
+        Ok(Some(grouping)) => {
             // Legacy's own `create_tankoubon` (`Model/Tankoubon.pm`) unconditionally writes the
             // tank's (possibly brand-new) name into `LRR_TITLES` here — without it, a Tankoubon
             // never survives the default `sortby=title` search path's own `LRR_TITLES ∩ filtered`
@@ -469,7 +493,7 @@ async fn create_or_rename_tankoubon(
                 action_type,
                 ActivityTarget {
                     id: Some(tankid.0.clone()),
-                    label: Some(grouping.name.clone()),
+                    label: Some(requested_name),
                     kind: Some("tankoubon".to_string()),
                 },
                 Outcome::Failure {
@@ -858,14 +882,23 @@ pub(crate) async fn sync_tankoubon_thumbnail_with_first_archive(
         if validate_manual_thumbnail_source(state, grouping).await {
             return;
         }
-        let mut reset = grouping.clone();
-        reset.thumbnail_manual = false;
-        reset.thumbnail_source_archive = None;
-        reset.thumbnail_source_page = None;
-        if let Err(e) = state.repos.groupings.save(&reset).await {
-            tracing::warn!(id = %grouping.tankid, error = %e, "failed to reset stale manual tank thumbnail source");
-            return;
-        }
+        let reset = state
+            .repos
+            .groupings
+            .update(&grouping.tankid, |g| {
+                g.thumbnail_manual = false;
+                g.thumbnail_source_archive = None;
+                g.thumbnail_source_page = None;
+            })
+            .await;
+        let reset = match reset {
+            Ok(Some(reset)) => reset,
+            Ok(None) => return,
+            Err(e) => {
+                tracing::warn!(id = %grouping.tankid, error = %e, "failed to reset stale manual tank thumbnail source");
+                return;
+            }
+        };
         force_apply_first_archive_cover(state, &reset, reset.archives.first()).await;
         return;
     }
@@ -1036,7 +1069,7 @@ async fn update_tankoubon_thumbnail(
     Query(params): Query<UpdateTankoubonThumbnailParams>,
 ) -> Response {
     let page = params.page.unwrap_or(1);
-    let mut grouping = match state.repos.groupings.get(&id).await {
+    let grouping = match state.repos.groupings.get(&id).await {
         Ok(Some(g)) => g,
         Ok(None) => {
             return not_found(
@@ -1094,10 +1127,17 @@ async fn update_tankoubon_thumbnail(
         Err(e) => return error(StatusCode::BAD_REQUEST, "update_tankoubon_thumbnail", e),
     };
 
-    grouping.thumbnail_manual = true;
-    grouping.thumbnail_source_archive = Some(arc_id);
-    grouping.thumbnail_source_page = Some(local_page);
-    if let Err(e) = state.repos.groupings.save(&grouping).await {
+    // The cover render took a while: only these fields, onto the tank as it is now.
+    let marked = state
+        .repos
+        .groupings
+        .update(&id, |g| {
+            g.thumbnail_manual = true;
+            g.thumbnail_source_archive = Some(arc_id);
+            g.thumbnail_source_page = Some(local_page);
+        })
+        .await;
+    if let Err(e) = marked {
         tracing::warn!(%id, error = %e, "failed to persist thumbnail_manual flag");
     }
 
@@ -1107,33 +1147,77 @@ async fn update_tankoubon_thumbnail(
     )
 }
 
+/// Brings the search index from `old` to `new` (membership, the tank's own tags, its title). Run
+/// through `update_then`, under the tank's lock: these are diffs.
+pub(crate) async fn reindex_tankoubon(state: &AppState, id: &TankId, old: Grouping, new: Grouping) {
+    let others = other_groupings(state, id).await;
+    let (joined, left) = tank_membership_delta(&old.archives, &new.archives, &others);
+    if let Err(e) =
+        lanrurugi_search::indexer::sync_tank_membership(&state.redis.search, &joined, &left).await
+    {
+        tracing::warn!(%id, error = %e, "failed to sync tank search index");
+    }
+    // A Tankoubon's own `tags` (a real, independent field — either auto-filled from common
+    // member tags at creation or explicitly set/appended here) were never written into
+    // `INDEX_<tag>` under the tank's own id — only member archives' individual `tags` are.
+    // Confirmed live, 2026-08-27: a tag genuinely visible on the Tankoubon itself (e.g.
+    // `female:high heels`, shown in its own metadata) returned zero search results for that
+    // tag, the Tankoubon never among them — "what you see is what you can find" broke
+    // silently. This makes tag search actually reach what the tank's own metadata already
+    // displays, independent of whether any individual member also happens to carry it.
+    if old.tags != new.tags {
+        if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
+            &state.redis.search,
+            &state.equivalence,
+            id.as_str(),
+            &old.tags,
+            &new.tags,
+        )
+        .await
+        {
+            tracing::warn!(%id, error = %e, "failed to update tank tag search index");
+        }
+    }
+    if old.name != new.name {
+        if let Err(e) = lanrurugi_search::indexer::update_title_index(
+            &state.redis.search,
+            &state.equivalence,
+            id,
+            &old.name,
+            &new.name,
+        )
+        .await
+        {
+            tracing::warn!(%id, error = %e, "failed to update tank title search index");
+        }
+    }
+}
+
 async fn update_tankoubon_progress(
     State(state): State<AppState>,
     Path((id, page)): Path<(TankId, u32)>,
 ) -> Response {
-    let mut grouping = match state.repos.groupings.get(&id).await {
-        Ok(Some(g)) => g,
-        Ok(None) => {
-            return not_found(
-                "update_tank_progress",
-                format!("{id} doesn't exist in the database!"),
-            )
-        }
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "update_tank_progress",
-                e.to_string(),
-            )
-        }
-    };
-    grouping.progress = page;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    match state.repos.groupings.save(&grouping).await {
-        Ok(()) => axum::Json(json!({
+    match state
+        .repos
+        .groupings
+        .update(&id, |g| {
+            g.progress = page;
+            // `sortby=lastread` (the library's "recently read" panel) ranks a Tankoubon by its own
+            // `lastreadtime`: reading a tank says nothing about reading one of its volumes
+            // standalone, so the members' own timestamps stay untouched.
+            g.lastreadtime = Some(now as i64);
+        })
+        .await
+    {
+        Ok(None) => not_found(
+            "update_tank_progress",
+            format!("{id} doesn't exist in the database!"),
+        ),
+        Ok(Some(_grouping)) => axum::Json(json!({
             "id": id,
             "operation": "update_tank_progress",
             "page": page,
@@ -1155,134 +1239,103 @@ async fn update_tankoubon(
     auth: Option<axum::extract::Extension<AuthContext>>,
     axum::Json(body): axum::Json<UpdateTankoubonBody>,
 ) -> Response {
-    let mut grouping = match state.repos.groupings.get(&id).await {
-        Ok(Some(g)) => g,
-        Ok(None) => {
-            return not_found(
-                "update_tankoubon",
-                format!("{id} doesn't exist in the database!"),
-            )
-        }
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "update_tankoubon",
-                e.to_string(),
-            )
-        }
-    };
-
     // Captured before `body.metadata` is moved out of below.
     let tags_set_explicitly = body.metadata.as_ref().is_some_and(|m| m.tags.is_some());
-    let old_name = grouping.name.clone();
-    let old_summary = grouping.summary.clone();
-    // `updated_at` is bumped below, but only if something other than a bare rating change
-    // actually happened — see that check's own comment for why a rating alone is excluded.
-    let old_tags = grouping.tags.clone();
+    let archive_ids: Option<Vec<ArchiveId>> = body
+        .archives
+        .map(|archives| archives.into_iter().map(ArchiveId).collect());
+    // Auto-fills the Tankoubon's own tags with whatever's common across all the member archives
+    // being set here (e.g. the same `artist:` tag on every volume) — but only when tags haven't
+    // been given a real value yet and this same request isn't itself setting them, so this fires
+    // once, right after the frontend's create-Tankoubon flow first populates the member list.
+    // Read before taking the tank's lock; applied inside it only if the tags are still empty.
+    let common_tags = match &archive_ids {
+        Some(ids) if !tags_set_explicitly && !ids.is_empty() => {
+            Some(common_member_tags(&state, ids).await)
+        }
+        _ => None,
+    };
+
+    let mut old_name = String::new();
+    let mut old_summary = String::new();
+    let mut old_archives: Vec<ArchiveId> = Vec::new();
+    let mut old_tags = String::new();
     let mut non_rating_change = false;
+    let updated = state
+        .repos
+        .groupings
+        .update_then(
+            &id,
+            |grouping| {
+                old_name = grouping.name.clone();
+                old_summary = grouping.summary.clone();
+                old_archives = grouping.archives.clone();
+                // `updated_at` is bumped below, but only if something other than a bare rating change
+                // actually happened — see that check's own comment for why a rating alone is excluded.
+                old_tags = grouping.tags.clone();
 
-    if let Some(metadata) = body.metadata {
-        if let Some(name) = metadata.name {
-            non_rating_change = true;
-            grouping.name = name;
-        }
-        if let Some(summary) = metadata.summary {
-            non_rating_change = true;
-            grouping.summary = summary;
-        }
-        if let Some(tags) = metadata.tags {
-            grouping.tags = if metadata.append.unwrap_or(false) && !grouping.tags.is_empty() {
-                format!("{},{}", grouping.tags, tags)
-            } else {
-                tags
-            };
-        }
-        if let Some(chapter_names) = metadata.chapter_names {
-            non_rating_change = true;
-            grouping.chapter_names = chapter_names;
-        }
-    }
-    let old_archives = grouping.archives.clone();
+                if let Some(metadata) = body.metadata {
+                    if let Some(name) = metadata.name {
+                        non_rating_change = true;
+                        grouping.name = name;
+                    }
+                    if let Some(summary) = metadata.summary {
+                        non_rating_change = true;
+                        grouping.summary = summary;
+                    }
+                    if let Some(tags) = metadata.tags {
+                        grouping.tags =
+                            if metadata.append.unwrap_or(false) && !grouping.tags.is_empty() {
+                                format!("{},{}", grouping.tags, tags)
+                            } else {
+                                tags
+                            };
+                    }
+                    if let Some(chapter_names) = metadata.chapter_names {
+                        non_rating_change = true;
+                        grouping.chapter_names = chapter_names;
+                    }
+                }
+                if let Some(archive_ids) = archive_ids {
+                    non_rating_change = true;
+                    if grouping.tags.is_empty() {
+                        if let Some(common_tags) = common_tags {
+                            grouping.tags = common_tags;
+                        }
+                    }
+                    grouping.archives = archive_ids;
+                }
+
+                // A rating-only change (the reader's star widget, right-click-to-clear included) must
+                // not bump `updated_at` — rating a Tankoubon you've already read/sorted shouldn't kick
+                // it back to the top of a date-sorted library view the way an actual content edit
+                // should. Compares the tags with their `rating:` entries stripped, so a request that
+                // changes both rating AND another tag still counts as an edit.
+                if !non_rating_change
+                    && strip_rating_tag(&old_tags) != strip_rating_tag(&grouping.tags)
+                {
+                    non_rating_change = true;
+                }
+                if non_rating_change {
+                    grouping.updated_at = Some(
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0),
+                    );
+                }
+            },
+            |old, new| reindex_tankoubon(&state, &id, old, new),
+        )
+        .await;
     let old_first = old_archives.first().cloned();
-    if let Some(archives) = body.archives {
-        non_rating_change = true;
-        let archive_ids: Vec<ArchiveId> = archives.into_iter().map(ArchiveId).collect();
-        // Auto-fills the Tankoubon's own tags with whatever's common across all the member
-        // archives being set here (e.g. the same `artist:` tag on every volume) — but only when
-        // tags haven't been given a real value yet (`grouping.tags.is_empty()`) and this same
-        // request isn't itself setting them (`tags_set_explicitly`), so this fires exactly once,
-        // right after the frontend's own create-Tankoubon flow (`PUT /tankoubons` then `PUT
-        // /tankoubons/{id}` with `archives`) first populates the member list — not on every
-        // later archive-list edit of an already-tagged Tankoubon.
-        if grouping.tags.is_empty() && !tags_set_explicitly && !archive_ids.is_empty() {
-            grouping.tags = common_member_tags(&state, &archive_ids).await;
-        }
-        grouping.archives = archive_ids;
-    }
 
-    // A rating-only change (the reader's star widget, right-click-to-clear included) must not
-    // bump `updated_at` — rating a Tankoubon you've already read/sorted shouldn't kick it back to
-    // the top of a date-sorted library view the way an actual content edit should. Every OTHER
-    // tags change (category/artist/anything but `rating:`) still counts as a real edit. Compares
-    // the tags with their `rating:` entries stripped rather than special-casing "only a rating
-    // field was in the request body" — a request that changes both rating AND another tag in the
-    // same call must still count as an edit.
-    if !non_rating_change && strip_rating_tag(&old_tags) != strip_rating_tag(&grouping.tags) {
-        non_rating_change = true;
-    }
-    if non_rating_change {
-        grouping.updated_at = Some(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-        );
-    }
-
-    match state.repos.groupings.save(&grouping).await {
-        Ok(()) => {
-            let others = other_groupings(&state, &id).await;
-            let (joined, left) = tank_membership_delta(&old_archives, &grouping.archives, &others);
-            if let Err(e) =
-                lanrurugi_search::indexer::sync_tank_membership(&state.redis.search, &joined, &left)
-                    .await
-            {
-                tracing::warn!(%id, error = %e, "failed to sync tank search index");
-            }
-            // A Tankoubon's own `tags` (a real, independent field — either auto-filled from common
-            // member tags at creation or explicitly set/appended here) were never written into
-            // `INDEX_<tag>` under the tank's own id — only member archives' individual `tags` are.
-            // Confirmed live, 2026-08-27: a tag genuinely visible on the Tankoubon itself (e.g.
-            // `female:high heels`, shown in its own metadata) returned zero search results for that
-            // tag, the Tankoubon never among them — "what you see is what you can find" broke
-            // silently. This makes tag search actually reach what the tank's own metadata already
-            // displays, independent of whether any individual member also happens to carry it.
-            if old_tags != grouping.tags {
-                if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
-                    &state.redis.search,
-                    &state.equivalence,
-                    id.as_str(),
-                    &old_tags,
-                    &grouping.tags,
-                )
-                .await
-                {
-                    tracing::warn!(%id, error = %e, "failed to update tank tag search index");
-                }
-            }
-            if old_name != grouping.name {
-                if let Err(e) = lanrurugi_search::indexer::update_title_index(
-                    &state.redis.search,
-                    &state.equivalence,
-                    &id,
-                    &old_name,
-                    &grouping.name,
-                )
-                .await
-                {
-                    tracing::warn!(%id, error = %e, "failed to update tank title search index");
-                }
-            }
+    match updated {
+        Ok(None) => not_found(
+            "update_tankoubon",
+            format!("{id} doesn't exist in the database!"),
+        ),
+        Ok(Some(grouping)) => {
             sync_tankoubon_thumbnail_with_first_archive(&state, &grouping, old_first.as_ref())
                 .await;
 
@@ -1358,7 +1411,7 @@ async fn update_tankoubon(
                 action_type,
                 ActivityTarget {
                     id: Some(id.0.clone()),
-                    label: Some(grouping.name.clone()),
+                    label: Some(old_name.clone()),
                     kind: Some("tankoubon".to_string()),
                 },
                 Outcome::Failure {
@@ -1619,22 +1672,6 @@ async fn add_to_tankoubon(
     auth: Option<axum::extract::Extension<AuthContext>>,
     Path((id, archive)): Path<(TankId, ArchiveId)>,
 ) -> Response {
-    let mut grouping = match state.repos.groupings.get(&id).await {
-        Ok(Some(g)) => g,
-        Ok(None) => {
-            return not_found(
-                "add_to_tankoubon",
-                format!("{id} doesn't exist in the database!"),
-            )
-        }
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "add_to_tankoubon",
-                e.to_string(),
-            )
-        }
-    };
     if state
         .repos
         .archives
@@ -1650,13 +1687,25 @@ async fn add_to_tankoubon(
             format!("{archive} does not exist in the database."),
         );
     }
-    let old_first = grouping.archives.first().cloned();
-    let newly_added = !grouping.archives.contains(&archive);
-    if newly_added {
-        grouping.archives.push(archive.clone());
-    }
-    match state.repos.groupings.save(&grouping).await {
-        Ok(()) => {
+    let mut old_first = None;
+    let mut newly_added = false;
+    let updated = state
+        .repos
+        .groupings
+        .update(&id, |grouping| {
+            old_first = grouping.archives.first().cloned();
+            newly_added = !grouping.archives.contains(&archive);
+            if newly_added {
+                grouping.archives.push(archive.clone());
+            }
+        })
+        .await;
+    match updated {
+        Ok(None) => not_found(
+            "add_to_tankoubon",
+            format!("{id} doesn't exist in the database!"),
+        ),
+        Ok(Some(grouping)) => {
             if newly_added {
                 if let Err(e) = lanrurugi_search::indexer::sync_tank_membership(
                     &state.redis.search,
@@ -1724,27 +1773,23 @@ async fn remove_from_tankoubon(
     auth: Option<axum::extract::Extension<AuthContext>>,
     Path((id, archive)): Path<(TankId, ArchiveId)>,
 ) -> Response {
-    let mut grouping = match state.repos.groupings.get(&id).await {
-        Ok(Some(g)) => g,
-        Ok(None) => {
-            return not_found(
-                "remove_from_tankoubon",
-                format!("{id} doesn't exist in the database!"),
-            )
-        }
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "remove_from_tankoubon",
-                e.to_string(),
-            )
-        }
-    };
-    let old_first = grouping.archives.first().cloned();
-    let was_present = grouping.archives.contains(&archive);
-    grouping.archives.retain(|a| a != &archive);
-    match state.repos.groupings.save(&grouping).await {
-        Ok(()) => {
+    let mut old_first = None;
+    let mut was_present = false;
+    let updated = state
+        .repos
+        .groupings
+        .update(&id, |grouping| {
+            old_first = grouping.archives.first().cloned();
+            was_present = grouping.archives.contains(&archive);
+            grouping.archives.retain(|a| a != &archive);
+        })
+        .await;
+    match updated {
+        Ok(None) => not_found(
+            "remove_from_tankoubon",
+            format!("{id} doesn't exist in the database!"),
+        ),
+        Ok(Some(grouping)) => {
             if was_present {
                 let others = other_groupings(&state, &id).await;
                 let still_in_another_tank = others.iter().any(|g| g.archives.contains(&archive));

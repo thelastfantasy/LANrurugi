@@ -12,7 +12,7 @@ import { useStats } from "./api/hooks"
 import { PHONE_WIDTH_QUERY, useIsNarrowViewport } from "./hooks/useIsNarrowViewport"
 import { useMenuPalette } from "./hooks/useMenuPalette"
 import { buildSearchToken } from "./lib/tagFormat"
-import { Z_OVERLAY_ABOVE_DRAWER, Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "./theme"
+import { Z_DIALOG } from "./theme"
 
 // Themed prompt/confirm replacements driven by module-level state, rendered by <DialogHost />.
 
@@ -916,7 +916,7 @@ function TagSearchField({
         }}
       />
       {open && suggestions.length > 0 && (
-        <PopupMenu portal={false} style={{ position: "absolute", top: "100%", left: 0, zIndex: Z_OVERLAY_CONTENT, minWidth: "100%", maxHeight: 180, overflowY: "auto" }}>
+        <PopupMenu portal={false} style={{ position: "absolute", top: "100%", left: 0, zIndex: Z_DIALOG + 2, minWidth: "100%", maxHeight: 180, overflowY: "auto" }}>
           {suggestions.map((s) => (
             <PopupMenuItem
               key={s.label}
@@ -1201,7 +1201,7 @@ export function DialogHost() {
   if (request.kind === "newCategory") {
     return createPortal(
       <>
-        <div style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_ABOVE_DRAWER, background: "rgba(0,0,0,0.4)" }} onClick={cancelNewCategory} />
+        <div style={{ position: "fixed", inset: 0, zIndex: Z_DIALOG, background: "rgba(0,0,0,0.4)" }} onClick={cancelNewCategory} />
         <div
           role="dialog"
           aria-modal="true"
@@ -1211,7 +1211,7 @@ export function DialogHost() {
             top: "50%",
             left: "50%",
             transform: "translate(-50%, -50%)",
-            zIndex: Z_OVERLAY_ABOVE_DRAWER + 1,
+            zIndex: Z_DIALOG + 1,
             display: "block",
             width: 360,
             padding: 20,
@@ -1230,7 +1230,7 @@ export function DialogHost() {
   if (request.kind === "renameArchive") {
     return createPortal(
       <>
-        <div style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP, background: "rgba(0,0,0,0.4)" }} onClick={cancelRenameArchive} />
+        <div style={{ position: "fixed", inset: 0, zIndex: Z_DIALOG, background: "rgba(0,0,0,0.4)" }} onClick={cancelRenameArchive} />
         <div
           role="dialog"
           aria-modal="true"
@@ -1240,7 +1240,7 @@ export function DialogHost() {
             top: "50%",
             left: "50%",
             transform: "translate(-50%, -50%)",
-            zIndex: Z_OVERLAY_CONTENT,
+            zIndex: Z_DIALOG + 1,
             display: "block",
             width: 400,
             padding: 20,
@@ -1264,7 +1264,7 @@ export function DialogHost() {
   if (request.kind === "info") {
     return createPortal(
       <>
-        <div style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP, background: "rgba(0,0,0,0.4)" }} onClick={acknowledgeInfo} />
+        <div style={{ position: "fixed", inset: 0, zIndex: Z_DIALOG, background: "rgba(0,0,0,0.4)" }} onClick={acknowledgeInfo} />
         <div
           role="dialog"
           aria-modal="true"
@@ -1274,7 +1274,7 @@ export function DialogHost() {
             top: "50%",
             left: "50%",
             transform: "translate(-50%, -50%)",
-            zIndex: Z_OVERLAY_CONTENT,
+            zIndex: Z_DIALOG + 1,
             display: "block",
             width: 420,
             padding: 20,
@@ -1299,7 +1299,7 @@ export function DialogHost() {
   if (request.kind === "stampEditor") {
     return createPortal(
       <>
-        <div style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP, background: "rgba(0,0,0,0.4)" }} onClick={cancelStampEditor} />
+        <div style={{ position: "fixed", inset: 0, zIndex: Z_DIALOG, background: "rgba(0,0,0,0.4)" }} onClick={cancelStampEditor} />
         <div
           role="dialog"
           aria-modal="true"
@@ -1309,7 +1309,7 @@ export function DialogHost() {
             top: "50%",
             left: "50%",
             transform: "translate(-50%, -50%)",
-            zIndex: Z_OVERLAY_CONTENT,
+            zIndex: Z_DIALOG + 1,
             display: "block",
             width: 320,
             padding: 20,
@@ -1370,7 +1370,7 @@ export function DialogHost() {
 
   return createPortal(
     <>
-      <div style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP, background: "rgba(0,0,0,0.4)" }} onClick={onCancel} />
+      <div style={{ position: "fixed", inset: 0, zIndex: Z_DIALOG, background: "rgba(0,0,0,0.4)" }} onClick={onCancel} />
       <div
         role="dialog"
         aria-modal="true"
@@ -1380,7 +1380,7 @@ export function DialogHost() {
           top: "50%",
           left: "50%",
           transform: "translate(-50%, -50%)",
-          zIndex: Z_OVERLAY_CONTENT,
+          zIndex: Z_DIALOG + 1,
           display: "block",
           width: 360,
           padding: 20,

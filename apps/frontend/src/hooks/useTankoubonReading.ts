@@ -3,7 +3,13 @@ import { useMemo } from "react"
 
 import { fetchJson } from "@/api/client"
 import { useTankoubonFull } from "@/api/hooks"
-import type { ArchiveFilesResponse, ArchiveMetadata, ArchivePage, TocEntry } from "@/api/types"
+import type {
+  ArchiveFilesResponse,
+  ArchiveMetadata,
+  ArchivePage,
+  PatchSource,
+  TocEntry,
+} from "@/api/types"
 
 export interface TankoubonChapter {
   arcId: string
@@ -11,6 +17,20 @@ export interface TankoubonChapter {
   /** Global page numbers, not this archive's local ones. */
   startPage: number
   endPage: number
+}
+
+/** A member whose pages could not be listed (corrupt, deleted, or no longer readable). */
+export interface TankoubonUnreadableChapter {
+  arcId: string
+  title: string
+  error: unknown
+}
+
+/** A member whose `.patch.zip` could not be read: the member still reads, minus the patched pages. */
+export interface TankoubonDamagedPatch {
+  arcId: string
+  title: string
+  sources: PatchSource[]
 }
 
 /** Reads a Tankoubon as one concatenated book by splicing member archives' pages in order. */
@@ -43,19 +63,26 @@ export function useTankoubonReading(tankId: string | null) {
     queries: queryOptions,
     combine: (results) => ({
       data: results.map((q) => q.data),
+      errors: results.map((q) => q.error),
       someLoading: results.some((q) => q.isLoading),
-      someError: results.some((q) => q.isError),
-      firstError: results.find((q) => q.error)?.error,
     }),
   })
 
+  // A member that cannot be listed (a corrupt archive, one deleted while it was in the tankoubon)
+  // must not take the whole book down with it: the rest of the book is still readable, so the
+  // failing chapters are skipped and reported instead. Only when *every* member fails is this a
+  // failure of the tankoubon itself.
+  const failedMembers = members.filter((_, i) => pageQueries.errors[i])
   const isLoading = full.isLoading || pageQueries.someLoading
-  const isError = full.isError || pageQueries.someError
-  const error = full.error ?? pageQueries.firstError
+  const isError =
+    full.isError || (members.length > 0 && failedMembers.length === members.length)
+  const error = full.error ?? pageQueries.errors.find((e) => e)
 
-  const { chapters, pages, toc } = useMemo(() => {
+  const { chapters, pages, toc, unreadableChapters, damagedPatches } = useMemo(() => {
     const chapters: TankoubonChapter[] = []
     const pages: ArchivePage[] = []
+    const unreadableChapters: TankoubonUnreadableChapter[] = []
+    const damagedPatches: TankoubonDamagedPatch[] = []
     let toc: TocEntry[] = []
 
     if (!isLoading && !isError) {
@@ -63,11 +90,28 @@ export function useTankoubonReading(tankId: string | null) {
       const nameById = new Map(chapterNames.map((c) => [c.id, c.name]))
       let offset = 0
       members.forEach((member, i) => {
+        const displayTitle = nameById.get(member.arcid) || member.title
+        const damage = pageQueries.data[i]?.patch_damage
+        if (damage) {
+          damagedPatches.push({
+            arcId: member.arcid,
+            title: displayTitle,
+            sources: damage.sources,
+          })
+        }
         const memberPages = pageQueries.data[i]?.pages ?? []
-        if (memberPages.length === 0) return
+        if (memberPages.length === 0) {
+          if (pageQueries.errors[i]) {
+            unreadableChapters.push({
+              arcId: member.arcid,
+              title: displayTitle,
+              error: pageQueries.errors[i],
+            })
+          }
+          return
+        }
         const startPage = offset + 1
         const endPage = offset + memberPages.length
-        const displayTitle = nameById.get(member.arcid) || member.title
         chapters.push({ arcId: member.arcid, title: displayTitle, startPage, endPage })
         pages.push(...memberPages)
         toc.push({ name: displayTitle, page: startPage, synthetic: true })
@@ -78,7 +122,7 @@ export function useTankoubonReading(tankId: string | null) {
       })
     }
 
-    return { chapters, pages, toc }
+    return { chapters, pages, toc, unreadableChapters, damagedPatches }
   }, [full.data, pageQueries, members, isLoading, isError])
 
   /** Maps a global page to its member archive + local page, or `null` if out of range. */
@@ -127,5 +171,12 @@ export function useTankoubonReading(tankId: string | null) {
     data: pagesData,
   }
 
-  return { metadata, pages: pagesResult, chapters, getArchiveForPage }
+  return {
+    metadata,
+    pages: pagesResult,
+    chapters,
+    unreadableChapters,
+    damagedPatches,
+    getArchiveForPage,
+  }
 }

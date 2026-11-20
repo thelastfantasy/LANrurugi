@@ -456,7 +456,9 @@ input[type="checkbox"].lrr-checkbox-bare::after {
 
 #reader-help.reader-help-panel {
   width: min(1100px, 94vw) !important;
-  left: 50%;
+  /* `!important` to answer legacy's `.small-overlay { left: 0 !important }` at ≤560px, which
+   * otherwise leaves the translate(-50%) centring to push the panel half off-screen. */
+  left: 50% !important;
   transform: translate(-50%, -50%);
   box-sizing: border-box;
   padding: 18px 24px;
@@ -474,20 +476,25 @@ input[type="checkbox"].lrr-checkbox-bare::after {
   line-height: 1.5;
 }
 
+/* Two real columns rather than `column-count`: a section can't be split (`break-inside: avoid`),
+   so the automatic balance pushed the two longest ones into the first column and left the second
+   half of the sheet empty while the whole thing scrolled. The reader's `helpContent` decides which
+   sections share a side (paging/display on the left, touch/navigation/bookmarks on the right). */
 #reader-help.reader-help-panel .reader-help-sections {
-  column-count: 2;
-  column-gap: 48px;
+  display: flex;
+  align-items: flex-start;
+  gap: 48px;
 }
 
-@media (max-width: 1000px) {
-  #reader-help.reader-help-panel .reader-help-sections {
-    column-count: 2;
-  }
+#reader-help.reader-help-panel .reader-help-column {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 @media (max-width: 680px) {
   #reader-help.reader-help-panel .reader-help-sections {
-    column-count: 1;
+    flex-direction: column;
+    gap: 0;
   }
 }
 
@@ -1149,6 +1156,58 @@ input[type="checkbox"].lrr-checkbox-bare::after {
     font-weight: 600;
     line-height: 1.35;
     overflow-wrap: anywhere;
+  }
+}
+
+/* The reader overview's page grid. Legacy sizes each cell from its own image's aspect ratio
+ * (`div.id3 img { height: 100%; width: auto }`), so a cell's width is not final until the image has
+ * decoded — every arriving thumbnail can re-pack the row it sits in, and one batch load shortens the
+ * whole grid by hundreds of pixels, which on a phone reads as the page jumping while you drag.
+ * Fixing the width to a 1:√2 page box derived from legacy's own cell height (280px → 198px, and the
+ * 196px height `lrr.css` sets below 560px → 139px) makes the grid's geometry depend on nothing but
+ * the page count. `object-fit: contain` keeps each image's own ratio inside that box, so a
+ * double-page spread is letterboxed instead of widening its cell. */
+.overview-page-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.overview-page-cell {
+  width: 198px;
+}
+
+@media all and (max-width: 560px) {
+  .overview-page-cell {
+    width: 139px;
+  }
+
+  /* legacy's overlay bar is one non-wrapping row: a long chapter name at 200px wide leaves the
+     "chapters" heading squeezed against the panel edge. Put the selector on its own line and keep
+     the heading on the first one. */
+  #archivePagesOverlay .overlay-bar {
+    flex-wrap: wrap;
+  }
+  #archivePagesOverlay .overlay-bar-left {
+    flex: 1 1 100%;
+    padding-left: 0;
+  }
+  #archivePagesOverlay .overlay-bar-left:empty {
+    display: none;
+  }
+  #archivePagesOverlay .chapter-selector {
+    display: flex;
+    flex: 1 1 100%;
+    align-items: center;
+    gap: 8px;
+    padding-right: 0;
+    text-align: left;
+  }
+  #archivePagesOverlay #chapter-select {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: auto;
   }
 }
 
@@ -2668,6 +2727,19 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 
 .sub-modal-tabs > .stdbtn {
   flex: 1;
+  /* The themes give `.stdbtn` a 150px minimum: five tabs then needed 750px and pushed the whole
+     dialog sideways on a phone. */
+  min-width: 0;
+}
+
+/* Phones: the tabs wrap, three to a row. */
+@media (max-width: 760px) {
+  .sub-modal-tabs {
+    flex-wrap: wrap;
+  }
+  .sub-modal-tabs > .stdbtn {
+    flex: 1 1 calc(33.333% - 6px);
+  }
 }
 
 .sub-modal-tabs > .stdbtn.is-active {
@@ -3303,6 +3375,30 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   }
 }
 
+/* In the phone drawer the list takes whatever height the drawer has left under the tabs and filters,
+   rather than a fixed 70vh: that box ran past the drawer's bottom, so its last rows sat below the
+   fold even with the list scrolled to its end. */
+.sub-drawer-body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.sub-drawer-body > * {
+  flex-shrink: 0;
+}
+.sub-drawer-body > .history-body {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sub-drawer-body > .history-body > .sub-modal-preview {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
 .history-sub-option {
   display: inline-flex;
   align-items: center;
@@ -3499,6 +3595,17 @@ body div.ido {
  * `!important`, so that is what this uses; the breakpoint keeps every desktop layout exactly as it
  * was, and `max-width` (rather than `width`) leaves narrow content untouched.
  */
+/* Reader overview's two admin buttons (edit / delete). `.stdbtn`'s theme-given 150px minimum
+ * cannot fit two of them in the panel's ~281px inner column on a phone, so they used to stack.
+ * Letting them share the row only below the phone breakpoint keeps the desktop pair legacy-sized.
+ * `!important` because an archive with a patch passes its own inline `min-width: 110px`. */
+@media (max-width: 768px) {
+  .admin-actions > .stdbtn {
+    flex: 1 1 0;
+    min-width: 0 !important;
+  }
+}
+
 @media (max-width: 768px) {
   body div.id1,
   body .left-column,

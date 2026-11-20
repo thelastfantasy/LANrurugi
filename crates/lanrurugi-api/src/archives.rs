@@ -449,6 +449,9 @@ pub(crate) enum DeleteOneOutcome {
 pub(crate) struct PurgeOptions {
     pub remove_archive_file: bool,
     pub keep_thumbnails: bool,
+    /// `true` when the archive is gone for good rather than moved into the bin, which decides
+    /// whether its Tankoubon memberships are dropped or kept for a restore.
+    pub permanent: bool,
     /// The recycle path writes its own `archive.recycle` entry, so the purge tail must not also
     /// log "deleted".
     pub record_activity: bool,
@@ -459,12 +462,14 @@ impl PurgeOptions {
     pub(crate) const PERMANENT: Self = Self {
         remove_archive_file: true,
         keep_thumbnails: false,
+        permanent: true,
         record_activity: true,
     };
     /// Specs/019: the payload already moved into the bin, and its cover must survive there.
     pub(crate) const AFTER_RECYCLE: Self = Self {
         remove_archive_file: false,
         keep_thumbnails: true,
+        permanent: false,
         record_activity: false,
     };
 }
@@ -491,6 +496,14 @@ pub(crate) async fn purge_one_archive(
             // user-triggered destructive action (unlinks the archive's file from disk, not just a
             // DB record).
             tracing::info!(%id, filename = %archive.name, "deleted archive");
+            // A permanent delete takes the Tankoubon memberships with it; a recycle keeps them so
+            // restoring from the bin puts the archive back where it was (see `tank_members`).
+            if options.permanent {
+                crate::tank_members::after_permanent_delete(state, &archive).await;
+                // A recycle keeps both the patch file and this record, so restoring from the bin
+                // still knows where the patch pages came from; a permanent delete ends both.
+                crate::patch_provenance::forget(state, id.as_str()).await;
+            }
             if options.record_activity {
                 crate::activity::record_manual(
                     state,
@@ -673,11 +686,50 @@ pub(crate) async fn purge_one_archive(
     }
 }
 
+/// Refuses to delete a *healthy* archive that a Tankoubon still lists: taking it out silently
+/// reshuffles that book's pages, so the user has to remove it from the book first. A damaged one
+/// (the integrity scan recorded a finding, or its file is already gone) may go — that is exactly
+/// what "delete the damaged archive" means.
+pub(crate) async fn tank_member_delete_refusal(
+    state: &AppState,
+    id: &lanrurugi_core::ids::ArchiveId,
+) -> Option<axum::response::Response> {
+    let in_tank = state
+        .repos
+        .groupings
+        .for_archive(id)
+        .await
+        .map(|tanks| !tanks.is_empty())
+        .unwrap_or(false);
+    if !in_tank {
+        return None;
+    }
+    let file_missing = match state.repos.archives.get(id).await {
+        Ok(Some(a)) => !std::path::Path::new(&a.file).is_file(),
+        _ => false,
+    };
+    if file_missing
+        || crate::integrity_scan::recorded_finding(state, id)
+            .await
+            .is_some()
+    {
+        return None;
+    }
+    Some(error(
+        StatusCode::CONFLICT,
+        "delete_archive",
+        "This archive belongs to a Tankoubon. Remove it from the Tankoubon first, or delete it here after the integrity scan reports it as damaged.",
+    ))
+}
+
 async fn delete_archive(
     State(state): State<AppState>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
 ) -> Response {
+    if let Some(refusal) = tank_member_delete_refusal(&state, &id).await {
+        return refusal;
+    }
     match crate::recycle::recycle_archive(&state, &id, auth.as_ref().map(|e| &e.0)).await {
         DeleteOneOutcome::NotFound => not_found("delete_archive", format!("{id} does not exist.")),
         DeleteOneOutcome::Deleted { filename } => axum::Json(json!({
@@ -724,6 +776,18 @@ async fn batch_delete_archives(
     let mut results = Vec::new();
     let mut deleted_count = 0u32;
     for id in &body.ids {
+        // Same refusal as the single-delete endpoint, reported per id so one Tankoubon member in
+        // the selection does not fail the whole batch.
+        if tank_member_delete_refusal(&state, id).await.is_some() {
+            results.push(BatchDeleteResult {
+                id: id.to_string(),
+                success: false,
+                recycled: false,
+                filename: None,
+                error: Some("archive belongs to a Tankoubon".to_string()),
+            });
+            continue;
+        }
         let outcome = crate::recycle::recycle_archive(&state, id, auth).await;
         results.push(match outcome {
             DeleteOneOutcome::NotFound => BatchDeleteResult {
@@ -879,34 +943,28 @@ async fn add_toc_entry(
     let Some(title) = params.title else {
         return error(StatusCode::BAD_REQUEST, "update_toc", "title is required.");
     };
-    let mut archive = match state.repos.archives.get(&id).await {
-        Ok(Some(a)) => a,
-        Ok(None) => return not_found("update_toc", format!("{id} does not exist.")),
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "update_toc",
-                e.to_string(),
-            )
-        }
-    };
-    archive.toc.retain(|t| t.page != params.page);
-    // Reserved chapter/ToC identifiers (`c1`-`c20`, `toc`) are meant to be unique per archive —
-    // the frontend's quick-add/keyboard-shortcut flows send these instead of localized display
-    // text specifically so re-setting "chapter 4" on a new page moves it rather than creating a
-    // second, stale "chapter 4" entry at the old page. Plain free-text titles (anything not one
-    // of these reserved identifiers) keep the old page-only dedup — a user is free to have two
-    // different pages both titled the same custom text if they want.
-    if is_reserved_toc_identifier(&title) {
-        archive.toc.retain(|t| t.name != title);
-    }
-    archive.toc.push(TocEntry {
-        page: params.page,
-        name: title,
-    });
-    archive.toc.sort_by_key(|t| t.page);
-    match state.repos.archives.save(&archive).await {
-        Ok(()) => ok(
+    let page = params.page;
+    let updated = state
+        .repos
+        .archives
+        .update(&id, |archive| {
+            archive.toc.retain(|t| t.page != page);
+            // Reserved chapter/ToC identifiers (`c1`-`c20`, `toc`) are meant to be unique per archive —
+            // the frontend's quick-add/keyboard-shortcut flows send these instead of localized display
+            // text specifically so re-setting "chapter 4" on a new page moves it rather than creating a
+            // second, stale "chapter 4" entry at the old page. Plain free-text titles (anything not one
+            // of these reserved identifiers) keep the old page-only dedup — a user is free to have two
+            // different pages both titled the same custom text if they want.
+            if is_reserved_toc_identifier(&title) {
+                archive.toc.retain(|t| t.name != title);
+            }
+            archive.toc.push(TocEntry { page, name: title });
+            archive.toc.sort_by_key(|t| t.page);
+        })
+        .await;
+    match updated {
+        Ok(None) => not_found("update_toc", format!("{id} does not exist.")),
+        Ok(Some(_)) => ok(
             "update_toc",
             [(
                 "successMessage",
@@ -938,20 +996,15 @@ async fn remove_toc_entry(
             "Tankoubon entries do not have their own ToC — use the member archive's ID instead.",
         );
     }
-    let mut archive = match state.repos.archives.get(&id).await {
-        Ok(Some(a)) => a,
-        Ok(None) => return not_found("remove_toc", format!("{id} does not exist.")),
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "remove_toc",
-                e.to_string(),
-            )
-        }
-    };
-    archive.toc.retain(|t| t.page != params.page);
-    match state.repos.archives.save(&archive).await {
-        Ok(()) => ok(
+    let page = params.page;
+    match state
+        .repos
+        .archives
+        .update(&id, |archive| archive.toc.retain(|t| t.page != page))
+        .await
+    {
+        Ok(None) => not_found("remove_toc", format!("{id} does not exist.")),
+        Ok(Some(_)) => ok(
             "remove_toc",
             [(
                 "successMessage",
@@ -1788,7 +1841,7 @@ async fn delete_patch(
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
 ) -> Response {
-    let mut archive = match state.repos.archives.get(&id).await {
+    let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
         Ok(None) => return not_found("delete_patch", format!("{id} not found.")),
         Err(e) => {
@@ -1831,8 +1884,12 @@ async fn delete_patch(
         }
     }
     if archive.has_patch {
-        archive.has_patch = false;
-        if let Err(e) = state.repos.archives.save(&archive).await {
+        if let Err(e) = state
+            .repos
+            .archives
+            .update(&archive.id, |a| a.has_patch = false)
+            .await
+        {
             // Patch file removal already succeeded above; only the DB flag write failed — still
             // a genuine attempted-and-failed operation.
             crate::activity::record_manual(
@@ -1856,6 +1913,9 @@ async fn delete_patch(
     }
 
     clear_page_thumbnails(&state, id.as_str()).await;
+    // Nothing the record remembers about the patch is true any more — a later patch starts from a
+    // fresh provenance list instead of inheriting the deleted one's sources.
+    crate::patch_provenance::forget(&state, id.as_str()).await;
     crate::activity::record_manual(
         &state,
         auth.as_ref().map(|e| &e.0),
@@ -2219,8 +2279,17 @@ async fn regenerate_thumbnail_on_demand(
         .ok()
         .flatten()?;
     let file = std::path::PathBuf::from(&archive.file);
-    if let Some(reason) = crate::thumbnail_failures::blocked(state, id, page, &file).await {
-        tracing::debug!(id = %id, page, reason = %reason, "skipping thumbnail generation");
+    if let Some(block) = crate::thumbnail_failures::blocked(state, id, page, &file).await {
+        tracing::debug!(id = %id, page, reason = %block.reason, "skipping thumbnail generation");
+        // The remembered failure was the page's own bytes failing to decode: answer with the
+        // corrupted-page placeholder rather than the generic one, so the grid says why. A cover
+        // (`page == 0`) is the whole archive's problem, not one page's, and keeps the generic one.
+        if block.damaged && page > 0 {
+            return Some((
+                "image/svg+xml",
+                bytes::Bytes::from_static(CORRUPTED_PAGE_PLACEHOLDER),
+            ));
+        }
         return None;
     }
 
@@ -2246,8 +2315,23 @@ async fn regenerate_thumbnail_on_demand(
                         Ok(_) => read_thumbnail_format(&state, &id, page, format).await,
                         Err(e) => {
                             tracing::warn!(id = %id, page, error = %e, "on-demand thumbnail generation failed");
+                            let damaged = matches!(&e, lanrurugi_scanner::thumbnail::ThumbnailError::Decode(_));
                             crate::thumbnail_failures::note_failure(&state, &id, page, &file, &e)
                                 .await;
+                            if damaged && page > 0 {
+                                // One page's bytes are unreadable: remember which page (by entry
+                                // name, like every other corrupted-page record) so the full-size
+                                // read and the bulk scan-free paths agree with this grid.
+                                if let Some(entry) =
+                                    page_entry_name(&file, source_page).await
+                                {
+                                    mark_page_corrupted(&state, &id, &entry).await;
+                                }
+                                return Some((
+                                    "image/svg+xml",
+                                    bytes::Bytes::from_static(CORRUPTED_PAGE_PLACEHOLDER),
+                                ));
+                            }
                             None
                         }
                     }
@@ -2255,6 +2339,25 @@ async fn regenerate_thumbnail_on_demand(
             },
         )
         .await
+}
+
+/// The entry name of one page (`1`-based) in an archive file, for the records that key on names
+/// rather than indexes. `None` when the container cannot list its entries at all.
+async fn page_entry_name(file: &std::path::Path, page: usize) -> Option<String> {
+    let path = file.to_path_buf();
+    let (pages, _) = lanrurugi_core::concurrency::run_blocking(move || {
+        let originals = lanrurugi_scanner::archive_format::list_pages(&path)?;
+        Ok::<_, lanrurugi_scanner::archive_format::ArchiveFormatError>(
+            lanrurugi_scanner::patch::effective_pages_checked(&path, &originals),
+        )
+    })
+    .await
+    .ok()?
+    .ok()?;
+    match pages.get(page.checked_sub(1)?)? {
+        lanrurugi_scanner::patch::EffectivePage::Original(name) => Some(name.clone()),
+        lanrurugi_scanner::patch::EffectivePage::Patched(name) => Some(patch_entry_key(name)),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2282,7 +2385,7 @@ async fn update_thumbnail(
         return not_found("update_thumbnail", "No archive ID specified.");
     }
     let page = params.page.unwrap_or(1);
-    let mut archive = match state.repos.archives.get(&id).await {
+    let archive = match state.repos.archives.get(&id).await {
         Ok(Some(a)) => a,
         Ok(None) => return not_found("update_thumbnail", format!("{id} does not exist.")),
         Err(e) => {
@@ -2328,8 +2431,13 @@ async fn update_thumbnail(
     {
         Ok(thumbhash) => {
             if thumbhash.is_some() {
-                archive.thumbhash = thumbhash;
-                if let Err(e) = state.repos.archives.save(&archive).await {
+                // The render took a while: write just the hash onto the record as it is now.
+                if let Err(e) = state
+                    .repos
+                    .archives
+                    .update(&id, |a| a.thumbhash = thumbhash)
+                    .await
+                {
                     tracing::warn!(id = %id, error = %e, "failed to persist updated thumbhash");
                 }
             }
@@ -2358,14 +2466,11 @@ async fn clear_new_flag(
 
 async fn set_isnew(state: &AppState, id: &lanrurugi_core::ids::ArchiveId, isnew: bool) -> Response {
     let operation = if isnew { "add_new" } else { "clear_new" };
-    let mut archive = match state.repos.archives.get(id).await {
-        Ok(Some(a)) => a,
-        Ok(None) => return not_found(operation, format!("{id} does not exist.")),
-        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, operation, e.to_string()),
-    };
-    archive.isnew = isnew;
-    match state.repos.archives.save(&archive).await {
-        Ok(()) => {
+    // The flag alone, never the whole record: the reader clears it as it opens an archive, in the
+    // same instant it saves the first page, and a whole-record save from a snapshot taken a moment
+    // earlier erased that progress (#302).
+    match state.repos.archives.set_isnew(id, isnew).await {
+        Ok(true) => {
             if let Err(e) =
                 lanrurugi_search::indexer::set_isnew_index(&state.redis.search, id.as_str(), isnew)
                     .await
@@ -2374,13 +2479,22 @@ async fn set_isnew(state: &AppState, id: &lanrurugi_core::ids::ArchiveId, isnew:
             }
             axum::Json(json!({ "operation": operation, "id": id, "success": 1 })).into_response()
         }
+        Ok(false) => not_found(operation, format!("{id} does not exist.")),
         Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, operation, e.to_string()),
     }
+}
+
+/// `?pages=` on `PUT /archives/{id}/progress/{page}`: the length of the page list the reader
+/// counted `page` in. Optional (legacy clients do not send it).
+#[derive(Debug, Default, serde::Deserialize)]
+struct ProgressQuery {
+    pages: Option<u32>,
 }
 
 async fn update_progress(
     State(state): State<AppState>,
     Path((id, page)): Path<(lanrurugi_core::ids::ArchiveId, u32)>,
+    Query(query): Query<ProgressQuery>,
 ) -> Response {
     if state.repos.archives.get(&id).await.ok().flatten().is_none() {
         return not_found("update_progress", format!("{id} does not exist."));
@@ -2389,7 +2503,12 @@ async fn update_progress(
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    match state.repos.archives.set_progress(&id, page, now).await {
+    match state
+        .repos
+        .archives
+        .set_progress(&id, page, query.pages.filter(|p| *p > 0), now)
+        .await
+    {
         Ok(()) => {
             // Matches legacy exactly (`Controller/Api/Archive.pm`: `$redis_cfg->incr("LRR_TOTALPAGESTAT")`)
             // — incremented unconditionally on every successful call, not just forward progress.
@@ -2581,13 +2700,17 @@ pub async fn spawn_regen_thumbnails_job(
             .zip(results)
             .collect();
 
-        for (i, mut archive) in archives.into_iter().enumerate() {
+        for (i, archive) in archives.into_iter().enumerate() {
             if let Some(result) = results_by_index.remove(&i) {
                 let shard = archive.id[0..2.min(archive.id.len())].to_string();
                 match result {
                     Ok(thumbhash) => {
-                        archive.thumbhash = thumbhash;
-                        if let Err(e) = archive_repo.save(&archive).await {
+                        // Only the hash: `archives` was listed before a library-wide render, and
+                        // writing those copies back would undo every edit made meanwhile.
+                        if let Err(e) = archive_repo
+                            .update(&archive.id, |a| a.thumbhash = thumbhash)
+                            .await
+                        {
                             tracing::warn!(id = %archive.id, error = %e, "failed to persist regenerated thumbhash");
                         }
                         // Clean up sibling files left over in the *other* thumbnail format —
@@ -2640,40 +2763,81 @@ pub struct UpdateMetadataParams {
 /// `PUT /archives/{id}/metadata` (US3): overwrites title/tags/summary and keeps the search
 /// indexes (title index, tag indexes, untagged set) in sync, matching legacy `set_title`/
 /// `set_tags`/`set_summary`'s side effects (`Utils/Database.pm`).
+/// Brings the title and tag indexes from `old` to `new`. Pass it to `update_then`, so it runs
+/// under the record's lock: these are diffs, and two of them applied in the other order leave a
+/// stale index.
+pub(crate) async fn reindex_title_and_tags(
+    state: &AppState,
+    old: lanrurugi_core::entities::Archive,
+    new: lanrurugi_core::entities::Archive,
+) {
+    let id = new.id.as_str();
+    if old.title != new.title {
+        if let Err(e) = lanrurugi_search::indexer::update_title_index(
+            &state.redis.search,
+            &state.equivalence,
+            id,
+            &old.title,
+            &new.title,
+        )
+        .await
+        {
+            tracing::warn!(%id, error = %e, "failed to update title search index");
+        }
+    }
+    if old.tags != new.tags {
+        if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
+            &state.redis.search,
+            &state.equivalence,
+            id,
+            &old.tags,
+            &new.tags,
+        )
+        .await
+        {
+            tracing::warn!(%id, error = %e, "failed to update tag search index");
+        }
+    }
+}
+
 async fn update_archive_metadata(
     State(state): State<AppState>,
     Path(id): Path<lanrurugi_core::ids::ArchiveId>,
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
     Query(params): Query<UpdateMetadataParams>,
 ) -> Response {
-    let mut archive = match state.repos.archives.get(&id).await {
-        Ok(Some(a)) => a,
-        Ok(None) => return not_found("update_metadata", format!("{id} does not exist.")),
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "update_metadata",
-                e.to_string(),
-            )
-        }
-    };
+    // The values it replaced are read under the record's lock along with the change, so the tag
+    // diff and the index updates below describe exactly this write.
+    let mut before: Option<(String, String, String)> = None;
+    let updated = state
+        .repos
+        .archives
+        .update_then(
+            &id,
+            |archive| {
+                before = Some((
+                    archive.title.clone(),
+                    archive.tags.clone(),
+                    archive.summary.clone(),
+                ));
+                if let Some(title) = params.title.filter(|t| !t.is_empty()) {
+                    archive.title = title;
+                }
+                if let Some(tags) = params.tags {
+                    archive.tags = tags;
+                }
+                if let Some(summary) = params.summary {
+                    archive.summary = summary;
+                }
+            },
+            |old, new| reindex_title_and_tags(&state, old, new),
+        )
+        .await;
+    let (old_title, old_tags, old_summary) = before.unwrap_or_default();
 
-    let old_title = archive.title.clone();
-    let old_tags = archive.tags.clone();
-    let old_summary = archive.summary.clone();
-
-    if let Some(title) = params.title.filter(|t| !t.is_empty()) {
-        archive.title = title;
-    }
-    if let Some(tags) = params.tags {
-        archive.tags = tags;
-    }
-    if let Some(summary) = params.summary {
-        archive.summary = summary;
-    }
-
-    match state.repos.archives.save(&archive).await {
-        Ok(()) => {
+    match updated {
+        Ok(None) => not_found("update_metadata", format!("{id} does not exist.")),
+        Ok(Some(archive)) => {
             // `tags_added`/`tags_removed` — the actual set difference, computed here rather than
             // handing the frontend two raw comma-joined strings to parse and diff itself: this is
             // the one place that already knows both the old and new tag string, Rust's own
@@ -2751,32 +2915,6 @@ async fn update_archive_metadata(
                 .await;
             }
             if archive.title != old_title {
-                if let Err(e) = lanrurugi_search::indexer::update_title_index(
-                    &state.redis.search,
-                    &state.equivalence,
-                    &id,
-                    &old_title,
-                    &archive.title,
-                )
-                .await
-                {
-                    tracing::warn!(%id, error = %e, "failed to update title search index");
-                }
-            }
-            if archive.tags != old_tags {
-                if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
-                    &state.redis.search,
-                    &state.equivalence,
-                    &id,
-                    &old_tags,
-                    &archive.tags,
-                )
-                .await
-                {
-                    tracing::warn!(%id, error = %e, "failed to update tag search index");
-                }
-            }
-            if archive.title != old_title {
                 let state = state.clone();
                 let id = id.to_string();
                 let title = archive.title.clone();
@@ -2797,7 +2935,7 @@ async fn update_archive_metadata(
                 lanrurugi_storage::activity::action_types::ARCHIVE_METADATA_UPDATE,
                 lanrurugi_storage::activity::ActivityTarget {
                     id: Some(id.to_string()),
-                    label: Some(archive.title.clone()),
+                    label: Some(old_title.clone()),
                     kind: Some("archive".to_string()),
                 },
                 lanrurugi_storage::activity::Outcome::Failure {
@@ -3838,6 +3976,46 @@ async fn page_file_etag(path: &str, key: &str) -> Option<String> {
     Some(format!("W/\"{}-{}-{}\"", meta.len(), mtime, key))
 }
 
+/// The answer for a page whose own bytes cannot be decoded: a grey 600×840 SVG saying so, instead
+/// of a broken-image icon the reader cannot tell apart from a network failure.
+fn corrupted_page_placeholder() -> FetchedPage {
+    FetchedPage {
+        content_type: "image/svg+xml",
+        body: crate::state::PageBody::Bytes(bytes::Bytes::from_static(CORRUPTED_PAGE_PLACEHOLDER)),
+        resized: false,
+        orig_size: 0,
+        orig_width: 0,
+        orig_height: 0,
+        etag: None,
+    }
+}
+
+/// The `Archive::corrupted_pages` key for a page that lives in the sidecar patch rather than in
+/// the archive file: patch entry names are independent of the archive's own, so the same name can
+/// exist in both, and without the prefix one bad patch page would suppress a healthy original.
+fn patch_entry_key(path: &str) -> String {
+    format!("patch:{path}")
+}
+
+/// Remembers one page as undecodable, keyed by its entry name, so later requests short-circuit to
+/// the placeholder above instead of repeating the failed decode — the same sticky list
+/// `generate_page_thumbnails` fills in bulk (see `Archive::corrupted_pages`).
+async fn mark_page_corrupted(state: &AppState, id: &str, entry: &str) {
+    let archive_id = ArchiveId(id.to_string());
+    let updated = state
+        .repos
+        .archives
+        .update(&archive_id, |archive| {
+            if !archive.corrupted_pages.iter().any(|page| page == entry) {
+                archive.corrupted_pages.push(entry.to_string());
+            }
+        })
+        .await;
+    if let Err(error) = updated {
+        tracing::warn!(%id, entry, error = %error, "could not record a corrupted page");
+    }
+}
+
 /// The actual per-`(archive, entry path)` work [`AppState::page_singleflight`] collapses
 /// concurrent duplicate calls onto — see [`get_page`]'s own doc comment.
 ///
@@ -3863,17 +4041,44 @@ async fn fetch_page(
     jxl_threads: usize,
 ) -> Result<FetchedPage, String> {
     if is_patch {
+        let corrupt_key = patch_entry_key(path);
+        if corrupted_pages.contains(&corrupt_key) {
+            return Ok(corrupted_page_placeholder());
+        }
         let archive_file_owned = archive_file.to_string();
         let entry_name = path.to_string();
-        let raw = lanrurugi_core::concurrency::run_blocking(move || {
+        let raw = match lanrurugi_core::concurrency::run_blocking(move || {
             lanrurugi_scanner::patch::read_page(
                 std::path::Path::new(&archive_file_owned),
                 &lanrurugi_scanner::patch::EffectivePage::Patched(entry_name),
             )
         })
         .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
+        {
+            Ok(Ok(raw)) => raw,
+            // This one patch page cannot be extracted at all — that is the page's own damage, not
+            // the patch's (a patch this broken fails `load` in `/files` first), so it is remembered
+            // exactly like an archive entry that cannot be read.
+            Ok(Err(lanrurugi_scanner::patch::PatchError::Archive(error)))
+                if error.is_permanent() =>
+            {
+                mark_page_corrupted(state, id, &corrupt_key).await;
+                return Ok(corrupted_page_placeholder());
+            }
+            Ok(Err(error)) => return Err(error.to_string()),
+            Err(error) => return Err(error.to_string()),
+        };
+        // Patch pages never take the resize/convert path below (their bytes are served as stored),
+        // so parsing the header here is the only place this page's own bytes get checked — the same
+        // "cannot decode" verdict `ResizeError::Decode` gives for entries inside the archive.
+        let decodable = lanrurugi_scanner::image_decode::image_reader(std::io::Cursor::new(&raw))
+            .with_guessed_format()
+            .map(|reader| reader.into_dimensions().is_ok())
+            .unwrap_or(false);
+        if !decodable {
+            mark_page_corrupted(state, id, &corrupt_key).await;
+            return Ok(corrupted_page_placeholder());
+        }
         let content_type = image_content_type(&raw);
         let orig_size = raw.len() as u64;
         return Ok(FetchedPage {
@@ -3893,17 +4098,7 @@ async fn fetch_page(
     // from the same `Archive` fetch `get_page` already did (not a second Redis round trip here).
     // See `Archive::corrupted_pages`'s own docs for why this is keyed by entry name, not index.
     if corrupted_pages.iter().any(|p| p == path) {
-        return Ok(FetchedPage {
-            content_type: "image/svg+xml",
-            body: crate::state::PageBody::Bytes(bytes::Bytes::from_static(
-                CORRUPTED_PAGE_PLACEHOLDER,
-            )),
-            resized: false,
-            orig_size: 0,
-            orig_width: 0,
-            orig_height: 0,
-            etag: None,
-        });
+        return Ok(corrupted_page_placeholder());
     }
 
     // `read_entry` does blocking libarchive FFI + file IO (constitution Principle III: never run
@@ -3911,15 +4106,24 @@ async fn fetch_page(
     // `run_blocking` internally, this call didn't before this change.
     let archive_file_owned = archive_file.to_string();
     let entry_path = path.to_string();
-    let raw = lanrurugi_core::concurrency::run_blocking(move || {
+    let read = lanrurugi_core::concurrency::run_blocking(move || {
         lanrurugi_scanner::archive_format::read_entry(
             std::path::Path::new(&archive_file_owned),
             &entry_path,
         )
     })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())?;
+    .await;
+    let raw = match read {
+        Ok(Ok(raw)) => raw,
+        // The entry itself cannot be extracted — that is this page's own damage, not the
+        // container's, so remember it and answer with the placeholder from now on.
+        Ok(Err(error)) if error.is_permanent() => {
+            mark_page_corrupted(state, id, path).await;
+            return Ok(corrupted_page_placeholder());
+        }
+        Ok(Err(error)) => return Err(error.to_string()),
+        Err(error) => return Err(error.to_string()),
+    };
     // Refcounted from here on: the resize call needs to hand the bytes to a blocking task while
     // this function may still have to serve them (the unchanged and the failed-conversion paths),
     // and cloning a `Vec` for that would copy the whole page.
@@ -4173,6 +4377,21 @@ async fn fetch_page(
             }
             Ok(None) => Ok(serve_original_page(archive_file, path, raw, content_type).await),
             Err(error) => {
+                // A decode failure is the page's own bytes being unreadable; anything else (encoder
+                // out of memory, worker gone) is worth retrying on the next request. Only claim the
+                // page when the client could not have rendered the original either — otherwise the
+                // unchanged bytes are still a better answer than a placeholder.
+                if client_cannot_decode_source
+                    && matches!(
+                        &error,
+                        lanrurugi_scanner::animation::AnimationError::GifDecode(_)
+                            | lanrurugi_scanner::animation::AnimationError::WebpDecode(_)
+                            | lanrurugi_scanner::animation::AnimationError::JxlDecode(_)
+                    )
+                {
+                    mark_page_corrupted(state, id, path).await;
+                    return Ok(corrupted_page_placeholder());
+                }
                 tracing::warn!(
                     %id,
                     path = %path,
@@ -4357,6 +4576,14 @@ async fn fetch_page(
         // not become an error response when the original bytes are right there (a JPEG 2000 page
         // in the sYCC colour space did exactly that before the JP2 path handled it).
         Err(error) => {
+            // A decode failure is the page's own bytes: the thumbnail path already treats the same
+            // `image` error as "damaged" (`ThumbnailError::Decode`), so the full-size page answers
+            // the same way instead of leaving a broken-image icon — and remembers it, so the
+            // overview grid and every later read agree without another attempt.
+            if matches!(&error, lanrurugi_scanner::resize::ResizeError::Decode(_)) {
+                mark_page_corrupted(state, id, path).await;
+                return Ok(corrupted_page_placeholder());
+            }
             tracing::warn!(
                 %id,
                 path = %path,
@@ -4564,7 +4791,25 @@ pub(crate) async fn get_files(
     let opt_suffix = "&optimize=1";
     match lanrurugi_scanner::archive_format::list_pages(archive_path) {
         Ok(pages) => {
-            let effective = lanrurugi_scanner::patch::effective_pages(archive_path, &pages);
+            // Opening an archive is the one moment every read passes through: a file that now lists
+            // its pages is no longer damaged, whatever an earlier scan or read concluded. The count
+            // is the archive's own — a patch's pages are merged in below, not stored on the record.
+            let own_pages = pages.len() as u32;
+            if own_pages == 0 {
+                // The container opened but holds nothing: the reader has nothing to show, so this
+                // is damage like any other, and the damaged list should say so.
+                crate::integrity_scan::note_damage(
+                    &state,
+                    &archive,
+                    crate::integrity_scan::Problem::NoPages,
+                    "the container lists no pages".to_string(),
+                )
+                .await;
+            } else {
+                crate::integrity_scan::note_readable(&state, &archive, own_pages).await;
+            }
+            let (effective, patch_error) =
+                lanrurugi_scanner::patch::effective_pages_checked(archive_path, &pages);
             let pages: Vec<serde_json::Value> = effective
                 .iter()
                 .map(|p| match p {
@@ -4576,9 +4821,42 @@ pub(crate) async fn get_files(
                     }
                 })
                 .collect();
-            axum::Json(json!({ "job": 0, "pages": pages })).into_response()
+            // A patch that cannot be read is reported here, once, while the archive itself is
+            // untouched: the reader gets the reason and the pages that used to be patched (so it
+            // can hide bookmarks/stamps sitting on them), and the record's progress and chapter
+            // markers are shifted past the pages that no longer exist.
+            let patch_damage = match patch_error {
+                Some(error) => {
+                    crate::patch_provenance::report_damage(
+                        &state,
+                        &archive,
+                        &error,
+                        pages.len() as u32,
+                    )
+                    .await
+                }
+                None => None,
+            };
+            axum::Json(json!({ "job": 0, "pages": pages, "patch_damage": patch_damage }))
+                .into_response()
         }
-        Err(e) => unreadable_archive_response("get_file_list", &id, archive_path, &e),
+        Err(e) => {
+            // Likewise the moment damage shows: record it (and clear it again on the next
+            // successful listing) so the damaged list, the library badge and `is:damaged` learn
+            // about a file nobody has scanned.
+            if e.is_permanent() {
+                use lanrurugi_scanner::archive_format::ArchiveFormatError;
+                let missing = matches!(&e, ArchiveFormatError::Io(io) if io.kind() == std::io::ErrorKind::NotFound)
+                    || !archive_path.exists();
+                let problem = if missing {
+                    crate::integrity_scan::Problem::Missing
+                } else {
+                    crate::integrity_scan::Problem::Unreadable
+                };
+                crate::integrity_scan::note_damage(&state, &archive, problem, e.to_string()).await;
+            }
+            unreadable_archive_response("get_file_list", &id, archive_path, &e)
+        }
     }
 }
 
@@ -4795,9 +5073,19 @@ async fn generate_page_thumbnails(
         }
     }
     if !newly_corrupted.is_empty() {
-        let mut updated = archive;
-        updated.corrupted_pages.extend(newly_corrupted);
-        if let Err(e) = state.repos.archives.save(&updated).await {
+        // Added to the list as it is now: the generation above took a while.
+        let added = state
+            .repos
+            .archives
+            .update(&id, |a| {
+                for page in newly_corrupted {
+                    if !a.corrupted_pages.contains(&page) {
+                        a.corrupted_pages.push(page);
+                    }
+                }
+            })
+            .await;
+        if let Err(e) = added {
             tracing::warn!(%id, error = %e, "failed to persist newly-detected corrupted pages");
         }
     }
@@ -5072,7 +5360,12 @@ mod tests {
         let mut archive = archive_named(&file.to_string_lossy(), "book.zip", "Pending Gate");
         archive.id = ArchiveId(id.clone());
         archive.pagecount = 1;
-        state.repos.archives.save(&archive).await.unwrap();
+        state
+            .repos
+            .archives
+            .create_or_replace(&archive)
+            .await
+            .unwrap();
         crate::visibility::mark_pending(&state, &id).await.unwrap();
 
         async fn body(resp: Response) -> String {
@@ -5133,6 +5426,8 @@ mod tests {
             corrupted_pages: vec![],
             has_patch: false,
             blake3: None,
+            primary_source: None,
+            progress_pages: None,
         }
     }
 

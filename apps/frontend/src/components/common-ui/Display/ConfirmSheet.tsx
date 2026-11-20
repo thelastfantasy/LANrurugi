@@ -1,5 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react"
 
+import { Z_DIALOG } from "@/theme"
+
 import { BottomSheet } from "./BottomSheet"
 
 /** Phone-width form of a confirmation: the message over one full-width confirm button, with the
@@ -39,6 +41,8 @@ export function ConfirmSheet({
       onClose={() => setOpen(false)}
       onExited={() => (confirmed.current ? onConfirm() : onCancel())}
       cancelLabel={cancelLabel}
+      // A confirmation can come from inside a modal or drawer, so it covers them.
+      zIndex={Z_DIALOG}
     >
       <div style={{ textAlign: "center", padding: "14px 4px 16px" }}>
         {icon && (

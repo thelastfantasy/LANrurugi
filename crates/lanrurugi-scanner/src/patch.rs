@@ -33,6 +33,20 @@ pub enum PatchError {
     Io(#[from] std::io::Error),
 }
 
+impl PatchError {
+    /// Whether the patch stays unusable however often it is read again: its container or metadata is
+    /// broken, or it belongs to other bytes. A plain I/O failure says nothing about the file.
+    pub fn is_permanent(&self) -> bool {
+        match self {
+            PatchError::Archive(e) => e.is_permanent(),
+            PatchError::MissingMetadata
+            | PatchError::InvalidMetadata(_)
+            | PatchError::Crc32Mismatch { .. } => true,
+            PatchError::Io(_) => false,
+        }
+    }
+}
+
 type Result<T> = std::result::Result<T, PatchError>;
 
 /// One group of pages to splice in at a single anchor point — `files` are inserted, in array
@@ -208,19 +222,29 @@ pub fn apply(original_pages: &[String], metadata: &PatchMetadata) -> Vec<Effecti
 /// file, the patch fails to load, or its crc32 doesn't match — a missing/invalid/stale patch must
 /// never break ordinary reading of the archive it targets.
 pub fn effective_pages(archive_path: &Path, original_pages: &[String]) -> Vec<EffectivePage> {
+    effective_pages_checked(archive_path, original_pages).0
+}
+
+/// [`effective_pages`] for a caller that also needs to know the patch was tried and failed — a
+/// patch nobody can read is something the reader must be told about, and the silent degradation
+/// [`effective_pages`] performs leaves nothing to report from.
+pub fn effective_pages_checked(
+    archive_path: &Path,
+    original_pages: &[String],
+) -> (Vec<EffectivePage>, Option<PatchError>) {
+    let originals = || {
+        original_pages
+            .iter()
+            .map(|name| EffectivePage::Original(name.clone()))
+            .collect::<Vec<_>>()
+    };
     let patch_path = patch_path_for(archive_path);
     if !patch_path.exists() {
-        return original_pages
-            .iter()
-            .map(|name| EffectivePage::Original(name.clone()))
-            .collect();
+        return (originals(), None);
     }
     match load(&patch_path, archive_path) {
-        Ok(metadata) => apply(original_pages, &metadata),
-        Err(_) => original_pages
-            .iter()
-            .map(|name| EffectivePage::Original(name.clone()))
-            .collect(),
+        Ok(metadata) => (apply(original_pages, &metadata), None),
+        Err(error) => (originals(), Some(error)),
     }
 }
 
@@ -381,6 +405,24 @@ mod tests {
     use std::io::Write;
 
     use super::*;
+
+    #[test]
+    fn only_a_failure_that_rereading_cannot_fix_is_permanent() {
+        assert!(!PatchError::Io(std::io::Error::other("busy")).is_permanent());
+        assert!(PatchError::MissingMetadata.is_permanent());
+        assert!(PatchError::Crc32Mismatch {
+            expected: "a".into(),
+            actual: "b".into()
+        }
+        .is_permanent());
+        assert!(
+            PatchError::Archive(ArchiveFormatError::Libarchive("truncated".into())).is_permanent()
+        );
+        assert!(
+            !PatchError::Archive(ArchiveFormatError::Io(std::io::Error::other("busy")))
+                .is_permanent()
+        );
+    }
 
     fn write_zip(entries: &[(&str, &[u8])]) -> tempfile::NamedTempFile {
         let file = tempfile::NamedTempFile::with_suffix(".zip").unwrap();

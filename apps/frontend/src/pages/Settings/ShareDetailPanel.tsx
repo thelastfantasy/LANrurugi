@@ -36,8 +36,9 @@ function ShareDetailItem({
     <div className="share-preview-item share-detail-item">
       {drag && (
         <span
-          {...drag.attributes}
-          {...drag.listeners}
+          ref={drag.handleRef}
+          role="button"
+          tabIndex={0}
           className="share-detail-drag"
           title={t("share.detail.dragToReorder")}
           aria-label={t("share.detail.dragToReorder")}

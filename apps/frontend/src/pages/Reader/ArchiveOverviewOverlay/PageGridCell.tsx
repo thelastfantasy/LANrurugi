@@ -1,22 +1,34 @@
 import type { MouseEvent, ReactNode } from "react"
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { Tooltip } from "@/components/common-ui/Display"
+import { BottomSheet, SheetGrid, SheetTile, Tooltip } from "@/components/common-ui/Display"
+import { useLongPress } from "@/hooks/useLongPress"
+import { useMenuPalette } from "@/hooks/useMenuPalette"
+import { TOC_CHAPTER_COUNT, tocChapterIdentifier } from "@/lib/utils/tocValidation"
+import { Z_OVERLAY_ABOVE_LEGACY_MODAL } from "@/theme"
 
-import { QuickAddTocPopover } from "./shared"
+import { QuickAddTocPopover, useQuickTocPresets } from "./shared"
+
+/** The sheet's two longest action labels get a row of their own — half a row is too narrow for them,
+ * and the tiles are single-line buttons (`SheetTile` truncates rather than wraps). The icon stays
+ * pinned to the left edge; the label centres in what is left of the row. */
+const FULL_ROW = { gridColumn: "1 / -1", display: "flex", alignItems: "center" }
+const FULL_ROW_LABEL = {
+  flex: "1 1 auto",
+  minWidth: 0,
+  textAlign: "center" as const,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+}
 
 /** One page thumbnail in the overview grid — shows a spin icon while its `<img>` hasn't loaded yet.
  * The native `<img>` `onLoad` event is the ready signal (no job-progress polling needed here). */
 
-// Sized to a 1:√2 (A4/B4) page ratio — without it, an unloaded cell collapses to the bare
-// `min-width: 100px` CSS hint, visibly narrower than its loaded siblings.
-const PLACEHOLDER_WIDTH_PX = 205
-
 function OverviewThumbnail({ src, alt }: { src: string; alt: string | undefined }) {
   const [loaded, setLoaded] = useState(false)
   return (
-    <div style={{ height: "100%", display: "flex", justifyContent: "center", ...(loaded ? undefined : { width: PLACEHOLDER_WIDTH_PX }) }}>
+    <div style={{ height: "100%", width: "100%", display: "flex", justifyContent: "center" }}>
       {!loaded && (
         <span
           style={{
@@ -33,7 +45,7 @@ function OverviewThumbnail({ src, alt }: { src: string; alt: string | undefined 
         loading="lazy"
         alt={alt}
         src={src}
-        style={{ display: "block", width: "auto", maxWidth: "100%", height: "100%", maxHeight: "none", objectFit: "contain", ...(loaded ? undefined : { visibility: "hidden" }) }}
+        style={{ display: "block", width: "100%", maxWidth: "none", height: "100%", maxHeight: "none", objectFit: "contain", ...(loaded ? undefined : { visibility: "hidden" }) }}
         onLoad={() => setLoaded(true)}
       />
     </div>
@@ -136,8 +148,8 @@ export function PageGridCell({
   highlighted: boolean
   thumbnailSrc: string
   onSelectPage: (page: number) => void
-  onSetThumbnail: (e: MouseEvent, page: number) => void
-  onAddToc: (e: MouseEvent, page: number) => void
+  onSetThumbnail: (page: number) => void
+  onAddToc: (page: number) => void
   onQuickAddToc: (page: number, title: string) => void
   onOpenLightbox: (page: number) => void
   /** True when this page came from a `.patch.zip` — gets a distinct green-tinted background. */
@@ -149,12 +161,43 @@ export function PageGridCell({
   const { t } = useTranslation()
   const [hovered, setHovered] = useState(false)
   const [quickAddAt, setQuickAddAt] = useState<DOMRect | null>(null)
+  // A touch screen has no hover to reveal the corner buttons, so a long press opens the same actions
+  // as a sheet. Mounted only while in use: the grid can hold hundreds of cells.
+  const [cellEl, setCellEl] = useState<HTMLDivElement | null>(null)
+  const [sheetMounted, setSheetMounted] = useState(false)
+  const [sheetOpen, setSheetOpen] = useState(false)
+  // The bottom-right button's right-click presets, as a sheet over the first one (the library's
+  // "add to category" works the same way).
+  const [presetSheetOpen, setPresetSheetOpen] = useState(false)
+  const presets = useQuickTocPresets()
+  const palette = useMenuPalette()
+  const afterSheet = useRef<(() => void) | null>(null)
+  useLongPress(
+    cellEl,
+    () => {
+      setSheetMounted(true)
+      requestAnimationFrame(() => setSheetOpen(true))
+    },
+    { blockContextMenu: () => true },
+  )
+  /** Closes the sheet, then runs `action` once it has slid away. */
+  const closeSheetThen = (action: () => void) => () => {
+    afterSheet.current = action
+    setSheetOpen(false)
+  }
+  const hasActions = !isTank || loggedIn
+  /** The sheets below are portaled into `body`, but React still bubbles their clicks through
+   * the component tree — without this, tapping the backdrop or an item also hits the cell's
+   * `onClick` (select that page, closing the overview). */
+  const stopCellClick = (e: MouseEvent) => e.stopPropagation()
   return (
     <div
+      ref={hasActions ? setCellEl : undefined}
       // Not `className="id1"` — that class's `min-height: 335px` is tuned for the library grid's
       // taller `ArchiveCard`, not this shorter thumbnail-only cell.
       data-page-cell={page}
-      style={{ display: "inline-block", cursor: "pointer" }}
+      className="overview-page-cell"
+      style={{ cursor: "pointer" }}
       onClick={() => onSelectPage(page)}
     >
       <div
@@ -244,7 +287,11 @@ export function PageGridCell({
               corner="top-right"
               title={t("reader.setThisPageAsThumbnail") ?? undefined}
               hovered={hovered}
-              onClick={(e) => onSetThumbnail(e, page)}
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                onSetThumbnail(page)
+              }}
             />
             <Tooltip
               label={t("reader.addChapterAtThisPage") + " " + t("reader.rightclickForQuickPresets")}
@@ -256,7 +303,11 @@ export function PageGridCell({
                 corner="bottom-right"
                 title={undefined}
                 hovered={hovered}
-                onClick={(e) => onAddToc(e, page)}
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  onAddToc(page)
+                }}
                 onContextMenu={(e) => {
                   e.preventDefault()
                   e.stopPropagation()
@@ -267,6 +318,96 @@ export function PageGridCell({
           </>
         )}
       </div>
+      {sheetMounted && (
+        <div style={{ display: "contents" }} onClick={stopCellClick} onContextMenu={stopCellClick}>
+          <BottomSheet
+            open={sheetOpen}
+            onClose={() => setSheetOpen(false)}
+            onExited={() => {
+              setSheetMounted(false)
+              const action = afterSheet.current
+              afterSheet.current = null
+              action?.()
+            }}
+            cancelLabel={t("common.cancel")}
+            // Above the overview itself, which sits on legacy's 9000 overlay layer.
+            zIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL}
+          >
+            <div style={{ padding: "6px 0 6px", fontWeight: 700, fontSize: 16 }}>
+              {t("common.pageN", { n: page })}
+            </div>
+            {/* One tile per corner button; the bottom-right one does two things (click, right-click). */}
+            <SheetGrid>
+              {loggedIn && (
+                <SheetTile
+                  icon="fa-file-image"
+                  style={FULL_ROW}
+                  onClick={closeSheetThen(() => onSetThumbnail(page))}
+                >
+                  <span style={FULL_ROW_LABEL}>{t("reader.setThisPageAsThumbnail")}</span>
+                </SheetTile>
+              )}
+              {!isTank && (
+                <SheetTile
+                  icon="fa-magnifying-glass"
+                  style={FULL_ROW}
+                  onClick={closeSheetThen(() => onOpenLightbox(page))}
+                >
+                  <span style={FULL_ROW_LABEL}>{t("reader.viewFullPage")}</span>
+                </SheetTile>
+              )}
+              {loggedIn && (
+                <>
+                  <SheetTile icon="fa-book-medical" onClick={closeSheetThen(() => onAddToc(page))}>
+                    {t("reader.addChapterAtThisPage")}
+                  </SheetTile>
+                  <SheetTile icon="fa-bolt" onClick={() => setPresetSheetOpen(true)}>
+                    {t("reader.quickAddChapter")}
+                  </SheetTile>
+                </>
+              )}
+            </SheetGrid>
+            {loggedIn && (
+              <BottomSheet
+                open={presetSheetOpen}
+                onClose={() => setPresetSheetOpen(false)}
+                cancelLabel={t("common.cancel")}
+                zIndex={Z_OVERLAY_ABOVE_LEGACY_MODAL + 10}
+              >
+                <div style={{ padding: "6px 0 6px", fontWeight: 700, fontSize: 16 }}>
+                  {t("reader.quickAddChapter")}
+                </div>
+                {(() => {
+                  // Picking one adds it and closes both sheets.
+                  const pick = (title: string) => {
+                    setPresetSheetOpen(false)
+                    closeSheetThen(() => onQuickAddToc(page, title))()
+                  }
+                  return (
+                    <>
+                      <SheetGrid>
+                        {presets.map((p) => (
+                          <SheetTile key={p.title} icon={p.icon} onClick={() => pick(p.value)}>
+                            {p.title}
+                          </SheetTile>
+                        ))}
+                      </SheetGrid>
+                      <div style={{ height: 10 }} />
+                      <SheetGrid separator={palette.separator}>
+                        {Array.from({ length: TOC_CHAPTER_COUNT }, (_, i) => i + 1).map((n) => (
+                          <SheetTile key={n} icon="fa-book-medical" onClick={() => pick(tocChapterIdentifier(n))}>
+                            {t("reader.chapterN", { n })}
+                          </SheetTile>
+                        ))}
+                      </SheetGrid>
+                    </>
+                  )
+                })()}
+              </BottomSheet>
+            )}
+          </BottomSheet>
+        </div>
+      )}
       {quickAddAt && (
         <QuickAddTocPopover
           anchor={quickAddAt}

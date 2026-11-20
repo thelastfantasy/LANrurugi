@@ -938,21 +938,15 @@ async fn inherit_metadata_to_split_archives(
 
     // Tags
     for new_id in new_ids {
-        if let Some(mut a) = state.repos.archives.get(new_id).await.ok().flatten() {
-            let old_tags = a.tags.clone();
-            a.tags = original.tags.clone();
-            if a.tags != old_tags {
-                let _ = state.repos.archives.save(&a).await;
-                let _ = lanrurugi_search::indexer::update_tag_indexes(
-                    &state.redis.search,
-                    &state.equivalence,
-                    new_id.as_str(),
-                    &old_tags,
-                    &a.tags,
-                )
-                .await;
-            }
-        }
+        let _ = state
+            .repos
+            .archives
+            .update_then(
+                new_id,
+                |a| a.tags = original.tags.clone(),
+                |old, new| crate::archives::reindex_title_and_tags(state, old, new),
+            )
+            .await;
     }
 
     // Categories
@@ -961,13 +955,17 @@ async fn inherit_metadata_to_split_archives(
             if !category.archives.contains(&original.id) {
                 continue;
             }
-            let mut category = category;
-            for new_id in new_ids {
-                if !category.archives.contains(new_id) {
-                    category.archives.push(new_id.clone());
-                }
-            }
-            let _ = state.repos.categories.save(&category).await;
+            let _ = state
+                .repos
+                .categories
+                .update(&category.catid, |c| {
+                    for new_id in new_ids {
+                        if !c.archives.contains(new_id) {
+                            c.archives.push(new_id.clone());
+                        }
+                    }
+                })
+                .await;
         }
     }
 
@@ -1313,15 +1311,23 @@ async fn run_split_job(
         .await
         .unwrap_or_default();
     for tank in original_tanks {
-        let mut updated = tank.clone();
-        let old_first = updated.archives.first().cloned();
-        updated.archives.retain(|a| a != archive_id);
-        for n in &new_ids {
-            if !updated.archives.contains(n) {
-                updated.archives.push(n.clone());
-            }
-        }
-        let _ = state.repos.groupings.save(&updated).await;
+        let mut old_first = None;
+        let updated = state
+            .repos
+            .groupings
+            .update(&tank.tankid, |g| {
+                old_first = g.archives.first().cloned();
+                g.archives.retain(|a| a != archive_id);
+                for n in &new_ids {
+                    if !g.archives.contains(n) {
+                        g.archives.push(n.clone());
+                    }
+                }
+            })
+            .await;
+        let Ok(Some(updated)) = updated else {
+            continue;
+        };
         crate::tankoubons::sync_tankoubon_thumbnail_with_first_archive(
             state,
             &updated,
@@ -1373,10 +1379,13 @@ async fn run_split_job(
         // The original archive is gone; drop its id from every category it belonged to. New split
         // archives were already added above by `inherit_metadata_to_split_archives`.
         if let Ok(categories) = state.repos.categories.list_all().await {
-            for mut category in categories {
+            for category in categories {
                 if category.archives.iter().any(|a| a == archive_id) {
-                    category.archives.retain(|a| a != archive_id);
-                    let _ = state.repos.categories.save(&category).await;
+                    let _ = state
+                        .repos
+                        .categories
+                        .update(&category.catid, |c| c.archives.retain(|a| a != archive_id))
+                        .await;
                 }
             }
         }

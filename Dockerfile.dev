@@ -194,9 +194,13 @@ ENV LANRURUGI_PDFIUM_LIB=/usr/local/lib/libpdfium.so
 # happened to be `ldconfig`'d most recently.
 #
 # CPU build: same official GitHub release tarball layout `lanrurugi-recommend` has always used.
+# The release host is tried first and an npmmirror binary mirror second: in 2026-11 the upstream
+# `microsoft/onnxruntime` GitHub repository (and with it every release asset) started answering
+# 404, which breaks the image build for reasons that have nothing to do with this project.
 ARG ORT_VERSION=1.27.0
 RUN mkdir -p /usr/local/lib/ort-cpu \
-    && curl -fsSL -o /tmp/ort-cpu.tgz https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz \
+    && (curl -fsSL -o /tmp/ort-cpu.tgz https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz \
+        || curl -fsSL -o /tmp/ort-cpu.tgz https://registry.npmmirror.com/-/binary/onnxruntime/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz) \
     && tar xzf /tmp/ort-cpu.tgz -C /tmp onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} \
     && cp /tmp/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} /usr/local/lib/ort-cpu/ \
     && ln -sf libonnxruntime.so.${ORT_VERSION} /usr/local/lib/ort-cpu/libonnxruntime.so.1 \
@@ -225,7 +229,8 @@ RUN mkdir -p /usr/local/lib/ort-cpu \
 # baked into the core `.so` itself. `_tensorrt.so` (also in this tarball) is NOT extracted — this
 # phase is explicitly CUDA-only, TensorRT is out of scope.
 RUN mkdir -p /usr/local/lib/ort-gpu \
-    && curl -fsSL -o /tmp/ort-gpu.tgz https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-gpu_cuda13-${ORT_VERSION}.tgz \
+    && (curl -fsSL -o /tmp/ort-gpu.tgz https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-gpu_cuda13-${ORT_VERSION}.tgz \
+        || curl -fsSL -o /tmp/ort-gpu.tgz https://registry.npmmirror.com/-/binary/onnxruntime/v${ORT_VERSION}/onnxruntime-linux-x64-gpu_cuda13-${ORT_VERSION}.tgz) \
     && tar xzf /tmp/ort-gpu.tgz -C /tmp \
         onnxruntime-linux-x64-gpu_cuda13-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} \
         onnxruntime-linux-x64-gpu_cuda13-${ORT_VERSION}/lib/libonnxruntime_providers_cuda.so \

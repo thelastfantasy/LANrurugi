@@ -12,7 +12,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use deadpool_redis::redis::AsyncCommands;
-use lanrurugi_core::entities::Archive;
+use lanrurugi_core::ids::ArchiveId;
 use lanrurugi_storage::keys::FILEMAP_KEY;
 use lanrurugi_storage::paths;
 use lanrurugi_storage::repository::ArchiveRepository;
@@ -108,10 +108,7 @@ pub async fn relocate_file(
     if tokio::fs::try_exists(&dest).await.unwrap_or(false) {
         return Ok((RelocationOutcome::Occupied, None));
     }
-    if let Some(parent) = dest.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    move_file(path, &dest).await?;
+    lanrurugi_storage::fsutil::in_dir(&dest, || move_file(path, &dest)).await?;
 
     // A patch is addressed by its archive's own path, so it has to travel with it. Either half of
     // a pair that cannot move together leaves the archive in place: relocation never revisits a
@@ -207,7 +204,7 @@ pub async fn relocate_library(
                         .unwrap_or(false);
                 if same_bytes {
                     archive.file = dest.to_string_lossy().to_string();
-                    match save_record(archives, &archive).await {
+                    match save_record(archives, &archive.id, &archive.file).await {
                         Ok(()) => {
                             let _: Result<(), _> = conn
                                 .hdel(FILEMAP_KEY, path.to_string_lossy().to_string())
@@ -246,28 +243,9 @@ pub async fn relocate_library(
             Ok((RelocationOutcome::Moved, Some(dest))) => {
                 let moved_from = path.clone();
                 let old = std::mem::replace(&mut archive.file, dest.to_string_lossy().to_string());
-                // The list was taken before this pass, and a first run over a large library can take
-                // hours; saving the whole struct would write back every field as it was then and
-                // silently drop tags, a title or reading progress changed in between. Re-read the
-                // record and change only `file`.
-                // A record that vanished while the file was moving must not be resurrected from
-                // this pass's stale snapshot: the file goes back where it came from and the next
-                // scan decides what that path is.
-                let (saved, record_vanished) = match archives.get(&archive.id).await {
-                    Ok(Some(fresh)) => {
-                        let mut fresh = fresh;
-                        fresh.file = archive.file.clone();
-                        (save_record(archives, &fresh).await, false)
-                    }
-                    Ok(None) => (Ok(()), true),
-                    Err(e) => (Err(e), false),
-                };
-                let saved = if record_vanished {
-                    Err(RepositoryError::NotFound("archive", archive.id.to_string()))
-                } else {
-                    saved
-                };
-                if let Err(e) = saved {
+                // A record that vanished while the file was moving fails here too: the file goes
+                // back where it came from and the next scan decides what that path is.
+                if let Err(e) = save_record(archives, &archive.id, &archive.file).await {
                     tracing::warn!(
                         id = %archive.id,
                         error = %e,
@@ -356,27 +334,31 @@ pub(crate) fn allow_saves() {
     *FAIL_SAVE_FOR.lock().unwrap() = None;
 }
 
+/// Points the record at `file`, changing nothing else: the list this pass works from was taken
+/// before it, and a first run over a large library can take hours. A record deleted meanwhile is
+/// `NotFound` and is not recreated.
 async fn save_record(
     archives: &ArchiveRepository,
-    archive: &Archive,
+    id: &ArchiveId,
+    file: &str,
 ) -> Result<(), RepositoryError> {
     #[cfg(test)]
     if FAIL_SAVE_FOR
         .lock()
         .unwrap()
         .as_deref()
-        .is_some_and(|id| id == archive.id.as_str())
+        .is_some_and(|failing| failing == id.as_str())
     {
-        return Err(RepositoryError::NotFound("archive", archive.id.to_string()));
+        return Err(RepositoryError::NotFound("archive", id.to_string()));
     }
-    archives.save(archive).await
+    match archives.update(id, |a| a.file = file.to_string()).await? {
+        Some(_) => Ok(()),
+        None => Err(RepositoryError::NotFound("archive", id.to_string())),
+    }
 }
 
 async fn move_back(from: &Path, to: &Path) -> std::io::Result<()> {
-    if let Some(parent) = to.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    move_file(from, to).await?;
+    lanrurugi_storage::fsutil::in_dir(to, || move_file(from, to)).await?;
     let moved_patch = crate::patch::patch_path_for(from);
     if tokio::fs::try_exists(&moved_patch).await.unwrap_or(false) {
         let original_patch = crate::patch::patch_path_for(to);
@@ -424,8 +406,12 @@ async fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
                 let _ = tokio::fs::remove_file(&staging).await;
                 return Err(e);
             }
-            tokio::fs::remove_file(from).await?;
-            Ok(())
+            match tokio::fs::remove_file(from).await {
+                // Someone else removed the source meanwhile; the copy is already in place, so the
+                // move happened. Reporting it as failed would leave the record on the old path.
+                Err(e) if e.kind() != ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            }
         }
         Err(e) => Err(e),
     }
@@ -434,6 +420,7 @@ async fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lanrurugi_core::entities::Archive;
 
     /// The settle window keeps a file that is still being copied in place, so the tests that
     /// expect a move have to age the file first.
@@ -584,6 +571,8 @@ mod tests {
             corrupted_pages: vec![],
             has_patch: false,
             blake3: None,
+            primary_source: None,
+            progress_pages: None,
         }
     }
 
@@ -611,7 +600,10 @@ mod tests {
             .await
             .unwrap();
         tokio::fs::rename(&original, &moved).await.unwrap();
-        archives.save(&archive_at(&original, &id)).await.unwrap();
+        archives
+            .create_or_replace(&archive_at(&original, &id))
+            .await
+            .unwrap();
 
         let report = relocate_library(&archives, &filemap, library)
             .await
@@ -656,7 +648,10 @@ mod tests {
         settle(&original).await;
         settle(&patch).await;
         let id = lanrurugi_storage::id::size_aware_id(&original).unwrap();
-        archives.save(&archive_at(&original, &id)).await.unwrap();
+        archives
+            .create_or_replace(&archive_at(&original, &id))
+            .await
+            .unwrap();
 
         fail_saves_for(id.as_str());
         let report = relocate_library(&archives, &filemap, library).await;

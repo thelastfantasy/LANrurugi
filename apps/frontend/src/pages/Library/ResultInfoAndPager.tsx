@@ -1,5 +1,7 @@
 import { useTranslation } from "react-i18next"
 
+import { isPlainLinkClick } from "@/components/common-ui/Link"
+
 /** DataTables' `simple_numbers` pagination window: first/last page, a run centered on the
  * current page, `null` markers (rendered as "…") for gaps. `page` and results are 0-based. */
 export function pagingWindow(page: number, pageCount: number): (number | null)[] {
@@ -63,6 +65,7 @@ export function ResultInfoAndPager({
               style={{ margin: "4px 0", ...(p === page ? { cursor: "default" } : undefined) }}
               // href stays real/copyable; only left-click navigation to the current page is a no-op.
               onClick={(e) => {
+                if (!isPlainLinkClick(e)) return
                 e.preventDefault()
                 if (p !== page) onPage(p)
               }}

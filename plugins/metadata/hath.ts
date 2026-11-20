@@ -42,7 +42,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   let logger = legacyCompat.getLogger("HentaiAtHome plugin", "plugins");
   let file = lrr_info["file_path"];
   let path_in_archive = (hostArgs.sidecar_files as Record<string, string> | undefined)?.["galleryinfo.txt"];
-  if ((! path_in_archive)) { throw new PluginErrorException("No galleryinfo.txt file found in this archive!"); }
+  if ((! path_in_archive)) { throw new PluginSkipException("No galleryinfo.txt file found in this archive!"); }
   let filepath = path_in_archive;
   let fh = filepath;
   if (fh === undefined) { throw new PluginErrorException("Could not open file", { filepath }); }

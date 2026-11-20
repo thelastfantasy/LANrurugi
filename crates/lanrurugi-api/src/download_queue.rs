@@ -1084,8 +1084,8 @@ fn start_error_message(e: &StartError) -> String {
     }
 }
 
-/// Starts a queue item on the subscription orchestrator's behalf — server-side, with no request
-/// and nobody pressing Start behind it.
+/// Starts a queue item on the server's behalf — for the subscription orchestrator, or a damaged
+/// archive being downloaded again — with nobody pressing Start behind it.
 ///
 /// Needed because "download automatically" means exactly that (spec FR-007a and its own Q&A: the
 /// alternative to downloading automatically is the approval list, *not* a second click on Start),
@@ -2111,8 +2111,15 @@ mod tests {
             corrupted_pages: vec![],
             has_patch: false,
             blake3: None,
+            primary_source: None,
+            progress_pages: None,
         };
-        state.repos.archives.save(&archive).await.unwrap();
+        state
+            .repos
+            .archives
+            .create_or_replace(&archive)
+            .await
+            .unwrap();
         crate::download_sources::record(&state, &url, &archive_id).await;
 
         // `add` mints the row's id itself; keep what it returns rather than the placeholder.

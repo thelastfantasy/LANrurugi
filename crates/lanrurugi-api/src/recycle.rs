@@ -29,9 +29,10 @@ use crate::AppState;
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 use lanrurugi_storage::keys::{CONFIG_KEY, FILEMAP_KEY, SAFETY_PASSWORD_HASH_FIELD};
 use lanrurugi_storage::recycle::{
-    entry_dir, move_into_bin, move_out_of_bin, payload_size, remove_entry_dir, scan_entry_dirs,
-    write_meta, RecycleActor, RecycleConflict, RecycleEntry, RecycleEntryView, RecycleKind,
-    RecycleMemberView, RecycleRepository, RecycleSnapshot, RecycleTank, RECYCLE_SCHEMA,
+    entry_dir, move_into_bin, move_out_of_bin, payload_dir, payload_size, read_meta,
+    remove_entry_dir, scan_entry_dirs, write_meta, RecycleActor, RecycleConflict, RecycleEntry,
+    RecycleEntryView, RecycleKind, RecycleMemberView, RecycleRepository, RecycleSnapshot,
+    RecycleTank, RECYCLE_SCHEMA,
 };
 
 pub fn router() -> Router<AppState> {
@@ -184,6 +185,8 @@ async fn build_snapshot(state: &AppState, archive: &Archive) -> RecycleSnapshot 
         toc: archive.toc.clone(),
         has_patch: archive.has_patch,
         blake3: archive.blake3.clone(),
+        primary_source: archive.primary_source.clone(),
+        progress_pages: archive.progress_pages,
         corrupted_pages: archive.corrupted_pages.clone(),
         heal_failed_at: archive.heal_failed_at,
         version_history,
@@ -217,6 +220,43 @@ fn entry_from_record(
         deleted_by,
         snapshot,
     }
+}
+
+/// Moves a recycled archive's stored `.patch.zip` out of the bin to `destination`, leaving the
+/// archive itself recoverable — "delete and download again" wants the patch's pages on the fresh
+/// copy, while a plain delete keeps moving both into the bin (and out of the library) together.
+/// Returns whether a patch was moved; the bin entry stops claiming it either way.
+pub(crate) async fn take_patch_out_of_bin(
+    state: &AppState,
+    id: &ArchiveId,
+    destination: &std::path::Path,
+) -> bool {
+    let dir = entry_dir(&state.library.archive_dir, id);
+    let Some(mut entry) = read_meta(&dir).await else {
+        return false;
+    };
+    let Some(name) = entry.patch_file_name.clone() else {
+        return false;
+    };
+    let source = payload_dir(&state.library.archive_dir, id).join(&name);
+    if !source.is_file() {
+        return false;
+    }
+    if let Err(e) =
+        lanrurugi_storage::fsutil::in_dir(destination, || tokio::fs::rename(&source, destination))
+            .await
+    {
+        tracing::warn!(%id, error = %e, "could not move a recycled archive's patch onto its replacement");
+        return false;
+    }
+    entry.patch_file_name = None;
+    if let Err(e) = write_meta(&dir, &entry).await {
+        tracing::warn!(%id, error = %e, "could not update a recycle entry after moving its patch");
+    }
+    if let Err(e) = repository(state).put(&entry).await {
+        tracing::warn!(%id, error = %e, "could not update a recycle entry after moving its patch");
+    }
+    true
 }
 
 /// Recycle one archive: snapshot, move bytes, record the entry, then drop the live record.
@@ -288,6 +328,10 @@ pub(crate) async fn recycle_archive(
         // rather than claiming success; startup reconciliation finishes the job.
         return DeleteOneOutcome::Error(e);
     }
+
+    // The member stays listed so a restore brings it back; only the tank's page marker has to
+    // leave the range that is now unreadable.
+    crate::tank_members::after_recycle(state, &archive).await;
 
     record_manual(
         state,
@@ -978,11 +1022,13 @@ async fn restore_record(
         corrupted_pages: snap.corrupted_pages.clone(),
         has_patch: entry.patch_file_name.is_some(),
         blake3: snap.blake3.clone(),
+        primary_source: snap.primary_source.clone(),
+        progress_pages: snap.progress_pages,
     };
     state
         .repos
         .archives
-        .save(&archive)
+        .create_or_replace(&archive)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -1238,7 +1284,12 @@ pub(crate) async fn restore_tankoubon(
         }
     }
 
-    if let Err(e) = state.repos.groupings.save(&tank.grouping).await {
+    if let Err(e) = state
+        .repos
+        .groupings
+        .create_or_replace(&tank.grouping)
+        .await
+    {
         rollback_recycled(state, &restored).await;
         return RestoreOutcome::Error(e.to_string());
     }
@@ -1326,7 +1377,21 @@ pub(crate) async fn purge_entry(state: &AppState, entry: &RecycleEntry) -> Resul
     repository(state)
         .remove(&entry.id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // A recycled archive kept its Tankoubon membership so a restore could put it back; purging the
+    // bin entry is the point where that is no longer possible, so the member goes too.
+    if state
+        .repos
+        .archives
+        .get(&entry.id)
+        .await
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        crate::tank_members::after_permanent_delete_with(state, &entry.id, entry.page_count).await;
+    }
+    Ok(())
 }
 
 /// Reconciles the bin inventory against what is on disk (research §3). Runs once at startup:

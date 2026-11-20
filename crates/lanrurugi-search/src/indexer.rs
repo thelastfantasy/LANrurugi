@@ -191,7 +191,7 @@ pub async fn backfill_source_tagged(
 /// mid-sequence failure (a transient connection hiccup, timeout, ...) used to leave the archive
 /// half-indexed: e.g. present in `LRR_UNTAGGED` but missing from `LRR_TANKGROUPED`/`LRR_NEW`,
 /// which made it permanently invisible to the default (`groupby_tanks=true`) search despite
-/// `ArchiveRepository::save` having already succeeded — a real "ghost record" observed in
+/// `ArchiveRepository::create_or_replace` having already succeeded — a real "ghost record" observed in
 /// practice, not just a theoretical race. All four writes now succeed or fail together.
 pub async fn index_new_archive(
     search_pool: &Pool,

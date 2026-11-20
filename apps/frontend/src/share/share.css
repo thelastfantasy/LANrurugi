@@ -331,7 +331,9 @@ div.ido.share-closed p:last-child {
 
 .share-form {
   display: grid;
-  grid-template-columns: max-content 1fr;
+  /* Capped, not `max-content`: one long label ("端口自动轮换（分钟，6–12 小时）") widened the label
+     column for every row and pushed the controls against the right edge. Labels wrap instead. */
+  grid-template-columns: minmax(0, 14em) 1fr;
   gap: 6px 10px;
   align-items: center;
   text-align: left;
@@ -340,6 +342,37 @@ div.ido.share-closed p:last-child {
   grid-column: 2;
   font-size: 0.85em;
   opacity: 0.8;
+}
+/* The embed switch plus the "why is it disabled" hint button, as one grid cell. */
+.share-embed-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.share-embed-hint {
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 1.05em;
+  line-height: 1;
+  opacity: 0.75;
+}
+.share-embed-hint:hover,
+.share-embed-hint:focus-visible {
+  opacity: 1;
+}
+.share-embed-hint-link {
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+  text-align: left;
 }
 .share-form-checks {
   display: flex;

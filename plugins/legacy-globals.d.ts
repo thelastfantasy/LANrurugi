@@ -270,6 +270,18 @@ declare var PluginErrorException: {
   };
 };
 
+/** "This archive is not mine" — see `PluginSkipException` in `plugin-sdk.ts`. The host counts it
+ * as declined rather than failed, so an archive from any other site costs no warning and no
+ * diagnostics event; everything that actually went wrong must keep using
+ * `PluginErrorException`. */
+// deno-lint-ignore no-var
+declare var PluginSkipException: {
+  new (reason: string, data?: Record<string, string | number>): Error & {
+    error_code: string;
+    data?: Record<string, string | number>;
+  };
+};
+
 // ── hostArgs protocol types (issue #86) ───────────────────────────────────────────────────────
 // `MetadataHostArgs`/`LoginHostArgs`/`ScriptHostArgs`/`DownloadHostArgs` moved here from
 // `plugin-sdk.ts` (that file's own module doc comment explains why: `lanrurugi-plugin-converter`'s

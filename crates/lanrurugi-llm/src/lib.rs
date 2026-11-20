@@ -19,7 +19,7 @@ use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::Pool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tracing::warn;
+use tracing::{debug, warn};
 
 pub use error::{LlmError, LlmErrorClass};
 pub use prefix::{Conversation, PrefixBreak};
@@ -372,7 +372,11 @@ fn reasoning_exhausted(parsed: &serde_json::Value) -> bool {
 
 fn first_choice_content(parsed: &serde_json::Value) -> Result<String, LlmError> {
     if reasoning_exhausted(parsed) {
-        warn!("LLM reply truncated with empty content (reasoning used the budget); retrying with thinking off");
+        // Recovered by `run_parsed`'s own retry with thinking off, so this is not a warning: only
+        // the *final* truncation (when the retry fails too) reaches a caller, which logs and
+        // captures it there. Logging every attempt made a routinely-recovered condition look like
+        // a recurring defect in diagnostics (162 such events in one dev instance).
+        debug!("LLM reply truncated with empty content (reasoning used the budget); retrying with thinking off");
         return Err(LlmError::truncated());
     }
     parsed["choices"][0]["message"]["content"]

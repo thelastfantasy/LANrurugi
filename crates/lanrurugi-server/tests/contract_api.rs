@@ -263,7 +263,7 @@ async fn ungrouped_search_finds_archives_folded_into_tankoubons() {
     let title = "Folded Raw Search Fixture";
     let tag = "zzrawsearchfixture:folded";
     let repo = lanrurugi_storage::repository::ArchiveRepository::new(redis.archive.clone());
-    repo.save(&Archive {
+    repo.create_or_replace(&Archive {
         id: lanrurugi_core::ids::ArchiveId(id.clone()),
         name: title.to_string(),
         title: title.to_string(),
@@ -282,6 +282,8 @@ async fn ungrouped_search_finds_archives_folded_into_tankoubons() {
         corrupted_pages: vec![],
         has_patch: false,
         blake3: None,
+        primary_source: None,
+        progress_pages: None,
     })
     .await
     .unwrap();
@@ -310,12 +312,13 @@ async fn ungrouped_search_finds_archives_folded_into_tankoubons() {
     let grouping_repo =
         lanrurugi_storage::repository::GroupingRepository::new(redis.archive.clone());
     grouping_repo
-        .save(&lanrurugi_core::entities::Grouping {
+        .create_or_replace(&lanrurugi_core::entities::Grouping {
             tankid: tankid.clone(),
             name: "Raw Search Fixture Tank".to_string(),
             summary: String::new(),
             tags: String::new(),
             progress: 0,
+            lastreadtime: None,
             archives: vec![lanrurugi_core::ids::ArchiveId(id.clone())],
             thumbnail_manual: false,
             thumbnail_source_archive: None,
@@ -406,7 +409,7 @@ async fn bookmark_search_operators_see_bookmarks_where_the_router_stores_them() 
     let title = "Bookmark Search Fixture";
     let tag = "zzbookmarkfixture:config";
     let repo = lanrurugi_storage::repository::ArchiveRepository::new(redis.archive.clone());
-    repo.save(&Archive {
+    repo.create_or_replace(&Archive {
         id: lanrurugi_core::ids::ArchiveId(id.clone()),
         name: title.to_string(),
         title: title.to_string(),
@@ -425,6 +428,8 @@ async fn bookmark_search_operators_see_bookmarks_where_the_router_stores_them() 
         corrupted_pages: vec![],
         has_patch: false,
         blake3: None,
+        primary_source: None,
+        progress_pages: None,
     })
     .await
     .unwrap();
@@ -653,7 +658,7 @@ async fn search_syntax_matrix_covers_every_operator_and_its_combinations() {
     ];
 
     for (id, title, tags, progress, pagecount, arcsize, has_patch) in &fixtures {
-        repo.save(&Archive {
+        repo.create_or_replace(&Archive {
             id: ArchiveId(id.to_string()),
             name: title.to_string(),
             title: title.to_string(),
@@ -674,6 +679,8 @@ async fn search_syntax_matrix_covers_every_operator_and_its_combinations() {
             corrupted_pages: vec![],
             has_patch: *has_patch,
             blake3: None,
+            primary_source: None,
+            progress_pages: None,
         })
         .await
         .unwrap();
@@ -704,12 +711,13 @@ async fn search_syntax_matrix_covers_every_operator_and_its_combinations() {
     // `PUT /api/tankoubons/{id}/{archive}`, because that endpoint re-syncs Tankoubon membership
     // globally and would undo the hand-written `srem` another test in this binary relies on.
     groupings
-        .save(&Grouping {
+        .create_or_replace(&Grouping {
             tankid: TankId(tank.clone()),
             name: "Syntax Matrix Tank".to_string(),
             summary: String::new(),
             tags: String::new(),
             progress: 0,
+            lastreadtime: None,
             archives: vec![ArchiveId(F.to_string())],
             thumbnail_manual: false,
             thumbnail_source_archive: None,
@@ -746,7 +754,7 @@ async fn search_syntax_matrix_covers_every_operator_and_its_combinations() {
     let static_cat = CategoryId("SET_99zzsyn001".to_string());
     let dynamic_cat = CategoryId("SET_99zzsyn002".to_string());
     categories
-        .save(&Category {
+        .create_or_replace(&Category {
             catid: static_cat.clone(),
             name: "Syntax Static Category".to_string(),
             search: None,
@@ -757,7 +765,7 @@ async fn search_syntax_matrix_covers_every_operator_and_its_combinations() {
         .await
         .unwrap();
     categories
-        .save(&Category {
+        .create_or_replace(&Category {
             catid: dynamic_cat.clone(),
             name: "Syntax Dynamic Category".to_string(),
             search: Some(format!("{run} artist:shared")),
@@ -1101,7 +1109,7 @@ async fn get_archives_matches_recorded_archive_metadata_shape() {
 
     let id = "c".repeat(40);
     let repo = lanrurugi_storage::repository::ArchiveRepository::new(redis.archive.clone());
-    repo.save(&Archive {
+    repo.create_or_replace(&Archive {
         id: lanrurugi_core::ids::ArchiveId(id.clone()),
         name: "Fate GO MEMO".to_string(),
         title: "Fate GO MEMO".to_string(),
@@ -1121,6 +1129,8 @@ async fn get_archives_matches_recorded_archive_metadata_shape() {
         corrupted_pages: vec![],
         has_patch: false,
         blake3: None,
+        primary_source: None,
+        progress_pages: None,
     })
     .await
     .unwrap();
@@ -1212,7 +1222,7 @@ async fn delete_archive_matches_recorded_response_shape() {
     };
     let id = "d".repeat(40);
     let repo = lanrurugi_storage::repository::ArchiveRepository::new(redis.archive.clone());
-    repo.save(&Archive {
+    repo.create_or_replace(&Archive {
         id: lanrurugi_core::ids::ArchiveId(id.clone()),
         name: "big_chungus".to_string(),
         title: "big_chungus".to_string(),
@@ -1231,6 +1241,8 @@ async fn delete_archive_matches_recorded_response_shape() {
         corrupted_pages: vec![],
         has_patch: false,
         blake3: None,
+        primary_source: None,
+        progress_pages: None,
     })
     .await
     .unwrap();
@@ -1745,7 +1757,7 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
     let id = "f".repeat(40);
     let archive_repo = lanrurugi_storage::repository::ArchiveRepository::new(redis.archive.clone());
     archive_repo
-        .save(&Archive {
+        .create_or_replace(&Archive {
             id: lanrurugi_core::ids::ArchiveId(id.clone()),
             name: "Volume 1".to_string(),
             title: "Volume 1".to_string(),
@@ -1764,6 +1776,8 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
             corrupted_pages: vec![],
             has_patch: false,
             blake3: None,
+            primary_source: None,
+            progress_pages: None,
         })
         .await
         .unwrap();
@@ -1957,7 +1971,7 @@ async fn subfolders_to_tankoubons_creates_tankoubons_visible_in_list_all() {
         (id_d.clone(), path_d, "Volume 0"),
     ] {
         archive_repo
-            .save(&Archive {
+            .create_or_replace(&Archive {
                 id: lanrurugi_core::ids::ArchiveId(id.clone()),
                 name: title.to_string(),
                 title: title.to_string(),
@@ -1976,6 +1990,8 @@ async fn subfolders_to_tankoubons_creates_tankoubons_visible_in_list_all() {
                 corrupted_pages: vec![],
                 has_patch: false,
                 blake3: None,
+                primary_source: None,
+                progress_pages: None,
             })
             .await
             .unwrap();
@@ -2221,9 +2237,11 @@ async fn seed_real_archive(redis: &RedisDbs, dir: &std::path::Path, id: &str) ->
         corrupted_pages: vec![],
         has_patch: false,
         blake3: None,
+        primary_source: None,
+        progress_pages: None,
     };
     lanrurugi_storage::repository::ArchiveRepository::new(redis.archive.clone())
-        .save(&archive)
+        .create_or_replace(&archive)
         .await
         .unwrap();
     archive
@@ -2474,12 +2492,13 @@ async fn recycling_a_tankoubon_keeps_it_as_one_restorable_entry() {
     let tank_id = "TANK_1700000000".to_string();
     let groupings = lanrurugi_storage::repository::GroupingRepository::new(redis.archive.clone());
     groupings
-        .save(&Grouping {
+        .create_or_replace(&Grouping {
             tankid: TankId(tank_id.clone()),
             name: "Tank Fixture".to_string(),
             summary: "summary".to_string(),
             tags: "artist:tank".to_string(),
             progress: 3,
+            lastreadtime: None,
             archives: vec![ArchiveId(id_one.clone()), ArchiveId(id_two.clone())],
             thumbnail_manual: false,
             thumbnail_source_archive: None,

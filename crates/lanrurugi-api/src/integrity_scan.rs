@@ -32,6 +32,10 @@ pub fn router() -> Router<AppState> {
             get(status).post(start).delete(stop),
         )
         .route("/database/integrity-scan/archives/{id}", post(recheck))
+        .route(
+            "/database/integrity-scan/archives/{id}/redownload",
+            post(redownload),
+        )
 }
 
 /// `archive id -> Finding` for every archive the last scans found damaged.
@@ -73,7 +77,7 @@ pub(crate) struct Finding {
     pub size_on_disk: Option<u64>,
 }
 
-fn now_secs() -> i64 {
+pub(crate) fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -136,25 +140,102 @@ pub(crate) fn check_file(path: &std::path::Path) -> Option<Finding> {
 /// Brings the archive record in line with a check: a finding sets `heal_failed_at` (if not set
 /// already), a file that opens clears it and restores the page count and size.
 async fn apply_to_record(state: &AppState, id: &ArchiveId, inspection: &Inspection) {
-    let Ok(Some(mut archive)) = state.repos.archives.get(id).await else {
-        return;
-    };
-    match inspection {
-        Inspection::Damaged(_) if archive.heal_failed_at.is_none() => {
-            archive.heal_failed_at = Some(now_secs().max(0) as u64);
-        }
-        Inspection::Readable { pages, size }
-            if archive.heal_failed_at.is_some() || archive.pagecount == 0 =>
-        {
-            archive.heal_failed_at = None;
-            archive.pagecount = *pages as u32;
-            archive.arcsize = *size;
-        }
-        _ => return,
-    }
-    if let Err(e) = state.repos.archives.save(&archive).await {
+    let updated = state
+        .repos
+        .archives
+        .update(id, |archive| match inspection {
+            Inspection::Damaged(_) if archive.heal_failed_at.is_none() => {
+                archive.heal_failed_at = Some(now_secs().max(0) as u64);
+            }
+            Inspection::Readable { pages, size }
+                if archive.heal_failed_at.is_some() || archive.pagecount == 0 =>
+            {
+                archive.heal_failed_at = None;
+                archive.pagecount = *pages as u32;
+                archive.arcsize = *size;
+            }
+            _ => {}
+        })
+        .await;
+    if let Err(e) = updated {
         tracing::warn!(%id, error = %e, "could not update an archive's damaged marker");
     }
+}
+
+/// The last integrity check's verdict on this archive, if it recorded one. Cleared by a scan or a
+/// recheck that finds the file readable again, so this is "is it broken *now*", not "was it ever".
+pub(crate) async fn recorded_finding(state: &AppState, id: &ArchiveId) -> Option<Finding> {
+    let mut conn = state.redis.config.get().await.ok()?;
+    let raw: Option<String> = conn.hget(FINDINGS_KEY, id.as_str()).await.ok()?;
+    serde_json::from_str(&raw?).ok()
+}
+
+/// Records damage noticed outside a scan — an ingest that produced no pages, or a read that found
+/// the container unreadable — so the settings list, the library badge and `is:damaged` learn about
+/// it at the moment it shows, without waiting for the next scan. Idempotent: the same problem
+/// recorded twice writes nothing.
+pub(crate) async fn note_damage(
+    state: &AppState,
+    archive: &lanrurugi_core::entities::Archive,
+    problem: Problem,
+    detail: String,
+) {
+    if recorded_finding(state, &archive.id)
+        .await
+        .is_some_and(|existing| existing.problem == problem)
+    {
+        return;
+    }
+    let size_on_disk = tokio::fs::metadata(&archive.file)
+        .await
+        .ok()
+        .map(|metadata| metadata.len());
+    let finding = Finding {
+        problem,
+        detail,
+        checked_at: now_secs(),
+        size_on_disk,
+    };
+    if let Ok(mut conn) = state.redis.config.get().await {
+        let _: Result<(), _> = conn
+            .hset(
+                FINDINGS_KEY,
+                archive.id.as_str(),
+                serde_json::to_string(&finding).unwrap_or_default(),
+            )
+            .await;
+    }
+    apply_to_record(state, &archive.id, &Inspection::Damaged(finding)).await;
+}
+
+/// The container opened, so an earlier verdict against it no longer holds: drop the finding and
+/// clear `heal_failed_at`. Only called when the record still carries a mark, so a healthy archive
+/// costs nothing.
+pub(crate) async fn note_readable(
+    state: &AppState,
+    archive: &lanrurugi_core::entities::Archive,
+    pages: u32,
+) {
+    // A listing with no pages is damage, not health — never clear a mark on the strength of it.
+    if pages == 0 || (archive.heal_failed_at.is_none() && archive.pagecount > 0) {
+        return;
+    }
+    if let Ok(mut conn) = state.redis.config.get().await {
+        let _: Result<(), _> = conn.hdel(FINDINGS_KEY, archive.id.as_str()).await;
+    }
+    let size = tokio::fs::metadata(&archive.file)
+        .await
+        .map(|metadata| metadata.len())
+        .unwrap_or(archive.arcsize);
+    apply_to_record(
+        state,
+        &archive.id,
+        &Inspection::Readable {
+            pages: pages.max(1) as usize,
+            size,
+        },
+    )
+    .await;
 }
 
 async fn store_finding(
@@ -215,6 +296,95 @@ async fn recheck(State(state): State<AppState>, Path(id): Path<ArchiveId>) -> Re
         Inspection::Readable { .. } => (false, None),
     };
     axum::Json(json!({ "success": 1, "damaged": damaged, "finding": finding })).into_response()
+}
+
+/// Moves a damaged archive to the recycle bin and queues its source for download again: the
+/// `source:` tag taken by the highest-priority download plugin. The record has to go first — an
+/// archive id is the hash of the file's first 512 KB, which a complete copy of a truncated file
+/// shares, so the new download would otherwise be refused as already in the library.
+async fn redownload(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
+    Path(id): Path<ArchiveId>,
+) -> Response {
+    const OP: &str = "integrity_redownload";
+    let internal =
+        |e: String| crate::common::error(axum::http::StatusCode::INTERNAL_SERVER_ERROR, OP, e);
+    let archive = match state.repos.archives.get(&id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return crate::common::not_found(OP, format!("{id} does not exist.")),
+        Err(e) => return internal(e.to_string()),
+    };
+    let Some((url, plugin)) = crate::plugins::pick_redownload_source(&state, &archive).await else {
+        return crate::common::error(
+            axum::http::StatusCode::BAD_REQUEST,
+            OP,
+            "No source: tag of this archive matches an installed download plugin.",
+        );
+    };
+    // The new copy lands in the category the damaged one was in, when there was a plain one.
+    let category = state
+        .repos
+        .categories
+        .for_archive(&id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .find(|c| !c.is_dynamic())
+        .map(|c| c.catid.to_string());
+
+    // Captured before the delete: a re-download produces a new archive record, and this is what
+    // puts it back where the old one was (its Tankoubons, its chapter names, its progress).
+    let restore_plan = crate::redownload_restore::capture(&state, &archive).await;
+
+    match crate::recycle::recycle_archive(&state, &id, auth.as_ref().map(|e| &e.0)).await {
+        crate::archives::DeleteOneOutcome::Deleted { .. } => {}
+        crate::archives::DeleteOneOutcome::NotFound => {
+            return crate::common::not_found(OP, format!("{id} does not exist."))
+        }
+        crate::archives::DeleteOneOutcome::Error(e) => return internal(e),
+    }
+    if let Ok(mut conn) = state.redis.config.get().await {
+        let _: Result<(), _> = conn.hdel(FINDINGS_KEY, id.as_str()).await;
+    }
+
+    let overwrite_on_duplicate =
+        crate::plugins::resolve_queue_overwrite_on_duplicate(&state, &plugin).await;
+    let item = match state
+        .download_queue
+        .add(lanrurugi_storage::download_queue::NewQueueItem {
+            origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
+            subscription_id: None,
+            url: url.clone(),
+            plugin_namespace: plugin.clone(),
+            file_size: None,
+            category,
+            metadata_tags: Vec::new(),
+            auto_fetch_metadata: true,
+            overwrite_on_duplicate,
+            state: lanrurugi_storage::download_queue::DownloadQueueState::Queued,
+        })
+        .await
+    {
+        Ok(item) => item,
+        // The archive is already in the recycle bin, where it can be restored from.
+        Err(e) => return internal(e.to_string()),
+    };
+    // Keyed by this queue item, so only this re-download applies the plan: a later manual download
+    // of the same URL is a different item and leaves the archive out of the Tankoubon.
+    crate::redownload_restore::store(&state, &item.id, &restore_plan).await;
+    // Queued but not started (another download of the same source running, say) is still a
+    // success: the row is in the queue with its reason.
+    let started = crate::download_queue::start_item_from_subscription(&state, &item.id).await;
+    axum::Json(json!({
+        "operation": OP,
+        "success": 1,
+        "url": url,
+        "plugin": plugin,
+        "queue_item": item.id,
+        "start_error": started.err(),
+    }))
+    .into_response()
 }
 
 async fn start(State(state): State<AppState>) -> Response {
@@ -281,23 +451,28 @@ async fn status(State(state): State<AppState>) -> Response {
         }
         Err(_) => Default::default(),
     };
-    let mut items: Vec<serde_json::Value> = archives
-        .iter()
-        .filter_map(|a| {
-            let finding = findings.get(a.id.as_str());
-            if finding.is_none() && a.heal_failed_at.is_none() {
-                return None;
-            }
-            Some(json!({
-                "id": a.id.as_str(),
-                "title": a.title,
-                "file": a.file,
-                "arcsize": a.arcsize,
-                "heal_failed_at": a.heal_failed_at,
-                "finding": finding,
-            }))
-        })
-        .collect();
+    let mut items: Vec<serde_json::Value> = Vec::new();
+    for a in &archives {
+        let finding = findings.get(a.id.as_str());
+        if finding.is_none() && a.heal_failed_at.is_none() {
+            continue;
+        }
+        // What "delete and download again" would fetch, so the list can say so (or disable it).
+        let redownload = crate::plugins::pick_redownload_source(&state, a)
+            .await
+            .map(|(url, plugin)| json!({ "url": url, "plugin": plugin }));
+        items.push(json!({
+            "id": a.id.as_str(),
+            "title": a.title,
+            "file": a.file,
+            "arcsize": a.arcsize,
+            "heal_failed_at": a.heal_failed_at,
+            "finding": finding,
+            "sources": crate::plugins::source_urls(&a.tags),
+            "primary_source": a.primary_source.as_deref().map(|p| format!("https://{p}")),
+            "redownload": redownload,
+        }));
+    }
     items.sort_by(|a, b| a["title"].as_str().cmp(&b["title"].as_str()));
     axum::Json(json!({
         "running": running,

@@ -42,11 +42,16 @@ This assumes the host already serves HTTPS through nginx (the existing `ix-nginx
 container runs with `network_mode: host`, which is why the sink only needs loopback). If it does
 not, see the commented-out `cloudflared` service in `compose.yaml` instead.
 
-### 1. Build the image
+### 1. Get the image
 
-The `telemetry-ingest` subcommand is not in any released image yet, so build from this repository.
-`Dockerfile.ingest` reuses the application Dockerfile's `rust-builder` stage (so the glibc matches
-bookworm) and ships only the one binary — 255 MB instead of the full image's several GB:
+`.github/workflows/telemetry.yml` publishes `ghcr.io/thelastfantasy/lanrurugi-telemetry:latest`, and
+re-publishes it **only when the sink's own code changes** — a finger-print of
+`telemetry_ingest.rs`, the CLI wiring, `heartbeat.rs` and this directory is the gate, so a program
+version bump does not touch it. Point `LANRURUGI_IMAGE` at that tag.
+
+Building it from source is the alternative (e.g. to run an unreleased change). `Dockerfile.ingest`
+reuses the application Dockerfile's `rust-builder` stage (so the glibc matches bookworm) and ships
+only the one binary — 255 MB instead of the full image's several GB:
 
 ```sh
 podman build --target rust-builder -t lrr-telemetry-builder .
@@ -55,6 +60,11 @@ podman create --name lrr-tb lrr-telemetry-builder
 mkdir -p /tmp/lanrurugi-ingest
 podman cp lrr-tb:/build/target/release/lanrurugi-server /tmp/lanrurugi-ingest/
 podman rm lrr-tb
+# The dashboard `telemetry-ingest` serves at `/`.
+podman build --target telemetry-ui -t lrr-telemetry-ui .
+podman create --name lrr-ui lrr-telemetry-ui
+podman cp lrr-ui:/ui/dist /tmp/lanrurugi-ingest/ui
+podman rm lrr-ui
 cp telemetry/Dockerfile.ingest /tmp/lanrurugi-ingest/
 podman build -f /tmp/lanrurugi-ingest/Dockerfile.ingest \
   -t localhost/lanrurugi-telemetry:local /tmp/lanrurugi-ingest

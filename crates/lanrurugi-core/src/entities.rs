@@ -83,6 +83,17 @@ pub struct Archive {
     /// existed, until the backfill job fills it in. Saving a record never clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blake3: Option<String>,
+    /// The one source this archive is known to be downloadable from, in `source:` tag form (no
+    /// scheme): the URL it was downloaded from, or the source its metadata plugin declared primary.
+    /// Not a tag, so not shown or searched; "download again" prefers it over other `source:` tags,
+    /// which a metadata plugin may add for other sites (and which may not work) (#302).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_source: Option<String>,
+    /// How many pages the reader's list held when it saved `lastreadpage`; `None` when the writer
+    /// did not say (an older client, the library's "mark as read"). When an unreadable patch's pages
+    /// drop out, it tells which numbering a saved page is in — before or after (#302).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_pages: Option<u32>,
 }
 
 impl Archive {
@@ -167,6 +178,13 @@ pub struct Grouping {
     /// The tank's own reading-progress marker (a global page number spanning all archives, per
     /// legacy `translate_global_page`) — distinct from any single archive's `lastreadpage`.
     pub progress: u32,
+    /// When this Tankoubon itself was last opened, independent of its members' own `lastreadtime`:
+    /// reading a tank says nothing about reading one of its volumes standalone, and the library's
+    /// "recently read" order ranks a tank by this value. `None` on records written before the field
+    /// existed — the search side then falls back to the MAX `lastreadtime` across members, which is
+    /// what it had to impute for every tank before this field existed.
+    #[serde(default)]
+    pub lastreadtime: Option<i64>,
     /// Ordered archive IDs (order is significant: volume order).
     pub archives: Vec<ArchiveId>,
     /// `true` once someone has explicitly picked a cover via `PUT /tankoubons/{id}/thumbnail`

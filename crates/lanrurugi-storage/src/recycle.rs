@@ -73,6 +73,11 @@ pub struct RecycleSnapshot {
     pub has_patch: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blake3: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_source: Option<String>,
+    /// Travels with `lastreadpage`: the page list length it was counted in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_pages: Option<u32>,
     #[serde(default)]
     pub corrupted_pages: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -382,10 +387,9 @@ pub async fn move_out_of_bin(
     destination: &Path,
 ) -> Result<Option<PathBuf>> {
     let payload = payload_dir(library, id);
-    if let Some(parent) = destination.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    tokio::fs::rename(payload.join(file_name), destination).await?;
+    // Restoring into a bucket directory that a prune elsewhere may remove the moment it is empty.
+    let source = payload.join(file_name);
+    crate::fsutil::in_dir(destination, || tokio::fs::rename(&source, destination)).await?;
     let mut patch_dest = None;
     if let Some(name) = patch_file_name {
         let dest = destination.with_file_name(name);
@@ -461,6 +465,8 @@ mod tests {
                 toc: vec![],
                 has_patch: false,
                 blake3: None,
+                primary_source: None,
+                progress_pages: None,
                 corrupted_pages: vec![],
                 heal_failed_at: None,
                 version_history: vec![],

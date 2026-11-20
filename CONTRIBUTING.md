@@ -122,6 +122,11 @@ mise run test-frontend-e2e    # Playwright——真实后端 + Redis，Chromium 
 ——这不会在那一次运行之外持续存在。完整验证指南见 `specs/003-ui-test-automation/quickstart.md`。
 
 
+## 开发规范（`docs/dev/`）
+
+- [修改已存储的记录](docs/dev/data-writes.md)：修改已有记录一律用仓库的 `update` / `update_then`，`create_or_replace` 只用于新建和整体替换（#302）。
+- [Issue / PR 标签](docs/dev/labels.md)：每个 issue 和 PR 打一个 `type:` 标签，以及至少一个 `area:` 标签。
+
 ## 设计文档（`specs/`）
 
 每个功能在自己的 `specs/<编号>-<名字>/` 下带 `spec.md`、`plan.md`、`tasks.md`（以及 `research.md`、

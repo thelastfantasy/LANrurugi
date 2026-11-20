@@ -141,7 +141,7 @@ pub(crate) async fn static_category_named(
     state
         .repos
         .categories
-        .save(&category)
+        .create_or_replace(&category)
         .await
         .map_err(|e| e.to_string())?;
     Ok(category.catid)
@@ -162,7 +162,7 @@ async fn create_category(
         pinned: params.pinned,
         visible_to_guest: params.visible_to_guest,
     };
-    match state.repos.categories.save(&category).await {
+    match state.repos.categories.create_or_replace(&category).await {
         Ok(()) => {
             record_manual(
                 &state,
@@ -244,32 +244,26 @@ async fn update_category(
     Path(id): Path<CategoryId>,
     axum::Form(params): axum::Form<UpdateCategoryParams>,
 ) -> Response {
-    let mut category = match state.repos.categories.get(&id).await {
-        Ok(Some(c)) => c,
-        Ok(None) => {
-            return not_found(
-                "update_category",
-                format!("{id} doesn't exist in the database!"),
-            )
-        }
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "update_category",
-                e.to_string(),
-            )
-        }
-    };
-    if let Some(name) = params.name {
-        category.name = name;
-    }
-    if let Some(search) = params.search {
-        category.search = Some(search).filter(|s| !s.is_empty());
-    }
-    category.pinned = params.pinned;
-    category.visible_to_guest = params.visible_to_guest;
-    match state.repos.categories.save(&category).await {
-        Ok(()) => axum::Json(json!({
+    let updated = state
+        .repos
+        .categories
+        .update(&id, |category| {
+            if let Some(name) = params.name {
+                category.name = name;
+            }
+            if let Some(search) = params.search {
+                category.search = Some(search).filter(|s| !s.is_empty());
+            }
+            category.pinned = params.pinned;
+            category.visible_to_guest = params.visible_to_guest;
+        })
+        .await;
+    match updated {
+        Ok(None) => not_found(
+            "update_category",
+            format!("{id} doesn't exist in the database!"),
+        ),
+        Ok(Some(_)) => axum::Json(json!({
             "operation": "update_category",
             "category_id": id,
             "success": 1,
@@ -381,7 +375,7 @@ pub async fn add_archive_to_category(
     catid: &str,
     archive: &str,
 ) -> Result<(), AddToCategoryError> {
-    let mut category = state
+    let category = state
         .repos
         .categories
         .get(&CategoryId(catid.to_string()))
@@ -420,40 +414,36 @@ pub async fn add_archive_to_category(
     if !exists {
         return Err(AddToCategoryError::ArchiveNotFound);
     }
-    if !category.archives.contains(&archive_id) {
-        category.archives.push(archive_id);
-    }
+    // Onto the member list as it is now: two adds to one category at once must both land.
     state
         .repos
         .categories
-        .save(&category)
+        .update(&category.catid, |c| {
+            if !c.archives.contains(&archive_id) {
+                c.archives.push(archive_id);
+            }
+        })
         .await
-        .map_err(|e| AddToCategoryError::Storage(e.to_string()))
+        .map_err(|e| AddToCategoryError::Storage(e.to_string()))?
+        .ok_or(AddToCategoryError::CategoryNotFound)
+        .map(|_| ())
 }
 
 async fn remove_from_category(
     State(state): State<AppState>,
     Path((id, archive)): Path<(CategoryId, ArchiveId)>,
 ) -> Response {
-    let mut category = match state.repos.categories.get(&id).await {
-        Ok(Some(c)) => c,
-        Ok(None) => {
-            return not_found(
-                "remove_from_category",
-                format!("{id} doesn't exist in the database!"),
-            )
-        }
-        Err(e) => {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "remove_from_category",
-                e.to_string(),
-            )
-        }
-    };
-    category.archives.retain(|a| a != &archive);
-    match state.repos.categories.save(&category).await {
-        Ok(()) => {
+    match state
+        .repos
+        .categories
+        .update(&id, |c| c.archives.retain(|a| a != &archive))
+        .await
+    {
+        Ok(None) => not_found(
+            "remove_from_category",
+            format!("{id} doesn't exist in the database!"),
+        ),
+        Ok(Some(_)) => {
             axum::Json(json!({ "operation": "remove_from_category", "success": 1 })).into_response()
         }
         Err(e) => error(

@@ -1467,15 +1467,13 @@ async fn apply_script_tag_updates(state: &AppState, plugin: &str, data: &Value) 
         ) else {
             continue;
         };
-        if let Ok(Some(mut archive)) = state
+        let _ = state
             .repos
             .archives
-            .get(&lanrurugi_core::ids::ArchiveId(id.to_string()))
-            .await
-        {
-            archive.tags = tags.to_string();
-            let _ = state.repos.archives.save(&archive).await;
-        }
+            .update(&lanrurugi_core::ids::ArchiveId(id.to_string()), |archive| {
+                archive.tags = tags.to_string();
+            })
+            .await;
     }
 }
 
@@ -1561,7 +1559,7 @@ async fn apply_foldertocat_categories(state: &AppState, plugin: &str, data: &Val
             pinned: false,
             visible_to_guest: false,
         };
-        let _ = state.repos.categories.save(&category).await;
+        let _ = state.repos.categories.create_or_replace(&category).await;
     }
 }
 
@@ -1572,6 +1570,12 @@ async fn apply_foldertocat_categories(state: &AppState, plugin: &str, data: &Val
 pub struct AutoPluginSummary {
     pub successes: u32,
     pub failures: u32,
+    /// Plugins that reported back "this archive is not mine to describe" (a structured
+    /// `PluginErrorException`, e.g. the EH metadata plugin's own "Skipping archive without
+    /// connecting to EH" on an archive whose title has no gallery id). Counted apart from
+    /// `failures`: nothing broke, the plugin simply declined, and a declined plugin is the normal
+    /// case for every archive outside that plugin's site.
+    pub declined: u32,
     pub added_tags: u32,
     /// The last plugin-returned non-empty title, if any (later plugins in run order win, matching
     /// legacy's own `$newtitle` being reassigned on every plugin that returns one).
@@ -1602,6 +1606,7 @@ pub async fn run_enabled_metadata_plugins_on_archive(
     let mut summary = AutoPluginSummary {
         successes: 0,
         failures: 0,
+        declined: 0,
         added_tags: 0,
         new_title: None,
     };
@@ -1672,8 +1677,19 @@ pub async fn run_enabled_metadata_plugins_on_archive(
         {
             Ok(data) => data,
             Err(e) => {
-                tracing::warn!(%archive_id, plugin = %ns, error = %e, "auto-run metadata plugin failed");
-                summary.failures += 1;
+                // `PluginSkipException` = "this archive is not mine to describe": the routine
+                // answer for every archive outside the plugin's own site, so it is counted apart
+                // and logged at info. Everything else — a crash, a timeout, a login/API failure,
+                // an unparseable reply — stays a warning, a failure count, and a diagnostics
+                // event, exactly as before.
+                if plugin_declined(&e) {
+                    tracing::info!(%archive_id, plugin = %ns, reason = %e, "auto-run metadata plugin declined the archive");
+                    summary.declined += 1;
+                } else {
+                    tracing::warn!(%archive_id, plugin = %ns, error = %e, "auto-run metadata plugin failed");
+                    crate::diagnostics::capture_plugin_error(&ns, &e.to_string());
+                    summary.failures += 1;
+                }
                 continue;
             }
         };
@@ -1683,90 +1699,93 @@ pub async fn run_enabled_metadata_plugins_on_archive(
             continue;
         }
 
-        let Ok(Some(mut archive)) = state
+        // `Model/Plugins.pm:292-296` — tag rules run on the plugin's freshly returned tags only,
+        // before they're merged into the record's, and only when `tagruleson` is set.
+        let new_tags = match data.get("tags").and_then(Value::as_str) {
+            Some(tags) if !tags.trim().is_empty() => {
+                Some(match get_computed_tagrules(state).await {
+                    Some(rules_text) => tag_rules::apply_tag_rules(tags, &rules_text),
+                    None => tags.to_string(),
+                })
+            }
+            _ => None,
+        };
+        let new_title = data
+            .get("title")
+            .and_then(Value::as_str)
+            .filter(|t| !t.trim().is_empty());
+        let new_summary = data
+            .get("summary")
+            .and_then(Value::as_str)
+            .filter(|t| !t.trim().is_empty());
+        // SDK 1.1: the source this plugin vouches for (its own site's page for the archive). Taken
+        // only while the archive has none: the URL a download actually came from outranks it.
+        let declared_primary = data
+            .get("primary_source")
+            .and_then(Value::as_str)
+            .map(trim_url)
+            .filter(|s| !s.is_empty());
+
+        // Merged onto the record as it is now (the plugin run took a while), under its lock.
+        let updated = state
             .repos
             .archives
-            .get(&lanrurugi_core::ids::ArchiveId(archive_id.to_string()))
-            .await
-        else {
-            summary.failures += 1;
-            continue;
-        };
-        let old_title = archive.title.clone();
-        let old_tags = archive.tags.clone();
-
-        // `set_tags($id, $newtags, 1)`'s real append+dedupe semantics (`Utils/Database.pm`) — new
-        // tags are appended after the existing ones, then deduplicated (first occurrence wins),
-        // not a blind overwrite.
-        if let Some(new_tags) = data.get("tags").and_then(Value::as_str) {
-            if !new_tags.trim().is_empty() {
-                // `Model/Plugins.pm:292-296` — tag rules run on the plugin's freshly returned tags
-                // only, before they're merged into `old_tags`, and only when `tagruleson` is set.
-                let rewritten;
-                let new_tags = match get_computed_tagrules(state).await {
-                    Some(rules_text) => {
-                        rewritten = tag_rules::apply_tag_rules(new_tags, &rules_text);
-                        rewritten.as_str()
+            .update_then(
+                &lanrurugi_core::ids::ArchiveId(archive_id.to_string()),
+                |archive| {
+                    // `set_tags($id, $newtags, 1)`'s append+dedupe semantics (`Utils/Database.pm`):
+                    // new tags go after the existing ones, first occurrence wins.
+                    if let Some(new_tags) = &new_tags {
+                        let mut seen = std::collections::HashSet::new();
+                        let merged: Vec<&str> = archive
+                            .tags
+                            .split(',')
+                            .chain(new_tags.split(','))
+                            .map(str::trim)
+                            .filter(|t| !t.is_empty() && seen.insert(*t))
+                            .collect();
+                        archive.tags = merged.join(",");
                     }
-                    None => new_tags,
-                };
-                let mut seen = std::collections::HashSet::new();
-                let mut merged = Vec::new();
-                for t in old_tags
-                    .split(',')
-                    .chain(new_tags.split(','))
-                    .map(str::trim)
-                    .filter(|t| !t.is_empty())
-                {
-                    if seen.insert(t.to_string()) {
-                        merged.push(t.to_string());
+                    if let Some(title) = new_title {
+                        archive.title = title.to_string();
                     }
-                }
+                    if let Some(summary_text) = new_summary {
+                        archive.summary = summary_text.to_string();
+                    }
+                    if let Some(primary) = &declared_primary {
+                        if archive.primary_source.is_none() {
+                            archive.primary_source = Some(primary.clone());
+                        }
+                        // The mark points at a `source:` tag, so the tag has to exist.
+                        let tag = format!("source:{primary}");
+                        if !archive.tags.split(',').any(|t| t.trim() == tag) {
+                            archive.tags = if archive.tags.is_empty() {
+                                tag
+                            } else {
+                                format!("{},{tag}", archive.tags)
+                            };
+                        }
+                    }
+                },
+                |old, new| crate::archives::reindex_title_and_tags(state, old, new),
+            )
+            .await;
+        if updated.as_ref().is_ok_and(|a| a.is_some()) {
+            if let Some(new_tags) = &new_tags {
                 summary.added_tags +=
                     new_tags.split(',').filter(|t| !t.trim().is_empty()).count() as u32;
-                archive.tags = merged.join(",");
             }
-        }
-        if let Some(title) = data.get("title").and_then(Value::as_str) {
-            if !title.trim().is_empty() {
-                archive.title = title.to_string();
+            if let Some(title) = new_title {
                 summary.new_title = Some(title.to_string());
             }
         }
-        if let Some(summary_text) = data.get("summary").and_then(Value::as_str) {
-            if !summary_text.trim().is_empty() {
-                archive.summary = summary_text.to_string();
-            }
-        }
 
-        match state.repos.archives.save(&archive).await {
-            Ok(()) => {
+        match updated {
+            Ok(None) => summary.failures += 1,
+            Ok(Some(archive)) => {
                 summary.successes += 1;
-                if archive.title != old_title {
-                    if let Err(e) = lanrurugi_search::indexer::update_title_index(
-                        &state.redis.search,
-                        &state.equivalence,
-                        archive_id,
-                        &old_title,
-                        &archive.title,
-                    )
-                    .await
-                    {
-                        tracing::warn!(%archive_id, error = %e, "failed to update title search index");
-                    }
-                }
-                if archive.tags != old_tags {
-                    if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
-                        &state.redis.search,
-                        &state.equivalence,
-                        archive_id,
-                        &old_tags,
-                        &archive.tags,
-                    )
-                    .await
-                    {
-                        tracing::warn!(%archive_id, error = %e, "failed to update tag search index");
-                    }
+                if declared_primary.is_some() {
+                    crate::download_sources::sync_sidecar_primary(state, &archive).await;
                 }
             }
             Err(e) => {
@@ -1948,8 +1967,12 @@ async fn use_plugin_sync(
             .await;
             // A failed manual run is a defect the administrator wants to report, so it also becomes
             // a diagnostics event (specs/018). Plugin failures log at `warn`, below the bridge's
-            // error level, hence the explicit capture here.
-            crate::diagnostics::capture_plugin_error(&plugin, &e.to_string());
+            // error level, hence the explicit capture here. A plugin *declining* the archive
+            // (`PluginSkipException`) is not a defect — the message still goes back to the user,
+            // but there is nothing to report to diagnostics.
+            if !plugin_declined(&e) {
+                crate::diagnostics::capture_plugin_error(&plugin, &e.to_string());
+            }
             axum::Json(json!({
                 "operation": "use_plugin",
                 "success": 0,
@@ -3042,6 +3065,20 @@ const MAX_DOWNLOAD_RETRIES: u32 = 4;
     job_id
 }
 
+/// The `error_code` a plugin's `PluginSkipException` (`plugin-sdk.ts`) carries when it is merely
+/// declining an archive rather than failing.
+const PLUGIN_SKIP_CODE: &str = "NOT_APPLICABLE";
+
+/// Whether `e` is a plugin *declining* the archive (`PluginSkipException`) rather than a real
+/// failure — the one distinction that decides info-versus-warning and counted-versus-not.
+fn plugin_declined(e: &lanrurugi_plugin::pool::PoolError) -> bool {
+    matches!(
+        e,
+        lanrurugi_plugin::pool::PoolError::PluginError(err)
+            if err.error_code.as_deref() == Some(PLUGIN_SKIP_CODE)
+    )
+}
+
 /// Builds a [`lanrurugi_core::queue_error::QueueError`] from a plugin-execution failure
 /// (`PluginPool::execute`'s `Err`) — `QueueError::PluginReported` when the underlying
 /// `ResponseError` carries a real `error_code` (the plugin itself threw a structured
@@ -3367,6 +3404,63 @@ pub(crate) async fn resolve_download_plugin_for_domain(
 
 /// Every installed namespace declaring `type: "download"`, in `discover_namespaces` order — the
 /// candidate set both resolvers above narrow down by URL/domain.
+/// An archive's `source:` tags as fetchable URLs. The tag holds [`trim_url`]'s form (no scheme),
+/// so `https://` is put back.
+pub(crate) fn source_urls(tags: &str) -> Vec<String> {
+    tags.split(',')
+        .filter_map(|t| t.trim().strip_prefix("source:"))
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| {
+            if v.starts_with("http://") || v.starts_with("https://") {
+                v.to_string()
+            } else {
+                format!("https://{v}")
+            }
+        })
+        .collect()
+}
+
+/// Which of an archive's sources to download it from again, and with which download plugin: its
+/// primary source while that is still one of its `source:` tags and a download plugin takes it,
+/// otherwise the source taken by the plugin that comes first in the download plugins' priority
+/// order. `None` when no source matches an installed download plugin.
+pub(crate) async fn pick_redownload_source(
+    state: &AppState,
+    archive: &lanrurugi_core::entities::Archive,
+) -> Option<(String, String)> {
+    let sources = source_urls(&archive.tags);
+    if sources.is_empty() {
+        return None;
+    }
+    let namespaces = sort_namespaces_by_priority(state, &download_namespaces(state).await).await;
+    let primary = archive
+        .primary_source
+        .as_deref()
+        .and_then(|p| sources.iter().find(|u| trim_url(u) == p));
+    if let Some(url) = primary {
+        if let Some((ns, _)) = find_matching_plugin(state, &namespaces, url).await {
+            return Some((url.clone(), ns));
+        }
+    }
+    for ns in namespaces {
+        let Ok(info) = state.plugins.plugin_info(&ns).await else {
+            continue;
+        };
+        let Some(re) = info
+            .url_pattern
+            .as_deref()
+            .and_then(|p| regex::Regex::new(p).ok())
+        else {
+            continue;
+        };
+        if let Some(url) = sources.iter().find(|u| re.is_match(u)) {
+            return Some((url.clone(), ns));
+        }
+    }
+    None
+}
+
 async fn download_namespaces(state: &AppState) -> Vec<String> {
     let mut out = Vec::new();
     for ns in discover_namespaces(&state.plugins_dir).await {
@@ -3616,59 +3710,40 @@ pub(crate) async fn ensure_metadata_cached(
 /// Merges `metadata_tags` into an archive's existing tag string — appends tags that aren't
 /// already present, leaves existing ones untouched. Updates the archive record + search index.
 pub(crate) async fn apply_metadata_tags(state: &AppState, archive_id: &str, metadata_tags: &str) {
-    let mut archive = match state
+    let updated = state
         .repos
         .archives
-        .get(&lanrurugi_core::ids::ArchiveId(archive_id.to_string()))
-        .await
-    {
-        Ok(Some(a)) => a,
-        _ => return,
-    };
-
-    let existing: std::collections::HashSet<&str> = archive
-        .tags
-        .split(',')
-        .map(|t| t.trim())
-        .filter(|t| !t.is_empty())
-        .collect();
-    // `seen` starts from the archive's own tags and then absorbs each accepted input tag, so a
-    // duplicated value inside `metadata_tags` is written once instead of twice.
-    let mut seen = existing.clone();
-    let new_tags: Vec<&str> = metadata_tags
-        .split(',')
-        .map(|t| t.trim())
-        .filter(|t| !t.is_empty() && seen.insert(t))
-        .collect();
-
-    if new_tags.is_empty() {
-        return;
-    }
-
-    let old_tags = archive.tags.clone();
-    let merged = if archive.tags.is_empty() {
-        new_tags.join(", ")
-    } else {
-        format!("{}, {}", archive.tags, new_tags.join(", "))
-    };
-    archive.tags = merged;
-
-    if let Err(e) = state.repos.archives.save(&archive).await {
+        .update_then(
+            &lanrurugi_core::ids::ArchiveId(archive_id.to_string()),
+            |archive| {
+                // `seen` starts from the archive's own tags and then absorbs each accepted input
+                // tag, so a duplicated value inside `metadata_tags` is written once, not twice.
+                let mut seen: std::collections::HashSet<String> = archive
+                    .tags
+                    .split(',')
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect();
+                let new_tags: Vec<&str> = metadata_tags
+                    .split(',')
+                    .map(|t| t.trim())
+                    .filter(|t| !t.is_empty() && seen.insert(t.to_string()))
+                    .collect();
+                if new_tags.is_empty() {
+                    return;
+                }
+                archive.tags = if archive.tags.is_empty() {
+                    new_tags.join(", ")
+                } else {
+                    format!("{}, {}", archive.tags, new_tags.join(", "))
+                };
+            },
+            // Re-indexed under the lock, so the new tags are searchable immediately and in order.
+            |old, new| crate::archives::reindex_title_and_tags(state, old, new),
+        )
+        .await;
+    if let Err(e) = updated {
         tracing::warn!(%archive_id, error = %e, "failed to save metadata tags to archive");
-        return;
-    }
-
-    // Re-index so the new tags are searchable immediately.
-    if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
-        &state.redis.search,
-        &state.equivalence,
-        archive_id,
-        &old_tags,
-        &archive.tags,
-    )
-    .await
-    {
-        tracing::warn!(%archive_id, error = %e, "failed to update search index after metadata tag merge");
     }
 }
 
@@ -4394,6 +4469,50 @@ pub(crate) mod tests {
     use super::*;
     use lanrurugi_plugin::protocol::PluginParameter;
     use lanrurugi_storage::plugin_options::DomainRuleOverride;
+
+    #[test]
+    fn only_the_skip_code_counts_as_declining() {
+        use lanrurugi_plugin::pool::PoolError;
+        use lanrurugi_plugin::protocol::ResponseError;
+
+        let declined = PoolError::PluginError(ResponseError {
+            message: "Skipping archive without connecting to EH".to_string(),
+            kind: "plugin_error".to_string(),
+            error_code: Some(PLUGIN_SKIP_CODE.to_string()),
+            data: None,
+        });
+        assert!(plugin_declined(&declined));
+
+        // Everything else stays a failure: a plugin's own real error, and a crash.
+        let failed = PoolError::PluginError(ResponseError {
+            message: "Search gallery by title failed".to_string(),
+            kind: "plugin_error".to_string(),
+            error_code: Some("Search gallery by title failed".to_string()),
+            data: None,
+        });
+        assert!(!plugin_declined(&failed));
+        let crashed = PoolError::PluginError(ResponseError {
+            message: "boom".to_string(),
+            kind: "internal".to_string(),
+            error_code: None,
+            data: None,
+        });
+        assert!(!plugin_declined(&crashed));
+    }
+
+    #[test]
+    fn source_urls_restore_the_scheme_the_tag_drops_and_skip_other_tags() {
+        assert_eq!(
+            source_urls(
+                "artist:x, source:e-hentai.org/g/1/ab ,source:https://chaika.moe/archive/2,source:"
+            ),
+            vec![
+                "https://e-hentai.org/g/1/ab".to_string(),
+                "https://chaika.moe/archive/2".to_string(),
+            ]
+        );
+        assert!(source_urls("artist:x").is_empty());
+    }
 
     fn plugin_info_with_parameters(parameters: Vec<PluginParameter>) -> PluginInfo {
         PluginInfo {

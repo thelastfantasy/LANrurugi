@@ -233,6 +233,16 @@ similar-looking icons in the same region and the visual difference at screenshot
 subtle enough to miss by eye). A claim of "matches legacy" is not valid until this comparison has
 actually been run and the values shown to agree — not assumed, not eyeballed from a screenshot.
 
+## Development rules live in `docs/dev/` — read the relevant one before that kind of change
+
+- `docs/dev/data-writes.md` — changing a stored archive/category/tankoubon/subscription goes through
+  the repository's `update` / `update_then` (per-record lock, re-read, write only what changed);
+  `create_or_replace` is for new records and deliberate whole replacements only (constitution
+  Principle III, #302). Writes/moves into library directories go through `fsutil::in_dir` (a
+  concurrent prune can remove a bucket directory); the file also has a race-hunting checklist.
+- `docs/dev/labels.md` — every issue and PR gets one `type:` label and at least one `area:` label;
+  apply them when creating the issue/PR (`gh issue create --label …`, `gh pr create --label …`).
+
 ## Issue tracking: only when the user asks
 
 **Do not create GitHub issues on your own initiative.** Creating one when the user asks for it (e.g.

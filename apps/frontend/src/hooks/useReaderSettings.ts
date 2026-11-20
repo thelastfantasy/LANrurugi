@@ -31,6 +31,27 @@ export const K_BEHAVIOR = {
  * `BACK_TOP` scroll incrementally to the edge first, mirroring `j`'s forward behavior. */
 export type KBehavior = (typeof K_BEHAVIOR)[keyof typeof K_BEHAVIOR];
 
+/** What clicking (or tapping) a page side does. `TURN` (the default, and what every click did
+ * before this became configurable) turns immediately, `KEYS` reuses `j`/`k` (so `kBehavior`
+ * applies), `SCROLL` always scrolls one step and turns only at the edge. */
+export const CLICK_ACTION = {
+  KEYS: "keys",
+  SCROLL: "scroll",
+  TURN: "turn",
+} as const;
+
+export type ClickAction = (typeof CLICK_ACTION)[keyof typeof CLICK_ACTION];
+
+/** Pressing `j`/`k` again before the last step finished: `MERGE` (the default, like a browser's
+ * own key scrolling) moves the one target and glides there; `SEQUENTIAL` runs every press in full,
+ * in order, so a `k` among the `j`s visibly scrolls back. */
+export const KEY_REPEAT = {
+  MERGE: "merge",
+  SEQUENTIAL: "sequential",
+} as const;
+
+export type KeyRepeat = (typeof KEY_REPEAT)[keyof typeof KEY_REPEAT];
+
 export interface ReaderSettings {
   hideHeader: boolean;
   mangaMode: boolean;
@@ -48,6 +69,8 @@ export interface ReaderSettings {
   jScrollUnit: JScrollUnit;
   jScrollAmount: number;
   kBehavior: KBehavior;
+  clickAction: ClickAction;
+  keyRepeat: KeyRepeat;
 }
 
 const DEFAULTS: ReaderSettings = {
@@ -67,6 +90,8 @@ const DEFAULTS: ReaderSettings = {
   jScrollUnit: J_SCROLL_UNIT.PERCENT,
   jScrollAmount: 80,
   kBehavior: K_BEHAVIOR.BACK_BOTTOM,
+  clickAction: CLICK_ACTION.TURN,
+  keyRepeat: KEY_REPEAT.MERGE,
 };
 
 function readBool(key: string, fallback: boolean): boolean {
@@ -115,6 +140,18 @@ function readFromLocalStorage(): ReaderSettings {
       return (Object.values(K_BEHAVIOR) as string[]).includes(raw ?? "")
         ? (raw as KBehavior)
         : DEFAULTS.kBehavior;
+    })(),
+    keyRepeat: (() => {
+      const raw = localStorage.getItem("keyRepeat");
+      return (Object.values(KEY_REPEAT) as string[]).includes(raw ?? "")
+        ? (raw as KeyRepeat)
+        : DEFAULTS.keyRepeat;
+    })(),
+    clickAction: (() => {
+      const raw = localStorage.getItem("clickAction");
+      return (Object.values(CLICK_ACTION) as string[]).includes(raw ?? "")
+        ? (raw as ClickAction)
+        : DEFAULTS.clickAction;
     })(),
   };
 }
@@ -175,6 +212,12 @@ function writeToLocalStorage(partial: Partial<ReaderSettings>) {
   }
   if (partial.kBehavior !== undefined) {
     localStorage.setItem("kBehavior", partial.kBehavior);
+  }
+  if (partial.clickAction !== undefined) {
+    localStorage.setItem("clickAction", partial.clickAction);
+  }
+  if (partial.keyRepeat !== undefined) {
+    localStorage.setItem("keyRepeat", partial.keyRepeat);
   }
 }
 

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@/api/client";
+import { Link } from "@/components/common-ui/Link";
 import { useLibrary } from "@/hooks/useLibrary";
 import { routes } from "@/lib/routes";
 import { isTankoubonId } from "@/lib/utils/isTankoubonId";
@@ -249,15 +250,7 @@ export function Library() {
           <i className="fas fa-sad-cry fa-4x" aria-hidden="true"></i>
           <h1>
             {lib.t("No archives to show you! Try")}{" "}
-            <a
-              href={routes.upload()}
-              onClick={(e) => {
-                e.preventDefault();
-                lib.navigate(routes.upload());
-              }}
-            >
-              {lib.t("uploading some")}
-            </a>
+            <Link to={routes.upload()}>{lib.t("uploading some")}</Link>
             ?
           </h1>
         </div>
@@ -374,6 +367,10 @@ export function Library() {
             onReorder={lib.setSelectedIds}
             onRemove={lib.toggleSelected}
             onSelectPage={() => lib.selectAllOnPage()}
+            onSelectResults={() => void lib.selectAllResults()}
+            selectingResults={lib.selectingAllResults}
+            onSortSelection={(mode) => void lib.sortSelection(mode)}
+            sortingSelection={lib.sortingSelection}
             onClear={lib.clearSelection}
             onRunBatch={lib.runBatchOnSelection}
             onRunBatchOnFilter={() => void lib.runBatchOnFilter()}

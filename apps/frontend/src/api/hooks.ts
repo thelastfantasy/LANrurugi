@@ -438,11 +438,12 @@ export function useFilterCounts(filters: readonly string[], base: SearchOptions)
   })
 }
 
-export function useArchiveMetadata(id: string | null) {
+/** `enabled: false` defers the request — long lists only fetch for rows that come into view. */
+export function useArchiveMetadata(id: string | null, enabled = true) {
   return useQuery({
     queryKey: ["archive", id],
     queryFn: () => fetchJson<ArchiveMetadata>(`/archives/${id}/metadata`),
-    enabled: id !== null,
+    enabled: id !== null && enabled,
   })
 }
 
@@ -466,10 +467,22 @@ export function usePageDimensions(id: string | null, count: number, enabled: boo
 export function useUpdateProgress(id: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (page: number) => sendJson("PUT", `/archives/${id}/progress/${page}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["archive", id] })
-      queryClient.invalidateQueries({ queryKey: ["archives"] })
+    // `pages`: the length of the list `page` was counted in, so the server can tell old page
+    // numbers from new ones when an unreadable patch's pages drop out of the list.
+    mutationFn: ({ page, pages }: { page: number; pages: number }) =>
+      sendJson("PUT", `/archives/${id}/progress/${page}?pages=${pages}`),
+    onSuccess: (_data, { page }) => {
+      // The reader saves on every page turn, so refetching here made each turn cost a
+      // `/metadata` round trip — a long scroll read as a request loop in the dev overlay (#dev).
+      // The new values are already known, so write them into the cache instead.
+      if (id !== null) {
+        const lastreadtime = Math.floor(Date.now() / 1000)
+        queryClient.setQueryData<ArchiveMetadata>(["archive", id], (previous) =>
+          previous === undefined ? previous : { ...previous, progress: page, lastreadtime },
+        )
+      }
+      // `['archives']` is left alone on purpose: it has no staleTime, so the library refetches it
+      // when it next mounts rather than on every page turned in the reader.
     },
   })
 }
@@ -1067,9 +1080,18 @@ export function useUpdateTankoubonProgress(id: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (page: number) => sendJson("PUT", `/tankoubons/${id}/progress/${page}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tankoubon", id] })
-      queryClient.invalidateQueries({ queryKey: ["tankoubons"] })
+    onSuccess: (_data, page) => {
+      // Same reasoning as `useUpdateProgress`: a Tankoubon turn must not refetch its metadata.
+      if (id !== null) {
+        queryClient.setQueryData<TankoubonMetadata>(["tankoubon", id], (previous) =>
+          previous === undefined ? previous : { ...previous, progress: page },
+        )
+        queryClient.setQueryData<TankoubonFullResponse>(["tankoubon-full", id], (previous) =>
+          previous === undefined
+            ? previous
+            : { ...previous, result: { ...previous.result, progress: page } },
+        )
+      }
     },
   })
 }
@@ -1207,6 +1229,12 @@ export function useLogin() {
     // Login page could mount the library with the cached pre-login `logged_in:false` status and
     // bounce straight back; with it, the provider observes the new cookies first.
     onSuccess: async () => {
+      // A guest-mode browser already populated identity-scoped caches with guest answers — notably
+      // `["settings"]`, whose `theme` is the *guest* theme. Those stay fresh for their staleTime,
+      // so the admin's own theme/settings were never fetched after logging in (the page kept the
+      // guest theme until a reload). Dropping every identity-dependent result matches what logout
+      // does; the session query is kept and invalidated below so guards still see it.
+      queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== SESSION_QUERY_KEY[0] })
       await queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY })
       // A browser that loaded the login page had no session, so the boot-time attempt found
       // capture disabled. This is what actually starts diagnostics for a fresh login.
@@ -2004,6 +2032,22 @@ export function useStopIntegrityScan() {
 }
 
 /** Checks one damaged archive again; clears its mark when the file opens now (#291). */
+/** Moves a damaged archive to the recycle bin and queues its source for download again. */
+export function useRedownloadDamagedArchive() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<{ url: string; plugin: string; queue_item: string; start_error: string | null }>(
+        "POST",
+        `/database/integrity-scan/archives/${encodeURIComponent(id)}/redownload`,
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["integrity-scan"] })
+      void queryClient.invalidateQueries({ queryKey: ["archives"] })
+    },
+  })
+}
+
 export function useRecheckArchive() {
   const queryClient = useQueryClient()
   return useMutation({

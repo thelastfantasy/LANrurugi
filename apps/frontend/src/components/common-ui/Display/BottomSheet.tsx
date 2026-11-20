@@ -13,6 +13,7 @@ export function BottomSheet({
   onExited,
   cancelLabel,
   children,
+  zIndex = 9000,
 }: {
   open?: boolean
   onClose: () => void
@@ -20,6 +21,8 @@ export function BottomSheet({
   onExited?: () => void
   cancelLabel: ReactNode
   children: ReactNode
+  /** The backdrop's layer; the sheet sits one above. Raised for a sheet that must cover a modal. */
+  zIndex?: number
 }) {
   const palette = useMenuPalette()
   // Uncontrolled: opened one frame after mount so the entry slide plays.
@@ -48,13 +51,13 @@ export function BottomSheet({
       <BaseDrawer.Portal>
         <BaseDrawer.Backdrop
           className="fixed inset-0 bg-black opacity-[calc(0.5*(1-var(--drawer-swipe-progress)))] transition-opacity duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 data-[swiping]:duration-0"
-          style={{ zIndex: 9000 }}
+          style={{ zIndex }}
         />
         {/* Sized to the dynamic viewport: with `inset: 0` the bottom edge follows the layout viewport,
             which mobile browsers move while their toolbar collapses. */}
         <BaseDrawer.Viewport
           className="fixed inset-x-0 top-0 flex items-end justify-center"
-          style={{ height: "100dvh", zIndex: 9001 }}
+          style={{ height: "100dvh", zIndex: zIndex + 1 }}
         >
           <BaseDrawer.Popup
             className="flex w-full flex-col overflow-hidden outline-none [transform:translateY(var(--drawer-swipe-movement-y))] transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] data-[ending-style]:[transform:translateY(100%)] data-[starting-style]:[transform:translateY(100%)] data-[swiping]:select-none data-[swiping]:duration-0"

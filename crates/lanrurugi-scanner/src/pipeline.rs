@@ -188,6 +188,13 @@ pub async fn run(
                 }
                 tracing::info!(?path, ?outcome, "ingested file")
             }
+            Ok(Err(e)) if !path.exists() => {
+                // The file was removed between the watcher's event and this read (a cancelled or
+                // replaced download, the recycle bin, another ingest that renamed it). There is
+                // nothing to catalogue and nothing went wrong, so it must not reach the watcher's
+                // failure channel or the log at warning level.
+                tracing::debug!(?path, error = %e, "watched file vanished before it could be ingested");
+            }
             Ok(Err(e)) => {
                 if let Some(tx) = &new_archive_tx {
                     let _ = tx.send(IngestEvent::Failed {
@@ -399,7 +406,20 @@ pub async fn ingest_file_with_policy(
         date_added: read_date_added_settings(&mut config_conn).await,
         defer_file_path,
     };
-    let fingerprint = fingerprint(path, blake3).await?;
+    // Cataloguing a hash-named file with no record (a rebuild after Redis was lost): its sidecar
+    // still has the fingerprint, valid while the file has not changed — reading a whole library
+    // again just to recompute it is the slow part of a rebuild.
+    let remembered = if blake3.is_none() {
+        // Reads up to 128 KiB per archive: off the reactor, like `fingerprint`.
+        let (path, id) = (path.to_path_buf(), id.clone());
+        lanrurugi_core::concurrency::run_blocking(move || sidecar_fingerprint(&path, &id))
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+    let fingerprint = fingerprint(path, blake3.or(remembered.as_deref())).await?;
     catalogue_new_archive(
         archives,
         search_pool,
@@ -426,6 +446,20 @@ pub async fn ingest_file_with_policy(
 struct DateAddedSettings {
     enabled: bool,
     use_last_modified: bool,
+}
+
+/// The fingerprint a hash-named file's sidecar recorded, while the file still matches it.
+fn sidecar_fingerprint(path: &Path, id: &ArchiveId) -> Option<String> {
+    let library = path.parent()?.parent()?;
+    if !lanrurugi_storage::paths::is_hash_layout_path(library, path, id.as_str()) {
+        return None;
+    }
+    let sidecar = lanrurugi_storage::sidecar::read(library, id.as_str())?;
+    if !sidecar.matches_file(path) {
+        return None;
+    }
+    tracing::info!(%id, "reusing the sidecar's BLAKE3 (size, mtime and sampled bytes unchanged)");
+    sidecar.blake3
 }
 
 /// The caller's fingerprint, or one read from `path` off the async reactor (027 FR-010).
@@ -636,7 +670,7 @@ async fn catalogue_new_archive(
     // `has_patch: false` that would only get corrected the next time some other code path happens
     // to touch this archive's record.
     let has_patch = crate::patch::patch_path_for(path).exists();
-    let mut archive = Archive {
+    let archive = Archive {
         id: id.clone(),
         name: name.clone(),
         title,
@@ -663,8 +697,10 @@ async fn catalogue_new_archive(
         corrupted_pages: Vec::new(),
         has_patch,
         blake3: Some(blake3.to_string()),
+        primary_source: None,
+        progress_pages: None,
     };
-    archives.save(&archive).await?;
+    archives.create_or_replace(&archive).await?;
     // The sidecar is written after the record exists and the bytes are final, never before: a
     // snapshot of an archive nobody can open would be worse than no snapshot. Only hash-layout
     // archives get one (020) — by-name archives carry their original name in the name itself.
@@ -672,30 +708,38 @@ async fn catalogue_new_archive(
         if lanrurugi_storage::paths::is_hash_layout_path(library, path, id.as_str()) {
             // On a rebuild there is no `title_filename`: the name on disk is the id. Falling back
             // to it would overwrite the only copy of the original name with `<id>.zip`, so an
-            // existing sidecar wins. Its `original_path` is preserved for the same reason.
-            let previous = lanrurugi_storage::sidecar::read(library, id.as_str());
-            let original_filename = title_filename
-                .map(str::to_string)
-                .or_else(|| previous.as_ref().map(|s| s.original_filename.clone()))
-                .or_else(|| {
-                    path.file_name()
-                        .and_then(|f| f.to_str())
-                        .map(str::to_string)
-                })
-                .unwrap_or_default();
-            match lanrurugi_storage::sidecar::Sidecar::for_archive(
-                id.as_str(),
-                path,
-                &original_filename,
-                &archive.title,
-            ) {
-                Ok(mut sidecar) => {
-                    sidecar.original_path = previous.map(|s| s.original_path).unwrap_or_default();
-                    if let Err(e) = lanrurugi_storage::sidecar::write(library, &sidecar) {
-                        tracing::warn!(%id, error = %e, "failed to write the archive sidecar");
-                    }
-                }
-                Err(e) => tracing::warn!(%id, error = %e, "failed to build the archive sidecar"),
+            // existing sidecar wins. Its `original_path` is preserved for the same reason. Read
+            // and written under the sidecar's lock: a download's primary source can be amended
+            // into it concurrently.
+            let written = lanrurugi_storage::sidecar::rewrite(library, id.as_str(), |previous| {
+                let original_filename = title_filename
+                    .map(str::to_string)
+                    .or_else(|| previous.as_ref().map(|s| s.original_filename.clone()))
+                    .or_else(|| {
+                        path.file_name()
+                            .and_then(|f| f.to_str())
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_default();
+                let mut sidecar = lanrurugi_storage::sidecar::Sidecar::for_archive(
+                    id.as_str(),
+                    path,
+                    &original_filename,
+                    &archive.title,
+                )?;
+                sidecar.blake3 = archive.blake3.clone();
+                // A fresh record has no primary source yet; a rebuild keeps the one the old
+                // sidecar remembered.
+                sidecar.primary_source = archive
+                    .primary_source
+                    .clone()
+                    .or_else(|| previous.as_ref().and_then(|s| s.primary_source.clone()));
+                sidecar.original_path = previous.map(|s| s.original_path).unwrap_or_default();
+                Ok(sidecar)
+            })
+            .await;
+            if let Err(e) = written {
+                tracing::warn!(%id, error = %e, "failed to write the archive sidecar");
             }
         }
     }
@@ -743,9 +787,12 @@ async fn catalogue_new_archive(
         )
         .await
         {
+            // Only the hash: the record is live by now, and the reader or a plugin may have
+            // changed it while the thumbnail rendered.
             Ok(thumbhash) => {
-                archive.thumbhash = thumbhash;
-                archives.save(&archive).await?;
+                archives
+                    .update(&archive.id, |a| a.thumbhash = thumbhash)
+                    .await?;
             }
             Err(e) => {
                 tracing::warn!(%id, error = %e, "thumbnail generation failed for new archive")
@@ -1125,7 +1172,7 @@ mod tests {
         };
         let mut existing_archive = archives.get(&existing_id).await.unwrap().unwrap();
         existing_archive.file = dir.path().join(&shared_name).to_string_lossy().to_string();
-        archives.save(&existing_archive).await.unwrap();
+        archives.create_or_replace(&existing_archive).await.unwrap();
         // The "existing" archive's real file, at the filename the new file will collide with.
         std::fs::copy(&existing_staged_path, dir.path().join(&shared_name)).unwrap();
 
@@ -1337,7 +1384,7 @@ mod tests {
     /// valid archive and one nonexistent path through the real loop and asserts the exact events
     /// the server consumes.
     #[tokio::test]
-    async fn run_reports_catalogued_and_failed_ingest_events() {
+    async fn run_reports_the_catalogued_event_and_ignores_a_vanished_path() {
         let Some((archive_pool, config_pool, search_pool)) = test_pools(26).await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
@@ -1346,11 +1393,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let thumb_dir = tempfile::tempdir().unwrap();
         let good = make_zip_with_pages(dir.path(), "good-event.zip", 2);
-        let missing = dir.path().join("missing-event.zip");
+        // A path the watcher saw whose file is already gone by the time it is ingested (a cancelled
+        // download, the recycle bin). Not a failure: nothing was there to catalogue.
+        let vanished = dir.path().join("vanished-event.zip");
 
         let (path_tx, path_rx) = mpsc::unbounded_channel();
         path_tx.send(good.clone()).unwrap();
-        path_tx.send(missing.clone()).unwrap();
+        path_tx.send(vanished.clone()).unwrap();
         drop(path_tx);
 
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -1378,12 +1427,10 @@ mod tests {
         }
 
         let id = catalogued.expect("the valid archive must produce a Catalogued event");
-        let (failed_path, reason) = failed.expect("the missing file must produce a Failed event");
-        assert_eq!(
-            failed_path.as_deref(),
-            Some(missing.to_string_lossy().as_ref())
+        assert!(
+            failed.is_none(),
+            "a vanished path must not be reported as a failure, got {failed:?}"
         );
-        assert!(!reason.is_empty());
 
         archives.delete(&ArchiveId(id)).await.unwrap();
         let mut conn = config_pool.get().await.unwrap();

@@ -1,7 +1,12 @@
 import { useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { useBatchDeleteArchives, useIntegrityScan, useRecheckArchive } from "@/api/hooks"
+import {
+  useBatchDeleteArchives,
+  useIntegrityScan,
+  useRecheckArchive,
+  useRedownloadDamagedArchive,
+} from "@/api/hooks"
 import type { DamagedArchive } from "@/api/types"
 import { Modal, Tooltip } from "@/components/common-ui/Display"
 import { Checkbox, CheckboxField } from "@/components/common-ui/Form"
@@ -14,12 +19,14 @@ import { FONT_SIZE_XS } from "@/theme"
 import { toast } from "@/toast"
 
 /** #292/#291: the archives a scan (or a failed self-heal) found damaged, filterable by title or
- * path, with a batch move to the recycle bin and a per-archive re-check for a replaced file. */
+ * path, with a batch move to the recycle bin, a per-archive re-check for a replaced file, and
+ * "delete and download again" from the archive's own source. */
 export function DamagedArchivesModal({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
   const scan = useIntegrityScan()
   const del = useBatchDeleteArchives()
   const recheck = useRecheckArchive()
+  const redownload = useRedownloadDamagedArchive()
   const [filter, setFilter] = useState("")
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
 
@@ -54,6 +61,23 @@ export function DamagedArchivesModal({ onClose }: { onClose: () => void }) {
     setSelected(new Set())
     await scan.refetch()
     toast({ text: t("settings.integrityDeleted") ?? undefined, icon: "success" })
+  }
+
+  async function downloadAgain(a: DamagedArchive) {
+    if (!a.redownload) return
+    if (!(await confirmDialog(t("settings.integrityRedownloadConfirm", { title: a.title, url: a.redownload.url }), true)))
+      return
+    const result = await redownload.mutateAsync(a.id)
+    setSelected((prev) => {
+      const next = new Set(prev)
+      next.delete(a.id)
+      return next
+    })
+    toast(
+      result.start_error
+        ? { text: t("settings.integrityRedownloadNotStarted", { reason: result.start_error }), icon: "warning" }
+        : { text: t("settings.integrityRedownloadQueued"), icon: "success" },
+    )
   }
 
   async function checkAgain(a: DamagedArchive) {
@@ -103,6 +127,13 @@ export function DamagedArchivesModal({ onClose }: { onClose: () => void }) {
       ) : (
         <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
           <table className="itg" style={{ width: "100%" }}>
+            {/* `table.itg` is `table-layout: fixed`, which splits unsized columns evenly: without
+                these widths the button column took half the row and the text wrapped early. */}
+            <colgroup>
+              <col style={{ width: 28 }} />
+              <col />
+              <col style={{ width: 120 }} />
+            </colgroup>
             <tbody>
               {shown.map((a) => (
                 <tr key={a.id} className="gtr1">
@@ -115,6 +146,7 @@ export function DamagedArchivesModal({ onClose }: { onClose: () => void }) {
                     </a>
                     <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.85 }}>{problemText(t, a)}</div>
                     <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.7, userSelect: "all" }}>{a.file}</div>
+                    {(a.sources ?? []).length > 0 && <SourceLine t={t} a={a} />}
                     <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.7 }}>
                       {sizeText(t, a)}
                       {detectedAt(a) && ` · ${t("settings.integrityFirstSeen", { time: detectedAt(a) })}`}
@@ -133,6 +165,19 @@ export function DamagedArchivesModal({ onClose }: { onClose: () => void }) {
                         label={t("settings.integrityRecheck")}
                         disabled={recheck.isPending}
                         onClick={() => void checkAgain(a)}
+                      />
+                      <RowIcon
+                        icon="fa-cloud-download-alt"
+                        label={
+                          a.redownload
+                            ? t("settings.integrityRedownloadFrom", {
+                                plugin: a.redownload.plugin,
+                                url: a.redownload.url,
+                              })
+                            : t("settings.integrityRedownloadUnavailable")
+                        }
+                        disabled={!a.redownload || redownload.isPending}
+                        onClick={() => void downloadAgain(a)}
                       />
                       <RowIcon
                         icon="fa-trash"
@@ -181,6 +226,29 @@ function RowIcon({
 }
 
 type TFn = ReturnType<typeof useTranslation>["t"]
+
+/** The archive's sources, the one "delete and download again" would use in bold with its plugin. */
+function SourceLine({ t, a }: { t: TFn; a: DamagedArchive }) {
+  const sources = a.sources ?? []
+  return (
+    <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.85 }}>
+      {t("settings.integritySources")}
+      {sources.map((url, i) => {
+        const chosen = a.redownload?.url === url
+        return (
+          <span key={url}>
+            {i > 0 && " · "}
+            <a href={url} target="_blank" rel="noreferrer" style={chosen ? { fontWeight: "bold" } : undefined}>
+              {url.replace(/^https?:\/\//, "")}
+            </a>
+            {url === a.primary_source && t("settings.integrityPrimarySource")}
+            {chosen && a.redownload && ` (${a.redownload.plugin})`}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
 
 function problemText(t: TFn, a: DamagedArchive): string {
   if (!a.finding) return t("settings.integrityProblem.heal_failed")

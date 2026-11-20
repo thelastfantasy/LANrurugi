@@ -47,6 +47,13 @@ pub fn check_in(slug: &str, status: &str, elapsed: Duration, interval_minutes: u
 }
 
 fn forward(body: &str) {
+    // A monitor expects a check-in every interval, forever. A forwarding *window* only lets them
+    // through for a while: the monitor it creates then reports a missed run every interval after
+    // the window closes (thousands of false "Cron failure" events from a beta whose window had
+    // long shut). So check-ins go out only where forwarding is continuous.
+    if !super::forward::always_forward() {
+        return;
+    }
     let Some(state) = super::CAPTURE_STATE.get().cloned() else {
         return;
     };

@@ -1082,9 +1082,33 @@ export interface ArchivePage {
   is_patch: boolean
 }
 
+/**
+ * Why an archive's `.patch.zip` could not be used, reported by `/files` the first time it happens.
+ * The archive itself still reads (the patch's pages are simply gone), so this is a warning, not an
+ * error: `pages` are the 1-based merged-list positions those pages used to occupy, which is what
+ * the reader uses to hide the bookmarks and stamps sitting on them.
+ */
+export interface PatchDamage {
+  reason: string
+  pages: number[]
+  sources: PatchSource[]
+  /** The progress/chapter adjustment did not complete yet; the next open retries it. */
+  pending?: boolean
+}
+
+/** One archive whose pages a patch was built from, snapshotted when the patch was created. */
+export interface PatchSource {
+  archive_id: string
+  name: string
+  title: string
+  crc32: string
+  sites: string[]
+}
+
 export interface ArchiveFilesResponse {
   job: number
   pages: ArchivePage[]
+  patch_damage?: PatchDamage | null
 }
 
 export interface PageDimensionsResponse {
@@ -1721,6 +1745,15 @@ export interface DamagedArchive {
   /** Set when the archive's self-heal already failed — known broken without a scan. */
   heal_failed_at: number | null
   finding: IntegrityFinding | null
+  /** The archive's `source:` tags, as URLs. Absent when the server answering is older than the
+   * field (a rebuild in progress) — callers must treat a missing list as empty. */
+  sources?: string[]
+  /** The one source it is known to be downloadable from (where it was downloaded, or what its
+   * metadata plugin vouched for); preferred by "delete and download again". */
+  primary_source: string | null
+  /** What "delete and download again" would fetch: the `source:` tag taken by the
+   * highest-priority download plugin. `null` when no source matches one. */
+  redownload: { url: string; plugin: string } | null
 }
 
 export interface IntegrityScanStatus {

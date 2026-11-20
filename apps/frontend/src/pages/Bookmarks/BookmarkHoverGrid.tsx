@@ -7,6 +7,7 @@ import { useNavigate } from "react-router-dom";
 import { useBookmarksForArchive, useBookmarksForTankoubon, useRemoveBookmark, useSetBookmarkName } from "@/api/hooks";
 import { Tooltip } from "@/components/common-ui/Display";
 import { IconButton } from "@/components/common-ui/Form";
+import { isPlainLinkClick } from "@/components/common-ui/Link"
 import { Confirm } from "@/components/Display";
 import { promptDialog } from "@/dialog";
 import { useSupportsHover } from "@/hooks/useSupportsHover";
@@ -385,6 +386,7 @@ export function BookmarkHoverGrid({
                   key={page}
                   href={`${routes.reader(archiveId)}?p=${page}`}
                   onClick={(e) => {
+                    if (!isPlainLinkClick(e)) return
                     e.preventDefault();
                     openPage(page);
                   }}
