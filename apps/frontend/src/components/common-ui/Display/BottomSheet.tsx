@@ -14,6 +14,7 @@ export function BottomSheet({
   cancelLabel,
   children,
   zIndex = 9000,
+  aboveKeyboard = false,
 }: {
   open?: boolean
   onClose: () => void
@@ -23,8 +24,12 @@ export function BottomSheet({
   children: ReactNode
   /** The backdrop's layer; the sheet sits one above. Raised for a sheet that must cover a modal. */
   zIndex?: number
+  /** For a sheet holding a text field: sits on the on-screen keyboard instead of behind it. Mobile
+   *  browsers shrink only the visual viewport for the keyboard, which `dvh` does not follow. */
+  aboveKeyboard?: boolean
 }) {
   const palette = useMenuPalette()
+  const keyboardBox = useVisualViewportBox(aboveKeyboard)
   // Uncontrolled: opened one frame after mount so the entry slide plays.
   const [selfOpen, setSelfOpen] = useState(false)
   useEffect(() => {
@@ -57,7 +62,11 @@ export function BottomSheet({
             which mobile browsers move while their toolbar collapses. */}
         <BaseDrawer.Viewport
           className="fixed inset-x-0 top-0 flex items-end justify-center"
-          style={{ height: "100dvh", zIndex: zIndex + 1 }}
+          style={
+            keyboardBox
+              ? { top: keyboardBox.top, height: keyboardBox.height, zIndex: zIndex + 1 }
+              : { height: "100dvh", zIndex: zIndex + 1 }
+          }
         >
           <BaseDrawer.Popup
             className="flex w-full flex-col overflow-hidden outline-none [transform:translateY(var(--drawer-swipe-movement-y))] transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] data-[ending-style]:[transform:translateY(100%)] data-[starting-style]:[transform:translateY(100%)] data-[swiping]:select-none data-[swiping]:duration-0"
@@ -92,6 +101,24 @@ export function BottomSheet({
       </BaseDrawer.Portal>
     </BaseDrawer.Root>
   )
+}
+
+/** The visual viewport's top and height while `enabled`, following the on-screen keyboard. */
+function useVisualViewportBox(enabled: boolean): { top: number; height: number } | null {
+  const [box, setBox] = useState<{ top: number; height: number } | null>(null)
+  useEffect(() => {
+    const viewport = window.visualViewport
+    if (!enabled || !viewport) return
+    const update = () => setBox({ top: viewport.offsetTop, height: viewport.height })
+    update()
+    viewport.addEventListener("resize", update)
+    viewport.addEventListener("scroll", update)
+    return () => {
+      viewport.removeEventListener("resize", update)
+      viewport.removeEventListener("scroll", update)
+    }
+  }, [enabled])
+  return enabled ? box : null
 }
 
 /** Two-column grid of sheet buttons; `separator` draws a rule above it. */

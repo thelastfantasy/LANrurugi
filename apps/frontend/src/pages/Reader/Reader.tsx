@@ -98,7 +98,7 @@ import { TRANSLATION_TARGET_LANGUAGES } from "@/translation/settings";
 import { useTranslationSettings } from "@/translation/useTranslationSettings";
 
 import { ArchiveOverviewOverlay } from "./ArchiveOverviewOverlay";
-import { BookmarkButton } from "./BookmarkButton";
+import { BookmarkButton, BookmarkNameSheet } from "./BookmarkButton";
 import {
   type ArchiveNavState,
   resolveAdjacentArchive,
@@ -683,6 +683,18 @@ export function Reader() {
   // Touch infinite scroll: the page a long press brought the floating toolbar up on. The toolbar
   // stays until that page has scrolled completely out of view.
   const [infiniteToolbarPage, setInfiniteToolbarPage] = useState<number | null>(null);
+  // Touch devices: the bookmark being renamed in its sheet. While it is open the reader holds still
+  // (no toolbar auto-close, no re-pin, no page tracking): the keyboard opening resizes the viewport,
+  // and reacting to that scrolled the page, moved "current page" and closed the toolbar with the
+  // field in it.
+  const [bookmarkNameEdit, setBookmarkNameEdit] = useState<{
+    page: number;
+    name: string | null;
+  } | null>(null);
+  const holdViewportRef = useRef(false);
+  useEffect(() => {
+    holdViewportRef.current = bookmarkNameEdit !== null;
+  }, [bookmarkNameEdit]);
   const [moreSheetOpen, setMoreSheetOpen] = useState(false);
   const [infiniteToolbarEl, setInfiniteToolbarEl] = useState<HTMLDivElement | null>(null);
   // Shared by both toolbars, so changing the primary action in one updates the other too.
@@ -825,7 +837,7 @@ export function Reader() {
     );
     if (!img) return;
     const observer = new IntersectionObserver(([entry]) => {
-      if (!entry.isIntersecting) setInfiniteToolbarPage(null);
+      if (!entry.isIntersecting && !holdViewportRef.current) setInfiniteToolbarPage(null);
     });
     observer.observe(img);
     return () => observer.disconnect();
@@ -2919,7 +2931,7 @@ export function Reader() {
     let rafId: number | null = null;
     function updateCurrentPageFromScroll() {
       rafId = null;
-      if (performance.now() < reflowGuardUntil) return;
+      if (performance.now() < reflowGuardUntil || holdViewportRef.current) return;
       if (!root) return;
       const viewportMid = window.innerHeight / 2;
       const images = root.querySelectorAll<HTMLElement>("[data-page]");
@@ -2989,6 +3001,9 @@ export function Reader() {
 
     const reflow = () => {
       reflowGuardUntil = performance.now() + REFLOW_GUARD_MS;
+      // Keyboard up for a bookmark name: hold the page where it is. Closing the keyboard resizes
+      // again once the hold is off, which puts the anchored page back.
+      if (holdViewportRef.current) return;
       const page = pinnedPage();
       if (page !== null) {
         const el = root.querySelector<HTMLElement>(`[data-page="${page}"]`);
@@ -3628,6 +3643,11 @@ export function Reader() {
             bookmarked={isPageBookmarked}
             name={currentBookmark?.name}
             loggedIn={loggedIn}
+            onEditName={
+              supportsHover
+                ? undefined
+                : (page, name) => setBookmarkNameEdit({ page, name })
+            }
             onRequireLogin={() => {
               const template = t("reader.aHrefUrlLogin") ?? "";
               toast({
@@ -3956,6 +3976,11 @@ export function Reader() {
             bookmarked={isPageBookmarked}
             name={currentBookmark?.name}
             loggedIn={loggedIn}
+            onEditName={
+              supportsHover
+                ? undefined
+                : (page, name) => setBookmarkNameEdit({ page, name })
+            }
             onRequireLogin={() => {
               const template = t("reader.aHrefUrlLogin") ?? "";
               toast({
@@ -4712,6 +4737,15 @@ export function Reader() {
           <Suspense fallback={null}>
             <ShareDialog items={[shareItem]} onClose={() => setShareItem(null)} />
           </Suspense>
+        )}
+        {/* Owned here rather than by the toolbar's bookmark button: the toolbar may close or move
+            to another page while the name is being typed. */}
+        {archiveId && !supportsHover && (
+          <BookmarkNameSheet
+            archiveId={archiveId}
+            edit={bookmarkNameEdit}
+            onClose={() => setBookmarkNameEdit(null)}
+          />
         )}
         {showTankSplit && archiveId && isTank && (
           <TankoubonSplitModal

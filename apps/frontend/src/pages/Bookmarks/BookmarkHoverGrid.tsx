@@ -18,6 +18,7 @@ import { matchesKeywords, splitKeywords } from "@/lib/utils/matchesKeywords";
 import { FONT_SIZE_SM, Z_OVERLAY_BACKDROP, Z_OVERLAY_TOOLTIP } from "@/theme";
 import { toast } from "@/toast";
 
+import { BookmarkNameSheet } from "../Reader/BookmarkButton";
 import {
   sortPagesByOrder,
   useHoverGridPageOrder,
@@ -151,6 +152,8 @@ export function BookmarkHoverGrid({
   const removeBookmark = useRemoveBookmark();
   const setName = useSetBookmarkName();
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
+  // Touch devices rename in a sheet above the keyboard rather than the prompt dialog.
+  const [nameEdit, setNameEdit] = useState<{ page: number; name: string | null } | null>(null);
   const [pageOrder] = useHoverGridPageOrder();
   const [onlyMatching] = useOnlyMatchingBookmarksPreference();
   const sortedPages = sortPagesByOrder(
@@ -481,6 +484,10 @@ export function BookmarkHoverGrid({
                       size={supportsHover ? 20 : 30}
                       title={t("bookmarks.editName") ?? undefined}
                       onClick={() => {
+                        if (!supportsHover) {
+                          setNameEdit({ page, name: entry?.name ?? null });
+                          return;
+                        }
                         void promptDialog(
                           t("bookmarks.namePlaceholder", { max: MAX_BOOKMARK_NAME_LEN }) ?? "",
                           entry?.name ?? "",
@@ -567,6 +574,13 @@ export function BookmarkHoverGrid({
             })}
           </div>
         </div>
+        {!supportsHover && (
+          <BookmarkNameSheet
+            archiveId={archiveId}
+            edit={nameEdit}
+            onClose={() => setNameEdit(null)}
+          />
+        )}
         {pendingDelete !== null &&
           createPortal(
             <div
