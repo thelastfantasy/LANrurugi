@@ -4099,7 +4099,7 @@ checksum = "d4345964bb142484797b161f473a503a434de77149dd8c7427788c6e13379388"
 
 [[package]]
 name = "lanrurugi-api"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "axum",
  "bao-tree",
@@ -4181,7 +4181,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-api-docgen"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "anyhow",
  "clap",
@@ -4194,7 +4194,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-backup"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "deadpool-redis",
  "lanrurugi-core",
@@ -4212,7 +4212,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-bench"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -4238,7 +4238,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-book"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -4249,7 +4249,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-book-worker"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "base64 0.23.1",
  "chardetng",
@@ -4272,7 +4272,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-core"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "base64 0.23.1",
  "bcrypt",
@@ -4294,14 +4294,14 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-egress"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "lanrurugi-embed-ipc"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "serde",
  "tarpc",
@@ -4310,7 +4310,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-embed-worker"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "futures",
  "lanrurugi-embed-ipc",
@@ -4324,7 +4324,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-equivalence"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "ferrous-opencc",
  "serde",
@@ -4336,7 +4336,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-fontcache"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "deadpool-redis",
  "image",
@@ -4351,7 +4351,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-gpu-ipc"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "bincode 2.0.1",
  "serde",
@@ -4361,7 +4361,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-gpu-worker"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "futures",
  "image",
@@ -4376,7 +4376,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-imgcompare"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "image",
  "image_hasher",
@@ -4393,7 +4393,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-inpaint"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "image",
  "imageproc",
@@ -4406,7 +4406,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-llm"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "axum",
  "chrono",
@@ -4424,7 +4424,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-ocr"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "image",
  "imageproc",
@@ -4445,7 +4445,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-plugin"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "lanrurugi-core",
  "reqwest",
@@ -4460,7 +4460,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-plugin-converter"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "anyhow",
  "axum",
@@ -4474,7 +4474,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-recommend"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "futures-util",
  "lanrurugi-core",
@@ -4493,7 +4493,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-scanner"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "avif-decode",
  "bytes",
@@ -4532,7 +4532,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-search"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -4550,7 +4550,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-server"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "anyhow",
  "axum",
@@ -4594,7 +4594,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-share"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "bao-tree",
  "blake3",
@@ -4635,7 +4635,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-share-proto"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -4653,7 +4653,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-storage"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "blake3",
  "chrono",
@@ -4678,7 +4678,7 @@ dependencies = [
 
 [[package]]
 name = "lanrurugi-translate"
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 dependencies = [
  "ab_glyph",
  "chrono",
