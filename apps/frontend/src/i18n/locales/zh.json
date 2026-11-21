@@ -1304,7 +1304,7 @@
   "Working on it...": "处理中...",
   "login.wrongPassword": "密码错误。",
   "library.yesDeleteIt": "是，删除",
-  "library.blockResubscribe": "同时阻止 {{names}} 再次下载它",
+  "library.blockResubscribe": "订阅「{{names}}」不再自动下载它（不影响手动下载）",
   "Yes, delete it!": "确定删除！",
   "You are using the current archive ID": "您正在使用当前档案的 ID",
   "You can also trigger Scripts here. Triggering a script will save your Plugin settings beforehand.": "您也可以在这里触发脚本。触发脚本将预先保存您的插件设置。",

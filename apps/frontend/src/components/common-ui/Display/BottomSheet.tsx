@@ -15,6 +15,7 @@ export function BottomSheet({
   children,
   zIndex = 9000,
   aboveKeyboard = false,
+  footer,
 }: {
   open?: boolean
   onClose: () => void
@@ -27,6 +28,9 @@ export function BottomSheet({
   /** For a sheet holding a text field: sits on the on-screen keyboard instead of behind it. Mobile
    *  browsers shrink only the visual viewport for the keyboard, which `dvh` does not follow. */
   aboveKeyboard?: boolean
+  /** Kept in view under the scrolling content, e.g. a form's confirm button: with the keyboard up
+   *  a form can be taller than the room left, and only its fields should scroll then. */
+  footer?: ReactNode
 }) {
   const palette = useMenuPalette()
   const keyboardBox = useVisualViewportBox(aboveKeyboard)
@@ -71,7 +75,8 @@ export function BottomSheet({
           <BaseDrawer.Popup
             className="flex w-full flex-col overflow-hidden outline-none [transform:translateY(var(--drawer-swipe-movement-y))] transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] data-[ending-style]:[transform:translateY(100%)] data-[starting-style]:[transform:translateY(100%)] data-[swiping]:select-none data-[swiping]:duration-0"
             style={{
-              maxHeight: "85dvh",
+              // Above the keyboard the room is what the keyboard leaves; the content scrolls in it.
+              maxHeight: keyboardBox ? `min(85dvh, ${keyboardBox.height - 12}px)` : "85dvh",
               background: palette.bg,
               color: palette.text,
               borderRadius: "14px 14px 0 0",
@@ -81,6 +86,11 @@ export function BottomSheet({
             <BaseDrawer.Content className="min-h-0 flex-1 overflow-y-auto overscroll-contain" style={{ padding: "6px 16px 12px" }}>
               {children}
             </BaseDrawer.Content>
+            {footer && (
+              <div className="shrink-0" style={{ padding: "0 16px 10px" }}>
+                {footer}
+              </div>
+            )}
             <div className="shrink-0" style={{ height: 6, background: palette.separator }} />
             <BaseDrawer.Close
               className="flex shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent"

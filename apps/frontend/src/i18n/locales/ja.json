@@ -1202,7 +1202,7 @@
   "reader.whenReadingAnArchiveFrom": "検索結果からアーカイブを読んでいる場合、以下の方法でアーカイブ間を移動することもできます：",
   "settings.whenTaggingArchivesUsingPlugins": "プラグインを使用してアーカイブにタグを付ける際、ここで指定したルールがデータベースに保存される前にタグへ適用されます。",
   "library.yesDeleteIt": "はい、削除します",
-  "library.blockResubscribe": "{{names}} が再ダウンロードしないようにする",
+  "library.blockResubscribe": "購読「{{names}}」で再び自動ダウンロードしない（手動ダウンロードには影響しません）",
   "You are using the current archive ID": "現在のアーカイブIDを使用しています",
   "upload.youCanDragAndDrop": "このウィンドウにファイルをドラッグ＆ドロップするか、アップロードボタンをクリックしてください。",
   "You can use the rules dropdown below to pre-select archives for deletion.": "下のルールのドロップダウンを使用すると、削除対象のアーカイブを事前に選択できます。",

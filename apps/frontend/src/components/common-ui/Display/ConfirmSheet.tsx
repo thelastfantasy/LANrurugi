@@ -14,6 +14,7 @@ export function ConfirmSheet({
   confirmLabel,
   cancelLabel,
   confirmDisabled = false,
+  aboveKeyboard = false,
   children,
   onConfirm,
   onCancel,
@@ -24,6 +25,8 @@ export function ConfirmSheet({
   confirmLabel: ReactNode
   cancelLabel: ReactNode
   confirmDisabled?: boolean
+  /** `children` holds a text field: keep the sheet on the on-screen keyboard (see `BottomSheet`). */
+  aboveKeyboard?: boolean
   /** Extra controls between the message and the button (e.g. a typed confirmation). */
   children?: ReactNode
   onConfirm: () => void
@@ -43,6 +46,7 @@ export function ConfirmSheet({
       cancelLabel={cancelLabel}
       // A confirmation can come from inside a modal or drawer, so it covers them.
       zIndex={Z_DIALOG}
+      aboveKeyboard={aboveKeyboard}
     >
       <div style={{ textAlign: "center", padding: "14px 4px 16px" }}>
         {icon && (

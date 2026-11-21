@@ -138,7 +138,9 @@ export function ratingBandKey(archive: StorageArchive): string {
  *  children must add up to the group's own bytes exactly (they do: the folded tail is one extra
  *  child, never a silent omission). */
 export type StorageTile = {
-  name: string
+  /** What the tile shows. Not recharts' `nameKey`: recharts builds each node's React key from its
+   *  position and that name, and two archives can share a title and — tiny ones — a position. */
+  label: string
   value: number
   tileKey: string
   tileKind: "group" | "archive" | "other"
@@ -345,7 +347,7 @@ function buildRatingGroups(
 
 function archiveTile(archive: StorageArchive, colorBy: StorageColorKey): StorageTile {
   return {
-    name: archive.title,
+    label: archive.title,
     value: archive.bytes,
     tileKey: `archive:${archive.id}`,
     tileKind: "archive",
@@ -378,7 +380,7 @@ export function buildTiles(
       const restBytes = rest.reduce((sum, archive) => sum + archive.bytes, 0)
       const title = otherLabel(rest.length)
       tiles.push({
-        name: title,
+        label: title,
         value: restBytes,
         tileKey: "other:archives",
         tileKind: "other",
@@ -404,7 +406,7 @@ export function buildTiles(
   const innerColorBy: StorageColorKey =
     level.colorBy === "progress" || level.colorBy === "rating" ? "artist" : level.colorBy
   const tiles: StorageTile[] = visible.map((group) => ({
-    name: group.label,
+    label: group.label,
     value: group.bytes,
     tileKey: group.key,
     tileKind: "group" as const,
@@ -429,7 +431,7 @@ export function buildTiles(
     const restBytes = rest.reduce((sum, group) => sum + group.bytes, 0)
     const title = otherLabel(rest.length)
     tiles.push({
-      name: title,
+      label: title,
       value: restBytes,
       tileKey: "other:groups",
       tileKind: "other",

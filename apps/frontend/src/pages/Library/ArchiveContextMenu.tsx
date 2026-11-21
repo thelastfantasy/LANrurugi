@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { startDownload } from "@/api/download";
+import { useCreateCategory } from "@/api/hooks";
 import type { ArchiveMetadata } from "@/api/types";
 import {
   BottomSheet,
@@ -18,6 +19,7 @@ import {
   SheetTile,
 } from "@/components/common-ui/Display";
 import { RatingWidget } from "@/components/common-ui/Form";
+import { newCategoryDialog } from "@/dialog";
 import {
   PHONE_QUERY,
   useIsNarrowViewport,
@@ -28,6 +30,7 @@ import { routes } from "@/lib/routes";
 import { splitTagsByNamespace } from "@/lib/tagFormat";
 import { isTankoubonId } from "@/lib/utils/isTankoubonId";
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme";
+import { toast } from "@/toast";
 
 import { type ContextMenuState } from "./types";
 
@@ -84,6 +87,19 @@ export function ArchiveContextMenu({
     liveArchives.find((a) => a.arcid === state.archive.arcid) ?? state.archive;
   const isTank = isTankoubonId(archive.arcid);
   const staticCategories = (categories ?? []).filter((c) => !c.search);
+  const createCategory = useCreateCategory();
+  /** Creates a category and, unless it is dynamic (its members come from its search), puts this
+   * archive in it — what choosing "new category" from "add to category" means. */
+  async function createCategoryWithArchive() {
+    const result = await newCategoryDialog();
+    if (result === null) return;
+    try {
+      const data = await createCategory.mutateAsync(result);
+      if (!result.isDynamic) onToggleCategory(data.category_id, archive.arcid, false);
+    } catch {
+      toast({ heading: t("common.errorModifyingCategory") ?? undefined, icon: "error" });
+    }
+  }
   const [categoryMenuOpen, setCategoryMenuOpen] = useState(false);
   const [categorySheetOpen, setCategorySheetOpen] = useState(false);
   const palette = useMenuPalette();
@@ -338,6 +354,18 @@ export function ArchiveContextMenu({
                 })}
               </SheetGrid>
             )}
+            {/* Its own row under a thin rule: an action, not one more category. */}
+            <div style={{ marginTop: 12 }}>
+              <SheetGrid separator={palette.separator}>
+                <SheetTile
+                  icon="fa-plus"
+                  onClick={() => void createCategoryWithArchive()}
+                  style={{ gridColumn: "1 / -1" }}
+                >
+                  {t("common.newCategory")}…
+                </SheetTile>
+              </SheetGrid>
+            </div>
           </BottomSheet>
         )}
       </BottomSheet>
@@ -455,6 +483,13 @@ export function ArchiveContextMenu({
                       </PopupMenuItem>
                     );
                   })}
+                  <PopupMenuSeparator />
+                  <PopupMenuItem
+                    // Closed only afterwards: closing unmounts this menu and the mutation with it.
+                    onClick={() => void createCategoryWithArchive().then(onClose)}
+                  >
+                    <i className="fa fa-plus" style={{ width: 18 }}></i> {t("common.newCategory")}…
+                  </PopupMenuItem>
                 </PopupMenu>
               )}
             </PopupMenuItem>

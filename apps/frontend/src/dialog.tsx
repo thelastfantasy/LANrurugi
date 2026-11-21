@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 
-import { ConfirmSheet, PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
+import { BottomSheet, ConfirmSheet, PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
 import { Tooltip } from "@/components/common-ui/Display"
 import { Checkbox, Input } from "@/components/common-ui/Form"
 import { SearchSyntaxHelp } from "@/components/Display"
@@ -874,6 +874,7 @@ function TagSearchField({
   autoFocus,
   onEnter,
   placeholder,
+  inputStyle,
 }: {
   id: string
   value: string
@@ -881,6 +882,7 @@ function TagSearchField({
   autoFocus: boolean
   onEnter: () => void
   placeholder?: string
+  inputStyle?: React.CSSProperties
 }) {
   const stats = useStats()
   const [open, setOpen] = useState(false)
@@ -907,7 +909,7 @@ function TagSearchField({
         id={id}
         type="text"
         className="stdinput"
-        style={{ width: "100%", height: 25, boxSizing: "border-box" }}
+        style={{ width: "100%", height: 25, boxSizing: "border-box", ...inputStyle }}
         value={value}
         placeholder={placeholder}
         autoComplete="off"
@@ -944,7 +946,22 @@ function TagSearchField({
   )
 }
 
-function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategoryResult) => void; onCancel: () => void }) {
+/** Phone-sheet sizing for a text field: as tall as the sheet's confirm button, and 16px so iOS does
+ * not zoom the page on focus. */
+const SHEET_INPUT_STYLE: React.CSSProperties = { height: 48, padding: "0 12px", fontSize: 16, borderRadius: 6 }
+
+/** `sheet` is the phone layout inside a bottom sheet: larger controls, one full-width confirm
+ * button, and no cancel button — the sheet's own bar is cancel. */
+function NewCategoryForm({
+  onSubmit,
+  onCancel,
+  layout = "dialog",
+}: {
+  onSubmit: (value: NewCategoryResult) => void
+  onCancel: () => void
+  layout?: "dialog" | "sheet"
+}) {
+  const sheet = layout === "sheet"
   const { t } = useTranslation()
   const [name, setName] = useState("")
   const [isDynamic, setIsDynamic] = useState(false)
@@ -962,15 +979,17 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
   }
 
   return (
-    <div onKeyDown={(e) => e.key === "Escape" && onCancel()}>
-      <p style={{ fontWeight: "bold", margin: "0 0 12px" }}>{t("common.newCategory")}</p>
+    <div onKeyDown={(e) => e.key === "Escape" && onCancel()} style={sheet ? { padding: "8px 4px 0" } : undefined}>
+      <p style={{ fontWeight: "bold", margin: sheet ? "0 0 8px" : "0 0 12px", fontSize: sheet ? 15 : undefined }}>
+        {t("common.newCategory")}
+      </p>
       <div role="tablist" style={{ display: "flex", gap: 4, marginBottom: 12 }}>
         <button
           type="button"
           role="tab"
           aria-selected={!isDynamic}
           className={`favtag-btn${!isDynamic ? " toggled" : ""}`}
-          style={{ flex: 1 }}
+          style={{ flex: 1, ...(sheet ? { height: 36, fontSize: 15 } : {}) }}
           onClick={() => setIsDynamic(false)}
         >
           {t("app.staticCategory")}
@@ -980,7 +999,7 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
           role="tab"
           aria-selected={isDynamic}
           className={`favtag-btn${isDynamic ? " toggled" : ""}`}
-          style={{ flex: 1 }}
+          style={{ flex: 1, ...(sheet ? { height: 36, fontSize: 15 } : {}) }}
           onClick={() => setIsDynamic(true)}
         >
           {t("app.dynamicCategory")}
@@ -996,9 +1015,10 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
           id="new-category-name"
           type="text"
           className="stdinput"
-          style={{ width: "100%", height: 25, boxSizing: "border-box" }}
+          style={{ width: "100%", height: 25, boxSizing: "border-box", ...(sheet ? SHEET_INPUT_STYLE : {}) }}
           value={name}
           placeholder={t("app.myCategory") ?? undefined}
+          enterKeyHint={sheet && !isDynamic ? "done" : undefined}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !isDynamic) submit()
@@ -1029,14 +1049,78 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
             autoFocus={false}
             onEnter={submit}
             placeholder="language:chinese"
+            inputStyle={sheet ? SHEET_INPUT_STYLE : undefined}
           />
         </div>
       )}
-      <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
-        <input type="button" className="stdbtn" value={t("common.cancel") ?? "Cancel"} onClick={onCancel} />
-        <input type="button" className="stdbtn" value={t("common.ok") ?? "OK"} onClick={submit} />
-      </div>
+      {sheet ? (
+        // The confirm button sits in the sheet's footer and submits this form through `form=`.
+        <form
+          id={NEW_CATEGORY_SHEET_FORM}
+          onSubmit={(e) => {
+            e.preventDefault()
+            submit()
+          }}
+        />
+      ) : (
+        <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
+          <input type="button" className="stdbtn" value={t("common.cancel") ?? "Cancel"} onClick={onCancel} />
+          <input type="button" className="stdbtn" value={t("common.ok") ?? "OK"} onClick={submit} />
+        </div>
+      )}
     </div>
+  )
+}
+
+const NEW_CATEGORY_SHEET_FORM = "new-category-sheet-form"
+
+/** The phone form of the new-category dialog. The answer is reported once the sheet has slid
+ * away, like `ConfirmSheet`, so the host can unmount it in that callback. */
+function NewCategorySheet({
+  onSubmit,
+  onCancel,
+}: {
+  onSubmit: (value: NewCategoryResult) => void
+  onCancel: () => void
+}) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setOpen(true))
+    return () => cancelAnimationFrame(frame)
+  }, [])
+  const result = useRef<NewCategoryResult | null>(null)
+  return (
+    <BottomSheet
+      open={open}
+      onClose={() => setOpen(false)}
+      onExited={() => (result.current ? onSubmit(result.current) : onCancel())}
+      cancelLabel={t("common.cancel")}
+      // Opened from a category sheet or a drawer, so it covers them.
+      zIndex={Z_DIALOG}
+      aboveKeyboard
+      // Kept in view: with the keyboard up the form can be taller than the room left.
+      footer={
+        <button
+          type="submit"
+          form={NEW_CATEGORY_SHEET_FORM}
+          className="stdbtn"
+          // Same shape as `ConfirmSheet`'s confirm button.
+          style={{ display: "block", width: "100%", height: 48, fontSize: 16, borderRadius: 6 }}
+        >
+          {t("common.ok")}
+        </button>
+      }
+    >
+      <NewCategoryForm
+        layout="sheet"
+        onSubmit={(value) => {
+          result.current = value
+          setOpen(false)
+        }}
+        onCancel={() => setOpen(false)}
+      />
+    </BottomSheet>
   )
 }
 
@@ -1209,6 +1293,9 @@ export function DialogHost() {
     close()
   }
 
+  if (request.kind === "newCategory" && phone) {
+    return <NewCategorySheet key={requestKey(request)} onSubmit={submitNewCategory} onCancel={cancelNewCategory} />
+  }
   if (request.kind === "newCategory") {
     return createPortal(
       <>
@@ -1352,6 +1439,7 @@ export function DialogHost() {
         key={requestKey(request)}
         message={request.message}
         icon={null}
+        aboveKeyboard
         confirmLabel={t("common.ok") ?? "OK"}
         cancelLabel={t("common.cancel") ?? "Cancel"}
         onConfirm={submitPrompt}
@@ -1391,6 +1479,7 @@ export function DialogHost() {
         confirmLabel={t("common.ok") ?? "OK"}
         cancelLabel={t("common.cancel") ?? "Cancel"}
         confirmDisabled={confirmationBlocked}
+        aboveKeyboard={requiredConfirmationWord !== null}
         onConfirm={confirmYes}
         onCancel={confirmNo}
       >

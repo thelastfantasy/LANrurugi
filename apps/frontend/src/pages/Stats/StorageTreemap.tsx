@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { type ComponentProps, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import type { TreemapNode } from "recharts"
 import { ResponsiveContainer, Tooltip, Treemap } from "recharts"
@@ -81,6 +81,17 @@ function useMeasuredSize<T extends HTMLElement>() {
  *  The default level is the flat library — one box per archive. That is also what "group by path"
  *  or "group by title" would collapse to here: the content folder has no subdirectories and titles
  *  are unique, so both are this view with an extra click. */
+/** The chart's entries are named by `tileKey`; the tooltip shows the tile's own label. */
+function TileTooltip({ payload, ...rest }: ComponentProps<typeof ChartTooltip>) {
+  return (
+    <ChartTooltip
+      {...rest}
+      payload={payload?.map((entry) => ({ ...entry, name: String(entry.payload?.label ?? entry.name ?? "") }))}
+      formatValue={(value) => formatBytes(Number(value))}
+    />
+  )
+}
+
 export function StorageTreemap({ archives }: { archives: ArchiveMetadata[] | undefined }) {
   const { t } = useTranslation()
   const series = useChartPalette()
@@ -237,7 +248,7 @@ export function StorageTreemap({ archives }: { archives: ArchiveMetadata[] | und
       return (
         <g style={{ pointerEvents: "none" }}>
           <text x={x + width / 2} y={y + height / 2} textAnchor="middle" fontSize={11} fill={text}>
-            {fitText(tile.name, width - 10, 11)}
+            {fitText(tile.label, width - 10, 11)}
           </text>
           {height >= 34 ? (
             <text
@@ -257,7 +268,7 @@ export function StorageTreemap({ archives }: { archives: ArchiveMetadata[] | und
     // Every other tile is a name over a size, in the top-left corner — the read SpaceSniffer has,
     // and the only one that survives a tile being 60px wide.
     if (width < 46 || height < 18) return null
-    const name = fitText(tile.name, width - 10, 11)
+    const name = fitText(tile.label, width - 10, 11)
     if (!name) return null
     return (
       <g style={{ pointerEvents: "none" }}>
@@ -392,7 +403,8 @@ export function StorageTreemap({ archives }: { archives: ArchiveMetadata[] | und
           <Treemap
             data={tiles}
             dataKey="value"
-            nameKey="name"
+            // Unique per tile (see `StorageTile.label`).
+            nameKey="tileKey"
             type="flat"
             aspectRatio={narrow ? 1 : 1.5}
             nodeInset={NODE_INSET}
@@ -403,7 +415,7 @@ export function StorageTreemap({ archives }: { archives: ArchiveMetadata[] | und
             isUpdateAnimationActive={false}
             content={renderTile}
           >
-            <Tooltip content={<ChartTooltip formatValue={(value) => formatBytes(Number(value))} />} cursor={false} />
+            <Tooltip content={<TileTooltip />} cursor={false} />
           </Treemap>
         </ResponsiveContainer>
       </div>

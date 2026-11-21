@@ -1243,7 +1243,7 @@
   "Working on it...": "Working on it...",
   "login.wrongPassword": "Wrong Password.",
   "library.yesDeleteIt": "Yes, delete it",
-  "library.blockResubscribe": "Also stop {{names}} downloading it again",
+  "library.blockResubscribe": "Don't let the subscription {{names}} download it again (manual downloads are not affected)",
   "Yes, delete it!": "Yes, delete it!",
   "You are using the current archive ID": "You are using the current archive ID",
   "You can also trigger Scripts here. Triggering a script will save your Plugin settings beforehand.": "You can also trigger Scripts here. Triggering a script will save your Plugin settings beforehand.",

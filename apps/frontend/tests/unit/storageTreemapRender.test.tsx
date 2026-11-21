@@ -1,6 +1,6 @@
 import { render } from "@testing-library/react"
 import { Treemap } from "recharts"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import { buildGroups, buildTiles, type StorageArchive, type StorageLevel } from "@/pages/Stats/storageTreemap"
 
@@ -20,7 +20,7 @@ function renderTiles(level: StorageLevel) {
       height={400}
       data={tiles}
       dataKey="value"
-      nameKey="name"
+      nameKey="tileKey"
       type="flat"
       nodeInset={1}
       nodeGap={1}
@@ -58,5 +58,22 @@ describe("storage treemap layout", () => {
     })
     expect(tiles).toHaveLength(2)
     expect(container.querySelectorAll("rect[data-depth]")).toHaveLength(tiles.length + 1)
+  })
+
+  it("keys tiles apart when two archives share a title and a position", () => {
+    // Empty files lay out as zero-area boxes in one corner; recharts keys a node by position and
+    // name, so the same title there gave two children one key.
+    const twins = [
+      archive("big", 5000, "alice"),
+      { ...archive("x1", 0, "bob"), title: "same title" },
+      { ...archive("x2", 0, "bob"), title: "same title" },
+    ]
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      renderTiles({ kind: "archives", title: "All", archives: twins, colorBy: "artist" })
+      expect(error.mock.calls.filter((call) => String(call[0]).includes("same key"))).toEqual([])
+    } finally {
+      error.mockRestore()
+    }
   })
 })
