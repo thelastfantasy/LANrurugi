@@ -744,5 +744,15 @@
   "upload.transferringCountHint": "Tareas que están moviendo bytes (sin contar la escritura en la biblioteca).",
   "reader.autoInfiniteScrollNarrow": "Activar automáticamente en móvil",
   "reader.autoInfiniteScrollNarrowDesc": "Usar siempre el desplazamiento infinito cuando la pantalla mide 768px de ancho o menos (móvil en vertical); las pantallas más anchas mantienen la opción de arriba.",
-  "reader.infiniteScrollForcedByNarrow": "Ancho de móvil: activado por el interruptor de abajo."
+  "reader.infiniteScrollForcedByNarrow": "Ancho de móvil: activado por el interruptor de abajo.",
+  "settings.forceLowMemory": "Forzar modo de poca memoria",
+  "settings.forceLowMemoryDescription": "Activado: el procesamiento de imágenes siempre usa el nivel de poca memoria, tenga la máquina la memoria que tenga — menos imágenes a la vez, menos memoria y carga más lenta. Desactivado: el nivel depende de la memoria disponible. Se aplica al guardar, sin reiniciar.",
+  "settings.memoryModeStatus": "Ahora: {{tier}} ({{reason}}; {{thumbnails}} miniaturas y {{pages}} páginas a la vez)",
+  "settings.memoryTierNormal": "normal",
+  "settings.memoryTierLow": "poca memoria",
+  "settings.memoryReasonForced": "forzado",
+  "settings.memoryReasonDetected": "automático · {{source}} {{size}}",
+  "settings.memoryReasonUnknown": "automático · no se pudo leer la memoria, funcionamiento normal",
+  "settings.memorySourceContainer": "límite del contenedor",
+  "settings.memorySourceMachine": "memoria del equipo"
 }

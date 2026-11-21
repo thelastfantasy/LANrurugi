@@ -97,6 +97,13 @@ impl ArchiveRepository {
         Ok(Some(archive_from_fields(id, fields)?))
     }
 
+    /// Just the `name` field, for callers that need nothing else (naming a served cover): the
+    /// whole record carries the ToC, stamps and summary.
+    pub async fn name(&self, id: &ArchiveId) -> Result<Option<String>> {
+        let mut conn = self.pool.get().await?;
+        Ok(conn.hget(id.as_str(), "name").await?)
+    }
+
     /// All archive IDs currently in the database (legacy 40-hex-char key glob).
     pub async fn list_ids(&self) -> Result<Vec<ArchiveId>> {
         let mut conn = self.pool.get().await?;
@@ -904,6 +911,18 @@ impl GroupingRepository {
         Self { pool }
     }
 
+    /// Just the name, without reading the member list.
+    pub async fn name(&self, tankid: &TankId) -> Result<Option<String>> {
+        let mut conn = self.pool.get().await?;
+        let members: Vec<String> = conn
+            .zrangebyscore(tankid.as_str(), SCORE_NAME, SCORE_NAME)
+            .await?;
+        Ok(members
+            .iter()
+            .find_map(|m| m.strip_prefix("name_"))
+            .map(str::to_string))
+    }
+
     pub async fn get(&self, tankid: &TankId) -> Result<Option<Grouping>> {
         let mut conn = self.pool.get().await?;
         let exists: bool = conn.exists(tankid.as_str()).await?;
@@ -1067,7 +1086,6 @@ impl GroupingRepository {
             .await?
             .map(|p| p.archives.into_iter().collect())
             .unwrap_or_default();
-        let _: () = conn.del(grouping.tankid.as_str()).await?;
 
         let mut members: Vec<(isize, String)> = vec![
             (SCORE_NAME, format!("name_{}", grouping.name)),
@@ -1143,30 +1161,31 @@ impl GroupingRepository {
         for (i, archive_id) in grouping.archives.iter().enumerate() {
             members.push(((i + 1) as isize, archive_id.to_string()));
         }
-        // deadpool-redis's ZADD takes (score, member) pairs.
-        let zadd_args: Vec<(isize, String)> = members;
-        let _: () = conn
-            .zadd_multiple(grouping.tankid.as_str(), &zadd_args)
-            .await?;
-
         let new_archives: std::collections::HashSet<ArchiveId> =
             grouping.archives.iter().cloned().collect();
+        // One MULTI/EXEC: issued as separate awaits, a request cancelled between the DEL and the
+        // ZADD (e.g. a superseded progress PUT) left the tankoubon deleted.
+        let mut pipe = deadpool_redis::redis::pipe();
+        pipe.atomic()
+            .del(grouping.tankid.as_str())
+            .ignore()
+            .zadd_multiple(grouping.tankid.as_str(), &members)
+            .ignore();
         for removed in old_archives.difference(&new_archives) {
-            let _: () = conn
-                .srem(
-                    crate::keys::archive_tankoubons_key(removed.as_str()),
-                    grouping.tankid.as_str(),
-                )
-                .await?;
+            pipe.srem(
+                crate::keys::archive_tankoubons_key(removed.as_str()),
+                grouping.tankid.as_str(),
+            )
+            .ignore();
         }
         for added in new_archives.difference(&old_archives) {
-            let _: () = conn
-                .sadd(
-                    crate::keys::archive_tankoubons_key(added.as_str()),
-                    grouping.tankid.as_str(),
-                )
-                .await?;
+            pipe.sadd(
+                crate::keys::archive_tankoubons_key(added.as_str()),
+                grouping.tankid.as_str(),
+            )
+            .ignore();
         }
+        let _: () = pipe.query_async(&mut conn).await?;
         Ok(())
     }
 

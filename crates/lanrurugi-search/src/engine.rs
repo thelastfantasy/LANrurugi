@@ -257,6 +257,99 @@ pub async fn search_exists(
     Ok(!matched.is_empty())
 }
 
+/// Batch `source:` resolution — for each input, the archive ids carrying a matching `source:` tag.
+///
+/// Archive-level by construction: this asks `INDEX_<tag>` directly, so it never reads
+/// `LRR_TANKGROUPED`, never folds a member behind its Tankoubon (`fold_tanks`) and never builds the
+/// candidate set `search` starts from. An archive filed into a Tankoubon therefore still answers
+/// "yes" here — the same reason `GET /search/archives` exists — and a Tankoubon's own `TANK_` id,
+/// which carries its own tags in the same index, is filtered out so an aggregate can't be mistaken
+/// for an archive. Existence, publication (`PENDING_VISIBILITY_SET`) and the empty-`file` rule are
+/// left to the API layer; this only reports what the index says.
+///
+/// Exists because a client checking a whole list used to call `search()` once per URL, and every
+/// one of those calls opens with a full `KEYS` scan of the archive keyspace plus a `ZSCAN` over
+/// every title — see `search`'s own candidate-set setup. One pipelined `SMEMBERS` per spelling
+/// replaces a few hundred full walks.
+///
+/// Accepted spellings: a bare `host/path` (what plugins store), a full URL with either scheme, with
+/// or without a trailing slash, and optionally already prefixed with `source:`.
+pub async fn lookup_sources(
+    search_pool: &Pool,
+    eq: &Equivalence,
+    sources: &[String],
+    source_equivalences: &[Vec<String>],
+) -> Result<Vec<Vec<String>>> {
+    let mut conn = search_pool.get().await?;
+    // Same staleness rule `search` applies: an index written under a different fold config leaves
+    // the pre-fold keys as the only trustworthy copy, so both spellings get queried.
+    let legacy_fallback = !crate::indexer::fold_fingerprint_matches(search_pool, eq)
+        .await
+        .unwrap_or(false);
+
+    // (source index, index key), in the order the sources were given.
+    let mut lookups: Vec<(usize, String)> = Vec::new();
+    for (index, source) in sources.iter().enumerate() {
+        let value = source.trim();
+        if value.is_empty() {
+            continue;
+        }
+        // Compared as bytes, not as a `&str` slice: `value[..7]` would panic on a source whose
+        // first seven bytes split a multi-byte character, and this input comes straight off the
+        // wire.
+        let tag = if value.len() >= 7 && value.as_bytes()[..7].eq_ignore_ascii_case(b"source:") {
+            value.to_string()
+        } else {
+            format!("source:{value}")
+        };
+        let mut spellings = tag_index_variants(&tag, source_equivalences);
+        // `tag_index_variants` only trims a trailing slash; the stored tag and a pasted URL
+        // disagree in *both* directions, and either spelling is the same gallery.
+        let with_slash: Vec<String> = spellings
+            .iter()
+            .filter(|spelling| !spelling.ends_with('/'))
+            .map(|spelling| format!("{spelling}/"))
+            .collect();
+        spellings.extend(with_slash);
+        for spelling in spellings {
+            lookups.push((index, crate::indexer::folded_tag_key(eq, &spelling)));
+            if legacy_fallback {
+                lookups.push((index, format!("INDEX_{}", spelling.trim().to_lowercase())));
+            }
+        }
+    }
+    lookups.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+
+    let mut ids: Vec<HashSet<String>> = vec![HashSet::new(); sources.len()];
+    // Ordinary pipelining, not one command per round trip — the size of one request's key list is
+    // bounded by the API layer's own cap, so `LOOKUP_BATCH` only keeps a single pipeline's reply
+    // from growing with the client's list.
+    const LOOKUP_BATCH: usize = 512;
+    for chunk in lookups.chunks(LOOKUP_BATCH) {
+        let mut pipe = deadpool_redis::redis::pipe();
+        for (_, key) in chunk {
+            pipe.smembers(key);
+        }
+        let members: Vec<Vec<String>> = pipe.query_async(&mut *conn).await?;
+        for ((index, _), batch) in chunk.iter().zip(members) {
+            ids[*index].extend(batch);
+        }
+    }
+
+    Ok(ids
+        .into_iter()
+        .map(|set| {
+            let mut ids: Vec<String> = set
+                .into_iter()
+                .filter(|id| !id.starts_with("TANK_"))
+                .collect();
+            // Stable order: a client comparing two lookups shouldn't see Redis's own set order.
+            ids.sort();
+            ids
+        })
+        .collect())
+}
+
 /// The inputs that stay identical for every node of one `search`/`search_exists` evaluation,
 /// bundled so the recursive evaluator and its leaf matcher keep a readable signature as operators
 /// gain data sources — the bookmark operator is the first that needs the *pool* alongside a
@@ -766,8 +859,18 @@ async fn attribute_filter(
     let value = value.replace('?', "_");
     // Handled before the split borrows below: a dynamic category's own `search` predicate is a
     // nested query, so this arm needs the whole context rather than pieces of it.
+    // `category:` names a category, but metadata plugins also write `category:` tags
+    // (`category:doujinshi`). An exact token (`$` or quoted) for a tag that exists is that tag —
+    // even when a category's name also matches, which the plain form keeps meaning — and a value no
+    // category has is looked up as a tag as well.
     if namespace == "category" {
-        return Ok(Some(category_filter(ctx, &value, scope).await?));
+        if token.isexact {
+            let tag_key = crate::indexer::folded_tag_key(ctx.eq, &format!("category:{value}"));
+            if ctx.search_conn.exists(&tag_key).await.unwrap_or(false) {
+                return Ok(None);
+            }
+        }
+        return category_filter(ctx, &value, scope).await;
     }
     let archive_pool = ctx.archive_pool;
     let archive_conn = &mut *ctx.archive_conn;
@@ -1040,14 +1143,16 @@ async fn size_filter(
 /// matches, evaluated as a real nested query against the same scope — so a saved search composed
 /// with `|`/`is:`/`phrase:` keeps working when referenced this way. `category_depth` bounds a
 /// predicate that references categories in a cycle.
+///
+/// `None` when no category matches at all, so the token is searched as a `category:` tag instead.
 async fn category_filter(
     ctx: &mut EvalCtx<'_>,
     value: &str,
     scope: &HashSet<String>,
-) -> Result<HashSet<String>> {
+) -> Result<Option<HashSet<String>>> {
     const MAX_CATEGORY_DEPTH: u8 = 4;
     if value.is_empty() {
-        return Ok(HashSet::new());
+        return Ok(Some(HashSet::new()));
     }
     let categories =
         lanrurugi_storage::repository::CategoryRepository::new(ctx.archive_pool.clone())
@@ -1059,12 +1164,14 @@ async fn category_filter(
     let folded = ctx.eq.fold_pattern(value);
     let name_pattern = format!("*{folded}*");
     let mut matched = HashSet::new();
+    let mut any_category = false;
     for category in categories {
         let matches = category.catid.as_str().eq_ignore_ascii_case(value)
             || glob_match(&name_pattern, &ctx.eq.fold(&category.name.to_lowercase()));
         if !matches {
             continue;
         }
+        any_category = true;
         match &category.search {
             Some(predicate) if !predicate.is_empty() => {
                 if ctx.category_depth >= MAX_CATEGORY_DEPTH {
@@ -1090,7 +1197,7 @@ async fn category_filter(
             }
         }
     }
-    Ok(matched)
+    Ok(any_category.then_some(matched))
 }
 
 /// `phrase:"two words"` — the *ordered, adjacent* occurrence of that text anywhere in an archive's
@@ -4202,6 +4309,55 @@ mod tests {
             search_ids("has:category -artist:beta").await,
             Vec::<String>::new()
         );
+        // A value no category has is a plain `category:` tag, as metadata plugins write them.
+        crate::indexer::update_tag_indexes(
+            &search_pool,
+            &eq,
+            &id_c,
+            "artist:gamma",
+            "artist:gamma,category:fixture-ehcat",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            search_ids("category:fixture-ehcat").await,
+            vec![id_c.clone()],
+            "no category by that name: searched as a tag"
+        );
+        // Once a category carries that name too, the plain form means the category and the exact
+        // form the tag.
+        let clash_id = lanrurugi_core::ids::CategoryId("SET_9999000003".to_string());
+        categories
+            .create_or_replace(&lanrurugi_core::entities::Category {
+                catid: clash_id.clone(),
+                name: "fixture-ehcat".to_string(),
+                search: None,
+                archives: vec![lanrurugi_core::ids::ArchiveId(id_b.clone())],
+                pinned: false,
+                visible_to_guest: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            search_ids("category:fixture-ehcat").await,
+            vec![id_b.clone()],
+            "the plain form names the category"
+        );
+        assert_eq!(
+            search_ids("category:fixture-ehcat$").await,
+            vec![id_c.clone()],
+            "the exact form names the tag"
+        );
+        categories.delete(&clash_id).await.unwrap();
+        crate::indexer::update_tag_indexes(
+            &search_pool,
+            &eq,
+            &id_c,
+            "artist:gamma,category:fixture-ehcat",
+            "artist:gamma",
+        )
+        .await
+        .unwrap();
         categories.delete(&category_id).await.unwrap();
         categories.delete(&dynamic_id).await.unwrap();
 

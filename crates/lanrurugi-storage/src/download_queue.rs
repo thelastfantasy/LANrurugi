@@ -355,7 +355,39 @@ impl DownloadQueueRepository {
     /// `file_size` and `LocalUpload` origin) — see [`NewQueueItem`]'s own field docs for what
     /// each caller is expected to supply.
     pub async fn add(&self, new_item: NewQueueItem) -> Result<DownloadQueueItem> {
-        let item = DownloadQueueItem {
+        let item = Self::new_item(new_item);
+        self.save(&item).await?;
+        Ok(item)
+    }
+
+    /// Adds several items in one round trip, in the order given. For a batch the user answered at
+    /// once (approving subscription works): one `add` each would make the batch's latency grow with
+    /// its size, and the queue would fill in visibly one row at a time.
+    pub async fn add_many(&self, new_items: Vec<NewQueueItem>) -> Result<Vec<DownloadQueueItem>> {
+        let items: Vec<DownloadQueueItem> = new_items.into_iter().map(Self::new_item).collect();
+        if items.is_empty() {
+            return Ok(items);
+        }
+        let mut pipe = deadpool_redis::redis::pipe();
+        pipe.atomic();
+        for item in &items {
+            let key = item_key(&item.id);
+            let raw = serde_json::to_string(item)
+                .map_err(|e| DownloadQueueStorageError::Json(key.clone(), e))?;
+            pipe.set(key, raw).ignore();
+        }
+        pipe.sadd(
+            IDS_KEY,
+            items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+        )
+        .ignore();
+        let mut conn = self.pool.get().await?;
+        let _: () = pipe.query_async(&mut conn).await?;
+        Ok(items)
+    }
+
+    fn new_item(new_item: NewQueueItem) -> DownloadQueueItem {
+        DownloadQueueItem {
             id: uuid::Uuid::new_v4().to_string(),
             origin: new_item.origin,
             subscription_id: new_item.subscription_id,
@@ -389,9 +421,7 @@ impl DownloadQueueRepository {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0),
-        };
-        self.save(&item).await?;
-        Ok(item)
+        }
     }
 
     /// Deletes every finished entry that finished before `cutoff_ms`, returning how many went.
@@ -436,10 +466,19 @@ impl DownloadQueueRepository {
     pub async fn list_all(&self) -> Result<Vec<DownloadQueueItem>> {
         let mut conn = self.pool.get().await?;
         let ids: Vec<String> = conn.smembers(IDS_KEY).await?;
-        let mut items = Vec::with_capacity(ids.len());
-        for id in ids {
-            if let Some(item) = self.get(&id).await? {
-                items.push(item);
+        let mut items: Vec<DownloadQueueItem> = Vec::with_capacity(ids.len());
+        // One MGET per chunk rather than a GET per item: every start checks the whole queue for a
+        // running duplicate, so approving a batch of subscription works used to cost
+        // (batch × queue length) round trips and fed the list back to the user one row at a time.
+        let keys: Vec<String> = ids.iter().map(|id| item_key(id)).collect();
+        for chunk in keys.chunks(500) {
+            let values: Vec<Option<String>> = conn.mget(chunk).await?;
+            for (key, raw) in chunk.iter().zip(values) {
+                let Some(raw) = raw else { continue };
+                items.push(
+                    serde_json::from_str(&raw)
+                        .map_err(|e| DownloadQueueStorageError::Json(key.clone(), e))?,
+                );
             }
         }
         items.sort_by_key(|i| i.created_at);
@@ -656,6 +695,43 @@ mod tests {
 
         // Idempotent: deleting an already-absent item is a no-op.
         repo.delete(&item.id).await.unwrap();
+    }
+
+    /// A batch lands in one write, in the order given, and reads back through the batched listing.
+    #[tokio::test]
+    async fn adds_a_batch_and_lists_it() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = DownloadQueueRepository::new(pool);
+
+        assert!(repo.add_many(Vec::new()).await.unwrap().is_empty());
+
+        let urls: Vec<String> = (0..3)
+            .map(|i| format!("https://example.com/batch/{i}"))
+            .collect();
+        let added = repo
+            .add_many(
+                urls.iter()
+                    .map(|u| new_download(u, "download/ehentai"))
+                    .collect(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            added.iter().map(|i| i.url.as_str()).collect::<Vec<_>>(),
+            urls.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+
+        let all = repo.list_all().await.unwrap();
+        for item in &added {
+            assert_eq!(all.iter().find(|i| i.id == item.id), Some(item));
+        }
+
+        repo.delete_many(&added.iter().map(|i| i.id.clone()).collect::<Vec<_>>())
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

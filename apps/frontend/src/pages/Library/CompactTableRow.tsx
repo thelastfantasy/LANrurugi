@@ -8,7 +8,7 @@ import { FormatBadge, StatusIcon } from "@/components/Display"
 import { useLongPress } from "@/hooks/useLongPress"
 import { routes } from "@/lib/routes"
 import { isBookExtension } from "@/lib/utils/bookFormats"
-import { isTankoubonId } from "@/lib/utils/isTankoubonId"
+import { coverUrl } from "@/lib/utils/coverUrl"
 
 import { CustomColumnCell } from "./CustomColumnCell"
 import { TagLine } from "./TagLine"
@@ -55,11 +55,7 @@ export function CompactTableRow({
         <Tooltip
           label={
             <img
-              src={
-                isTankoubonId(archive.arcid)
-                  ? `/api/tankoubons/${archive.arcid}/thumbnail?no_fallback=true`
-                  : `/api/archives/${archive.arcid}/thumbnail?no_fallback=true`
-              }
+              src={coverUrl(archive)}
               alt=""
               style={{ height: 300, display: "block" }}
             />

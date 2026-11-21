@@ -39,18 +39,43 @@ fn worker_budget() -> usize {
         .max(1)
 }
 
-/// How many page/cover decodes may be in flight at once.
+/// How many reader pages may be decoded and converted at once (`LANRURUGI_PAGE_CONCURRENCY`
+/// overrides it).
 ///
 /// A memory bound, not a CPU one: each in-flight page holds its decoded image (3 bytes per pixel
 /// — 8–12 MB for a normal page, far more for a 3000×4000 scan) plus the encoder's own buffers, so
 /// "one per core" turns a 64-core host into 64 simultaneous page decodes. Eight is already more
 /// than the reader's own prefetch window needs, and the singleflight in front of this collapses
-/// duplicate keys anyway.
-pub fn image_work_concurrency() -> usize {
+/// duplicate keys anyway. The running limit can change later (low-memory mode, #332); this is
+/// the starting point.
+pub fn page_concurrency() -> usize {
+    env_override("LANRURUGI_PAGE_CONCURRENCY").unwrap_or_else(|| cores().min(8))
+}
+
+/// How many cover/page thumbnails may be generated at once (`LANRURUGI_THUMBNAIL_CONCURRENCY`
+/// overrides it).
+///
+/// Its own pool, not the reader's (#330): a homepage asks for hundreds of covers in one second,
+/// and sharing one limit with pages let those take every slot a page being read needed. A
+/// thumbnail is decoded at a reduced scale where the format allows, so a few at a time keep up.
+pub fn thumbnail_concurrency() -> usize {
+    env_override("LANRURUGI_THUMBNAIL_CONCURRENCY").unwrap_or_else(|| cores().min(4))
+}
+
+fn cores() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
-        .min(8)
+}
+
+/// A positive integer from `name`, if set to one.
+fn env_override(name: &str) -> Option<usize> {
+    std::env::var(name)
+        .ok()?
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|&n| n > 0)
 }
 
 /// How many archives a library scan ingests at once.

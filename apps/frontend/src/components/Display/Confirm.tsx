@@ -2,7 +2,7 @@ import type { ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 
 import { ConfirmSheet } from "@/components/common-ui/Display"
-import { PHONE_WIDTH_QUERY, useIsNarrowViewport } from "@/hooks/useIsNarrowViewport"
+import { PHONE_QUERY, useIsNarrowViewport } from "@/hooks/useIsNarrowViewport"
 import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme"
 
 /** Generic confirm/warning dialog using `dialog.tsx`'s `.swal2-popup`/`.swal2-actions` styling, or
@@ -26,7 +26,7 @@ export function Confirm({
   danger?: boolean
 }) {
   const { t } = useTranslation()
-  const phone = useIsNarrowViewport(PHONE_WIDTH_QUERY)
+  const phone = useIsNarrowViewport(PHONE_QUERY)
   if (phone) {
     return (
       <ConfirmSheet

@@ -12,6 +12,6 @@ export function useIsNarrowViewport(query = "(max-width: 640px)"): boolean {
   return narrow
 }
 
-/** Phone width, where menus and confirmations become bottom sheets (and the reader turns on
- * infinite scroll when asked to). */
-export const PHONE_WIDTH_QUERY = "(max-width: 768px)"
+/** A phone: narrow and touch-driven, where menus and confirmations become bottom sheets. A
+ * narrowed desktop window keeps its modals, since its primary pointer is still fine. */
+export const PHONE_QUERY = "(max-width: 768px) and (pointer: coarse)"

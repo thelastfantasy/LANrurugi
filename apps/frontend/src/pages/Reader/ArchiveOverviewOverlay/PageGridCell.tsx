@@ -25,8 +25,14 @@ const FULL_ROW_LABEL = {
 /** One page thumbnail in the overview grid — shows a spin icon while its `<img>` hasn't loaded yet.
  * The native `<img>` `onLoad` event is the ready signal (no job-progress polling needed here). */
 
-function OverviewThumbnail({ src, alt }: { src: string; alt: string | undefined }) {
+/** On touch screens a row is at most this many times as tall as it is wide (see the overview's
+ * row fitting); a page longer than that shows its top, cropped to the cell's width. */
+export const MAX_ROW_ASPECT = 1.5
+
+function OverviewThumbnail({ src, alt, cropLong }: { src: string; alt: string | undefined; cropLong: boolean }) {
   const [loaded, setLoaded] = useState(false)
+  const [long, setLong] = useState(false)
+  const crop = cropLong && long
   return (
     <div style={{ height: "100%", width: "100%", display: "flex", justifyContent: "center" }}>
       {!loaded && (
@@ -45,8 +51,14 @@ function OverviewThumbnail({ src, alt }: { src: string; alt: string | undefined 
         loading="lazy"
         alt={alt}
         src={src}
-        style={{ display: "block", width: "100%", maxWidth: "none", height: "100%", maxHeight: "none", objectFit: "contain", ...(loaded ? undefined : { visibility: "hidden" }) }}
-        onLoad={() => setLoaded(true)}
+        // `objectPosition` overrides legacy's `div.id3:not(.nocrop) img { object-position: left top }`,
+        // which pinned every letterboxed thumbnail to the cell's corner.
+        style={{ display: "block", width: "100%", maxWidth: "none", height: "100%", maxHeight: "none", objectFit: crop ? "cover" : "contain", objectPosition: crop ? "center top" : "center", ...(loaded ? undefined : { visibility: "hidden" }) }}
+        onLoad={(e) => {
+          const img = e.currentTarget
+          setLong(img.naturalWidth > 0 && img.naturalHeight / img.naturalWidth > MAX_ROW_ASPECT)
+          setLoaded(true)
+        }}
       />
     </div>
   )
@@ -138,7 +150,10 @@ export function PageGridCell({
   isTank,
   isPatch = false,
   chapterName,
+  cornerButtons = true,
 }: {
+  /** False on touch screens, where a long press opens the same actions as a sheet. */
+  cornerButtons?: boolean
   page: number
   isStamped: boolean
   loggedIn: boolean
@@ -241,7 +256,7 @@ export function PageGridCell({
             {chapterName}
           </span>
         )}
-        <OverviewThumbnail src={thumbnailSrc} alt={t("common.pageN", { n: page }) ?? undefined} />
+        <OverviewThumbnail src={thumbnailSrc} alt={t("common.pageN", { n: page }) ?? undefined} cropLong={!cornerButtons} />
         {isPatch && (
           <Tooltip label={t("reader.patchPage")} wrapperStyle={{ position: "static" }}>
             <span
@@ -267,7 +282,7 @@ export function PageGridCell({
             </span>
           </Tooltip>
         )}
-        {!isTank && (
+        {cornerButtons && !isTank && (
         <PageGridActionIcon
           icon="fa-magnifying-glass"
           corner="bottom-left"
@@ -280,7 +295,7 @@ export function PageGridCell({
           }}
         />
         )}
-        {loggedIn && (
+        {cornerButtons && loggedIn && (
           <>
             <PageGridActionIcon
               icon="fa-file-image"

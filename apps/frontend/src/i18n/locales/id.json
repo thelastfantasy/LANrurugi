@@ -814,5 +814,15 @@
   "upload.transferringCountHint": "Tugas yang sedang memindahkan byte (tahap penulisan ke pustaka tidak dihitung).",
   "reader.autoInfiniteScrollNarrow": "Aktifkan otomatis di lebar ponsel",
   "reader.autoInfiniteScrollNarrowDesc": "Selalu gunakan gulir tanpa batas saat lebar layar 768px atau kurang (ponsel tegak); layar yang lebih lebar tetap mengikuti pilihan di atas.",
-  "reader.infiniteScrollForcedByNarrow": "Lebar ponsel: diaktifkan oleh sakelar di bawah."
+  "reader.infiniteScrollForcedByNarrow": "Lebar ponsel: diaktifkan oleh sakelar di bawah.",
+  "settings.forceLowMemory": "Paksa mode memori rendah",
+  "settings.forceLowMemoryDescription": "Aktif: pemrosesan gambar selalu berjalan di tingkat memori rendah, berapa pun memori mesin — lebih sedikit gambar sekaligus, lebih hemat memori, pemuatan lebih lambat. Nonaktif: tingkat mengikuti memori yang tersedia. Berlaku saat disimpan, tanpa memulai ulang.",
+  "settings.memoryModeStatus": "Sekarang: {{tier}} ({{reason}}; {{thumbnails}} gambar mini dan {{pages}} halaman sekaligus)",
+  "settings.memoryTierNormal": "normal",
+  "settings.memoryTierLow": "memori rendah",
+  "settings.memoryReasonForced": "dipaksa",
+  "settings.memoryReasonDetected": "otomatis · {{source}} {{size}}",
+  "settings.memoryReasonUnknown": "otomatis · memori tidak terbaca, berjalan normal",
+  "settings.memorySourceContainer": "batas kontainer",
+  "settings.memorySourceMachine": "memori mesin"
 }

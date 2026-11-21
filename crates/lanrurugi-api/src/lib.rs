@@ -36,10 +36,12 @@ pub mod llm_prompts;
 pub mod llm_usage;
 pub mod login;
 pub mod logs;
+pub mod memory_mode;
 pub mod misc;
 pub mod mojibake;
 pub mod opds;
 pub mod opensearch;
+pub(crate) mod page_dimensions;
 pub mod patch_provenance;
 pub mod plugin_wizard;
 pub mod plugins;
@@ -51,12 +53,14 @@ pub mod recommend_precompute;
 pub mod recycle;
 pub mod redownload_restore;
 pub mod repair;
+pub(crate) mod revision_carryover;
 pub mod safety_password;
 pub mod scripts;
 pub mod search;
 pub mod search_history;
 pub mod sessions;
 pub mod settings;
+pub mod source_lookup;
 pub mod tank_members;
 pub use lanrurugi_share::attempts as share_attempts;
 pub mod share_host;
@@ -121,6 +125,7 @@ pub fn router() -> Router<AppState> {
         .merge(shinobu::router())
         .merge(upload::router())
         .merge(search::router())
+        .merge(source_lookup::router())
         .merge(stats::router())
         .merge(opds::router())
         .merge(plugins::router())

@@ -806,6 +806,8 @@ mod tests {
             domain_match: vec![],
             generated_by_wizard: false,
             sidecar_files: vec![],
+            data_version: 1,
+            capabilities: vec![],
         };
         let credentials = Credentials {
             fields: std::collections::HashMap::from([(

@@ -755,5 +755,15 @@
   "upload.transferringCountHint": "Oppgaver som overfører bytes nå (innskriving i biblioteket telles ikke).",
   "reader.autoInfiniteScrollNarrow": "Slå på automatisk på mobilbredde",
   "reader.autoInfiniteScrollNarrowDesc": "Bruk alltid uendelig rulling når skjermen er 768px bred eller smalere (mobil i stående modus); bredere skjermer beholder valget over.",
-  "reader.infiniteScrollForcedByNarrow": "Mobilbredde: slått på av bryteren nedenfor."
+  "reader.infiniteScrollForcedByNarrow": "Mobilbredde: slått på av bryteren nedenfor.",
+  "settings.forceLowMemory": "Tving lavminnemodus",
+  "settings.forceLowMemoryDescription": "På: bildebehandling kjører alltid på lavminnenivået, uansett hvor mye minne maskinen har — færre bilder samtidig, mindre minne, tregere lasting. Av: nivået følger tilgjengelig minne. Gjelder ved lagring, uten omstart.",
+  "settings.memoryModeStatus": "Nå: {{tier}} ({{reason}}; {{thumbnails}} miniatyrer og {{pages}} sider samtidig)",
+  "settings.memoryTierNormal": "normal",
+  "settings.memoryTierLow": "lavt minne",
+  "settings.memoryReasonForced": "tvunget",
+  "settings.memoryReasonDetected": "automatisk · {{source}} {{size}}",
+  "settings.memoryReasonUnknown": "automatisk · minnet kunne ikke leses, normal drift",
+  "settings.memorySourceContainer": "containergrense",
+  "settings.memorySourceMachine": "maskinens minne"
 }

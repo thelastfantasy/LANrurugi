@@ -94,6 +94,10 @@ for c in "$@"; do args+=(-p "$c"); done
 scripts/cargo-container-run.sh cargo test --no-fail-fast --lib --bins --tests "${args[@]}"
 """
 
+[tasks.test-plugins]
+description = "deno test for the hand-written plugins (tests/plugins/), kept outside plugins/ because every .ts there is loaded as a plugin"
+run = "deno test --config plugins/deno.json --allow-read tests/plugins/"
+
 [tasks.test-one]
 description = "cargo test -p <crate> --lib <name filter> inside the dev container — runs only the unit tests whose name contains the filter, e.g. `mise run test-one -- lanrurugi-api not_enabled_never_queues`"
 run = """
@@ -418,6 +422,19 @@ run = "podman stop lrr-dev"
 [tasks.dev-seed]
 description = "Write the uncommon-state seed data (subscriptions awaiting approval, reservations, check history) into the running dev container (#286)"
 run = "node apps/frontend/tests/seed/seed.mjs --container lrr-dev --port 16379"
+
+[tasks.dev-aspect-archive]
+description = "Generate the synthetic aspect-ratio test archive (infinite-scroll alignment, overview row fitting) and upload it to the running dev container. Password from LANRURUGI_DEV_PASSWORD, else the dev default"
+run = '''
+set -eu
+dir=$(mktemp -d)
+trap 'rm -rf "$dir"' EXIT
+zip="$dir/[测试] 滚动与概览对齐.zip"
+python3 scripts/gen-aspect-test-archive.py "$zip"
+curl -fsS -c "$dir/jar" -o /dev/null --data-urlencode "password=${LANRURUGI_DEV_PASSWORD:-kamimamita}" http://127.0.0.1:3000/api/login
+curl -sS -b "$dir/jar" -X PUT -F "file=@$zip" http://127.0.0.1:3000/api/archives/upload
+echo
+'''
 
 [tasks.dev-rebuild]
 description = "Rebuild the dev image after a *backend* source change (frontend changes need no rebuild — Vite picks them up live)"

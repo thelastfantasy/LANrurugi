@@ -124,7 +124,7 @@ fn write_merged(source: &Path, target: &Path) -> std::io::Result<bool> {
     }
     let tmp = target.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
     let file = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
-    match lanrurugi_scanner::patch::write_merged_zip(source, file) {
+    match lanrurugi_scanner::patch::write_merged_zip(source, None, file) {
         Ok(true) => std::fs::rename(&tmp, target).map(|()| true),
         Ok(false) => std::fs::remove_file(&tmp).map(|()| false),
         Err(e) => {

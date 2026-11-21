@@ -1,13 +1,16 @@
 import { getImageCapabilityHeader,IMAGE_FORMAT_SUPPORT_HEADER } from "@/lib/utils/imageFormatSupport"
 
+function contentLengthKb(res: Response): number | null {
+  const bytes = Number(res.headers.get("Content-Length"))
+  if (Number.isNaN(bytes)) return null
+  return Math.floor(bytes / 1024)
+}
+
 /** Fetches an `<img>`'s byte size via a `HEAD` request's `Content-Length` header (rounded to KB)
  * — browsers don't expose it otherwise. Resolves to `null` if unavailable. */
 export async function fetchContentLengthKb(url: string): Promise<number | null> {
   try {
-    const res = await fetch(url, { method: "HEAD" })
-    const bytes = Number(res.headers.get("Content-Length"))
-    if (Number.isNaN(bytes)) return null
-    return Math.floor(bytes / 1024)
+    return contentLengthKb(await fetch(url, { method: "HEAD" }))
   } catch {
     return null
   }
@@ -26,10 +29,35 @@ export interface ResizedPageInfo {
   servedBytes?: number
 }
 
-export async function fetchResizedPageInfo(
+function resizedPageInfo(res: Response): ResizedPageInfo | null {
+  const servedFormat = res.headers.get("x-lrr-resized")
+  if (servedFormat !== "webp" && servedFormat !== "jxl") return null
+  const origSize = Number(res.headers.get("x-lrr-original-size"))
+  const dims = res.headers.get("x-lrr-original-dimensions")?.split("x")
+  if (Number.isNaN(origSize) || !dims) return null
+  const origWidth = Number(dims[0])
+  const origHeight = Number(dims[1])
+  if (Number.isNaN(origWidth) || Number.isNaN(origHeight)) return null
+  const servedBytes = Number(res.headers.get("x-lrr-served-size"))
+  return {
+    servedFormat,
+    origSizeBytes: origSize,
+    origWidth,
+    origHeight,
+    ...(Number.isNaN(servedBytes) ? {} : { servedBytes }),
+  }
+}
+
+/** The file-info bar's two answers — entry size and conversion details — from one HEAD. */
+export interface PageFileInfo {
+  sizeKb: number | null
+  resized: ResizedPageInfo | null
+}
+
+export async function fetchPageFileInfo(
   url: string,
   options: { fresh?: boolean } = {},
-): Promise<ResizedPageInfo | null> {
+): Promise<PageFileInfo> {
   try {
     // `fresh` bypasses the browser's own copy: the page responses are `max-age=300`, so a second
     // HEAD within that window would replay the *first* answer — which, taken before the image was
@@ -39,24 +67,9 @@ export async function fetchResizedPageInfo(
       method: "HEAD",
       ...(options.fresh ? { cache: "no-store" as const } : {}),
     })
-    const servedFormat = res.headers.get("x-lrr-resized")
-    if (servedFormat !== "webp" && servedFormat !== "jxl") return null
-    const origSize = Number(res.headers.get("x-lrr-original-size"))
-    const dims = res.headers.get("x-lrr-original-dimensions")?.split("x")
-    if (Number.isNaN(origSize) || !dims) return null
-    const origWidth = Number(dims[0])
-    const origHeight = Number(dims[1])
-    if (Number.isNaN(origWidth) || Number.isNaN(origHeight)) return null
-    const servedBytes = Number(res.headers.get("x-lrr-served-size"))
-    return {
-      servedFormat,
-      origSizeBytes: origSize,
-      origWidth,
-      origHeight,
-      ...(Number.isNaN(servedBytes) ? {} : { servedBytes }),
-    }
+    return { sizeKb: contentLengthKb(res), resized: resizedPageInfo(res) }
   } catch {
-    return null
+    return { sizeKb: null, resized: null }
   }
 }
 

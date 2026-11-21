@@ -232,7 +232,7 @@ describe("buildTiles", () => {
     // A canvas far too small for five tiles: the archive level folds by count only, so the mosaic
     // keeps its slivers instead of collapsing into one grey block.
     const tiles = buildTiles(level, 100, label)
-    expect(tiles.map((tile) => tile.name)).toEqual(library.map((entry) => entry.id))
+    expect(tiles.map((tile) => tile.label)).toEqual(library.map((entry) => entry.id))
     expect(bytesOfTiles(tiles)).toBe(10900)
     expect(tiles.every((tile) => tile.drillTo === undefined)).toBe(true)
     expect(tiles[0].colorKey).toBe("alice")

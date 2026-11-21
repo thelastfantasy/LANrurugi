@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next"
 import { Select } from "@/components/common-ui/Form"
 import { useReaderSettings } from "@/hooks/useReaderSettings"
 import { withImageCapabilities } from "@/lib/utils/imageFormatSupport"
-import { fetchContentLengthKb, fetchResizedPageInfo, type ResizedPageInfo } from "@/lib/utils/imageMeta"
+import { fetchPageFileInfo, type ResizedPageInfo } from "@/lib/utils/imageMeta"
 import { displayTocName } from "@/lib/utils/tocValidation"
 import { chapterForPage, tocChapterSpans } from "@/pages/Reader/ArchiveOverviewOverlay/shared"
 
@@ -165,10 +165,7 @@ export function ShareReader({
     let request = heads.current.get(displayUrl)
     if (!request) {
       const absolute = displayUrl
-      request = Promise.all([fetchResizedPageInfo(absolute), fetchContentLengthKb(absolute)]).then(([resized, sizeKb]) => ({
-        resized,
-        sizeKb,
-      }))
+      request = fetchPageFileInfo(absolute)
       heads.current.set(displayUrl, request)
     }
     let cancelled = false

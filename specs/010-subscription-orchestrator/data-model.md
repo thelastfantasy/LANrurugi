@@ -48,6 +48,22 @@ metadata has its own authoritative source (the metadata capability's full record
 merge-never-delete rule. `refetch_metadata` therefore re-runs *that* path rather than copying cache
 values across.
 
+Re-measured 2026-11-20: e-hentai's listing rows now show only 1–4 tags (2.3 on average, against 19.7
+from its `gdata` API), so the discovery plugin takes tags, rating (the exact average), the main title
+and page count from `gdata` and declares `data_version: 2`. A snapshot entry written under another
+data version is updated without being compared, so that change does not read as every work changing
+at once. The rule above stands unchanged.
+
+**History is stored in the snapshot, not per cycle (2026-11-20).** Each entry carries its verdicts as
+runs over cycle numbers (`runs: [{verdict, from_seq, to_seq}]`) and the earlier values of fields that
+changed (`changes`, tags as a diff, ratings compared at 0.1). A cycle record is a summary (`seq`,
+counts per verdict); the history view rebuilds a cycle's rows from the snapshot. Cycle records used to
+repeat every candidate in full each check, over 90% of a subscription's Redis use. Entries the listing
+no longer shows are dropped once out of the window, no longer reconsiderable, and older than every kept
+cycle. Rejected works stay reconsiderable for `RECONSIDER_DAYS` (7); a source declaring the
+`refresh_sources` capability re-reads those the listing did not show, so a rating that rose is noticed
+even after the work left the window.
+
 Titles are likewise never synced automatically, under any of the three options: the local title may
 have been edited by the user (`PUT /archives/{id}/metadata` permits exactly that), and silently
 overwriting their edit is worse than leaving a stale title. A change is surfaced with both values and

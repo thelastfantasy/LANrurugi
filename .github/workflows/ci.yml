@@ -158,6 +158,9 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
+      - name: plugin tests (deno)
+        run: mise run test-plugins
+
       # Cheap, no build: catches the beta.1/beta.2 class of mistake at PR time — the release
       # Dockerfile built and copied fewer binaries than Dockerfile.dev, so every shipped image was
       # missing the embed and GPU workers. See the script's own header.

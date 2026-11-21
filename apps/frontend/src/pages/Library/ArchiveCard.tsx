@@ -10,6 +10,7 @@ import { FormatBadge, StatusIcon } from "@/components/Display"
 import { useLongPress } from "@/hooks/useLongPress"
 import { routes } from "@/lib/routes"
 import { isBookExtension } from "@/lib/utils/bookFormats"
+import { coverUrl } from "@/lib/utils/coverUrl"
 import { highlightText } from "@/lib/utils/highlightText"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 
@@ -121,10 +122,7 @@ export function ArchiveCard({
 }) {
   const { t } = useTranslation()
   const id = archive.arcid
-  const isTank = isTankoubonId(id)
-  const thumbSrc = isTank
-    ? `/api/tankoubons/${id}/thumbnail?no_fallback=true`
-    : `/api/archives/${id}/thumbnail?no_fallback=true`
+  const thumbSrc = coverUrl(archive)
   const [thumbLoaded, setThumbLoaded] = useState(() => loadedThumbs.has(thumbSrc))
   const [thumbFailed, setThumbFailed] = useState(false)
   // Touch opens the menu on our own long-press timing; right-click stays on `onContextMenu`.

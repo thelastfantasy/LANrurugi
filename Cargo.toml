@@ -32,7 +32,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.0-beta.7"
+version = "1.0.0-beta.8"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/thelastfantasy/LANrurugi"
@@ -100,6 +100,9 @@ tiff = "0.11"
 # buffer (an unchecked `from_raw_parts` in `ImageComponent::data()`), so this uses the C library —
 # `libopenjp2-7-dev` is installed by the Dockerfiles.
 jpeg2k = { version = "0.10", default-features = false, features = ["image", "openjpeg-sys"] }
+# DCT-scaled JPEG decoding for thumbnails (#330): `zune-jpeg`, behind `image`, always decodes the
+# full frame. No `rayon` feature: thumbnail decodes already run on the capped workspace pool.
+jpeg-decoder = { version = "0.3", default-features = false }
 # Still-AVIF decoding via `rav1d`, the pure-Rust port of dav1d. Requires rustc >= 1.98, which is
 # why `RUST_VERSION` in the Dockerfiles tracks current stable (1.99) rather than an older pin.
 avif-decode = "3"

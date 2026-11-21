@@ -83,6 +83,7 @@ pub fn write_tankoubon_zip<W: Write>(out: W, members: &[MemberSource]) -> io::Re
             Ok(file) => {
                 match lanrurugi_scanner::patch::write_merged_zip(
                     path,
+                    None,
                     std::io::BufWriter::new(file),
                 ) {
                     Ok(true) => {

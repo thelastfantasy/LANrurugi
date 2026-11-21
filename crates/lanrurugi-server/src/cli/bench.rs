@@ -142,12 +142,19 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         plugins,
         plugins_dir,
         download_managers: Default::default(),
-        thumbnail_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
-            lanrurugi_core::concurrency::image_work_concurrency(),
-        )),
-        page_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
-            lanrurugi_core::concurrency::image_work_concurrency(),
-        )),
+        // Separate pools (#330), each handing freed heap back once its burst is over.
+        thumbnail_singleflight: Arc::new(
+            lanrurugi_core::singleflight::Singleflight::new(
+                lanrurugi_core::concurrency::thumbnail_concurrency(),
+            )
+            .release_heap_when_idle(),
+        ),
+        page_singleflight: Arc::new(
+            lanrurugi_core::singleflight::Singleflight::new(
+                lanrurugi_core::concurrency::page_concurrency(),
+            )
+            .release_heap_when_idle(),
+        ),
         plugin_options,
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue,
@@ -159,6 +166,7 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         recommender: Arc::new(lanrurugi_api::recommend::RecommendService::new(models_dir)),
         new_archive_tx,
         download_cancellations: Default::default(),
+        download_deferrals: Default::default(),
         pending_generate_requests: Default::default(),
         split_progress_tx: Default::default(),
         translation_runtime: Default::default(),

@@ -809,5 +809,15 @@
   "upload.transferringCountHint": "Tâches en cours de transfert (hors enregistrement dans la bibliothèque).",
   "reader.autoInfiniteScrollNarrow": "Activer automatiquement sur mobile",
   "reader.autoInfiniteScrollNarrowDesc": "Toujours utiliser le défilement infini quand l'écran fait 768px de large ou moins (téléphone en portrait) ; les écrans plus larges gardent le choix ci-dessus.",
-  "reader.infiniteScrollForcedByNarrow": "Largeur mobile : activé par l'interrupteur ci-dessous."
+  "reader.infiniteScrollForcedByNarrow": "Largeur mobile : activé par l'interrupteur ci-dessous.",
+  "settings.forceLowMemory": "Forcer le mode mémoire réduite",
+  "settings.forceLowMemoryDescription": "Activé : le traitement des images utilise toujours le niveau mémoire réduite, quelle que soit la mémoire de la machine — moins d'images à la fois, moins de mémoire, chargement plus lent. Désactivé : le niveau suit la mémoire disponible. S'applique à l'enregistrement, sans redémarrage.",
+  "settings.memoryModeStatus": "Actuellement : {{tier}} ({{reason}} ; {{thumbnails}} miniatures et {{pages}} pages à la fois)",
+  "settings.memoryTierNormal": "normal",
+  "settings.memoryTierLow": "mémoire réduite",
+  "settings.memoryReasonForced": "forcé",
+  "settings.memoryReasonDetected": "automatique · {{source}} {{size}}",
+  "settings.memoryReasonUnknown": "automatique · mémoire illisible, fonctionnement normal",
+  "settings.memorySourceContainer": "limite du conteneur",
+  "settings.memorySourceMachine": "mémoire de la machine"
 }

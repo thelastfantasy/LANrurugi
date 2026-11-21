@@ -1100,6 +1100,7 @@ pub(crate) async fn serve_archive_download(
     }
     let job = Repack::Merged {
         archive: std::path::PathBuf::from(&archive_file),
+        blake3: archive.blake3.clone(),
         patch,
     };
     let cache = repack_cache_path("merged", &job.cache_key());
@@ -1234,6 +1235,8 @@ pub(crate) enum Repack {
     /// A patched archive, rebuilt as one zip.
     Merged {
         archive: std::path::PathBuf,
+        /// The archive's record's BLAKE3, which checks the patch without reading the archive.
+        blake3: Option<String>,
         patch: std::path::PathBuf,
     },
     /// A tankoubon, zipped from its members in reading order.
@@ -1249,7 +1252,7 @@ impl Repack {
     pub(crate) fn cache_key(&self) -> String {
         let mut key = String::new();
         let files: Vec<(&str, &std::path::Path)> = match self {
-            Self::Merged { archive, patch } => vec![("archive", archive), ("patch", patch)],
+            Self::Merged { archive, patch, .. } => vec![("archive", archive), ("patch", patch)],
             Self::Tankoubon { members, .. } => members
                 .iter()
                 .enumerate()
@@ -1321,9 +1324,11 @@ pub(crate) async fn ensure_repack(cache: &std::path::Path, job: Repack) -> bool 
         };
         let writer = std::io::BufWriter::new(file);
         let built = match &job {
-            Repack::Merged { archive, .. } => {
+            Repack::Merged {
+                archive, blake3, ..
+            } => {
                 matches!(
-                    lanrurugi_scanner::patch::write_merged_zip(archive, writer),
+                    lanrurugi_scanner::patch::write_merged_zip(archive, blake3.as_deref(), writer),
                     Ok(true)
                 )
             }
@@ -1960,6 +1965,145 @@ pub struct GetThumbnailParams {
     /// page endpoint. Normally absent, in which case the capability cookie/header is used.
     #[serde(default)]
     format: Option<String>,
+    /// The cover version a search result reported (`cover_version`). A URL that names its version
+    /// can never show other bytes, so the browser may keep the cover for good. Not `v`: the reader
+    /// overview already busts its own cover with a per-session `?v=<counter>`, which repeats.
+    #[serde(default)]
+    cv: Option<String>,
+}
+
+/// Stamps the library-format cover file as written now. [`cover_version`] reads that file's time,
+/// so stamping it after every other format is written keeps a new version from being published
+/// while one of them still shows the old cover.
+pub(crate) async fn mark_cover_written(path: &std::path::Path) {
+    let path = path.to_path_buf();
+    let stamped = tokio::task::spawn_blocking(move || {
+        std::fs::File::options()
+            .write(true)
+            .open(&path)?
+            .set_modified(std::time::SystemTime::now())
+    })
+    .await;
+    if let Ok(Err(e)) = stamped {
+        tracing::warn!(error = %e, "could not stamp the new cover's time");
+    }
+}
+
+/// Removes a cover file that no longer shows the current cover; a missing one is fine.
+pub(crate) async fn remove_stale_cover(path: &std::path::Path) {
+    if let Err(e) = tokio::fs::remove_file(path).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(path = %path.display(), error = %e, "could not remove a stale cover");
+        }
+    }
+}
+
+/// `Cache-Control` for a cover requested by version: a new cover is a new URL.
+pub(crate) const THUMB_CACHE_VERSIONED: &str = "private, max-age=31536000, immutable";
+
+/// The library's thumbnail format and quality, remembered for a few seconds: every cover request
+/// and every search card needs them, and reading them is an `HGETALL` of the whole `LRR_CONFIG`.
+pub(crate) async fn thumb_settings(
+    state: &AppState,
+) -> lanrurugi_scanner::thumbnail::ThumbSettings {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static CACHE: Mutex<Option<(Instant, lanrurugi_scanner::thumbnail::ThumbSettings)>> =
+        Mutex::new(None);
+    const TTL: Duration = Duration::from_secs(5);
+    if let Some((at, settings)) = *CACHE.lock().unwrap_or_else(|e| e.into_inner()) {
+        if at.elapsed() < TTL {
+            return settings;
+        }
+    }
+    let settings = match state.redis.config.get().await {
+        Ok(mut conn) => lanrurugi_scanner::thumbnail::read_settings(&mut conn).await,
+        Err(_) => lanrurugi_scanner::thumbnail::ThumbSettings {
+            format: lanrurugi_scanner::thumbnail::ThumbFormat::Webp,
+            quality: 85,
+        },
+    };
+    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), settings));
+    settings
+}
+
+/// A token that changes whenever the cover of `id` (an archive or a `TANK_` id) does: which format
+/// is on disk and when it was written, preferring the library's own format. Writing a cover —
+/// setting another page, a regeneration, a format switch — always writes a new file. `None` while
+/// there is no cover file yet; the card then asks without a version, as before. Sent as `?cv=`.
+pub(crate) async fn cover_version(
+    state: &AppState,
+    id: &str,
+    preferred: lanrurugi_scanner::thumbnail::ThumbFormat,
+) -> Option<String> {
+    use lanrurugi_scanner::thumbnail::ThumbFormat;
+    let formats =
+        std::iter::once(preferred).chain(ThumbFormat::ALL.into_iter().filter(|f| *f != preferred));
+    for format in formats {
+        let path = if crate::tankoubons::is_valid_tankoubon_id(id) {
+            crate::tankoubons::tankoubon_cover_path(state, id, format)
+        } else {
+            match thumbnail_disk_path(state, id, 0, format) {
+                Some(path) => path,
+                None => return None,
+            }
+        };
+        if let Ok(meta) = tokio::fs::metadata(&path).await {
+            let written = meta
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_millis();
+            return Some(format!("{}{written:x}", format.extension()));
+        }
+    }
+    None
+}
+
+/// The response for one cover or page thumbnail: a validator hashed from the payload (so a
+/// revalidation is a bodyless 304), `cache_control`, and — on a full response — a download name.
+pub(crate) fn thumbnail_http_response(
+    request: &HeaderMap,
+    content_type: &'static str,
+    bytes: bytes::Bytes,
+    cache_control: &'static str,
+    disposition: impl FnOnce() -> header::HeaderValue,
+) -> Response {
+    let etag = thumbnail_etag(&bytes);
+    let unchanged = request
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|candidate| candidate.trim().trim_start_matches("W/") == etag)
+        });
+    let mut response = if unchanged {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        (
+            [(
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_static(content_type),
+            )],
+            bytes,
+        )
+            .into_response()
+    };
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static(cache_control),
+    );
+    headers.insert(
+        header::ETAG,
+        header::HeaderValue::from_str(&etag).expect("etag is ASCII"),
+    );
+    if !unchanged {
+        headers.insert(header::CONTENT_DISPOSITION, disposition());
+    }
+    response
 }
 
 pub(crate) async fn get_archive_thumbnail(
@@ -1990,70 +2134,32 @@ pub(crate) async fn get_archive_thumbnail(
     // a page of ~160 tiles re-render from cache instead of re-validating every one of them on each
     // refresh (measured: the server answers a 304 in ~5 ms, but 160 of them still queue behind six
     // connections per host, which is why the same cards kept appearing to lag behind).
-    const THUMB_CACHE: &str = "private, max-age=60, must-revalidate";
+    let thumb_cache: &'static str = if params.cv.is_some() {
+        THUMB_CACHE_VERSIONED
+    } else {
+        "private, max-age=60, must-revalidate"
+    };
     // Naming a saved thumbnail needs the archive's own title — the URL carries only the opaque ID,
     // so a direct navigation would save as `thumbnail.jpg`. Best-effort: an orphaned thumbnail
     // whose archive row is already gone still serves, just named after its ID.
-    let archive_name = match state.repos.archives.get(&id).await {
-        Ok(Some(archive)) => archive.name,
+    let archive_name = match state.repos.archives.name(&id).await {
+        Ok(Some(name)) => name,
         _ => id.to_string(),
     };
     let page_param = params.page.filter(|page| *page > 0);
+    // Every path that produces a thumbnail — disk read, on-demand regeneration, the fallback
+    // placeholder — funnels through here, so the payload-hashed validator stays correct without
+    // threading file metadata through each of them.
     let thumbnail_response = |content_type: &'static str, bytes: bytes::Bytes| {
-        // Every path that produces a thumbnail — disk read, on-demand regeneration, the fallback
-        // placeholder — funnels through here, so a validator hashed from the payload itself stays
-        // correct without threading file metadata through each of them. `no-cache` still forces
-        // revalidation on every navigation, but a matching validator turns that into a bodyless
-        // 304 instead of re-sending the whole image (100 tiles per page adds up).
-        let etag = thumbnail_etag(&bytes);
-        let unchanged = headers
-            .get(header::IF_NONE_MATCH)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| {
-                value
-                    .split(',')
-                    .any(|candidate| candidate.trim().trim_start_matches("W/") == etag)
-            });
-        let mut response = if unchanged {
-            StatusCode::NOT_MODIFIED.into_response()
-        } else {
-            (
-                [(
-                    header::CONTENT_TYPE,
-                    header::HeaderValue::from_static(content_type),
-                )],
-                bytes,
-            )
-                .into_response()
-        };
-        let headers = response.headers_mut();
-        headers.insert(
-            header::CACHE_CONTROL,
-            header::HeaderValue::from_static(THUMB_CACHE),
-        );
-        headers.insert(
-            header::ETAG,
-            header::HeaderValue::from_str(&etag).expect("etag is ASCII"),
-        );
-        if !unchanged {
-            headers.insert(
-                header::CONTENT_DISPOSITION,
-                disposition_header(&thumbnail_disposition_for(
-                    &archive_name,
-                    page_param,
-                    content_type,
-                )),
-            );
-        }
-        response
+        thumbnail_http_response(&headers, content_type, bytes, thumb_cache, || {
+            disposition_header(&thumbnail_disposition_for(
+                &archive_name,
+                page_param,
+                content_type,
+            ))
+        })
     };
-    let thumb_settings = match state.redis.config.get().await {
-        Ok(mut conn) => lanrurugi_scanner::thumbnail::read_settings(&mut conn).await,
-        Err(_) => lanrurugi_scanner::thumbnail::ThumbSettings {
-            format: lanrurugi_scanner::thumbnail::ThumbFormat::Webp,
-            quality: 85,
-        },
-    };
+    let thumb_settings = thumb_settings(&state).await;
     let desired_format = desired_thumbnail_format(client_support, thumb_settings.format);
     if let Some((content_type, bytes)) =
         read_thumbnail_format(&state, id.as_str(), page, desired_format).await
@@ -2348,7 +2454,7 @@ async fn page_entry_name(file: &std::path::Path, page: usize) -> Option<String> 
     let (pages, _) = lanrurugi_core::concurrency::run_blocking(move || {
         let originals = lanrurugi_scanner::archive_format::list_pages(&path)?;
         Ok::<_, lanrurugi_scanner::archive_format::ArchiveFormatError>(
-            lanrurugi_scanner::patch::effective_pages_checked(&path, &originals),
+            lanrurugi_scanner::patch::effective_pages_checked(&path, &originals, None),
         )
     })
     .await
@@ -2430,6 +2536,31 @@ async fn update_thumbnail(
     .await
     {
         Ok(thumbhash) => {
+            // A cover kept in another format would still show the old page to a browser that asks
+            // for that format — and under the new `cover_version`, for good. Removing it is not
+            // enough: the record keeps no cover page, so an on-demand regeneration would draw
+            // page 1 again. Every format is written from the chosen page instead.
+            for other in lanrurugi_scanner::thumbnail::ThumbFormat::ALL {
+                if other == thumb_settings.format {
+                    continue;
+                }
+                let Some(path) = thumbnail_disk_path(&state, id.as_str(), 0, other) else {
+                    continue;
+                };
+                let written = lanrurugi_scanner::thumbnail::generate(
+                    std::path::PathBuf::from(&archive.file),
+                    page as usize,
+                    path.clone(),
+                    other,
+                    thumb_settings.quality,
+                )
+                .await;
+                if let Err(e) = written {
+                    tracing::warn!(%id, format = other.extension(), error = %e, "could not write the new cover in another format");
+                    remove_stale_cover(&path).await;
+                }
+            }
+            mark_cover_written(&output).await;
             if thumbhash.is_some() {
                 // The render took a while: write just the hash onto the record as it is now.
                 if let Err(e) = state
@@ -2748,6 +2879,7 @@ pub async fn spawn_regen_thumbnails_job(
         }
         jobs.finish(&job_id_for_task, json!({ "regenerated": total }))
             .await;
+        lanrurugi_core::memory::release_free_heap_soon("thumbnail regeneration finished");
     });
 
     job_id
@@ -4808,8 +4940,11 @@ pub(crate) async fn get_files(
             } else {
                 crate::integrity_scan::note_readable(&state, &archive, own_pages).await;
             }
-            let (effective, patch_error) =
-                lanrurugi_scanner::patch::effective_pages_checked(archive_path, &pages);
+            let (effective, patch_error) = lanrurugi_scanner::patch::effective_pages_checked(
+                archive_path,
+                &pages,
+                archive.blake3.as_deref(),
+            );
             let pages: Vec<serde_json::Value> = effective
                 .iter()
                 .map(|p| match p {
@@ -4890,22 +5025,15 @@ pub(crate) fn unreadable_archive_response(
 
 #[derive(Debug, Deserialize)]
 pub struct PageDimensionsParams {
-    /// How many pages, from the start, to actually measure — see [`read_page_dimensions`]'s own
-    /// docs for why this is a required, bounded count rather than "all of them."
-    ///
-    /// [`read_page_dimensions`]: lanrurugi_scanner::archive_format::read_page_dimensions
+    /// How many pages, from the start of the reader's page list, to answer for.
     count: usize,
 }
 
 /// `GET /archives/{id}/page-dimensions?count=N` — natural pixel width/height for the first `N`
-/// pages only, in the same order as `/files`'s own `pages` array (so the frontend can zip them
-/// together by index without a separate name-matching step). Additive to `/files`, not folded into
-/// it — existing callers of `/files` (the third-party-compatible file-list contract) shouldn't have
-/// to pay for an archive pass with per-entry image-header parsing they never asked for; only the
-/// infinite-scroll reader view (the one caller that actually needs this, to size not-yet-loaded
-/// `<img>`s accurately before jumping to a resume position — see `read_page_dimensions`'s own docs
-/// for why it's bounded to just the pages before that jump, not the whole archive) calls this
-/// endpoint at all.
+/// pages, in the same order as `/files`'s own `pages` array (patch pages included), so the
+/// infinite-scroll reader can reserve each unloaded page's height before jumping to a resume
+/// position. Additive to `/files` rather than folded into it: its other callers never need sizes.
+/// Answered from the cache in [`crate::page_dimensions`]; only pages never measured open the file.
 async fn get_page_dimensions(
     State(state): State<AppState>,
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
@@ -4926,17 +5054,16 @@ async fn get_page_dimensions(
             )
         }
     };
-    let archive_file = archive.file.clone();
-    let count = params.count;
-    let result = lanrurugi_core::concurrency::run_blocking(move || {
-        lanrurugi_scanner::archive_format::read_page_dimensions(
-            std::path::Path::new(&archive_file),
-            count,
-        )
-    })
-    .await;
-    match result {
-        Ok(Ok(dimensions)) => {
+    match crate::page_dimensions::first_pages(
+        &state,
+        id.as_str(),
+        &archive.file,
+        archive.blake3.as_deref(),
+        params.count,
+    )
+    .await
+    {
+        Ok(dimensions) => {
             let json_dims: Vec<serde_json::Value> = dimensions
                 .into_iter()
                 .map(|dim| match dim {
@@ -4946,16 +5073,7 @@ async fn get_page_dimensions(
                 .collect();
             axum::Json(json!({ "dimensions": json_dims })).into_response()
         }
-        Ok(Err(e)) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "get_page_dimensions",
-            e.to_string(),
-        ),
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "get_page_dimensions",
-            e.to_string(),
-        ),
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, "get_page_dimensions", e),
     }
 }
 
@@ -5215,11 +5333,12 @@ async fn get_page_thumbnails(
     // disk I/O (`list_pages` + the patch-existence check), so run off the async reactor like every
     // other archive-format read in this file.
     let archive_file = archive.file.clone();
+    let blake3 = archive.blake3.clone();
     let total = match lanrurugi_core::concurrency::run_blocking(move || {
         let path = std::path::Path::new(&archive_file);
         let original = lanrurugi_scanner::archive_format::list_pages(path)?;
         Ok::<usize, lanrurugi_scanner::archive_format::ArchiveFormatError>(
-            lanrurugi_scanner::patch::effective_pages(path, &original).len(),
+            lanrurugi_scanner::patch::effective_pages(path, &original, blake3.as_deref()).len(),
         )
     })
     .await

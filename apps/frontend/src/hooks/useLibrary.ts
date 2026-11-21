@@ -674,7 +674,9 @@ const { t } = useTranslation();
         navigate(routes.tankoubonEdit(targetTank));
         return;
       }
-      const name = await promptDialog(t("hooks.enterANameForThe") ?? "");
+      const name = await promptDialog(t("hooks.enterANameForThe") ?? "", "", {
+        placeholder: t("hooks.tankoubonNamePlaceholder") ?? undefined,
+      });
       if (!name?.trim()) return;
       const result = await createTankoubon.mutateAsync(name.trim());
       await fetch(`/api/tankoubons/${result.tankoubon_id}`, {

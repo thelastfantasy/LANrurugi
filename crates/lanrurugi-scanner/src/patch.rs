@@ -27,8 +27,10 @@ pub enum PatchError {
     MissingMetadata,
     #[error("invalid patch metadata.json: {0}")]
     InvalidMetadata(#[from] serde_json::Error),
-    #[error("patch targetCrc32 {expected} does not match target archive's real crc32 {actual} — refusing to apply a patch that may belong to a different file")]
-    Crc32Mismatch { expected: String, actual: String },
+    #[error("patch target {expected} does not match the target archive's {actual} — refusing to apply a patch that may belong to a different file")]
+    TargetMismatch { expected: String, actual: String },
+    #[error("patch metadata names no target archive")]
+    NoTarget,
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -41,7 +43,8 @@ impl PatchError {
             PatchError::Archive(e) => e.is_permanent(),
             PatchError::MissingMetadata
             | PatchError::InvalidMetadata(_)
-            | PatchError::Crc32Mismatch { .. } => true,
+            | PatchError::TargetMismatch { .. }
+            | PatchError::NoTarget => true,
             PatchError::Io(_) => false,
         }
     }
@@ -64,33 +67,40 @@ pub struct PatchInsertion {
     pub files: Vec<String>,
 }
 
-/// `metadata.json`'s own shape, inside a `.patch.zip`. `target_crc32` is checked against the real
-/// target archive's own crc32 before a patch is ever applied (issue #77: "补丁json里面最好也包括
-/// 补丁目标的crc32值...避免打错目标") — a patch is only ever matched to its target by filename
-/// convention (same directory, same stem), which breaks silently if the target is later renamed
-/// out from under a stale patch or a differently-content file happens to reuse the name; the crc32
-/// check turns that into a loud, refused-to-apply error instead of silently splicing in pages that
-/// don't belong.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// `metadata.json`'s own shape, inside a `.patch.zip`. `target_blake3` is checked against the real
+/// target archive before a patch is ever applied (issue #77: "补丁json里面最好也包括补丁目标的crc32值
+/// ...避免打错目标") — a patch is only matched to its target by filename convention (same directory,
+/// same stem), which breaks silently if the target is later renamed out from under a stale patch or
+/// a differently-content file happens to reuse the name; the check turns that into a loud,
+/// refused-to-apply error instead of silently splicing in pages that don't belong.
+///
+/// BLAKE3 rather than the CRC32 patches first carried: the library already records every archive's
+/// BLAKE3, so checking costs a comparison instead of reading the whole archive on every page-list
+/// request. The CRC32 fields are only read, to migrate such a patch once (see [`load`]).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PatchMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_blake3: Option<String>,
+    /// BLAKE3 of every source archive whose pages were merged into this patch (lowercase hex), so a
+    /// re-download of the same source is recognised as "already patched".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources_blake3: Vec<String>,
+    /// Legacy: the target's CRC32, in patches written before `target_blake3`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub target_crc32: String,
-    /// CRC32 of the source archive whose pages were extracted for this patch — stored so a future
-    /// re-download of the same source can be recognized as "already patched" and skip the filename-
-    /// conflict menu entirely rather than re-offering the same compare-and-resolve flow.
+    /// Legacy: the first source's CRC32.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_crc32: Option<String>,
-    /// Every source archive whose pages were merged into this patch (CRC32, lowercase hex). A patch
-    /// merged from several sources cannot say that with `source_crc32` alone; that field keeps the
-    /// first source so older readers still see one.
+    /// Legacy: every source's CRC32, until the duplicates scan converts them to `sources_blake3`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<String>,
     pub insertions: Vec<PatchInsertion>,
 }
 
 impl PatchMetadata {
-    /// `sources` plus the legacy single `source_crc32`, lowercased and deduplicated.
-    pub fn all_sources(&self) -> Vec<String> {
+    /// The legacy `sources` plus `source_crc32`, lowercased and deduplicated.
+    pub fn legacy_sources(&self) -> Vec<String> {
         let mut out: Vec<String> = self
             .sources
             .iter()
@@ -147,24 +157,133 @@ pub fn is_patch_path(path: &Path) -> bool {
 
 const METADATA_ENTRY_SUFFIX: &str = "metadata.json";
 
-/// Loads and validates a patch zip's metadata against the real target archive's own crc32 —
-/// [`Crc32Mismatch`](PatchError::Crc32Mismatch) if they don't match, which every caller below
-/// treats as "there is effectively no valid patch here" (degrades to the unpatched page list)
-/// rather than a hard error surfaced to the reader.
-pub fn load(patch_path: &Path, target_archive_path: &Path) -> Result<PatchMetadata> {
-    let metadata_entry = archive_format::find_entry_by_suffix(patch_path, METADATA_ENTRY_SUFFIX)?
-        .ok_or(PatchError::MissingMetadata)?;
-    let raw = archive_format::read_entry(patch_path, &metadata_entry)?;
-    let metadata: PatchMetadata = serde_json::from_slice(&raw)?;
-
+/// Loads and validates a patch zip's metadata against its target archive —
+/// [`TargetMismatch`](PatchError::TargetMismatch) if it belongs to other bytes, which every caller
+/// below treats as "there is effectively no valid patch here" (degrades to the unpatched page list)
+/// rather than a hard error surfaced to the reader. `target_blake3` is the target's BLAKE3 when the
+/// caller has its record (see [`target_blake3`]).
+///
+/// A patch from before `targetBlake3` is checked by its CRC32 once — a full read of the target —
+/// and then rewritten with the BLAKE3, so that read never repeats.
+pub fn load(
+    patch_path: &Path,
+    target_archive_path: &Path,
+    target_blake3: Option<&str>,
+) -> Result<PatchMetadata> {
+    let metadata = read_metadata(patch_path)?;
+    if let Some(expected) = &metadata.target_blake3 {
+        let actual = self::target_blake3(target_archive_path, target_blake3)?;
+        if !expected.eq_ignore_ascii_case(&actual) {
+            return Err(PatchError::TargetMismatch {
+                expected: expected.clone(),
+                actual,
+            });
+        }
+        return Ok(metadata);
+    }
+    if metadata.target_crc32.is_empty() {
+        return Err(PatchError::NoTarget);
+    }
     let actual = crc32_of_file(target_archive_path)?;
     if !metadata.target_crc32.eq_ignore_ascii_case(&actual) {
-        return Err(PatchError::Crc32Mismatch {
+        return Err(PatchError::TargetMismatch {
             expected: metadata.target_crc32,
             actual,
         });
     }
-    Ok(metadata)
+    let mut upgraded = metadata;
+    upgraded.target_blake3 = Some(self::target_blake3(target_archive_path, target_blake3)?);
+    upgraded.target_crc32.clear();
+    if let Err(e) = rewrite_metadata(patch_path, &upgraded) {
+        tracing::warn!(patch = %patch_path.display(), error = %e, "could not record the target's BLAKE3 in a CRC32 patch; it will be checked by CRC32 again");
+    }
+    Ok(upgraded)
+}
+
+fn read_metadata(patch_path: &Path) -> Result<PatchMetadata> {
+    let metadata_entry = archive_format::find_entry_by_suffix(patch_path, METADATA_ENTRY_SUFFIX)?
+        .ok_or(PatchError::MissingMetadata)?;
+    let raw = archive_format::read_entry(patch_path, &metadata_entry)?;
+    Ok(serde_json::from_slice(&raw)?)
+}
+
+/// Replaces a patch's `metadata.json`, keeping its pages. Atomic, like every patch write.
+pub fn rewrite_metadata(patch_path: &Path, metadata: &PatchMetadata) -> Result<()> {
+    use std::io::Read;
+    let to_io = |e: zip::result::ZipError| PatchError::Io(std::io::Error::other(e.to_string()));
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(patch_path)?).map_err(to_io)?;
+    let mut pages = Vec::new();
+    for index in 0..zip.len() {
+        let mut entry = zip.by_index(index).map_err(to_io)?;
+        let name = entry.name().map_err(to_io)?.to_string();
+        if entry.is_dir() || name.ends_with(METADATA_ENTRY_SUFFIX) {
+            continue;
+        }
+        let mut bytes = Vec::with_capacity(entry.size() as usize);
+        entry.read_to_end(&mut bytes)?;
+        pages.push((name, bytes));
+    }
+    let bytes = build_patch_zip_from(metadata, &pages)?;
+    let tmp = patch_path.with_extension("zip.tmp");
+    {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&tmp, patch_path)?;
+    Ok(())
+}
+
+type TargetKey = (PathBuf, u64, Option<std::time::SystemTime>);
+
+/// BLAKE3s already known per state of a file, so a target the caller had no record for is hashed
+/// at most once per process.
+static TARGET_HASHES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<TargetKey, String>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// The target archive's BLAKE3 (lowercase hex): `known` (its record's) when the caller has it, else
+/// one learned earlier for the same state of the file, else the sidecar's while it still matches
+/// the file, else the file is hashed.
+pub fn target_blake3(path: &Path, known: Option<&str>) -> std::io::Result<String> {
+    let meta = std::fs::metadata(path)?;
+    let key: TargetKey = (path.to_path_buf(), meta.len(), meta.modified().ok());
+    let remember = |hash: &str| {
+        if let Ok(mut map) = TARGET_HASHES.lock() {
+            map.insert(key.clone(), hash.to_string());
+        }
+    };
+    if let Some(known) = known {
+        let hash = known.to_ascii_lowercase();
+        remember(&hash);
+        return Ok(hash);
+    }
+    if let Some(hash) = TARGET_HASHES
+        .lock()
+        .ok()
+        .and_then(|map| map.get(&key).cloned())
+    {
+        return Ok(hash);
+    }
+    let hash = match sidecar_blake3(path) {
+        Some(hash) => hash,
+        None => lanrurugi_core::io::blake3_file(path)?.to_hex().to_string(),
+    };
+    remember(&hash);
+    Ok(hash)
+}
+
+fn sidecar_blake3(path: &Path) -> Option<String> {
+    let id = path.file_stem()?.to_str()?;
+    // Only a hash-layout archive (named by its id) has a sidecar; a by-name one is named by title.
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let library = path.parent()?.parent()?;
+    let sidecar = lanrurugi_storage::sidecar::read(library, id)?;
+    let hash = sidecar.blake3.clone()?;
+    sidecar.matches_file(path).then_some(hash)
 }
 
 /// Splices `metadata`'s insertions into `original_pages` (the target archive's own
@@ -221,8 +340,12 @@ pub fn apply(original_pages: &[String], metadata: &PatchMetadata) -> Vec<Effecti
 /// `original_pages` unchanged, as plain [`EffectivePage::Original`]s, whenever there's no patch
 /// file, the patch fails to load, or its crc32 doesn't match — a missing/invalid/stale patch must
 /// never break ordinary reading of the archive it targets.
-pub fn effective_pages(archive_path: &Path, original_pages: &[String]) -> Vec<EffectivePage> {
-    effective_pages_checked(archive_path, original_pages).0
+pub fn effective_pages(
+    archive_path: &Path,
+    original_pages: &[String],
+    target_blake3: Option<&str>,
+) -> Vec<EffectivePage> {
+    effective_pages_checked(archive_path, original_pages, target_blake3).0
 }
 
 /// [`effective_pages`] for a caller that also needs to know the patch was tried and failed — a
@@ -231,6 +354,7 @@ pub fn effective_pages(archive_path: &Path, original_pages: &[String]) -> Vec<Ef
 pub fn effective_pages_checked(
     archive_path: &Path,
     original_pages: &[String],
+    target_blake3: Option<&str>,
 ) -> (Vec<EffectivePage>, Option<PatchError>) {
     let originals = || {
         original_pages
@@ -242,7 +366,7 @@ pub fn effective_pages_checked(
     if !patch_path.exists() {
         return (originals(), None);
     }
-    match load(&patch_path, archive_path) {
+    match load(&patch_path, archive_path, target_blake3) {
         Ok(metadata) => (apply(original_pages, &metadata), None),
         Err(error) => (originals(), Some(error)),
     }
@@ -275,15 +399,19 @@ pub fn read_page(archive_path: &Path, page: &EffectivePage) -> Result<Vec<u8>> {
 /// that don't know about each other's contents), and this also guarantees the merged zip's own
 /// natural sort order matches the effective order even though the two source archives' own
 /// internal naming schemes may differ.
-pub fn build_merged_zip(archive_path: &Path) -> Result<Option<Vec<u8>>> {
+pub fn build_merged_zip(
+    archive_path: &Path,
+    target_blake3: Option<&str>,
+) -> Result<Option<Vec<u8>>> {
     let mut buf = std::io::Cursor::new(Vec::new());
-    Ok(write_merged_zip(archive_path, &mut buf)?.then(|| buf.into_inner()))
+    Ok(write_merged_zip(archive_path, target_blake3, &mut buf)?.then(|| buf.into_inner()))
 }
 
 /// [`build_merged_zip`] written to `out` a page at a time, so memory stays at one page whatever
 /// the archive's size. `false` (nothing written) when there is nothing to merge.
 pub fn write_merged_zip<W: std::io::Write + std::io::Seek>(
     archive_path: &Path,
+    target_blake3: Option<&str>,
     out: W,
 ) -> Result<bool> {
     let patch_path = patch_path_for(archive_path);
@@ -291,8 +419,8 @@ pub fn write_merged_zip<W: std::io::Write + std::io::Seek>(
         return Ok(false);
     }
     let original_pages = archive_format::list_pages(archive_path)?;
-    let effective = effective_pages(archive_path, &original_pages);
-    // A patch that failed to load (missing metadata, crc32 mismatch, ...) degrades `effective`
+    let effective = effective_pages(archive_path, &original_pages, target_blake3);
+    // A patch that failed to load (missing metadata, target mismatch, ...) degrades `effective`
     // back down to exactly `original_pages` — nothing left to actually merge, so there's no need
     // to repackage at all; the caller should serve the original file bytes as-is.
     if effective.len() == original_pages.len()
@@ -329,25 +457,23 @@ pub fn write_merged_zip<W: std::io::Write + std::io::Seek>(
     Ok(true)
 }
 
-/// Builds a brand-new `.patch.zip`'s raw bytes from a target archive's crc32 plus the actual page
-/// image bytes to bundle (`(entry_name, bytes)` pairs — the export endpoint reads these from
-/// wherever the user's chosen pages actually live, e.g. `lanrurugi_imgcompare`'s staged comparison
-/// files, before calling this) and the `insertions` describing where each belongs. Pure in-memory
-/// assembly (no filesystem write) — the caller decides whether to write this to
-/// [`patch_path_for`]'s own path directly or hand the bytes back to a user for manual placement
+/// Builds a brand-new `.patch.zip`'s raw bytes from a target archive's BLAKE3 plus the actual page
+/// image bytes to bundle (`(entry_name, bytes)` pairs) and the `insertions` describing where each
+/// belongs. Pure in-memory assembly (no filesystem write) — the caller decides whether to write this
+/// to [`patch_path_for`]'s own path directly or hand the bytes back to a user for manual placement
 /// (issue #77's own confirmed design: "补丁不需要应用，只要放在漫画目录内" — a user-managed file,
 /// not something this crate installs on the user's behalf).
 pub fn build_patch_zip(
-    target_crc32: &str,
-    source_crc32: Option<&str>,
+    target_blake3: &str,
+    sources_blake3: Vec<String>,
     pages: &[(String, Vec<u8>)],
     insertions: Vec<PatchInsertion>,
 ) -> Result<Vec<u8>> {
     let metadata = PatchMetadata {
-        source_crc32: source_crc32.map(|s| s.to_string()),
-        sources: Vec::new(),
-        target_crc32: target_crc32.to_string(),
+        target_blake3: Some(target_blake3.to_string()),
+        sources_blake3,
         insertions,
+        ..Default::default()
     };
     build_patch_zip_from(&metadata, pages)
 }
@@ -379,7 +505,8 @@ pub fn build_patch_zip_from(
     Ok(buf.into_inner())
 }
 
-/// Streaming CRC32 of a whole file — same algorithm/output shape (lowercase hex) as
+/// Streaming CRC32 of a whole file, for checking and migrating patches that predate
+/// `targetBlake3` — same algorithm/output shape (lowercase hex) as
 /// `lanrurugi-api`'s own `hex_crc32_of_file` (download-staging's content-derived temp filename),
 /// duplicated here rather than shared because that one lives in a crate `lanrurugi-scanner` sits
 /// *below* in the dependency graph (`lanrurugi-api` depends on `lanrurugi-scanner`, not the other
@@ -410,7 +537,7 @@ mod tests {
     fn only_a_failure_that_rereading_cannot_fix_is_permanent() {
         assert!(!PatchError::Io(std::io::Error::other("busy")).is_permanent());
         assert!(PatchError::MissingMetadata.is_permanent());
-        assert!(PatchError::Crc32Mismatch {
+        assert!(PatchError::TargetMismatch {
             expected: "a".into(),
             actual: "b".into()
         }
@@ -456,25 +583,90 @@ mod tests {
         assert!(!is_patch_path(Path::new("/lib/foo.patch.rar")));
     }
 
-    #[test]
-    fn load_rejects_a_crc32_that_does_not_match_the_real_target() {
-        let target = write_zip(&[("page1.jpg", b"real page bytes")]);
-        let patch_json = br#"{"targetCrc32":"deadbeef","insertions":[]}"#;
-        let patch = write_zip(&[("metadata.json", patch_json)]);
-
-        let err = load(patch.path(), target.path()).unwrap_err();
-        assert!(matches!(err, PatchError::Crc32Mismatch { .. }), "{err:?}");
+    fn blake3_of(path: &Path) -> String {
+        lanrurugi_core::io::blake3_file(path)
+            .unwrap()
+            .to_hex()
+            .to_string()
     }
 
     #[test]
-    fn load_accepts_a_matching_crc32() {
+    fn load_rejects_a_target_that_does_not_match() {
         let target = write_zip(&[("page1.jpg", b"real page bytes")]);
-        let real_crc32 = crc32_of_file(target.path()).unwrap();
-        let patch_json = format!(r#"{{"targetCrc32":"{real_crc32}","insertions":[]}}"#);
+        let patch_json = format!(r#"{{"targetBlake3":"{}","insertions":[]}}"#, "0".repeat(64));
         let patch = write_zip(&[("metadata.json", patch_json.as_bytes())]);
 
-        let metadata = load(patch.path(), target.path()).unwrap();
-        assert_eq!(metadata.target_crc32, real_crc32);
+        let err = load(patch.path(), target.path(), None).unwrap_err();
+        assert!(matches!(err, PatchError::TargetMismatch { .. }), "{err:?}");
+        // The caller's record says the same thing without reading the file.
+        let err = load(patch.path(), target.path(), Some(&"1".repeat(64))).unwrap_err();
+        assert!(matches!(err, PatchError::TargetMismatch { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn load_accepts_a_matching_blake3() {
+        let target = write_zip(&[("page1.jpg", b"real page bytes")]);
+        let real = blake3_of(target.path());
+        let patch_json = format!(r#"{{"targetBlake3":"{real}","insertions":[]}}"#);
+        let patch = write_zip(&[("metadata.json", patch_json.as_bytes())]);
+
+        assert_eq!(
+            load(patch.path(), target.path(), None)
+                .unwrap()
+                .target_blake3,
+            Some(real.clone())
+        );
+        assert!(load(patch.path(), target.path(), Some(&real.to_uppercase())).is_ok());
+    }
+
+    #[test]
+    fn a_by_name_target_without_a_record_is_hashed() {
+        // A by-name archive is named by its title, which is no id: there is no sidecar to read.
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("_byname").join("無垢な少女 [DL版].zip");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, zip_bytes(&[("a.jpg", b"data")])).unwrap();
+        let real = blake3_of(&target);
+        let patch_json = format!(r#"{{"targetBlake3":"{real}","insertions":[]}}"#);
+        let patch = write_zip(&[("metadata.json", patch_json.as_bytes())]);
+
+        assert!(load(patch.path(), &target, None).is_ok());
+    }
+
+    #[test]
+    fn a_crc32_patch_is_checked_once_and_then_carries_the_blake3() {
+        let target = write_zip(&[("page1.jpg", b"real page bytes")]);
+        let crc = crc32_of_file(target.path()).unwrap();
+        let patch_json = format!(
+            r#"{{"targetCrc32":"{crc}","sources":["aaaa0000"],"insertions":[{{"files":["p.jpg"]}}]}}"#
+        );
+        let patch = write_zip(&[
+            ("metadata.json", patch_json.as_bytes()),
+            ("p.jpg", b"patch page"),
+        ]);
+
+        let metadata = load(patch.path(), target.path(), None).unwrap();
+        let real = blake3_of(target.path());
+        assert_eq!(metadata.target_blake3.as_deref(), Some(real.as_str()));
+
+        let stored = read_metadata(patch.path()).unwrap();
+        assert_eq!(stored.target_blake3.as_deref(), Some(real.as_str()));
+        assert!(stored.target_crc32.is_empty());
+        // Sources wait for the duplicates scan, which knows the archives they were.
+        assert_eq!(stored.legacy_sources(), ["aaaa0000"]);
+        assert_eq!(
+            archive_format::read_entry(patch.path(), "p.jpg").unwrap(),
+            b"patch page"
+        );
+
+        let wrong = write_zip(&[(
+            "metadata.json",
+            br#"{"targetCrc32":"deadbeef","insertions":[]}"#,
+        )]);
+        assert!(matches!(
+            load(wrong.path(), target.path(), None).unwrap_err(),
+            PatchError::TargetMismatch { .. }
+        ));
     }
 
     #[test]
@@ -485,14 +677,12 @@ mod tests {
             "c.jpg".to_string(),
         ];
         let metadata = PatchMetadata {
-            source_crc32: None,
-            sources: Vec::new(),
-            target_crc32: String::new(),
             insertions: vec![PatchInsertion {
                 after_filename: Some("a.jpg".to_string()),
                 before_filename: None,
                 files: vec!["patch1.jpg".to_string(), "patch2.jpg".to_string()],
             }],
+            ..Default::default()
         };
         let result = apply(&original, &metadata);
         let names: Vec<&str> = result.iter().map(|p| p.entry_name()).collect();
@@ -507,14 +697,12 @@ mod tests {
     fn apply_inserts_before_the_given_anchor_when_after_is_absent() {
         let original = vec!["a.jpg".to_string(), "b.jpg".to_string()];
         let metadata = PatchMetadata {
-            source_crc32: None,
-            sources: Vec::new(),
-            target_crc32: String::new(),
             insertions: vec![PatchInsertion {
                 after_filename: None,
                 before_filename: Some("b.jpg".to_string()),
                 files: vec!["patch1.jpg".to_string()],
             }],
+            ..Default::default()
         };
         let result = apply(&original, &metadata);
         let names: Vec<&str> = result.iter().map(|p| p.entry_name()).collect();
@@ -529,14 +717,12 @@ mod tests {
             "c.jpg".to_string(),
         ];
         let metadata = PatchMetadata {
-            source_crc32: None,
-            sources: Vec::new(),
-            target_crc32: String::new(),
             insertions: vec![PatchInsertion {
                 after_filename: Some("a.jpg".to_string()),
                 before_filename: Some("c.jpg".to_string()),
                 files: vec!["patch1.jpg".to_string()],
             }],
+            ..Default::default()
         };
         let result = apply(&original, &metadata);
         let names: Vec<&str> = result.iter().map(|p| p.entry_name()).collect();
@@ -549,14 +735,12 @@ mod tests {
     fn apply_inserts_at_the_start_when_both_anchors_are_absent() {
         let original = vec!["a.jpg".to_string()];
         let metadata = PatchMetadata {
-            source_crc32: None,
-            sources: Vec::new(),
-            target_crc32: String::new(),
             insertions: vec![PatchInsertion {
                 after_filename: None,
                 before_filename: None,
                 files: vec!["patch1.jpg".to_string()],
             }],
+            ..Default::default()
         };
         let result = apply(&original, &metadata);
         let names: Vec<&str> = result.iter().map(|p| p.entry_name()).collect();
@@ -567,14 +751,12 @@ mod tests {
     fn apply_skips_an_insertion_whose_anchor_does_not_exist() {
         let original = vec!["a.jpg".to_string()];
         let metadata = PatchMetadata {
-            source_crc32: None,
-            sources: Vec::new(),
-            target_crc32: String::new(),
             insertions: vec![PatchInsertion {
                 after_filename: Some("does-not-exist.jpg".to_string()),
                 before_filename: None,
                 files: vec!["patch1.jpg".to_string()],
             }],
+            ..Default::default()
         };
         let result = apply(&original, &metadata);
         let names: Vec<&str> = result.iter().map(|p| p.entry_name()).collect();
@@ -585,12 +767,12 @@ mod tests {
     fn effective_pages_returns_originals_unchanged_when_no_patch_file_exists() {
         let target = write_zip(&[("a.jpg", b"data")]);
         let original = vec!["a.jpg".to_string()];
-        let result = effective_pages(target.path(), &original);
+        let result = effective_pages(target.path(), &original, None);
         assert_eq!(result, vec![EffectivePage::Original("a.jpg".to_string())]);
     }
 
     #[test]
-    fn effective_pages_degrades_to_originals_on_crc32_mismatch() {
+    fn effective_pages_degrades_to_originals_on_a_target_mismatch() {
         let dir = tempfile::tempdir().unwrap();
         let target_path = dir.path().join("foo.zip");
         std::fs::write(&target_path, zip_bytes(&[("a.jpg", b"data")])).unwrap();
@@ -605,7 +787,7 @@ mod tests {
         .unwrap();
 
         let original = vec!["a.jpg".to_string()];
-        let result = effective_pages(&target_path, &original);
+        let result = effective_pages(&target_path, &original, None);
         assert_eq!(result, vec![EffectivePage::Original("a.jpg".to_string())]);
     }
 
@@ -646,11 +828,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let target_path = dir.path().join("foo.zip");
         std::fs::write(&target_path, zip_bytes(&[("a.jpg", b"original")])).unwrap();
-        let real_crc32 = crc32_of_file(&target_path).unwrap();
+        let real = blake3_of(&target_path);
 
         let bytes = build_patch_zip(
-            &real_crc32,
-            None,
+            &real,
+            vec!["b".repeat(64)],
             &[("extra1.jpg".to_string(), b"extra bytes".to_vec())],
             vec![PatchInsertion {
                 after_filename: Some("a.jpg".to_string()),
@@ -662,8 +844,9 @@ mod tests {
         let patch_path = dir.path().join("foo.patch.zip");
         std::fs::write(&patch_path, &bytes).unwrap();
 
-        let metadata = load(&patch_path, &target_path).unwrap();
-        assert_eq!(metadata.target_crc32, real_crc32);
+        let metadata = load(&patch_path, &target_path, None).unwrap();
+        assert_eq!(metadata.target_blake3, Some(real));
+        assert_eq!(metadata.sources_blake3, ["b".repeat(64)]);
         assert_eq!(metadata.insertions.len(), 1);
 
         let effective = apply(&["a.jpg".to_string()], &metadata);

@@ -16,7 +16,7 @@ use std::sync::Arc;
 use lanrurugi_plugin::protocol::{DiscoveredCandidate, DiscoveryResult, DiscoveryStop};
 use lanrurugi_storage::subscriptions::{
     CandidateRecord, CandidateVerdict, CheckCycle, CycleOutcome, ScanWindow, Subscription,
-    MAX_SCAN_CANDIDATES, MAX_SCAN_PAGES, SCAN_CACHE_RUN,
+    CYCLE_HISTORY_LIMIT, MAX_SCAN_CANDIDATES, MAX_SCAN_PAGES, SCAN_CACHE_RUN,
 };
 
 use super::matcher;
@@ -75,6 +75,9 @@ pub struct CycleContext<'a> {
     /// keeps them, greyed out) or dropped without a trace (a real cycle never acts on them, and
     /// history should not fill up with works it was never going to consider).
     pub keep_out_of_window: bool,
+    /// Sources re-read by `refreshSources` because a rule rejected them earlier. Decided regardless
+    /// of the window: being reconsidered is why they were read at all.
+    pub refreshed: &'a [String],
     /// Normalises a tag before comparison, so a rule written in one script or width still matches a
     /// listing that spells the same tag differently. Supplied rather than built here to keep `decide`
     /// free of state.
@@ -163,7 +166,12 @@ pub fn decide(
             .and_then(matcher::parse_posted_at);
         // Older than the subscription's window. The source stops at that bound for a real check, so
         // this can only be reached through a preview — which keeps the row to explain its own count.
-        if let (Some(cutoff), Some(posted)) = (ctx.window_cutoff, posted_secs) {
+        // A reconsiderable work is decided wherever it was read, listed past the window edge
+        // included: being reconsidered is why it matters at all.
+        let reconsidering = ctx.refreshed.iter().any(|r| r == &source)
+            || ctx.reconsider.iter().any(|r| r == &source);
+        if let (Some(cutoff), Some(posted), false) = (ctx.window_cutoff, posted_secs, reconsidering)
+        {
             if posted < cutoff {
                 if ctx.keep_out_of_window {
                     records.push(CandidateRecord {
@@ -218,6 +226,18 @@ pub fn decide(
                 ctx.now,
                 ctx.fold,
             ) {
+                matcher::Outcome::Rejected(rule) if !rule_can_change(&rule) => {
+                    // Rejected by a field that does not change (category, uploader): asking again
+                    // would always get the same answer, so it is settled rather than reconsiderable.
+                    if redecide {
+                        reconsidered.push(source.clone());
+                        CandidateVerdict::AlreadySeen
+                    } else {
+                        CandidateVerdict::Rejected {
+                            rule: rule.as_key(),
+                        }
+                    }
+                }
                 matcher::Outcome::Rejected(rule) => {
                     if redecide {
                         // Already recorded as rejected once: repeating it would put the same row in
@@ -305,14 +325,38 @@ pub fn decide(
     }
 }
 
+/// Whether a rejection could come out differently on a later check.
+///
+/// Only a single rule over a field that does not change is final. A failed group (`field_rule:all`)
+/// does not say which of its rules failed, so it stays reconsiderable, and so does an age rule, which
+/// becomes true with time.
+fn rule_can_change(rule: &matcher::RejectionRule) -> bool {
+    use matcher::RejectionRule::*;
+    match rule {
+        ExcludedCategory(_) => false,
+        FieldRule(field) => !matches!(field.as_str(), "category" | "uploader"),
+        MissingRequiredTag(_) | ExcludedTag(_) | BelowMinimumRating | FieldUnavailable(_) => true,
+    }
+}
+
 /// Assembles the persisted record of a cycle.
+///
+/// With a `seq` it is a summary: the rows are rebuilt from the snapshot's verdict runs on read.
+/// Without one (the sequence could not be allocated) the rows are stored inline, as before summaries.
 pub fn build_cycle(
     id: String,
     subscription_id: String,
     started_at: i64,
     finished_at: i64,
     decision: &CycleDecision,
+    seq: Option<u64>,
 ) -> CheckCycle {
+    let mut verdict_counts = std::collections::BTreeMap::new();
+    for record in &decision.records {
+        *verdict_counts
+            .entry(record.verdict.tag().to_string())
+            .or_insert(0u32) += 1;
+    }
     CheckCycle {
         id,
         subscription_id,
@@ -320,12 +364,18 @@ pub fn build_cycle(
         finished_at,
         outcome: decision.outcome.clone(),
         candidates_seen: decision.records.len() as u32,
-        candidates: decision
-            .records
-            .iter()
-            .take(CYCLE_RECORD_LIMIT)
-            .cloned()
-            .collect(),
+        seq,
+        verdict_counts,
+        candidates: if seq.is_some() {
+            Vec::new()
+        } else {
+            decision
+                .records
+                .iter()
+                .take(CYCLE_RECORD_LIMIT)
+                .cloned()
+                .collect()
+        },
     }
 }
 
@@ -438,6 +488,7 @@ pub async fn preview_decide(
             now: now_secs(),
             window_cutoff,
             keep_out_of_window: true,
+            refreshed: &[],
             fold: &fold,
         },
     )
@@ -576,6 +627,25 @@ struct ScanPlan {
     page_budget: u32,
     posted_after: Option<i64>,
     stop_on_cache: bool,
+    /// Reconsiderable works inside the window, and the oldest of their publication times. The
+    /// settled-run stop waits until the listing has passed that time or shown them all, or a
+    /// rejected work further down the listing would never be looked at again.
+    pending: std::collections::HashSet<String>,
+    oldest_pending: Option<i64>,
+}
+
+/// Whether a run of settled works may end the scan, given which reconsiderable works are still
+/// unseen and the oldest publication time read so far.
+fn may_stop_on_cache(
+    unseen_pending: usize,
+    oldest_read: Option<i64>,
+    oldest_pending: Option<i64>,
+) -> bool {
+    match oldest_pending {
+        None => true,
+        Some(_) if unseen_pending == 0 => true,
+        Some(pending) => oldest_read.is_some_and(|read| read <= pending),
+    }
 }
 
 struct ScanOutcome {
@@ -608,6 +678,8 @@ fn scan_plan(subscription: &Subscription) -> (ScanPlan, bool) {
             page_budget,
             posted_after,
             stop_on_cache,
+            pending: Default::default(),
+            oldest_pending: None,
         },
         settings_just_changed,
     )
@@ -688,6 +760,8 @@ where
     let mut error = None;
     let mut stop_reason = None;
     let mut stopped_by_cache = false;
+    let mut unseen_pending = plan.pending.clone();
+    let mut oldest_read: Option<i64> = None;
     // The first chunk is deliberately one page: in steady state it is enough to hit the settled run
     // and stop, and a larger first chunk would re-read uploads the previous cycle already handled.
     let mut chunk = 1u32;
@@ -752,6 +826,14 @@ where
             } else {
                 cache_run = 0;
             }
+            unseen_pending.remove(&candidate.source);
+            if let Some(posted) = candidate
+                .posted_at
+                .as_deref()
+                .and_then(matcher::parse_posted_at)
+            {
+                oldest_read = Some(oldest_read.map_or(posted, |o: i64| o.min(posted)));
+            }
             collected.push(candidate);
             if collected.len() >= MAX_SCAN_CANDIDATES as usize {
                 break;
@@ -760,7 +842,10 @@ where
 
         on_chunk(pages_read, collected.len());
 
-        if plan.stop_on_cache && cache_run >= SCAN_CACHE_RUN {
+        if plan.stop_on_cache
+            && cache_run >= SCAN_CACHE_RUN
+            && may_stop_on_cache(unseen_pending.len(), oldest_read, plan.oldest_pending)
+        {
             stopped_by_cache = true;
             break;
         }
@@ -775,7 +860,13 @@ where
         if cursor.is_none() {
             break;
         }
-        chunk = 5;
+        // Past a settled run and only still reading for reconsiderable works: one page at a time,
+        // so the extra reading stops as soon as their time is passed.
+        chunk = if plan.stop_on_cache && cache_run >= SCAN_CACHE_RUN {
+            1
+        } else {
+            5
+        };
     }
 
     Ok(ScanOutcome {
@@ -875,8 +966,35 @@ pub async fn run_check(state: &AppState, subscription_id: &str, trigger: CheckTr
         .map(String::as_str)
         .collect();
 
+    // Read before the scan: the settled-run stop needs the publication times of the reconsiderable
+    // works, and the diff afterwards needs the rest.
+    let previous_snapshot = state
+        .subscriptions
+        .snapshot(subscription_id)
+        .await
+        .unwrap_or_default();
+    let source_info = state.plugins.plugin_info(&subscription.source).await.ok();
+    let data_version = source_info.as_ref().map_or(1, |i| i.data_version);
+
     let scan = subscription.scan;
-    let (plan, _) = scan_plan(&subscription);
+    let (mut plan, _) = scan_plan(&subscription);
+    let can_refresh = source_info
+        .as_ref()
+        .is_some_and(|i| i.has_capability("refresh_sources"));
+    // A source that can re-read works directly covers every reconsiderable work the scan does not
+    // reach, so only one that cannot needs the scan to keep paging for them.
+    if let (Some(cutoff), false) = (plan.posted_after, can_refresh) {
+        for source in &reconsider {
+            let posted = previous_snapshot
+                .get(source)
+                .and_then(|e| e.posted_at.as_deref())
+                .and_then(matcher::parse_posted_at);
+            if let Some(posted) = posted.filter(|p| *p >= cutoff) {
+                plan.pending.insert(source.clone());
+                plan.oldest_pending = Some(plan.oldest_pending.map_or(posted, |o| o.min(posted)));
+            }
+        }
+    }
     let outcome = match scan_listing(
         state,
         &subscription,
@@ -895,7 +1013,15 @@ pub async fn run_check(state: &AppState, subscription_id: &str, trigger: CheckTr
         }
     };
     let stopped_by_cache = outcome.stopped_by_cache;
-    let result = outcome.result;
+    let mut result = outcome.result;
+
+    // Reconsiderable works the listing did not show — out of the window now, or past where the scan
+    // stopped — are read directly, so a rating that rose is still noticed.
+    let refreshed = if result.error.is_none() && can_refresh {
+        refresh_unlisted(state, &subscription, &base_args, &reconsider, &mut result).await
+    } else {
+        Vec::new()
+    };
 
     if stopped_by_cache {
         tracing::debug!(
@@ -949,6 +1075,7 @@ pub async fn run_check(state: &AppState, subscription_id: &str, trigger: CheckTr
             now: now_secs(),
             window_cutoff: plan.posted_after,
             keep_out_of_window: false,
+            refreshed: &refreshed,
             fold: &fold,
         };
         decide(&subscription, &result, &ctx)
@@ -1135,7 +1262,29 @@ pub async fn run_check(state: &AppState, subscription_id: &str, trigger: CheckTr
             .await;
     }
 
-    apply_snapshot_diff(state, &subscription, &result, &decision, scan_complete).await;
+    let seq = match state.subscriptions.next_cycle_seq(subscription_id).await {
+        Ok(seq) => Some(seq),
+        Err(e) => {
+            tracing::warn!(%subscription_id, error = %e, "could not allocate a cycle number; storing its rows inline");
+            None
+        }
+    };
+    let snapshot = apply_snapshot_diff(
+        state,
+        &subscription,
+        &result,
+        &decision,
+        SnapshotInputs {
+            scan_complete,
+            previous: &previous_snapshot,
+            seq,
+            data_version,
+            refreshed: &refreshed,
+            reconsider: &reconsider,
+            window_cutoff: plan.posted_after,
+        },
+    )
+    .await;
 
     let cycle = build_cycle(
         uuid::Uuid::new_v4().to_string(),
@@ -1143,14 +1292,22 @@ pub async fn run_check(state: &AppState, subscription_id: &str, trigger: CheckTr
         started_at,
         now_secs(),
         &decision,
+        seq,
     );
-    let _ = state.subscriptions.record_cycle(&cycle).await;
+    if let Err(e) = state
+        .subscriptions
+        .record_cycle_with_snapshot(&cycle, &snapshot.to_save, &snapshot.to_remove)
+        .await
+    {
+        tracing::warn!(%subscription_id, error = %e, "failed to record the check and its snapshot");
+    }
     tracing::info!(
         %subscription_id,
         name = %subscription.name,
         outcome = ?decision.outcome,
         pages_read = result.pages_read,
         candidates = result.candidates.as_ref().map_or(0, |c| c.len()),
+        refreshed = refreshed.len(),
         matched = decision.actionable.len(),
         queued = routed.queued,
         start_failed = routed.start_failed,
@@ -1209,19 +1366,78 @@ fn emit_scan_progress(
     }));
 }
 
+/// What the snapshot diff needs beyond the listing and the decision.
+struct SnapshotInputs<'a> {
+    scan_complete: bool,
+    previous:
+        &'a std::collections::HashMap<String, lanrurugi_storage::subscriptions::SnapshotEntry>,
+    seq: Option<u64>,
+    data_version: u32,
+    refreshed: &'a [String],
+    reconsider: &'a [String],
+    window_cutoff: Option<i64>,
+}
+
+/// Reads the reconsiderable works the listing did not show through the source's `refreshSources`
+/// and appends them to `result`. Returns which sources were read this way.
+async fn refresh_unlisted(
+    state: &AppState,
+    subscription: &Subscription,
+    base_args: &serde_json::Value,
+    reconsider: &[String],
+    result: &mut DiscoveryResult,
+) -> Vec<String> {
+    let listed: std::collections::HashSet<&str> = result
+        .candidates
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .map(|c| c.source.as_str())
+        .collect();
+    let wanted: Vec<&String> = reconsider
+        .iter()
+        .filter(|s| !listed.contains(s.as_str()))
+        .collect();
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    let mut args = base_args.clone();
+    if let Some(obj) = args.as_object_mut() {
+        obj.insert("sources".into(), serde_json::json!(wanted));
+    }
+    let refreshed = match state
+        .plugins
+        .refresh_sources(&subscription.source, args)
+        .await
+    {
+        Ok(Some(refreshed)) if refreshed.error.is_none() => refreshed,
+        Ok(_) => return Vec::new(),
+        Err(e) => {
+            tracing::warn!(subscription_id = %subscription.id, error = %e, "could not refresh reconsiderable works");
+            return Vec::new();
+        }
+    };
+    let wanted: std::collections::HashSet<&str> = wanted.iter().map(|s| s.as_str()).collect();
+    let fresh: Vec<DiscoveredCandidate> = refreshed
+        .candidates
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|c| wanted.contains(c.source.as_str()))
+        .collect();
+    let sources = fresh.iter().map(|c| c.source.clone()).collect();
+    result.candidates.get_or_insert_with(Vec::new).extend(fresh);
+    sources
+}
+
 async fn apply_snapshot_diff(
     state: &AppState,
     subscription: &Subscription,
     result: &lanrurugi_plugin::protocol::DiscoveryResult,
     decision: &CycleDecision,
-    scan_complete: bool,
-) {
+    inputs: SnapshotInputs<'_>,
+) -> super::snapshot::SnapshotDiff {
     let candidates = result.candidates.as_deref().unwrap_or(&[]);
-    let previous = state
-        .subscriptions
-        .snapshot(&subscription.id)
-        .await
-        .unwrap_or_default();
+    let previous = inputs.previous;
 
     let fold = |t: &str| state.equivalence.fold(t).into_owned();
     let still_matches = |c: &lanrurugi_plugin::protocol::DiscoveredCandidate| {
@@ -1236,21 +1452,43 @@ async fn apply_snapshot_diff(
         )
     };
 
-    let diff = super::snapshot::diff(
+    let verdicts: std::collections::HashMap<String, CandidateVerdict> = decision
+        .records
+        .iter()
+        .map(|r| (r.source_url.clone(), r.verdict.clone()))
+        .collect();
+    let refreshed: std::collections::HashSet<String> = inputs.refreshed.iter().cloned().collect();
+    let reconsider: std::collections::HashSet<String> = inputs.reconsider.iter().cloned().collect();
+    let now = now_secs();
+    let prune = match subscription.scan {
+        ScanWindow::Days { .. } => inputs.window_cutoff.map_or(
+            super::snapshot::PruneRule::Never,
+            super::snapshot::PruneRule::PostedBefore,
+        ),
+        // No age bound: dropped once unlisted for a few checks' worth of time.
+        ScanWindow::Pages { .. } => {
+            super::snapshot::PruneRule::LastSeenBefore(now - 3 * subscription.interval_secs as i64)
+        }
+    };
+    let diff = super::snapshot::diff_with(
         candidates,
-        &previous,
-        decision.outcome.is_authoritative() && scan_complete,
-        now_secs(),
-        &still_matches,
+        previous,
+        &super::snapshot::DiffContext {
+            authoritative: decision.outcome.is_authoritative() && inputs.scan_complete,
+            now,
+            still_matches: &still_matches,
+            seq: inputs.seq,
+            verdicts: &verdicts,
+            data_version: inputs.data_version,
+            refreshed: &refreshed,
+            window_cutoff: inputs.window_cutoff,
+            oldest_kept_seq: inputs
+                .seq
+                .map_or(0, |s| s.saturating_sub(CYCLE_HISTORY_LIMIT as u64 - 1)),
+            prune,
+            reconsider: &reconsider,
+        },
     );
-
-    if let Err(e) = state
-        .subscriptions
-        .save_snapshot_entries(&subscription.id, &diff.to_save)
-        .await
-    {
-        tracing::warn!(subscription_id = %subscription.id, error = %e, "failed to save listing snapshot");
-    }
 
     for removed in &diff.removed {
         // Withdrawing an unanswered question regardless of policy: the work is gone from the source,
@@ -1298,6 +1536,7 @@ async fn apply_snapshot_diff(
             );
         }
     }
+    diff
 }
 
 /// Canonical source URL to the id of the archive holding it, from the `source:` tag every downloaded
@@ -1351,6 +1590,7 @@ pub async fn scheduler_loop(state: AppState) {
             let run = crate::diagnostics::report::reporter().cron("subscription-sweep");
             sweep_finished_queue(&state).await;
             sweep_skipped(&state).await;
+            sweep_rejected(&state).await;
             run.ok();
         }
         let Ok(subscriptions) = state.subscriptions.list_all().await else {
@@ -1424,6 +1664,31 @@ async fn sweep_skipped(state: &AppState) {
             }
             Err(e) => {
                 tracing::warn!(subscription_id = %subscription.id, error = %e, "could not sweep skip records")
+            }
+        }
+    }
+}
+
+/// Drops rejections past `RECONSIDER_DAYS` from each subscription's reconsiderable set. They stay
+/// seen, so nothing is re-offered; they just stop being refreshed every check.
+async fn sweep_rejected(state: &AppState) {
+    let cutoff_ms =
+        now_epoch_ms() - lanrurugi_storage::subscriptions::RECONSIDER_DAYS * 24 * 60 * 60 * 1000;
+    let Ok(subscriptions) = state.subscriptions.list_all().await else {
+        return;
+    };
+    for subscription in subscriptions {
+        match state
+            .subscriptions
+            .prune_rejected_before(&subscription.id, cutoff_ms)
+            .await
+        {
+            Ok(0) => {}
+            Ok(removed) => {
+                tracing::info!(subscription_id = %subscription.id, removed, "stopped reconsidering old rejections")
+            }
+            Err(e) => {
+                tracing::warn!(subscription_id = %subscription.id, error = %e, "could not sweep reconsiderable works")
             }
         }
     }
@@ -1519,6 +1784,7 @@ mod tests {
             // Page-window semantics: no age bound, so nothing is out of window.
             window_cutoff: None,
             keep_out_of_window: false,
+            refreshed: &[],
         }
     }
 
@@ -1976,5 +2242,128 @@ mod tests {
             CandidateVerdict::AlreadySeen
         ));
         assert!(d.actionable.is_empty());
+    }
+
+    fn rule_filters(
+        field: &str,
+        operator: lanrurugi_storage::subscriptions::FieldOperator,
+        value: lanrurugi_storage::subscriptions::RuleValue,
+    ) -> Filters {
+        Filters {
+            condition: Some(lanrurugi_storage::subscriptions::Condition::Rule(
+                lanrurugi_storage::subscriptions::FieldRule {
+                    field: field.into(),
+                    operator,
+                    value,
+                },
+            )),
+            ..Filters::default()
+        }
+    }
+
+    /// A rejection by a field that never changes is settled, not reconsiderable: re-reading it every
+    /// check could only give the same answer.
+    #[test]
+    fn a_rejection_by_an_unchanging_field_is_not_reconsiderable() {
+        use lanrurugi_storage::subscriptions::{FieldOperator, RuleValue};
+        let mut c = cand("e-hentai.org/g/1/aaaaaaaaaa", &[]);
+        c.uploader = Some("someone-else".into());
+        let by_uploader = rule_filters(
+            "uploader",
+            FieldOperator::Equals,
+            RuleValue::Text("me".into()),
+        );
+        let d = decide(
+            &sub(true, by_uploader),
+            &result(vec![c.clone()], false),
+            &ctx(&[], &[], &[], NO_CATS),
+        );
+        assert!(matches!(
+            d.records[0].verdict,
+            CandidateVerdict::Rejected { .. }
+        ));
+        assert!(d.to_mark_rejected.is_empty());
+        assert_eq!(d.to_mark_seen, vec![c.source.clone()]);
+
+        c.rating = Some(3.0);
+        let by_rating = rule_filters("rating", FieldOperator::Gte, RuleValue::Number(4.0));
+        let d = decide(
+            &sub(true, by_rating),
+            &result(vec![c.clone()], false),
+            &ctx(&[], &[], &[], NO_CATS),
+        );
+        assert_eq!(d.to_mark_rejected, vec![c.source.clone()]);
+    }
+
+    /// A reconsiderable work is decided even though it is out of the window, whether the listing
+    /// showed it or `refreshSources` read it.
+    #[test]
+    fn a_refreshed_work_is_decided_outside_the_window() {
+        let mut c = cand("e-hentai.org/g/1/aaaaaaaaaa", &[]);
+        c.posted_at = Some("1600000000".into());
+        let seen = vec![c.source.clone()];
+        let refreshed = vec![c.source.clone()];
+        let run = |refreshed: &[String]| {
+            decide(
+                &sub(true, Filters::default()),
+                &result(vec![c.clone()], false),
+                &CycleContext {
+                    window_cutoff: Some(1_700_000_000),
+                    refreshed,
+                    ..ctx_with_reconsider(&seen, &seen, &[], &[], NO_CATS)
+                },
+            )
+        };
+        let listed = run(&[]);
+        assert_eq!(
+            listed.actionable,
+            vec![c.source.clone()],
+            "a reconsiderable row listed past the window edge is decided too"
+        );
+        let d = run(&refreshed);
+        assert_eq!(d.actionable, vec![c.source.clone()]);
+        assert_eq!(d.reconsidered, vec![c.source.clone()]);
+        let other = decide(
+            &sub(true, Filters::default()),
+            &result(vec![c.clone()], false),
+            &CycleContext {
+                window_cutoff: Some(1_700_000_000),
+                ..ctx(&[], &[], &[], NO_CATS)
+            },
+        );
+        assert!(
+            other.records.is_empty(),
+            "any other row past the window is dropped"
+        );
+    }
+
+    #[test]
+    fn the_settled_run_stop_waits_for_reconsiderable_works() {
+        // Nothing to wait for.
+        assert!(may_stop_on_cache(0, None, None));
+        // All of them already read.
+        assert!(may_stop_on_cache(0, Some(500), Some(100)));
+        // Still unseen, and the listing has not reached their time yet.
+        assert!(!may_stop_on_cache(1, Some(500), Some(100)));
+        assert!(!may_stop_on_cache(1, None, Some(100)));
+        // The listing has passed their time: they are not in it any more.
+        assert!(may_stop_on_cache(1, Some(100), Some(100)));
+    }
+
+    #[test]
+    fn a_cycle_with_a_number_stores_a_summary() {
+        let d = decide(
+            &sub(false, Filters::default()),
+            &result(vec![cand("a", &[]), cand("b", &[])], false),
+            &ctx(&["b".to_string()], &[], &[], NO_CATS),
+        );
+        let summary = build_cycle("id".into(), "s1".into(), 1, 2, &d, Some(7));
+        assert!(summary.candidates.is_empty());
+        assert_eq!(summary.candidates_seen, 2);
+        assert_eq!(summary.seq, Some(7));
+        assert_eq!(summary.verdict_counts.get("awaiting_approval"), Some(&1));
+        assert_eq!(summary.verdict_counts.get("already_seen"), Some(&1));
+        let inline = build_cycle("id".into(), "s1".into(), 1, 2, &d, None);
+        assert_eq!(inline.candidates.len(), 2);
     }
 }

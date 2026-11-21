@@ -217,6 +217,14 @@ export interface PluginInfoResult {
    * disk. Omit entirely for a hand-written/manually-uploaded plugin; the host never infers this
    * from anything other than the plugin's own declared value. */
   generated_by_wizard?: boolean;
+  /** Discovery plugins: version of what each candidate's fields mean. Bump it when a field's source
+   * changes (say, tags from an API instead of the listing row) so the host does not report every
+   * work as changed on the first check after the upgrade. `1` when omitted. */
+  data_version?: number;
+  /** Optional calls this plugin answers, declared rather than detected. `"refresh_sources"`: exports
+   * `refreshSources(args)`, which takes the discovery criteria plus `sources: string[]` and returns a
+   * {@linkcode DiscoveryResult} for just those works, read without paging a listing. */
+  capabilities?: string[];
 }
 
 /** A plugin-authored error — `error_code` doubles as an i18n lookup key (the frontend's

@@ -738,5 +738,15 @@
   "upload.transferringCountHint": "Tarefas transferindo bytes agora (sem contar a gravação na biblioteca).",
   "reader.autoInfiniteScrollNarrow": "Ativar automaticamente no celular",
   "reader.autoInfiniteScrollNarrowDesc": "Usar sempre a rolagem infinita quando a tela tiver 768px de largura ou menos (celular na vertical); telas mais largas mantêm a escolha acima.",
-  "reader.infiniteScrollForcedByNarrow": "Largura de celular: ativado pelo interruptor abaixo."
+  "reader.infiniteScrollForcedByNarrow": "Largura de celular: ativado pelo interruptor abaixo.",
+  "settings.forceLowMemory": "Forçar modo de pouca memória",
+  "settings.forceLowMemoryDescription": "Ligado: o processamento de imagens usa sempre o nível de pouca memória, seja qual for a memória da máquina — menos imagens de cada vez, menos memória, carregamento mais lento. Desligado: o nível segue a memória disponível. Aplica-se ao salvar, sem reiniciar.",
+  "settings.memoryModeStatus": "Agora: {{tier}} ({{reason}}; {{thumbnails}} miniaturas e {{pages}} páginas de cada vez)",
+  "settings.memoryTierNormal": "normal",
+  "settings.memoryTierLow": "pouca memória",
+  "settings.memoryReasonForced": "forçado",
+  "settings.memoryReasonDetected": "automático · {{source}} {{size}}",
+  "settings.memoryReasonUnknown": "automático · memória não lida, funcionamento normal",
+  "settings.memorySourceContainer": "limite do contêiner",
+  "settings.memorySourceMachine": "memória da máquina"
 }

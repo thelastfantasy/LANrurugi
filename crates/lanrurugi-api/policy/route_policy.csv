@@ -21,6 +21,12 @@ p, token_admin, /api/*, PUT, allow
 p, token_admin, /api/*, DELETE, allow
 
 p, token_guest, /api/*, GET, allow
+# A POST that only reads. The batch source lookup answers the same question `GET
+# /api/search?filter=source:<url>` does, for a whole list at once (a GET cannot carry hundreds of
+# URLs), so a read-only token is the right credential for it — the intended caller is a userscript.
+# Listed in `lanrurugi-api-docgen`'s `GUEST_TOKEN_READ_ONLY_POSTS` too, which is what keeps the
+# "a guest token never mutates" gate honest instead of just silent.
+p, token_guest, /api/archives/lookup, POST, allow
 
 # 007-guest-restricted-access: an unauthenticated caller `require_api_key` has determined is
 # eligible for scoped guest access (site-wide `guestmode` switch on, at least one

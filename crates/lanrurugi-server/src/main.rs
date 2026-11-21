@@ -539,12 +539,19 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         // previews and an hourly check, and bounds what a burst can do to a source.
         discovery_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(8)),
         download_managers: Default::default(),
-        thumbnail_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
-            lanrurugi_core::concurrency::image_work_concurrency(),
-        )),
-        page_singleflight: Arc::new(lanrurugi_core::singleflight::Singleflight::new(
-            lanrurugi_core::concurrency::image_work_concurrency(),
-        )),
+        // Separate pools (#330), each handing freed heap back once its burst is over.
+        thumbnail_singleflight: Arc::new(
+            lanrurugi_core::singleflight::Singleflight::new(
+                lanrurugi_core::concurrency::thumbnail_concurrency(),
+            )
+            .release_heap_when_idle(),
+        ),
+        page_singleflight: Arc::new(
+            lanrurugi_core::singleflight::Singleflight::new(
+                lanrurugi_core::concurrency::page_concurrency(),
+            )
+            .release_heap_when_idle(),
+        ),
         plugin_options,
         plugin_options_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         download_queue,
@@ -556,6 +563,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         recommender: recommender.clone(),
         new_archive_tx: new_archive_tx.clone(),
         download_cancellations: Default::default(),
+        download_deferrals: Default::default(),
         pending_generate_requests: Default::default(),
         split_progress_tx: Default::default(),
         translation_runtime: Default::default(),
@@ -1150,6 +1158,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 errors = scan_summary.errors,
                 "startup scan complete"
             );
+            lanrurugi_core::memory::release_free_heap_soon("startup scan finished");
             // Same pools as the scan above — this is background work, not a request.
             let heal_summary =
                 lanrurugi_scanner::full_scan::heal_pagecounts(&redis.scanner.archives()).await;
@@ -1174,6 +1183,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     }
 
     let shutdown_state = state.clone();
+    // #332: the memory tier sets both image pools' limits (it logs them).
+    lanrurugi_api::memory_mode::apply(&state).await;
+    lanrurugi_core::memory::log_snapshot("startup");
     let app = app::build_app(state, args.static_dir, args.docs_dir);
     let listener = match args.bind.parse::<std::net::SocketAddr>() {
         Ok(addr) => tokio::net::TcpListener::from_std(lanrurugi_server::listen::bind(addr)?)?,
@@ -1596,6 +1608,7 @@ async fn rebuild_index(args: RebuildIndexArgs) -> anyhow::Result<()> {
         errors = scan_summary.errors,
         "Full scan complete"
     );
+    lanrurugi_core::memory::release_free_heap_soon("full scan finished");
 
     tracing::info!("Healing pagecount/arcsize for archives left corrupted by past ingest races...");
     let heal_summary = lanrurugi_scanner::full_scan::heal_pagecounts(&repos.archives).await;

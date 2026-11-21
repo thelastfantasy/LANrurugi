@@ -233,7 +233,7 @@ fn generate_sync(
     // as an original one rather than the overview grid (the one caller that actually surfaces
     // per-page thumbnails to a user) silently having no thumbnail for it.
     let original_pages = archive_format::list_pages(archive_path)?;
-    let effective = crate::patch::effective_pages(archive_path, &original_pages);
+    let effective = crate::patch::effective_pages(archive_path, &original_pages, None);
     let entry = effective
         .get(page.saturating_sub(1))
         .ok_or(ThumbnailError::NoPages)?;
@@ -294,7 +294,7 @@ fn generate_batch_sync(
             .collect();
     }
 
-    let effective = crate::patch::effective_pages(archive_path, pages);
+    let effective = crate::patch::effective_pages(archive_path, pages, None);
     let mut results: Vec<Option<Result<Option<String>, ThumbnailError>>> =
         jobs.iter().map(|_| None).collect();
 
@@ -403,7 +403,9 @@ fn thumbnail_from_bytes(
         hex_encode(&hasher.finalize())
     });
 
-    let img = crate::image_decode::load_from_memory(bytes)?;
+    // Decoded only as large as the thumbnail needs (a JPEG at a DCT scale): a full-size decode of a
+    // scan held ~100 MB per in-flight thumbnail for pixels the resize below threw away (#330).
+    let img = crate::image_decode::load_for_height(bytes, THUMBNAIL_HEIGHT)?;
     // A thumbnail exists to be *smaller* than the page it stands in for — in pixels and in bytes.
     // Both halves of that are enforced here, because neither is guaranteed by the encoder:
     //

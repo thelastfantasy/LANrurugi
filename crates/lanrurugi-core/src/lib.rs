@@ -8,6 +8,7 @@ pub mod ids;
 pub mod io;
 pub mod jobs;
 pub mod logging;
+pub mod memory;
 pub mod password;
 pub mod queue_error;
 pub mod rate_limit;

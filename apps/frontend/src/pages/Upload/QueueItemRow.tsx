@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 
 import {
   useConfirmOlderRevision,
+  useDeferQueueItem,
   useDeleteQueueItem,
   useFetchQueueItemMetadata,
   useForceDownloadQueueItem,
@@ -36,6 +37,7 @@ import { QueueErrorText } from "@/components/Layout";
 import { useIsNarrowViewport } from "@/hooks/useIsNarrowViewport";
 import { routes } from "@/lib/routes";
 import { FONT_SIZE_SM, FONT_SIZE_XS, Z_OVERLAY_TOOLTIP } from "@/theme";
+import { toast } from "@/toast";
 
 import {
   ICON_BUTTON_STYLE,
@@ -406,6 +408,7 @@ export function QueueItemRow({
     item.error?.kind === "source_download_in_progress";
   const stop = useStopQueueItem();
   const pause = usePauseQueueItem();
+  const defer = useDeferQueueItem();
   const confirmOlder = useConfirmOlderRevision();
   const del = useDeleteQueueItem();
   // Shared with the subscriptions page's own list (same query key), so a queue of a dozen rows
@@ -773,9 +776,41 @@ export function QueueItemRow({
               </button>
             </Tooltip>
           </>
-        ) : isLocalUpload ? null : item.state === "starting" ||
-          item.state === "waiting" ||
-          item.state === "downloading" ? (
+        ) : isLocalUpload ? null : item.state === "starting" || item.state === "waiting" ? (
+          // Not transferring yet, so there is nothing to pause: the choices are to let the jobs
+          // behind it go first, or to drop it (kept on the list as cancelled, restartable).
+          <>
+            <Tooltip label={t("upload.defer") ?? ""}>
+              <button
+                type="button"
+                className="stdbtn"
+                style={ICON_BUTTON_STYLE}
+                aria-label={t("upload.defer") ?? "Defer"}
+                disabled={item.state !== "waiting" || defer.isPending}
+                onClick={() =>
+                  void defer
+                    .mutateAsync(item.id)
+                    .then(() => toast({ text: t("upload.deferred") ?? undefined, icon: "info" }))
+                    .catch(() => toast({ text: t("upload.deferTooLate") ?? undefined, icon: "warning" }))
+                }
+              >
+                <i className="fa fa-angles-down" aria-hidden="true"></i>
+              </button>
+            </Tooltip>
+            <Tooltip label={t("upload.cancelDownload") ?? ""}>
+              <button
+                type="button"
+                className="stdbtn"
+                style={ICON_BUTTON_STYLE}
+                aria-label={t("upload.cancelDownload") ?? "Cancel"}
+                disabled={stop.isPending}
+                onClick={() => void stop.mutateAsync(item.id)}
+              >
+                <i className="fa fa-ban" aria-hidden="true"></i>
+              </button>
+            </Tooltip>
+          </>
+        ) : item.state === "downloading" ? (
           <>
             <Tooltip label={t("upload.pause") ?? ""}>
               <button

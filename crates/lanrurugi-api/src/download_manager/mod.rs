@@ -172,22 +172,67 @@ impl DownloadManager {
     pub async fn acquire_job(
         &self,
         capacity: Option<u32>,
-        mut turn: JobTurn,
+        turn: JobTurn,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<DownloadPermit, crate::download_manager::stream::DownloadError> {
-        if let Some(prev) = turn.prev.as_mut() {
-            tokio::select! {
-                biased;
-                _ = cancel.cancelled() => {
-                    return Err(crate::download_manager::stream::DownloadError::Cancelled);
-                }
-                _ = prev => {}
-            }
-            turn.prev = None;
+        self.acquire_job_deferrable(capacity, turn, cancel, None)
+            .await
+    }
+
+    /// [`Self::acquire_job`], plus "defer": each notification of `defer` while the job is still
+    /// waiting gives up its place and takes a fresh turn at the back of the line. The jobs behind
+    /// it move up in their original order (a dropped [`JobTurn`] still hands on only after its own
+    /// predecessor), and the deferred job itself stays alive — nothing it already did is redone.
+    pub async fn acquire_job_deferrable(
+        &self,
+        capacity: Option<u32>,
+        mut turn: JobTurn,
+        cancel: &tokio_util::sync::CancellationToken,
+        defer: Option<&tokio::sync::Notify>,
+    ) -> Result<DownloadPermit, crate::download_manager::stream::DownloadError> {
+        enum Step {
+            Ready,
+            Deferred,
         }
-        let permit = self.acquire_job_permit(capacity, cancel).await;
-        drop(turn);
-        permit
+        let deferred = || async {
+            match defer {
+                Some(notify) => notify.notified().await,
+                None => std::future::pending().await,
+            }
+        };
+        loop {
+            if let Some(prev) = turn.prev.as_mut() {
+                let step = tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => {
+                        return Err(crate::download_manager::stream::DownloadError::Cancelled);
+                    }
+                    _ = deferred() => Step::Deferred,
+                    _ = prev => Step::Ready,
+                };
+                if let Step::Deferred = step {
+                    drop(turn);
+                    turn = self.take_job_turn();
+                    continue;
+                }
+                turn.prev = None;
+            }
+            let permit = tokio::select! {
+                biased;
+                permit = self.acquire_job_permit(capacity, cancel) => Some(permit),
+                _ = deferred() => None,
+            };
+            match permit {
+                Some(permit) => {
+                    drop(turn);
+                    return permit;
+                }
+                None => {
+                    drop(turn);
+                    turn = self.take_job_turn();
+                }
+            }
+        }
     }
 
     async fn acquire_job_permit(
@@ -441,6 +486,42 @@ mod tests {
             task.await.unwrap();
         }
         assert_eq!(*order.lock().unwrap(), vec![0, 2, 3]);
+    }
+
+    /// Deferring a waiting job sends it to the back: the jobs behind it are served first, in their
+    /// own order, and the deferred job still gets its slot afterwards.
+    #[tokio::test]
+    async fn a_deferred_job_goes_to_the_back_of_the_line() {
+        let mgr = Arc::new(DownloadManager::new());
+        let held = mgr
+            .acquire_job(Some(1), mgr.take_job_turn(), &no_cancel())
+            .await
+            .unwrap();
+        let turns: Vec<_> = (0..3).map(|_| mgr.take_job_turn()).collect();
+        let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let defer_first = Arc::new(tokio::sync::Notify::new());
+        let mut tasks = Vec::new();
+        for (i, turn) in turns.into_iter().enumerate() {
+            let (mgr, order, defer) = (mgr.clone(), order.clone(), defer_first.clone());
+            tasks.push(tokio::spawn(async move {
+                let defer = (i == 0).then_some(defer.as_ref());
+                let permit = mgr
+                    .acquire_job_deferrable(Some(1), turn, &no_cancel(), defer)
+                    .await
+                    .unwrap();
+                order.lock().unwrap().push(i);
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                drop(permit);
+            }));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        defer_first.notify_one();
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        drop(held);
+        for task in tasks {
+            task.await.unwrap();
+        }
+        assert_eq!(*order.lock().unwrap(), vec![1, 2, 0]);
     }
 
     #[tokio::test]

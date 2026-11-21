@@ -14,8 +14,9 @@ use serde::Deserialize;
 use serde_json::json;
 
 use lanrurugi_storage::subscriptions::{
-    CreditPolicy, Criteria, Filters, ReservationStatus, ScanWindow, SourceChangePolicy,
-    SourceRemovalPolicy, Subscription, SubscriptionState, MAX_SCAN_DAYS, MAX_SCAN_PAGES,
+    CreditPolicy, Criteria, CycleOutcome, Filters, ReservationStatus, ScanWindow,
+    SourceChangePolicy, SourceRemovalPolicy, Subscription, SubscriptionState, MAX_SCAN_DAYS,
+    MAX_SCAN_PAGES,
 };
 
 use futures_util::StreamExt;
@@ -324,11 +325,20 @@ async fn create(
 async fn detail(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match state.subscriptions.get(&id).await {
         Ok(Some(s)) => {
-            let cycles = state
+            let mut cycles = state
                 .subscriptions
                 .recent_cycles(&id, 20)
                 .await
                 .unwrap_or_default();
+            // A summary stores no rows; they are rebuilt here so the history view is unchanged.
+            if cycles.iter().any(|c| c.seq.is_some()) {
+                let snapshot = state.subscriptions.snapshot(&id).await.unwrap_or_default();
+                for cycle in &mut cycles {
+                    if let Some(seq) = cycle.seq {
+                        cycle.candidates = super::snapshot::records_at(&snapshot, seq);
+                    }
+                }
+            }
             axum::Json(json!({ "subscription": s, "cycles": cycles })).into_response_owned()
         }
         Ok(None) => not_found("get_subscription", format!("{id} does not exist.")),
@@ -547,7 +557,43 @@ async fn combined_history(
                 work.clone(),
             ));
         }
-        for cycle in cycles {
+        // Summaries carry no rows: each work's latest verdict comes from the snapshot instead, which
+        // is the same "newest record per work" this view keeps anyway.
+        let outcome_by_seq: std::collections::HashMap<u64, &CycleOutcome> = cycles
+            .iter()
+            .filter_map(|c| c.seq.map(|seq| (seq, &c.outcome)))
+            .collect();
+        if !outcome_by_seq.is_empty() {
+            let snapshot = state
+                .subscriptions
+                .snapshot(&subscription.id)
+                .await
+                .unwrap_or_default();
+            for entry in snapshot.values() {
+                // Older than every kept summary: past what this history covers, as a full-detail
+                // cycle that rolled off the list used to be.
+                let Some((last, outcome)) = entry
+                    .runs
+                    .last()
+                    .and_then(|run| outcome_by_seq.get(&run.to_seq).map(|o| (run, *o)))
+                else {
+                    continue;
+                };
+                let Some(record) = super::snapshot::record_at(entry, last.to_seq) else {
+                    continue;
+                };
+                entries.push(json!({
+                    "skipped": skipped.contains_key(&record.source_url),
+                    "subscription_id": subscription.id,
+                    "subscription_name": subscription.name,
+                    "checked_at": entry.last_verdict_at.unwrap_or(entry.last_seen_at),
+                    "outcome": outcome,
+                    "download": outcome_by_source.get(&record.source_url),
+                    "candidate": record,
+                }));
+            }
+        }
+        for cycle in cycles.iter().filter(|c| c.seq.is_none()) {
             for record in &cycle.candidates {
                 entries.push(json!({
                     "skipped": skipped.contains_key(&record.source_url),
@@ -640,10 +686,9 @@ async fn combined_history(
     axum::Json(json!({ "history": entries })).into_response_owned()
 }
 
-/// How far back to read per subscription before merging. A ceiling rather than everything: history is
-/// bounded by age anyway, and reading all of it for every subscription to then discard most of it
-/// would cost more the longer the install has been running.
-const CYCLES_PER_SUBSCRIPTION: isize = 20;
+/// How many cycles to read per subscription before merging: every kept one. Summaries are small, and
+/// at most a few older full-detail cycles remain after the upgrade trims them.
+const CYCLES_PER_SUBSCRIPTION: isize = lanrurugi_storage::subscriptions::CYCLE_HISTORY_LIMIT;
 
 #[derive(Debug, Deserialize)]
 struct HistoryQuery {
@@ -1102,6 +1147,24 @@ async fn enqueue_work(
     subscription: &lanrurugi_storage::subscriptions::Subscription,
     source_url: &str,
 ) -> Result<Result<String, String>, super::reservations::ReservationReason> {
+    let item = state
+        .download_queue
+        .add(queue_entry(state, subscription, source_url).await?)
+        .await
+        .map_err(|e| super::reservations::ReservationReason::DownloadFailed(e.to_string()))?;
+    // Approving or retrying *is* the decision this download was waiting for, so it starts here —
+    // see `download_queue::start_item_from_subscription`'s own docs.
+    Ok(crate::download_queue::start_item_from_subscription(state, &item.id).await)
+}
+
+/// Builds the queue entry for one work without adding it. `None` when no installed download plugin
+/// takes its URL.
+async fn queue_entry(
+    state: &AppState,
+    subscription: &lanrurugi_storage::subscriptions::Subscription,
+    source_url: &str,
+) -> Result<lanrurugi_storage::download_queue::NewQueueItem, super::reservations::ReservationReason>
+{
     // The subscription's `source` is the discovery plugin, which has no `execDownload`; the
     // download plugin that owns this URL is resolved separately, and every download-plugin setting
     // is keyed off its namespace. See `plugins::resolve_download_plugin_for_url`.
@@ -1112,61 +1175,106 @@ async fn enqueue_work(
     };
     let overwrite_on_duplicate =
         crate::plugins::resolve_queue_overwrite_on_duplicate(state, &download_namespace).await;
-    let item = state
-        .download_queue
-        .add(lanrurugi_storage::download_queue::NewQueueItem {
-            origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
-            subscription_id: Some(subscription.id.clone()),
-            url: source_url.to_string(),
-            plugin_namespace: download_namespace,
-            file_size: None,
-            category: subscription.target_category.clone(),
-            metadata_tags: subscription.metadata_tags.clone(),
-            auto_fetch_metadata: subscription.enrich_metadata,
-            overwrite_on_duplicate,
-            // Enters the queue exactly as a manually added URL would, inheriting the existing
-            // start/stop/retry behaviour rather than getting a path of its own.
-            state: lanrurugi_storage::download_queue::DownloadQueueState::Queued,
-        })
-        .await
-        .map_err(|e| super::reservations::ReservationReason::DownloadFailed(e.to_string()))?;
-    // Approving or retrying *is* the decision this download was waiting for, so it starts here —
-    // see `download_queue::start_item_from_subscription`'s own docs.
-    Ok(crate::download_queue::start_item_from_subscription(state, &item.id).await)
+    Ok(lanrurugi_storage::download_queue::NewQueueItem {
+        origin: lanrurugi_storage::download_queue::QueueItemOrigin::Download,
+        subscription_id: Some(subscription.id.clone()),
+        url: source_url.to_string(),
+        plugin_namespace: download_namespace,
+        file_size: None,
+        category: subscription.target_category.clone(),
+        metadata_tags: subscription.metadata_tags.clone(),
+        auto_fetch_metadata: subscription.enrich_metadata,
+        overwrite_on_duplicate,
+        // Enters the queue exactly as a manually added URL would, inheriting the existing
+        // start/stop/retry behaviour rather than getting a path of its own.
+        state: lanrurugi_storage::download_queue::DownloadQueueState::Queued,
+    })
 }
 
-/// Queues and starts each pending work, as approving it from the list does. Returns how many reached
-/// the queue and, per id, why one did not (or did but did not start).
+/// Queues every pending work in `ids` and takes them off the approval list as one batch, then starts
+/// the queued items in the background. Returns how many reached the queue and, per id, why one did
+/// not.
+///
+/// Batched end to end — one read of the pending entries, one write that adds every queue row, one
+/// that removes every answered entry — so the list empties in one step when the user presses the
+/// button, however many works were selected. Starting is not awaited: it reads the whole queue for
+/// its duplicate check and launches a plugin per item, and a start that fails afterwards is reported
+/// on its queue row, which is where an approved work is followed from anyway.
 async fn approve_entries(state: &AppState, ids: &[String]) -> (usize, Vec<serde_json::Value>) {
-    let mut approved = 0usize;
     let mut failures: Vec<serde_json::Value> = Vec::new();
+    let entries = match state.subscriptions.get_pending_many(ids).await {
+        Ok(entries) => entries,
+        Err(e) => {
+            let failures = ids
+                .iter()
+                .map(|id| json!({ "id": id, "error": e.to_string() }))
+                .collect();
+            return (0, failures);
+        }
+    };
+    let found: std::collections::HashSet<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+    for id in ids.iter().filter(|id| !found.contains(id.as_str())) {
+        failures.push(json!({ "id": id, "error": "no such pending approval" }));
+    }
 
-    for id in ids {
-        let Ok(Some(entry)) = state.subscriptions.get_pending(id).await else {
-            failures.push(json!({ "id": id, "error": "no such pending approval" }));
+    let mut subscriptions: std::collections::HashMap<
+        String,
+        Option<lanrurugi_storage::subscriptions::Subscription>,
+    > = std::collections::HashMap::new();
+    let mut answered: Vec<String> = Vec::new();
+    let mut new_items = Vec::new();
+    for entry in &entries {
+        if !subscriptions.contains_key(&entry.subscription_id) {
+            let subscription = state
+                .subscriptions
+                .get(&entry.subscription_id)
+                .await
+                .ok()
+                .flatten();
+            subscriptions.insert(entry.subscription_id.clone(), subscription);
+        }
+        let Some(subscription) = &subscriptions[&entry.subscription_id] else {
+            failures.push(json!({ "id": entry.id, "error": "the subscription no longer exists" }));
             continue;
         };
-        let Ok(Some(subscription)) = state.subscriptions.get(&entry.subscription_id).await else {
-            failures.push(json!({ "id": id, "error": "the subscription no longer exists" }));
-            continue;
-        };
-
-        match enqueue_work(state, &subscription, &entry.source_url).await {
-            Ok(started) => {
-                // Deleted only after the queue accepted it; the other order would lose the work
-                // entirely while the user believed they had approved it.
-                let _ = state.subscriptions.delete_pending(id).await;
-                approved += 1;
-                if let Err(e) = started {
-                    // Still queued and startable from the upload page, so this is a warning.
-                    failures.push(json!({ "id": id, "error": e, "queued": true }));
-                }
+        match queue_entry(state, subscription, &entry.source_url).await {
+            Ok(new_item) => {
+                answered.push(entry.id.clone());
+                new_items.push(new_item);
             }
             // Left pending rather than dismissed: installing a missing plugin is a real fix, and
             // the user's answer should survive until then.
-            Err(reason) => failures.push(json!({ "id": id, "error": reason.as_key() })),
+            Err(reason) => failures.push(json!({ "id": entry.id, "error": reason.as_key() })),
         }
     }
+
+    let queued = match state.download_queue.add_many(new_items).await {
+        Ok(items) => items,
+        Err(e) => {
+            for id in &answered {
+                failures.push(json!({ "id": id, "error": e.to_string() }));
+            }
+            return (0, failures);
+        }
+    };
+    // Removed only after the queue accepted them; the other order would lose the works entirely
+    // while the user believed they had approved them.
+    if let Err(e) = state.subscriptions.delete_pending_many(&answered).await {
+        tracing::warn!(error = %e, "approved works queued but left on the approval list");
+    }
+    let approved = queued.len();
+    let item_ids: Vec<String> = queued.into_iter().map(|i| i.id).collect();
+    let spawned = state.clone();
+    tokio::spawn(async move {
+        for (item_id, result) in
+            crate::download_queue::start_items_from_subscription(&spawned, &item_ids).await
+        {
+            if let Err(e) = result {
+                // Still queued and startable from the upload page, so this is a warning.
+                tracing::warn!(queue_item = %item_id, error = %e, "approved work queued but not started");
+            }
+        }
+    });
     (approved, failures)
 }
 

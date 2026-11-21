@@ -79,7 +79,16 @@ const INGEST_SOURCE_ROWS: &[&str] = &["download", "scanner", "upload_browser", "
 /// Tags that describe the record rather than its content — never preference signals. `rating` is
 /// excluded because it is a *weight* on a work rather than a property of one (see
 /// [`preference_weights`]); it gets its own breakdown in [`Preferences::ratings`] instead.
-const NON_CONTENT_NAMESPACES: &[&str] = &["date_added", "timestamp", "source", "rating"];
+/// `download`/`gallery` (metadata plugins' download URL and gallery id) are one value per archive:
+/// a list of them is every entry at one archive.
+const NON_CONTENT_NAMESPACES: &[&str] = &[
+    "date_added",
+    "timestamp",
+    "source",
+    "rating",
+    "download",
+    "gallery",
+];
 
 /// Tag *values* that are not what their namespace's name promises, dropped from that namespace's
 /// own breakdown. `language:translated` is the one case today: it records that a work is a
@@ -1879,7 +1888,7 @@ mod tests {
         let now = 1_800_000_000;
         let archives = vec![read_archive(
             "a",
-            "artist:alpha,artist:beta,date_added:1700000000,rating:4,tag:school",
+            "artist:alpha,artist:beta,date_added:1700000000,rating:4,tag:school,download:https://x.test/1/,gallery:70641",
             10,
             10,
             now,
@@ -1889,6 +1898,7 @@ mod tests {
         let names: Vec<&str> = namespaces.iter().map(|n| n.namespace.as_str()).collect();
         assert!(names.contains(&"artist") && names.contains(&"tag"));
         assert!(!names.contains(&"date_added") && !names.contains(&"rating"));
+        assert!(!names.contains(&"download") && !names.contains(&"gallery"));
 
         let artist = namespaces.iter().find(|n| n.namespace == "artist").unwrap();
         let tag = namespaces.iter().find(|n| n.namespace == "tag").unwrap();

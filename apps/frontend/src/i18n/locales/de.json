@@ -799,5 +799,15 @@
   "upload.transferringCountHint": "Aufgaben, die gerade Bytes übertragen (ohne Übernahme in die Bibliothek).",
   "reader.autoInfiniteScrollNarrow": "Auf Handybreite automatisch aktivieren",
   "reader.autoInfiniteScrollNarrowDesc": "Bei einer Bildschirmbreite bis 768px (Handy im Hochformat) immer unendliches Scrollen verwenden; breitere Bildschirme behalten die Auswahl oben.",
-  "reader.infiniteScrollForcedByNarrow": "Handybreite: durch den Schalter unten aktiviert."
+  "reader.infiniteScrollForcedByNarrow": "Handybreite: durch den Schalter unten aktiviert.",
+  "settings.forceLowMemory": "Speichersparmodus erzwingen",
+  "settings.forceLowMemoryDescription": "An: Bildverarbeitung läuft immer in der Speichersparstufe, egal wie viel Speicher der Rechner hat – weniger Bilder gleichzeitig, weniger Speicher, langsameres Laden. Aus: Die Stufe richtet sich nach dem verfügbaren Speicher. Gilt sofort nach dem Speichern, ohne Neustart.",
+  "settings.memoryModeStatus": "Aktuell: {{tier}} ({{reason}}; {{thumbnails}} Vorschaubilder und {{pages}} Seiten gleichzeitig)",
+  "settings.memoryTierNormal": "normal",
+  "settings.memoryTierLow": "Speichersparend",
+  "settings.memoryReasonForced": "erzwungen",
+  "settings.memoryReasonDetected": "automatisch · {{source}} {{size}}",
+  "settings.memoryReasonUnknown": "automatisch · Speicher nicht lesbar, normaler Betrieb",
+  "settings.memorySourceContainer": "Container-Limit",
+  "settings.memorySourceMachine": "Arbeitsspeicher des Rechners"
 }

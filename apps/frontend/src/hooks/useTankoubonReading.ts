@@ -45,6 +45,10 @@ export function useTankoubonReading(tankId: string | null) {
     () => full.data?.result.full_data ?? [],
     [full.data],
   )
+  // Read separately from `full.data`, which is replaced on every progress save: keyed on the whole
+  // response, the spliced page list became a new array per page turn, and the infinite-scroll
+  // effect that depends on it remounted and dropped a jump's pending load-window update.
+  const chapterNames = full.data?.result.chapter_names
   const memberIds = useMemo(() => members.map((m) => m.arcid), [members])
   const queryOptions = useMemo(
     () => memberIds.map((id) => ({
@@ -86,8 +90,7 @@ export function useTankoubonReading(tankId: string | null) {
     let toc: TocEntry[] = []
 
     if (!isLoading && !isError) {
-      const chapterNames = full.data?.result.chapter_names ?? []
-      const nameById = new Map(chapterNames.map((c) => [c.id, c.name]))
+      const nameById = new Map((chapterNames ?? []).map((c) => [c.id, c.name]))
       let offset = 0
       members.forEach((member, i) => {
         const displayTitle = nameById.get(member.arcid) || member.title
@@ -123,7 +126,7 @@ export function useTankoubonReading(tankId: string | null) {
     }
 
     return { chapters, pages, toc, unreadableChapters, damagedPatches }
-  }, [full.data, pageQueries, members, isLoading, isError])
+  }, [chapterNames, pageQueries, members, isLoading, isError])
 
   /** Maps a global page to its member archive + local page, or `null` if out of range. */
   function getArchiveForPage(globalPage: number): { arcId: string; localPage: number } | null {
