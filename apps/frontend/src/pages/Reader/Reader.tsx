@@ -3178,11 +3178,30 @@ export function Reader() {
     });
     columnObserver.observe(root, { childList: true, subtree: true });
 
-    // A phone's viewport height is not constant: the address bar comes and goes, and every change
-    // moves the page under the viewport centre by half the difference. Re-applying the same
-    // alignment on resize keeps the resumed (or anchored) page where the reader left it.
-    window.addEventListener("resize", reflow);
-    window.visualViewport?.addEventListener("resize", reflow);
+    // A phone's viewport height is not constant: the address bar and toolbars come and go. While
+    // the resume pin holds, the same alignment is re-applied so the resumed page stays where it
+    // opened. Once the reader scrolls on their own, the browser keeps the content in place as its
+    // bars move; scrolling the anchored page back to the new centre on top of that jumped by half
+    // the bars' height whenever they reappeared late in a fling (real report). Only the anchor's
+    // baseline follows the viewport then — except for the first change after a keyboard hold
+    // (bookmark naming), which is the keyboard closing and has to put the page back.
+    let heldSinceBaseline = false;
+    const onViewportResize = () => {
+      if (holdViewportRef.current) {
+        heldSinceBaseline = true;
+        return;
+      }
+      if (pinnedPage() !== null || heldSinceBaseline) {
+        heldSinceBaseline = false;
+        reflow();
+        return;
+      }
+      reflowGuardUntil = performance.now() + REFLOW_GUARD_MS;
+      const anchor = infiniteScrollAnchorRef.current;
+      if (anchor?.el.isConnected) anchor.offset = alignFor(anchor.el.getBoundingClientRect());
+    };
+    window.addEventListener("resize", onViewportResize);
+    window.visualViewport?.addEventListener("resize", onViewportResize);
 
     return () => {
       unpin();
@@ -3192,8 +3211,8 @@ export function Reader() {
       GESTURE_EVENTS.forEach((type) =>
         window.removeEventListener(type, markGesture, { capture: true }),
       );
-      window.removeEventListener("resize", reflow);
-      window.visualViewport?.removeEventListener("resize", reflow);
+      window.removeEventListener("resize", onViewportResize);
+      window.visualViewport?.removeEventListener("resize", onViewportResize);
       if (rafId !== null) cancelAnimationFrame(rafId);
       columnObserver.disconnect();
       resizeObserver.disconnect();
