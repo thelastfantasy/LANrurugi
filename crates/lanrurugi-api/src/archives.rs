@@ -2879,6 +2879,7 @@ pub async fn spawn_regen_thumbnails_job(
         }
         jobs.finish(&job_id_for_task, json!({ "regenerated": total }))
             .await;
+        lanrurugi_core::memory::release_free_heap_soon("thumbnail regeneration finished");
     });
 
     job_id

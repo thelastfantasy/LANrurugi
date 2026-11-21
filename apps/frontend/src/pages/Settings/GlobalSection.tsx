@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next"
 import { useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
@@ -9,6 +10,7 @@ import {
   useStopBlake3Backfill,
   useTidyTags,
 } from "@/api/hooks"
+import type { MemoryMode } from "@/api/types"
 import { NumberInput } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
 import { confirmDialog } from "@/dialog"
@@ -18,6 +20,24 @@ import { FONT_SIZE_SM } from "@/theme"
 
 import { LanguageOrderEditor } from "./LanguageOrderEditor"
 import { ActionRow, CheckboxRow, ImageSupportBadge, Row } from "./shared"
+
+/** "Now: low memory (automatic · container limit 2.0 GB; 2 thumbnails and 2 pages at a time)". */
+function memoryModeStatus(mode: MemoryMode, t: TFunction): string {
+  const size = mode.budget_bytes === null ? "" : `${(mode.budget_bytes / 2 ** 30).toFixed(1)} GB`
+  const source = mode.budget_source === "container" ? t("settings.memorySourceContainer") : t("settings.memorySourceMachine")
+  const reason =
+    mode.reason === "forced"
+      ? t("settings.memoryReasonForced")
+      : mode.reason === "unknown"
+        ? t("settings.memoryReasonUnknown")
+        : t("settings.memoryReasonDetected", { source, size })
+  return t("settings.memoryModeStatus", {
+    tier: mode.effective === "low" ? t("settings.memoryTierLow") : t("settings.memoryTierNormal"),
+    reason,
+    thumbnails: mode.thumbnail_concurrency,
+    pages: mode.page_concurrency,
+  })
+}
 
 export function GlobalSection({
   htmltitle,
@@ -48,6 +68,9 @@ export function GlobalSection({
   setArchiveSplitDeleteOriginalEnabled,
   ingestStrictVerify,
   setIngestStrictVerify,
+  forceLowMemory,
+  setForceLowMemory,
+  memoryMode,
   guestmode,
   setGuestmode,
   newbadgemode,
@@ -95,6 +118,9 @@ export function GlobalSection({
   setArchiveSplitDeleteOriginalEnabled: (v: boolean) => void
   ingestStrictVerify: boolean
   setIngestStrictVerify: (v: boolean) => void
+  forceLowMemory: boolean
+  setForceLowMemory: (v: boolean) => void
+  memoryMode: MemoryMode | null
   guestmode: boolean
   setGuestmode: (v: boolean) => void
   newbadgemode: string
@@ -401,6 +427,20 @@ export function GlobalSection({
             label={t("settings.ingestStrictVerify")}
           >
             {t("settings.ingestStrictVerifyDescription")}
+          </CheckboxRow>
+          <CheckboxRow
+            id="force_low_memory"
+            checked={forceLowMemory}
+            onChange={setForceLowMemory}
+            label={t("settings.forceLowMemory")}
+          >
+            {t("settings.forceLowMemoryDescription")}
+            {memoryMode && (
+              <>
+                <br />
+                {memoryModeStatus(memoryMode, t)}
+              </>
+            )}
           </CheckboxRow>
           {/* Site-wide guest-mode switch (FR-003) — grants nothing alone; also needs a category
               marked visible to guests (Categories.tsx) to actually route guests in. */}

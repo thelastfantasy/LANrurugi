@@ -317,5 +317,15 @@
   "upload.ingesting": "লাইব্ৰেৰীত সংৰক্ষণ কৰি আছে…",
   "upload.ingestingHint": "ডাউনলোড সম্পূৰ্ণ হৈছে — সংগ্ৰহটো লাইব্ৰেৰীত লিখি থাম্বনেইল সৃষ্টি কৰি আছে।",
   "upload.transferringCount": "{{n}} টা স্থানান্তৰত",
-  "upload.transferringCountHint": "এই মুহূৰ্তত বাইট স্থানান্তৰ কৰি থকা কাৰ্য (লাইব্ৰেৰীত লিখাৰ পৰ্যায় বাদে)।"
+  "upload.transferringCountHint": "এই মুহূৰ্তত বাইট স্থানান্তৰ কৰি থকা কাৰ্য (লাইব্ৰেৰীত লিখাৰ পৰ্যায় বাদে)।",
+  "settings.forceLowMemory": "নিম্ন মেমৰি ধৰণ বাধ্যতামূলক কৰক",
+  "settings.forceLowMemoryDescription": "অন কৰিলে মেচিনত যিমানেই মেমৰি নাথাকক, ছবিৰ কাম সদায় নিম্ন মেমৰি স্তৰত চলিব — একেলগে কম ছবি, কম মেমৰি, লেহেমীয়া লোডিং। অফ কৰিলে উপলব্ধ মেমৰি অনুসৰি স্বয়ংক্ৰিয়ভাৱে বাছে। ছেভ কৰাৰ লগে লগে প্ৰযোজ্য, পুনৰাৰম্ভৰ প্ৰয়োজন নাই।",
+  "settings.memoryModeStatus": "এতিয়া: {{tier}} ({{reason}}; একেলগে {{thumbnails}} খন থাম্বনেইল আৰু {{pages}} খন পৃষ্ঠা)",
+  "settings.memoryTierNormal": "সাধাৰণ",
+  "settings.memoryTierLow": "নিম্ন মেমৰি",
+  "settings.memoryReasonForced": "বাধ্যতামূলক",
+  "settings.memoryReasonDetected": "স্বয়ংক্ৰিয় · {{source}} {{size}}",
+  "settings.memoryReasonUnknown": "স্বয়ংক্ৰিয় · মেমৰি পঢ়িব পৰা নগ'ল, সাধাৰণভাৱে চলি আছে",
+  "settings.memorySourceContainer": "কণ্টেইনাৰৰ সীমা",
+  "settings.memorySourceMachine": "মেচিনৰ মেমৰি"
 }

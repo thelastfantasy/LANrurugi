@@ -762,5 +762,15 @@
   "upload.transferringCountHint": "Số tác vụ đang truyền byte (không tính giai đoạn ghi vào thư viện).",
   "reader.autoInfiniteScrollNarrow": "Tự bật ở chiều rộng điện thoại",
   "reader.autoInfiniteScrollNarrowDesc": "Luôn dùng cuộn vô hạn khi màn hình rộng 768px trở xuống (điện thoại dọc); màn hình rộng hơn vẫn theo lựa chọn ở trên.",
-  "reader.infiniteScrollForcedByNarrow": "Chiều rộng điện thoại: đang được bật bởi công tắc bên dưới."
+  "reader.infiniteScrollForcedByNarrow": "Chiều rộng điện thoại: đang được bật bởi công tắc bên dưới.",
+  "settings.forceLowMemory": "Buộc chế độ ít bộ nhớ",
+  "settings.forceLowMemoryDescription": "Bật: xử lý ảnh luôn chạy ở mức ít bộ nhớ, bất kể máy có bao nhiêu bộ nhớ — ít ảnh cùng lúc hơn, tốn ít bộ nhớ hơn, tải ảnh chậm hơn. Tắt: mức được chọn theo bộ nhớ còn dùng được. Có hiệu lực khi lưu, không cần khởi động lại.",
+  "settings.memoryModeStatus": "Hiện tại: {{tier}} ({{reason}}; {{thumbnails}} ảnh thu nhỏ và {{pages}} trang cùng lúc)",
+  "settings.memoryTierNormal": "bình thường",
+  "settings.memoryTierLow": "ít bộ nhớ",
+  "settings.memoryReasonForced": "bị buộc",
+  "settings.memoryReasonDetected": "tự động · {{source}} {{size}}",
+  "settings.memoryReasonUnknown": "tự động · không đọc được bộ nhớ, chạy bình thường",
+  "settings.memorySourceContainer": "giới hạn container",
+  "settings.memorySourceMachine": "bộ nhớ máy"
 }

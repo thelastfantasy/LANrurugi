@@ -92,6 +92,16 @@ export interface TankoubonFullResponse {
   filtered: number
 }
 
+/** The memory tier image work runs in (`GET /settings` `memory_mode`, #332). */
+export interface MemoryMode {
+  effective: "normal" | "low"
+  reason: "forced" | "small_budget" | "large_budget" | "unknown"
+  budget_bytes: number | null
+  budget_source: "container" | "machine" | null
+  thumbnail_concurrency: number
+  page_concurrency: number
+}
+
 export interface Settings {
   theme: string
   /** Theme shown to an unauthenticated `guest_visitor`, independent of the admin's own `theme`. */
@@ -173,6 +183,10 @@ export interface Settings {
   archive_split_delete_original_enabled: boolean
   /** 027: read every block copied into the library back past the cache and compare. */
   ingest_strict_verify?: boolean
+  /** #332: hold image work to the low-memory tier whatever the memory budget says. */
+  force_low_memory?: boolean
+  /** #332, read-only: the memory tier in effect and what decided it. */
+  memory_mode?: MemoryMode | null
   /** Site-wide guest-mode master switch; see `Category.visible_to_guest` for the per-category half. */
   guestmode: boolean
   /** Background scanning yields to interactive traffic (default on). */

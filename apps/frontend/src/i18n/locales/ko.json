@@ -897,5 +897,15 @@
   "upload.transferringCountHint": "현재 바이트를 전송 중인 작업 수(저장 단계 제외).",
   "reader.autoInfiniteScrollNarrow": "휴대폰 너비에서 자동 사용",
   "reader.autoInfiniteScrollNarrowDesc": "화면 너비가 768px 이하(세로 모드 휴대폰)일 때는 항상 무한 스크롤을 사용합니다. 넓은 화면에서는 위 설정을 따릅니다.",
-  "reader.infiniteScrollForcedByNarrow": "휴대폰 너비이므로 아래 스위치에 의해 자동으로 켜져 있습니다."
+  "reader.infiniteScrollForcedByNarrow": "휴대폰 너비이므로 아래 스위치에 의해 자동으로 켜져 있습니다.",
+  "settings.forceLowMemory": "저메모리 모드 강제",
+  "settings.forceLowMemoryDescription": "켜면 기기 메모리와 관계없이 저메모리 단계로 동작합니다. 동시에 처리하는 이미지가 줄어 메모리를 아끼지만 이미지 로딩은 느려집니다. 끄면 사용 가능한 메모리에 따라 자동으로 선택합니다. 저장하면 바로 적용되며 재시작할 필요가 없습니다.",
+  "settings.memoryModeStatus": "현재: {{tier}} ({{reason}}; 썸네일 {{thumbnails}}개, 페이지 {{pages}}개 동시 처리)",
+  "settings.memoryTierNormal": "일반",
+  "settings.memoryTierLow": "저메모리",
+  "settings.memoryReasonForced": "수동 강제",
+  "settings.memoryReasonDetected": "자동 · {{source}} {{size}}",
+  "settings.memoryReasonUnknown": "자동 · 메모리를 확인하지 못해 일반으로 동작",
+  "settings.memorySourceContainer": "컨테이너 메모리 한도",
+  "settings.memorySourceMachine": "기기 메모리"
 }

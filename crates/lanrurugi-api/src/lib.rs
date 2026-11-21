@@ -36,6 +36,7 @@ pub mod llm_prompts;
 pub mod llm_usage;
 pub mod login;
 pub mod logs;
+pub mod memory_mode;
 pub mod misc;
 pub mod mojibake;
 pub mod opds;
