@@ -2377,7 +2377,7 @@
   "stats.zoomHint": "Ctrl/⌘ + 滚轮缩放，拖动平移 · 点击柱/数据点查看档案 · Shift+点击合并区间",
   "stats.rangeTruncated": "更早的历史仍然存在，但超出了本页一次加载的范围。",
   "library.searchSyntaxProgressBand": "阅读进度区间（占页数百分比）：",
-  "stats.searchThisTag": "在库中搜索 {{tag}}",
+  "stats.searchReadWithTag": "搜索读过的、带 {{tag}} 的档案",
   "stats.searchThisQuery": "在库中搜索：{{query}}",
   "stats.progressBucket.1_20": "1-20%",
   "stats.progressBucket.21_40": "21-40%",

@@ -2320,7 +2320,7 @@
   "stats.zoomHint": "Ctrl/⌘ + ホイールでズーム、ドラッグで移動 · 棒や点をクリックでアーカイブ一覧 · Shift+クリックで範囲を結合",
   "stats.rangeTruncated": "それ以前の履歴も存在しますが、このページが一度に読み込む範囲を超えています。",
   "library.searchSyntaxProgressBand": "閲覧進捗の帯（ページ数に対する割合）：",
-  "stats.searchThisTag": "{{tag}} でライブラリを検索",
+  "stats.searchReadWithTag": "{{tag}} の既読アーカイブを検索",
   "stats.searchThisQuery": "ライブラリを検索：{{query}}",
   "stats.progressBucket.1_20": "1-20%",
   "stats.progressBucket.21_40": "21-40%",
