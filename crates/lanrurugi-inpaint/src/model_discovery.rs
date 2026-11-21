@@ -87,6 +87,18 @@ pub fn model_path(dir: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
+    /// The fetch script is what puts the model into release images: a file name it writes that
+    /// discovery does not look for ships a model nothing loads (#329).
+    #[test]
+    fn fetch_script_writes_the_file_discovery_looks_for() {
+        let script = include_str!("../../../scripts/fetch-inpaint-model.sh");
+        assert!(
+            script.contains(&format!("FILE=\"{MODEL_FILE}\"")),
+            "scripts/fetch-inpaint-model.sh must fetch {MODEL_FILE}"
+        );
+        assert!(script.contains("\"${DEST}/${FILE}\""));
+    }
+
     #[test]
     fn candidates_always_include_system_and_container_paths() {
         let candidates = candidate_dirs();
