@@ -10,11 +10,13 @@ crate's model isn't installed).
 
 | File | Purpose |
 |---|---|
-| `lama_fp32.onnx` | LaMa inpainting network, fixed 512x512 input |
+| `lama-manga-dynamic.onnx` | LaMa inpainting network fine-tuned on manga, dynamic `h`/`w` input |
 
-From [`Carve/LaMa-ONNX`](https://huggingface.co/Carve/LaMa-ONNX) — an Apache-2.0 ONNX export of
-[`advimman/lama`](https://github.com/advimman/lama) (itself Apache-2.0), pinned to an exact commit
-and checksum-verified by the fetch script.
+From [`ogkalu/lama-manga-onnx-dynamic`](https://huggingface.co/ogkalu/lama-manga-onnx-dynamic) — an
+Apache-2.0 ONNX export of [`dreMaz/AnimeMangaInpainting`](https://huggingface.co/dreMaz/AnimeMangaInpainting),
+pinned to an exact commit and checksum-verified by the fetch script. It replaced the fixed-512
+`Carve/LaMa-ONNX` export on 2026-09-08 (see `src/lib.rs` for why); the fetch script only followed in
+#329, so release images up to 1.0.0-beta.7 carry no usable inpainting model.
 
 Fetch it for local development with:
 
@@ -24,7 +26,7 @@ Fetch it for local development with:
 
 ## Model discovery
 
-`model_discovery.rs` resolves the directory holding `lama_fp32.onnx` by taking the **first match**
+`model_discovery.rs` resolves the directory holding `lama-manga-dynamic.onnx` by taking the **first match**
 from this search path (same pattern as `lanrurugi-ocr::model_discovery`):
 
 1. `LANRURUGI_INPAINT_MODEL_DIR` — explicit override, wins over everything.
@@ -49,10 +51,11 @@ this crate (one LaMa call per text region against a small padded crop) was tried
 after hitting cross-region context pollution and irregular-small-hole degradation in practice; see
 `Inpainter::erase_page`'s own doc comment for the full history.
 
-The page is letterboxed (aspect-ratio-preserving scale + centred mid-grey pad), not stretched,
-into the model's fixed 512x512 input — matching `zyddnys/manga-image-translator`'s own
-`resize_keep_aspect`. The output is cropped back to the real content and resized back up to the
-page's own true size before masked pixels are pasted back in.
+A page whose longer edge exceeds `MAX_INPAINT_SIZE` is first scaled down, keeping its aspect ratio
+(never squeezed into a square); both sides are then edge-padded up to a multiple of 8, which this
+export requires — matching `zyddnys/manga-image-translator`'s own `resize_keep_aspect` and
+`pad_size = 8`. The output is cropped back to the real content and scaled back up to the page's own
+size before masked pixels are pasted back in.
 
 ## Execution provider
 
