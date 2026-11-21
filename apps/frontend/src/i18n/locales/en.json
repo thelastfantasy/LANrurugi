@@ -2377,7 +2377,7 @@
   "stats.zoomHint": "Ctrl/⌘ + wheel to zoom, drag to pan · click a bar or point for its archives · Shift+click to merge a range",
   "stats.rangeTruncated": "Older history exists but is beyond what this page loads at once.",
   "library.searchSyntaxProgressBand": "Progress band, as a percentage of the page count:",
-  "stats.searchThisTag": "Search the library for {{tag}}",
+  "stats.searchReadWithTag": "Search read archives tagged {{tag}}",
   "stats.searchThisQuery": "Search the library for: {{query}}",
   "stats.progressBucket.1_20": "1-20%",
   "stats.progressBucket.21_40": "21-40%",
