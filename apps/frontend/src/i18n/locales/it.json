@@ -502,5 +502,15 @@
   "upload.transferringCountHint": "Attività che stanno trasferendo byte (esclusa la scrittura nella libreria).",
   "reader.autoInfiniteScrollNarrow": "Attiva automaticamente su smartphone",
   "reader.autoInfiniteScrollNarrowDesc": "Usa sempre lo scorrimento infinito quando lo schermo è largo 768px o meno (telefono in verticale); gli schermi più larghi mantengono la scelta qui sopra.",
-  "reader.infiniteScrollForcedByNarrow": "Larghezza smartphone: attivato dall'interruttore qui sotto."
+  "reader.infiniteScrollForcedByNarrow": "Larghezza smartphone: attivato dall'interruttore qui sotto.",
+  "settings.forceLowMemory": "Forza modalità a basso consumo di memoria",
+  "settings.forceLowMemoryDescription": "Attivo: l'elaborazione delle immagini usa sempre il livello a basso consumo, qualunque sia la memoria della macchina — meno immagini alla volta, meno memoria, caricamento più lento. Disattivo: il livello segue la memoria disponibile. Si applica al salvataggio, senza riavvio.",
+  "settings.memoryModeStatus": "Ora: {{tier}} ({{reason}}; {{thumbnails}} miniature e {{pages}} pagine alla volta)",
+  "settings.memoryTierNormal": "normale",
+  "settings.memoryTierLow": "basso consumo",
+  "settings.memoryReasonForced": "forzato",
+  "settings.memoryReasonDetected": "automatico · {{source}} {{size}}",
+  "settings.memoryReasonUnknown": "automatico · memoria non leggibile, funzionamento normale",
+  "settings.memorySourceContainer": "limite del container",
+  "settings.memorySourceMachine": "memoria della macchina"
 }

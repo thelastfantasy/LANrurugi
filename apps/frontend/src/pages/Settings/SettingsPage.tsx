@@ -99,6 +99,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
   const [archiveSplitSuggestionsEnabled, setArchiveSplitSuggestionsEnabled] = useState(settings.archive_split_suggestions_enabled)
   const [archiveSplitDeleteOriginalEnabled, setArchiveSplitDeleteOriginalEnabled] = useState(settings.archive_split_delete_original_enabled)
   const [ingestStrictVerify, setIngestStrictVerify] = useState(settings.ingest_strict_verify ?? false)
+  const [forceLowMemory, setForceLowMemory] = useState(settings.force_low_memory ?? false)
   const [guestmode, setGuestmode] = useState(settings.guestmode)
   const [idlescan, setIdlescan] = useState(settings.idlescan)
   const [newbadgemode, setNewbadgemode] = useState(settings.newbadgemode)
@@ -197,6 +198,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       archiveSplitSuggestionsEnabled !== settings.archive_split_suggestions_enabled ||
       archiveSplitDeleteOriginalEnabled !== settings.archive_split_delete_original_enabled ||
       ingestStrictVerify !== (settings.ingest_strict_verify ?? false) ||
+      forceLowMemory !== (settings.force_low_memory ?? false) ||
       guestmode !== settings.guestmode ||
       idlescan !== settings.idlescan ||
       accessTokenLifetimeSecs !== settings.access_token_lifetime_secs ||
@@ -231,7 +233,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
       htmltitle, language, pagesize, enableresize, sizethreshold, readerquality,
       localprogress, authprogress, stampautobookmark, stampautounbookmark, subfoldersToTankoubons,
       archiveSplitSuggestionsEnabled, archiveSplitDeleteOriginalEnabled, ingestStrictVerify,
-      guestmode, idlescan, accessTokenLifetimeSecs,
+      forceLowMemory, guestmode, idlescan, accessTokenLifetimeSecs,
       refreshTokenLifetimeSecs, refreshTokenIdleLifetimeSecs, maxLoginDevices,
       trustedOrigins, ssoAutoRedirect, enablecors, tempmaxsize,
       logMaxFileMb, logMaxFiles,
@@ -273,6 +275,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         archive_split_suggestions_enabled: archiveSplitSuggestionsEnabled,
         archive_split_delete_original_enabled: archiveSplitDeleteOriginalEnabled,
         ingest_strict_verify: ingestStrictVerify,
+        force_low_memory: forceLowMemory,
         guestmode,
         idlescan,
         access_token_lifetime_secs: accessTokenLifetimeSecs,
@@ -478,6 +481,9 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
               setArchiveSplitDeleteOriginalEnabled={setArchiveSplitDeleteOriginalEnabled}
               ingestStrictVerify={ingestStrictVerify}
               setIngestStrictVerify={setIngestStrictVerify}
+              forceLowMemory={forceLowMemory}
+              setForceLowMemory={setForceLowMemory}
+              memoryMode={settings.memory_mode ?? null}
               guestmode={guestmode}
               setGuestmode={setGuestmode}
               newbadgemode={newbadgemode}

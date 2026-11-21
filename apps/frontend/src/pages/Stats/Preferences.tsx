@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next"
 
 import type { StatsNamespaceTags, StatsOverview } from "@/api/types"
-import { getTagSearchURL } from "@/lib/tagFormat"
+import { buildSearchToken } from "@/lib/tagFormat"
 
 import { useChartPalette } from "./chartPalette"
 import { BarRow, LegendSwatch, StatsSection, StatsTable, useStatsPanel } from "./Charts"
@@ -11,6 +11,12 @@ import { formatPercent, seriesColor } from "./format"
  *  namespace name, exactly how the rest of the app namespaces tags. */
 function namespaceLabelKey(namespace: string): string {
   return `stats.prefNamespace.${namespace}`
+}
+
+/** The archives behind a tag's count here: only the read ones, as the statistics count them, not
+ *  every archive in the library carrying the tag. */
+function readTagSearchURL(namespace: string, tag: string): string {
+  return `/?q=${encodeURIComponent(`${buildSearchToken(namespace, tag, true)} is:read`)}`
 }
 
 /** One promoted axis (`language` / `artist` / `circle` / `cosplayer`) as its own block: its tags, each with
@@ -55,8 +61,8 @@ function HighlightBlock({
           valueLabel={t("stats.readArchivesValue", { count: tag.archives })}
           hint={formatPercent(tag.weight, total)}
           color={color}
-          href={getTagSearchURL(namespace, tag.text)}
-          linkTitle={t("stats.searchThisTag", { tag: `${namespace}:${tag.text}` })}
+          href={readTagSearchURL(namespace, tag.text)}
+          linkTitle={t("stats.searchReadWithTag", { tag: `${namespace}:${tag.text}` })}
         />
       ))}
     </div>
@@ -149,8 +155,8 @@ export function Preferences({ preferences }: { preferences: StatsOverview["prefe
                     max={maxTag}
                     valueLabel={t("stats.readArchivesValue", { count: tag.archives })}
                     color={seriesColor(palette, nsIndex)}
-                    href={getTagSearchURL(ns.namespace, tag.text)}
-                    linkTitle={t("stats.searchThisTag", { tag: `${ns.namespace}:${tag.text}` })}
+                    href={readTagSearchURL(ns.namespace, tag.text)}
+                    linkTitle={t("stats.searchReadWithTag", { tag: `${ns.namespace}:${tag.text}` })}
                   />
                 ))}
               </div>

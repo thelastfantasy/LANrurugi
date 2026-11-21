@@ -428,6 +428,20 @@ pub(crate) async fn read_ingest_strict_verify(state: &AppState) -> bool {
     }
 }
 
+/// #332: whether image work is held to the low-memory tier whatever the memory budget says (see
+/// `memory_mode`).
+pub(crate) async fn read_force_low_memory(state: &AppState) -> bool {
+    match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "force_low_memory")
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|v| v != "0"),
+        Err(_) => false,
+    }
+}
+
 /// issue #97: whether placing a stamp on a not-yet-bookmarked page should also bookmark it —
 /// read by `stamps.rs::add_stamp`. Same shape as [`read_new_badge_mode`] above.
 pub(crate) async fn read_stamp_autobookmark(state: &AppState) -> bool {
@@ -634,6 +648,9 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     // `conversion_slots`, so it shows up as the first page turn being slower, not as a load spike.
     ("enableresize", true),
     ("enablewebp", true),
+    // #332: hold image work to the low-memory tier on any machine. Off means the tier follows the
+    // memory budget (`memory_mode`); applied on save, no restart.
+    ("force_low_memory", false),
     // Use JPEG XL as the generated thumbnail format. JXL > WebP > JPEG for clients that advertise
     // JXL, with on-demand fallback generation for clients that do not; animated sources still use
     // animated WebP when re-encoding. Defaults on to match the intended format priority.
@@ -1046,6 +1063,10 @@ async fn get_settings(State(state): State<AppState>, headers: axum::http::Header
         "egress_binding".to_string(),
         json!({ "state": egress_binding, "interface": egress_interface }),
     );
+    body.insert(
+        "memory_mode".to_string(),
+        crate::memory_mode::current_json(),
+    );
 
     axum::Json(Value::Object(body)).into_response()
 }
@@ -1144,6 +1165,7 @@ async fn put_settings(
     // specs/019 — tightening either bin bound must take effect now, not on the next hourly sweep.
     let recycle_bounds_changed =
         fields.contains_key("recycle_retention_days") || fields.contains_key("recycle_max_size_gb");
+    let memory_mode_changed = fields.contains_key("force_low_memory");
     let new_enablewebp = fields.get("enablewebp").and_then(Value::as_bool);
     let previous_enablewebp = conn
         .hget::<_, _, Option<String>>(CONFIG_KEY, "enablewebp")
@@ -1391,6 +1413,11 @@ async fn put_settings(
                 tracing::warn!(error = %e, "failed to enforce max_login_devices after settings change")
             }
         }
+    }
+
+    // #332: the new tier applies to the running pools at once.
+    if memory_mode_changed {
+        crate::memory_mode::apply(&state).await;
     }
 
     if recycle_bounds_changed {
