@@ -1099,6 +1099,12 @@ async function handleRequest(req: PluginRequest) {
           ? normalizeDiscoveryResult(await mod.discover(req.args))
           : null;
         break;
+      case "refresh_sources":
+        // Optional, declared through `pluginInfo().capabilities`. Same result shape as `discover`.
+        result = typeof mod.refreshSources === "function"
+          ? normalizeDiscoveryResult(await mod.refreshSources(req.args))
+          : null;
+        break;
       case "canonicalize_source": {
         // Host-side `source:` tag comparison routes through the plugin's own normalizer when it
         // has one, so a site's domain-alias knowledge stays in the plugin that actually has it.

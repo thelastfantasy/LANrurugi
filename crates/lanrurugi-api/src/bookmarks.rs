@@ -513,7 +513,11 @@ async fn list_bookmarks_for_archive(
             let archive_path = std::path::Path::new(&archive.file);
             match lanrurugi_scanner::archive_format::list_pages(archive_path) {
                 Ok(names) => {
-                    let effective = lanrurugi_scanner::patch::effective_pages(archive_path, &names);
+                    let effective = lanrurugi_scanner::patch::effective_pages(
+                        archive_path,
+                        &names,
+                        archive.blake3.as_deref(),
+                    );
                     effective
                         .iter()
                         .enumerate()
@@ -916,8 +920,11 @@ async fn list_bookmarks_for_tankoubon(
                 let archive_path = std::path::Path::new(&archive.file);
                 match lanrurugi_scanner::archive_format::list_pages(archive_path) {
                     Ok(names) => {
-                        let effective =
-                            lanrurugi_scanner::patch::effective_pages(archive_path, &names);
+                        let effective = lanrurugi_scanner::patch::effective_pages(
+                            archive_path,
+                            &names,
+                            archive.blake3.as_deref(),
+                        );
                         effective
                             .iter()
                             .enumerate()

@@ -29,6 +29,8 @@ export interface ArchiveMetadata {
   archive_count: number | null
   /** Whether a sidecar `.patch.zip` exists; not present on a synthetic Tankoubon entry. */
   has_patch?: boolean
+  /** LANrurugi-only: names the current cover file; `null` while there is none. See `coverUrl`. */
+  cover_version?: string | null
   /** LANrurugi-only: whether an Archive split suggestion exists for this archive. */
   has_split_suggestion?: boolean
   /** LANrurugi-only, present only when `true`: the file is known to be unreadable (#291). */
@@ -630,6 +632,11 @@ export interface CheckCycle {
   finished_at: number
   outcome: CycleOutcome
   candidates_seen: number
+  /** Position in the subscription's sequence; absent on cycles stored before summaries. */
+  seq?: number
+  /** Candidates per verdict tag. Absent on cycles stored before summaries. */
+  verdict_counts?: Record<string, number>
+  /** Always filled by the detail endpoint, rebuilt from the snapshot for a summary. */
   candidates: CandidateRecord[]
 }
 
@@ -1101,7 +1108,9 @@ export interface PatchSource {
   archive_id: string
   name: string
   title: string
-  crc32: string
+  blake3: string
+  /** Only on records made before patches named their sources by BLAKE3. */
+  crc32?: string
   sites: string[]
 }
 

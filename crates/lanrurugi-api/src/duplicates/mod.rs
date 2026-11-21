@@ -124,16 +124,30 @@ async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, 
         .iter()
         .map(|a| (a.id.as_str().to_string(), a.file.clone()))
         .collect();
-    let candidates: Vec<(String, String)> = metas
+    let blake3s: HashMap<String, String> = archives
         .iter()
-        .filter_map(|m| files.get(&m.id).map(|f| (m.id.clone(), f.clone())))
+        .filter_map(|a| {
+            Some((
+                a.id.as_str().to_string(),
+                a.blake3.clone()?.to_ascii_lowercase(),
+            ))
+        })
         .collect();
-    let patch_states: HashMap<String, patching::PatchState> =
+    let candidates: Vec<(String, String, Option<String>)> = metas
+        .iter()
+        .filter_map(|m| {
+            files
+                .get(&m.id)
+                .map(|f| (m.id.clone(), f.clone(), blake3s.get(&m.id).cloned()))
+        })
+        .collect();
+    let mut patch_states: HashMap<String, patching::PatchState> =
         lanrurugi_core::concurrency::run_blocking(move || {
             candidates
                 .iter()
-                .filter_map(|(id, file)| {
-                    patching::patch_state(std::path::Path::new(file)).map(|s| (id.clone(), s))
+                .filter_map(|(id, file, blake3)| {
+                    patching::patch_state(std::path::Path::new(file), blake3.as_deref())
+                        .map(|s| (id.clone(), s))
                 })
                 .collect()
         })
@@ -171,7 +185,7 @@ async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, 
         .iter()
         .flat_map(|group| detect::regroup_by_pairs(group, &hashes_for_regroup))
         .collect();
-    attach_patch_info(&mut groups, &patch_states, &files).await?;
+    attach_patch_info(&mut groups, &mut patch_states, &files, &blake3s).await?;
 
     let mut conn = state.redis.config.get().await.map_err(|e| e.to_string())?;
     let _: Result<(), _> = conn.del(GROUPS_KEY).await;
@@ -204,42 +218,81 @@ async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, 
     Ok(groups.len())
 }
 
-/// Records each member's patch page count and which members' patches came from another member.
-/// Only groups with a patched member pay for the CRC32 of the others (a full read of each file).
+/// A patch whose sources are still CRC32s, with the files and BLAKE3s of the other members of its
+/// group — the only archives those CRC32s can still be matched against.
+struct LegacyPatch {
+    target: String,
+    file: String,
+    blake3: Option<String>,
+    others: Vec<(String, String)>,
+}
+
+/// Records each member's patch page count and which members' patches came from another member,
+/// by the members' BLAKE3s. A patch whose sources are still CRC32s is migrated first, which costs
+/// the CRC32 of the other members of its groups (a full read of each) once.
 async fn attach_patch_info(
     groups: &mut [GroupRecord],
-    patch_states: &HashMap<String, patching::PatchState>,
+    patch_states: &mut HashMap<String, patching::PatchState>,
     files: &HashMap<String, String>,
+    blake3s: &HashMap<String, String>,
 ) -> Result<(), String> {
-    let mut wanted: Vec<(String, String)> = Vec::new();
+    let mut legacy: Vec<LegacyPatch> = Vec::new();
     for group in groups.iter() {
-        if !group
-            .members
-            .iter()
-            .any(|id| patch_states.get(id).is_some_and(|p| !p.sources.is_empty()))
-        {
-            continue;
+        for target in &group.members {
+            if !patch_states
+                .get(target)
+                .is_some_and(|p| !p.legacy_sources.is_empty())
+            {
+                continue;
+            }
+            let Some(file) = files.get(target) else {
+                continue;
+            };
+            let others: Vec<(String, String)> = group
+                .members
+                .iter()
+                .filter(|m| *m != target)
+                .filter_map(|m| Some((files.get(m)?.clone(), blake3s.get(m)?.clone())))
+                .collect();
+            legacy.push(LegacyPatch {
+                target: target.clone(),
+                file: file.clone(),
+                blake3: blake3s.get(target).cloned(),
+                others,
+            });
         }
-        for id in &group.members {
-            if let Some(file) = files.get(id) {
-                if !wanted.iter().any(|(w, _)| w == id) {
-                    wanted.push((id.clone(), file.clone()));
-                }
+    }
+    if !legacy.is_empty() {
+        let migrated: Vec<(String, Vec<String>)> = lanrurugi_core::concurrency::run_blocking(move || {
+            legacy
+                .into_iter()
+                .filter_map(|LegacyPatch { target, file, blake3, others }| {
+                    let found: HashMap<String, String> = others
+                        .into_iter()
+                        .filter_map(|(path, hash)| {
+                            let crc = lanrurugi_scanner::patch::crc32_of_file(std::path::Path::new(&path)).ok()?;
+                            Some((crc.to_ascii_lowercase(), hash))
+                        })
+                        .collect();
+                    match patching::migrate_legacy_sources(std::path::Path::new(&file), blake3.as_deref(), &found) {
+                        Ok(sources) => Some((target, sources)),
+                        Err(e) => {
+                            tracing::warn!(id = %target, error = %e, "could not convert a patch's CRC32 sources");
+                            None
+                        }
+                    }
+                })
+                .collect()
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        for (target, sources) in migrated {
+            if let Some(state) = patch_states.get_mut(&target) {
+                state.sources = sources;
+                state.legacy_sources.clear();
             }
         }
     }
-    let crcs: HashMap<String, String> = lanrurugi_core::concurrency::run_blocking(move || {
-        wanted
-            .iter()
-            .filter_map(|(id, file)| {
-                lanrurugi_scanner::patch::crc32_of_file(std::path::Path::new(file))
-                    .ok()
-                    .map(|crc| (id.clone(), crc.to_ascii_lowercase()))
-            })
-            .collect()
-    })
-    .await
-    .map_err(|e| e.to_string())?;
 
     for group in groups.iter_mut() {
         for target in &group.members {
@@ -251,9 +304,9 @@ async fn attach_patch_info(
             }
             for source in &group.members {
                 if source != target
-                    && crcs
+                    && blake3s
                         .get(source)
-                        .is_some_and(|crc| patch.sources.contains(crc))
+                        .is_some_and(|hash| patch.sources.contains(hash))
                 {
                     group.patch_links.push(model::PatchLink {
                         target: target.clone(),

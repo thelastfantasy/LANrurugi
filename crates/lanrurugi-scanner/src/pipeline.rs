@@ -734,7 +734,13 @@ async fn catalogue_new_archive(
                     .primary_source
                     .clone()
                     .or_else(|| previous.as_ref().and_then(|s| s.primary_source.clone()));
-                sidecar.original_path = previous.map(|s| s.original_path).unwrap_or_default();
+                if let Some(previous) = previous {
+                    sidecar.original_path = previous.original_path;
+                    // Measured sizes stay valid as long as their file is unchanged, which
+                    // `FileDimensions::describes` checks whenever they are read.
+                    sidecar.page_dimensions = previous.page_dimensions;
+                    sidecar.patch_page_dimensions = previous.patch_page_dimensions;
+                }
                 Ok(sidecar)
             })
             .await;

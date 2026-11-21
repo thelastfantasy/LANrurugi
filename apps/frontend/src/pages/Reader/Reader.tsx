@@ -80,9 +80,8 @@ import {
 } from "@/lib/utils/imageFormatSupport";
 import type { PageMeta } from "@/lib/utils/imageMeta";
 import {
-  fetchContentLengthKb,
+  fetchPageFileInfo,
   fetchPageMeta,
-  fetchResizedPageInfo,
   type ResizedPageInfo,
 } from "@/lib/utils/imageMeta";
 import { isTankoubonId } from "@/lib/utils/isTankoubonId";
@@ -98,7 +97,7 @@ import { TRANSLATION_TARGET_LANGUAGES } from "@/translation/settings";
 import { useTranslationSettings } from "@/translation/useTranslationSettings";
 
 import { ArchiveOverviewOverlay } from "./ArchiveOverviewOverlay";
-import { BookmarkButton } from "./BookmarkButton";
+import { BookmarkButton, BookmarkNameSheet } from "./BookmarkButton";
 import {
   type ArchiveNavState,
   resolveAdjacentArchive,
@@ -178,6 +177,28 @@ const STEP_QUEUE_LIMIT = 10;
 const SEQUENTIAL_STEP_MS = 140;
 const TURN_SETTLE_TIMEOUT_MS = 2000;
 
+/**
+ * The box an infinite-scroll page of `dim` will occupy once loaded, for its `<img>` before then.
+ * A loaded page is `width: auto; max-width: 100%` (legacy's `.reader-image`), i.e. its natural width
+ * capped by the column and, in fit-height, by the height cap times its ratio — an image with no
+ * bytes yet has no natural width, so that cap is spelled out here. `auto` in the ratio lets the
+ * image's own ratio win as soon as it is known, so a wrong estimate never stretches the pixels.
+ */
+function infinitePlaceholderBox(
+  dim: { width: number; height: number },
+  imageStyle: React.CSSProperties,
+): React.CSSProperties {
+  const ratio = dim.width / dim.height;
+  const caps = ["100%", `${dim.width}px`];
+  if (imageStyle.maxHeight !== undefined) caps.push(`calc(${imageStyle.maxHeight} * ${ratio})`);
+  return {
+    aspectRatio: `auto ${dim.width} / ${dim.height}`,
+    // The skeleton's `min-height` is only for a page of unknown size.
+    minHeight: 0,
+    ...(imageStyle.width === undefined ? { width: `min(${caps.join(", ")})` } : {}),
+  };
+}
+
 /** Scrolls the window to `top` over `SEQUENTIAL_STEP_MS` (ease-out), resolving when it gets there —
  * or as soon as `cancelled()` says the reader took over, leaving the scroll where it is. A native
  * smooth scroll cannot be awaited, and its length is the browser's to pick. */
@@ -228,6 +249,24 @@ function waitFor(ready: () => boolean, timeoutMs: number): Promise<void> {
  * bare call inside the component body reads as render-time impurity to the hooks lint. */
 function nowMs(): number {
   return performance.now();
+}
+
+/** Infinite scroll: how far to scroll so a page sits where the reader expects it — centred when it
+ * fits the viewport, top edge at the top when it is taller. */
+function infiniteAlignOffset(rect: DOMRect): number {
+  return rect.height > window.innerHeight
+    ? rect.top
+    : rect.top + rect.height / 2 - window.innerHeight / 2;
+}
+
+/** Infinite scroll: the page under the viewport centre, or `null` between pages. */
+function infinitePageAtCentre(): number | null {
+  const mid = window.innerHeight / 2;
+  for (const el of document.querySelectorAll<HTMLElement>("img[data-page]")) {
+    const rect = el.getBoundingClientRect();
+    if (rect.top <= mid && rect.bottom >= mid) return Number(el.dataset.page);
+  }
+  return null;
 }
 
 /** Where the viewport sits now, for the diagnostics above and for the edge test `j`/`k` share. */
@@ -661,6 +700,18 @@ export function Reader() {
   // Touch infinite scroll: the page a long press brought the floating toolbar up on. The toolbar
   // stays until that page has scrolled completely out of view.
   const [infiniteToolbarPage, setInfiniteToolbarPage] = useState<number | null>(null);
+  // Touch devices: the bookmark being renamed in its sheet. While it is open the reader holds still
+  // (no toolbar auto-close, no re-pin, no page tracking): the keyboard opening resizes the viewport,
+  // and reacting to that scrolled the page, moved "current page" and closed the toolbar with the
+  // field in it.
+  const [bookmarkNameEdit, setBookmarkNameEdit] = useState<{
+    page: number;
+    name: string | null;
+  } | null>(null);
+  const holdViewportRef = useRef(false);
+  useEffect(() => {
+    holdViewportRef.current = bookmarkNameEdit !== null;
+  }, [bookmarkNameEdit]);
   const [moreSheetOpen, setMoreSheetOpen] = useState(false);
   const [infiniteToolbarEl, setInfiniteToolbarEl] = useState<HTMLDivElement | null>(null);
   // Shared by both toolbars, so changing the primary action in one updates the other too.
@@ -803,7 +854,7 @@ export function Reader() {
     );
     if (!img) return;
     const observer = new IntersectionObserver(([entry]) => {
-      if (!entry.isIntersecting) setInfiniteToolbarPage(null);
+      if (!entry.isIntersecting && !holdViewportRef.current) setInfiniteToolbarPage(null);
     });
     observer.observe(img);
     return () => observer.disconnect();
@@ -851,6 +902,22 @@ export function Reader() {
   const infiniteScrollCurrentPageRef = useRef<number | null>(null);
   const infiniteScrollResumedRef = useRef(false);
   const infiniteScrollResumePageRef = useRef<number | null>(null);
+  /**
+   * The page the infinite column loads around: the page under the viewport centre, but only once
+   * the scroll has slowed to reading speed. A `loading="lazy"` image starts its request as soon as
+   * it comes near the viewport and nothing cancels it, so a fast fling past thirty 6 MB pages used to
+   * queue thirty downloads in front of the page the reader finally stopped on. `first`/`last` are
+   * the pages then on screen, which load before any of their neighbours do.
+   */
+  /** Infinite scroll: pages whose `<img>` currently has a `src`. */
+  const infiniteRequestedRef = useRef<Set<number>>(new Set());
+  /** Infinite scroll: pages whose image failed, so the load tiers below them do not wait forever. */
+  const [infiniteFailedPages, setInfiniteFailedPages] = useState<Record<number, true>>({});
+  const [infiniteLoadView, setInfiniteLoadView] = useState<{
+    centre: number;
+    first: number;
+    last: number;
+  } | null>(null);
   const [archiveTransition, setArchiveTransition] = useState<{
     direction: "prev" | "next";
     /** Whether the finished work had *no* rating when this sheet opened. Snapshotted on purpose:
@@ -1055,7 +1122,9 @@ export function Reader() {
   // cover the pages whose real size is not known yet.
   const infiniteScrollResumeDimensions = usePageDimensions(
     isTank ? null : archiveId,
-    infiniteScrollResumePageRef.current ?? 0,
+    // At least one page even when reading from the start: its ratio is the estimate every page
+    // below is reserved at until it loads (see the column below).
+    infiniteScrollResumePageRef.current === null ? 0 : Math.max(infiniteScrollResumePageRef.current, 1),
     readerSettings.infiniteScroll,
   );
 
@@ -1458,6 +1527,9 @@ export function Reader() {
   // image itself is still being downloaded; dimensions fill in later when `onImageLoad` fires.
   useEffect(() => {
     if (!pages.data || !pages.data.pages.length) return
+    // Infinite scroll: a fling passes a page every frame, and two HEADs each tied up the connections
+    // the page it stops on needs. Ask only about the page under the viewport once it settles.
+    if (readerSettings.infiniteScroll && infiniteLoadView?.centre !== spread.left) return
     const pageNumbers =
       spread.right === null ? [spread.left] : [spread.left, spread.right]
     for (const page of pageNumbers) {
@@ -1471,22 +1543,20 @@ export function Reader() {
       // produces. Asking with the bare `pages[].url` queried a cache entry nothing ever wrote, so a
       // converted page fell back to its entry size (real report, 2026-11-04).
       const absoluteUrl = pageStreamUrl(page) ?? new URL(url, window.location.origin).toString()
-      void fetchContentLengthKb(absoluteUrl).then((kb) => {
-        if (kb !== null) {
+      void fetchPageFileInfo(absoluteUrl).then(({ sizeKb, resized }) => {
+        if (sizeKb !== null) {
           setPageSizesKb((prev) =>
-            prev[page] !== undefined ? prev : { ...prev, [page]: kb },
+            prev[page] !== undefined ? prev : { ...prev, [page]: sizeKb },
           )
         }
-      })
-      void fetchResizedPageInfo(absoluteUrl).then((info) => {
-        if (info !== null) {
+        if (resized !== null) {
           setResizedPageInfo((prev) =>
-            prev[page] !== undefined ? prev : { ...prev, [page]: info },
+            prev[page] !== undefined ? prev : { ...prev, [page]: resized },
           )
         }
       })
     }
-  }, [spread.left, spread.right, pageStreamUrl, pages.data]);
+  }, [spread.left, spread.right, pageStreamUrl, pages.data, readerSettings.infiniteScroll, infiniteLoadView?.centre]);
 
   useEffect(() => {
     if (!archiveId || totalPages === 0) return;
@@ -1707,23 +1777,57 @@ export function Reader() {
 
   /** Touch infinite scroll reads vertically, so a tap on the lower half scrolls forward by the `j`
    * step and one on the upper half back; the toolbar is a long press instead (see below). */
-  function onInfiniteScrollTap(clientY: number) {
+  /** `tappedPage` is the page image the tap landed on: its own lower half turns forward from it,
+   * its upper half back. A tap between pages falls back to the screen's halves and the page at the
+   * viewport centre. */
+  function onInfiniteScrollTap(clientY: number, tappedPage?: number) {
     // Some browsers (Firefox for Android) still send a click when a pinch lifts; that is no tap.
     if (multiTouchGestureRef.current) return;
-    const forward = clientY >= window.innerHeight / 2;
-    if (
-      forward &&
-      window.innerHeight + window.scrollY >=
-        document.documentElement.scrollHeight - 1
-    ) {
+    const pageEl = (page: number) =>
+      document.querySelector<HTMLElement>(`img[data-page="${page}"]`);
+    const tappedRect = tappedPage !== undefined ? pageEl(tappedPage)?.getBoundingClientRect() : undefined;
+    const forward = tappedRect
+      ? clientY >= tappedRect.top + tappedRect.height / 2
+      : clientY >= window.innerHeight / 2;
+    // Taps between pages in quick succession continue from the page the last one is still
+    // scrolling to.
+    const intent = infiniteIntentRef.current;
+    const pending = !tappedRect && intent !== null && nowMs() - intent.at < SCROLL_INTENT_MS;
+    const fromPage =
+      tappedRect && tappedPage !== undefined
+        ? tappedPage
+        : pending
+          ? intent.page
+          : (infinitePageAtCentre() ?? currentPage);
+    if (!pending) {
+      // A page taller than the screen is read through before it turns.
+      const rect = pageEl(fromPage)?.getBoundingClientRect();
+      if (rect && rect.height > window.innerHeight) {
+        const below = rect.bottom - window.innerHeight;
+        const above = -rect.top;
+        if (forward && below > 1) {
+          window.scrollBy({ top: Math.min(window.innerHeight, below), behavior: "smooth" });
+          return;
+        }
+        if (!forward && above > 1) {
+          window.scrollBy({ top: -Math.min(window.innerHeight, above), behavior: "smooth" });
+          return;
+        }
+      }
+    }
+    const nextPage = fromPage + (forward ? 1 : -1);
+    if (nextPage > totalPages) {
+      infiniteIntentRef.current = null;
       startArchiveTransition("next");
       return;
     }
-    const step =
-      readerSettings.jScrollUnit === J_SCROLL_UNIT.PX
-        ? readerSettings.jScrollAmount
-        : window.innerHeight * (readerSettings.jScrollAmount / 100);
-    window.scrollBy({ top: forward ? step : -step, behavior: "smooth" });
+    const target = nextPage >= 1 ? pageEl(nextPage) : null;
+    if (!target) return;
+    infiniteIntentRef.current = { page: nextPage, at: nowMs() };
+    window.scrollTo({
+      top: Math.max(0, Math.round(window.scrollY + infiniteAlignOffset(target.getBoundingClientRect()))),
+      behavior: "smooth",
+    });
   }
 
   function goToInfiniteScrollPage(
@@ -1941,6 +2045,85 @@ export function Reader() {
       });
   }
 
+  // Infinite scroll: scrolling on past the bottom opens the end-of-archive overlay, as a tap there
+  // does. A fling that only arrives at the bottom must not: its momentum keeps sending scroll and
+  // wheel events, so a gesture counts only once the page has been still at the bottom for a moment.
+  const startArchiveTransitionRef = useRef(startArchiveTransition);
+  useEffect(() => {
+    startArchiveTransitionRef.current = startArchiveTransition;
+  });
+  useEffect(() => {
+    if (!readerSettings.infiniteScroll || archiveTransition || overlay) return;
+    /** Still at the bottom for this long before a new gesture counts. */
+    const SETTLED_MS = 250;
+    /** Finger travel, or summed wheel delta, past the bottom that opens the overlay. */
+    const PULL_PX = 48;
+    let lastMotion = performance.now();
+    let wheelPull = 0;
+    let touchStartY: number | null = null;
+    const atBottom = () =>
+      window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 1;
+    const settled = () => atBottom() && performance.now() - lastMotion >= SETTLED_MS;
+    // Only on the pages themselves: a sheet, menu or toolbar over them is its own surface.
+    // (`.infinite-scroll` is also on `<body>`, so the page column is tested by its ref.)
+    const onPages = (target: EventTarget | null) =>
+      target instanceof Node && infiniteScrollRootRef.current?.contains(target) === true;
+    const open = () => {
+      wheelPull = 0;
+      touchStartY = null;
+      startArchiveTransitionRef.current("next");
+    };
+
+    const onScroll = () => {
+      lastMotion = performance.now();
+      wheelPull = 0;
+    };
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY <= 0 || !onPages(e.target)) {
+        wheelPull = 0;
+        return;
+      }
+      if (!settled()) {
+        // A momentum stream at the bottom moves nothing, so it is its own motion.
+        lastMotion = performance.now();
+        wheelPull = 0;
+        return;
+      }
+      wheelPull += e.deltaMode === WheelEvent.DOM_DELTA_LINE ? e.deltaY * 16 : e.deltaY;
+      if (wheelPull >= PULL_PX) open();
+    };
+    const onTouchStart = (e: TouchEvent) => {
+      touchStartY =
+        e.touches.length === 1 && onPages(e.target) && settled() ? e.touches[0].clientY : null;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (touchStartY === null) return;
+      if (e.touches.length !== 1) {
+        touchStartY = null;
+        return;
+      }
+      if (touchStartY - e.touches[0].clientY >= PULL_PX) open();
+    };
+    const onTouchEnd = () => {
+      touchStartY = null;
+    };
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("wheel", onWheel, { passive: true });
+    window.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchmove", onTouchMove, { passive: true });
+    window.addEventListener("touchend", onTouchEnd, { passive: true });
+    window.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("wheel", onWheel);
+      window.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", onTouchEnd);
+      window.removeEventListener("touchcancel", onTouchEnd);
+    };
+  }, [readerSettings.infiniteScroll, archiveTransition, overlay]);
+
   // Headless hides the chrome, so the page's own click surface no longer covers the screen: the
   // whole viewport becomes the turn target, split down the middle like the page itself. The image
   // link already turns pages and calls `preventDefault`, the loading placeholder does the same, and
@@ -2047,6 +2230,7 @@ export function Reader() {
     if (page > 0) {
       mainReadyRef.current[page] = true;
       setMainReady((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
+      setInfiniteFailedPages((prev) => (prev[page] ? prev : { ...prev, [page]: true }));
     }
     // A failed JXL load means the capability probe lied (Firefox Android decodes some samples but
     // not every page). Downgrade this tab to WebP and retry the same URL once, so the reader never
@@ -2132,19 +2316,18 @@ export function Reader() {
     // Same URL the `<img>` itself loaded (see the file-info note in the prefetch effect above):
     // the served-size header only exists for the cache entry this exact variant writes.
     const originalUrl = pageStreamUrl(page) ?? pages.data?.pages[page - 1]?.url ?? img.src;
-    if (pageSizesKb[page] === undefined) {
-      void fetchContentLengthKb(originalUrl).then((kb) => {
-        if (kb !== null) setPageSizesKb((prev) => ({ ...prev, [page]: kb }));
-      });
-    }
-    // One cache-bypassing HEAD per painted page. Deliberately unconditional: this request is what
+    // One cache-bypassing HEAD per painted page, which also fills in the entry size if the earlier
+    // HEAD has not. Deliberately unconditional: this request is what
     // makes the numbers *final*, because the conversion that just produced these bytes is what
     // writes the cache entry (and its size) the first HEAD could not have seen. Gating it on "no
     // info yet" left pages stuck on their entry size whenever a fast page turn raced the earlier
     // request (real report, 2026-11-04: flipping quickly showed the plain line).
     if (!servedInfoReverifiedRef.current.has(page)) {
       servedInfoReverifiedRef.current.add(page);
-      void fetchResizedPageInfo(originalUrl, { fresh: true }).then((info) => {
+      void fetchPageFileInfo(originalUrl, { fresh: true }).then(({ sizeKb, resized: info }) => {
+        if (sizeKb !== null) {
+          setPageSizesKb((prev) => (prev[page] !== undefined ? prev : { ...prev, [page]: sizeKb }));
+        }
         // Store the `null` too: a fresh HEAD saying "served as-is" is a *settled* answer, and the
         // bar can then show the plain line without waiting forever. A cached HEAD's `null` is not
         // trusted (it can predate the page's conversion), which is why the prefetch above ignores
@@ -2732,8 +2915,7 @@ export function Reader() {
     // be centred without cutting off both ends — lands with its own top edge on the viewport's top,
     // i.e. the reader starts at the beginning of that page. Computed rather than left to
     // `scrollIntoView`, whose `block:"center"` silently top-aligns the tall case and rounds the rest.
-    const alignFor = (rect: DOMRect) =>
-      rect.height > window.innerHeight ? rect.top : rect.top + rect.height / 2 - window.innerHeight / 2;
+    const alignFor = infiniteAlignOffset;
     const pin = (el: HTMLElement | null) => {
       // A re-render can replace the column's nodes, leaving the element we pinned against detached:
       // its rect is all zeroes, which would silently scroll the reader away instead of re-pinning.
@@ -2758,6 +2940,9 @@ export function Reader() {
       // it, but hooking `load` makes the correction land on that exact frame instead of the next one.
       const target0 = targetOf();
       target0?.addEventListener("load", () => {
+        // On a slow link the resumed page can finish long after the reader has scrolled elsewhere;
+        // re-pinning then yanked them back to where the reader opened.
+        if (pinnedPage() === null) return;
         const el = targetOf();
         if (el) pin(el);
       }, { once: true });
@@ -2768,6 +2953,9 @@ export function Reader() {
           ? []
           : all.filter((img) => Number((img.closest("[data-page]") ?? img).getAttribute("data-page")) < pin);
       };
+      // A page outside the load window has no `src` and nothing left to settle.
+      const settled = (img: HTMLImageElement) =>
+        !img.getAttribute("src") || (img.complete && img.naturalHeight > 0);
       const tick = () => {
         if (pinnedPage() === null) {
           holding = false;
@@ -2788,7 +2976,7 @@ export function Reader() {
         // Keep holding until everything above the target has actually decoded: on a phone that is
         // several seconds, and stopping on a fixed timer just lets the last images drag the page
         // away after the fact. A page still loading keeps `steadyFrames` reset anyway.
-        const aboveSettled = pagesAbove().every((img) => img.complete && img.naturalHeight > 0);
+        const aboveSettled = pagesAbove().every(settled);
         if (steadyFrames >= 45 && aboveSettled) {
           holding = false;
           return;
@@ -2869,7 +3057,7 @@ export function Reader() {
     let rafId: number | null = null;
     function updateCurrentPageFromScroll() {
       rafId = null;
-      if (performance.now() < reflowGuardUntil) return;
+      if (performance.now() < reflowGuardUntil || holdViewportRef.current) return;
       if (!root) return;
       const viewportMid = window.innerHeight / 2;
       const images = root.querySelectorAll<HTMLElement>("[data-page]");
@@ -2891,7 +3079,47 @@ export function Reader() {
         break;
       }
     }
+    // Moves the load window to the pages on screen. Called directly while the scroll is slow enough
+    // to read along, and only after it comes to rest during a fling.
+    function settleLoadPage() {
+      if (!root) return;
+      const viewportMid = window.innerHeight / 2;
+      let centre: number | null = null;
+      let first: number | null = null;
+      let last: number | null = null;
+      for (const img of root.querySelectorAll<HTMLElement>("[data-page]")) {
+        const rect = img.getBoundingClientRect();
+        if (rect.bottom <= 0) continue;
+        if (rect.top >= window.innerHeight) break;
+        const page = Number(img.dataset.page);
+        if (Number.isNaN(page)) continue;
+        first ??= page;
+        last = page;
+        if (rect.top <= viewportMid && rect.bottom >= viewportMid) centre = page;
+      }
+      if (first === null || last === null) return;
+      const view = { centre: centre ?? first, first, last };
+      setInfiniteLoadView((prev) =>
+        prev?.centre === view.centre && prev.first === view.first && prev.last === view.last
+          ? prev
+          : view,
+      );
+    }
+    /** Faster than this (viewport heights per second) is skimming, not reading. */
+    const SKIM_SPEED = 1.5;
+    const LOAD_SETTLE_MS = 150;
+    let lastScrollY = window.scrollY;
+    let lastScrollAt = performance.now();
+    let settleTimer: number | undefined;
     function onScroll() {
+      const now = performance.now();
+      const speed =
+        (Math.abs(window.scrollY - lastScrollY) / Math.max(1, now - lastScrollAt)) * 1000;
+      lastScrollY = window.scrollY;
+      lastScrollAt = now;
+      window.clearTimeout(settleTimer);
+      if (speed < window.innerHeight * SKIM_SPEED) settleLoadPage();
+      else settleTimer = window.setTimeout(settleLoadPage, LOAD_SETTLE_MS);
       if (rafId !== null) return;
       rafId = requestAnimationFrame(updateCurrentPageFromScroll);
     }
@@ -2899,6 +3127,9 @@ export function Reader() {
 
     const reflow = () => {
       reflowGuardUntil = performance.now() + REFLOW_GUARD_MS;
+      // Keyboard up for a bookmark name: hold the page where it is. Closing the keyboard resizes
+      // again once the hold is off, which puts the anchored page back.
+      if (holdViewportRef.current) return;
       const page = pinnedPage();
       if (page !== null) {
         const el = root.querySelector<HTMLElement>(`[data-page="${page}"]`);
@@ -2947,21 +3178,41 @@ export function Reader() {
     });
     columnObserver.observe(root, { childList: true, subtree: true });
 
-    // A phone's viewport height is not constant: the address bar comes and goes, and every change
-    // moves the page under the viewport centre by half the difference. Re-applying the same
-    // alignment on resize keeps the resumed (or anchored) page where the reader left it.
-    window.addEventListener("resize", reflow);
-    window.visualViewport?.addEventListener("resize", reflow);
+    // A phone's viewport height is not constant: the address bar and toolbars come and go. While
+    // the resume pin holds, the same alignment is re-applied so the resumed page stays where it
+    // opened. Once the reader scrolls on their own, the browser keeps the content in place as its
+    // bars move; scrolling the anchored page back to the new centre on top of that jumped by half
+    // the bars' height whenever they reappeared late in a fling (real report). Only the anchor's
+    // baseline follows the viewport then — except for the first change after a keyboard hold
+    // (bookmark naming), which is the keyboard closing and has to put the page back.
+    let heldSinceBaseline = false;
+    const onViewportResize = () => {
+      if (holdViewportRef.current) {
+        heldSinceBaseline = true;
+        return;
+      }
+      if (pinnedPage() !== null || heldSinceBaseline) {
+        heldSinceBaseline = false;
+        reflow();
+        return;
+      }
+      reflowGuardUntil = performance.now() + REFLOW_GUARD_MS;
+      const anchor = infiniteScrollAnchorRef.current;
+      if (anchor?.el.isConnected) anchor.offset = alignFor(anchor.el.getBoundingClientRect());
+    };
+    window.addEventListener("resize", onViewportResize);
+    window.visualViewport?.addEventListener("resize", onViewportResize);
 
     return () => {
       unpin();
       window.clearTimeout(unpinTimer);
       window.removeEventListener("scroll", onScroll);
+      window.clearTimeout(settleTimer);
       GESTURE_EVENTS.forEach((type) =>
         window.removeEventListener(type, markGesture, { capture: true }),
       );
-      window.removeEventListener("resize", reflow);
-      window.visualViewport?.removeEventListener("resize", reflow);
+      window.removeEventListener("resize", onViewportResize);
+      window.visualViewport?.removeEventListener("resize", onViewportResize);
       if (rafId !== null) cancelAnimationFrame(rafId);
       columnObserver.disconnect();
       resizeObserver.disconnect();
@@ -3163,6 +3414,39 @@ export function Reader() {
   } else {
     outerStyle.maxWidth = "1200px";
   }
+
+  // Infinite scroll: the ratio reserved for pages nobody has measured yet, and the pages whose
+  // images may request bytes (see `infiniteLoadView`). Loaded pages keep their `src` regardless.
+  const resumeDims = infiniteScrollResumeDimensions.data?.dimensions;
+  const infiniteFallbackDim =
+    lastDimsRef.current ?? resumeDims?.findLast((dim) => dim != null) ?? null;
+  const infiniteResumePage = infiniteScrollResumePageRef.current ?? currentPage;
+  const loadView = infiniteLoadView ?? {
+    centre: infiniteResumePage,
+    first: infiniteResumePage - 1,
+    last: infiniteResumePage + 1,
+  };
+  // The page under the viewport centre goes first, then the rest of the screen, then the
+  // neighbours — each tier with the whole link to itself. Started together they split the
+  // bandwidth, and the page the reader is looking at took as long as all of them.
+  const infiniteLoaded = (from: number, to: number) => {
+    for (let page = Math.max(1, from); page <= Math.min(totalPages, to); page++) {
+      if (pageDimensions[page] === undefined && !infiniteFailedPages[page]) return false;
+    }
+    return true;
+  };
+  const infiniteCentreLoaded = infiniteLoaded(loadView.centre, loadView.centre);
+  const infiniteViewLoaded = infiniteCentreLoaded && infiniteLoaded(loadView.first, loadView.last);
+  const infiniteLoadRadius = Math.max(3, effectivePreload);
+  const infiniteInReach = (page: number) =>
+    page >= loadView.first - infiniteLoadRadius && page <= loadView.last + infiniteLoadRadius;
+  const infiniteMayLoad = (page: number) =>
+    // A request already under way is only cancelled once its page drops out of reach: reading
+    // slowly past a half-loaded page would otherwise throw away the bytes and start it over.
+    (infiniteRequestedRef.current.has(page) && infiniteInReach(page)) ||
+    page === loadView.centre ||
+    (infiniteCentreLoaded && page >= loadView.first && page <= loadView.last) ||
+    (infiniteViewLoaded && infiniteInReach(page));
 
   /** The tiny preview, pinned under the streaming page in the same box: it costs ~10 KB and paints
    * long before a full page does (the first frame of a 20 MB animation needs ~76 KB, a static scan
@@ -3504,6 +3788,11 @@ export function Reader() {
             bookmarked={isPageBookmarked}
             name={currentBookmark?.name}
             loggedIn={loggedIn}
+            onEditName={
+              supportsHover
+                ? undefined
+                : (page, name) => setBookmarkNameEdit({ page, name })
+            }
             onRequireLogin={() => {
               const template = t("reader.aHrefUrlLogin") ?? "";
               toast({
@@ -3832,6 +4121,11 @@ export function Reader() {
             bookmarked={isPageBookmarked}
             name={currentBookmark?.name}
             loggedIn={loggedIn}
+            onEditName={
+              supportsHover
+                ? undefined
+                : (page, name) => setBookmarkNameEdit({ page, name })
+            }
             onRequireLogin={() => {
               const template = t("reader.aHrefUrlLogin") ?? "";
               toast({
@@ -4255,15 +4549,23 @@ export function Reader() {
             >
               {pages.data.pages.map((url, i) => {
                 const hasRealHeight = pageDimensions[i + 1] !== undefined;
-                const resumeDim =
-                  infiniteScrollResumeDimensions.data?.dimensions[i];
+                // The box a page will end up in, reserved before it loads: its measured size, or
+                // the last page that did load (archives are nearly always uniform). A placeholder
+                // of any other height changed size on load, and with the column anchored on the
+                // page under the viewport centre, that shrink is what sank the page being read;
+                // the bytes already painted were also stretched to the wrong box until then.
+                const knownDim =
+                  infiniteScrollResumeDimensions.data?.dimensions[i] ?? infiniteFallbackDim;
                 const style: React.CSSProperties =
-                  !hasRealHeight && resumeDim
+                  !hasRealHeight && knownDim
                     ? {
                         ...imageStyle,
-                        aspectRatio: `${resumeDim.width} / ${resumeDim.height}`,
+                        ...infinitePlaceholderBox(knownDim, imageStyle),
                       }
                     : imageStyle;
+                const src = hasRealHeight || infiniteMayLoad(i + 1) ? url.url : undefined;
+                if (src) infiniteRequestedRef.current.add(i + 1);
+                else infiniteRequestedRef.current.delete(i + 1);
                 return (
                   <img
                     key={url.url}
@@ -4273,8 +4575,9 @@ export function Reader() {
                         ? "reader-image"
                         : "reader-image loading-placeholder"
                     }
-                    src={url.url}
-                    alt={`${t("reader.page")} ${i + 1}`}
+                    src={src}
+                    // Without a `src` the browser paints the alt text inside the reserved box.
+                    alt={src ? `${t("reader.page")} ${i + 1}` : ""}
                     loading="lazy"
                     draggable={false}
                     style={style}
@@ -4284,7 +4587,7 @@ export function Reader() {
                       // Headless also listens on the document; this tap is already handled.
                       e.preventDefault();
                       if (!supportsHover) {
-                        onInfiniteScrollTap(e.clientY);
+                        onInfiniteScrollTap(e.clientY, i + 1);
                         return;
                       }
                       const isLeftHalf = e.clientX < window.innerWidth / 2;
@@ -4579,6 +4882,15 @@ export function Reader() {
           <Suspense fallback={null}>
             <ShareDialog items={[shareItem]} onClose={() => setShareItem(null)} />
           </Suspense>
+        )}
+        {/* Owned here rather than by the toolbar's bookmark button: the toolbar may close or move
+            to another page while the name is being typed. */}
+        {archiveId && !supportsHover && (
+          <BookmarkNameSheet
+            archiveId={archiveId}
+            edit={bookmarkNameEdit}
+            onClose={() => setBookmarkNameEdit(null)}
+          />
         )}
         {showTankSplit && archiveId && isTank && (
           <TankoubonSplitModal

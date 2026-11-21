@@ -732,7 +732,7 @@ pub fn compare_archives_streaming(
 /// missing, unreadable or stale patch degrades to the plain list (`patch::effective_pages`).
 fn effective_page_list(path: &Path) -> Result<Vec<EffectivePage>> {
     let original = archive_format::list_pages(path)?;
-    Ok(patch::effective_pages(path, &original))
+    Ok(patch::effective_pages(path, &original, None))
 }
 
 fn is_patched(page: &EffectivePage) -> bool {

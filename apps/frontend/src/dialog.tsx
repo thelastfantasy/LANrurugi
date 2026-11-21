@@ -3,13 +3,13 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 
-import { ConfirmSheet, PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
+import { BottomSheet, ConfirmSheet, PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
 import { Tooltip } from "@/components/common-ui/Display"
 import { Checkbox, Input } from "@/components/common-ui/Form"
 import { SearchSyntaxHelp } from "@/components/Display"
 
 import { useStats } from "./api/hooks"
-import { PHONE_WIDTH_QUERY, useIsNarrowViewport } from "./hooks/useIsNarrowViewport"
+import { PHONE_QUERY, useIsNarrowViewport } from "./hooks/useIsNarrowViewport"
 import { useMenuPalette } from "./hooks/useMenuPalette"
 import { buildSearchToken } from "./lib/tagFormat"
 import { Z_DIALOG } from "./theme"
@@ -116,6 +116,8 @@ type DialogRequest =
       kind: "prompt"
       message: string
       defaultValue: string
+      placeholder: string
+      multiline: boolean
       resolve: (value: string | null) => void
     }
   | {
@@ -167,10 +169,16 @@ function setRequest(request: DialogRequest | null) {
   listeners.forEach((l) => l())
 }
 
-/** Drop-in replacement for `window.prompt` — resolves the entered string, or null if cancelled. */
-export function promptDialog(message: string, defaultValue = ""): Promise<string | null> {
+/** Drop-in replacement for `window.prompt` — resolves the entered string, or null if cancelled.
+ * The field's placeholder is `placeholder`, else the default value. `multiline` swaps the one-line
+ * input (Enter submits) for a growing textarea (Enter is a newline). */
+export function promptDialog(
+  message: string,
+  defaultValue = "",
+  { placeholder, multiline = false }: { placeholder?: string; multiline?: boolean } = {},
+): Promise<string | null> {
   return new Promise((resolve) => {
-    setRequest({ kind: "prompt", message, defaultValue, resolve })
+    setRequest({ kind: "prompt", message, defaultValue, placeholder: placeholder || defaultValue, multiline, resolve })
   })
 }
 
@@ -866,6 +874,7 @@ function TagSearchField({
   autoFocus,
   onEnter,
   placeholder,
+  inputStyle,
 }: {
   id: string
   value: string
@@ -873,6 +882,7 @@ function TagSearchField({
   autoFocus: boolean
   onEnter: () => void
   placeholder?: string
+  inputStyle?: React.CSSProperties
 }) {
   const stats = useStats()
   const [open, setOpen] = useState(false)
@@ -899,7 +909,7 @@ function TagSearchField({
         id={id}
         type="text"
         className="stdinput"
-        style={{ width: "100%", height: 25, boxSizing: "border-box" }}
+        style={{ width: "100%", height: 25, boxSizing: "border-box", ...inputStyle }}
         value={value}
         placeholder={placeholder}
         autoComplete="off"
@@ -936,7 +946,22 @@ function TagSearchField({
   )
 }
 
-function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategoryResult) => void; onCancel: () => void }) {
+/** Phone-sheet sizing for a text field: as tall as the sheet's confirm button, and 16px so iOS does
+ * not zoom the page on focus. */
+const SHEET_INPUT_STYLE: React.CSSProperties = { height: 48, padding: "0 12px", fontSize: 16, borderRadius: 6 }
+
+/** `sheet` is the phone layout inside a bottom sheet: larger controls, one full-width confirm
+ * button, and no cancel button — the sheet's own bar is cancel. */
+function NewCategoryForm({
+  onSubmit,
+  onCancel,
+  layout = "dialog",
+}: {
+  onSubmit: (value: NewCategoryResult) => void
+  onCancel: () => void
+  layout?: "dialog" | "sheet"
+}) {
+  const sheet = layout === "sheet"
   const { t } = useTranslation()
   const [name, setName] = useState("")
   const [isDynamic, setIsDynamic] = useState(false)
@@ -954,15 +979,17 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
   }
 
   return (
-    <div onKeyDown={(e) => e.key === "Escape" && onCancel()}>
-      <p style={{ fontWeight: "bold", margin: "0 0 12px" }}>{t("common.newCategory")}</p>
+    <div onKeyDown={(e) => e.key === "Escape" && onCancel()} style={sheet ? { padding: "8px 4px 0" } : undefined}>
+      <p style={{ fontWeight: "bold", margin: sheet ? "0 0 8px" : "0 0 12px", fontSize: sheet ? 15 : undefined }}>
+        {t("common.newCategory")}
+      </p>
       <div role="tablist" style={{ display: "flex", gap: 4, marginBottom: 12 }}>
         <button
           type="button"
           role="tab"
           aria-selected={!isDynamic}
           className={`favtag-btn${!isDynamic ? " toggled" : ""}`}
-          style={{ flex: 1 }}
+          style={{ flex: 1, ...(sheet ? { height: 36, fontSize: 15 } : {}) }}
           onClick={() => setIsDynamic(false)}
         >
           {t("app.staticCategory")}
@@ -972,7 +999,7 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
           role="tab"
           aria-selected={isDynamic}
           className={`favtag-btn${isDynamic ? " toggled" : ""}`}
-          style={{ flex: 1 }}
+          style={{ flex: 1, ...(sheet ? { height: 36, fontSize: 15 } : {}) }}
           onClick={() => setIsDynamic(true)}
         >
           {t("app.dynamicCategory")}
@@ -988,9 +1015,10 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
           id="new-category-name"
           type="text"
           className="stdinput"
-          style={{ width: "100%", height: 25, boxSizing: "border-box" }}
+          style={{ width: "100%", height: 25, boxSizing: "border-box", ...(sheet ? SHEET_INPUT_STYLE : {}) }}
           value={name}
           placeholder={t("app.myCategory") ?? undefined}
+          enterKeyHint={sheet && !isDynamic ? "done" : undefined}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !isDynamic) submit()
@@ -1021,14 +1049,78 @@ function NewCategoryForm({ onSubmit, onCancel }: { onSubmit: (value: NewCategory
             autoFocus={false}
             onEnter={submit}
             placeholder="language:chinese"
+            inputStyle={sheet ? SHEET_INPUT_STYLE : undefined}
           />
         </div>
       )}
-      <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
-        <input type="button" className="stdbtn" value={t("common.cancel") ?? "Cancel"} onClick={onCancel} />
-        <input type="button" className="stdbtn" value={t("common.ok") ?? "OK"} onClick={submit} />
-      </div>
+      {sheet ? (
+        // The confirm button sits in the sheet's footer and submits this form through `form=`.
+        <form
+          id={NEW_CATEGORY_SHEET_FORM}
+          onSubmit={(e) => {
+            e.preventDefault()
+            submit()
+          }}
+        />
+      ) : (
+        <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
+          <input type="button" className="stdbtn" value={t("common.cancel") ?? "Cancel"} onClick={onCancel} />
+          <input type="button" className="stdbtn" value={t("common.ok") ?? "OK"} onClick={submit} />
+        </div>
+      )}
     </div>
+  )
+}
+
+const NEW_CATEGORY_SHEET_FORM = "new-category-sheet-form"
+
+/** The phone form of the new-category dialog. The answer is reported once the sheet has slid
+ * away, like `ConfirmSheet`, so the host can unmount it in that callback. */
+function NewCategorySheet({
+  onSubmit,
+  onCancel,
+}: {
+  onSubmit: (value: NewCategoryResult) => void
+  onCancel: () => void
+}) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setOpen(true))
+    return () => cancelAnimationFrame(frame)
+  }, [])
+  const result = useRef<NewCategoryResult | null>(null)
+  return (
+    <BottomSheet
+      open={open}
+      onClose={() => setOpen(false)}
+      onExited={() => (result.current ? onSubmit(result.current) : onCancel())}
+      cancelLabel={t("common.cancel")}
+      // Opened from a category sheet or a drawer, so it covers them.
+      zIndex={Z_DIALOG}
+      aboveKeyboard
+      // Kept in view: with the keyboard up the form can be taller than the room left.
+      footer={
+        <button
+          type="submit"
+          form={NEW_CATEGORY_SHEET_FORM}
+          className="stdbtn"
+          // Same shape as `ConfirmSheet`'s confirm button.
+          style={{ display: "block", width: "100%", height: 48, fontSize: 16, borderRadius: 6 }}
+        >
+          {t("common.ok")}
+        </button>
+      }
+    >
+      <NewCategoryForm
+        layout="sheet"
+        onSubmit={(value) => {
+          result.current = value
+          setOpen(false)
+        }}
+        onCancel={() => setOpen(false)}
+      />
+    </BottomSheet>
   )
 }
 
@@ -1094,12 +1186,15 @@ function RenameArchiveForm({
 }
 
 /** Mounted once app-wide — renders whatever dialog the module-level API pushed. */
+const PROMPT_FIELD_STYLE: React.CSSProperties = { width: "100%", boxSizing: "border-box", marginBottom: 12, textAlign: "left" }
+const SHEET_FIELD_STYLE: React.CSSProperties = { ...PROMPT_FIELD_STYLE, fontSize: 16, borderRadius: 6 }
+
 export function DialogHost() {
   const { t, i18n } = useTranslation()
   const [, forceUpdate] = useState(0)
   const [typedConfirmation, setTypedConfirmation] = useState("")
   const [promptValue, setPromptValue] = useState("")
-  const phone = useIsNarrowViewport(PHONE_WIDTH_QUERY)
+  const phone = useIsNarrowViewport(PHONE_QUERY)
 
   useEffect(() => {
     const listener = () => forceUpdate((n) => n + 1)
@@ -1198,6 +1293,9 @@ export function DialogHost() {
     close()
   }
 
+  if (request.kind === "newCategory" && phone) {
+    return <NewCategorySheet key={requestKey(request)} onSubmit={submitNewCategory} onCancel={cancelNewCategory} />
+  }
   if (request.kind === "newCategory") {
     return createPortal(
       <>
@@ -1335,6 +1433,42 @@ export function DialogHost() {
   const onConfirm = request.kind === "prompt" ? submitPrompt : confirmYes
   const confirmationBlocked = requiredConfirmationWord !== null && typedConfirmation !== requiredConfirmationWord
 
+  if (phone && request.kind === "prompt") {
+    return (
+      <ConfirmSheet
+        key={requestKey(request)}
+        message={request.message}
+        icon={null}
+        aboveKeyboard
+        confirmLabel={t("common.ok") ?? "OK"}
+        cancelLabel={t("common.cancel") ?? "Cancel"}
+        onConfirm={submitPrompt}
+        onCancel={cancelPrompt}
+      >
+        {/* Sized like the sheet's confirm button; a one-line field's Enter submits the sheet's form. */}
+        {request.multiline ? (
+          <Input
+            rows={3}
+            value={promptValue}
+            onValueChange={(value) => setPromptValue(value)}
+            placeholder={request.placeholder || undefined}
+            autoFocus
+            style={{ ...SHEET_FIELD_STYLE, minHeight: 48, padding: "12px" }}
+          />
+        ) : (
+          <Input
+            value={promptValue}
+            onValueChange={(value) => setPromptValue(value)}
+            placeholder={request.placeholder || undefined}
+            autoFocus
+            enterKeyHint="done"
+            style={{ ...SHEET_FIELD_STYLE, height: 48, padding: "0 12px" }}
+          />
+        )}
+      </ConfirmSheet>
+    )
+  }
+
   if (phone && request.kind === "confirm") {
     return (
       <ConfirmSheet
@@ -1345,6 +1479,7 @@ export function DialogHost() {
         confirmLabel={t("common.ok") ?? "OK"}
         cancelLabel={t("common.cancel") ?? "Cancel"}
         confirmDisabled={confirmationBlocked}
+        aboveKeyboard={requiredConfirmationWord !== null}
         onConfirm={confirmYes}
         onCancel={confirmNo}
       >
@@ -1398,22 +1533,31 @@ export function DialogHost() {
           <i className="fa fa-exclamation-triangle fa-2x" style={{ color: "#d33" }} aria-hidden="true"></i>
         )}
         <div style={{ fontWeight: "bold", margin: request.kind === "confirm" ? "12px 0" : "0 0 12px" }}>{request.message}</div>
-        {request.kind === "prompt" && (
-          <Input
-            rows={1}
-            value={promptValue}
-            onValueChange={(value) => setPromptValue(value)}
-            placeholder={request.defaultValue || undefined}
-            autoFocus
-            style={{ width: "100%", boxSizing: "border-box", marginBottom: 12, textAlign: "left" }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault()
-                onConfirm()
-              }
-            }}
-          />
-        )}
+        {request.kind === "prompt" &&
+          (request.multiline ? (
+            <Input
+              rows={3}
+              value={promptValue}
+              onValueChange={(value) => setPromptValue(value)}
+              placeholder={request.placeholder || undefined}
+              autoFocus
+              style={PROMPT_FIELD_STYLE}
+            />
+          ) : (
+            <Input
+              value={promptValue}
+              onValueChange={(value) => setPromptValue(value)}
+              placeholder={request.placeholder || undefined}
+              autoFocus
+              style={PROMPT_FIELD_STYLE}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  onConfirm()
+                }
+              }}
+            />
+          ))}
         {requiredConfirmationWord !== null && (
           <div style={{ textAlign: "left", marginBottom: 12 }}>
             <label htmlFor="dialog-typed-confirmation" style={{ display: "block", fontSize: 13, marginBottom: 4 }}>

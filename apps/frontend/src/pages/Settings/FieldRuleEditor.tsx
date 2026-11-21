@@ -235,6 +235,8 @@ function RuleRow({
             className="stdinput"
             style={{ width: 90 }}
             step={0.1}
+            // What a source's rating means is not obvious from the number alone.
+            title={rule.field === "rating" ? t("subscriptions.ratingRuleHint") : undefined}
             value={numberDraft}
             onValueChange={(v) => {
               setNumberDraft(v);

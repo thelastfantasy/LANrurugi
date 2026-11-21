@@ -69,7 +69,10 @@ fn folded_title_member(eq: &Equivalence, title: &str, id: &str) -> String {
 
 /// Canonical tag index key. Lower-casing happens before `fold` so index and query sides apply the
 /// same order (grammar already lowercases query tokens).
-fn folded_tag_key(eq: &Equivalence, tag: &str) -> String {
+///
+/// `pub(crate)` for `engine::lookup_sources`, which must spell these keys exactly as the writer
+/// does — a second copy of the format would drift silently and just stop matching.
+pub(crate) fn folded_tag_key(eq: &Equivalence, tag: &str) -> String {
     format!("INDEX_{}", eq.fold(&tag.trim().to_lowercase()))
 }
 

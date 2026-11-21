@@ -93,6 +93,16 @@ pub fn run(merged: &Merged, policy: &Policy) -> Result<()> {
     // it explicitly, so forgetting one deny hands a guest token a write it should never have. That
     // is checkable, true today (0 violations), and the actual property the deny list maintains.
     const MUTATING: [&str; 4] = ["POST", "PUT", "PATCH", "DELETE"];
+
+    /// Mutating-verb routes a guest token may call anyway, because they only read.
+    ///
+    /// The gate below exists to stop a forgotten `deny` from handing a read-only token a write, so
+    /// an entry here is a reviewed decision, not a way around the rule: the route must have no
+    /// side effects. Keep the list tiny and say why each one is here.
+    ///
+    /// - `/api/archives/lookup`: batch "which archives carry these source tags". POST only because
+    ///   a few hundred URLs do not fit in a URL; the handler writes nothing.
+    const GUEST_TOKEN_READ_ONLY_POSTS: &[&str] = &["/api/archives/lookup"];
     for (path, method) in merged.operations.keys() {
         if !path.starts_with(AUTHENTICATED_PREFIX) {
             continue;
@@ -115,13 +125,14 @@ pub fn run(merged: &Merged, policy: &Policy) -> Result<()> {
         }
 
         if MUTATING.contains(&action.as_str())
+            && !GUEST_TOKEN_READ_ONLY_POSTS.contains(&path.as_str())
             && policy.allows(Role::TokenGuest, method.as_str(), path)
         {
             failures.push(format!(
                 "policy: {action} {path} is reachable by a guest token. A guest token is read-only \
                  (`token_guest` is granted `GET` and every mutating route denies it explicitly), so \
-                 add `p, token_guest, {path}, {action}, deny` — or, if a guest token genuinely should \
-                 be able to call this, record that decision on purpose."
+                 add `p, token_guest, {path}, {action}, deny`. Only a route that provably writes \
+                 nothing may join `GUEST_TOKEN_READ_ONLY_POSTS` instead."
             ));
         }
     }

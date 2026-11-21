@@ -14,6 +14,7 @@ export function ConfirmSheet({
   confirmLabel,
   cancelLabel,
   confirmDisabled = false,
+  aboveKeyboard = false,
   children,
   onConfirm,
   onCancel,
@@ -24,6 +25,8 @@ export function ConfirmSheet({
   confirmLabel: ReactNode
   cancelLabel: ReactNode
   confirmDisabled?: boolean
+  /** `children` holds a text field: keep the sheet on the on-screen keyboard (see `BottomSheet`). */
+  aboveKeyboard?: boolean
   /** Extra controls between the message and the button (e.g. a typed confirmation). */
   children?: ReactNode
   onConfirm: () => void
@@ -43,6 +46,7 @@ export function ConfirmSheet({
       cancelLabel={cancelLabel}
       // A confirmation can come from inside a modal or drawer, so it covers them.
       zIndex={Z_DIALOG}
+      aboveKeyboard={aboveKeyboard}
     >
       <div style={{ textAlign: "center", padding: "14px 4px 16px" }}>
         {icon && (
@@ -50,9 +54,18 @@ export function ConfirmSheet({
         )}
         <div style={{ fontWeight: "bold", fontSize: 15, marginTop: icon ? 12 : 0 }}>{message}</div>
       </div>
+      {/* A form, so Enter in a field among `children` submits through `requestSubmit()`. */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (confirmDisabled) return
+          confirmed.current = true
+          setOpen(false)
+        }}
+      >
       {children}
       <button
-        type="button"
+        type="submit"
         disabled={confirmDisabled}
         // `.stdbtn-danger` carries each theme's destructive colors; layout is inline.
         className={danger ? "stdbtn stdbtn-danger" : "stdbtn"}
@@ -65,13 +78,10 @@ export function ConfirmSheet({
           borderRadius: 6,
           ...(confirmDisabled ? { opacity: 0.5, cursor: "not-allowed" } : {}),
         }}
-        onClick={() => {
-          confirmed.current = true
-          setOpen(false)
-        }}
       >
         {confirmLabel}
       </button>
+      </form>
     </BottomSheet>
   )
 }

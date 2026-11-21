@@ -47,6 +47,9 @@ export function PendingApprovals({
 
   const nameOf = (id: string) => subscriptions.find((s) => s.id === id)?.name ?? id
   const busy = approve.isPending || dismiss.isPending
+  // Only rows still on the list count: an answered row leaves it at once (see `useApprovePending`),
+  // and a selection kept past that would offer to act on works that are already gone.
+  const chosenIds = items.filter((p) => selected.has(p.id)).map((p) => p.id)
   // Always grouped, even with one subscription: the heading is where its select-all and its name
   // live, which is what lets the rows drop a subscription column of their own.
   const groups = groupBySubscription(items, (p) => p.subscription_id)
@@ -76,8 +79,8 @@ export function PendingApprovals({
   }
 
   async function runApprove(ids: string[]) {
-    const result = await approve.mutateAsync(ids)
     setSelected(new Set())
+    const result = await approve.mutateAsync(ids)
     if (result.failures.length > 0) {
       // Named rather than summarised: a partial batch is reported as-is, so the user knows which
       // works did not make it into the queue instead of assuming all of them did.
@@ -110,18 +113,19 @@ export function PendingApprovals({
           type="button"
           className="stdbtn"
           style={ROW_BUTTON_STYLE}
-          disabled={busy || selected.size === 0}
-          value={t("subscriptions.approveSelected", { count: selected.size }) ?? undefined}
-          onClick={() => void runApprove([...selected])}
+          disabled={busy || chosenIds.length === 0}
+          value={t("subscriptions.approveSelected", { count: chosenIds.length }) ?? undefined}
+          onClick={() => void runApprove(chosenIds)}
         />
         <input
           type="button"
           className="stdbtn"
           style={ROW_BUTTON_STYLE}
-          disabled={busy || selected.size === 0}
-          value={t("subscriptions.dismissSelected", { count: selected.size }) ?? undefined}
+          disabled={busy || chosenIds.length === 0}
+          value={t("subscriptions.dismissSelected", { count: chosenIds.length }) ?? undefined}
           onClick={() => {
-            void dismiss.mutateAsync([...selected]).then(() => setSelected(new Set()))
+            setSelected(new Set())
+            void dismiss.mutateAsync(chosenIds)
           }}
         />
       </div>
