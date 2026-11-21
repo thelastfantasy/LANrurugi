@@ -9,7 +9,7 @@ import { Checkbox, Input } from "@/components/common-ui/Form"
 import { SearchSyntaxHelp } from "@/components/Display"
 
 import { useStats } from "./api/hooks"
-import { PHONE_WIDTH_QUERY, useIsNarrowViewport } from "./hooks/useIsNarrowViewport"
+import { PHONE_QUERY, useIsNarrowViewport } from "./hooks/useIsNarrowViewport"
 import { useMenuPalette } from "./hooks/useMenuPalette"
 import { buildSearchToken } from "./lib/tagFormat"
 import { Z_DIALOG } from "./theme"
@@ -116,6 +116,8 @@ type DialogRequest =
       kind: "prompt"
       message: string
       defaultValue: string
+      placeholder: string
+      multiline: boolean
       resolve: (value: string | null) => void
     }
   | {
@@ -167,10 +169,16 @@ function setRequest(request: DialogRequest | null) {
   listeners.forEach((l) => l())
 }
 
-/** Drop-in replacement for `window.prompt` — resolves the entered string, or null if cancelled. */
-export function promptDialog(message: string, defaultValue = ""): Promise<string | null> {
+/** Drop-in replacement for `window.prompt` — resolves the entered string, or null if cancelled.
+ * The field's placeholder is `placeholder`, else the default value. `multiline` swaps the one-line
+ * input (Enter submits) for a growing textarea (Enter is a newline). */
+export function promptDialog(
+  message: string,
+  defaultValue = "",
+  { placeholder, multiline = false }: { placeholder?: string; multiline?: boolean } = {},
+): Promise<string | null> {
   return new Promise((resolve) => {
-    setRequest({ kind: "prompt", message, defaultValue, resolve })
+    setRequest({ kind: "prompt", message, defaultValue, placeholder: placeholder || defaultValue, multiline, resolve })
   })
 }
 
@@ -1094,12 +1102,15 @@ function RenameArchiveForm({
 }
 
 /** Mounted once app-wide — renders whatever dialog the module-level API pushed. */
+const PROMPT_FIELD_STYLE: React.CSSProperties = { width: "100%", boxSizing: "border-box", marginBottom: 12, textAlign: "left" }
+const SHEET_FIELD_STYLE: React.CSSProperties = { ...PROMPT_FIELD_STYLE, fontSize: 16, borderRadius: 6 }
+
 export function DialogHost() {
   const { t, i18n } = useTranslation()
   const [, forceUpdate] = useState(0)
   const [typedConfirmation, setTypedConfirmation] = useState("")
   const [promptValue, setPromptValue] = useState("")
-  const phone = useIsNarrowViewport(PHONE_WIDTH_QUERY)
+  const phone = useIsNarrowViewport(PHONE_QUERY)
 
   useEffect(() => {
     const listener = () => forceUpdate((n) => n + 1)
@@ -1335,6 +1346,41 @@ export function DialogHost() {
   const onConfirm = request.kind === "prompt" ? submitPrompt : confirmYes
   const confirmationBlocked = requiredConfirmationWord !== null && typedConfirmation !== requiredConfirmationWord
 
+  if (phone && request.kind === "prompt") {
+    return (
+      <ConfirmSheet
+        key={requestKey(request)}
+        message={request.message}
+        icon={null}
+        confirmLabel={t("common.ok") ?? "OK"}
+        cancelLabel={t("common.cancel") ?? "Cancel"}
+        onConfirm={submitPrompt}
+        onCancel={cancelPrompt}
+      >
+        {/* Sized like the sheet's confirm button; a one-line field's Enter submits the sheet's form. */}
+        {request.multiline ? (
+          <Input
+            rows={3}
+            value={promptValue}
+            onValueChange={(value) => setPromptValue(value)}
+            placeholder={request.placeholder || undefined}
+            autoFocus
+            style={{ ...SHEET_FIELD_STYLE, minHeight: 48, padding: "12px" }}
+          />
+        ) : (
+          <Input
+            value={promptValue}
+            onValueChange={(value) => setPromptValue(value)}
+            placeholder={request.placeholder || undefined}
+            autoFocus
+            enterKeyHint="done"
+            style={{ ...SHEET_FIELD_STYLE, height: 48, padding: "0 12px" }}
+          />
+        )}
+      </ConfirmSheet>
+    )
+  }
+
   if (phone && request.kind === "confirm") {
     return (
       <ConfirmSheet
@@ -1398,22 +1444,31 @@ export function DialogHost() {
           <i className="fa fa-exclamation-triangle fa-2x" style={{ color: "#d33" }} aria-hidden="true"></i>
         )}
         <div style={{ fontWeight: "bold", margin: request.kind === "confirm" ? "12px 0" : "0 0 12px" }}>{request.message}</div>
-        {request.kind === "prompt" && (
-          <Input
-            rows={1}
-            value={promptValue}
-            onValueChange={(value) => setPromptValue(value)}
-            placeholder={request.defaultValue || undefined}
-            autoFocus
-            style={{ width: "100%", boxSizing: "border-box", marginBottom: 12, textAlign: "left" }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault()
-                onConfirm()
-              }
-            }}
-          />
-        )}
+        {request.kind === "prompt" &&
+          (request.multiline ? (
+            <Input
+              rows={3}
+              value={promptValue}
+              onValueChange={(value) => setPromptValue(value)}
+              placeholder={request.placeholder || undefined}
+              autoFocus
+              style={PROMPT_FIELD_STYLE}
+            />
+          ) : (
+            <Input
+              value={promptValue}
+              onValueChange={(value) => setPromptValue(value)}
+              placeholder={request.placeholder || undefined}
+              autoFocus
+              style={PROMPT_FIELD_STYLE}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  onConfirm()
+                }
+              }}
+            />
+          ))}
         {requiredConfirmationWord !== null && (
           <div style={{ textAlign: "left", marginBottom: 12 }}>
             <label htmlFor="dialog-typed-confirmation" style={{ display: "block", fontSize: 13, marginBottom: 4 }}>

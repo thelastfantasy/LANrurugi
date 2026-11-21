@@ -19,7 +19,7 @@ import {
 } from "@/components/common-ui/Display";
 import { RatingWidget } from "@/components/common-ui/Form";
 import {
-  PHONE_WIDTH_QUERY,
+  PHONE_QUERY,
   useIsNarrowViewport,
 } from "@/hooks/useIsNarrowViewport";
 import { useMenuPalette } from "@/hooks/useMenuPalette";
@@ -88,7 +88,7 @@ export function ArchiveContextMenu({
   const [categorySheetOpen, setCategorySheetOpen] = useState(false);
   const palette = useMenuPalette();
   // Phone width gets a bottom action sheet instead of the floating menu.
-  const narrow = useIsNarrowViewport(PHONE_WIDTH_QUERY);
+  const narrow = useIsNarrowViewport(PHONE_QUERY);
   const menuRef = useRef<HTMLUListElement | null>(null);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   // Geometry decided from the row's rect when the submenu opens: align with the row, then bound

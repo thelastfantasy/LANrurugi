@@ -96,9 +96,10 @@ pub(crate) async fn capture(state: &AppState, old_id: &ArchiveId) -> Option<Carr
 }
 
 /// The effective page list (what the reader numbers), with patch-sourced pages marked.
-fn effective_pages(path: &Path) -> Vec<EffectivePage> {
+/// `blake3` is the archive's record's, when the caller has it.
+fn effective_pages(path: &Path, blake3: Option<&str>) -> Vec<EffectivePage> {
     match lanrurugi_scanner::archive_format::list_pages(path) {
-        Ok(names) => lanrurugi_scanner::patch::effective_pages(path, &names),
+        Ok(names) => lanrurugi_scanner::patch::effective_pages(path, &names, blake3),
         Err(e) => {
             tracing::warn!(path = %path.display(), error = %e, "could not list pages to carry across a revision");
             Vec::new()
@@ -133,7 +134,7 @@ fn hashes_of(path: &Path, pages: &[EffectivePage]) -> Vec<Option<PageHash>> {
 }
 
 fn keys_for(path: &Path, wanted: &HashSet<u32>) -> HashMap<u32, PageKey> {
-    let pages = effective_pages(path);
+    let pages = effective_pages(path, None);
     let chosen: Vec<(u32, EffectivePage)> = pages
         .into_iter()
         .enumerate()
@@ -185,9 +186,11 @@ pub(crate) async fn apply(state: &AppState, plan: Carryover, new_id: &ArchiveId)
         return;
     };
     let file = new_archive.file.clone();
-    let new_pages = tokio::task::spawn_blocking(move || effective_pages(Path::new(&file)))
-        .await
-        .unwrap_or_default();
+    let blake3 = new_archive.blake3.clone();
+    let new_pages =
+        tokio::task::spawn_blocking(move || effective_pages(Path::new(&file), blake3.as_deref()))
+            .await
+            .unwrap_or_default();
     let new_names: Vec<String> = new_pages
         .iter()
         .map(|p| p.entry_name().to_string())

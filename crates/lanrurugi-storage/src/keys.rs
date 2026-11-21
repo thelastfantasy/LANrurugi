@@ -143,6 +143,17 @@ pub fn thumbnail_retry_key(archive_id: &str, page: u32) -> String {
     format!("LANRURUGI_THUMBNAIL_RETRY:{archive_id}:{page}")
 }
 
+/// Additive, LANrurugi-only. Natural sizes of an archive's first pages, as measured for the
+/// infinite-scroll resume (`GET /archives/{id}/page-dimensions`), with the file's size and mtime
+/// they were read at. Measuring means opening the archive; the sizes only change with the file.
+pub fn page_dimensions_key(archive_id: &str) -> String {
+    format!("LANRURUGI_PAGE_DIMENSIONS:{archive_id}")
+}
+
+/// 30 days, refreshed on every measurement: the fingerprint is what invalidates an entry, the
+/// expiry only cleans up after archives that are gone.
+pub const PAGE_DIMENSIONS_TTL_SECS: u64 = 30 * 24 * 60 * 60;
+
 /// 10 minutes: long enough that a page load's worth of thumbnails does not retry a file that is
 /// currently unreadable, short enough that a worker that came back is picked up on the next visit.
 pub const THUMBNAIL_RETRY_TTL_SECS: i64 = 10 * 60;

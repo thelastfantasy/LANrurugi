@@ -305,26 +305,33 @@ impl RawArchiveReader {
             0
         };
         let mut data = Vec::with_capacity(hint);
+        self.read_data_into(&mut data, usize::MAX)?;
+        Ok(data)
+    }
+
+    /// Appends the current entry's data to `data` until it holds at least `limit` bytes or the
+    /// entry ends; returns whether it ended. Calling it again continues where it stopped.
+    fn read_data_into(&mut self, data: &mut Vec<u8>, limit: usize) -> Result<bool> {
         let mut buf = [0u8; 8192];
-        unsafe {
-            loop {
-                let n = libarchive2_sys::archive_read_data(
+        while data.len() < limit {
+            let n = unsafe {
+                libarchive2_sys::archive_read_data(
                     self.handle,
                     buf.as_mut_ptr() as *mut std::os::raw::c_void,
                     buf.len(),
-                );
-                if n < 0 {
-                    return Err(ArchiveFormatError::Libarchive(Self::error_string(
-                        self.handle,
-                    )));
-                }
-                if n == 0 {
-                    break;
-                }
-                data.extend_from_slice(&buf[..n as usize]);
+                )
+            };
+            if n < 0 {
+                return Err(ArchiveFormatError::Libarchive(unsafe {
+                    Self::error_string(self.handle)
+                }));
             }
+            if n == 0 {
+                return Ok(true);
+            }
+            data.extend_from_slice(&buf[..n as usize]);
         }
-        Ok(data)
+        Ok(false)
     }
 
     fn skip_data(&mut self) -> Result<()> {
@@ -725,81 +732,119 @@ where
     Ok(())
 }
 
-/// Reads natural pixel dimensions for just the first `count` pages (natural-sort order, same as
-/// [`list_pages`] — so callers can zip this 1:1 against a prior `list_pages`/`/files` result by
-/// index), leaving every page beyond that entirely unread. Used only for infinite-scroll's resume-
-/// position jump: an unloaded `<img>` needs a real height reserved for every page *before* wherever
-/// tracked progress is about to scroll to, or the jump lands short/long depending on how wrong the
-/// generic loading-placeholder guess was for that archive — but nothing after the resume point
-/// needs measuring up front at all, it's reached by the reader's own normal lazy-scroll from there.
-/// Reading `count` unconditionally instead (or literally every page) would make this endpoint's
-/// cost scale with however deep someone's progress happens to be — or with total archive size
-/// regardless of progress — defeating the same "don't fetch more than what's about to be shown"
-/// reasoning that motivated lazy-loading the actual page images in the first place, just moved
-/// server-side.
+/// Natural pixel width/height of the named entries, in the order given; `None` for a name that is
+/// missing or not a readable image, rather than failing the whole batch.
 ///
-/// Two passes, deliberately: libarchive is a forward-only stream with no cheap random access, so
-/// pass one (every entry's name, `skip_data`-ing all of them — the same cheap walk [`list_pages`]
-/// already does) is what makes "the first `count` pages" a well-defined, natural-sort-stable set
-/// before pass two re-opens the archive and actually reads bytes for only that set, `skip_data`-ing
-/// everything else. Total work is proportional to `count`, not to how far into the archive those
-/// `count` wanted entries physically sit.
-///
-/// `into_dimensions` reads just enough of each wanted entry to parse its header (no full pixel
-/// decode/color-conversion — the expensive part `resize.rs`/`thumbnail.rs` both pay for real
-/// thumbnail generation, and pointless overhead here since only the width/height ever get used). A
-/// single corrupted/unrecognized-format entry yields `None` at its position rather than failing the
-/// whole batch, matching `fetch_page`'s own per-page tolerance for corrupted pages elsewhere in
-/// this codebase.
-pub fn read_page_dimensions(path: &Path, count: usize) -> Result<Vec<Option<(u32, u32)>>> {
+/// Only the first [`DIMENSION_PROBE_BYTES`] of each entry are read and parsed, then dropped; the
+/// whole entry only when its header does not fit in that. Holding every page's full bytes until the
+/// end cost gigabytes for a resume deep into a large archive, enough for the host's OOM killer to
+/// take the server down. A ZIP is probed through its central directory, so the entries in between
+/// are never decompressed; other formats take one forward pass that stops at the last wanted name.
+pub fn read_page_dimensions(path: &Path, names: &[String]) -> Result<Vec<Option<(u32, u32)>>> {
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
     if is_book(path) {
-        // Known from inspection, without producing a single page.
+        // Known from inspection, without producing a single page; pages are listed in that order.
         let info = lanrurugi_book::inspect(path)?;
-        return Ok(info
-            .sizes
+        let listed = list_pages(path)?;
+        return Ok(names
             .iter()
-            .take(count)
-            .map(|&size| Some(size))
+            .map(|name| {
+                let index = listed.iter().position(|n| n == name)?;
+                info.sizes.get(index).copied()
+            })
             .collect());
     }
     if !is_supported_archive(path) {
         return Err(ArchiveFormatError::UnsupportedExtension(extension_of(path)));
     }
-    if count == 0 {
-        return Ok(Vec::new());
+
+    if zip_random_access_eligible(path) {
+        if let Some(dimensions) = read_page_dimensions_via_zip(path, names) {
+            return Ok(dimensions);
+        }
     }
 
-    let mut names = list_pages(path)?;
-    names.truncate(count);
-    let wanted: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
-
-    let mut found: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
+    let mut wanted: std::collections::HashMap<&str, usize> = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| (name.as_str(), index))
+        .collect();
+    let mut out = vec![None; names.len()];
     let mut archive = RawArchiveReader::open(path)?;
     while let Some(entry) = archive.next_entry()? {
         if entry.is_regular_file {
             let name = decode_archive_name(&entry.name_bytes);
-            if wanted.contains(name.as_str()) {
-                found.insert(name, archive.read_data_to_vec()?);
-                if found.len() == wanted.len() {
+            if let Some(index) = wanted.remove(name.as_str()) {
+                let mut bytes = Vec::new();
+                let ended = archive.read_data_into(&mut bytes, DIMENSION_PROBE_BYTES)?;
+                out[index] = match dimensions_of(&bytes) {
+                    Some(size) => Some(size),
+                    None if !ended => {
+                        archive.read_data_into(&mut bytes, usize::MAX)?;
+                        dimensions_of(&bytes)
+                    }
+                    None => None,
+                };
+                if wanted.is_empty() {
                     break;
                 }
-                continue;
             }
         }
         archive.skip_data()?;
     }
+    Ok(out)
+}
 
-    Ok(names
-        .into_iter()
-        .map(|name| {
-            found.remove(&name).and_then(|bytes| {
-                crate::image_decode::image_reader(std::io::Cursor::new(bytes))
-                    .with_guessed_format()
-                    .ok()
-                    .and_then(|reader| reader.into_dimensions().ok())
-            })
-        })
-        .collect())
+/// How much of a page [`read_page_dimensions`] reads to find its size. Generous for a header —
+/// a JPEG's EXIF block, which can carry its own thumbnail, sits before the frame header and is
+/// capped at 64 KiB — and still a small fraction of a typical page.
+const DIMENSION_PROBE_BYTES: usize = 256 * 1024;
+
+fn dimensions_of(bytes: &[u8]) -> Option<(u32, u32)> {
+    crate::image_decode::image_reader(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()
+}
+
+/// [`read_page_dimensions`] through the zip central directory: each page is a seek plus the first
+/// [`DIMENSION_PROBE_BYTES`] of its own decompression. `None` under the same conditions as
+/// [`read_entries_via_zip`], so the forward scan then decides.
+fn read_page_dimensions_via_zip(path: &Path, names: &[String]) -> Option<Vec<Option<(u32, u32)>>> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+    let mut out = Vec::with_capacity(names.len());
+    for name in names {
+        let mut bytes = Vec::new();
+        match archive.by_name(name) {
+            Ok(entry) => {
+                entry
+                    .take(DIMENSION_PROBE_BYTES as u64)
+                    .read_to_end(&mut bytes)
+                    .ok()?;
+            }
+            Err(zip::result::ZipError::FileNotFound) => {
+                out.push(None);
+                continue;
+            }
+            Err(_) => return None,
+        }
+        let size = match dimensions_of(&bytes) {
+            Some(size) => Some(size),
+            None if bytes.len() >= DIMENSION_PROBE_BYTES => {
+                bytes.clear();
+                archive.by_name(name).ok()?.read_to_end(&mut bytes).ok()?;
+                dimensions_of(&bytes)
+            }
+            None => None,
+        };
+        out.push(size);
+    }
+    Some(out)
 }
 
 /// SHA-1 of each named entry's bytes, in the order given; `None` for a name not in the archive, and
@@ -1225,6 +1270,88 @@ mod tests {
     fn read_entries_returns_empty_for_an_empty_request() {
         let f = make_test_zip_with_ext("zip", &["page1.jpg"]);
         assert_eq!(read_entries(f.path(), &[]).unwrap(), Vec::new());
+    }
+
+    /// A noisy JPEG, so it compresses badly; with `pad_header`, comment segments push its frame
+    /// header past [`DIMENSION_PROBE_BYTES`].
+    fn big_jpeg(width: u32, height: u32, pad_header: bool) -> Vec<u8> {
+        let mut seed = 0x9e37_79b9u32;
+        let img = image::RgbImage::from_fn(width, height, |_, _| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            image::Rgb([seed as u8, (seed >> 8) as u8, (seed >> 16) as u8])
+        });
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95)
+            .encode_image(&img)
+            .unwrap();
+        if pad_header {
+            let mut padded = jpeg[..2].to_vec();
+            for _ in 0..(DIMENSION_PROBE_BYTES / 65_000 + 1) {
+                padded.extend_from_slice(&[0xFF, 0xFE, 0xFF, 0xFF]);
+                padded.extend(std::iter::repeat_n(b'x', 0xFFFF - 2));
+            }
+            padded.extend_from_slice(&jpeg[2..]);
+            jpeg = padded;
+        }
+        jpeg
+    }
+
+    #[test]
+    fn read_page_dimensions_reads_headers_through_both_paths() {
+        let mut png = Vec::new();
+        image::RgbImage::new(30, 70)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let entries: Vec<(&str, Vec<u8>)> = vec![
+            ("01.jpg", big_jpeg(640, 900, false)),
+            ("02.jpg", big_jpeg(500, 400, true)),
+            ("03.png", png),
+            ("04.jpg", b"not an image".to_vec()),
+            ("05.jpg", big_jpeg(320, 200, false)),
+        ];
+        assert!(
+            entries[0].1.len() > DIMENSION_PROBE_BYTES,
+            "page 1 must outgrow the probe"
+        );
+        // `.cbr` is not zip-eligible, so the same bytes go through libarchive's forward scan, which
+        // recognises the container by its content.
+        for ext in ["zip", "cbr"] {
+            let file = tempfile::NamedTempFile::with_suffix(format!(".{ext}")).unwrap();
+            let mut writer = zip::ZipWriter::new(file.reopen().unwrap());
+            let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
+            for (name, bytes) in &entries {
+                writer.start_file(*name, options).unwrap();
+                writer.write_all(bytes).unwrap();
+            }
+            writer.finish().unwrap();
+
+            let names = |list: &[&str]| list.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+            assert_eq!(
+                read_page_dimensions(
+                    file.path(),
+                    &names(&[
+                        "05.jpg",
+                        "01.jpg",
+                        "02.jpg",
+                        "03.png",
+                        "04.jpg",
+                        "missing.jpg"
+                    ])
+                )
+                .unwrap(),
+                vec![
+                    Some((320, 200)),
+                    Some((640, 900)),
+                    Some((500, 400)),
+                    Some((30, 70)),
+                    None,
+                    None
+                ],
+                "{ext}"
+            );
+        }
     }
 
     #[test]

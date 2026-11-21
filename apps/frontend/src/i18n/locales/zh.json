@@ -418,6 +418,7 @@
   "app.enterStampName": "输入图章名称：",
   "Enter a full namespace without the colon, e.g \"artist\".": "请输入完整的命名空间（不带冒号），例如“artist”。",
   "hooks.enterANameForThe": "为新的单行本输入名称。",
+  "hooks.tankoubonNamePlaceholder": "单行本名称",
   "app.enterANameForThe": "请输入新分类的名称",
   "Enter a tag namespace for this column": "为此栏输入标签命名空间",
   "reader.enterATitleForThis": "请输入此章节/部分的标题：",

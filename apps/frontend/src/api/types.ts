@@ -1106,7 +1106,9 @@ export interface PatchSource {
   archive_id: string
   name: string
   title: string
-  crc32: string
+  blake3: string
+  /** Only on records made before patches named their sources by BLAKE3. */
+  crc32?: string
   sites: string[]
 }
 

@@ -210,6 +210,7 @@
   "app.enterStampName": "スタンプ名を入力してください :",
   "Enter a full namespace without the colon, e.g \"artist\".": "コロンを含まない完全な名前空間（例 : \"artist\"）を入力してください。",
   "hooks.enterANameForThe": "新しい単行本の名前を入力してください。",
+  "hooks.tankoubonNamePlaceholder": "単行本の名前",
   "app.enterANameForThe": "新しいカテゴリ名を入力してください",
   "Enter a tag namespace for this column": "この列のタグ名前空間を入力してください",
   "reader.enterATitleForThis": "この区切りのタイトルを入力してください :",

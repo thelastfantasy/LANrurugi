@@ -15,7 +15,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use lanrurugi_scanner::archive_format;
-use lanrurugi_scanner::patch::{self, EffectivePage, PatchInsertion, PatchMetadata};
+use lanrurugi_scanner::patch::{self, EffectivePage, PatchInsertion};
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -29,18 +29,21 @@ use crate::AppState;
 pub struct PatchState {
     /// Patch pages that actually apply (an insertion whose anchor no longer exists is dropped).
     pub pages: u32,
-    /// CRC32s of every archive pages were taken from.
+    /// BLAKE3s of every archive pages were taken from.
     pub sources: Vec<String>,
+    /// CRC32s of sources from a patch written before `sourcesBlake3`, until
+    /// [`migrate_legacy_sources`] converts them.
+    pub legacy_sources: Vec<String>,
 }
 
-/// Reads `archive_path`'s patch, if any and if it still matches the archive. Blocking: the CRC32
-/// check reads the whole archive.
-pub fn patch_state(archive_path: &Path) -> Option<PatchState> {
+/// Reads `archive_path`'s patch, if any and if it still matches the archive (whose record's BLAKE3
+/// is `blake3`). Blocking.
+pub fn patch_state(archive_path: &Path, blake3: Option<&str>) -> Option<PatchState> {
     let patch_path = patch::patch_path_for(archive_path);
     if !patch_path.is_file() {
         return None;
     }
-    let metadata = patch::load(&patch_path, archive_path).ok()?;
+    let metadata = patch::load(&patch_path, archive_path, blake3).ok()?;
     let original = archive_format::list_pages(archive_path).ok()?;
     let pages = patch::apply(&original, &metadata)
         .iter()
@@ -48,8 +51,36 @@ pub fn patch_state(archive_path: &Path) -> Option<PatchState> {
         .count() as u32;
     Some(PatchState {
         pages,
-        sources: metadata.all_sources(),
+        sources: metadata
+            .sources_blake3
+            .iter()
+            .map(|s| s.to_ascii_lowercase())
+            .collect(),
+        legacy_sources: metadata.legacy_sources(),
     })
+}
+
+/// Rewrites a patch whose sources are still CRC32s with the BLAKE3s of those that `found` resolves
+/// (`crc32 -> blake3`, from archives the scan just read), dropping the rest: a source that is not in
+/// the library can no longer be recognised either way. Returns the patch's BLAKE3 sources.
+pub fn migrate_legacy_sources(
+    archive_path: &Path,
+    blake3: Option<&str>,
+    found: &HashMap<String, String>,
+) -> Result<Vec<String>, patch::PatchError> {
+    let patch_path = patch::patch_path_for(archive_path);
+    let mut metadata = patch::load(&patch_path, archive_path, blake3)?;
+    for crc in metadata.legacy_sources() {
+        if let Some(hash) = found.get(&crc) {
+            if !metadata.sources_blake3.contains(hash) {
+                metadata.sources_blake3.push(hash.clone());
+            }
+        }
+    }
+    metadata.sources.clear();
+    metadata.source_crc32 = None;
+    patch::rewrite_metadata(&patch_path, &metadata)?;
+    Ok(metadata.sources_blake3)
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,10 +107,10 @@ pub struct PatchOutcome {
     /// Existing patch files renamed because a new page took their name.
     pub renamed: usize,
     pub patch_pages: usize,
-    /// CRC32 of the source file these pages came from — plumbing for the provenance record, not
+    /// BLAKE3 of the source file these pages came from — plumbing for the provenance record, not
     /// part of the HTTP response shape.
     #[serde(skip)]
-    pub source_crc32: String,
+    pub source_blake3: String,
     /// 1-based positions the patch's pages occupy in the merged page list, also plumbing for the
     /// provenance record (`patch_pages` alone cannot say *where* they are).
     #[serde(skip)]
@@ -153,9 +184,15 @@ pub async fn create_patch(
 
     let target_path = PathBuf::from(&target.file);
     let source_path = PathBuf::from(&source.file);
+    let target_blake3 = target.blake3.clone();
+    let source_blake3 = source.blake3.clone();
     let picks = body.pages.clone();
     let result = lanrurugi_core::concurrency::run_blocking(move || {
-        merge_into_patch(&target_path, &source_path, &picks)
+        merge_into_patch(
+            (&target_path, target_blake3.as_deref()),
+            (&source_path, source_blake3.as_deref()),
+            &picks,
+        )
     })
     .await;
 
@@ -207,7 +244,7 @@ pub async fn create_patch(
             }
         }
         crate::archives::clear_page_thumbnails(&state, &body.target).await;
-        // The patch zip itself only carries CRC32s, and it is exactly what becomes unreadable when
+        // The patch zip itself only carries hashes, and it is exactly what becomes unreadable when
         // a patch breaks — so where these pages came from is recorded beside the archive instead.
         let sources = crate::patch_provenance::source_sites(&source);
         let record = crate::patch_provenance::record_merge(
@@ -217,7 +254,8 @@ pub async fn create_patch(
                 archive_id: source.id.as_str().to_string(),
                 name: source.name.clone(),
                 title: source.title.clone(),
-                crc32: outcome.source_crc32.clone(),
+                blake3: outcome.source_blake3.clone(),
+                crc32: String::new(),
                 sites: sources.clone(),
             },
             outcome.patch_positions.clone(),
@@ -237,7 +275,7 @@ pub async fn create_patch(
                 "source_name": source.name,
                 "source_title": source.title,
                 "source_sites": sources,
-                "source_crc32": outcome.source_crc32,
+                "source_blake3": outcome.source_blake3,
                 "patch_pages": record.pages,
             })),
         )
@@ -247,17 +285,20 @@ pub async fn create_patch(
         .into_response()
 }
 
+/// `target` and `source` are each a file with its record's BLAKE3, when the record has one.
 fn merge_into_patch(
-    target: &Path,
-    source: &Path,
+    (target, target_blake3): (&Path, Option<&str>),
+    (source, source_blake3): (&Path, Option<&str>),
     picks: &[PatchPick],
 ) -> Result<PatchOutcome, PatchFailure> {
     let patch_path = patch::patch_path_for(target);
     let original = archive_format::list_pages(target)?;
     let existing = if patch_path.is_file() {
-        Some(patch::load(&patch_path, target).map_err(|e| {
-            PatchFailure::StalePatch(format!("the existing patch cannot be merged: {e}"))
-        })?)
+        Some(
+            patch::load(&patch_path, target, target_blake3).map_err(|e| {
+                PatchFailure::StalePatch(format!("the existing patch cannot be merged: {e}"))
+            })?,
+        )
     } else {
         None
     };
@@ -281,7 +322,8 @@ fn merge_into_patch(
         }
     }
 
-    let source_pages = patch::effective_pages(source, &archive_format::list_pages(source)?);
+    let source_pages =
+        patch::effective_pages(source, &archive_format::list_pages(source)?, source_blake3);
     let mut outcome = PatchOutcome::default();
     let mut planned: Vec<(usize, String)> = Vec::new();
     for pick in picks {
@@ -337,23 +379,15 @@ fn merge_into_patch(
         return Ok(outcome);
     }
 
-    let source_crc = patch::crc32_of_file(source)?;
-    let mut sources = existing
-        .as_ref()
-        .map(PatchMetadata::all_sources)
-        .unwrap_or_default();
-    if !sources.contains(&source_crc) {
-        sources.push(source_crc.clone());
+    let source_hash = patch::target_blake3(source, source_blake3)?;
+    // Keeps the existing patch's sources, legacy ones included, for the duplicates scan.
+    let mut metadata = existing.unwrap_or_default();
+    if !metadata.sources_blake3.contains(&source_hash) {
+        metadata.sources_blake3.push(source_hash.clone());
     }
-    let metadata = PatchMetadata {
-        target_crc32: patch::crc32_of_file(target)?,
-        source_crc32: existing
-            .as_ref()
-            .and_then(|m| m.source_crc32.clone())
-            .or(Some(source_crc.clone())),
-        sources,
-        insertions: insertions_for(&sequence),
-    };
+    metadata.target_blake3 = Some(patch::target_blake3(target, target_blake3)?);
+    metadata.target_crc32.clear();
+    metadata.insertions = insertions_for(&sequence);
     let bundled: Vec<(String, Vec<u8>)> = sequence
         .iter()
         .filter_map(|p| match p {
@@ -363,7 +397,7 @@ fn merge_into_patch(
         .collect();
     let bytes = patch::build_patch_zip_from(&metadata, &bundled)?;
     write_durably(&patch_path, &bytes)?;
-    outcome.source_crc32 = source_crc;
+    outcome.source_blake3 = source_hash;
     Ok(outcome)
 }
 
@@ -472,6 +506,7 @@ fn write_durably(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lanrurugi_scanner::patch::PatchMetadata;
     use std::io::Write;
 
     fn o(n: &str) -> EffectivePage {
@@ -501,10 +536,8 @@ mod tests {
     fn insertions_round_trip_through_apply() {
         let sequence = vec![p("x"), o("1"), o("2"), p("y"), p("z"), o("3"), p("w")];
         let metadata = PatchMetadata {
-            target_crc32: String::new(),
-            source_crc32: None,
-            sources: Vec::new(),
             insertions: insertions_for(&sequence),
+            ..Default::default()
         };
         let originals = vec!["1".to_string(), "2".to_string(), "3".to_string()];
         assert_eq!(patch::apply(&originals, &metadata), sequence);
@@ -553,8 +586,8 @@ mod tests {
         write_zip(&second, &[("003.jpg", &page(30)), ("x.jpg", &page(3))]);
 
         let outcome = merge_into_patch(
-            &target,
-            &first,
+            (&target, None),
+            (&first, None),
             &[PatchPick {
                 source_page: 2,
                 insert_before: 9,
@@ -562,7 +595,7 @@ mod tests {
         )
         .unwrap();
         // Compared field by field: `PatchOutcome` also carries provenance the HTTP response hides
-        // (`source_crc32`, `patch_positions`), which this test is not about.
+        // (`source_blake3`, `patch_positions`), which this test is not about.
         assert_eq!(
             (
                 outcome.added,
@@ -574,8 +607,8 @@ mod tests {
         );
 
         let outcome = merge_into_patch(
-            &target,
-            &second,
+            (&target, None),
+            (&second, None),
             &[
                 PatchPick {
                     source_page: 0,
@@ -599,7 +632,7 @@ mod tests {
         );
 
         let originals = archive_format::list_pages(&target).unwrap();
-        let pages = patch::effective_pages(&target, &originals);
+        let pages = patch::effective_pages(&target, &originals, None);
         assert_eq!(
             pages,
             vec![p("003.jpg"), o("001.jpg"), o("002.jpg"), p("003~2.jpg")]
@@ -607,11 +640,15 @@ mod tests {
         assert_eq!(patch::read_page(&target, &pages[0]).unwrap(), page(30));
         assert_eq!(patch::read_page(&target, &pages[3]).unwrap(), page(3));
 
-        let state = patch_state(&target).unwrap();
+        let state = patch_state(&target, None).unwrap();
         assert_eq!(state.pages, 2);
         assert_eq!(state.sources.len(), 2);
-        assert!(state
-            .sources
-            .contains(&patch::crc32_of_file(&first).unwrap()));
+        assert!(state.sources.contains(
+            &lanrurugi_core::io::blake3_file(&first)
+                .unwrap()
+                .to_hex()
+                .to_string()
+        ));
+        assert!(state.legacy_sources.is_empty());
     }
 }

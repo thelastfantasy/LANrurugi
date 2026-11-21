@@ -45,12 +45,73 @@ import { TankDeleteChoiceDialog } from "@/pages/Library/TankDeleteChoiceDialog"
 import { EntryTreePopover } from "@/pages/Upload/EntryTreePopover"
 import { toast } from "@/toast"
 
-import { PageGridCell } from "./PageGridCell"
+import { MAX_ROW_ASPECT, PageGridCell } from "./PageGridCell"
 import { PageLightbox } from "./PageLightbox"
 import { ChapterActionMenu } from "./shared"
 import { TagsTable } from "./TagsTable"
 
 /** Scroll-to-top floating button, visible only after scrolling down 300px. */
+/** Touch screens: each row of the page grid is as tall as its shortest page, rather than legacy's
+ * fixed 196px box that left a landscape page floating in empty space.
+ *
+ * A row is fitted once every thumbnail in it has loaded (so it changes height once, not per image),
+ * from the images' own aspect ratio at the cell's fixed width; taller pages in the row are
+ * letterboxed by the thumbnail's `object-fit: contain`. Rows are found by their top edge: cell
+ * widths are fixed, so which cells share a row never depends on these heights.
+ *
+ * A row is capped at {@link MAX_ROW_ASPECT} times the cell width, so a row of long strips (a
+ * webtoon) never fills the screen; those thumbnails show their top instead. */
+function useFitRowsToShortestPage(grid: HTMLElement | null, enabled: boolean) {
+  useEffect(() => {
+    if (!grid || !enabled) return
+    let frame = 0
+    const fit = () => {
+      const rows = new Map<number, HTMLElement[]>()
+      for (const cell of grid.querySelectorAll<HTMLElement>(".overview-page-cell")) {
+        const row = rows.get(cell.offsetTop) ?? []
+        row.push(cell)
+        rows.set(cell.offsetTop, row)
+      }
+      for (const cells of rows.values()) {
+        const heights = cells.map((cell) => {
+          const box = cell.querySelector<HTMLElement>(".id3")
+          const img = box?.querySelector("img")
+          return box && img?.complete && img.naturalWidth > 0
+            ? box.clientWidth * Math.min(img.naturalHeight / img.naturalWidth, MAX_ROW_ASPECT)
+            : null
+        })
+        const shortest = heights.every((h) => h !== null)
+          ? Math.min(...(heights as number[]))
+          : null
+        for (const cell of cells) {
+          const box = cell.querySelector<HTMLElement>(".id3")
+          if (!box) continue
+          // `!important`: legacy's own phone rule pins `div.id3` with one.
+          if (shortest === null) box.style.removeProperty("height")
+          else box.style.setProperty("height", `${Math.round(shortest)}px`, "important")
+        }
+      }
+    }
+    const schedule = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(fit)
+    }
+    schedule()
+    // `load` does not bubble, but it does reach a capturing listener on an ancestor.
+    grid.addEventListener("load", schedule, true)
+    const resize = new ResizeObserver(schedule)
+    resize.observe(grid)
+    const children = new MutationObserver(schedule)
+    children.observe(grid, { childList: true, subtree: true })
+    return () => {
+      cancelAnimationFrame(frame)
+      grid.removeEventListener("load", schedule, true)
+      resize.disconnect()
+      children.disconnect()
+    }
+  }, [grid, enabled])
+}
+
 function ScrollToTopFab({ onJump }: { onJump: () => void }) {
   const { t } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
@@ -230,6 +291,8 @@ export function ArchiveOverviewOverlay({
   const archiveCategories = staticCategories.filter((c) => c.archives.includes(archive.arcid))
   const isTank = isTankoubonId(archive.arcid)
   const supportsHover = useSupportsHover()
+  const [pageGridEl, setPageGridEl] = useState<HTMLDivElement | null>(null)
+  useFitRowsToShortestPage(pageGridEl, !supportsHover)
 
   function resolve(page: number): { arcId: string; localPage: number } | null {
     return resolvePage ? resolvePage(page) : { arcId: archive.arcid, localPage: page }
@@ -1018,7 +1081,7 @@ export function ArchiveOverviewOverlay({
           </div>
         </div>
 
-        <div id="pages-section" className="overview-page-grid">
+        <div id="pages-section" className="overview-page-grid" ref={setPageGridEl}>
           {loadedTotal > 0 && loadedStart > 0 && (
             <div style={{ width: "100%", height: 3, background: "rgba(128,128,128,0.15)", marginBottom: 4 }}>
               <div
@@ -1054,6 +1117,7 @@ export function ArchiveOverviewOverlay({
                   isTank={isTank}
                   isPatch={patchPageSet?.has(page) ?? false}
                   chapterName={chapterNameByPage.get(page)}
+                  cornerButtons={supportsHover}
                 />
               )
             }

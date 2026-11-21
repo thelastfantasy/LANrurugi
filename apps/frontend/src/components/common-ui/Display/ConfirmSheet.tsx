@@ -50,9 +50,18 @@ export function ConfirmSheet({
         )}
         <div style={{ fontWeight: "bold", fontSize: 15, marginTop: icon ? 12 : 0 }}>{message}</div>
       </div>
+      {/* A form, so Enter in a field among `children` submits through `requestSubmit()`. */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (confirmDisabled) return
+          confirmed.current = true
+          setOpen(false)
+        }}
+      >
       {children}
       <button
-        type="button"
+        type="submit"
         disabled={confirmDisabled}
         // `.stdbtn-danger` carries each theme's destructive colors; layout is inline.
         className={danger ? "stdbtn stdbtn-danger" : "stdbtn"}
@@ -65,13 +74,10 @@ export function ConfirmSheet({
           borderRadius: 6,
           ...(confirmDisabled ? { opacity: 0.5, cursor: "not-allowed" } : {}),
         }}
-        onClick={() => {
-          confirmed.current = true
-          setOpen(false)
-        }}
       >
         {confirmLabel}
       </button>
+      </form>
     </BottomSheet>
   )
 }

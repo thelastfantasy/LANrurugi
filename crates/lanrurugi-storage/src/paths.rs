@@ -23,12 +23,8 @@ pub const BYNAME_DIR: &str = "_byname";
 /// (100k archives ≈ 390 per bucket) and needs no fan-out below it; growing to 4,096+ buckets moves
 /// the problem to the root, where every `ls`, backup walk and SMB listing pays for it.
 pub fn bucket_name(id: &str) -> &str {
-    if id.len() < 2 {
-        "00"
-    } else {
-        // Ids are ASCII hex by construction, so this never splits a multi-byte character.
-        &id[..2]
-    }
+    // Ids are ASCII hex by construction; anything else (a by-name file's stem) must not panic.
+    id.get(..2).unwrap_or("00")
 }
 
 /// `<library>/<bucket>/<id>.<ext>`; an empty extension yields `<id>`.
@@ -84,6 +80,8 @@ mod tests {
         assert_eq!(bucket_name("ab"), "ab");
         assert_eq!(bucket_name("a"), "00");
         assert_eq!(bucket_name(""), "00");
+        // A by-name file's stem: no panic on a multi-byte first character.
+        assert_eq!(bucket_name("無垢な少女"), "00");
     }
 
     #[test]

@@ -40,6 +40,7 @@ pub mod misc;
 pub mod mojibake;
 pub mod opds;
 pub mod opensearch;
+pub(crate) mod page_dimensions;
 pub mod patch_provenance;
 pub mod plugin_wizard;
 pub mod plugins;

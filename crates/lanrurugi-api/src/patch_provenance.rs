@@ -37,7 +37,11 @@ pub struct PatchSource {
     /// by the time anyone reads this).
     pub name: String,
     pub title: String,
-    /// CRC32 of the source file, matching the patch's own `sources`/`sourceCrc32`.
+    /// BLAKE3 of the source file, matching the patch's own `sourcesBlake3`.
+    #[serde(default)]
+    pub blake3: String,
+    /// Legacy: the CRC32 records made before patches named their sources by BLAKE3 carry.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub crc32: String,
     /// `source:` tags of the source archive (prefix stripped) plus its primary source, which is
     /// where that source itself came from.
@@ -611,7 +615,8 @@ mod tests {
                 archive_id: "b".repeat(40),
                 name: "B.zip".to_string(),
                 title: "B".to_string(),
-                crc32: "deadbeef".to_string(),
+                blake3: "deadbeef".to_string(),
+                crc32: String::new(),
                 sites: vec!["https://example.org/b".to_string()],
             }],
             pages: vec![3, 4],

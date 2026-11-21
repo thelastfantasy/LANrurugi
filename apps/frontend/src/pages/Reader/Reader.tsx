@@ -80,9 +80,8 @@ import {
 } from "@/lib/utils/imageFormatSupport";
 import type { PageMeta } from "@/lib/utils/imageMeta";
 import {
-  fetchContentLengthKb,
+  fetchPageFileInfo,
   fetchPageMeta,
-  fetchResizedPageInfo,
   type ResizedPageInfo,
 } from "@/lib/utils/imageMeta";
 import { isTankoubonId } from "@/lib/utils/isTankoubonId";
@@ -250,6 +249,24 @@ function waitFor(ready: () => boolean, timeoutMs: number): Promise<void> {
  * bare call inside the component body reads as render-time impurity to the hooks lint. */
 function nowMs(): number {
   return performance.now();
+}
+
+/** Infinite scroll: how far to scroll so a page sits where the reader expects it — centred when it
+ * fits the viewport, top edge at the top when it is taller. */
+function infiniteAlignOffset(rect: DOMRect): number {
+  return rect.height > window.innerHeight
+    ? rect.top
+    : rect.top + rect.height / 2 - window.innerHeight / 2;
+}
+
+/** Infinite scroll: the page under the viewport centre, or `null` between pages. */
+function infinitePageAtCentre(): number | null {
+  const mid = window.innerHeight / 2;
+  for (const el of document.querySelectorAll<HTMLElement>("img[data-page]")) {
+    const rect = el.getBoundingClientRect();
+    if (rect.top <= mid && rect.bottom >= mid) return Number(el.dataset.page);
+  }
+  return null;
 }
 
 /** Where the viewport sits now, for the diagnostics above and for the edge test `j`/`k` share. */
@@ -1526,17 +1543,15 @@ export function Reader() {
       // produces. Asking with the bare `pages[].url` queried a cache entry nothing ever wrote, so a
       // converted page fell back to its entry size (real report, 2026-11-04).
       const absoluteUrl = pageStreamUrl(page) ?? new URL(url, window.location.origin).toString()
-      void fetchContentLengthKb(absoluteUrl).then((kb) => {
-        if (kb !== null) {
+      void fetchPageFileInfo(absoluteUrl).then(({ sizeKb, resized }) => {
+        if (sizeKb !== null) {
           setPageSizesKb((prev) =>
-            prev[page] !== undefined ? prev : { ...prev, [page]: kb },
+            prev[page] !== undefined ? prev : { ...prev, [page]: sizeKb },
           )
         }
-      })
-      void fetchResizedPageInfo(absoluteUrl).then((info) => {
-        if (info !== null) {
+        if (resized !== null) {
           setResizedPageInfo((prev) =>
-            prev[page] !== undefined ? prev : { ...prev, [page]: info },
+            prev[page] !== undefined ? prev : { ...prev, [page]: resized },
           )
         }
       })
@@ -1762,23 +1777,57 @@ export function Reader() {
 
   /** Touch infinite scroll reads vertically, so a tap on the lower half scrolls forward by the `j`
    * step and one on the upper half back; the toolbar is a long press instead (see below). */
-  function onInfiniteScrollTap(clientY: number) {
+  /** `tappedPage` is the page image the tap landed on: its own lower half turns forward from it,
+   * its upper half back. A tap between pages falls back to the screen's halves and the page at the
+   * viewport centre. */
+  function onInfiniteScrollTap(clientY: number, tappedPage?: number) {
     // Some browsers (Firefox for Android) still send a click when a pinch lifts; that is no tap.
     if (multiTouchGestureRef.current) return;
-    const forward = clientY >= window.innerHeight / 2;
-    if (
-      forward &&
-      window.innerHeight + window.scrollY >=
-        document.documentElement.scrollHeight - 1
-    ) {
+    const pageEl = (page: number) =>
+      document.querySelector<HTMLElement>(`img[data-page="${page}"]`);
+    const tappedRect = tappedPage !== undefined ? pageEl(tappedPage)?.getBoundingClientRect() : undefined;
+    const forward = tappedRect
+      ? clientY >= tappedRect.top + tappedRect.height / 2
+      : clientY >= window.innerHeight / 2;
+    // Taps between pages in quick succession continue from the page the last one is still
+    // scrolling to.
+    const intent = infiniteIntentRef.current;
+    const pending = !tappedRect && intent !== null && nowMs() - intent.at < SCROLL_INTENT_MS;
+    const fromPage =
+      tappedRect && tappedPage !== undefined
+        ? tappedPage
+        : pending
+          ? intent.page
+          : (infinitePageAtCentre() ?? currentPage);
+    if (!pending) {
+      // A page taller than the screen is read through before it turns.
+      const rect = pageEl(fromPage)?.getBoundingClientRect();
+      if (rect && rect.height > window.innerHeight) {
+        const below = rect.bottom - window.innerHeight;
+        const above = -rect.top;
+        if (forward && below > 1) {
+          window.scrollBy({ top: Math.min(window.innerHeight, below), behavior: "smooth" });
+          return;
+        }
+        if (!forward && above > 1) {
+          window.scrollBy({ top: -Math.min(window.innerHeight, above), behavior: "smooth" });
+          return;
+        }
+      }
+    }
+    const nextPage = fromPage + (forward ? 1 : -1);
+    if (nextPage > totalPages) {
+      infiniteIntentRef.current = null;
       startArchiveTransition("next");
       return;
     }
-    const step =
-      readerSettings.jScrollUnit === J_SCROLL_UNIT.PX
-        ? readerSettings.jScrollAmount
-        : window.innerHeight * (readerSettings.jScrollAmount / 100);
-    window.scrollBy({ top: forward ? step : -step, behavior: "smooth" });
+    const target = nextPage >= 1 ? pageEl(nextPage) : null;
+    if (!target) return;
+    infiniteIntentRef.current = { page: nextPage, at: nowMs() };
+    window.scrollTo({
+      top: Math.max(0, Math.round(window.scrollY + infiniteAlignOffset(target.getBoundingClientRect()))),
+      behavior: "smooth",
+    });
   }
 
   function goToInfiniteScrollPage(
@@ -2267,19 +2316,18 @@ export function Reader() {
     // Same URL the `<img>` itself loaded (see the file-info note in the prefetch effect above):
     // the served-size header only exists for the cache entry this exact variant writes.
     const originalUrl = pageStreamUrl(page) ?? pages.data?.pages[page - 1]?.url ?? img.src;
-    if (pageSizesKb[page] === undefined) {
-      void fetchContentLengthKb(originalUrl).then((kb) => {
-        if (kb !== null) setPageSizesKb((prev) => ({ ...prev, [page]: kb }));
-      });
-    }
-    // One cache-bypassing HEAD per painted page. Deliberately unconditional: this request is what
+    // One cache-bypassing HEAD per painted page, which also fills in the entry size if the earlier
+    // HEAD has not. Deliberately unconditional: this request is what
     // makes the numbers *final*, because the conversion that just produced these bytes is what
     // writes the cache entry (and its size) the first HEAD could not have seen. Gating it on "no
     // info yet" left pages stuck on their entry size whenever a fast page turn raced the earlier
     // request (real report, 2026-11-04: flipping quickly showed the plain line).
     if (!servedInfoReverifiedRef.current.has(page)) {
       servedInfoReverifiedRef.current.add(page);
-      void fetchResizedPageInfo(originalUrl, { fresh: true }).then((info) => {
+      void fetchPageFileInfo(originalUrl, { fresh: true }).then(({ sizeKb, resized: info }) => {
+        if (sizeKb !== null) {
+          setPageSizesKb((prev) => (prev[page] !== undefined ? prev : { ...prev, [page]: sizeKb }));
+        }
         // Store the `null` too: a fresh HEAD saying "served as-is" is a *settled* answer, and the
         // bar can then show the plain line without waiting forever. A cached HEAD's `null` is not
         // trusted (it can predate the page's conversion), which is why the prefetch above ignores
@@ -2867,8 +2915,7 @@ export function Reader() {
     // be centred without cutting off both ends — lands with its own top edge on the viewport's top,
     // i.e. the reader starts at the beginning of that page. Computed rather than left to
     // `scrollIntoView`, whose `block:"center"` silently top-aligns the tall case and rounds the rest.
-    const alignFor = (rect: DOMRect) =>
-      rect.height > window.innerHeight ? rect.top : rect.top + rect.height / 2 - window.innerHeight / 2;
+    const alignFor = infiniteAlignOffset;
     const pin = (el: HTMLElement | null) => {
       // A re-render can replace the column's nodes, leaving the element we pinned against detached:
       // its rect is all zeroes, which would silently scroll the reader away instead of re-pinning.
@@ -4521,7 +4568,7 @@ export function Reader() {
                       // Headless also listens on the document; this tap is already handled.
                       e.preventDefault();
                       if (!supportsHover) {
-                        onInfiniteScrollTap(e.clientY);
+                        onInfiniteScrollTap(e.clientY, i + 1);
                         return;
                       }
                       const isLeftHalf = e.clientX < window.innerWidth / 2;

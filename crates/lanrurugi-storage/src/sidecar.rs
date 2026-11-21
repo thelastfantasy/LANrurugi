@@ -62,6 +62,56 @@ pub struct Sidecar {
     /// plugin vouched for. Nothing in the file itself can give it back after Redis is lost.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primary_source: Option<String>,
+    /// Natural sizes of the archive's pages, for the reader's infinite scroll.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_dimensions: Option<FileDimensions>,
+    /// The same for the pages of the archive's `.patch.zip`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patch_page_dimensions: Option<FileDimensions>,
+}
+
+/// Natural sizes of a container's pages by entry name, read from the file while it had this size
+/// and mtime; only pages someone asked about are present. `None` for an entry that is not a
+/// readable image. Measuring means opening the container, so this is kept next to the bytes like
+/// the rest of the snapshot, and mirrored in Redis (`LANRURUGI_PAGE_DIMENSIONS:{id}`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileDimensions {
+    pub size: u64,
+    /// RFC 3339 UTC with milliseconds, like [`Sidecar::mtime`].
+    pub mtime: String,
+    pub pages: std::collections::BTreeMap<String, Option<[u32; 2]>>,
+}
+
+impl FileDimensions {
+    /// Empty, for the file at `path` as it is now.
+    pub fn for_file(path: &Path) -> std::io::Result<Self> {
+        let (size, mtime) = file_stamp(path)?;
+        Ok(Self {
+            size,
+            mtime,
+            pages: Default::default(),
+        })
+    }
+
+    /// Whether these sizes were read from the file `path` holds now.
+    pub fn describes(&self, path: &Path) -> bool {
+        file_stamp(path).is_ok_and(|(size, mtime)| size == self.size && mtime == self.mtime)
+    }
+
+    /// Adds `other`'s pages, when both were read from the same file; otherwise changes nothing.
+    pub fn merge(&mut self, other: &FileDimensions) {
+        if (self.size, &self.mtime) == (other.size, &other.mtime) {
+            for (name, size) in &other.pages {
+                self.pages.entry(name.clone()).or_insert(*size);
+            }
+        }
+    }
+}
+
+/// A file's size and modification time as [`FileDimensions`] records them.
+pub fn file_stamp(path: &Path) -> std::io::Result<(u64, String)> {
+    let meta = std::fs::metadata(path)?;
+    Ok((meta.len(), stamp(meta.modified()?)))
 }
 
 impl Sidecar {
@@ -94,6 +144,8 @@ impl Sidecar {
             blake3: None,
             sample: sample_of(path).ok(),
             primary_source: None,
+            page_dimensions: None,
+            patch_page_dimensions: None,
         })
     }
 
@@ -366,6 +418,49 @@ mod tests {
             serde_json::from_slice(&std::fs::read(paths::sidecar_path(library, id)).unwrap())
                 .unwrap();
         assert!(raw["mtime"].is_string(), "{raw}");
+    }
+
+    #[test]
+    fn page_sizes_belong_to_one_state_of_one_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("a.zip");
+        std::fs::write(&file, b"first").unwrap();
+        let mut sizes = FileDimensions::for_file(&file).unwrap();
+        sizes.pages.insert("01.jpg".into(), Some([800, 1200]));
+        assert!(sizes.describes(&file));
+
+        // Same file: pages add up, existing ones are kept.
+        let mut more = FileDimensions::for_file(&file).unwrap();
+        more.pages.insert("01.jpg".into(), Some([1, 1]));
+        more.pages.insert("02.jpg".into(), None);
+        sizes.merge(&more);
+        assert_eq!(sizes.pages.get("01.jpg"), Some(&Some([800, 1200])));
+        assert_eq!(sizes.pages.get("02.jpg"), Some(&None));
+
+        // Another state of the file: nothing carries over, and the old sizes no longer apply.
+        std::fs::write(&file, b"second, longer").unwrap();
+        let mut fresh = FileDimensions::for_file(&file).unwrap();
+        fresh.merge(&sizes);
+        assert!(fresh.pages.is_empty());
+        assert!(!sizes.describes(&file));
+    }
+
+    #[test]
+    fn a_sidecar_without_page_sizes_still_reads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = "c".repeat(40);
+        let dest = paths::sidecar_path(tmp.path(), &id);
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::write(
+            &dest,
+            format!(
+                r#"{{"version":1,"id":"{id}","title":"t","size":1,"mtime":"m","written":"w"}}"#
+            ),
+        )
+        .unwrap();
+        let sidecar = read(tmp.path(), &id).unwrap();
+        assert_eq!(sidecar.page_dimensions, None);
+        assert_eq!(sidecar.patch_page_dimensions, None);
     }
 
     #[test]

@@ -233,7 +233,7 @@ fn generate_sync(
     // as an original one rather than the overview grid (the one caller that actually surfaces
     // per-page thumbnails to a user) silently having no thumbnail for it.
     let original_pages = archive_format::list_pages(archive_path)?;
-    let effective = crate::patch::effective_pages(archive_path, &original_pages);
+    let effective = crate::patch::effective_pages(archive_path, &original_pages, None);
     let entry = effective
         .get(page.saturating_sub(1))
         .ok_or(ThumbnailError::NoPages)?;
@@ -294,7 +294,7 @@ fn generate_batch_sync(
             .collect();
     }
 
-    let effective = crate::patch::effective_pages(archive_path, pages);
+    let effective = crate::patch::effective_pages(archive_path, pages, None);
     let mut results: Vec<Option<Result<Option<String>, ThumbnailError>>> =
         jobs.iter().map(|_| None).collect();
 

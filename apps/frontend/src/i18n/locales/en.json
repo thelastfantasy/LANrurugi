@@ -395,6 +395,7 @@
   "app.enterStampName": "Enter Stamp name:",
   "Enter a full namespace without the colon, e.g \"artist\".": "Enter a full namespace without the colon, e.g \"artist\".",
   "hooks.enterANameForThe": "Enter a name for the new Tankoubon.",
+  "hooks.tankoubonNamePlaceholder": "Tankoubon name",
   "app.enterANameForThe": "Enter a name for the new category",
   "Enter a tag namespace for this column": "Enter a tag namespace for this column",
   "reader.enterATitleForThis": "Enter a title for this chapter/section:",

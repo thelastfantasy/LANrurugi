@@ -423,6 +423,19 @@ run = "podman stop lrr-dev"
 description = "Write the uncommon-state seed data (subscriptions awaiting approval, reservations, check history) into the running dev container (#286)"
 run = "node apps/frontend/tests/seed/seed.mjs --container lrr-dev --port 16379"
 
+[tasks.dev-aspect-archive]
+description = "Generate the synthetic aspect-ratio test archive (infinite-scroll alignment, overview row fitting) and upload it to the running dev container. Password from LANRURUGI_DEV_PASSWORD, else the dev default"
+run = '''
+set -eu
+dir=$(mktemp -d)
+trap 'rm -rf "$dir"' EXIT
+zip="$dir/[测试] 滚动与概览对齐.zip"
+python3 scripts/gen-aspect-test-archive.py "$zip"
+curl -fsS -c "$dir/jar" -o /dev/null --data-urlencode "password=${LANRURUGI_DEV_PASSWORD:-kamimamita}" http://127.0.0.1:3000/api/login
+curl -sS -b "$dir/jar" -X PUT -F "file=@$zip" http://127.0.0.1:3000/api/archives/upload
+echo
+'''
+
 [tasks.dev-rebuild]
 description = "Rebuild the dev image after a *backend* source change (frontend changes need no rebuild — Vite picks them up live)"
 # Deliberately `podman build` directly, NOT `podman compose -f compose.dev.yaml build` — this

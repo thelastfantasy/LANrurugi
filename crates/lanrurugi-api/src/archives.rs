@@ -1100,6 +1100,7 @@ pub(crate) async fn serve_archive_download(
     }
     let job = Repack::Merged {
         archive: std::path::PathBuf::from(&archive_file),
+        blake3: archive.blake3.clone(),
         patch,
     };
     let cache = repack_cache_path("merged", &job.cache_key());
@@ -1234,6 +1235,8 @@ pub(crate) enum Repack {
     /// A patched archive, rebuilt as one zip.
     Merged {
         archive: std::path::PathBuf,
+        /// The archive's record's BLAKE3, which checks the patch without reading the archive.
+        blake3: Option<String>,
         patch: std::path::PathBuf,
     },
     /// A tankoubon, zipped from its members in reading order.
@@ -1249,7 +1252,7 @@ impl Repack {
     pub(crate) fn cache_key(&self) -> String {
         let mut key = String::new();
         let files: Vec<(&str, &std::path::Path)> = match self {
-            Self::Merged { archive, patch } => vec![("archive", archive), ("patch", patch)],
+            Self::Merged { archive, patch, .. } => vec![("archive", archive), ("patch", patch)],
             Self::Tankoubon { members, .. } => members
                 .iter()
                 .enumerate()
@@ -1321,9 +1324,11 @@ pub(crate) async fn ensure_repack(cache: &std::path::Path, job: Repack) -> bool 
         };
         let writer = std::io::BufWriter::new(file);
         let built = match &job {
-            Repack::Merged { archive, .. } => {
+            Repack::Merged {
+                archive, blake3, ..
+            } => {
                 matches!(
-                    lanrurugi_scanner::patch::write_merged_zip(archive, writer),
+                    lanrurugi_scanner::patch::write_merged_zip(archive, blake3.as_deref(), writer),
                     Ok(true)
                 )
             }
@@ -2348,7 +2353,7 @@ async fn page_entry_name(file: &std::path::Path, page: usize) -> Option<String> 
     let (pages, _) = lanrurugi_core::concurrency::run_blocking(move || {
         let originals = lanrurugi_scanner::archive_format::list_pages(&path)?;
         Ok::<_, lanrurugi_scanner::archive_format::ArchiveFormatError>(
-            lanrurugi_scanner::patch::effective_pages_checked(&path, &originals),
+            lanrurugi_scanner::patch::effective_pages_checked(&path, &originals, None),
         )
     })
     .await
@@ -4808,8 +4813,11 @@ pub(crate) async fn get_files(
             } else {
                 crate::integrity_scan::note_readable(&state, &archive, own_pages).await;
             }
-            let (effective, patch_error) =
-                lanrurugi_scanner::patch::effective_pages_checked(archive_path, &pages);
+            let (effective, patch_error) = lanrurugi_scanner::patch::effective_pages_checked(
+                archive_path,
+                &pages,
+                archive.blake3.as_deref(),
+            );
             let pages: Vec<serde_json::Value> = effective
                 .iter()
                 .map(|p| match p {
@@ -4890,22 +4898,15 @@ pub(crate) fn unreadable_archive_response(
 
 #[derive(Debug, Deserialize)]
 pub struct PageDimensionsParams {
-    /// How many pages, from the start, to actually measure — see [`read_page_dimensions`]'s own
-    /// docs for why this is a required, bounded count rather than "all of them."
-    ///
-    /// [`read_page_dimensions`]: lanrurugi_scanner::archive_format::read_page_dimensions
+    /// How many pages, from the start of the reader's page list, to answer for.
     count: usize,
 }
 
 /// `GET /archives/{id}/page-dimensions?count=N` — natural pixel width/height for the first `N`
-/// pages only, in the same order as `/files`'s own `pages` array (so the frontend can zip them
-/// together by index without a separate name-matching step). Additive to `/files`, not folded into
-/// it — existing callers of `/files` (the third-party-compatible file-list contract) shouldn't have
-/// to pay for an archive pass with per-entry image-header parsing they never asked for; only the
-/// infinite-scroll reader view (the one caller that actually needs this, to size not-yet-loaded
-/// `<img>`s accurately before jumping to a resume position — see `read_page_dimensions`'s own docs
-/// for why it's bounded to just the pages before that jump, not the whole archive) calls this
-/// endpoint at all.
+/// pages, in the same order as `/files`'s own `pages` array (patch pages included), so the
+/// infinite-scroll reader can reserve each unloaded page's height before jumping to a resume
+/// position. Additive to `/files` rather than folded into it: its other callers never need sizes.
+/// Answered from the cache in [`crate::page_dimensions`]; only pages never measured open the file.
 async fn get_page_dimensions(
     State(state): State<AppState>,
     auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
@@ -4926,17 +4927,16 @@ async fn get_page_dimensions(
             )
         }
     };
-    let archive_file = archive.file.clone();
-    let count = params.count;
-    let result = lanrurugi_core::concurrency::run_blocking(move || {
-        lanrurugi_scanner::archive_format::read_page_dimensions(
-            std::path::Path::new(&archive_file),
-            count,
-        )
-    })
-    .await;
-    match result {
-        Ok(Ok(dimensions)) => {
+    match crate::page_dimensions::first_pages(
+        &state,
+        id.as_str(),
+        &archive.file,
+        archive.blake3.as_deref(),
+        params.count,
+    )
+    .await
+    {
+        Ok(dimensions) => {
             let json_dims: Vec<serde_json::Value> = dimensions
                 .into_iter()
                 .map(|dim| match dim {
@@ -4946,16 +4946,7 @@ async fn get_page_dimensions(
                 .collect();
             axum::Json(json!({ "dimensions": json_dims })).into_response()
         }
-        Ok(Err(e)) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "get_page_dimensions",
-            e.to_string(),
-        ),
-        Err(e) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "get_page_dimensions",
-            e.to_string(),
-        ),
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, "get_page_dimensions", e),
     }
 }
 
@@ -5215,11 +5206,12 @@ async fn get_page_thumbnails(
     // disk I/O (`list_pages` + the patch-existence check), so run off the async reactor like every
     // other archive-format read in this file.
     let archive_file = archive.file.clone();
+    let blake3 = archive.blake3.clone();
     let total = match lanrurugi_core::concurrency::run_blocking(move || {
         let path = std::path::Path::new(&archive_file);
         let original = lanrurugi_scanner::archive_format::list_pages(path)?;
         Ok::<usize, lanrurugi_scanner::archive_format::ArchiveFormatError>(
-            lanrurugi_scanner::patch::effective_pages(path, &original).len(),
+            lanrurugi_scanner::patch::effective_pages(path, &original, blake3.as_deref()).len(),
         )
     })
     .await

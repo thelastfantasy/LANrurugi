@@ -222,6 +222,7 @@
   "settings.enablingThisOptionWillSave": "啟用此選項後，閱讀進度將儲存在瀏覽器中（透過 localStorage），而非伺服器。",
   "settings.enablingThisWillUseFile": "啟用後，設定 \"date_added\" 標籤時將使用檔案的最後修改時間而非目前時間。",
   "Enter a full namespace without the colon, e.g \"artist\".": "請輸入不含冒號的完整命名空間，例如 \"artist\"。",
+  "hooks.tankoubonNamePlaceholder": "單行本名稱",
   "app.enterANameForThe": "請輸入新分類的名稱",
   "Enter a tag namespace for this column": "請為此欄位輸入一個標籤命名空間",
   "jobs.error": "錯誤",
