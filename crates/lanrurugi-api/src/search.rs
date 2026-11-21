@@ -74,7 +74,11 @@ pub(crate) async fn resolve_search_entry_with_mode(
                 tags.push(a.tags.clone());
             }
         }
+        let cover_format = crate::archives::thumb_settings(state).await.format;
+        let cover_version =
+            crate::archives::cover_version(state, grouping.tankid.as_str(), cover_format).await;
         return Some(json!({
+            "cover_version": cover_version,
             "arcid": grouping.tankid,
             "title": grouping.name,
             "filename": "",
@@ -148,6 +152,13 @@ async fn search_entry_json(
         .flatten()
         .is_some();
     obj.insert("has_split_suggestion".into(), json!(has_split_suggestion));
+    // Additive: names the cover file, so a card can request it by version and cache it for good
+    // (see `archives::cover_version`).
+    let cover_format = crate::archives::thumb_settings(state).await.format;
+    obj.insert(
+        "cover_version".into(),
+        json!(crate::archives::cover_version(state, id, cover_format).await),
+    );
     Some(json)
 }
 

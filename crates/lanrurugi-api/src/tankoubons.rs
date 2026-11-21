@@ -634,6 +634,22 @@ pub struct GetTankoubonThumbnailParams {
     /// archive thumbnail/reader endpoints.
     #[serde(default)]
     format: Option<String>,
+    /// The cover version a search result reported, as for archive covers.
+    #[serde(default)]
+    cv: Option<String>,
+}
+
+/// `<thumb_dir>/TA/<id>.<ext>`: where a tankoubon's cover is kept in `format`.
+pub(crate) fn tankoubon_cover_path(
+    state: &AppState,
+    id: &str,
+    format: lanrurugi_scanner::thumbnail::ThumbFormat,
+) -> std::path::PathBuf {
+    state
+        .library
+        .thumb_dir
+        .join("TA")
+        .join(format!("{id}.{}", format.extension()))
 }
 
 async fn get_tankoubon_thumbnail(
@@ -646,6 +662,11 @@ async fn get_tankoubon_thumbnail(
     // builds a filesystem path directly from `id` without a repository lookup first, so an
     // unvalidated value containing `/` or `..` would otherwise escape `thumb_dir`.
     const THUMB_CACHE: &str = "private, no-cache";
+    let thumb_cache = if params.cv.is_some() {
+        crate::archives::THUMB_CACHE_VERSIONED
+    } else {
+        THUMB_CACHE
+    };
     if !is_valid_tankoubon_id(id.as_str()) {
         return (
             [
@@ -660,37 +681,20 @@ async fn get_tankoubon_thumbnail(
         crate::archives::ClientImageSupport::from_request(&headers, params.format.as_deref());
     // Same reasoning as `archives::get_archive_thumbnail`'s own name lookup: the URL carries only
     // the opaque ID, so without this a saved cover is named per the URL's last segment.
-    let tankoubon_name = match state.repos.groupings.get(&id).await {
-        Ok(Some(grouping)) => grouping.name,
+    let tankoubon_name = match state.repos.groupings.name(&id).await {
+        Ok(Some(name)) => name,
         _ => id.to_string(),
     };
     let thumbnail_response = |content_type: &'static str, bytes: bytes::Bytes| {
-        (
-            [
-                (
-                    header::CONTENT_TYPE,
-                    header::HeaderValue::from_static(content_type),
-                ),
-                (
-                    header::CACHE_CONTROL,
-                    header::HeaderValue::from_static(THUMB_CACHE),
-                ),
-                (
-                    header::CONTENT_DISPOSITION,
-                    crate::archives::disposition_header(
-                        &crate::archives::thumbnail_disposition_for(
-                            &tankoubon_name,
-                            None,
-                            content_type,
-                        ),
-                    ),
-                ),
-            ],
-            bytes,
-        )
-            .into_response()
+        crate::archives::thumbnail_http_response(&headers, content_type, bytes, thumb_cache, || {
+            crate::archives::disposition_header(&crate::archives::thumbnail_disposition_for(
+                &tankoubon_name,
+                None,
+                content_type,
+            ))
+        })
     };
-    let thumb_settings = read_tankoubon_thumb_settings(&state).await;
+    let thumb_settings = crate::archives::thumb_settings(&state).await;
     let desired_format =
         crate::archives::desired_thumbnail_format(client_support, thumb_settings.format);
     if let Some((content_type, bytes)) =
@@ -725,11 +729,7 @@ async fn read_tankoubon_thumbnail_from_disk(
     support: crate::archives::ClientImageSupport,
 ) -> Option<(&'static str, bytes::Bytes)> {
     for format in crate::archives::thumbnail_formats_for(support) {
-        let path = state
-            .library
-            .thumb_dir
-            .join("TA")
-            .join(format!("{id}.{}", format.extension()));
+        let path = tankoubon_cover_path(state, id, format);
         if let Ok(contents) = tokio::fs::read(&path).await {
             return Some((format.content_type(), bytes::Bytes::from(contents)));
         }
@@ -742,11 +742,7 @@ async fn read_tankoubon_thumbnail_format(
     id: &str,
     format: lanrurugi_scanner::thumbnail::ThumbFormat,
 ) -> Option<(&'static str, bytes::Bytes)> {
-    let path = state
-        .library
-        .thumb_dir
-        .join("TA")
-        .join(format!("{id}.{}", format.extension()));
+    let path = tankoubon_cover_path(state, id, format);
     if let Ok(contents) = tokio::fs::read(&path).await {
         return Some((format.content_type(), bytes::Bytes::from(contents)));
     }
@@ -1126,6 +1122,28 @@ async fn update_tankoubon_thumbnail(
         Ok(path) => path,
         Err(e) => return error(StatusCode::BAD_REQUEST, "update_tankoubon_thumbnail", e),
     };
+    // Same as an archive's cover: another format's file would keep showing the old page, and an
+    // on-demand regeneration draws the first member's first page, so every format is written now.
+    for other in lanrurugi_scanner::thumbnail::ThumbFormat::ALL {
+        if other == thumb_settings.format {
+            continue;
+        }
+        let written = generate_tankoubon_cover(
+            &state,
+            id.as_str(),
+            &archive,
+            local_page,
+            other,
+            thumb_settings.quality,
+        )
+        .await;
+        if let Err(e) = written {
+            tracing::warn!(%id, format = other.extension(), error = %e, "could not write the new cover in another format");
+            crate::archives::remove_stale_cover(&tankoubon_cover_path(&state, id.as_str(), other))
+                .await;
+        }
+    }
+    crate::archives::mark_cover_written(&output).await;
 
     // The cover render took a while: only these fields, onto the tank as it is now.
     let marked = state

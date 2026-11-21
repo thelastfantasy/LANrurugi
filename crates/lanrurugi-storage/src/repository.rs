@@ -97,6 +97,13 @@ impl ArchiveRepository {
         Ok(Some(archive_from_fields(id, fields)?))
     }
 
+    /// Just the `name` field, for callers that need nothing else (naming a served cover): the
+    /// whole record carries the ToC, stamps and summary.
+    pub async fn name(&self, id: &ArchiveId) -> Result<Option<String>> {
+        let mut conn = self.pool.get().await?;
+        Ok(conn.hget(id.as_str(), "name").await?)
+    }
+
     /// All archive IDs currently in the database (legacy 40-hex-char key glob).
     pub async fn list_ids(&self) -> Result<Vec<ArchiveId>> {
         let mut conn = self.pool.get().await?;
@@ -902,6 +909,18 @@ const SCORE_LASTREADTIME: isize = -10;
 impl GroupingRepository {
     pub fn new(pool: Pool) -> Self {
         Self { pool }
+    }
+
+    /// Just the name, without reading the member list.
+    pub async fn name(&self, tankid: &TankId) -> Result<Option<String>> {
+        let mut conn = self.pool.get().await?;
+        let members: Vec<String> = conn
+            .zrangebyscore(tankid.as_str(), SCORE_NAME, SCORE_NAME)
+            .await?;
+        Ok(members
+            .iter()
+            .find_map(|m| m.strip_prefix("name_"))
+            .map(str::to_string))
     }
 
     pub async fn get(&self, tankid: &TankId) -> Result<Option<Grouping>> {

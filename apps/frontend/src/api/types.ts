@@ -29,6 +29,8 @@ export interface ArchiveMetadata {
   archive_count: number | null
   /** Whether a sidecar `.patch.zip` exists; not present on a synthetic Tankoubon entry. */
   has_patch?: boolean
+  /** LANrurugi-only: names the current cover file; `null` while there is none. See `coverUrl`. */
+  cover_version?: string | null
   /** LANrurugi-only: whether an Archive split suggestion exists for this archive. */
   has_split_suggestion?: boolean
   /** LANrurugi-only, present only when `true`: the file is known to be unreadable (#291). */

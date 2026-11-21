@@ -573,6 +573,8 @@ export function useSetArchiveThumbnail(id: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["archive", id] })
       queryClient.invalidateQueries({ queryKey: ["archives"] })
+      // Search results carry `cover_version`; the cards only ask for the new cover once they have it.
+      queryClient.invalidateQueries({ queryKey: ["search"] })
     },
   })
 }
@@ -1101,7 +1103,11 @@ export function useSetTankoubonThumbnail(id: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (page: number) => sendJson("PUT", `/tankoubons/${id}/thumbnail?page=${page}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tankoubon", id] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tankoubon", id] })
+      // Search results carry `cover_version`; the cards only ask for the new cover once they have it.
+      queryClient.invalidateQueries({ queryKey: ["search"] })
+    },
   })
 }
 
