@@ -1,13 +1,18 @@
 import type { ReactNode } from "react"
+import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 
 import { ConfirmSheet } from "@/components/common-ui/Display"
 import { PHONE_QUERY, useIsNarrowViewport } from "@/hooks/useIsNarrowViewport"
-import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme"
+import { Z_OVERLAY_ABOVE_LEGACY_MODAL } from "@/theme"
 
 /** Generic confirm/warning dialog using `dialog.tsx`'s `.swal2-popup`/`.swal2-actions` styling, or
  * a bottom sheet at phone width. Owns no business copy — `message`/`confirmLabel`/`danger` are all
- * caller-supplied. */
+ * caller-supplied.
+ *
+ * Portalled to `body` above the legacy modal layer: rendered in place, a dialog opened from inside
+ * the reader's archive overview sat in that page's own stacking context, under the overview — in
+ * the DOM and focusable, but invisible and unclickable. */
 export function Confirm({
   message,
   icon = "fa-exclamation-triangle",
@@ -40,10 +45,10 @@ export function Confirm({
       />
     )
   }
-  return (
+  return createPortal(
     <>
       <div
-        style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_BACKDROP, background: "rgba(0,0,0,0.4)" }}
+        style={{ position: "fixed", inset: 0, zIndex: Z_OVERLAY_ABOVE_LEGACY_MODAL, background: "rgba(0,0,0,0.4)" }}
         onClick={onCancel}
       />
       <div
@@ -55,7 +60,7 @@ export function Confirm({
           top: "50%",
           left: "50%",
           transform: "translate(-50%, -50%)",
-          zIndex: Z_OVERLAY_CONTENT,
+          zIndex: Z_OVERLAY_ABOVE_LEGACY_MODAL + 1,
           display: "block",
           width: 360,
           padding: 20,
@@ -82,6 +87,7 @@ export function Confirm({
           />
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   )
 }
