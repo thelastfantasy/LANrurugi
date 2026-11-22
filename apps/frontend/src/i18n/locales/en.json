@@ -534,7 +534,7 @@
   "settings.howLongYouStayLogged": "How long you stay logged in before your browser needs to silently refresh its session (no re-login needed as long as the refresh window below hasn't also expired).",
   "reader.howManyImagesToPreload": "How many images to preload",
   "I don't know everything, but I sure as hell know this database's busted lads": "I don't know everything, but I sure as hell know this database's busted lads",
-  "settings.ianaTimezoneIdentifierEG": "IANA timezone identifier (e.g. Asia/Tokyo, UTC). Used to display date_added tags and resolve date_added:YYYY-MM-DD searches to a calendar day. Defaults to UTC.",
+  "settings.ianaTimezoneIdentifierEG": "IANA timezone identifier (e.g. Asia/Tokyo, UTC). Used to resolve date_added tags and date_added:YYYY-MM-DD searches to a calendar day, and to compute the bounds of \"last N days\"-style filter windows (including a subscription's time window). Times are still displayed in the browser's own timezone. Defaults to UTC.",
   "settings.id": "ID",
   "edit.id": "ID:",
   "app.iconColor": "Icon Color",

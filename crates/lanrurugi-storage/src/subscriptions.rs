@@ -122,14 +122,34 @@ fn library_deleted_key(subscription_id: &str) -> String {
     format!("LANRURUGI_SUBSCRIPTION_LIBRARY_DELETED_{subscription_id}")
 }
 
-/// Works this subscription queued for download, `source -> epoch ms`.
+/// Every acceptance this subscription recorded, `source -> comma-separated epoch ms` (oldest first).
 ///
 /// The "accepted" list is a membership list, not a view of the download queue: a queue row is swept
 /// once its retention passes, and a row whose work was deleted leaves nothing behind, so deriving
-/// "was this accepted?" from them lets a row vanish for a reason that is not expiry. This record is
-/// written once, when the download is queued, and pruned only by the same retention the queue uses.
+/// "was this accepted?" from them lets a row vanish for a reason that is not expiry.
+///
+/// Append-only: a second acceptance of the same work adds a timestamp, it does not replace the first —
+/// replacing would discard the newest record in favour of an older one, which is the same non-expiry
+/// disappearance this list exists to prevent. Timestamps rather than a second record because the
+/// source URL is the expensive part and it is stored once; one timestamp is 13 characters. A
+/// timestamp goes only when it passes the retention ([`SubscriptionRepository::prune_accepted_before`]).
 fn accepted_key(subscription_id: &str) -> String {
     format!("LANRURUGI_SUBSCRIPTION_ACCEPTED_{subscription_id}")
+}
+
+/// Appends one timestamp to a work's field. A hash has no atomic append, and a read-then-write could
+/// lose a concurrent acceptance — a lost record is a row leaving the history before it expires.
+const APPEND_ACCEPTED: &str = r#"
+local current = redis.call('HGET', KEYS[1], ARGV[1])
+if current then
+  return redis.call('HSET', KEYS[1], ARGV[1], current .. ',' .. ARGV[2])
+end
+return redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+"#;
+
+/// The timestamps in one acceptance field, oldest first (a single value is the common case).
+fn accept_times(value: &str) -> Vec<i64> {
+    value.split(',').filter_map(|at| at.parse().ok()).collect()
 }
 
 /// Epoch milliseconds, for ordering the blocked list. Local helper rather than a dependency on the
@@ -1280,25 +1300,35 @@ impl SubscriptionRepository {
             return Ok(());
         }
         let mut conn = self.pool.get().await?;
-        let at = now_ms();
-        let mut pipe = deadpool_redis::redis::pipe();
+        let at = now_ms().to_string();
         for source in sources {
-            // `hset_nx`: the first acceptance is when the row started, and re-queueing (a retry, a
-            // fresh download of the same work) must not extend its life.
-            pipe.hset_nx(accepted_key(subscription_id), source, at)
-                .ignore();
+            // Appended, never merged into an existing record: see [`accepted_key`].
+            let _: () = deadpool_redis::redis::Script::new(APPEND_ACCEPTED)
+                .key(accepted_key(subscription_id))
+                .arg(source)
+                .arg(&at)
+                .invoke_async(&mut *conn)
+                .await?;
         }
-        let _: () = pipe.query_async(&mut *conn).await?;
         Ok(())
     }
 
-    /// The works this subscription accepted, `source -> epoch ms`.
-    pub async fn accepted_all(
-        &self,
-        subscription_id: &str,
-    ) -> Result<std::collections::HashMap<String, i64>> {
+    /// Every acceptance record this subscription holds, `(source, accepted_at)`, oldest first — one
+    /// entry per acceptance, so one work may appear more than once.
+    pub async fn accepted_all(&self, subscription_id: &str) -> Result<Vec<(String, i64)>> {
         let mut conn = self.pool.get().await?;
-        Ok(conn.hgetall(accepted_key(subscription_id)).await?)
+        let raw: std::collections::HashMap<String, String> =
+            conn.hgetall(accepted_key(subscription_id)).await?;
+        let mut out: Vec<(String, i64)> = raw
+            .iter()
+            .flat_map(|(source, times)| {
+                accept_times(times)
+                    .into_iter()
+                    .map(move |at| (source.clone(), at))
+            })
+            .collect();
+        out.sort_by_key(|(_, at)| *at);
+        Ok(out)
     }
 
     /// Drops accepted records older than `cutoff_ms` — the one way a row leaves the accepted list.
@@ -1309,16 +1339,28 @@ impl SubscriptionRepository {
     ) -> Result<usize> {
         let mut conn = self.pool.get().await?;
         let key = accepted_key(subscription_id);
-        let all: std::collections::HashMap<String, i64> = conn.hgetall(&key).await?;
-        let stale: Vec<String> = all
-            .into_iter()
-            .filter(|(_, at)| *at < cutoff_ms)
-            .map(|(source, _)| source)
-            .collect();
-        if !stale.is_empty() {
-            let _: () = conn.hdel(&key, &stale).await?;
+        let all: std::collections::HashMap<String, String> = conn.hgetall(&key).await?;
+        let mut pipe = deadpool_redis::redis::pipe();
+        pipe.atomic();
+        let mut dropped = 0usize;
+        for (source, times) in &all {
+            let all_times = accept_times(times);
+            let kept: Vec<String> = all_times
+                .iter()
+                .filter(|at| **at >= cutoff_ms)
+                .map(i64::to_string)
+                .collect();
+            dropped += all_times.len() - kept.len();
+            if kept.is_empty() {
+                pipe.hdel(&key, source).ignore();
+            } else if kept.len() != all_times.len() {
+                pipe.hset(&key, source, kept.join(",")).ignore();
+            }
         }
-        Ok(stale.len())
+        if dropped > 0 {
+            let _: () = pipe.query_async(&mut *conn).await?;
+        }
+        Ok(dropped)
     }
 
     /// Settles works by the user's own decision: never downloaded again, and never reconsidered.
@@ -1932,20 +1974,27 @@ mod tests {
         repo.forget_all_seen(id).await.unwrap();
         let listed = repo.accepted_all(id).await.unwrap();
         assert_eq!(listed.len(), 1);
-        assert!(listed.contains_key(&source));
+        assert_eq!(listed[0].0, source);
 
-        {
-            let mut conn = pool.get().await.unwrap();
-            let stale = now_ms() - 40 * 86_400_000;
-            let _: () = conn.hset(accepted_key(id), &source, stale).await.unwrap();
-        }
+        // A second acceptance appends its own timestamp; the first is not replaced.
+        let first_at = listed[0].1;
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        repo.mark_accepted(id, std::slice::from_ref(&source))
+            .await
+            .unwrap();
+        let events = repo.accepted_all(id).await.unwrap();
+        assert_eq!(events.len(), 2, "one timestamp per acceptance");
+        let second_at = events[1].1;
+        assert!(second_at > first_at);
+
+        // Pruning drops the expired timestamp only; the newer one still holds the row in the list.
         assert_eq!(
-            repo.prune_accepted_before(id, now_ms() - 86_400_000)
-                .await
-                .unwrap(),
+            repo.prune_accepted_before(id, first_at + 1).await.unwrap(),
             1
         );
-        assert!(repo.accepted_all(id).await.unwrap().is_empty());
+        let left = repo.accepted_all(id).await.unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].1, second_at);
         repo.delete(id).await.unwrap();
     }
 
