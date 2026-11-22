@@ -102,6 +102,17 @@ fn skipped_key(subscription_id: &str) -> String {
     format!("LANRURUGI_SUBSCRIPTION_SKIPPED_{subscription_id}")
 }
 
+/// Works the user threw away from the download queue, `source -> epoch ms`.
+///
+/// A deleted queue row is the only trace of "this was queued and then discarded": the cycle keeps the
+/// decision (`queued`) for good, and the queue no longer holds the item, so the history would go on
+/// claiming "added to the download queue" for a work that will never arrive. A work deleted from the
+/// *library* needs no entry here — the recycle bin still holds it, and that record also stops being
+/// true once it is restored. Bounded by [`DELETED_RETENTION_DAYS`].
+fn deleted_key(subscription_id: &str) -> String {
+    format!("LANRURUGI_SUBSCRIPTION_DELETED_{subscription_id}")
+}
+
 /// Epoch milliseconds, for ordering the blocked list. Local helper rather than a dependency on the
 /// jobs crate's own clock: this is the only timestamp this file needs.
 fn now_ms() -> i64 {
@@ -142,6 +153,10 @@ const LEGACY_CYCLES_KEPT: isize = 12;
 /// How long a rejected work stays reconsiderable. Past this it is simply seen: a rating that has not
 /// moved in a week is unlikely to, and every reconsiderable work costs a refresh each check.
 pub const RECONSIDER_DAYS: i64 = 7;
+
+/// How long a deleted work is remembered ([`deleted_key`]). Long enough to explain a row the user
+/// still recognizes, short enough that the record cannot accumulate for ever.
+pub const DELETED_RETENTION_DAYS: i64 = 30;
 
 // ── Subscription ────────────────────────────────────────────────────────────────────────────────
 
@@ -1117,6 +1132,64 @@ impl SubscriptionRepository {
         Ok(stale.len())
     }
 
+    /// Remembers that the user deleted these works from the download queue.
+    ///
+    /// Called by the queue's own delete path, which is what knows both the item and the subscription
+    /// it came from. See [`deleted_key`] for why the history needs this at all.
+    pub async fn mark_deleted(&self, subscription_id: &str, sources: &[String]) -> Result<()> {
+        if sources.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.pool.get().await?;
+        let at = now_ms();
+        let mut pipe = deadpool_redis::redis::pipe();
+        for source in sources {
+            pipe.hset(deleted_key(subscription_id), source, at).ignore();
+        }
+        let _: () = pipe.query_async(&mut *conn).await?;
+        Ok(())
+    }
+
+    /// The works recorded as deleted, `source -> epoch ms`.
+    pub async fn deleted_all(
+        &self,
+        subscription_id: &str,
+    ) -> Result<std::collections::HashMap<String, i64>> {
+        let mut conn = self.pool.get().await?;
+        Ok(conn.hgetall(deleted_key(subscription_id)).await?)
+    }
+
+    /// Drops delete records — because the work was queued again, or because the user asked for a
+    /// fresh look at everything. A work that is downloaded again is not deleted any more.
+    pub async fn forget_deleted(&self, subscription_id: &str, sources: &[String]) -> Result<()> {
+        if sources.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.pool.get().await?;
+        let _: () = conn.hdel(deleted_key(subscription_id), sources).await?;
+        Ok(())
+    }
+
+    /// Drops delete records older than `cutoff_ms`; returns how many went. The works stay seen.
+    pub async fn prune_deleted_before(
+        &self,
+        subscription_id: &str,
+        cutoff_ms: i64,
+    ) -> Result<usize> {
+        let mut conn = self.pool.get().await?;
+        let key = deleted_key(subscription_id);
+        let all: std::collections::HashMap<String, i64> = conn.hgetall(&key).await?;
+        let stale: Vec<String> = all
+            .into_iter()
+            .filter(|(_, at)| *at < cutoff_ms)
+            .map(|(source, _)| source)
+            .collect();
+        if !stale.is_empty() {
+            let _: () = conn.hdel(&key, &stale).await?;
+        }
+        Ok(stale.len())
+    }
+
     /// Settles works by the user's own decision: never downloaded again, and never reconsidered.
     ///
     /// This is the one rejection that is not the host's guess about a value that may change — it is an
@@ -1263,9 +1336,10 @@ impl SubscriptionRepository {
         migrate_rejected(&mut conn, subscription_id).await?;
         let _: () = conn.hdel(rejected_at_key(subscription_id), sources).await?;
         // A blocked work that is being reconsidered stops being blocked, by definition — and a
-        // skipped one stops being skipped.
+        // skipped one stops being skipped, and a deleted one stops reading as deleted.
         let _: () = conn.hdel(blocked_key(subscription_id), sources).await?;
         let _: () = conn.hdel(skipped_key(subscription_id), sources).await?;
+        let _: () = conn.hdel(deleted_key(subscription_id), sources).await?;
         Ok(())
     }
 
@@ -1281,6 +1355,7 @@ impl SubscriptionRepository {
         let _: () = conn.del(rejected_at_key(subscription_id)).await?;
         let _: () = conn.del(blocked_key(subscription_id)).await?;
         let _: () = conn.del(skipped_key(subscription_id)).await?;
+        let _: () = conn.del(deleted_key(subscription_id)).await?;
         Ok(())
     }
 
@@ -1611,6 +1686,47 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    /// A deleted work is remembered, forgotten again when it is queued afresh, and dropped once it is
+    /// past `DELETED_RETENTION_DAYS`.
+    #[tokio::test]
+    async fn deleted_works_are_listed_forgotten_and_pruned() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let id = "sub-deleted-1";
+        let repo = SubscriptionRepository::new(pool.clone());
+        repo.delete(id).await.unwrap();
+        let source = "e-hentai.org/g/9202/bbbbbbbbbb".to_string();
+        repo.mark_deleted(id, std::slice::from_ref(&source))
+            .await
+            .unwrap();
+        let listed = repo.deleted_all(id).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed.contains_key(&source));
+        repo.forget_deleted(id, std::slice::from_ref(&source))
+            .await
+            .unwrap();
+        assert!(repo.deleted_all(id).await.unwrap().is_empty());
+
+        repo.mark_deleted(id, std::slice::from_ref(&source))
+            .await
+            .unwrap();
+        {
+            let mut conn = pool.get().await.unwrap();
+            let stale = now_ms() - (DELETED_RETENTION_DAYS + 1) * 86_400_000;
+            let _: () = conn.hset(deleted_key(id), &source, stale).await.unwrap();
+        }
+        assert_eq!(
+            repo.prune_deleted_before(id, now_ms() - 86_400_000)
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(repo.deleted_all(id).await.unwrap().is_empty());
+        repo.delete(id).await.unwrap();
     }
 
     /// A reconsiderable set written before rejections carried a time is moved over on first touch,

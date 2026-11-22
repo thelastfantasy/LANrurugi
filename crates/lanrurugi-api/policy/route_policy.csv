@@ -155,9 +155,11 @@ p, token_guest, /api/database/drop, POST, deny
 p, token_guest, /api/database/duplicates, GET, deny
 p, token_guest, /api/database/duplicates, DELETE, deny
 p, token_guest, /api/database/duplicates/scan, POST, deny
+p, token_guest, /api/database/duplicates/events, GET, deny
 p, token_guest, /api/database/duplicates/groups, GET, deny
 p, token_guest, /api/database/duplicates/groups/:key, GET, deny
 p, token_guest, /api/database/duplicates/compare, GET, deny
+p, token_guest, /api/database/duplicates/compare/progress, GET, deny
 p, token_guest, /api/database/duplicates/patch, POST, deny
 p, token_guest, /api/database/blake3-backfill, POST, deny
 p, token_guest, /api/database/blake3-backfill, DELETE, deny

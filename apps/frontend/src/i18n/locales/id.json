@@ -830,5 +830,19 @@
   "settings.timezoneFilterPlaceholder": "Cari menurut nama atau selisih, mis. Tokyo, +09",
   "settings.timezoneNoMatch": "Tidak ada zona waktu yang cocok",
   "activity.queueItemCount": "{{count}} unduhan",
-  "duplicates.scanning": "Memindai…"
+  "duplicates.scanning": "Memindai…",
+  "duplicates.scanningWarning": "Grup di bawah adalah yang ditemukan sejauh ini dan masih bisa berubah: menghapus atau menggabungkan file sekarang, atau pilihan pada suatu grup, mungkin tidak berlaku lagi nanti — risiko Anda sendiri.",
+  "duplicates.interrupted": "Pemindaian terakhir terputus (misalnya karena server dimulai ulang), jadi hasil ini belum lengkap; pemindaian berlanjut otomatis sekitar satu menit setelah server berjalan.",
+  "duplicates.noCover": "{{count}} arsip tidak memiliki thumbnail sampul dan tidak dibandingkan kali ini. Pindai lagi setelah thumbnail-nya ada untuk menyertakannya.",
+  "duplicates.phase.preparing": "Menyiapkan",
+  "duplicates.phase.covers": "Membaca sampul",
+  "duplicates.phase.grouping": "Mengelompokkan",
+  "duplicates.phase.patches": "Memeriksa patch",
+  "duplicates.phase.reviewing": "Tinjauan model",
+  "duplicates.phase.cleanup": "Membersihkan",
+  "duplicates.compareProgress": "Membaca halaman: A {{aDone}}/{{aTotal}} · B {{bDone}}/{{bTotal}}",
+  "duplicates.nothingPending": "Tidak ada yang perlu diputuskan; grup yang sudah ditangani ada di bawah.",
+  "duplicates.handledSection": "Sudah ditangani ({{count}} grup)",
+  "duplicates.allKept": "Semua disimpan",
+  "duplicates.undoHandled": "Urungkan"
 }

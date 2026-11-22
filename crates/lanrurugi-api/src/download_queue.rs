@@ -15,7 +15,7 @@ use axum::routing::{get, patch, post};
 use axum::Router;
 use futures_util::StreamExt;
 use lanrurugi_plugin::protocol::PluginInfo;
-use lanrurugi_storage::download_queue::DownloadQueueState;
+use lanrurugi_storage::download_queue::{DownloadQueueItem, DownloadQueueState};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio_stream::wrappers::BroadcastStream;
@@ -492,6 +492,9 @@ async fn delete_queue_item(
         Ok(()) => {
             if let Some(tx) = &state.download_queue_tx {
                 let _ = tx.send(serde_json::json!({ "kind": "remove", "id": &id }));
+            }
+            if let Some(item) = &item {
+                record_subscription_deletion(&state, item).await;
             }
             record_manual(
                 &state,
@@ -1037,6 +1040,9 @@ async fn delete_selected(
             if let Some(tx) = &state.download_queue_tx {
                 let _ = tx.send(serde_json::json!({ "kind": "remove", "id": id }));
             }
+            if let Some(item) = &item {
+                record_subscription_deletion(&state, item).await;
+            }
             deleted.push(id.clone());
         }
     }
@@ -1057,6 +1063,25 @@ async fn delete_selected(
         .await;
     }
     axum::Json(json!({ "deleted": deleted })).into_response()
+}
+
+/// Remembers a deleted item so its subscription's history can say "deleted".
+///
+/// Deleting the row is what erases the evidence: the cycle recorded only the decision (`queued`), so
+/// without this the panel would keep claiming the work was added to the queue long after the user
+/// threw it away. Only subscription-owned items have a history to correct.
+async fn record_subscription_deletion(state: &AppState, item: &DownloadQueueItem) {
+    let Some(subscription_id) = &item.subscription_id else {
+        return;
+    };
+    let source = crate::plugins::trim_url(&item.url);
+    if let Err(e) = state
+        .subscriptions
+        .mark_deleted(subscription_id, &[source])
+        .await
+    {
+        tracing::warn!(%subscription_id, error = %e, "could not record a deleted subscription work");
+    }
 }
 
 #[derive(Debug)]

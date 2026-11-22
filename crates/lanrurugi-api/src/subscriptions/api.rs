@@ -526,6 +526,25 @@ async fn combined_history(
         })
         .collect();
 
+    // What the library says became of these works. A cycle's verdict stops being the whole truth the
+    // moment the work is handled, and nothing rewrites it afterwards, so a deleted work would go on
+    // reading "queued" for ever. Two records say otherwise: the recycle bin (deleted after it was
+    // catalogued, and silent again once restored) and the delete records the queue writes (thrown
+    // away before it ever arrived).
+    let recycled_by_source = recycled_sources(&state).await;
+    let mut deleted_by_source: std::collections::HashMap<(String, String), i64> =
+        Default::default();
+    for subscription in &subscriptions {
+        for (source, at) in state
+            .subscriptions
+            .deleted_all(&subscription.id)
+            .await
+            .unwrap_or_default()
+        {
+            deleted_by_source.insert((subscription.id.clone(), source), at);
+        }
+    }
+
     // Per subscription, because that is how cycles are stored; merged afterwards by time.
     let mut entries: Vec<serde_json::Value> = Vec::new();
     // Every subscription's skips, kept for after the merge: one whose check aged out of the history
@@ -678,12 +697,60 @@ async fn combined_history(
             "download": outcome_by_source.get(&source),
         }));
     }
+    for entry in entries.iter_mut() {
+        let subscription_id = entry["subscription_id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let Some(source) = entry["candidate"]["source_url"]
+            .as_str()
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        let recycled = recycled_by_source.get(&source).copied();
+        let from_queue = deleted_by_source
+            .get(&(subscription_id, source))
+            .map(|at| at / 1000);
+        // Whichever happened last is what the row is about.
+        let deleted = match (recycled, from_queue) {
+            (Some(bin), Some(queue)) if bin >= queue => Some((bin, "recycled")),
+            (Some(_), Some(queue)) => Some((queue, "queue")),
+            (Some(bin), None) => Some((bin, "recycled")),
+            (None, Some(queue)) => Some((queue, "queue")),
+            (None, None) => None,
+        };
+        if let Some((at, kind)) = deleted {
+            entry["deleted"] = json!({ "at": at, "kind": kind });
+        }
+    }
     entries.sort_by_key(|e| std::cmp::Reverse(e["checked_at"].as_i64().unwrap_or(0)));
 
     let limit = params.limit.unwrap_or(1000).min(1000);
     entries.truncate(limit);
 
     axum::Json(json!({ "history": entries })).into_response_owned()
+}
+
+/// The works still in the recycle bin, by trimmed source URL → when it was deleted (epoch seconds).
+///
+/// Reads the bin itself rather than a copy: restoring an archive makes the bin entry disappear, which
+/// is exactly when the "deleted" label should stop being shown.
+async fn recycled_sources(state: &AppState) -> std::collections::HashMap<String, i64> {
+    let Ok(entries) =
+        lanrurugi_storage::recycle::RecycleRepository::new(state.redis.archive.clone())
+            .list()
+            .await
+    else {
+        return Default::default();
+    };
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let source = entry.snapshot.primary_source?;
+            Some((crate::plugins::trim_url(&source), entry.deleted_at))
+        })
+        .collect()
 }
 
 /// How many cycles to read per subscription before merging: every kept one. Summaries are small, and
@@ -1261,6 +1328,20 @@ async fn approve_entries(state: &AppState, ids: &[String]) -> (usize, Vec<serde_
     // while the user believed they had approved them.
     if let Err(e) = state.subscriptions.delete_pending_many(&answered).await {
         tracing::warn!(error = %e, "approved works queued but left on the approval list");
+    }
+    // Queued again, so no longer a deleted row (see `deleted_key`).
+    for item in &queued {
+        let Some(subscription_id) = &item.subscription_id else {
+            continue;
+        };
+        let source = crate::plugins::trim_url(&item.url);
+        if let Err(e) = state
+            .subscriptions
+            .forget_deleted(subscription_id, &[source])
+            .await
+        {
+            tracing::warn!(%subscription_id, error = %e, "could not clear a deleted-work record");
+        }
     }
     let approved = queued.len();
     let item_ids: Vec<String> = queued.into_iter().map(|i| i.id).collect();

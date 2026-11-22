@@ -1186,6 +1186,15 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // #332: the memory tier sets both image pools' limits (it logs them).
     lanrurugi_api::memory_mode::apply(&state).await;
     lanrurugi_core::memory::log_snapshot("startup");
+    // A duplicate scan a restart cut short starts again on its own, a minute in so it does not
+    // compete with the startup library scan for the disk.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            lanrurugi_api::duplicates::scan::resume_interrupted(&state).await;
+        });
+    }
     let app = app::build_app(state, args.static_dir, args.docs_dir);
     let listener = match args.bind.parse::<std::net::SocketAddr>() {
         Ok(addr) => tokio::net::TcpListener::from_std(lanrurugi_server::listen::bind(addr)?)?,

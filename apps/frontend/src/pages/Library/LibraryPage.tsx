@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { ApiError } from "@/api/client";
 import { Link } from "@/components/common-ui/Link";
 import { useLibrary } from "@/hooks/useLibrary";
+import { sourceTagFrom } from "@/lib/deleteArchive";
 import { routes } from "@/lib/routes";
 import { isTankoubonId } from "@/lib/utils/isTankoubonId";
 
@@ -30,13 +31,7 @@ function sourceOf(
   shown: { arcid: string; tags?: string | null }[],
   id: string,
 ): string | undefined {
-  const tags = shown.find((a) => a.arcid === id)?.tags
-  if (!tags) return undefined
-  for (const tag of tags.split(",")) {
-    const value = tag.trim()
-    if (value.toLowerCase().startsWith("source:")) return value.slice("source:".length).trim()
-  }
-  return undefined
+  return sourceTagFrom(shown.find((a) => a.arcid === id)?.tags)
 }
 
 export function Library() {

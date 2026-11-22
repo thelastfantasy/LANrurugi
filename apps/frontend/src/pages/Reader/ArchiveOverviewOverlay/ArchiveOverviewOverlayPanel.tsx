@@ -36,11 +36,13 @@ import { confirmDialog, newCategoryDialog, promptDialog } from "@/dialog"
 import { usePaginatedOverview } from "@/hooks/usePaginatedOverview"
 import { useSupportsHover } from "@/hooks/useSupportsHover"
 import type { TankoubonChapter } from "@/hooks/useTankoubonReading"
+import { deleteArchiveToBin, sourceTagFrom } from "@/lib/deleteArchive"
 import { routes } from "@/lib/routes"
 import { isBookExtension } from "@/lib/utils/bookFormats"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 import { sortCategories } from "@/lib/utils/sortCategories"
 import { displayTocName, isReservedTocIdentifier } from "@/lib/utils/tocValidation"
+import { DeleteConfirmDialog } from "@/pages/Library/DeleteConfirmDialog"
 import { TankDeleteChoiceDialog } from "@/pages/Library/TankDeleteChoiceDialog"
 import { EntryTreePopover } from "@/pages/Upload/EntryTreePopover"
 import { toast } from "@/toast"
@@ -336,6 +338,7 @@ export function ArchiveOverviewOverlay({
   const removeTocEntryForId = useRemoveTocEntryForId()
   const deleteTankoubon = useDeleteTankoubon()
   const [tankDeleteOpen, setTankDeleteOpen] = useState(false)
+  const [archiveDeleteOpen, setArchiveDeleteOpen] = useState(false)
   const splitSuggestion = useArchiveSplitSuggestion(!isTank ? archive.arcid : null)
   const analyzeSplit = useAnalyzeArchiveSplit()
   const executeSplit = useExecuteArchiveSplit()
@@ -467,15 +470,21 @@ export function ArchiveOverviewOverlay({
       setTankDeleteOpen(true)
       return
     }
-    if (
-      !(await confirmDialog(
-        t("common.thisWillDeleteBothMetadata") ?? "",
-        true,
-      ))
-    ) {
-      return
-    }
-    await fetch(`/api/archives/${archive.arcid}`, { method: "DELETE" })
+    // The library's own confirmation: it asks whether subscriptions may fetch the work again.
+    setArchiveDeleteOpen(true)
+  }
+
+  async function confirmArchiveDelete(blockResubscribe: boolean) {
+    setArchiveDeleteOpen(false)
+    const deleted = await deleteArchiveToBin({
+      archiveId: archive.arcid,
+      reconsiderSource: blockResubscribe ? undefined : sourceTagFrom(archive.tags),
+      queryClient,
+      t,
+    })
+    if (!deleted) return
+    queryClient.invalidateQueries({ queryKey: ["archive", archive.arcid] })
+    queryClient.invalidateQueries({ queryKey: ["archives"] })
     navigate(routes.library())
   }
 
@@ -1136,6 +1145,14 @@ export function ArchiveOverviewOverlay({
         <ScrollToTopFab onJump={() => setScrollAnchor(1)} />
       </div>
 
+      {archiveDeleteOpen && (
+        <DeleteConfirmDialog
+          isTank={false}
+          source={sourceTagFrom(archive.tags)}
+          onCancel={() => setArchiveDeleteOpen(false)}
+          onConfirm={(blockResubscribe) => void confirmArchiveDelete(blockResubscribe)}
+        />
+      )}
       {tankDeleteOpen && (
         <TankDeleteChoiceDialog
           title={archive.title}

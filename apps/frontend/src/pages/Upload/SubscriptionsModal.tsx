@@ -83,6 +83,17 @@ function bandOf(record: CandidateRecord): "match" | "waiting" | "excluded" | "he
 function outcomeOf(entry: HistoryEntry): { key: string; band: keyof typeof ROW_CLASS } | null {
   // Answered "no" from the approval list, and never queued: the cycle's "awaiting approval" is stale.
   if (entry.skipped && !entry.download) return { key: "subscriptions.outcomeSkipped", band: "excluded" }
+  // Deleted after it was handled. Checked first because it is the newest fact about the work: a queue
+  // row can say `done` while the archive has already been thrown out of the library.
+  if (entry.deleted) {
+    return {
+      key:
+        entry.deleted.kind === "recycled"
+          ? "subscriptions.outcomeDeletedRecycled"
+          : "subscriptions.outcomeDeletedQueue",
+      band: "excluded",
+    }
+  }
   const state = entry.download?.state
   switch (state) {
     case "done":
@@ -430,7 +441,14 @@ export function SubscriptionsModal({
     // queue reads `queued` — both were accepted, and the queue record is the evidence of it. Without
     // the `download` half this tab is empty whenever nothing happens to be in flight at this second.
     if (band === "match")
-      return all.filter((e) => (bandOf(e.candidate) === "match" && !e.skipped) || e.download != null)
+      return all.filter(
+        (e) =>
+          (bandOf(e.candidate) === "match" && !e.skipped) ||
+          e.download != null ||
+          // Deleted after it was handled: the cycle's verdict may since read `already_held`, but the
+          // work was accepted and then thrown away, which is what this tab is about.
+          e.deleted != null,
+      )
     return all.filter((e) => bandOf(e.candidate) === "excluded")
   }, [history.data, band, blockedRows, reservations.data])
   const rows = unfilteredRows.filter(
@@ -585,14 +603,30 @@ export function SubscriptionsModal({
                     fixed-width and always present: only downloaded works have a state, and letting
                     their titles start further right than everyone else's would be worse than the
                     icon is good. */}
-                {e.download && (
+                {(e.download || e.deleted) && (
                   <span className="history-title-state">
-                    <Tooltip label={stateLabel(e.download.state, t)} zIndex={9700}>
-                      <i
-                        className={`fa ${DOWNLOAD_STATE_ICON[e.download.state] ?? "fa-circle"} history-state-icon ${stateIconClass(e.download.state)}`}
-                        aria-label={stateLabel(e.download.state, t) ?? undefined}
-                      ></i>
-                    </Tooltip>
+                    {e.deleted ? (
+                      <Tooltip
+                        label={t("subscriptions.outcomeDeletedHint", {
+                          when: new Date(e.deleted.at * 1000).toLocaleString(),
+                        })}
+                        zIndex={9700}
+                      >
+                        {/* A shape of its own rather than a new colour: nothing is in flight and
+                            nothing is in the library, so neither existing state's colour fits. */}
+                        <i
+                          className="fa fa-trash history-state-icon history-state-running"
+                          aria-label={t("subscriptions.outcomeDeleted") ?? undefined}
+                        ></i>
+                      </Tooltip>
+                    ) : e.download ? (
+                      <Tooltip label={stateLabel(e.download.state, t)} zIndex={9700}>
+                        <i
+                          className={`fa ${DOWNLOAD_STATE_ICON[e.download.state] ?? "fa-circle"} history-state-icon ${stateIconClass(e.download.state)}`}
+                          aria-label={stateLabel(e.download.state, t) ?? undefined}
+                        ></i>
+                      </Tooltip>
+                    ) : null}
                   </span>
                 )}
                 <CandidateTitleLink record={e.candidate} order={titleOrder} />
@@ -622,7 +656,7 @@ export function SubscriptionsModal({
                     <Verdict record={e.candidate} />
                   )}
                 <span className="history-when" title={t("subscriptions.colWhen")}>
-                  {new Date(e.checked_at * 1000).toLocaleString()}
+                  {new Date((e.deleted?.at ?? e.checked_at) * 1000).toLocaleString()}
                 </span>
                 {/* Both directions from the row itself. The history cannot mark a blocked work by
                     itself — in it, a blocked work reads exactly like any other seen one — so the

@@ -754,5 +754,19 @@
   "settings.timezoneFilterPlaceholder": "Pesquisar por nome ou deslocamento, ex.: Tokyo, +09",
   "settings.timezoneNoMatch": "Nenhum fuso horário correspondente",
   "activity.queueItemCount": "{{count}} downloads",
-  "duplicates.scanning": "A analisar…"
+  "duplicates.scanning": "A analisar…",
+  "duplicates.scanningWarning": "Os grupos abaixo são os encontrados até agora e podem ainda mudar: apagar ou fundir ficheiros agora, ou escolhas feitas num grupo, podem deixar de se aplicar depois — por sua conta e risco.",
+  "duplicates.interrupted": "A última análise foi interrompida (por exemplo, por um reinício) e estes resultados estão incompletos; recomeça sozinha cerca de um minuto após o servidor arrancar.",
+  "duplicates.noCover": "{{count}} arquivos não têm miniatura de capa e não foram comparados desta vez. Volte a analisar quando as miniaturas existirem para os incluir.",
+  "duplicates.phase.preparing": "A preparar",
+  "duplicates.phase.covers": "A ler capas",
+  "duplicates.phase.grouping": "A agrupar",
+  "duplicates.phase.patches": "A verificar patches",
+  "duplicates.phase.reviewing": "Revisão do modelo",
+  "duplicates.phase.cleanup": "A limpar",
+  "duplicates.compareProgress": "A ler páginas: A {{aDone}}/{{aTotal}} · B {{bDone}}/{{bTotal}}",
+  "duplicates.nothingPending": "Nada por decidir; os grupos tratados estão abaixo.",
+  "duplicates.handledSection": "Tratados ({{count}} grupos)",
+  "duplicates.allKept": "Todos mantidos",
+  "duplicates.undoHandled": "Anular"
 }

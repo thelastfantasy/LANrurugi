@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { ApiError, fetchJson, waitForJob } from "@/api/client"
+import { ApiError, fetchJson } from "@/api/client"
 import {
   useClearDuplicates,
   useDeleteArchive,
@@ -10,8 +10,9 @@ import {
   useSaveDuplicateDecisions,
   useScanDuplicates,
 } from "@/api/hooks"
-import type { DuplicateGroupView, DuplicateMember, JobRecord, JobsResponse } from "@/api/types"
+import type { DuplicateGroupView, DuplicateMember, DuplicateScanStatus } from "@/api/types"
 import { Button, NumberInput } from "@/components/common-ui/Form"
+import { STATE_COLOR } from "@/components/Display"
 import { confirmDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
@@ -49,10 +50,30 @@ import { useApplyTheme } from "@/theme"
  * a suggestion the local review produced (or the model's, when one is configured), and one
  * primary action — the side-by-side comparison.
  */
-/** The id of a duplicate scan still queued or running on the server, if any. */
-async function runningScanJob(): Promise<string | null> {
-  const { jobs } = await fetchJson<JobsResponse>("/jobs").catch(() => ({ jobs: [] as JobRecord[] }))
-  return jobs.find((job) => job.name === "find_duplicates" && (job.state === "queued" || job.state === "active"))?.id ?? null
+/** A running scan: what it is doing, how far, and what that means for the groups shown. */
+function ScanProgressPanel({ status }: { status: DuplicateScanStatus }) {
+  const { t } = useTranslation()
+  const percent = Math.round(status.progress * 100)
+  const phase = status.phase ? t(`duplicates.phase.${status.phase}`) : t("duplicates.phase.preparing")
+  return (
+    <div className="mb-3 text-sm" role="status">
+      <div className="mb-1 flex items-center gap-2">
+        <i className="fa fa-spinner fa-spin" aria-hidden="true" />
+        <span>
+          {phase}
+          {status.total > 0 ? ` · ${status.done.toLocaleString()} / ${status.total.toLocaleString()}` : ""}
+        </span>
+        <span className="ml-auto tabular-nums opacity-70">{percent}%</span>
+      </div>
+      {/* The track is translucent grey and the fill the theme's job colour, so it reads on every theme. */}
+      <div style={{ height: 6, borderRadius: 3, background: "rgba(128,128,128,0.25)", overflow: "hidden" }}>
+        <div style={{ width: `${percent}%`, height: "100%", background: STATE_COLOR.active, transition: "width 0.4s" }} />
+      </div>
+      <p className="mt-2 text-xs">
+        <i className="fa fa-triangle-exclamation" aria-hidden="true" /> {t("duplicates.scanningWarning")}
+      </p>
+    </div>
+  )
 }
 
 export function Duplicates() {
@@ -76,46 +97,47 @@ export function Duplicates() {
   useEffect(() => {
     localStorage.setItem(DUPLICATES_COVER_PERCENT_KEY, String(coverPercent))
   }, [coverPercent])
-  const [busy, setBusy] = useState(false)
+  const [liveStatus, setLiveStatus] = useState<DuplicateScanStatus | null>(null)
+  const scan = liveStatus ?? groups.data?.status ?? null
+  const busy = Boolean(scan?.scanning) || scanDuplicates.isPending
 
-  // The scan is a server job, so it keeps running when this page is left or reloaded, and the
-  // server refuses a second one while it runs. Either way this page follows the running scan: busy
-  // until it ends, then its results load.
-  async function followScan(jobId: string, isCancelled: () => boolean = () => false) {
-    setBusy(true)
-    try {
-      await waitForJob(jobId)
-      if (!isCancelled()) await groups.refetch()
-    } finally {
-      if (!isCancelled()) setBusy(false)
-    }
-  }
-
+  // The scan is a server job: it keeps running when this page is left or reloaded, and it publishes
+  // the groups found so far as it goes. The server pushes its status on connect and on every change
+  // (progress included, about once a second); the groups are refetched only when their revision
+  // moved or a scan just ended (its model reviews change the cards without changing the groups).
   useEffect(() => {
-    let cancelled = false
-    void runningScanJob().then((jobId) => {
-      if (jobId && !cancelled) void followScan(jobId, () => cancelled)
+    const source = new EventSource("/api/database/duplicates/events")
+    let last: DuplicateScanStatus | null = null
+    source.addEventListener("status", (event) => {
+      let status: DuplicateScanStatus
+      try {
+        status = JSON.parse((event as MessageEvent<string>).data) as DuplicateScanStatus
+      } catch {
+        return
+      }
+      if (!last || status.revision !== last.revision || (last.scanning && !status.scanning)) void groups.refetch()
+      last = status
+      setLiveStatus(status)
     })
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per visit
+    return () => source.close()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one subscription per visit
   }, [])
 
   async function handleScan() {
-    let jobId: string | null
     try {
-      jobId = (await scanDuplicates.mutateAsync(threshold)).job
+      await scanDuplicates.mutateAsync(threshold)
     } catch (error) {
-      // 409: a scan started elsewhere (another tab, or before a reload) is still running.
+      // 409: a scan started elsewhere (another tab, or before a reload) is already running, and the
+      // event stream is already following it.
       if (!(error instanceof ApiError && error.status === 409)) throw error
-      jobId = await runningScanJob()
     }
-    if (jobId) await followScan(jobId)
   }
 
   // A group whose other members were deleted since the scan has nothing left to compare.
   const list = (groups.data?.groups ?? []).filter((group) => group.members.length >= 2)
+  // A group whose members were all kept is handled; a rescan with the same members keeps it so.
+  const pending = list.filter((group) => !group.resolved)
+  const handled = list.filter((group) => group.resolved)
 
   return (
     <div className="ido duplicates-page">
@@ -151,8 +173,8 @@ export function Duplicates() {
           <span className="w-8 text-right tabular-nums opacity-70">{coverPercent}%</span>
         </label>
         <div className="flex items-center gap-2">
-          <button className="stdbtn" onClick={handleScan} disabled={busy || scanDuplicates.isPending}>
-            {(busy || scanDuplicates.isPending) && <i className="fa fa-spinner fa-spin mr-2" />}
+          <button className="stdbtn" onClick={handleScan} disabled={busy}>
+            {busy && <i className="fa fa-spinner fa-spin mr-2" />}
             {t("duplicates.scan")}
           </button>
           {list.length > 0 && (
@@ -172,7 +194,7 @@ export function Duplicates() {
       <p className="mb-4 text-xs opacity-70">
         {groups.data?.scanned_at
           ? t("duplicates.lastScan", {
-              count: list.length,
+              count: pending.length,
               chained: groups.data.chained_groups,
             })
           : busy
@@ -180,26 +202,50 @@ export function Duplicates() {
             : t("duplicates.neverScanned")}
       </p>
 
+      {scan?.scanning && <ScanProgressPanel status={scan} />}
+      {scan && !scan.scanning && scan.interrupted && (
+        <p className="mb-3 text-sm" role="status">
+          <i className="fa fa-triangle-exclamation" aria-hidden="true" /> {t("duplicates.interrupted")}
+        </p>
+      )}
+      {scan && !scan.scanning && scan.no_cover > 0 && (
+        <p className="mb-3 text-xs opacity-70">{t("duplicates.noCover", { count: scan.no_cover })}</p>
+      )}
+
       {groups.isLoading && (
         <div id="processing">
           <i className="fa fa-3x fa-compact-disc fa-spin"></i>
         </div>
       )}
 
-      {!groups.isLoading && !busy && list.length === 0 && (
-        <p className="opacity-70">{t("duplicates.empty")}</p>
+      {!groups.isLoading && !busy && pending.length === 0 && (
+        <p className="opacity-70">{handled.length > 0 ? t("duplicates.nothingPending") : t("duplicates.empty")}</p>
       )}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {list.map((group) => (
+        {pending.map((group) => (
           <GroupCard
             key={group.key}
             group={group}
-            busy={busy}
+            // Groups stay usable while a scan runs; the warning above says they may still change.
+            busy={scanDuplicates.isPending}
             coverPercent={coverPercent}
           />
         ))}
       </div>
+
+      {handled.length > 0 && (
+        <details className="mt-6">
+          <summary className="cursor-pointer text-sm font-semibold">
+            {t("duplicates.handledSection", { count: handled.length })}
+          </summary>
+          <div className="mt-3 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {handled.map((group) => (
+              <GroupCard key={group.key} group={group} busy={scanDuplicates.isPending} coverPercent={coverPercent} />
+            ))}
+          </div>
+        </details>
+      )}
 
       <Button id="return" className="mt-4" onClick={() => navigate(routes.library())}>
         {t("common.returnToLibrary")}
@@ -253,8 +299,8 @@ function GroupCard({
     })
   }
 
-  async function persist(states: Record<string, "keep" | "discard">, pairs?: [string, string][]) {
-    const decisions: Record<string, "keep" | "discard"> = {}
+  async function persist(states: Record<string, "keep" | "discard" | "undecided">, pairs?: [string, string][]) {
+    const decisions: Record<string, "keep" | "discard" | "undecided"> = {}
     for (const member of group.members) {
       const state = states[member.id]
       if (state) decisions[member.id] = state
@@ -323,6 +369,24 @@ function GroupCard({
           {t("duplicates.members", { count: group.members.length })}
         </span>
         <span className="flex items-center gap-2 text-xs opacity-80">
+          {group.resolved && (
+            <>
+              <span className="rounded bg-black/10 px-1.5 py-0.5">
+                <i className="fa fa-check mr-1" aria-hidden="true" />
+                {t("duplicates.allKept")}
+              </span>
+              <button
+                type="button"
+                className="underline opacity-80"
+                disabled={save.isPending}
+                onClick={() =>
+                  void persist(Object.fromEntries(group.members.map((m) => [m.id, "undecided" as const])))
+                }
+              >
+                {t("duplicates.undoHandled")}
+              </button>
+            </>
+          )}
           {group.chained && (
             <span className="rounded bg-black/10 px-1.5 py-0.5">
               {t("duplicates.chained")}

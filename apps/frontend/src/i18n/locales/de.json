@@ -815,5 +815,19 @@
   "settings.timezoneFilterPlaceholder": "Nach Name oder Versatz suchen, z. B. Tokyo, +09",
   "settings.timezoneNoMatch": "Keine passende Zeitzone",
   "activity.queueItemCount": "{{count}} Downloads",
-  "duplicates.scanning": "Wird durchsucht …"
+  "duplicates.scanning": "Wird durchsucht …",
+  "duplicates.scanningWarning": "Die Gruppen unten sind der bisherige Stand und können sich bis zum Ende noch ändern: Dateien jetzt zu löschen oder zusammenzuführen oder Entscheidungen zu einer Gruppe gelten danach womöglich nicht mehr – auf eigene Gefahr.",
+  "duplicates.interrupted": "Der letzte Suchlauf wurde abgebrochen (z. B. durch einen Neustart), die Ergebnisse sind unvollständig; er startet etwa eine Minute nach dem Serverstart von selbst neu.",
+  "duplicates.noCover": "{{count}} Archive haben kein Cover-Vorschaubild und wurden diesmal nicht verglichen. Ein erneuter Suchlauf nach dem Erzeugen der Vorschaubilder bezieht sie ein.",
+  "duplicates.phase.preparing": "Vorbereitung",
+  "duplicates.phase.covers": "Cover lesen",
+  "duplicates.phase.grouping": "Gruppieren",
+  "duplicates.phase.patches": "Patches prüfen",
+  "duplicates.phase.reviewing": "Modellprüfung",
+  "duplicates.phase.cleanup": "Aufräumen",
+  "duplicates.compareProgress": "Seiten lesen: A {{aDone}}/{{aTotal}} · B {{bDone}}/{{bTotal}}",
+  "duplicates.nothingPending": "Nichts mehr zu entscheiden; erledigte Gruppen stehen unten.",
+  "duplicates.handledSection": "Erledigt ({{count}} Gruppen)",
+  "duplicates.allKept": "Alle behalten",
+  "duplicates.undoHandled": "Rückgängig"
 }

@@ -778,5 +778,19 @@
   "settings.timezoneFilterPlaceholder": "Tìm theo tên hoặc độ lệch, ví dụ Tokyo, +09",
   "settings.timezoneNoMatch": "Không có múi giờ phù hợp",
   "activity.queueItemCount": "{{count}} lượt tải",
-  "duplicates.scanning": "Đang quét…"
+  "duplicates.scanning": "Đang quét…",
+  "duplicates.scanningWarning": "Các nhóm bên dưới là những gì tìm được đến lúc này và có thể còn thay đổi: xóa hoặc gộp tệp lúc này, hay lựa chọn đã đặt cho một nhóm, có thể không còn đúng sau đó — bạn tự chịu rủi ro.",
+  "duplicates.interrupted": "Lần quét trước bị gián đoạn (ví dụ do khởi động lại), nên kết quả chưa đầy đủ; việc quét sẽ tự tiếp tục khoảng một phút sau khi máy chủ khởi động.",
+  "duplicates.noCover": "{{count}} kho lưu trữ không có ảnh thu nhỏ bìa nên lần này chưa được so sánh. Quét lại khi đã có ảnh thu nhỏ để đưa chúng vào.",
+  "duplicates.phase.preparing": "Đang chuẩn bị",
+  "duplicates.phase.covers": "Đọc bìa",
+  "duplicates.phase.grouping": "Gom nhóm",
+  "duplicates.phase.patches": "Kiểm tra bản vá",
+  "duplicates.phase.reviewing": "Mô hình xem xét",
+  "duplicates.phase.cleanup": "Dọn dẹp",
+  "duplicates.compareProgress": "Đang đọc trang: A {{aDone}}/{{aTotal}} · B {{bDone}}/{{bTotal}}",
+  "duplicates.nothingPending": "Không còn gì cần quyết định; các nhóm đã xử lý ở bên dưới.",
+  "duplicates.handledSection": "Đã xử lý ({{count}} nhóm)",
+  "duplicates.allKept": "Giữ tất cả",
+  "duplicates.undoHandled": "Hoàn tác"
 }

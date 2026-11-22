@@ -771,5 +771,19 @@
   "settings.timezoneFilterPlaceholder": "Søk etter navn eller forskyvning, f.eks. Tokyo, +09",
   "settings.timezoneNoMatch": "Ingen tidssone passer",
   "activity.queueItemCount": "{{count}} nedlastinger",
-  "duplicates.scanning": "Skanner …"
+  "duplicates.scanning": "Skanner …",
+  "duplicates.scanningWarning": "Gruppene under er det som er funnet så langt og kan fortsatt endre seg: å slette eller slå sammen filer nå, eller valg gjort for en gruppe, gjelder kanskje ikke lenger etterpå – på egen risiko.",
+  "duplicates.interrupted": "Forrige skanning ble avbrutt (for eksempel av en omstart), så resultatene er ufullstendige; den starter igjen av seg selv omtrent ett minutt etter at serveren starter.",
+  "duplicates.noCover": "{{count}} arkiver har ikke miniatyrbilde av omslaget og ble ikke sammenlignet denne gangen. Skann på nytt når miniatyrbildene finnes for å ta dem med.",
+  "duplicates.phase.preparing": "Forbereder",
+  "duplicates.phase.covers": "Leser omslag",
+  "duplicates.phase.grouping": "Grupperer",
+  "duplicates.phase.patches": "Sjekker patcher",
+  "duplicates.phase.reviewing": "Modellvurdering",
+  "duplicates.phase.cleanup": "Rydder opp",
+  "duplicates.compareProgress": "Leser sider: A {{aDone}}/{{aTotal}} · B {{bDone}}/{{bTotal}}",
+  "duplicates.nothingPending": "Ingenting igjen å avgjøre; behandlede grupper står under.",
+  "duplicates.handledSection": "Behandlet ({{count}} grupper)",
+  "duplicates.allKept": "Alle beholdt",
+  "duplicates.undoHandled": "Angre"
 }

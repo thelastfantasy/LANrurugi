@@ -825,5 +825,19 @@
   "settings.timezoneFilterPlaceholder": "Rechercher par nom ou décalage, p. ex. Tokyo, +09",
   "settings.timezoneNoMatch": "Aucun fuseau horaire correspondant",
   "activity.queueItemCount": "{{count}} téléchargements",
-  "duplicates.scanning": "Analyse en cours…"
+  "duplicates.scanning": "Analyse en cours…",
+  "duplicates.scanningWarning": "Les groupes ci-dessous sont ceux trouvés jusqu'ici et peuvent encore changer : supprimer ou fusionner des fichiers maintenant, ou les choix faits sur un groupe, peuvent ne plus s'appliquer ensuite — à vos risques.",
+  "duplicates.interrupted": "La dernière analyse a été interrompue (par exemple par un redémarrage) ; ces résultats sont incomplets. Elle reprend d'elle-même environ une minute après le démarrage du serveur.",
+  "duplicates.noCover": "{{count}} archives n'ont pas de miniature de couverture et n'ont pas été comparées cette fois. Relancez l'analyse une fois leurs miniatures créées pour les inclure.",
+  "duplicates.phase.preparing": "Préparation",
+  "duplicates.phase.covers": "Lecture des couvertures",
+  "duplicates.phase.grouping": "Regroupement",
+  "duplicates.phase.patches": "Vérification des patchs",
+  "duplicates.phase.reviewing": "Examen par le modèle",
+  "duplicates.phase.cleanup": "Nettoyage",
+  "duplicates.compareProgress": "Lecture des pages : A {{aDone}}/{{aTotal}} · B {{bDone}}/{{bTotal}}",
+  "duplicates.nothingPending": "Plus rien à décider ; les groupes traités sont en dessous.",
+  "duplicates.handledSection": "Traités ({{count}} groupes)",
+  "duplicates.allKept": "Tous conservés",
+  "duplicates.undoHandled": "Annuler"
 }

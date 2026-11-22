@@ -16,71 +16,46 @@ use crate::AppState;
 pub const COVER_HASH_KEY: &str = "LANRURUGI_DUP_COVER_HASH";
 const PREFIX: &str = "v1:";
 
-/// What one hashing pass produced.
-pub struct CoverHashes {
-    /// id → 64-bit perceptual hash.
-    pub hashes: HashMap<String, [u8; 8]>,
-    /// Archives whose cover could not be read (deleted thumbnail and no regeneration possible).
-    pub missing: usize,
+/// The cached hashes of those `ids` that have one. Every archive's cover is hashed once; a scan
+/// reads these first so a rescan has nearly everything before it hashes a single cover.
+pub async fn cached(state: &AppState, ids: &[String]) -> HashMap<String, [u8; 8]> {
+    let Ok(mut conn) = state.redis.config.get().await else {
+        return HashMap::new();
+    };
+    let all: HashMap<String, String> = conn.hgetall(COVER_HASH_KEY).await.unwrap_or_default();
+    ids.iter()
+        .filter_map(|id| {
+            let raw = all.get(id)?.strip_prefix(PREFIX)?;
+            Some((id.clone(), parse_hex8(raw)?))
+        })
+        .collect()
 }
 
-/// Hashes every archive's cover, reusing anything already in the cache.
-pub async fn collect(state: &AppState, ids: &[String]) -> CoverHashes {
-    let mut cached: HashMap<String, [u8; 8]> = HashMap::new();
-    let mut conn = state.redis.config.get().await.ok();
-    if let Some(conn) = conn.as_mut() {
-        let all: HashMap<String, String> = conn.hgetall(COVER_HASH_KEY).await.unwrap_or_default();
-        for id in ids {
-            if let Some(raw) = all.get(id).and_then(|v| v.strip_prefix(PREFIX)) {
-                if let Some(bytes) = parse_hex8(raw) {
-                    cached.insert(id.clone(), bytes);
-                }
-            }
-        }
+/// Hashes one archive's stored cover thumbnail and caches the result. `None` when it has none.
+pub async fn hash_and_store(state: &AppState, id: &str) -> Option<[u8; 8]> {
+    let bytes = hash_one(state, id).await?;
+    if let Ok(mut conn) = state.redis.config.get().await {
+        let _: Result<(), _> = conn
+            .hset(COVER_HASH_KEY, id, format!("{PREFIX}{}", hex8(&bytes)))
+            .await;
     }
-
-    let mut hashes = HashMap::with_capacity(ids.len());
-    let mut missing = 0usize;
-    let mut fresh: Vec<(String, String)> = Vec::new();
-
-    for id in ids {
-        if let Some(bytes) = cached.get(id) {
-            hashes.insert(id.clone(), *bytes);
-            continue;
-        }
-        match hash_one(state, id).await {
-            Some(bytes) => {
-                hashes.insert(id.clone(), bytes);
-                fresh.push((id.clone(), hex8(&bytes)));
-            }
-            None => missing += 1,
-        }
-    }
-
-    if let Some(conn) = conn.as_mut() {
-        for (id, value) in fresh {
-            let _: Result<(), _> = conn
-                .hset(COVER_HASH_KEY, &id, format!("{PREFIX}{value}"))
-                .await;
-        }
-    }
-
-    CoverHashes { hashes, missing }
+    Some(bytes)
 }
 
+/// Hashes the cover thumbnail already on disk. An archive without one is skipped rather than given
+/// a thumbnail here: generating covers for a whole library decodes a page per archive, which is
+/// what made a scan slow and memory-hungry. Such archives are counted and reported instead.
 async fn hash_one(state: &AppState, id: &str) -> Option<[u8; 8]> {
-    let archive_id = lanrurugi_core::ids::ArchiveId(id.to_string());
-    let (_, bytes) = crate::archives::share_thumbnail(state, &archive_id, 0).await?;
-    // `share_thumbnail` never returns `None` for a valid id — it falls back to a shared placeholder
-    // PNG. Hashing that would make every cover-less archive look identical, so treat it as missing
-    // (and don't cache it: a real thumbnail may appear later without the id changing).
+    let bytes = crate::archives::stored_cover_thumbnail(state, id).await?;
     if crate::archives::is_placeholder_thumbnail(&bytes) {
         return None;
     }
-    let image = lanrurugi_core::concurrency::run_blocking(move || image::load_from_memory(&bytes))
-        .await
-        .ok()?
-        .ok()?;
+    let image = lanrurugi_core::concurrency::run_blocking(move || {
+        lanrurugi_scanner::image_decode::load_from_memory(&bytes)
+    })
+    .await
+    .ok()?
+    .ok()?;
     Some(hash_image(&image))
 }
 

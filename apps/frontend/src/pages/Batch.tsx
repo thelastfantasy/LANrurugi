@@ -258,11 +258,11 @@ export function Batch() {
 
   const operationsPanel = (
     <>
-    <table className="tag-options">
+    <table className="tag-options batch-operation-table">
       <tbody>
         <tr>
           <td>
-            <select id="batch-operation" className="favtag-btn" value={operation} onChange={(e) => setOperation(e.target.value as Operation)}>
+            <select id="batch-operation" className="favtag-btn batch-operation-select" value={operation} onChange={(e) => setOperation(e.target.value as Operation)}>
               <option value="plugin">🧩 {t("batch.usePlugin")}</option>
               <option value="clearnew">🆕 {t("batch.removeNewFlag")}</option>
               <option value="tagrules">📏 {t("batch.applyTagRules")}</option>
@@ -350,7 +350,7 @@ export function Batch() {
       <input
         type="button"
         id="start-batch"
-        className="stdbtn"
+        className="stdbtn batch-start-btn"
         disabled={busy || selected.size === 0}
         onClick={() => void runSelectedOperation()}
         value={t("batch.startTask") ?? undefined}

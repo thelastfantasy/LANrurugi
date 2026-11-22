@@ -1,0 +1,59 @@
+name: 功能 / 改进提案
+description: 新功能、既有功能的强化，或需要先讨论的改动
+title: ""
+labels: ["type: feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        设计细节写进 `specs/`，本议题只保留目标、边界、依赖与验收——两份设计文档必然漂移。
+        这批工作有总纲时，在「依赖与关联」里写上父议题编号。
+  - type: textarea
+    id: goal
+    attributes:
+      label: 目标
+      description: 要解决什么问题、给谁解决。一到两句。
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 范围与边界
+      description: 做什么，以及明确不做什么。后者比前者更能防止范围蔓延。
+      placeholder: |
+        做：
+        - …
+        不做：
+        - …
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 可验证的条目。避免「体验良好」这类无法判定的表述。
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: true
+  - type: textarea
+    id: relations
+    attributes:
+      label: 依赖与关联
+      description: 前置议题、父议题、相关 spec。
+      placeholder: |
+        父议题：#…
+        依赖：#…
+        spec：specs/…
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 提交前确认
+      options:
+        - label: "已加至少一个 `area:` 标签（backend / frontend / infra / deno）"
+          required: true
+        - label: 已选 milestone（m0 首版 / m1 后续）
+          required: true
+        - label: "方案尚未定案时，已加 `status: discussion`"
+          required: false

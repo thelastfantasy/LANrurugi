@@ -518,5 +518,19 @@
   "settings.timezoneNoMatch": "Nessun fuso orario corrispondente",
   "edit.choosePlugin": "-- Scegli un plugin --",
   "activity.queueItemCount": "{{count}} download",
-  "duplicates.scanning": "Scansione in corso…"
+  "duplicates.scanning": "Scansione in corso…",
+  "duplicates.scanningWarning": "I gruppi qui sotto sono quelli trovati finora e possono ancora cambiare: eliminare o unire file adesso, o le scelte fatte su un gruppo, potrebbero non valere più dopo — a tuo rischio.",
+  "duplicates.interrupted": "L'ultima scansione è stata interrotta (ad esempio da un riavvio), quindi i risultati sono incompleti; riparte da sola circa un minuto dopo l'avvio del server.",
+  "duplicates.noCover": "{{count}} archivi non hanno una miniatura di copertina e questa volta non sono stati confrontati. Ripeti la scansione quando le miniature esistono per includerli.",
+  "duplicates.phase.preparing": "Preparazione",
+  "duplicates.phase.covers": "Lettura copertine",
+  "duplicates.phase.grouping": "Raggruppamento",
+  "duplicates.phase.patches": "Controllo patch",
+  "duplicates.phase.reviewing": "Revisione del modello",
+  "duplicates.phase.cleanup": "Pulizia",
+  "duplicates.compareProgress": "Lettura pagine: A {{aDone}}/{{aTotal}} · B {{bDone}}/{{bTotal}}",
+  "duplicates.nothingPending": "Niente da decidere; i gruppi gestiti sono qui sotto.",
+  "duplicates.handledSection": "Gestiti ({{count}} gruppi)",
+  "duplicates.allKept": "Tutti conservati",
+  "duplicates.undoHandled": "Annulla"
 }

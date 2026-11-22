@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { useDeleteArchive, useDuplicateCompare, useSaveDuplicateDecisions } from "@/api/hooks"
+import { useDeleteArchive, useDuplicateCompare, useDuplicateCompareProgress, useSaveDuplicateDecisions } from "@/api/hooks"
 import type {
   ComparisonSide,
   DuplicateCompare,
@@ -47,6 +47,7 @@ export function SmartCompareModal({
   const narrow = useIsNarrowViewport()
   const [[aId, bId], setPair] = useState<[string, string]>(pair)
   const compare = useDuplicateCompare(aId, bId)
+  const compareProgress = useDuplicateCompareProgress(aId, bId, compare.isLoading).data?.progress
   const save = useSaveDuplicateDecisions()
   const deleteArchive = useDeleteArchive()
   const data = compare.data
@@ -377,6 +378,17 @@ export function SmartCompareModal({
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, paddingTop: 48, opacity: 0.8 }}>
               <i className="fa fa-2x fa-spinner fa-spin" aria-hidden="true" />
               {t("duplicates.comparing")}
+              {compareProgress && (
+                // Decoding every page of both sides is most of a comparison; a cached side is done at once.
+                <span style={{ fontSize: FONT_SIZE_SM }} className="tabular-nums">
+                  {t("duplicates.compareProgress", {
+                    aDone: compareProgress.a.done,
+                    aTotal: compareProgress.a.total,
+                    bDone: compareProgress.b.done,
+                    bTotal: compareProgress.b.total,
+                  })}
+                </span>
+              )}
             </div>
           )}
           {compare.isError && (

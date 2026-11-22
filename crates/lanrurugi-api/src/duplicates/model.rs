@@ -75,6 +75,15 @@ impl DecisionRecord {
         self.decisions.get(id).map(String::as_str).unwrap_or("keep")
     }
 
+    /// Every member was explicitly kept ("keep all"): the group is handled. A rescan that finds the
+    /// same members gets the same group key and so stays handled; a new member makes a new key.
+    pub fn keeps_all(&self, members: &[String]) -> bool {
+        !members.is_empty()
+            && members
+                .iter()
+                .all(|id| self.decisions.get(id).map(String::as_str) == Some("keep"))
+    }
+
     pub fn rejects(&self, a: &str, b: &str) -> bool {
         self.not_duplicate
             .iter()
@@ -131,4 +140,22 @@ fn tag_values<'a>(tags: &'a [String], namespace: &str) -> Vec<&'a str> {
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_all_needs_an_explicit_keep_for_every_member() {
+        let members = vec!["a".to_string(), "b".to_string()];
+        let mut record = DecisionRecord::default();
+        assert!(!record.keeps_all(&members), "no decision is not a decision");
+        record.decisions.insert("a".into(), "keep".into());
+        assert!(!record.keeps_all(&members));
+        record.decisions.insert("b".into(), "discard".into());
+        assert!(!record.keeps_all(&members));
+        record.decisions.insert("b".into(), "keep".into());
+        assert!(record.keeps_all(&members));
+    }
 }

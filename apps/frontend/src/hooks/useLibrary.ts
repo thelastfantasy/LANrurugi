@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 
-import { ApiError, fetchJson, sendJson } from "@/api/client";
+import { fetchJson, sendJson } from "@/api/client";
 import {
   useCategories,
   useCreateTankoubon,
@@ -31,6 +31,7 @@ import {
   TANKOUBON_ONLY,
   UNTAGGED_ONLY,
 } from "@/lib/constants";
+import { deleteArchiveToBin, sourceTagFrom } from "@/lib/deleteArchive";
 import { routes } from "@/lib/routes";
 import {
   appendToken,
@@ -741,15 +742,7 @@ const { t } = useTranslation();
 
   /** This archive's `source:` tag, from whatever the page already holds. */
   function sourceTagOf(archiveId: string): string | undefined {
-    const tags = shown.find((a) => a.arcid === archiveId)?.tags;
-    if (!tags) return undefined;
-    for (const tag of tags.split(",")) {
-      const value = tag.trim();
-      if (value.toLowerCase().startsWith("source:")) {
-        return value.slice("source:".length).trim();
-      }
-    }
-    return undefined;
+    return sourceTagFrom(shown.find((a) => a.arcid === archiveId)?.tags);
   }
 
   /// `blockResubscribe` defaults to blocking, which is also what doing nothing achieves: a work stays
@@ -773,65 +766,8 @@ const { t } = useTranslation();
       if (tankMode === "recycle") {
         toast({ heading: t("recycleBin.movedToBin"), icon: "success" });
       }
-    } else {
-      try {
-        await sendJson("DELETE", `/archives/${archiveId}`)
-      } catch (err) {
-        // The server refuses to delete a healthy archive that a Tankoubon still lists (it would
-        // silently reshuffle that book), and says why — that message is what the user needs.
-        toast({
-          heading:
-            err instanceof ApiError && err.status === 409
-              ? t("library.deleteTankMemberRefused")
-              : err instanceof Error
-                ? err.message
-                : String(err),
-          icon: "error",
-        })
-        return
-      };
-      // Recoverable for the retention window: offer the undo right where the mistake happened
-      // (spec 019 FR-034) instead of making the user open the bin page.
-      toast({
-        heading: t("recycleBin.movedToBin"),
-        icon: "success",
-        action: {
-          label: t("recycleBin.undo"),
-          onClick: () => {
-            void (async () => {
-              try {
-                await sendJson("POST", `/recycle-bin/${encodeURIComponent(archiveId)}/restore`);
-                await queryClient.invalidateQueries({ queryKey: ["archives"] });
-                await queryClient.invalidateQueries({ queryKey: ["recycle-bin"] });
-                toast({ heading: t("recycleBin.restored"), icon: "success" });
-              } catch {
-                toast({ heading: t("recycleBin.restoreFailed"), icon: "error" });
-              }
-            })();
-          },
-        },
-      });
-    }
-
-    if (source) {
-      // After the delete, and failures are swallowed: the archive is already gone, and a failure here
-      // only means a subscription will not re-offer the work — not something to surface as a failed
-      // delete.
-      try {
-        const { tracking } = await fetchJson<{ tracking: { id: string }[] }>(
-          `/subscriptions/tracking?source=${encodeURIComponent(source)}`,
-        );
-        await Promise.all(
-          tracking.map((s) =>
-            sendJson("POST", `/subscriptions/${encodeURIComponent(s.id)}/forget`, {
-              sources: [source],
-              all: false,
-            }),
-          ),
-        );
-      } catch {
-        // Nothing to do — the work simply stays recorded as seen.
-      }
+    } else if (!(await deleteArchiveToBin({ archiveId, reconsiderSource: source, queryClient, t }))) {
+      return;
     }
     queryClient.invalidateQueries({ queryKey: ["archive", archiveId] });
     queryClient.invalidateQueries({ queryKey: ["archives"] });

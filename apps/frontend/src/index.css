@@ -4187,3 +4187,38 @@ div.gt.gt-single > span {
   padding: 8px 12px;
   text-align: left;
 }
+/* On the phone the sheet is the whole operation, so its one action reads as one: the confirm
+   dialog's own button size (48px, full width, 16px), not the compact row height the desktop
+   column uses. Scoped to the sheet, so the desktop panel keeps its original size. */
+.batch-ops-sheet .batch-start-btn {
+  display: block;
+  width: 100%;
+  height: 48px;
+  margin: 8px 0 4px;
+  font-size: 16px;
+  border-radius: 6px;
+}
+/* The operation picker leads the sheet, so it takes the same size as the button below it — the
+   single-cell table it sits in is a layout leftover, so it gets stretched too (.favtag-btn's own
+   25px/10pt/3px-radius would otherwise win on the select). */
+.batch-ops-sheet .batch-operation-table,
+.batch-ops-sheet .batch-operation-table > tbody > tr > td {
+  width: 100%;
+  padding: 0;
+}
+/* A one-cell table still carries the default 2px cell spacing, which put the select 4px in from
+   the button below it — the visible mismatch. */
+.batch-ops-sheet .batch-operation-table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+.batch-ops-sheet .batch-operation-select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: 48px;
+  margin: 0 0 8px;
+  padding: 0 10px;
+  font-size: 16px;
+  border-radius: 6px;
+}
