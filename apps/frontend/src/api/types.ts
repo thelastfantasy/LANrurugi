@@ -696,6 +696,13 @@ export interface HistoryEntry {
     at: number
     kind: "recycled" | "queue"
   } | null
+  /** No queue record is left to speak for this work, but the library holds an archive with its
+   *  source: the finished queue rows are swept by the retention setting, and a deleted one leaves
+   *  nothing behind — hence "已入库" in the library yet "added to the download queue" here. */
+  held?: boolean
+  /** This subscription queued the work for download. The accepted tab's membership predicate, kept
+   *  on the subscription's own record so a row only ever leaves that tab by expiring. */
+  accepted?: boolean
 }
 
 export interface SubscriptionSource {

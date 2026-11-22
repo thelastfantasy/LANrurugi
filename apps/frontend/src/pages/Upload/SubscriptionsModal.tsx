@@ -104,9 +104,11 @@ function outcomeOf(entry: HistoryEntry): { key: string; band: keyof typeof ROW_C
       return { key: "upload.cancelled", band: "excluded" }
     case "awaiting_revision_confirmation":
       return { key: "subscriptions.verdictAwaitingApproval", band: "waiting" }
-    default:
-      return null
   }
+  // Nothing in the queue speaks for this row any more (the retained rows age out, a deleted one is
+  // gone), but the library holds it: that is what the row's decision actually led to.
+  if (entry.held) return { key: "subscriptions.outcomeCatalogued", band: "held" }
+  return null
 }
 
 /** One Font Awesome class per queue state. Shape carries the state and the tooltip names it — no new
@@ -440,15 +442,11 @@ export function SubscriptionsModal({
     // was queued and has since been catalogued reads `already_held`, and one still sitting in the
     // queue reads `queued` — both were accepted, and the queue record is the evidence of it. Without
     // the `download` half this tab is empty whenever nothing happens to be in flight at this second.
-    if (band === "match")
-      return all.filter(
-        (e) =>
-          (bandOf(e.candidate) === "match" && !e.skipped) ||
-          e.download != null ||
-          // Deleted after it was handled: the cycle's verdict may since read `already_held`, but the
-          // work was accepted and then thrown away, which is what this tab is about.
-          e.deleted != null,
-      )
+    // "Accepted" is a membership list, not a view of the current state: a row stays here until its
+    // record expires. Deriving it from the verdict or the queue row instead is what let a row vanish
+    // for a reason that is not expiry — a later cycle re-reading it as `already_held`, a queue row
+    // swept after its retention, a work deleted from the library.
+    if (band === "match") return all.filter((e) => e.accepted === true && !e.skipped)
     return all.filter((e) => bandOf(e.candidate) === "excluded")
   }, [history.data, band, blockedRows, reservations.data])
   const rows = unfilteredRows.filter(

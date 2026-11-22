@@ -278,9 +278,15 @@ pub(crate) async fn recycle_archive(
 
     // A record whose file is already gone (legacy leftovers, a manually deleted file) has nothing
     // to move: purge it like a cleanup would rather than failing the delete.
+    let source =
+        crate::subscriptions::api::archive_source(archive.primary_source.as_deref(), &archive.tags);
     if archive.file.is_empty() || !Path::new(&archive.file).is_file() {
         tracing::warn!(%id, file = %archive.file, "deleting an archive whose file is already gone");
-        return purge_one_archive(state, id, auth, PurgeOptions::PERMANENT).await;
+        let outcome = purge_one_archive(state, id, auth, PurgeOptions::PERMANENT).await;
+        if let (DeleteOneOutcome::Deleted { .. }, Some(source)) = (&outcome, &source) {
+            crate::subscriptions::api::record_library_deletion(state, source).await;
+        }
+        return outcome;
     }
 
     let snapshot = build_snapshot(state, &archive).await;
@@ -347,6 +353,9 @@ pub(crate) async fn recycle_archive(
         Some(json!({ "file": original_path, "size": archive.arcsize })),
     )
     .await;
+    if let Some(source) = &source {
+        crate::subscriptions::api::record_library_deletion(state, source).await;
+    }
 
     DeleteOneOutcome::Deleted {
         filename: archive.name,
@@ -985,6 +994,13 @@ pub(crate) async fn restore_archive(
         Some(json!({ "file": destination_str })),
     )
     .await;
+
+    if let Some(source) = crate::subscriptions::api::archive_source(
+        entry.snapshot.primary_source.as_deref(),
+        &entry.snapshot.tags,
+    ) {
+        crate::subscriptions::api::clear_library_deletion(state, &source).await;
+    }
 
     RestoreOutcome::Restored {
         path: destination_str,

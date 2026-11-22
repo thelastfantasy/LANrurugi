@@ -534,6 +534,14 @@ async fn combined_history(
     let recycled_by_source = recycled_sources(&state).await;
     let mut deleted_by_source: std::collections::HashMap<(String, String), i64> =
         Default::default();
+    // Library deletions this subscription recorded: what keeps a row "deleted" once the recycle bin
+    // no longer holds the archive.
+    let mut library_deleted_by_source: std::collections::HashMap<(String, String), i64> =
+        Default::default();
+    // What this subscription actually accepted. Read from its own record rather than inferred from
+    // the queue: a finished queue row is swept once its retention passes, so inferring would let a
+    // row leave the accepted tab for a reason that is not expiry.
+    let mut accepted_by_source: std::collections::HashSet<(String, String)> = Default::default();
     for subscription in &subscriptions {
         for (source, at) in state
             .subscriptions
@@ -542,6 +550,23 @@ async fn combined_history(
             .unwrap_or_default()
         {
             deleted_by_source.insert((subscription.id.clone(), source), at);
+        }
+        for (source, at) in state
+            .subscriptions
+            .library_deleted_all(&subscription.id)
+            .await
+            .unwrap_or_default()
+        {
+            library_deleted_by_source.insert((subscription.id.clone(), source), at / 1000);
+        }
+        for source in state
+            .subscriptions
+            .accepted_all(&subscription.id)
+            .await
+            .unwrap_or_default()
+            .into_keys()
+        {
+            accepted_by_source.insert((subscription.id.clone(), source));
         }
     }
 
@@ -555,12 +580,25 @@ async fn combined_history(
         String,
         lanrurugi_storage::subscriptions::SkippedWork,
     )> = Vec::new();
+    // Works the retained history shows this subscription queued at some point — the acceptance
+    // evidence for rows recorded before the accepted list existed (see `accepted_key`).
+    let mut queued_in_history: std::collections::HashSet<(String, String)> = Default::default();
     for subscription in &subscriptions {
         let cycles = state
             .subscriptions
             .recent_cycles(&subscription.id, CYCLES_PER_SUBSCRIPTION)
             .await
             .unwrap_or_default();
+        for cycle in &cycles {
+            for record in &cycle.candidates {
+                if matches!(
+                    record.verdict,
+                    lanrurugi_storage::subscriptions::CandidateVerdict::Queued
+                ) {
+                    queued_in_history.insert((subscription.id.clone(), record.source_url.clone()));
+                }
+            }
+        }
         // A cycle's "awaiting approval" is never rewritten once answered, so a skipped work would
         // still read as waiting (and as accepted). The skip record says what actually happened.
         let skipped = state
@@ -589,6 +627,14 @@ async fn combined_history(
                 .await
                 .unwrap_or_default();
             for entry in snapshot.values() {
+                if entry.runs.iter().any(|run| {
+                    matches!(
+                        run.verdict,
+                        lanrurugi_storage::subscriptions::CandidateVerdict::Queued
+                    )
+                }) {
+                    queued_in_history.insert((subscription.id.clone(), entry.source.clone()));
+                }
                 // Older than every kept summary: past what this history covers, as a full-detail
                 // cycle that rolled off the list used to be.
                 let Some((last, outcome)) = entry
@@ -708,7 +754,11 @@ async fn combined_history(
         else {
             continue;
         };
-        let recycled = recycled_by_source.get(&source).copied();
+        let recycled = recycled_by_source.get(&source).copied().max(
+            library_deleted_by_source
+                .get(&(subscription_id.clone(), source.clone()))
+                .copied(),
+        );
         let from_queue = deleted_by_source
             .get(&(subscription_id, source))
             .map(|at| at / 1000);
@@ -722,6 +772,54 @@ async fn combined_history(
         };
         if let Some((at, kind)) = deleted {
             entry["deleted"] = json!({ "at": at, "kind": kind });
+        }
+    }
+    // The library itself, for every row the queue can no longer speak for: its finished rows are
+    // swept after `download_queue_retention_days` and a deleted one leaves nothing behind, which is
+    // how a work sitting in the library came to read "added to the download queue". Only read when
+    // some row actually needs it — the queue's own state is the better answer whenever it exists.
+    let needs_library = entries
+        .iter()
+        .any(|e| e["download"].is_null() && e["deleted"].is_null());
+    let held_by_source = if needs_library {
+        match state.repos.archives.held_sources().await {
+            Ok(sources) => sources,
+            Err(e) => {
+                tracing::warn!(error = %e, "could not read the library's sources");
+                Default::default()
+            }
+        }
+    } else {
+        Default::default()
+    };
+    for entry in entries.iter_mut() {
+        let subscription_id = entry["subscription_id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let Some(source) = entry["candidate"]["source_url"]
+            .as_str()
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        // "Accepted" is a membership question with one answer, not a view of the current state: the
+        // tab keeps a row until its record expires. The record is the evidence, and the queue's own
+        // record counts too — a row queued before the record existed is still accepted.
+        let queued = entry["candidate"]["verdict"]["verdict"].as_str() == Some("queued");
+        if accepted_by_source.contains(&(subscription_id.clone(), source.clone()))
+            || queued_in_history.contains(&(subscription_id, source.clone()))
+            || queued
+            || !entry["download"].is_null()
+            || !entry["deleted"].is_null()
+        {
+            entry["accepted"] = json!(true);
+        }
+        if !entry["download"].is_null() || !entry["deleted"].is_null() {
+            continue;
+        }
+        if held_by_source.contains_key(&source) {
+            entry["held"] = json!(true);
         }
     }
     entries.sort_by_key(|e| std::cmp::Reverse(e["checked_at"].as_i64().unwrap_or(0)));
@@ -747,10 +845,81 @@ async fn recycled_sources(state: &AppState) -> std::collections::HashMap<String,
     entries
         .into_iter()
         .filter_map(|entry| {
-            let source = entry.snapshot.primary_source?;
+            // `primary_source` is the archive record's own field and is *absent* on records written
+            // before it existed — the `source:` tag is what those carry, so fall back to it rather
+            // than letting a deleted work silently vanish from the history.
+            let source = entry
+                .snapshot
+                .primary_source
+                .clone()
+                .or_else(|| source_from_tags(&entry.snapshot.tags))?;
             Some((crate::plugins::trim_url(&source), entry.deleted_at))
         })
         .collect()
+}
+
+/// An archive's source as subscription records key it: its `primary_source`, else its `source:` tag.
+pub(crate) fn archive_source(primary_source: Option<&str>, tags: &str) -> Option<String> {
+    primary_source
+        .map(str::to_string)
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| source_from_tags(tags))
+        .map(|source| crate::plugins::trim_url(&source))
+}
+
+/// An archive a subscription brought in was deleted from the library: mark its history row, for
+/// every subscription that has seen the work, so the row keeps reading "deleted" after the recycle
+/// bin is emptied (see `library_deleted_key`). Best effort — a failure only loses that status.
+pub(crate) async fn record_library_deletion(state: &AppState, source: &str) {
+    let Ok(subscriptions) = state.subscriptions.list_all().await else {
+        return;
+    };
+    let sources = [source.to_string()];
+    for subscription in subscriptions {
+        if !state
+            .subscriptions
+            .is_seen(&subscription.id, source)
+            .await
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        if let Err(e) = state
+            .subscriptions
+            .mark_library_deleted(&subscription.id, &sources)
+            .await
+        {
+            tracing::warn!(subscription_id = %subscription.id, error = %e, "could not record a library deletion");
+        }
+    }
+}
+
+/// The archive was restored from the recycle bin: its rows are no longer "deleted".
+pub(crate) async fn clear_library_deletion(state: &AppState, source: &str) {
+    let Ok(subscriptions) = state.subscriptions.list_all().await else {
+        return;
+    };
+    let sources = [source.to_string()];
+    for subscription in subscriptions {
+        if let Err(e) = state
+            .subscriptions
+            .forget_library_deleted(&subscription.id, &sources)
+            .await
+        {
+            tracing::warn!(subscription_id = %subscription.id, error = %e, "could not clear a library deletion");
+        }
+    }
+}
+
+/// The first `source:` tag in a comma-separated tag string, if any.
+fn source_from_tags(tags: &str) -> Option<String> {
+    tags.split(',')
+        .find_map(|tag| {
+            tag.trim()
+                .strip_prefix("source:")
+                .map(|source| source.trim().to_string())
+        })
+        .filter(|source| !source.is_empty())
 }
 
 /// How many cycles to read per subscription before merging: every kept one. Summaries are small, and
@@ -1329,7 +1498,8 @@ async fn approve_entries(state: &AppState, ids: &[String]) -> (usize, Vec<serde_
     if let Err(e) = state.subscriptions.delete_pending_many(&answered).await {
         tracing::warn!(error = %e, "approved works queued but left on the approval list");
     }
-    // Queued again, so no longer a deleted row (see `deleted_key`).
+    // Queued again, so no longer a deleted row (see `deleted_key`) — and newly accepted, which is
+    // what keeps the row in the history once its queue record is swept (see `accepted_key`).
     for item in &queued {
         let Some(subscription_id) = &item.subscription_id else {
             continue;
@@ -1337,10 +1507,17 @@ async fn approve_entries(state: &AppState, ids: &[String]) -> (usize, Vec<serde_
         let source = crate::plugins::trim_url(&item.url);
         if let Err(e) = state
             .subscriptions
-            .forget_deleted(subscription_id, &[source])
+            .forget_deleted(subscription_id, std::slice::from_ref(&source))
             .await
         {
             tracing::warn!(%subscription_id, error = %e, "could not clear a deleted-work record");
+        }
+        if let Err(e) = state
+            .subscriptions
+            .mark_accepted(subscription_id, &[source])
+            .await
+        {
+            tracing::warn!(%subscription_id, error = %e, "could not record an accepted work");
         }
     }
     let approved = queued.len();
