@@ -363,6 +363,11 @@ jobs:
       - name: Generate the plugin SDK reference
         run: mise run docs-sdk
 
+      # The Pages Function that serves archived docs versions from R2 (#305): its zip reader and
+      # page rewriting, against a real archive. Plain Node, no dependencies to install.
+      - name: Docs — archived-version Function tests
+        run: node --test "apps/docs-site/tests/*.test.mjs"
+
       # Uploaded so the publishing jobs consume exactly the bytes this job validated, generated from
       # the same revision, rather than regenerating them under a different toolchain. Both paths are
       # consumed as-is: `docs-build` deliberately does not re-run `docs-sdk`.
@@ -371,8 +376,8 @@ jobs:
           name: docs-generated
           if-no-files-found: error
           path: |
-            docs/public/openapi.json
-            docs/dist-sdk/
+            apps/docs-site/public/openapi.json
+            apps/docs-site/dist-sdk/
 
   docs-build:
     name: Docs (build + publish all three)
@@ -404,15 +409,14 @@ jobs:
           install: true
           cache: true
 
-      # `path: docs`, not `path: .` and not `path: docs/public`. With multiple paths in the upload,
-      # the artifact's root is their *least common ancestor* — here `docs/` — so its entries are
-      # `public/openapi.json` and `dist-sdk/…` (confirmed by listing a real run's artifact).
-      # Extracting into `docs/` puts both back exactly where the build looks for them; `.` drops them
-      # at the repository root, and `docs/public` nests them one level too deep.
+      # `path: apps/docs-site`, not `.` and not `apps/docs-site/public`. With multiple paths in the
+      # upload, the artifact's root is their *least common ancestor* — here `apps/docs-site/` — so its
+      # entries are `public/openapi.json` and `dist-sdk/…`. Extracting into `apps/docs-site/` puts both
+      # back exactly where the build looks for them.
       - uses: actions/download-artifact@v8
         with:
           name: docs-generated
-          path: docs
+          path: apps/docs-site
 
       # Same rule the frontend job documents at length: every pnpm invocation runs from the repo
       # root with `--filter`, never with cwd inside a workspace package.
@@ -441,46 +445,101 @@ jobs:
         run: |
           echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
 
-      - name: Build — docs site (this version)
+      # The latest version is built for the site root (#305): its URLs never change between releases,
+      # so links to it keep working and nothing has to redirect. Older versions stay under
+      # `/v<version>/` (static, or from R2 below), and `/v<this version>/…` 301s to the root.
+      - name: Build — docs site (this version, at the root)
         env:
           DOCS_SITE_URL: ${{ vars.DOCS_SITE_URL || 'https://docs.lrrg.dev' }}
           DOCS_SDK_URL: ${{ vars.DOCS_SDK_URL || 'https://sdk.lrrg.dev/' }}
           DOCS_SWAGGER_URL: ${{ vars.DOCS_SWAGGER_URL || 'https://api.lrrg.dev/' }}
-          DOCS_BASE: /v${{ steps.docs-version.outputs.version }}/
-        run: |
-          set -euo pipefail
-          mise run docs-build
-          version="${{ steps.docs-version.outputs.version }}"
-          mv docs/dist "docs/.dist-$version"
-          mkdir -p "docs/dist/v$version"
-          cp -a "docs/.dist-$version/." "docs/dist/v$version/"
-          rm -rf "docs/.dist-$version"
+          DOCS_VERSION: ${{ steps.docs-version.outputs.version }}
+          DOCS_BASE: /
+        run: mise run docs-build
 
       # Older versions come from their releases, not from rebuilding old tags here: a 1.0.0 docs
       # build would need 1.0.0's lockfile and toolchain, which is exactly the thing that rots.
-      - name: Add released version trees
+      - name: Download released version zips
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           current="v${{ steps.docs-version.outputs.version }}"
           mkdir -p /tmp/released-docs
-          for tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
+          for tag in $(gh release list --limit 1000 --json tagName --jq '.[].tagName'); do
             [ "$tag" = "$current" ] && continue
             gh release download "$tag" --pattern 'docs-*.zip' --dir /tmp/released-docs --clobber || true
           done
-          shopt -s nullglob
-          for zip in /tmp/released-docs/docs-*.zip; do
-            name=$(basename "$zip" .zip)
-            name=${name#docs-}
-            name=${name#v}
-            [ "v$name" = "$current" ] && continue
-            mkdir -p "docs/dist/v$name"
-            unzip -q -o "$zip" -d "docs/dist/v$name"
-          done
 
-      - name: Assemble the version manifest and the site root
-        run: node docs/scripts/assemble-versions.mjs
+      # Older versions beyond the few kept static are read from their release zip in R2 by the Pages
+      # Function (`apps/docs-site/functions/`). The bucket is created on first use; when R2 cannot be
+      # reached (not enabled on the account, or no token) every version simply stays static.
+      - name: Ensure the R2 bucket for archived versions
+        id: r2
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          needs.rust.result == 'success' && needs.frontend.result == 'success' &&
+          env.CLOUDFLARE_API_TOKEN != ''
+        run: |
+          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets"
+          bucket=lanrurugi-docs-versions
+          status=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$api/$bucket")
+          if [ "$status" = 404 ]; then
+            echo "creating R2 bucket $bucket"
+            status=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$api" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              -H 'Content-Type: application/json' -d "{\"name\":\"$bucket\"}")
+          fi
+          if [ "$status" = 200 ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::R2 is not available (HTTP $status); every docs version stays static"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Place older versions (static or R2)
+        env:
+          R2_AVAILABLE: ${{ steps.r2.outputs.available || 'false' }}
+        run: |
+          set -euo pipefail
+          current="${{ steps.docs-version.outputs.version }}"
+          shopt -s nullglob
+          declare -A zips
+          for zip in /tmp/released-docs/docs-*.zip; do
+            name=$(basename "$zip" .zip); name=${name#docs-}; name=${name#v}
+            zips[$name]=$zip
+          done
+          plan=$(node apps/docs-site/scripts/plan-versions.mjs --current "$current" --r2 "$R2_AVAILABLE" "${!zips[@]}")
+          echo "$plan"
+          static=$(sed -n 's/^static=//p' <<<"$plan")
+          archived=$(sed -n 's/^archived=//p' <<<"$plan")
+          for version in ${static//,/ }; do
+            mkdir -p "apps/docs-site/dist/v$version"
+            unzip -q -o "${zips[$version]}" -d "apps/docs-site/dist/v$version"
+          done
+          # Archived zips go to R2 only once: a released version's docs never change.
+          if [ -n "$archived" ]; then
+            objects=$(curl -sf -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/lanrurugi-docs-versions/objects?per_page=1000" \
+              | jq -r '.result[]?.key' || true)
+            for version in ${archived//,/ }; do
+              grep -qxF "$version.zip" <<<"$objects" && continue
+              echo "uploading $version.zip to R2"
+              pnpm exec wrangler r2 object put "lanrurugi-docs-versions/$version.zip" \
+                --file "${zips[$version]}" --content-type application/zip --remote
+            done
+          fi
+          echo "ARCHIVED_VERSIONS=$archived" >> "$GITHUB_ENV"
+
+      - name: Assemble the version manifest, redirects and routes
+        env:
+          DOCS_SITE_URL: ${{ vars.DOCS_SITE_URL || 'https://docs.lrrg.dev' }}
+        run: |
+          node apps/docs-site/scripts/assemble-versions.mjs \
+            --current "${{ steps.docs-version.outputs.version }}" --archived "$ARCHIVED_VERSIONS"
+          if [ -n "$ARCHIVED_VERSIONS" ]; then
+            printf '\n[[r2_buckets]]\nbinding = "DOCS_VERSIONS"\nbucket_name = "lanrurugi-docs-versions"\n' \
+              >> apps/docs-site/wrangler.toml
+          fi
 
       - name: Build — Swagger UI
         run: mise run docs-swagger
@@ -520,7 +579,10 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy docs/dist --project-name=lanrurugi-docs
+          # From the site's own directory, so `wrangler.toml` (the R2 binding) and `functions/` ship
+          # with the static files.
+          workingDirectory: apps/docs-site
+          command: pages deploy dist --project-name=lanrurugi-docs
 
       - name: Publish Swagger UI
         if: >-
@@ -531,7 +593,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy docs/dist-swagger --project-name=lanrurugi-api-swagger
+          command: pages deploy apps/docs-site/dist-swagger --project-name=lanrurugi-api-swagger
 
       - name: Publish plugin SDK reference
         if: >-
@@ -542,7 +604,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy docs/dist-sdk --project-name=lanrurugi-sdk
+          command: pages deploy apps/docs-site/dist-sdk --project-name=lanrurugi-sdk
 
       # The project homepage: plain HTML/CSS/JS pre-rendered per language by a dependency-free
       # Node script (so crawlers get real text and hreflang alternates without running JS).

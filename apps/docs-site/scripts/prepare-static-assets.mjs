@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const docsRoot = join(here, '..')
-const repoRoot = join(docsRoot, '..')
+const repoRoot = join(docsRoot, '..', '..')
 
 let failed = false
 

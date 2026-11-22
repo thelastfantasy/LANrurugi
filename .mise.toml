@@ -191,7 +191,7 @@ version="$(git describe --tags --always 2>/dev/null || echo dev)"
 scripts/cargo-container-run.sh cargo clean --release -p libarchive2-sys
 scripts/cargo-container-run.sh env CMAKE_TOOLCHAIN_FILE=/workspace/packaging/libarchive-portable.cmake \
   cargo build --release -p lanrurugi-server -p lanrurugi-book-worker -p lanrurugi-embed-worker -p lanrurugi-gpu-worker
-[ -f docs/public/openapi.json ] || mise run docs-api
+[ -f apps/docs-site/public/openapi.json ] || mise run docs-api
 scripts/build-native-assets.sh .native-assets
 scripts/package-native.sh "$platform" "$version" .cargo-target/release .native-assets dist/native
 """
@@ -230,7 +230,7 @@ run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-recommend --release
 
 # ── 011-api-docs-site ────────────────────────────────────────────────────────
 [tasks.docs-api]
-description = "Generate the API reference document (docs/public/openapi.json) from the server's own route table. Extra args go to the generator: `mise run docs-api -- --check` runs the gates without writing."
+description = "Generate the API reference document (apps/docs-site/public/openapi.json) from the server's own route table. Extra args go to the generator: `mise run docs-api -- --check` runs the gates without writing."
 # Passes `$@` through so `--check`, `--quiet` and the path overrides in
 # specs/011-api-docs-site/contracts/docgen-cli.md are all reachable from here.
 run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-api-docgen -- \"$@\""
@@ -275,7 +275,7 @@ description = "Preview the release notes for the next tag (bilingual when DEEPSE
 run = "python3 scripts/release-changelog.py"
 
 [tasks.docs-sdk]
-description = "Build deliverable 3 of 3: the plugin-authoring SDK reference into docs/dist-sdk/ — the browsable HTML tree plus a path-normalised machine-readable JSON, both from the same TypeScript the plugin runtime loads. Deployed as its own Cloudflare Pages project; the server image copies it under /docs/sdk/."
+description = "Build deliverable 3 of 3: the plugin-authoring SDK reference into apps/docs-site/dist-sdk/ — the browsable HTML tree plus a path-normalised machine-readable JSON, both from the same TypeScript the plugin runtime loads. Deployed as its own Cloudflare Pages project; the server image copies it under /docs/sdk/."
 # Same three sources as `plugin-sdk-docs`, and for the same reason: `plugins/legacy-globals.d.ts`
 # carries `MetadataHostArgs`/`LoginHostArgs`/`ScriptHostArgs`/`DownloadHostArgs`/
 # `PluginErrorException`, and a run without it silently drops every one of those symbols from the
@@ -290,7 +290,7 @@ description = "Build deliverable 3 of 3: the plugin-authoring SDK reference into
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
-out=docs/dist-sdk
+out=apps/docs-site/dist-sdk
 rm -rf "$out"
 sources=(
   crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts
@@ -312,7 +312,7 @@ build_one() {
   # deno doc has no extra-stylesheet option; this links the shared LANrurugi palette into every
   # page, and the version switcher and the old-version notice.
   SDK_VERSION="$version" SDK_LATEST_VERSION="$latest" SDK_VERSION_DIR="$dir" \
-    node docs/scripts/theme-sdk.mjs "$dest"
+    node apps/docs-site/scripts/theme-sdk.mjs "$dest"
 }
 
 build_one . "$out" "$latest" ""
@@ -354,16 +354,16 @@ cat > "$out/404.html" <<'HTMLEOF'
 </html>
 HTMLEOF
 # Same Cloudflare Pages headers as the docs site (noindex on the *.pages.dev hosts).
-cp docs/public/_headers "$out/_headers"
+cp apps/docs-site/public/_headers "$out/_headers"
 echo "wrote $out (SDK $latest at the root) and $out/versions.json: $(cat "$out/versions.json")"
 """
 
 [tasks.docs-swagger]
-description = "Build deliverable 2 of 3: a standalone Swagger UI page over the same openapi.json, into docs/dist-swagger/ — browsable schemas and a request panel, neither of which the prose reference can offer. Two locales: `/` is Chinese, `/en/` English. Deployed as its own Cloudflare Pages project."
+description = "Build deliverable 2 of 3: a standalone Swagger UI page over the same openapi.json, into apps/docs-site/dist-swagger/ — browsable schemas and a request panel, neither of which the prose reference can offer. Two locales: `/` is Chinese, `/en/` English. Deployed as its own Cloudflare Pages project."
 run = "pnpm --filter lanrurugi-docs run build:swagger"
 
 [tasks.docs-build]
-description = "Build deliverable 1 of 3: the documentation site into docs/dist/. DOCS_BASE picks the deployment shape: `/` (default) for the public site, `/docs/` for the copy inside the server image. DOCS_SDK_URL points the sidebar's SDK entry at the SDK deployment. Requires the generated docs/public/openapi.json (`mise run docs-api`)."
+description = "Build deliverable 1 of 3: the documentation site into apps/docs-site/dist/. DOCS_BASE picks the deployment shape: `/` (default) for the public site, `/docs/` for the copy inside the server image. DOCS_SDK_URL points the sidebar's SDK entry at the SDK deployment. Requires the generated apps/docs-site/public/openapi.json (`mise run docs-api`)."
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
@@ -372,7 +372,7 @@ pnpm --filter lanrurugi-docs run build
 """
 
 [tasks.docs-dev]
-description = "Serve the documentation site locally with hot reload. Requires the generated docs/public/ artefacts (`mise run docs-api` and `mise run docs-sdk`), since the site renders them rather than producing them."
+description = "Serve the documentation site locally with hot reload. Requires the generated apps/docs-site/public/ artefacts (`mise run docs-api` and `mise run docs-sdk`), since the site renders them rather than producing them."
 run = "pnpm --filter lanrurugi-docs run dev"
 
 [tasks.plugin-sdk-docs]

@@ -1,0 +1,7 @@
+# Cloudflare Pages configuration for the docs site (`lanrurugi-docs`), used by `wrangler pages
+# deploy` run from this directory (it also picks up `functions/`). The R2 binding the archived-
+# version Function reads (`DOCS_VERSIONS`) is appended by CI only after it has confirmed the bucket
+# exists, so a deploy without R2 still works: every version is then deployed as static files.
+name = "lanrurugi-docs"
+pages_build_output_dir = "dist"
+compatibility_date = "2026-11-01"

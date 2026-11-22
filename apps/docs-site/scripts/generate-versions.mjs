@@ -11,7 +11,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const repoRoot = resolve(here, '../..')
+const repoRoot = resolve(here, '../../..')
 const output = resolve(here, '../public/versions.json')
 
 function git(args) {
@@ -44,13 +44,15 @@ const versions = tags.map((tag) => {
   return { version: tag.replace(/^v/, ''), tag, date, prerelease: tag.replace(/^v/, '').includes('-') }
 })
 
-if (versions.length === 0) {
-  const version = currentVersion() ?? 'dev'
-  versions.push({
-    version,
-    tag: `v${version}`,
+// The version being built leads the list even before its tag exists: the docs for a release are
+// built from the merge to `main`, which happens before the tag is pushed.
+const building = currentVersion() ?? (versions.length === 0 ? 'dev' : null)
+if (building && !versions.some((entry) => entry.version === building)) {
+  versions.unshift({
+    version: building,
+    tag: `v${building}`,
     date: new Date().toISOString().slice(0, 10),
-    prerelease: version.includes('-'),
+    prerelease: building.includes('-'),
   })
 }
 

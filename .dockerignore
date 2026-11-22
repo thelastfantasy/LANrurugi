@@ -9,13 +9,13 @@ apps/frontend/node_modules/
 # developer's local build output and generated inputs must not ride along in the build context —
 # these are gitignored for the same reason. `docs/api/` (the vendored upstream OpenAPI document and
 # the hand-written sidecar) IS an input and is copied explicitly by the Dockerfile.
-docs/dist/
+apps/docs-site/dist/
 docs/.astro/
-docs/node_modules/
-docs/public/openapi.json
-docs/dist-swagger/
-docs/dist-sdk/
-docs/public/favicon.svg
+apps/docs-site/node_modules/
+apps/docs-site/public/openapi.json
+apps/docs-site/dist-swagger/
+apps/docs-site/dist-sdk/
+apps/docs-site/public/favicon.svg
 .git/
 .github/
 specs/

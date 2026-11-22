@@ -32,10 +32,10 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url))
 const docsRoot = join(here, '..')
-const repoRoot = join(docsRoot, '..')
+const repoRoot = join(docsRoot, '..', '..')
 
 const specPath = join(docsRoot, 'public', 'openapi.json')
-const tagNamesPath = join(docsRoot, 'api', 'tag-names.json')
+const tagNamesPath = join(repoRoot, 'docs', 'api', 'tag-names.json')
 const generatedDir = join(docsRoot, 'src', 'generated')
 const contentDir = join(docsRoot, 'src', 'content', 'docs')
 
@@ -66,7 +66,7 @@ const spec = JSON.parse(readFileSync(specPath, 'utf8'))
 const overlays = {}
 for (const locale of LOCALES) {
   if (locale.key === SOURCE_LOCALE) continue
-  const path = join(docsRoot, 'api', 'i18n', `${locale.key}.json`)
+  const path = join(repoRoot, 'docs', 'api', 'i18n', `${locale.key}.json`)
   if (!existsSync(path)) {
     console.error(
       `generate-api-pages: locale "${locale.key}" has no translation overlay at ` +

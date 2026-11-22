@@ -18,6 +18,12 @@ const apiNav = JSON.parse(
 // from drifting into two independently maintained documents.
 const base = process.env.DOCS_BASE ?? '/'
 const site = process.env.DOCS_SITE_URL
+// The workspace version this tree documents. The latest version is built for the site root, where
+// the base no longer names it (#305); the version picker reads this instead.
+const docsVersion =
+  process.env.DOCS_VERSION ??
+  /^version = "(.*)"/m.exec(readFileSync(new URL('../../Cargo.toml', import.meta.url), 'utf8'))?.[1] ??
+  'dev'
 
 /** @type {import('astro/config').AstroUserConfig} */
 // Where the SDK reference lives. Its own Cloudflare Pages project in production, and a sibling
@@ -70,7 +76,10 @@ export default defineConfig({
   // `DOCS_SDK_URL` has no `PUBLIC_` prefix, so it is not in `import.meta.env` by default; injecting
   // it here is what lets the content pages read it (see `plugin/sdk.mdx`).
   vite: {
-    define: { 'import.meta.env.DOCS_SDK_URL': JSON.stringify(sdkUrl) },
+    define: {
+      'import.meta.env.DOCS_SDK_URL': JSON.stringify(sdkUrl),
+      'import.meta.env.DOCS_VERSION': JSON.stringify(docsVersion),
+    },
   },
   integrations: [
     starlight({
