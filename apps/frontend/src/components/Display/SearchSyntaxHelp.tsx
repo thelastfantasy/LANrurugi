@@ -90,7 +90,10 @@ export function SearchSyntaxHelp() {
           {t("library.searchSyntaxDateAdded")} <SyntaxExample>date_added:2026-08-20</SyntaxExample>
         </li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
-          {t("library.searchSyntaxNumericCompare")} <SyntaxExample>pages:&gt;100</SyntaxExample>, <SyntaxExample>read:&lt;5</SyntaxExample>
+          {/* One example per operator: `>` `>=` `<` `<=` and `=` all work for `pages:` and `read:`. */}
+          {t("library.searchSyntaxNumericCompare")} <SyntaxExample>pages:&gt;=100</SyntaxExample>,{" "}
+          <SyntaxExample>pages:&lt;=300</SyntaxExample>, <SyntaxExample>pages:=24</SyntaxExample>,{" "}
+          <SyntaxExample>read:&lt;5</SyntaxExample>
         </li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
           {t("library.searchSyntaxRelevance")} <SyntaxExample>sortby=relevance</SyntaxExample>

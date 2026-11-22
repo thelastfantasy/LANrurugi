@@ -2018,7 +2018,15 @@ fn parse_numeric_filter(tag: &str) -> Option<(&'static str, &'static str, u32)> 
         _ if is_progress_namespace(col_str) => "progress",
         _ => return None,
     };
-    for (op_str, op) in [(">=", ">="), ("<=", "<="), (">", ">"), ("<", "<")] {
+    // `=` is accepted explicitly too (`pages:=100`), as `rating:` and the percentage form already
+    // do; without it the token fell through to a tag search that never matches.
+    for (op_str, op) in [
+        (">=", ">="),
+        ("<=", "<="),
+        (">", ">"),
+        ("<", "<"),
+        ("=", "="),
+    ] {
         if let Some(num) = rest.strip_prefix(op_str) {
             return num.parse().ok().map(|n| (col, op, n));
         }
@@ -3807,6 +3815,19 @@ mod tests {
             Some(("pagecount", "=", 100))
         );
         assert_eq!(parse_numeric_filter("reader:100"), None);
+        // An explicit `=` means the same as the bare number.
+        assert_eq!(
+            parse_numeric_filter("pages:=100"),
+            Some(("pagecount", "=", 100))
+        );
+        assert_eq!(
+            parse_numeric_filter("read:=40"),
+            Some(("progress", "=", 40))
+        );
+        assert_eq!(
+            parse_numeric_filter("progress:=40"),
+            Some(("progress", "=", 40))
+        );
     }
 
     #[test]
@@ -4375,6 +4396,14 @@ mod tests {
             vec![id_c.clone()]
         );
         assert!(search_ids("artist:gamma read:>=90%").await.is_empty());
+        // An explicit `=` is the same claim as the bare number, on both `pages:` (page count) and
+        // `read:` (page position) — c is a 10-page archive sitting 6 pages in.
+        assert_eq!(
+            search_ids("artist:gamma pages:=10").await,
+            vec![id_c.clone()]
+        );
+        assert_eq!(search_ids("artist:gamma read:=6").await, vec![id_c.clone()]);
+        assert!(search_ids("artist:gamma pages:=9").await.is_empty());
 
         // `in:tank` flips once the archive leaves the ungrouped set (what a real Tankoubon
         // membership change does) — asserted through the ungrouped entry point, since the default
