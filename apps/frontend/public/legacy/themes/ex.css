@@ -1678,3 +1678,23 @@ textarea {
     background-color: rgba(80, 140, 205, 0.25);
     border-left: 3px solid rgb(80, 140, 205);
 }
+
+/* Categories page's archive panel (`.category-panel` in index.css): this theme's `div.id1` colors. */
+.category-panel {
+  background: #43464E;
+  border: 1px solid #34353B;
+}
+
+/* Running/finished job and download bars (`STATE_COLOR.active` in JobProgress.tsx). White text sits on it. */
+:root {
+  --job-active-color: #3e8e52;
+  /* Text of the Activity page's tinted "success" chip (activityColors.ts). */
+  --activity-success-text: #7fd394;
+}
+
+/* A disabled destructive button looks like any disabled `.stdbtn` (this theme's own), not a dimmed red one. */
+.stdbtn-danger:disabled {
+  background: #34353b;
+  border: 2px solid #000000;
+  color: #f1f1f1;
+}

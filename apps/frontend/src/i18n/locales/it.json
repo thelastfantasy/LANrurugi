@@ -208,6 +208,7 @@
   "This will apply the following Tag Rules to the selected Archives.": "Questo applicherà le seguenti Regole Tag agli Archivi selezionati.",
   "Thumbnail Directory": "Cartella Miniature",
   "batch.timeoutMax20s": "Timeout (max 20s):",
+  "batch.seconds": "secondi",
   "common.title": "Titolo",
   "edit.title": "Titolo:",
   "Total": "Totale",
@@ -514,5 +515,7 @@
   "settings.memorySourceContainer": "limite del container",
   "settings.memorySourceMachine": "memoria della macchina",
   "settings.timezoneFilterPlaceholder": "Cerca per nome o scostamento, es. Tokyo, +09",
-  "settings.timezoneNoMatch": "Nessun fuso orario corrispondente"
+  "settings.timezoneNoMatch": "Nessun fuso orario corrispondente",
+  "edit.choosePlugin": "-- Scegli un plugin --",
+  "activity.queueItemCount": "{{count}} download"
 }

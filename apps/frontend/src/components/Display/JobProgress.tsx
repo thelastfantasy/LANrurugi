@@ -8,10 +8,11 @@ import { useIsNarrowViewport } from "@/hooks"
 import { FONT_SIZE_SM, FONT_SIZE_XS } from "@/theme"
 
 /** State → color, shared between the Jobs page's badges/borders and this component's default bar
- * color. */
+ * color. `active` is per theme (`--job-active-color` in each theme file): the saturated green read
+ * as glaring on the dark themes. */
 export const STATE_COLOR: Record<JobRecordState, string> = {
   queued: "rgb(66, 133, 244)",
-  active: "rgb(26, 165, 26)",
+  active: "var(--job-active-color, rgb(26, 165, 26))",
   finished: "rgb(120, 120, 120)",
   failed: "rgb(207, 37, 37)",
 }
@@ -258,8 +259,8 @@ export function computeEta(
  * The bar used to share its row with a fixed-width label column, which left the track only as wide
  * as whatever the column did not reserve. Splitting the reading at the fill boundary — theme text
  * colour over the empty track, white over the filled part — keeps it readable without a per-theme
- * colour: the fill is `STATE_COLOR.active` in every theme, and the done row already writes white on
- * that same green. The indeterminate variants keep the theme colour throughout (their moving 30%
+ * colour: the fill is `STATE_COLOR.active`, a green dark enough for white in every theme, and the
+ * done row already writes white on that same green. The indeterminate variants keep the theme colour throughout (their moving 30%
  * block is rendered at low opacity, so the text stays legible over it). */
 function InlineBar({
   ratio,

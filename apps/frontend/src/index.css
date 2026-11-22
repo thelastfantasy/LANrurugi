@@ -1711,10 +1711,10 @@ body:has([data-overlay="modal"]) {
  * introduced — but it's a genuine, confirmed usability break worth fixing outright rather than
  * preserving: this class carries only `div.id1`'s *visual* properties (nothing sizing-related,
  * since the panel already sets its own explicit width/height inline at every viewport), so it's
- * immune to the archive-card media query entirely. */
+ * immune to the archive-card media query entirely. Its colors are per theme, appended to each
+ * theme file. */
 .category-panel {
-  background: none repeat scroll 0 0 #f2efdf;
-  border: 1px solid #e3e0d1;
+  /* Colors come from each theme file's own `.category-panel` rule (its `div.id1` colors). */
   border-radius: 9px;
   display: inline-block;
   margin: 3px 2px 2px 3px;

@@ -309,6 +309,7 @@
   "settings.themeColorMetaHint": "若您使用支援 \"theme-color\" 的瀏覽器，主題的主要配色也會一併套用。",
   "settings.imageSizeThreshold": "圖片大小閾值",
   "edit.importTagsFromPlugin": "從外掛匯入標籤：",
+  "edit.choosePlugin": "-- 選擇外掛 --",
   "In MBs. The cache contains recently viewed pages, for faster subsequent reading.": "單位為 MB。快取用於儲存最近檢視的頁面，以加快之後的讀取速度。",
   "reader.infiniteScrolling": "無限滾動",
   "It is automatically emptied when it grows past this specified size.": "當快取超過此大小時，將會自動清除。",
@@ -614,6 +615,7 @@
   "settings.thumbnailGenerationQueued": "縮圖產生已加入佇列。",
   "settings.thumbnailRegenerationQueued": "縮圖重新產生已加入佇列。",
   "batch.timeoutMax20s": "逾時 (最多 20 秒）：",
+  "batch.seconds": "秒",
   "common.title": "標題",
   "edit.title": "標題：",
   "reader.toReturnToTheArchive": "要返回檔案列表，請點擊向下箭頭或按下 Backspace。",
@@ -1335,5 +1337,6 @@
   "reader.keyRepeatSequential": "逐個執行，每次按鍵都完整捲動一次（最多排隊 10 次）",
   "reader.patchUnreadablePending": "這個檔案的補丁無法讀取，已跳過其中的 {{count}} 頁（來源：{{sources}}）。閱讀進度和目錄會在下次開啟時調整。",
   "settings.timezoneFilterPlaceholder": "搜尋時區或偏移，如 Tokyo、+09",
-  "settings.timezoneNoMatch": "沒有符合的時區"
+  "settings.timezoneNoMatch": "沒有符合的時區",
+  "activity.queueItemCount": "{{count}} 個下載任務"
 }

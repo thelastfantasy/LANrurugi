@@ -263,6 +263,7 @@
   "settings.ifYouWantToClear": "Jika Anda ingin menghapus tanda tersebut, klik tombol ini.",
   "settings.imageSizeThreshold": "Ambang Ukuran Gambar",
   "edit.importTagsFromPlugin": "Impor Tag dari Plugin:",
+  "edit.choosePlugin": "-- Pilih plugin --",
   "library.indexSettings": "Pengaturan Indeks",
   "reader.infiniteScrolling": "Gulir Tanpa Batas",
   "It is automatically emptied when it grows past this specified size.": "Dikosongkan secara otomatis ketika melebihi ukuran yang ditentukan.",
@@ -491,6 +492,7 @@
   "library.thumbnail": "Keluku",
   "Thumbnail Directory": "Direktori Keluku",
   "batch.timeoutMax20s": "Batas waktu (maks. 20 detik):",
+  "batch.seconds": "detik",
   "common.title": "Judul",
   "edit.title": "Judul:",
   "reader.toggleStamps": "Tampilkan/Sembunyikan Stempel",
@@ -826,5 +828,6 @@
   "settings.memorySourceContainer": "batas kontainer",
   "settings.memorySourceMachine": "memori mesin",
   "settings.timezoneFilterPlaceholder": "Cari menurut nama atau selisih, mis. Tokyo, +09",
-  "settings.timezoneNoMatch": "Tidak ada zona waktu yang cocok"
+  "settings.timezoneNoMatch": "Tidak ada zona waktu yang cocok",
+  "activity.queueItemCount": "{{count}} unduhan"
 }

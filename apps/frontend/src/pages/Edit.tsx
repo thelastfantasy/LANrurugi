@@ -236,7 +236,7 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
                   value={selectedPlugin}
                   onChange={(e) => setSelectedPlugin(e.target.value)}
                 >
-                  <option value="">{t("common.NoCategory")}</option>
+                  <option value="">{t("edit.choosePlugin")}</option>
                   {plugins.data?.map((p) => (
                     <option key={p.namespace} value={p.namespace}>
                       {p.name}

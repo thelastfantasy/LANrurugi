@@ -275,7 +275,9 @@ export function Batch() {
       </tbody>
     </table>
 
-    <div className="id1 tag-options" style={{ padding: 4, height: "unset", width: "97%" }}>
+    {/* `.id1` adds 3px + 2px of margin; at 97% plus padding the box ran 3px past the column and
+        put a horizontal scrollbar under it. */}
+    <div className="id1 tag-options" style={{ padding: 4, height: "unset", boxSizing: "border-box", width: "calc(100% - 5px)" }}>
       {operation === "plugin" && (
         <div className="operation plugin-operation">
           <table>
@@ -302,7 +304,7 @@ export function Batch() {
                     value={pluginTimeout}
                     onValueChange={(v) => setPluginTimeout(Math.min(20, Math.max(0, v)))}
                   />{" "}
-                  seconds
+                  {t("batch.seconds")}
                 </td>
               </tr>
             </tbody>

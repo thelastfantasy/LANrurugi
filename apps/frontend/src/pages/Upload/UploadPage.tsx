@@ -329,6 +329,8 @@ export function Upload() {
       <br />
       <textarea
         id="urlForm"
+        // The theme's own input look; unstyled it stayed the browser's white box on the dark themes.
+        className="stdinput"
         value={urls}
         onChange={(e) => {
           if (composingFrom.current !== null) setUrls(e.target.value)
@@ -350,7 +352,7 @@ export function Upload() {
           const ta = e.target as HTMLTextAreaElement
           setUrls(urls.slice(0, ta.selectionStart) + insert + urls.slice(ta.selectionEnd))
         }}
-        style={{ width: 400, height: 100, whiteSpace: "pre" }}
+        style={{ width: 400, maxWidth: "100%", height: 100, whiteSpace: "pre" }}
       />
       <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.5, textAlign: "left" }}>
         {t("upload.validUrlLinesCount", { count: urls.split("\n").map((u) => u.trim()).filter(Boolean).length })}

@@ -220,6 +220,7 @@
   "settings.ifYouWantToClear": "Se você quer limpar esses sinalizadores, clique nesse botão.",
   "settings.imageSizeThreshold": "Limite do Tamanho da Imagem",
   "edit.importTagsFromPlugin": "Importar as Etiquetas do Plugin:",
+  "edit.choosePlugin": "-- Escolha um plugin --",
   "reader.infiniteScrolling": "Rolagem Infinita",
   "settings.kaput": "Kaput!",
   "Keep all files": "Matenha todos os aquivos",
@@ -418,6 +419,7 @@
   "Threw away the search cache!": "Joguei fora o cache da pesquisa!",
   "Thumbnail Directory": "Diretório de Miniaturas",
   "batch.timeoutMax20s": "Tempo restante de no (máximo 20s):",
+  "batch.seconds": "segundos",
   "common.title": "Título",
   "edit.title": "Título:",
   "Total": "Total",
@@ -750,5 +752,6 @@
   "settings.memorySourceContainer": "limite do contêiner",
   "settings.memorySourceMachine": "memória da máquina",
   "settings.timezoneFilterPlaceholder": "Pesquisar por nome ou deslocamento, ex.: Tokyo, +09",
-  "settings.timezoneNoMatch": "Nenhum fuso horário correspondente"
+  "settings.timezoneNoMatch": "Nenhum fuso horário correspondente",
+  "activity.queueItemCount": "{{count}} downloads"
 }

@@ -257,6 +257,7 @@
   "settings.ifYouWantToClear": "Drücke diesen Button, um diese Markierungen zu entfernen.",
   "settings.imageSizeThreshold": "Maximale Bildgröße",
   "edit.importTagsFromPlugin": "Tags von diesem Plugin importieren :",
+  "edit.choosePlugin": "-- Plugin wählen --",
   "library.indexSettings": "Index Einstellungen",
   "reader.infiniteScrolling": "Unendliches Scrollen",
   "settings.kaput": "Kaputt!",
@@ -475,6 +476,7 @@
   "library.thumbnail": "Miniaturansicht",
   "Thumbnail Directory": "Thumbnail-Ordner",
   "batch.timeoutMax20s": "Zeitüberschreitung (max 20s):",
+  "batch.seconds": "Sekunden",
   "common.title": "Titel",
   "edit.title": "Titel:",
   "reader.toggleStamps": "Stempel ein-/ausblenden",
@@ -811,5 +813,6 @@
   "settings.memorySourceContainer": "Container-Limit",
   "settings.memorySourceMachine": "Arbeitsspeicher des Rechners",
   "settings.timezoneFilterPlaceholder": "Nach Name oder Versatz suchen, z. B. Tokyo, +09",
-  "settings.timezoneNoMatch": "Keine passende Zeitzone"
+  "settings.timezoneNoMatch": "Keine passende Zeitzone",
+  "activity.queueItemCount": "{{count}} Downloads"
 }

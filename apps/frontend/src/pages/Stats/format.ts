@@ -110,3 +110,9 @@ export function seriesColor(colors: string[], index: number): string {
   if (colors.length === 0) return "currentColor"
   return colors[index % colors.length]
 }
+
+/** A rating-distribution bar: every star count in the theme's first series colour, "unrated" in
+ *  neutral grey. Rotating the series per row made 5★ grey (read as disabled) and "unrated" green. */
+export function ratingColor(colors: string[], stars: number): string {
+  return stars === 0 ? "rgba(127,127,127,0.6)" : seriesColor(colors, 0)
+}

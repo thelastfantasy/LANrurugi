@@ -230,6 +230,7 @@
   "settings.ifYouWantToClear": "Om du vil fjerne de flaggene, klikk på denne knappen.",
   "settings.imageSizeThreshold": "Bilderstørrelsesterskel",
   "edit.importTagsFromPlugin": "Importer Tagger fra Programvaretillegg :",
+  "edit.choosePlugin": "-- Velg et programtillegg --",
   "In MBs. The cache contains recently viewed pages, for faster subsequent reading.": "I MB. Cachen inneholder nylig viste sider for raskere senere lesing.",
   "reader.infiniteScrolling": "Uendelig rulling",
   "settings.kaput": "Totalhavari!",
@@ -434,6 +435,7 @@
   "Threw away the search cache!": "Søkecacheen ble kastet!",
   "Thumbnail Directory": "Miniatyrbildemappe",
   "batch.timeoutMax20s": "Tidsavbrudd (maks 20s):",
+  "batch.seconds": "sekunder",
   "common.title": "Tittel",
   "edit.title": "Tittel:",
   "Total": "Totalt",
@@ -767,5 +769,6 @@
   "settings.memorySourceContainer": "containergrense",
   "settings.memorySourceMachine": "maskinens minne",
   "settings.timezoneFilterPlaceholder": "Søk etter navn eller forskyvning, f.eks. Tokyo, +09",
-  "settings.timezoneNoMatch": "Ingen tidssone passer"
+  "settings.timezoneNoMatch": "Ingen tidssone passer",
+  "activity.queueItemCount": "{{count}} nedlastinger"
 }

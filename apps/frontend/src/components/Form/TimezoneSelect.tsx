@@ -105,11 +105,20 @@ export function TimezoneSelect({
         filter={matchesTimezone}
         autoHighlight
       >
+        {/* Looks like the settings rows' other selects (`.stdinput`, full width), not a button. */}
         <Combobox.Trigger
           ref={triggerRef}
-          className="stdbtn"
+          className="stdinput"
           aria-label={ariaLabel}
-          style={{ display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 6, maxWidth: "100%" }}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 6,
+            width: "100%",
+            cursor: "pointer",
+            textAlign: "left",
+          }}
         >
           <span className="truncate">
             {known ? `${value} (${OFFSETS.get(value)})` : `${t("settings.custom")} (${value})`}
@@ -133,7 +142,8 @@ export function TimezoneSelect({
                 boxShadow: FLOATING_POPUP_SHADOW,
                 color: palette.text,
                 transformOrigin: "var(--transform-origin)",
-                width: "min(22rem, calc(100vw - 2rem))",
+                width: "max(var(--anchor-width), min(22rem, calc(100vw - 2rem)))",
+                maxWidth: "calc(100vw - 2rem)",
                 maxHeight: "min(26rem, var(--available-height))",
               }}
             >

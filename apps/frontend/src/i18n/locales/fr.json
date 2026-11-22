@@ -264,6 +264,7 @@
   "settings.ifYouWantToClear": "Vous pouvez supprimer tous ces indicateurs d'un coup via ce bouton.",
   "settings.imageSizeThreshold": "Limite de taille d'image",
   "edit.importTagsFromPlugin": "Importer les métadonnées à partir du plugin :",
+  "edit.choosePlugin": "-- Choisir un plugin --",
   "library.indexSettings": "Paramètres de l'index",
   "reader.infiniteScrolling": "Défilement infini",
   "It is automatically emptied when it grows past this specified size.": "Il est vidé automatiquement lorsqu'il dépasse cette taille.",
@@ -488,6 +489,7 @@
   "library.thumbnail": "Miniatures",
   "Thumbnail Directory": "Dossier des miniatures",
   "batch.timeoutMax20s": "Intervalle d'exécution (max 20s) :",
+  "batch.seconds": "secondes",
   "common.title": "Titre",
   "edit.title": "Titre :",
   "reader.toggleStamps": "Afficher/cacher les Tampons",
@@ -821,5 +823,6 @@
   "settings.memorySourceContainer": "limite du conteneur",
   "settings.memorySourceMachine": "mémoire de la machine",
   "settings.timezoneFilterPlaceholder": "Rechercher par nom ou décalage, p. ex. Tokyo, +09",
-  "settings.timezoneNoMatch": "Aucun fuseau horaire correspondant"
+  "settings.timezoneNoMatch": "Aucun fuseau horaire correspondant",
+  "activity.queueItemCount": "{{count}} téléchargements"
 }

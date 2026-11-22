@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="zh-Hans" data-theme="g">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>关联作品与登场角色 · UI 印象稿</title>
+<!-- 真实主题 CSS：和 apps/frontend/public/legacy/themes/ 同一份文件，切主题即切真实主题 -->
+<link id="themeCss" rel="stylesheet" href="/legacy/themes/g.css" />
+<style>
+  /* ---- 原型外壳（不属于产品 UI） ---- */
+  .proto-bar {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    padding: 8px 12px; margin: -2px -2px 12px;
+    background: color-mix(in srgb, currentColor 8%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+    font: 12px/1.4 system-ui, sans-serif; text-align: left;
+  }
+  .proto-bar .sp { flex: 1 }
+  .proto-bar label { display: inline-flex; gap: 4px; align-items: center }
+  .proto-bar select, .proto-bar button {
+    font: inherit; padding: 2px 6px; border-radius: 4px;
+    border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+    background: color-mix(in srgb, currentColor 6%, transparent); color: inherit;
+  }
+  .proto-bar button[aria-pressed="true"] { background: color-mix(in srgb, currentColor 22%, transparent) }
+  .proto-tab[aria-selected="true"] { font-weight: 700; text-decoration: underline }
+
+  /* ---- 产品区（模拟 reader 的 archive overview 面板） ---- */
+  #panel { max-width: 720px; margin: 0 auto 40px; padding: 0 16px; text-align: left }
+  .ov-head { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 18px }
+  .ov-thumb {
+    width: 96px; height: 132px; flex: none; border-radius: 3px;
+    background: color-mix(in srgb, currentColor 14%, transparent);
+    display: grid; place-items: center; font-size: 11px; opacity: .75;
+  }
+  .ov-title { margin: 0 0 4px; font-size: 15pt; line-height: 1.25 }
+  .ov-sub { opacity: .7; font-size: 9pt; line-height: 1.6 }
+
+  section.block { margin: 22px 0 }
+  section.block > h2 {
+    font-size: 11pt; margin: 0 0 8px; padding-bottom: 3px;
+    border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+    display: flex; align-items: baseline; gap: 8px;
+  }
+  .h2-note { font-size: 8.5pt; font-weight: 400; opacity: .6 }
+
+  /* 关联作品：链 chip */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px }
+  .linkchip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 8px; border-radius: 999px; font-size: 9pt;
+    text-decoration: none; color: inherit;
+    border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+    background: color-mix(in srgb, currentColor 5%, transparent);
+  }
+  .linkchip:hover { background: color-mix(in srgb, currentColor 12%, transparent) }
+  .linkchip .site { font-weight: 700 }
+  .linkchip .kind { opacity: .55; font-size: 8pt }
+  .linkchip .mark { opacity: .6 }
+  .linkchip.derived { border-style: dashed }
+  .linkchip.add { border-style: dotted; opacity: .8; cursor: pointer }
+
+  /* 进度：阅读 / 观看 并列 */
+  .pgrow { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 9pt }
+  .pglabel { width: 34px; opacity: .75; flex: none }
+  .pgbar { flex: 1; height: 7px; border-radius: 999px; background: color-mix(in srgb, currentColor 12%, transparent); overflow: hidden }
+  .pgbar i { display: block; height: 100%; border-radius: 999px; background: color-mix(in srgb, currentColor 45%, transparent) }
+  .pgrow.video .pgbar i { background: repeating-linear-gradient(90deg, currentColor 0 6px, transparent 6px 10px); opacity: .7 }
+  .pgval { width: 108px; text-align: right; flex: none; opacity: .85 }
+  .pg-foot { font-size: 8.5pt; opacity: .6; margin-top: 6px }
+
+  /* 角色卡 */
+  .entity-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px }
+  .ecard {
+    display: flex; gap: 9px; padding: 8px; border-radius: 4px;
+    border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+    background: color-mix(in srgb, currentColor 4%, transparent);
+  }
+  .eavatar {
+    width: 40px; height: 40px; flex: none; border-radius: 50%;
+    display: grid; place-items: center; font-size: 14pt; font-weight: 700;
+    background: color-mix(in srgb, currentColor 16%, transparent);
+  }
+  .ebody { min-width: 0 }
+  .ename { font-size: 10pt; font-weight: 700; line-height: 1.3; word-break: break-word }
+  .altnames { font-size: 8pt; opacity: .6; line-height: 1.4; word-break: break-word }
+  .ebadges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px }
+  .erole {
+    font-size: 7.5pt; padding: 0 5px; border-radius: 3px;
+    border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  }
+  .erole.main { font-weight: 700; background: color-mix(in srgb, currentColor 14%, transparent) }
+  .ecv { font-size: 8.5pt; opacity: .8; margin-top: 3px }
+  .ecv .cvname { font-weight: 600; opacity: 1 }
+  .entity-foot { font-size: 8.5pt; opacity: .65; margin-top: 8px }
+  .entity-foot a { color: inherit }
+
+  /* 原生标签区：刻意做得比角色区"朴素"，体现分开管理 */
+  .tagline { font-size: 9pt; line-height: 2; word-break: break-word }
+  .gt { margin-right: 4px }
+
+  /* 数据注记 */
+  .anno { display: none }
+  body.annotate .anno {
+    display: inline-block; vertical-align: middle; margin-left: 4px;
+    font: 10px/1.5 ui-monospace, monospace; padding: 0 4px; border-radius: 3px;
+    background: #FFD84D; color: #1a1a1a; border: 1px solid #b99a20;
+  }
+  body.annotate [data-field] { outline: 1px dashed #FFD84D88; outline-offset: 2px }
+
+  /* 编辑页 */
+  .paste-row { display: flex; gap: 6px; flex-wrap: wrap }
+  .paste-row input {
+    flex: 1; min-width: 240px; padding: 5px 8px; font-size: 9pt; color: inherit;
+    border-radius: 3px; border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+    background: color-mix(in srgb, currentColor 5%, transparent);
+  }
+  .cand {
+    display: flex; gap: 10px; padding: 8px; margin: 8px 0; border-radius: 4px;
+    border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+    background: color-mix(in srgb, currentColor 4%, transparent);
+  }
+  .cand .cover { width: 46px; height: 64px; flex: none; border-radius: 2px; background: color-mix(in srgb, currentColor 16%, transparent) }
+  .cand .pick { margin-left: auto; align-self: center }
+  .cand.best { border-color: color-mix(in srgb, currentColor 55%, transparent) }
+  .import-box {
+    margin-top: 12px; padding: 10px; border-radius: 4px;
+    border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+    background: color-mix(in srgb, currentColor 6%, transparent);
+    font-size: 9pt;
+  }
+  .import-box .row { display: flex; gap: 14px; flex-wrap: wrap; margin: 8px 0 }
+  .import-box label { display: inline-flex; gap: 4px; align-items: center }
+  .muted { opacity: .62 }
+  .rule { border: 0; border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent); margin: 14px 0 }
+</style>
+</head>
+<body>
+<div class="proto-bar">
+  <strong>UI 印象稿</strong>
+  <button class="proto-tab" data-tab="archive" aria-selected="true">档案页</button>
+  <button class="proto-tab" data-tab="edit" aria-selected="false">编辑 · 关联作品</button>
+  <span class="sp"></span>
+  <label>主题
+    <select id="theme">
+      <option value="g">g</option>
+      <option value="ex">ex</option>
+      <option value="modern">modern</option>
+      <option value="modern_red">modern_red</option>
+      <option value="modern_clear">modern_clear</option>
+    </select>
+  </label>
+  <label>语言
+    <select id="lang">
+      <option value="ja">日本語</option>
+      <option value="zh">中文</option>
+      <option value="latn">Romaji</option>
+    </select>
+  </label>
+  <button id="annoBtn" aria-pressed="false">数据注记</button>
+</div>
+
+<!-- ========== 档案页 ========== -->
+<main id="panel" tabindex="-1">
+<div id="tab-archive">
+  <div class="ov-head">
+    <div class="ov-thumb">封面</div>
+    <div>
+      <h1 class="ov-title" data-field="archive.title">星屑のランナー</h1>
+      <div class="ov-sub">
+        12 页 · 4.2 MB · 2026-11-02 入库<span class="anno">archive.pagecount / arcsize</span><br />
+        artist:月白工房 · parody:原创<span class="anno">archive.tags</span>
+      </div>
+    </div>
+  </div>
+
+  <section class="block">
+    <h2>关联作品 <span class="h2-note">3 个 · 可搜、不计入统计</span></h2>
+    <div class="chips" data-field="archive.external_links[]">
+      <a class="linkchip" href="https://bgm.tv/subject/259790" target="_blank" rel="noreferrer">
+        <span class="site">bgm.tv</span><span class="kind">subject</span><span>259790</span><span class="mark">↗</span>
+        <span class="anno">link{site:"bgm",kind:"subject",id}</span>
+      </a>
+      <a class="linkchip" href="https://anidb.net/anime/1234" target="_blank" rel="noreferrer">
+        <span class="site">anidb</span><span class="kind">anime</span><span>1234</span><span class="mark">↗</span>
+      </a>
+      <span class="linkchip derived" title="由 Jellyfin 自动匹配（ProviderIds.Bangumi）· 可解除">
+        <span class="site">jellyfin</span><span class="kind">item</span><span>8f3c…</span><span class="mark">⇄</span>
+        <span class="anno">link.derived=true</span>
+      </span>
+      <button class="linkchip add">+ 添加</button>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>进度</h2>
+    <div class="pgrow">
+      <span class="pglabel">漫画</span>
+      <div class="pgbar"><i style="width:25%"></i></div>
+      <span class="pgval">3 / 12 页</span>
+    </div>
+    <div class="pgrow video" data-field="watch{percentage,position,episode}">
+      <span class="pglabel">影片</span>
+      <div class="pgbar"><i style="width:78%"></i></div>
+      <span class="pgval">第 3 集 · 78%</span>
+      <span class="anno">watch.percentage</span>
+    </div>
+    <div class="pg-foot">
+      影片进度来自 Jellyfin「家 · 192.168.3.20」· 5 分钟前更新 · 只读
+      <span class="anno">watch.fetched_at / server</span>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>
+      登场角色
+      <span class="h2-note">12 位 · 已导入主要与配角 · 语言：<span id="langLabel">日本語</span></span>
+    </h2>
+    <div class="entity-grid" data-field="relation.entities[]">
+      <article class="ecard">
+        <div class="eavatar" data-avatar="ル">ル</div>
+        <div class="ebody">
+          <div class="ename" data-ja="ルカ" data-zh="露卡" data-latn="Luca"></div>
+          <div class="altnames"></div>
+          <div class="ebadges"><span class="erole main">主角</span><span class="anno">relation.role</span></div>
+          <div class="ecv">CV <span class="cvname" data-ja="水原ひかり" data-zh="水原光" data-latn="Mizuhara Hikari"></span></div>
+        </div>
+      </article>
+      <article class="ecard">
+        <div class="eavatar" data-avatar="ミ">ミ</div>
+        <div class="ebody">
+          <div class="ename" data-ja="ミナ" data-zh="米娜" data-latn="Mina"></div>
+          <div class="altnames"></div>
+          <div class="ebadges"><span class="erole main">主角</span></div>
+          <div class="ecv">CV <span class="cvname" data-ja="東山あかり" data-zh="东山明" data-latn="Higashiyama Akari"></span></div>
+        </div>
+      </article>
+      <article class="ecard">
+        <div class="eavatar" data-avatar="ト">ト</div>
+        <div class="ebody">
+          <div class="ename" data-ja="トウカ" data-zh="灯花" data-latn="Touka"></div>
+          <div class="altnames"></div>
+          <div class="ebadges"><span class="erole">配角</span></div>
+          <div class="ecv"><span class="muted">CV 未登记</span></div>
+        </div>
+      </article>
+      <article class="ecard">
+        <div class="eavatar" data-avatar="?">?</div>
+        <div class="ebody">
+          <div class="ename">駅長</div>
+          <div class="altnames"><span class="muted">无外链 · 仅本站</span><span class="anno">names 只有一条</span></div>
+          <div class="ebadges"><span class="erole">客串</span></div>
+        </div>
+      </article>
+    </div>
+    <div class="entity-foot">
+      <a href="#">在搜索中打开 character:ルカ</a> · 角色名不进标签云、不影响「未分类」判定
+      <span class="anno">派生索引，不写 archive.tags</span>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>标签 <span class="h2-note">原生标签，与角色分开管理</span></h2>
+    <div class="tagline">
+      <span class="gt">artist:月白工房</span>
+      <span class="gt">parody:原创</span>
+      <span class="gt">language:japanese</span>
+      <span class="gt">source:https://example.invalid/g/123</span>
+    </div>
+  </section>
+</div>
+
+<!-- ========== 编辑页 ========== -->
+<div id="tab-edit" hidden>
+  <h1 class="ov-title" style="margin-bottom:4px">编辑 · 星屑のランナー</h1>
+  <div class="ov-sub" style="margin-bottom:18px">标签编辑与归档信息</div>
+
+  <section class="block">
+    <h2>关联作品</h2>
+    <div class="paste-row">
+      <input value="https://bgm.tv/subject/259790" aria-label="粘贴链接" />
+      <button class="stdbtn">识别</button>
+    </div>
+    <div class="pg-foot">支持 bgm.tv / anidb / 媒体服务器条目链接，也接受纯数字 id（配合站点下拉）。</div>
+
+    <div class="cand best" data-field="resolve.candidates[]">
+      <div class="cover"></div>
+      <div style="min-width:0">
+        <div style="font-weight:700;font-size:10pt">星屑のランナー</div>
+        <div class="muted" style="font-size:8.5pt">bgm.tv · subject 259790 · TV · 2024 · 8.1 分</div>
+        <div class="muted" style="font-size:8.5pt">角色 12 · 声优 9 · 与现有标题相似度 高</div>
+      </div>
+      <button class="stdbtn pick">用这个</button>
+    </div>
+    <div class="cand">
+      <div class="cover"></div>
+      <div style="min-width:0">
+        <div style="font-weight:700;font-size:10pt">星屑のランナー 第2期</div>
+        <div class="muted" style="font-size:8.5pt">bgm.tv · subject 312004 · TV · 2025 · 7.9 分</div>
+        <div class="muted" style="font-size:8.5pt">角色 9 · 声优 7 · 与现有标题相似度 中</div>
+      </div>
+      <button class="stdbtn pick">用这个</button>
+    </div>
+
+    <div class="import-box">
+      <div data-field="import.preview">
+        将导入 <strong>角色 12</strong>（主要 3 / 配角 5 / 客串 4）· <strong>声优 9</strong> · 已存在 0
+        <span class="anno">EntityInput[]</span>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" checked /> 只导入主要与配角</label>
+        <label><input type="checkbox" checked /> 同时导入声优</label>
+        <label><input type="checkbox" /> 同时更新标题与标签</label>
+      </div>
+      <div class="row">
+        <button class="stdbtn">导入并合并</button>
+        <button class="stdbtn">只保存链接</button>
+        <button class="stdbtn">取消</button>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <section class="block">
+    <h2>已关联</h2>
+    <div class="chips">
+      <span class="linkchip">
+        <span class="site">bgm.tv</span><span class="kind">subject</span><span>259790</span>
+        <span class="mark" role="button" title="解除关联（不影响已导入的角色）">✕</span>
+      </span>
+      <span class="linkchip derived" title="由 Jellyfin 自动匹配 · 可解除">
+        <span class="site">jellyfin</span><span class="kind">item</span><span>8f3c…</span>
+        <span class="mark" role="button">✕</span>
+      </span>
+    </div>
+    <div class="pg-foot">解除链接不会删除已导入的角色；「重新导入」才会改动它们。</div>
+  </section>
+</div>
+</main>
+
+<script>
+  // 主题切换：直接换真实主题文件
+  document.getElementById('theme').addEventListener('change', (e) => {
+    document.documentElement.dataset.theme = e.target.value
+    document.getElementById('themeCss').href = '/legacy/themes/' + e.target.value + '.css'
+  })
+
+  // 多语言名：主名跟随语言，其余语言折叠为副行（数据模型要能表达"同一实体多个名字"）
+  const LANGS = ['ja', 'zh', 'latn']
+  const LANG_LABEL = { ja: '日本語', zh: '中文', latn: 'Romaji' }
+  function primary(el, lang) {
+    return el.dataset[lang] || el.dataset.ja || el.textContent.trim()
+  }
+  function applyLang(lang) {
+    document.getElementById('langLabel').textContent = LANG_LABEL[lang]
+    for (const el of document.querySelectorAll('.ename, .cvname, .tagline .ename')) {
+      if (!el.dataset.ja && !el.dataset.zh) continue // 无多语言数据，保持静态文本
+      const others = LANGS.filter((l) => l !== lang && el.dataset[l]).map((l) => el.dataset[l])
+      el.textContent = primary(el, lang)
+      const alt = el.parentElement.querySelector('.altnames')
+      if (alt && el.classList.contains('ename')) {
+        alt.textContent = others.length ? others.join(' · ') : ''
+      }
+      const av = el.parentElement.querySelector('.eavatar')
+      if (av) av.textContent = primary(el, lang).slice(0, 1)
+    }
+  }
+  document.getElementById('lang').addEventListener('change', (e) => applyLang(e.target.value))
+  applyLang('ja')
+
+  // 数据注记：把每个 UI 元素和它需要的数据字段对上
+  document.getElementById('annoBtn').addEventListener('click', (e) => {
+    const on = document.body.classList.toggle('annotate')
+    e.target.setAttribute('aria-pressed', String(on))
+  })
+
+  // 两个 tab
+  for (const b of document.querySelectorAll('.proto-tab')) {
+    b.addEventListener('click', () => {
+      for (const o of document.querySelectorAll('.proto-tab')) {
+        o.setAttribute('aria-selected', String(o === b))
+      }
+      document.getElementById('tab-archive').hidden = b.dataset.tab !== 'archive'
+      document.getElementById('tab-edit').hidden = b.dataset.tab !== 'edit'
+    })
+  }
+</script>
+</body>
+</html>

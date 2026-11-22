@@ -306,6 +306,7 @@
   "settings.themeColorMetaHint": "브라우저가 \"theme-color\"를 지원하는 경우 테마의 기본 색상도 해당 위치에 ",
   "settings.imageSizeThreshold": "이미지 크기 임계값",
   "edit.importTagsFromPlugin": "플러그인에서 태그 가져오기:",
+  "edit.choosePlugin": "-- 플러그인 선택 --",
   "In MBs. The cache contains recently viewed pages, for faster subsequent reading.": "MBs. 캐시는 최근 본 페이지를 포함하며, 더 빠른 후속 읽기를 위해 사용됩니다.",
   "library.indexSettings": "인덱스 설정",
   "reader.infiniteScrolling": "무한 스크롤",
@@ -560,6 +561,7 @@
   "library.thumbnail": "썸네일",
   "Thumbnail Directory": "섬네일 디렉터리",
   "batch.timeoutMax20s": "시간 초과 (최대 20초):",
+  "batch.seconds": "초",
   "common.title": "제목",
   "edit.title": "제목:",
   "reader.toReturnToTheArchive": "아카이브 인덱스로 돌아가려면, 아래 화살표를 터치하거나 Backspace를 ",
@@ -909,5 +911,6 @@
   "settings.memorySourceContainer": "컨테이너 메모리 한도",
   "settings.memorySourceMachine": "기기 메모리",
   "settings.timezoneFilterPlaceholder": "이름 또는 오프셋으로 검색 (예: Tokyo, +09)",
-  "settings.timezoneNoMatch": "일치하는 시간대가 없습니다"
+  "settings.timezoneNoMatch": "일치하는 시간대가 없습니다",
+  "activity.queueItemCount": "다운로드 {{count}}개"
 }

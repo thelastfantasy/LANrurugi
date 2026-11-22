@@ -235,6 +235,7 @@
   "settings.ifYouWantToClear": "Nếu bạn muốn xóa những cờ đó, nhấp vào nút này.",
   "settings.imageSizeThreshold": "Giới hạn kích thước ảnh",
   "edit.importTagsFromPlugin": "Thêm Thẻ từ Plugin:",
+  "edit.choosePlugin": "-- Chọn plugin --",
   "reader.infiniteScrolling": "Cuộn vô hạn",
   "It is automatically emptied when it grows past this specified size.": "Nó sẽ tự động được làm trống khi vượt quá kích thước đã chỉ định.",
   "settings.kaput": "Toang rồi!",
@@ -440,6 +441,7 @@
   "Threw away the search cache!": "Đã xóa bộ nhớ đệm tìm kiếm!",
   "Thumbnail Directory": "Thư mục ảnh thu nhỏ",
   "batch.timeoutMax20s": "Thời gian chờ (tối đa 20 giây):",
+  "batch.seconds": "giây",
   "common.title": "Tiêu đề",
   "edit.title": "Tiêu đề:",
   "Total": "Tổng cộng",
@@ -774,5 +776,6 @@
   "settings.memorySourceContainer": "giới hạn container",
   "settings.memorySourceMachine": "bộ nhớ máy",
   "settings.timezoneFilterPlaceholder": "Tìm theo tên hoặc độ lệch, ví dụ Tokyo, +09",
-  "settings.timezoneNoMatch": "Không có múi giờ phù hợp"
+  "settings.timezoneNoMatch": "Không có múi giờ phù hợp",
+  "activity.queueItemCount": "{{count}} lượt tải"
 }
