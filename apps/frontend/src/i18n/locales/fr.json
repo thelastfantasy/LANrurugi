@@ -819,5 +819,7 @@
   "settings.memoryReasonDetected": "automatique · {{source}} {{size}}",
   "settings.memoryReasonUnknown": "automatique · mémoire illisible, fonctionnement normal",
   "settings.memorySourceContainer": "limite du conteneur",
-  "settings.memorySourceMachine": "mémoire de la machine"
+  "settings.memorySourceMachine": "mémoire de la machine",
+  "settings.timezoneFilterPlaceholder": "Rechercher par nom ou décalage, p. ex. Tokyo, +09",
+  "settings.timezoneNoMatch": "Aucun fuseau horaire correspondant"
 }

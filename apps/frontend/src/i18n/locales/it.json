@@ -512,5 +512,7 @@
   "settings.memoryReasonDetected": "automatico · {{source}} {{size}}",
   "settings.memoryReasonUnknown": "automatico · memoria non leggibile, funzionamento normale",
   "settings.memorySourceContainer": "limite del container",
-  "settings.memorySourceMachine": "memoria della macchina"
+  "settings.memorySourceMachine": "memoria della macchina",
+  "settings.timezoneFilterPlaceholder": "Cerca per nome o scostamento, es. Tokyo, +09",
+  "settings.timezoneNoMatch": "Nessun fuso orario corrispondente"
 }

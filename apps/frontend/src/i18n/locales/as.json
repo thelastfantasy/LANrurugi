@@ -327,5 +327,7 @@
   "settings.memoryReasonDetected": "স্বয়ংক্ৰিয় · {{source}} {{size}}",
   "settings.memoryReasonUnknown": "স্বয়ংক্ৰিয় · মেমৰি পঢ়িব পৰা নগ'ল, সাধাৰণভাৱে চলি আছে",
   "settings.memorySourceContainer": "কণ্টেইনাৰৰ সীমা",
-  "settings.memorySourceMachine": "মেচিনৰ মেমৰি"
+  "settings.memorySourceMachine": "মেচিনৰ মেমৰি",
+  "settings.timezoneFilterPlaceholder": "নাম বা অফছেটেৰে সন্ধান কৰক, যেনে Tokyo, +09",
+  "settings.timezoneNoMatch": "মিলা সময় অঞ্চল নাই"
 }

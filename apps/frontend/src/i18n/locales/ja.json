@@ -1165,6 +1165,8 @@
   "settings.thumbnailGenerationQueued": "サムネイル生成をキューに追加しました。",
   "settings.thumbnailRegenerationQueued": "サムネイル再生成をキューに追加しました。",
   "settings.timezone": "タイムゾーン",
+  "settings.timezoneFilterPlaceholder": "名前またはオフセットで検索（例：Tokyo、+09）",
+  "settings.timezoneNoMatch": "一致するタイムゾーンがありません",
   "hooks.tipRightclickAnArchiveFor": "ヒント：アーカイブを右クリックすると、さらに多くの操作を実行できます！",
   "reader.toReturnToTheArchive": "アーカイブ一覧に戻るには、下向き矢印をタップするか Backspace キーを使用してください。",
   "settings.tokenRenamed": "トークンの名前を変更しました。",

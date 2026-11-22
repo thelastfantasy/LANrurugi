@@ -13,6 +13,7 @@ import {
 import type { MemoryMode } from "@/api/types"
 import { NumberInput } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
+import { TimezoneSelect } from "@/components/Form"
 import { confirmDialog } from "@/dialog"
 import { routes } from "@/lib/routes"
 import { getImageFormatSupport } from "@/lib/utils/imageFormatSupport"
@@ -44,6 +45,8 @@ export function GlobalSection({
   setHtmltitle,
   language,
   setLanguage,
+  timezone,
+  setTimezone,
   pagesize,
   setPagesize,
   enableresize,
@@ -94,6 +97,8 @@ export function GlobalSection({
   setHtmltitle: (v: string) => void
   language: string
   setLanguage: (v: string) => void
+  timezone: string
+  setTimezone: (v: string) => void
   pagesize: number
   setPagesize: (v: number) => void
   enableresize: boolean
@@ -172,6 +177,13 @@ export function GlobalSection({
             <LanguageOrderEditor value={language} onChange={setLanguage} />
             <br />
             {t("settings.selectTheLanguageForThe")}
+          </Row>
+          <Row label={t("settings.timezone")}>
+            {/* `date_added` display + day-range search resolve in this IANA timezone so every
+                viewer agrees on which day an archive belongs to, regardless of browser timezone. */}
+            <TimezoneSelect value={timezone} onChange={setTimezone} ariaLabel={t("settings.timezone")} />
+            <br />
+            {t("settings.ianaTimezoneIdentifierEG")}
           </Row>
           <Row label={t("settings.archivesPerPage")}>
             <NumberInput style={{ width: "100%" }} value={pagesize} onValueChange={setPagesize} />

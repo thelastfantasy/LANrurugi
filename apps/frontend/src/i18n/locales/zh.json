@@ -1184,6 +1184,8 @@
   "settings.thumbnailRegenerationQueued": "缩略图重新生成已加入队列。",
   "batch.timeoutMax20s": "超时（最多20秒）：",
   "settings.timezone": "时区",
+  "settings.timezoneFilterPlaceholder": "搜索时区或偏移，如 Tokyo、+09",
+  "settings.timezoneNoMatch": "没有匹配的时区",
   "hooks.tipRightclickAnArchiveFor": "提示：右键点击档案可查看更多操作！",
   "common.title": "标题",
   "edit.title": "标题：",

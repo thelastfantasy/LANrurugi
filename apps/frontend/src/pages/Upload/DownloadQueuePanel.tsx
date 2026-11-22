@@ -99,14 +99,18 @@ export function DownloadQueuePanel({
    *  count kept beside it and the label moved to a tooltip / `aria-label`. */
   const narrow = useIsNarrowViewport()
 
-  /** The tabs a group shows, and the items behind each. A group with only one kind of item has
-   * nothing to switch between, so it gets no tabs at all — the per-row "from a subscription" badge
-   * already says where those came from. */
+  /** The tabs a group shows, the items behind each, and the tab in effect. Any subscription items
+   * keep the tabs up — once the manual rows were cleared, the remaining subscription rows otherwise
+   * looked like manual ones, the per-row badge being too small to notice. A group of manual rows
+   * only has nothing to tell apart and gets no tabs. The tab in effect is the chosen one unless that
+   * side is empty, so clearing a side never leaves the group showing nothing. */
   const tabsFor = useCallback(
-    (groupItems: DownloadQueueItem[]) => {
+    (groupItems: DownloadQueueItem[], chosen: QueueTab | undefined) => {
       const { manual, fromSubscriptions } = partitionByOrigin(groupItems)
-      const tabs = manual.length > 0 && fromSubscriptions.length > 0
-      return { manual, fromSubscriptions, tabs }
+      const tabs = fromSubscriptions.length > 0
+      const preferred = chosen ?? "manual"
+      const tab: QueueTab = preferred === "manual" && manual.length === 0 ? "subscription" : preferred
+      return { manual, fromSubscriptions, tabs, tab }
     },
     [],
   )
@@ -124,9 +128,9 @@ export function DownloadQueuePanel({
   const visibleItems = useMemo(() => {
     const out: DownloadQueueItem[] = []
     for (const [namespace, groupItems] of grouped) {
-      const { manual, fromSubscriptions, tabs } = tabsFor(groupItems)
+      const { manual, fromSubscriptions, tabs, tab } = tabsFor(groupItems, tabByGroup[namespace])
       if (!tabs) out.push(...groupItems)
-      else out.push(...((tabByGroup[namespace] ?? "manual") === "manual" ? manual : fromSubscriptions))
+      else out.push(...(tab === "manual" ? manual : fromSubscriptions))
     }
     return out
   }, [grouped, tabByGroup, tabsFor])
@@ -356,12 +360,11 @@ export function DownloadQueuePanel({
             const isLocalUpload = namespace === LOCAL_UPLOAD_NAMESPACE
             const isShareImport = namespace === SHARE_IMPORT_NAMESPACE
             const groupTitle = groupTitleFor(namespace)
-            const { manual, fromSubscriptions, tabs } = tabsFor(groupItems)
+            const { manual, fromSubscriptions, tabs, tab } = tabsFor(groupItems, tabByGroup[namespace])
             // `downloading` also covers the cataloguing/writing phase that follows the transfer,
             // so a raw count of those rows overstates how many are actually pulling bytes — this
             // is the number the concurrency limit applies to.
             const transferringCount = groupItems.filter((it) => it.transferring === true).length
-            const tab: QueueTab = tabByGroup[namespace] ?? "manual"
             const shown = tabs ? (tab === "manual" ? manual : fromSubscriptions) : groupItems
             // Splitting a list must not bury the rows that need an answer, so whichever tab holds
             // them says how many rather than leaving them one click away and unannounced.
@@ -393,6 +396,7 @@ export function DownloadQueuePanel({
                             type="button"
                             className={`stdbtn queue-tab${tab === which ? " queue-tab-active" : ""}`}
                             aria-pressed={tab === which}
+                            disabled={which === "manual" && manual.length === 0}
                             // The accessible name never depends on the icon being understood, and it
                             // stays present in both layouts.
                             aria-label={which === "manual" ? t("upload.tabManual") : t("upload.tabSubscription")}

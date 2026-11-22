@@ -809,5 +809,7 @@
   "settings.memoryReasonDetected": "automatisch · {{source}} {{size}}",
   "settings.memoryReasonUnknown": "automatisch · Speicher nicht lesbar, normaler Betrieb",
   "settings.memorySourceContainer": "Container-Limit",
-  "settings.memorySourceMachine": "Arbeitsspeicher des Rechners"
+  "settings.memorySourceMachine": "Arbeitsspeicher des Rechners",
+  "settings.timezoneFilterPlaceholder": "Nach Name oder Versatz suchen, z. B. Tokyo, +09",
+  "settings.timezoneNoMatch": "Keine passende Zeitzone"
 }

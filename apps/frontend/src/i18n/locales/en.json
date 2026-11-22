@@ -1126,6 +1126,8 @@
   "settings.thumbnailRegenerationQueued": "Thumbnail regeneration queued.",
   "batch.timeoutMax20s": "Timeout (max 20s):",
   "settings.timezone": "Timezone",
+  "settings.timezoneFilterPlaceholder": "Search by name or offset, e.g. Tokyo, +09",
+  "settings.timezoneNoMatch": "No matching timezone",
   "hooks.tipRightclickAnArchiveFor": "Tip: right-click an archive for more actions!",
   "common.title": "Title",
   "edit.title": "Title:",

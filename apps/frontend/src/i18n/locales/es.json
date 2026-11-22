@@ -754,5 +754,7 @@
   "settings.memoryReasonDetected": "automático · {{source}} {{size}}",
   "settings.memoryReasonUnknown": "automático · no se pudo leer la memoria, funcionamiento normal",
   "settings.memorySourceContainer": "límite del contenedor",
-  "settings.memorySourceMachine": "memoria del equipo"
+  "settings.memorySourceMachine": "memoria del equipo",
+  "settings.timezoneFilterPlaceholder": "Buscar por nombre o desfase, p. ej. Tokyo, +09",
+  "settings.timezoneNoMatch": "Ninguna zona horaria coincide"
 }

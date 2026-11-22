@@ -772,5 +772,7 @@
   "settings.memoryReasonDetected": "tự động · {{source}} {{size}}",
   "settings.memoryReasonUnknown": "tự động · không đọc được bộ nhớ, chạy bình thường",
   "settings.memorySourceContainer": "giới hạn container",
-  "settings.memorySourceMachine": "bộ nhớ máy"
+  "settings.memorySourceMachine": "bộ nhớ máy",
+  "settings.timezoneFilterPlaceholder": "Tìm theo tên hoặc độ lệch, ví dụ Tokyo, +09",
+  "settings.timezoneNoMatch": "Không có múi giờ phù hợp"
 }

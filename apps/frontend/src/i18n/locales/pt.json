@@ -748,5 +748,7 @@
   "settings.memoryReasonDetected": "automático · {{source}} {{size}}",
   "settings.memoryReasonUnknown": "automático · memória não lida, funcionamento normal",
   "settings.memorySourceContainer": "limite do contêiner",
-  "settings.memorySourceMachine": "memória da máquina"
+  "settings.memorySourceMachine": "memória da máquina",
+  "settings.timezoneFilterPlaceholder": "Pesquisar por nome ou deslocamento, ex.: Tokyo, +09",
+  "settings.timezoneNoMatch": "Nenhum fuso horário correspondente"
 }

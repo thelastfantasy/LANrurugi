@@ -1333,5 +1333,7 @@
   "reader.keyRepeatHint": "上一次捲動還沒結束就再次按鍵時的處理方式。",
   "reader.keyRepeatMerge": "合併到終點，一次滑過去（預設）",
   "reader.keyRepeatSequential": "逐個執行，每次按鍵都完整捲動一次（最多排隊 10 次）",
-  "reader.patchUnreadablePending": "這個檔案的補丁無法讀取，已跳過其中的 {{count}} 頁（來源：{{sources}}）。閱讀進度和目錄會在下次開啟時調整。"
+  "reader.patchUnreadablePending": "這個檔案的補丁無法讀取，已跳過其中的 {{count}} 頁（來源：{{sources}}）。閱讀進度和目錄會在下次開啟時調整。",
+  "settings.timezoneFilterPlaceholder": "搜尋時區或偏移，如 Tokyo、+09",
+  "settings.timezoneNoMatch": "沒有符合的時區"
 }

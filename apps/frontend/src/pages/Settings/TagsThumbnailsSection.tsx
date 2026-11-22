@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next"
 import { useRegenThumbnails } from "@/api/hooks"
 import { NumberInput, RadioGroup, RadioItem } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
-import { TimezoneSelect } from "@/components/Form"
 import { getImageFormatSupport } from "@/lib/utils/imageFormatSupport"
 import { FONT_SIZE_SM } from "@/theme"
 
@@ -26,8 +25,6 @@ export function TagsThumbnailsSection({
   setUsedateadded,
   usedatemodified,
   setUsedatemodified,
-  timezone,
-  setTimezone,
   onStatus,
 }: {
   thumbnailFormat: "jxl" | "webp" | "jpeg"
@@ -46,8 +43,6 @@ export function TagsThumbnailsSection({
   setUsedateadded: (v: boolean) => void
   usedatemodified: boolean
   setUsedatemodified: (v: boolean) => void
-  timezone: string
-  setTimezone: (v: string) => void
   onStatus: (status: string) => void
 }) {
   const { t } = useTranslation()
@@ -156,13 +151,6 @@ export function TagsThumbnailsSection({
               {t("settings.enablingThisWillUseFile")}
             </CheckboxRow>
           )}
-          <Row label={t("settings.timezone")}>
-            {/* `date_added` display + day-range search resolve in this IANA timezone so every
-                viewer agrees on which day an archive belongs to, regardless of browser timezone. */}
-            <TimezoneSelect value={timezone} onChange={setTimezone} ariaLabel={t("settings.timezone")} />
-            <br />
-            {t("settings.ianaTimezoneIdentifierEG")}
-          </Row>
           <Row label={t("settings.excludedNamespaces")}>
             <input
               className="stdinput"

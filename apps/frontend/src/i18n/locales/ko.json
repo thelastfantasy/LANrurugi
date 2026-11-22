@@ -907,5 +907,7 @@
   "settings.memoryReasonDetected": "자동 · {{source}} {{size}}",
   "settings.memoryReasonUnknown": "자동 · 메모리를 확인하지 못해 일반으로 동작",
   "settings.memorySourceContainer": "컨테이너 메모리 한도",
-  "settings.memorySourceMachine": "기기 메모리"
+  "settings.memorySourceMachine": "기기 메모리",
+  "settings.timezoneFilterPlaceholder": "이름 또는 오프셋으로 검색 (예: Tokyo, +09)",
+  "settings.timezoneNoMatch": "일치하는 시간대가 없습니다"
 }
