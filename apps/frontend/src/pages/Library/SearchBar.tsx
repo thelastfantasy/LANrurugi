@@ -3,7 +3,8 @@ import type { RefObject } from "react";
 import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { Button, IconButtonWithTooltip } from "@/components/common-ui/Form";
+import { Tooltip } from "@/components/common-ui/Display";
+import { Button } from "@/components/common-ui/Form";
 import { ClickPopover, SearchSyntaxHelp } from "@/components/Display";
 import { useMenuPalette } from "@/hooks/useMenuPalette";
 import { isRowPick, type QuickFilter } from "@/lib/searchSuggestions";
@@ -369,15 +370,28 @@ export function SearchBar({
           </Button>
         )}
         {loggedIn && (
-          <IconButtonWithTooltip
-            icon="fa fa-robot"
-            title={t("library.aiSmartCreateTankoubon")}
-            description={t("library.analyzeArchivesNotYetIn")}
-            // Not `searchbtn` — its legacy min-width: 100px !important would stretch this icon button wide.
-            wrapperStyle={{ alignItems: "center", height: 21 }}
-            style={{ marginTop: 4 }}
-            onClick={onAiSmartTankoubon}
-          />
+          // Sized like its neighbours (`searchbtn`, growing with the row) rather than as a small
+          // icon button, which sat shorter and narrower than every other button in the row.
+          <Tooltip
+            label={
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>{t("library.aiSmartCreateTankoubon")}</div>
+                <div style={{ opacity: 0.8 }}>{t("library.analyzeArchivesNotYetIn")}</div>
+              </div>
+            }
+            anchor="cursor"
+            wrapperStyle={{ flexGrow: 1 }}
+          >
+            <Button
+              id="ai-smart-tankoubon"
+              className="searchbtn"
+              style={{ width: "100%" }}
+              aria-label={t("library.aiSmartCreateTankoubon") ?? undefined}
+              onClick={onAiSmartTankoubon}
+            >
+              <i className="fa fa-robot" aria-hidden="true" />
+            </Button>
+          </Tooltip>
         )}
       </div>
     </div>

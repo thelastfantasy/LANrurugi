@@ -106,12 +106,10 @@ export function ImageSupportBadge({ support }: { support: ImageFormatSupport }) 
         gap: 4,
         padding: "2px 7px",
         borderRadius: 999,
-        background: isJxl
-          ? "rgba(26, 115, 232, 0.12)"
-          : isSource
-            ? "rgba(220, 38, 38, 0.10)"
-            : "rgba(245, 158, 11, 0.16)",
-        color: isJxl ? "#1a73e8" : isSource ? "#dc2626" : "#b45309",
+        // Solid fill with white text: the earlier tint-plus-coloured-text all but disappeared on the
+        // dark themes, and a solid fill reads the same on every theme.
+        background: isJxl ? "#1a73e8" : isSource ? "#dc2626" : "#b45309",
+        color: "#ffffff",
         fontWeight: 700,
         lineHeight: 1.4,
       }}

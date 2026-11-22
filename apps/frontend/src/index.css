@@ -2131,6 +2131,17 @@ body:has([data-overlay="modal"]) {
   grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
   gap: 5px;
 }
+
+/* The library grid and the duplicates groups ran edge to edge inside the `.ido` card (its legacy
+   padding is vertical only). On a phone `.ido` gets its own 3px padding below, which is enough. */
+@media (min-width: 641px) {
+  #thumbs_container.library-thumb-grid,
+  .duplicates-page {
+    padding-left: 16px;
+    padding-right: 16px;
+    box-sizing: border-box;
+  }
+}
 .library-thumb-grid div.id1 {
   width: auto;
   margin: 0;
@@ -4118,7 +4129,9 @@ div.gt.gt-single > span {
 .batch-row-pick {
   cursor: pointer;
 }
+/* 13px rather than the page's inherited 8pt: at 8pt the titles were hard to read on the dark themes. */
 .batch-row-title {
+  font-size: 13px;
   flex: 1;
   min-width: 0;
   overflow: hidden;

@@ -88,7 +88,7 @@ export function Duplicates() {
   const list = (groups.data?.groups ?? []).filter((group) => group.members.length >= 2)
 
   return (
-    <div className="ido">
+    <div className="ido duplicates-page">
       <h1 className="ih">{t("app.duplicateDetection")}</h1>
       <p>{t("duplicates.intro")}</p>
 
