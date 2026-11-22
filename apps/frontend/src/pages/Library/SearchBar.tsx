@@ -370,8 +370,8 @@ export function SearchBar({
           </Button>
         )}
         {loggedIn && (
-          // Sized like its neighbours (`searchbtn`, growing with the row) rather than as a small
-          // icon button, which sat shorter and narrower than every other button in the row.
+          // Icon-width, but the theme's own `.stdbtn` height and the row's 4px top margin, so it
+          // lines up with the `searchbtn`s beside it (a fixed 21px icon button sat shorter).
           <Tooltip
             label={
               <div>
@@ -380,12 +380,10 @@ export function SearchBar({
               </div>
             }
             anchor="cursor"
-            wrapperStyle={{ flexGrow: 1 }}
           >
             <Button
               id="ai-smart-tankoubon"
-              className="searchbtn"
-              style={{ width: "100%" }}
+              style={{ width: 32, minWidth: 32, padding: 0, marginTop: 4 }}
               aria-label={t("library.aiSmartCreateTankoubon") ?? undefined}
               onClick={onAiSmartTankoubon}
             >

@@ -11,7 +11,7 @@ import {
   useSaveDuplicateDecisions,
   useScanDuplicates,
 } from "@/api/hooks"
-import type { DuplicateGroupView, DuplicateMember } from "@/api/types"
+import type { DuplicateGroupView, DuplicateMember, JobRecord, JobsResponse } from "@/api/types"
 import { Button, NumberInput } from "@/components/common-ui/Form"
 import { confirmDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
@@ -72,6 +72,29 @@ export function Duplicates() {
     localStorage.setItem(DUPLICATES_COVER_PERCENT_KEY, String(coverPercent))
   }, [coverPercent])
   const [busy, setBusy] = useState(false)
+
+  // The scan is a server job, so it keeps running when this page is left. On return, pick up a scan
+  // still in flight: show it as busy and load its results when it ends, instead of offering a
+  // second scan the server would refuse.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const { jobs } = await fetchJson<JobsResponse>("/jobs").catch(() => ({ jobs: [] as JobRecord[] }))
+      const running = jobs.find((job) => job.name === "find_duplicates" && (job.state === "queued" || job.state === "active"))
+      if (!running || cancelled) return
+      setBusy(true)
+      try {
+        await waitForJob(running.id)
+        if (!cancelled) await groups.refetch()
+      } finally {
+        if (!cancelled) setBusy(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per visit
+  }, [])
 
   async function handleScan() {
     setBusy(true)
