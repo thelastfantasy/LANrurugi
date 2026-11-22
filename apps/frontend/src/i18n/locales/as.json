@@ -332,5 +332,6 @@
   "settings.timezoneNoMatch": "মিলা সময় অঞ্চল নাই",
   "batch.seconds": "ছেকেণ্ড",
   "edit.choosePlugin": "-- প্লাগইন বাছক --",
-  "activity.queueItemCount": "{{count}} টা ডাউনলোড"
+  "activity.queueItemCount": "{{count}} টা ডাউনলোড",
+  "duplicates.scanning": "স্কেন কৰি আছে…"
 }

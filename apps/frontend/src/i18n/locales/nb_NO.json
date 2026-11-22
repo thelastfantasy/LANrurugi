@@ -770,5 +770,6 @@
   "settings.memorySourceMachine": "maskinens minne",
   "settings.timezoneFilterPlaceholder": "Søk etter navn eller forskyvning, f.eks. Tokyo, +09",
   "settings.timezoneNoMatch": "Ingen tidssone passer",
-  "activity.queueItemCount": "{{count}} nedlastinger"
+  "activity.queueItemCount": "{{count}} nedlastinger",
+  "duplicates.scanning": "Skanner …"
 }

@@ -1092,6 +1092,7 @@
   "duplicates.lastScan_one": "{{count}} 組（{{chained}} 組鏈式）",
   "duplicates.lastScan_other": "{{count}} 組（{{chained}} 組鏈式）",
   "duplicates.neverScanned": "還沒有掃描過。",
+  "duplicates.scanning": "正在掃描…",
   "duplicates.empty": "沒有發現重複檔案。匯入新檔案後可以再掃描一次。",
   "duplicates.members": "{{count}} 個成員",
   "duplicates.members_one": "{{count}} 個成員",

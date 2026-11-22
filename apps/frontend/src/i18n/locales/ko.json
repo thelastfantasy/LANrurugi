@@ -912,5 +912,6 @@
   "settings.memorySourceMachine": "기기 메모리",
   "settings.timezoneFilterPlaceholder": "이름 또는 오프셋으로 검색 (예: Tokyo, +09)",
   "settings.timezoneNoMatch": "일치하는 시간대가 없습니다",
-  "activity.queueItemCount": "다운로드 {{count}}개"
+  "activity.queueItemCount": "다운로드 {{count}}개",
+  "duplicates.scanning": "검사 중…"
 }

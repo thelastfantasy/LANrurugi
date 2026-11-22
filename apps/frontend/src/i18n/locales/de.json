@@ -814,5 +814,6 @@
   "settings.memorySourceMachine": "Arbeitsspeicher des Rechners",
   "settings.timezoneFilterPlaceholder": "Nach Name oder Versatz suchen, z. B. Tokyo, +09",
   "settings.timezoneNoMatch": "Keine passende Zeitzone",
-  "activity.queueItemCount": "{{count}} Downloads"
+  "activity.queueItemCount": "{{count}} Downloads",
+  "duplicates.scanning": "Wird durchsucht …"
 }

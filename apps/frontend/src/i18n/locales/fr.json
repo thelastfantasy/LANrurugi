@@ -824,5 +824,6 @@
   "settings.memorySourceMachine": "mémoire de la machine",
   "settings.timezoneFilterPlaceholder": "Rechercher par nom ou décalage, p. ex. Tokyo, +09",
   "settings.timezoneNoMatch": "Aucun fuseau horaire correspondant",
-  "activity.queueItemCount": "{{count}} téléchargements"
+  "activity.queueItemCount": "{{count}} téléchargements",
+  "duplicates.scanning": "Analyse en cours…"
 }

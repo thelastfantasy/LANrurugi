@@ -3138,6 +3138,7 @@
   "duplicates.lastScan_one": "{{count}} 组（{{chained}} 组链式）",
   "duplicates.lastScan_other": "{{count}} 组（{{chained}} 组链式）",
   "duplicates.neverScanned": "还没有扫描过。",
+  "duplicates.scanning": "正在扫描…",
   "duplicates.empty": "没有发现重复档案。导入新档案后可以再扫描一次。",
   "duplicates.members": "{{count}} 个成员",
   "duplicates.members_one": "{{count}} 个成员",

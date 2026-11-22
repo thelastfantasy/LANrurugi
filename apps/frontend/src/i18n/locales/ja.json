@@ -2826,6 +2826,7 @@
   "duplicates.lastScan_one": "{{count}} 組（連鎖 {{chained}} 組）",
   "duplicates.lastScan_other": "{{count}} 組（連鎖 {{chained}} 組）",
   "duplicates.neverScanned": "まだスキャンしていません。",
+  "duplicates.scanning": "スキャン中…",
   "duplicates.empty": "重複は見つかりませんでした。新しいアーカイブを入れてから再スキャンしてください。",
   "duplicates.members": "{{count}} 件",
   "duplicates.members_one": "{{count}} 件",

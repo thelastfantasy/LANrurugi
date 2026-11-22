@@ -3138,6 +3138,7 @@
   "duplicates.lastScan_one": "{{count}} group ({{chained}} chained)",
   "duplicates.lastScan_other": "{{count}} groups ({{chained}} chained)",
   "duplicates.neverScanned": "No scan yet.",
+  "duplicates.scanning": "Scanning…",
   "duplicates.empty": "No duplicates found. Scan again after importing new archives.",
   "duplicates.members": "{{count}} members",
   "duplicates.members_one": "{{count}} member",

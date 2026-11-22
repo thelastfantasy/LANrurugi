@@ -517,5 +517,6 @@
   "settings.timezoneFilterPlaceholder": "Cerca per nome o scostamento, es. Tokyo, +09",
   "settings.timezoneNoMatch": "Nessun fuso orario corrispondente",
   "edit.choosePlugin": "-- Scegli un plugin --",
-  "activity.queueItemCount": "{{count}} download"
+  "activity.queueItemCount": "{{count}} download",
+  "duplicates.scanning": "Scansione in corso…"
 }

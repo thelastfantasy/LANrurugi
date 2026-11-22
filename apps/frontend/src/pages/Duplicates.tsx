@@ -2,8 +2,7 @@ import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
-import { waitForJob } from "@/api/client"
-import { fetchJson } from "@/api/client"
+import { ApiError, fetchJson, waitForJob } from "@/api/client"
 import {
   useClearDuplicates,
   useDeleteArchive,
@@ -50,6 +49,12 @@ import { useApplyTheme } from "@/theme"
  * a suggestion the local review produced (or the model's, when one is configured), and one
  * primary action — the side-by-side comparison.
  */
+/** The id of a duplicate scan still queued or running on the server, if any. */
+async function runningScanJob(): Promise<string | null> {
+  const { jobs } = await fetchJson<JobsResponse>("/jobs").catch(() => ({ jobs: [] as JobRecord[] }))
+  return jobs.find((job) => job.name === "find_duplicates" && (job.state === "queued" || job.state === "active"))?.id ?? null
+}
+
 export function Duplicates() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -73,23 +78,24 @@ export function Duplicates() {
   }, [coverPercent])
   const [busy, setBusy] = useState(false)
 
-  // The scan is a server job, so it keeps running when this page is left. On return, pick up a scan
-  // still in flight: show it as busy and load its results when it ends, instead of offering a
-  // second scan the server would refuse.
+  // The scan is a server job, so it keeps running when this page is left or reloaded, and the
+  // server refuses a second one while it runs. Either way this page follows the running scan: busy
+  // until it ends, then its results load.
+  async function followScan(jobId: string, isCancelled: () => boolean = () => false) {
+    setBusy(true)
+    try {
+      await waitForJob(jobId)
+      if (!isCancelled()) await groups.refetch()
+    } finally {
+      if (!isCancelled()) setBusy(false)
+    }
+  }
+
   useEffect(() => {
     let cancelled = false
-    void (async () => {
-      const { jobs } = await fetchJson<JobsResponse>("/jobs").catch(() => ({ jobs: [] as JobRecord[] }))
-      const running = jobs.find((job) => job.name === "find_duplicates" && (job.state === "queued" || job.state === "active"))
-      if (!running || cancelled) return
-      setBusy(true)
-      try {
-        await waitForJob(running.id)
-        if (!cancelled) await groups.refetch()
-      } finally {
-        if (!cancelled) setBusy(false)
-      }
-    })()
+    void runningScanJob().then((jobId) => {
+      if (jobId && !cancelled) void followScan(jobId, () => cancelled)
+    })
     return () => {
       cancelled = true
     }
@@ -97,14 +103,15 @@ export function Duplicates() {
   }, [])
 
   async function handleScan() {
-    setBusy(true)
+    let jobId: string | null
     try {
-      const { job } = await scanDuplicates.mutateAsync(threshold)
-      await waitForJob(job)
-      await groups.refetch()
-    } finally {
-      setBusy(false)
+      jobId = (await scanDuplicates.mutateAsync(threshold)).job
+    } catch (error) {
+      // 409: a scan started elsewhere (another tab, or before a reload) is still running.
+      if (!(error instanceof ApiError && error.status === 409)) throw error
+      jobId = await runningScanJob()
     }
+    if (jobId) await followScan(jobId)
   }
 
   // A group whose other members were deleted since the scan has nothing left to compare.
@@ -168,7 +175,9 @@ export function Duplicates() {
               count: list.length,
               chained: groups.data.chained_groups,
             })
-          : t("duplicates.neverScanned")}
+          : busy
+            ? t("duplicates.scanning")
+            : t("duplicates.neverScanned")}
       </p>
 
       {groups.isLoading && (
@@ -177,7 +186,7 @@ export function Duplicates() {
         </div>
       )}
 
-      {!groups.isLoading && list.length === 0 && (
+      {!groups.isLoading && !busy && list.length === 0 && (
         <p className="opacity-70">{t("duplicates.empty")}</p>
       )}
 

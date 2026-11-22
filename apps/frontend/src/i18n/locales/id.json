@@ -829,5 +829,6 @@
   "settings.memorySourceMachine": "memori mesin",
   "settings.timezoneFilterPlaceholder": "Cari menurut nama atau selisih, mis. Tokyo, +09",
   "settings.timezoneNoMatch": "Tidak ada zona waktu yang cocok",
-  "activity.queueItemCount": "{{count}} unduhan"
+  "activity.queueItemCount": "{{count}} unduhan",
+  "duplicates.scanning": "Memindai…"
 }
