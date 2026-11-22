@@ -38,6 +38,10 @@ const NODE_GAP = 1
  *  themes precisely because it has no hue. */
 const NEUTRAL_FILL = "rgba(127,127,127,0.20)"
 const NEUTRAL_HOVER_FILL = "rgba(127,127,127,0.36)"
+/** An archive with no value for the colour key (no artist, say). Opaque grey under the tiles' own
+ *  0.62 opacity: the translucent neutral above all but vanished there, and those are often the
+ *  largest archives. */
+const UNKEYED_FILL = "rgb(127,127,127)"
 
 const DIMENSIONS: { value: StorageDimension; labelKey: string }[] = [
   { value: "file", labelKey: "stats.storageTreemapByFile" },
@@ -150,7 +154,7 @@ export function StorageTreemap({ archives }: { archives: ArchiveMetadata[] | und
     }
   }, [entries, series])
 
-  const colorFor = (colorBy: StorageColorKey, key: string) => colorMaps[colorBy].get(key) ?? NEUTRAL_FILL
+  const colorFor = (colorBy: StorageColorKey, key: string) => colorMaps[colorBy].get(key) ?? UNKEYED_FILL
 
   const rootLevel = useMemo<StorageLevel>(() => {
     const title = t("stats.storageTreemapAll")

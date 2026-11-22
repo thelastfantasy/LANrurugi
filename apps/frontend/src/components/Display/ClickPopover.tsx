@@ -11,6 +11,7 @@ export function ClickPopover({
   trigger,
   maxWidth = 320,
   zIndex = Z_OVERLAY_TOOLTIP,
+  nativeButton = true,
 }: {
   label: React.ReactNode
   trigger: ReactElement
@@ -18,11 +19,14 @@ export function ClickPopover({
    * (e.g. a multi-line search-syntax reference). */
   maxWidth?: number
   zIndex?: number
+  /** `false` when `trigger` is not a `<button>` (e.g. a whole line of text): Base UI otherwise
+   *  warns that it expected native button semantics. */
+  nativeButton?: boolean
 }) {
   const palette = useMenuPalette()
   return (
     <Popover.Root>
-      <Popover.Trigger render={trigger} />
+      <Popover.Trigger render={trigger} nativeButton={nativeButton} />
       <Popover.Portal>
         <Popover.Positioner sideOffset={8} collisionPadding={8} className="outline-none" style={{ zIndex }}>
           <Popover.Popup

@@ -197,6 +197,9 @@ function SectionLink({ entry }: { entry: ActivityEntry }) {
   )
 }
 
+/** Bulk queue actions whose stored target label is the server's English `"<n> items"`. */
+const BULK_QUEUE_ACTION_TYPES = new Set(["download_queue.delete", "download_queue.bulk_start"])
+
 /** What the "操作内容" column shows for one entry: a fixed description for whole-database actions,
  * "A 重命名为 B" for renames, "已删除 X" for deletions, else the target's title, linked if possible. */
 export function OperationDescription({ entry }: { entry: ActivityEntry }) {
@@ -207,8 +210,10 @@ export function OperationDescription({ entry }: { entry: ActivityEntry }) {
   }
 
   const rawTitle = entry.target.label ?? entry.target.id
-  const title =
-    entry.target.kind === "plugin" && rawTitle && rawTitle in PLUGIN_TYPE_LABEL_KEYS
+  const queueItemCount = BULK_QUEUE_ACTION_TYPES.has(entry.action_type) ? rawTitle?.match(/^(\d+) items$/)?.[1] : undefined
+  const title = queueItemCount
+    ? (t("activity.queueItemCount", { count: Number(queueItemCount) }) ?? rawTitle)
+    : entry.target.kind === "plugin" && rawTitle && rawTitle in PLUGIN_TYPE_LABEL_KEYS
       ? (t(PLUGIN_TYPE_LABEL_KEYS[rawTitle]) ?? rawTitle)
       : rawTitle
   if (!title) {

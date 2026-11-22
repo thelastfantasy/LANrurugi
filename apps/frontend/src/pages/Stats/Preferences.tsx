@@ -5,7 +5,7 @@ import { buildSearchToken } from "@/lib/tagFormat"
 
 import { useChartPalette } from "./chartPalette"
 import { BarRow, LegendSwatch, StatsSection, StatsTable, useStatsPanel } from "./Charts"
-import { formatPercent, seriesColor } from "./format"
+import { formatPercent, ratingColor, seriesColor } from "./format"
 
 /** i18n key for a promoted namespace's own heading; anything else falls back to the raw tag
  *  namespace name, exactly how the rest of the app namespaces tags. */
@@ -21,6 +21,10 @@ function readTagSearchURL(namespace: string, tag: string): string {
 
 /** One promoted axis (`language` / `artist` / `circle` / `cosplayer`) as its own block: its tags, each with
  *  the bar length of its preference weight and the number of read archives behind it. */
+/** A fixed line height for the column headings: with `normal`, a Latin-only label ("Coser") sat a
+ *  few pixels shorter than a CJK one, so its column started higher than its neighbours. */
+const HEADING_LINE_HEIGHT = 1.4
+
 function HighlightBlock({
   namespace,
   data,
@@ -36,7 +40,7 @@ function HighlightBlock({
   if (!data || data.tags.length === 0) {
     return (
       <div style={{ flex: "1 1 260px", minWidth: 240 }}>
-        <div style={{ fontSize: "0.9rem", marginBottom: 6 }}>
+        <div style={{ fontSize: "0.9rem", lineHeight: HEADING_LINE_HEIGHT, marginBottom: 6 }}>
           <LegendSwatch color={color} />
           <b>{label}</b>
         </div>
@@ -48,7 +52,7 @@ function HighlightBlock({
   const total = data.tags.reduce((sum, tag) => sum + tag.weight, 0)
   return (
     <div style={{ flex: "1 1 260px", minWidth: 240 }} data-namespace={namespace}>
-      <div style={{ fontSize: "0.9rem", marginBottom: 6 }}>
+      <div style={{ fontSize: "0.9rem", lineHeight: HEADING_LINE_HEIGHT, marginBottom: 6 }}>
         <LegendSwatch color={color} />
         <b>{label}</b>
       </div>
@@ -116,7 +120,7 @@ export function Preferences({ preferences }: { preferences: StatsOverview["prefe
         <h4 style={{ fontSize: "0.9rem", margin: "0 0 8px" }}>{t("stats.ratingAmongRead")}</h4>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 24 }}>
           <div style={{ flex: "1 1 320px", minWidth: 280 }}>
-            {preferences.ratings.map((tier, index) => (
+            {preferences.ratings.map((tier) => (
               <BarRow
                 key={tier.stars}
                 label={tier.stars === 0 ? t("stats.unrated") : t("stats.starsValue", { count: tier.stars })}
@@ -126,7 +130,7 @@ export function Preferences({ preferences }: { preferences: StatsOverview["prefe
                   tier.archives,
                   preferences.read_archives,
                 )}`}
-                color={seriesColor(palette, (index + 2) % palette.length)}
+                color={ratingColor(palette, tier.stars)}
               />
             ))}
           </div>
@@ -143,7 +147,7 @@ export function Preferences({ preferences }: { preferences: StatsOverview["prefe
             const maxTag = ns.tags.reduce((max, tag) => Math.max(max, tag.weight), 0)
             return (
               <div key={ns.namespace} style={{ flex: "1 1 260px", minWidth: 240 }}>
-                <div style={{ fontSize: "0.82rem", marginBottom: 6 }}>
+                <div style={{ fontSize: "0.82rem", lineHeight: HEADING_LINE_HEIGHT, marginBottom: 6 }}>
                   <LegendSwatch color={seriesColor(palette, nsIndex)} />
                   <b>{ns.namespace}</b>
                 </div>

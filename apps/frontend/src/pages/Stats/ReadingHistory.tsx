@@ -16,6 +16,7 @@ import {
   formatTimestamp,
   progressBucketLabelKey,
   progressBucketSearchQuery,
+  ratingColor,
   searchURL,
   timelineLabel,
 } from "./format"
@@ -185,7 +186,7 @@ export function ReadingHistory({ reading }: { reading: StatsOverview["reading"] 
 
         <div style={{ flex: "1 1 320px", minWidth: 280 }}>
           <h4 style={{ fontSize: "0.9rem", margin: "0 0 8px" }}>{t("stats.ratingDistribution")}</h4>
-          {reading.ratings.map((rating, index) => (
+          {reading.ratings.map((rating) => (
             <BarRow
               key={rating.stars}
               label={
@@ -196,7 +197,7 @@ export function ReadingHistory({ reading }: { reading: StatsOverview["reading"] 
               value={rating.archives}
               max={reading.ratings.reduce((max, entry) => Math.max(max, entry.archives), 0)}
               valueLabel={rating.archives.toLocaleString()}
-              color={palette[(index + 2) % palette.length]}
+              color={ratingColor(palette, rating.stars)}
             />
           ))}
         </div>

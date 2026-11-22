@@ -2126,6 +2126,19 @@ export function useDuplicateCompare(a: string | null, b: string | null) {
   return useQuery({ ...duplicateCompareQuery(a, b), enabled: a !== null && b !== null })
 }
 
+/** How far a running comparison has fingerprinted each side; polled only while it runs. */
+export function useDuplicateCompareProgress(a: string | null, b: string | null, running: boolean) {
+  return useQuery({
+    queryKey: ["duplicates", "compare-progress", a, b],
+    queryFn: () =>
+      fetchJson<{ progress: { a: { done: number; total: number }; b: { done: number; total: number } } | null }>(
+        `/database/duplicates/compare/progress?a=${encodeURIComponent(a ?? "")}&b=${encodeURIComponent(b ?? "")}`,
+      ),
+    enabled: running && a !== null && b !== null,
+    refetchInterval: running ? 700 : false,
+  })
+}
+
 export function useSaveDuplicateDecisions() {
   const queryClient = useQueryClient()
   return useMutation({

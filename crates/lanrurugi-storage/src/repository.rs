@@ -165,6 +165,40 @@ impl ArchiveRepository {
         Ok(archives)
     }
 
+    /// Every in-library archive's canonical `source:` tag, `source -> archive id` (first archive
+    /// wins when several share one). One `KEYS` plus one pipelined `HGET … tags`, cheaper than the
+    /// full [`Self::list_all`] a caller would otherwise use.
+    ///
+    /// The subscription history asks this to answer "did this work arrive?" for rows the download
+    /// queue can no longer speak for — its finished rows are swept after
+    /// `download_queue_retention_days`, and a deleted row leaves nothing behind at all. There is no
+    /// source index (legacy's `LRR_URLMAP` has no equivalent here), so this is a scan, the same
+    /// trade-off `plugins::get_existing_archive_id_for_url` already makes.
+    pub async fn held_sources(&self) -> Result<std::collections::HashMap<String, String>> {
+        let mut conn = self.pool.get().await?;
+        let ids: Vec<String> = conn.keys(ARCHIVE_KEY_GLOB).await?;
+        let mut out = std::collections::HashMap::new();
+        for chunk in ids.chunks(500) {
+            let mut pipe = deadpool_redis::redis::pipe();
+            for id in chunk {
+                pipe.cmd("HGET").arg(id).arg("tags");
+            }
+            let tags: Vec<Option<String>> = pipe.query_async(&mut conn).await?;
+            for (id, tags) in chunk.iter().zip(tags) {
+                let Some(tags) = tags else { continue };
+                for tag in tags.split(',') {
+                    if let Some(source) = tag.trim().strip_prefix("source:") {
+                        let source = source.trim();
+                        if !source.is_empty() {
+                            out.entry(source.to_string()).or_insert_with(|| id.clone());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Finds the archive whose stored `file` path has `filename` as its basename, if any —
     /// returns only the *first* match. No indexed lookup exists for this (legacy has none either
     /// — `file` is not a secondary Redis index anywhere) so this is a full `list_all` scan;

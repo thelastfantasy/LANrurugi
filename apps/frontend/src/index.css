@@ -1711,10 +1711,10 @@ body:has([data-overlay="modal"]) {
  * introduced — but it's a genuine, confirmed usability break worth fixing outright rather than
  * preserving: this class carries only `div.id1`'s *visual* properties (nothing sizing-related,
  * since the panel already sets its own explicit width/height inline at every viewport), so it's
- * immune to the archive-card media query entirely. */
+ * immune to the archive-card media query entirely. Its colors are per theme, appended to each
+ * theme file. */
 .category-panel {
-  background: none repeat scroll 0 0 #f2efdf;
-  border: 1px solid #e3e0d1;
+  /* Colors come from each theme file's own `.category-panel` rule (its `div.id1` colors). */
   border-radius: 9px;
   display: inline-block;
   margin: 3px 2px 2px 3px;
@@ -2130,6 +2130,17 @@ body:has([data-overlay="modal"]) {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
   gap: 5px;
+}
+
+/* The library grid and the duplicates groups ran edge to edge inside the `.ido` card (its legacy
+   padding is vertical only). On a phone `.ido` gets its own 3px padding below, which is enough. */
+@media (min-width: 641px) {
+  #thumbs_container.library-thumb-grid,
+  .duplicates-page {
+    padding-left: 16px;
+    padding-right: 16px;
+    box-sizing: border-box;
+  }
 }
 .library-thumb-grid div.id1 {
   width: auto;
@@ -4118,7 +4129,9 @@ div.gt.gt-single > span {
 .batch-row-pick {
   cursor: pointer;
 }
+/* 13px rather than the page's inherited 8pt: at 8pt the titles were hard to read on the dark themes. */
 .batch-row-title {
+  font-size: 13px;
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -4173,4 +4186,39 @@ div.gt.gt-single > span {
 .batch-ops-sheet {
   padding: 8px 12px;
   text-align: left;
+}
+/* On the phone the sheet is the whole operation, so its one action reads as one: the confirm
+   dialog's own button size (48px, full width, 16px), not the compact row height the desktop
+   column uses. Scoped to the sheet, so the desktop panel keeps its original size. */
+.batch-ops-sheet .batch-start-btn {
+  display: block;
+  width: 100%;
+  height: 48px;
+  margin: 8px 0 4px;
+  font-size: 16px;
+  border-radius: 6px;
+}
+/* The operation picker leads the sheet, so it takes the same size as the button below it — the
+   single-cell table it sits in is a layout leftover, so it gets stretched too (.favtag-btn's own
+   25px/10pt/3px-radius would otherwise win on the select). */
+.batch-ops-sheet .batch-operation-table,
+.batch-ops-sheet .batch-operation-table > tbody > tr > td {
+  width: 100%;
+  padding: 0;
+}
+/* A one-cell table still carries the default 2px cell spacing, which put the select 4px in from
+   the button below it — the visible mismatch. */
+.batch-ops-sheet .batch-operation-table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+.batch-ops-sheet .batch-operation-select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: 48px;
+  margin: 0 0 8px;
+  padding: 0 10px;
+  font-size: 16px;
+  border-radius: 6px;
 }

@@ -307,15 +307,37 @@ pub fn compare_archives(
     b_filename: String,
     b_file_size: u64,
 ) -> Result<ComparisonResult> {
-    let mut samples: Vec<Option<PageComparison>> = Vec::new();
-    let mut done: Option<ComparisonResult> = None;
-    compare_archives_streaming(
+    compare_archives_with(
         a_path,
         b_path,
         a_filename,
         a_file_size,
         b_filename,
         b_file_size,
+        CompareHooks::default(),
+    )
+}
+
+/// [`compare_archives`] with a fingerprint cache and/or a decode-progress callback.
+pub fn compare_archives_with(
+    a_path: &Path,
+    b_path: &Path,
+    a_filename: String,
+    a_file_size: u64,
+    b_filename: String,
+    b_file_size: u64,
+    hooks: CompareHooks<'_>,
+) -> Result<ComparisonResult> {
+    let mut samples: Vec<Option<PageComparison>> = Vec::new();
+    let mut done: Option<ComparisonResult> = None;
+    compare_archives_streaming_with(
+        a_path,
+        b_path,
+        a_filename,
+        a_file_size,
+        b_filename,
+        b_file_size,
+        hooks,
         |event| {
             match event {
                 CompareEvent::Sample {
@@ -422,6 +444,30 @@ pub fn compare_archives_streaming(
     a_file_size: u64,
     b_filename: String,
     b_file_size: u64,
+    on_event: impl FnMut(CompareEvent) -> bool,
+) -> Result<()> {
+    compare_archives_streaming_with(
+        a_path,
+        b_path,
+        a_filename,
+        a_file_size,
+        b_filename,
+        b_file_size,
+        CompareHooks::default(),
+        on_event,
+    )
+}
+
+/// [`compare_archives_streaming`] with a fingerprint cache and/or a decode-progress callback.
+#[allow(clippy::too_many_arguments)]
+pub fn compare_archives_streaming_with(
+    a_path: &Path,
+    b_path: &Path,
+    a_filename: String,
+    a_file_size: u64,
+    b_filename: String,
+    b_file_size: u64,
+    hooks: CompareHooks<'_>,
     mut on_event: impl FnMut(CompareEvent) -> bool,
 ) -> Result<()> {
     // Stage-by-stage timing (reported live: "把比较耗时的操作都用日志记录下来，我要看看执行了
@@ -449,8 +495,8 @@ pub fn compare_archives_streaming(
     );
 
     let t_load = std::time::Instant::now();
-    let a_fingerprints = load_fingerprints(a_path, &a_pages)?;
-    let b_fingerprints = load_fingerprints(b_path, &b_pages)?;
+    let a_fingerprints = load_fingerprints(a_path, &a_pages, Side::A, hooks)?;
+    let b_fingerprints = load_fingerprints(b_path, &b_pages, Side::B, hooks)?;
     tracing::info!(
         a_pages = a_pages.len(),
         b_pages = b_pages.len(),
@@ -802,8 +848,30 @@ const FINGERPRINT_BATCH: usize = 16;
 /// random-access for ZIP and one pass otherwise), decode it in parallel on the shared capped pool,
 /// drop the bytes, continue. Also carries each page's compressed byte size (for
 /// `PageComparison::a_file_size`/`b_file_size`), free since the bytes are in hand.
-fn load_fingerprints(path: &Path, pages: &[EffectivePage]) -> Result<Vec<PageFingerprint>> {
+fn load_fingerprints(
+    path: &Path,
+    pages: &[EffectivePage],
+    side: Side,
+    hooks: CompareHooks<'_>,
+) -> Result<Vec<PageFingerprint>> {
     let t_decode = std::time::Instant::now();
+    let report = |done: usize| {
+        if let Some(progress) = hooks.progress {
+            progress(side, done, pages.len());
+        }
+    };
+    let cache_key = hooks.cache.and_then(|_| fingerprint_cache_key(path, pages));
+    if let (Some(cache), Some(key)) = (hooks.cache, cache_key.as_deref()) {
+        if let Some(cached) = cache.get(key).and_then(|bytes| decode_fingerprints(&bytes)) {
+            if cached.len() == pages.len() {
+                report(pages.len());
+                tracing::info!(path = %path.display(), entries = pages.len(), "load_fingerprints: cache hit");
+                return Ok(cached);
+            }
+        }
+    }
+    report(0);
+    let decoded_count = std::cell::Cell::new(0usize);
     let entries: Vec<String> = pages.iter().map(|p| p.entry_name().to_string()).collect();
     let mut slots: Vec<Option<PageFingerprint>> = entries.iter().map(|_| None).collect();
     let mut failure: Option<ImgCompareError> = None;
@@ -835,6 +903,8 @@ fn load_fingerprints(path: &Path, pages: &[EffectivePage]) -> Result<Vec<PageFin
         })
     };
     let mut store = |decoded: Vec<(usize, Result<PageFingerprint>)>| {
+        decoded_count.set(decoded_count.get() + decoded.len());
+        report(decoded_count.get());
         for (index, fingerprint) in decoded {
             match fingerprint {
                 Ok(fingerprint) => slots[index] = Some(fingerprint),
@@ -891,7 +961,119 @@ fn load_fingerprints(path: &Path, pages: &[EffectivePage]) -> Result<Vec<PageFin
         elapsed_ms = t_decode.elapsed().as_millis(),
         "load_fingerprints: batched decode + hash/sharpness/grid (rayon) done"
     );
+    if let (Some(cache), Some(key)) = (hooks.cache, cache_key.as_deref()) {
+        cache.put(key, encode_fingerprints(&fingerprints));
+    }
     Ok(fingerprints)
+}
+
+/// Where a comparison keeps each archive's page fingerprints between runs. The caller owns the
+/// storage; this crate only builds the key and the bytes.
+pub trait FingerprintCache: Sync {
+    fn get(&self, key: &str) -> Option<Vec<u8>>;
+    fn put(&self, key: &str, bytes: Vec<u8>);
+}
+
+/// Optional extras for a comparison: a fingerprint cache, and a callback told how many of a side's
+/// pages are fingerprinted so far (`side, done, total`) — decoding is most of a comparison's time.
+#[derive(Clone, Copy, Default)]
+pub struct CompareHooks<'a> {
+    pub cache: Option<&'a dyn FingerprintCache>,
+    pub progress: Option<&'a (dyn Fn(Side, usize, usize) + Sync)>,
+}
+
+/// Bumped whenever a fingerprint would be computed differently, so old cache entries are not used.
+const FINGERPRINT_FORMAT: &str = "fp1";
+
+/// Identifies an archive's effective pages as they are now: the archive's and its patch's size and
+/// modification time, and the page list. A changed file or patch gives a new key. `None` when the
+/// archive cannot be stat'ed (nothing is cached then).
+fn fingerprint_cache_key(path: &Path, pages: &[EffectivePage]) -> Option<String> {
+    let stamp = |p: &Path| -> Option<String> {
+        let meta = std::fs::metadata(p).ok()?;
+        let modified = meta
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos();
+        Some(format!("{}:{}", meta.len(), modified))
+    };
+    let archive = stamp(path)?;
+    let patch = stamp(&lanrurugi_scanner::patch::patch_path_for(path)).unwrap_or_default();
+    let mut key = format!("{FINGERPRINT_FORMAT}|{}|{archive}|{patch}", path.display());
+    for page in pages {
+        key.push('|');
+        key.push(if is_patched(page) { 'p' } else { 'o' });
+        key.push_str(page.entry_name());
+    }
+    Some(key)
+}
+
+fn encode_fingerprints(fingerprints: &[PageFingerprint]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(FINGERPRINT_FORMAT.as_bytes());
+    out.extend_from_slice(&(fingerprints.len() as u32).to_le_bytes());
+    for f in fingerprints {
+        out.extend_from_slice(&f.width.to_le_bytes());
+        out.extend_from_slice(&f.height.to_le_bytes());
+        out.extend_from_slice(&f.file_size.to_le_bytes());
+        out.extend_from_slice(&f.sharpness.to_le_bytes());
+        let hash = f.hash.as_bytes();
+        out.extend_from_slice(&(hash.len() as u32).to_le_bytes());
+        out.extend_from_slice(hash);
+        out.extend_from_slice(&f.grid.width().to_le_bytes());
+        out.extend_from_slice(&f.grid.height().to_le_bytes());
+        out.extend_from_slice(f.grid.as_raw());
+    }
+    out
+}
+
+fn decode_fingerprints(bytes: &[u8]) -> Option<Vec<PageFingerprint>> {
+    struct Reader<'a>(&'a [u8]);
+    impl<'a> Reader<'a> {
+        fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+            if self.0.len() < n {
+                return None;
+            }
+            let (head, rest) = self.0.split_at(n);
+            self.0 = rest;
+            Some(head)
+        }
+        fn u32(&mut self) -> Option<u32> {
+            Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?))
+        }
+        fn u64(&mut self) -> Option<u64> {
+            Some(u64::from_le_bytes(self.take(8)?.try_into().ok()?))
+        }
+    }
+    let mut r = Reader(bytes);
+    if r.take(FINGERPRINT_FORMAT.len())? != FINGERPRINT_FORMAT.as_bytes() {
+        return None;
+    }
+    let count = r.u32()? as usize;
+    let mut out = Vec::with_capacity(count.min(10_000));
+    for _ in 0..count {
+        let width = r.u32()?;
+        let height = r.u32()?;
+        let file_size = r.u64()?;
+        let sharpness = f64::from_bits(r.u64()?);
+        let hash_len = r.u32()? as usize;
+        let hash = image_hasher::ImageHash::from_bytes(r.take(hash_len)?).ok()?;
+        let grid_width = r.u32()?;
+        let grid_height = r.u32()?;
+        let raw = r.take(grid_width as usize * grid_height as usize)?.to_vec();
+        let grid = image::GrayImage::from_raw(grid_width, grid_height, raw)?;
+        out.push(PageFingerprint {
+            width,
+            height,
+            file_size,
+            hash,
+            sharpness,
+            grid,
+        });
+    }
+    r.0.is_empty().then_some(out)
 }
 
 /// Decodes only the pages the precise crop-alignment pass needs (at most two per sampled pair),
@@ -1014,6 +1196,55 @@ fn sample_evenly(comparisons: &[PageComparison], count: usize) -> Vec<PageCompar
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fingerprints_survive_the_cache_encoding() {
+        let image = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(64, 90, |x, y| {
+            image::Rgb([(x * 4) as u8, (y * 2) as u8, 128])
+        }));
+        let original = PageFingerprint {
+            width: 1200,
+            height: 1700,
+            file_size: 345_678,
+            hash: alignment::hash_page(&image),
+            sharpness: 123.456,
+            grid: crop_align::gray_grid(&image),
+        };
+        let bytes = encode_fingerprints(std::slice::from_ref(&original));
+        let decoded = decode_fingerprints(&bytes).expect("decodes");
+        assert_eq!(decoded.len(), 1);
+        let back = &decoded[0];
+        assert_eq!(
+            (back.width, back.height, back.file_size),
+            (1200, 1700, 345_678)
+        );
+        assert_eq!(back.sharpness, 123.456);
+        assert_eq!(back.hash, original.hash);
+        assert_eq!(back.grid, original.grid);
+        // Truncated or trailing bytes are not a fingerprint list.
+        assert!(decode_fingerprints(&bytes[..bytes.len() - 1]).is_none());
+        let mut longer = bytes.clone();
+        longer.push(0);
+        assert!(decode_fingerprints(&longer).is_none());
+    }
+
+    #[test]
+    fn the_cache_key_changes_with_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("book.zip");
+        std::fs::write(&path, b"one").unwrap();
+        let pages = vec![EffectivePage::Original("001.jpg".into())];
+        let first = fingerprint_cache_key(&path, &pages).unwrap();
+        assert_eq!(fingerprint_cache_key(&path, &pages).unwrap(), first);
+        std::fs::write(&path, b"longer").unwrap();
+        assert_ne!(fingerprint_cache_key(&path, &pages).unwrap(), first);
+        let patched = vec![EffectivePage::Patched("001.jpg".into())];
+        assert_ne!(
+            fingerprint_cache_key(&path, &patched),
+            fingerprint_cache_key(&path, &pages)
+        );
+        assert!(fingerprint_cache_key(&dir.path().join("missing.zip"), &pages).is_none());
+    }
 
     fn comparison(a: f64, b: f64) -> PageComparison {
         PageComparison {

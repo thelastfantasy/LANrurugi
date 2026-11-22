@@ -258,11 +258,11 @@ export function Batch() {
 
   const operationsPanel = (
     <>
-    <table className="tag-options">
+    <table className="tag-options batch-operation-table">
       <tbody>
         <tr>
           <td>
-            <select id="batch-operation" className="favtag-btn" value={operation} onChange={(e) => setOperation(e.target.value as Operation)}>
+            <select id="batch-operation" className="favtag-btn batch-operation-select" value={operation} onChange={(e) => setOperation(e.target.value as Operation)}>
               <option value="plugin">🧩 {t("batch.usePlugin")}</option>
               <option value="clearnew">🆕 {t("batch.removeNewFlag")}</option>
               <option value="tagrules">📏 {t("batch.applyTagRules")}</option>
@@ -275,7 +275,9 @@ export function Batch() {
       </tbody>
     </table>
 
-    <div className="id1 tag-options" style={{ padding: 4, height: "unset", width: "97%" }}>
+    {/* `.id1` adds 3px + 2px of margin; at 97% plus padding the box ran 3px past the column and
+        put a horizontal scrollbar under it. */}
+    <div className="id1 tag-options" style={{ padding: 4, height: "unset", boxSizing: "border-box", width: "calc(100% - 5px)" }}>
       {operation === "plugin" && (
         <div className="operation plugin-operation">
           <table>
@@ -302,7 +304,7 @@ export function Batch() {
                     value={pluginTimeout}
                     onValueChange={(v) => setPluginTimeout(Math.min(20, Math.max(0, v)))}
                   />{" "}
-                  seconds
+                  {t("batch.seconds")}
                 </td>
               </tr>
             </tbody>
@@ -348,7 +350,7 @@ export function Batch() {
       <input
         type="button"
         id="start-batch"
-        className="stdbtn"
+        className="stdbtn batch-start-btn"
         disabled={busy || selected.size === 0}
         onClick={() => void runSelectedOperation()}
         value={t("batch.startTask") ?? undefined}
@@ -426,7 +428,7 @@ export function Batch() {
 
       <div style={{ display: "flex", justifyContent: "center", gap: 8 }}>
         <input type="button" id="plugin-config" className="stdbtn" value={t("common.pluginConfiguration") ?? undefined} onClick={() => navigate(routes.pluginSettings())} />
-        <input type="button" id="return" className="stdbtn" value={t("common.returnToLibrary") ?? undefined} onClick={() => navigate(routes.settings())} />
+        <input type="button" id="return" className="stdbtn" value={t("common.returnToLibrary") ?? undefined} onClick={() => navigate(routes.library())} />
       </div>
     </div>
   )

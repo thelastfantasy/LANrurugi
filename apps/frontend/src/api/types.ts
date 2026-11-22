@@ -689,6 +689,20 @@ export interface HistoryEntry {
     /** Whether the queue would accept starting it again. */
     can_retry: boolean
   } | null
+  /** The work has since been deleted: `recycled` from the library (still restorable from the recycle
+   *  bin) or `queue` (the user threw the queue row away before it arrived). The cycle's verdict is
+   *  never rewritten, so without this a deleted work reads as "queued" for ever. */
+  deleted?: {
+    at: number
+    kind: "recycled" | "queue"
+  } | null
+  /** No queue record is left to speak for this work, but the library holds an archive with its
+   *  source: the finished queue rows are swept by the retention setting, and a deleted one leaves
+   *  nothing behind — hence "已入库" in the library yet "added to the download queue" here. */
+  held?: boolean
+  /** This subscription queued the work for download. The accepted tab's membership predicate, kept
+   *  on the subscription's own record so a row only ever leaves that tab by expiring. */
+  accepted?: boolean
 }
 
 export interface SubscriptionSource {
@@ -1663,6 +1677,8 @@ export interface DuplicateReview {
 
 export interface DuplicateGroupView {
   key: string
+  /** Every member was explicitly kept: handled, and listed apart from the groups still to decide. */
+  resolved?: boolean
   chained: boolean
   middle: string | null
   members: DuplicateMember[]
@@ -1673,7 +1689,26 @@ export interface DuplicateGroupView {
   patch_links?: { target: string; source: string }[]
 }
 
+/** A duplicate scan's state, from `GET /database/duplicates/events` and the groups listing. */
+export interface DuplicateScanStatus {
+  /** A scan is queued or running; the stored groups are what it has found so far. */
+  scanning: boolean
+  /** The running scan's progress, 0–1. */
+  progress: number
+  /** Changes whenever the stored groups do; the page refetches them only then. */
+  revision: number
+  phase: "preparing" | "covers" | "grouping" | "patches" | "reviewing" | "cleanup" | null
+  /** Covers hashed / groups reviewed so far, and of how many; both 0 in phases that do not count. */
+  done: number
+  total: number
+  /** A scan was cut short by a restart and has not started again yet: the groups are incomplete. */
+  interrupted: boolean
+  /** Archives the last scan could not compare because they have no cover thumbnail. */
+  no_cover: number
+}
+
 export interface DuplicateGroupsResponse {
+  status?: DuplicateScanStatus
   scanned_at: number
   algorithm: string
   chained_groups: number

@@ -457,6 +457,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
               setHtmltitle={setHtmltitle}
               language={language}
               setLanguage={setLanguage}
+              timezone={timezone}
+              setTimezone={setTimezone}
               pagesize={pagesize}
               setPagesize={setPagesize}
               enableresize={enableresize}
@@ -648,8 +650,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
               setUsedateadded={setUsedateadded}
               usedatemodified={usedatemodified}
               setUsedatemodified={setUsedatemodified}
-              timezone={timezone}
-              setTimezone={setTimezone}
               onStatus={setStatus}
             />
           </SectionErrorBoundary>

@@ -61,6 +61,28 @@ export function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
 }
 
+/** The library fixes each item's z-index at its list position, so a word on the far side of the
+ *  sphere could paint over a large one facing the viewer. Re-stack by depth after every frame: the
+ *  library's own `scale` is larger the nearer an item is. Its timer looks `_next` up on the
+ *  instance each tick, so wrapping it there is enough. */
+function stackByDepth(instance: TagCloudInstance | null) {
+  const raw = instance as unknown as {
+    _next: () => void
+    items: { el: HTMLElement; scale: string | number }[]
+  } | null
+  if (!raw || typeof raw._next !== "function" || !Array.isArray(raw.items)) return
+  const restack = () => {
+    for (const item of raw.items) item.el.style.zIndex = String(Math.round(Number(item.scale) * 1000))
+  }
+  const next = raw._next
+  raw._next = function stacked() {
+    next.call(raw)
+    restack()
+  }
+  // The first frame ran inside the constructor; a paused (reduced-motion) cloud never ticks again.
+  restack()
+}
+
 export function TagCloud({ tags, onTagClick }: { tags: StatTag[]; onTagClick?: (tag: StatTag) => void }) {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -121,6 +143,7 @@ export function TagCloud({ tags, onTagClick }: { tags: StatTag[]; onTagClick?: (
       useHTML: true,
     })
     instanceRef.current = Array.isArray(instance) ? (instance[0] ?? null) : instance
+    stackByDepth(instanceRef.current)
 
     if (prefersReducedMotion) instanceRef.current?.pause()
     if (pausedByVisibilityRef.current) instanceRef.current?.pause()

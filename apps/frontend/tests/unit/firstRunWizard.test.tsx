@@ -325,7 +325,7 @@ describe("FirstRunWizard", () => {
     // plus (once it is off) the ordered fallback list.
     expect(screen.getByRole("checkbox", { name: "Automatic (browser default)" })).toBeChecked()
     // The timezone picker defaults to the server's own value rather than to a blank field.
-    expect(screen.getByRole("combobox", { name: "Timezone" })).toHaveValue("UTC")
+    expect(screen.getByRole("combobox", { name: "Timezone" })).toHaveTextContent("UTC (+0000)")
   })
 
   it("treats the language order as a draft too, committed by Next rather than on each click", async () => {
@@ -348,9 +348,10 @@ describe("FirstRunWizard", () => {
     renderWizard()
 
     click("Basics")
-    fireEvent.change(screen.getByRole("combobox", { name: "Timezone" }), {
-      target: { value: "Asia/Tokyo" },
-    })
+    // The picker filters on what is typed into its popup, by name or by offset.
+    fireEvent.click(screen.getByRole("combobox", { name: "Timezone" }))
+    fireEvent.change(await screen.findByPlaceholderText(/Search by name or offset/), { target: { value: "tokyo" } })
+    fireEvent.click(await screen.findByRole("option", { name: /^Asia\/Tokyo/ }))
 
     // Wander away without submitting: the pick has to survive, and must not have been written yet.
     click("Done")

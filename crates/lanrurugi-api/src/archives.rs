@@ -2200,6 +2200,24 @@ pub(crate) async fn get_archive_thumbnail(
 /// derive data from the *image* (the duplicate detector's perceptual hash) must treat the
 /// placeholder as "no cover available": it is one fixed PNG, so every archive that fell back to it
 /// would otherwise hash identically and look like a 100% visual match.
+/// The archive's cover thumbnail as already stored, in any format; never generates one. For work
+/// over the whole library (the duplicate scan) that must not decode thousands of archive pages.
+pub(crate) async fn stored_cover_thumbnail(state: &AppState, id: &str) -> Option<bytes::Bytes> {
+    use lanrurugi_scanner::thumbnail::ThumbFormat;
+    if !is_valid_archive_id(id) {
+        return None;
+    }
+    for format in [ThumbFormat::Webp, ThumbFormat::Jpeg, ThumbFormat::Jxl] {
+        let Some(path) = thumbnail_disk_path(state, id, 0, format) else {
+            continue;
+        };
+        if let Ok(contents) = tokio::fs::read(&path).await {
+            return Some(bytes::Bytes::from(contents));
+        }
+    }
+    None
+}
+
 pub(crate) fn is_placeholder_thumbnail(bytes: &[u8]) -> bool {
     bytes == PLACEHOLDER_THUMBNAIL
 }

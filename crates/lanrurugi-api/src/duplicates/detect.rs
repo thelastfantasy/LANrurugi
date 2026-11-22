@@ -219,6 +219,11 @@ pub fn build_groups(
         if rejects.contains(&ordered) {
             continue;
         }
+        // Episodes or volumes of one series often share a cover; they belong in a tankoubon (the
+        // library's AI grouping), not in a duplicate group.
+        if different_volumes(&ma.title, &mb.title) {
+            continue;
+        }
         let distance = super::cover::distance(&hashes[&a], &hashes[&b]);
         if distance > threshold {
             continue;
@@ -425,8 +430,91 @@ pub fn regroup_by_pairs(
     out
 }
 
+/// Both titles carry a volume/episode number and the numbers differ ("第2話" vs "第7話",
+/// "Vol.3" vs "Vol.4"). A title with no number says nothing, so one copy naming its volume and the
+/// other not is still compared.
+pub fn different_volumes(a: &str, b: &str) -> bool {
+    let (a, b) = (volume_marks(a), volume_marks(b));
+    !a.is_empty() && !b.is_empty() && a != b
+}
+
+/// The volume/episode numbers a title names, in order: `第N話/话/巻/卷/章/回/集/部`, `N巻/卷`,
+/// `Vol.N`/`Volume N`, `#N`. Full-width and kanji numerals count.
+fn volume_marks(title: &str) -> Vec<u32> {
+    use std::sync::OnceLock;
+    static PATTERN: OnceLock<regex::Regex> = OnceLock::new();
+    let pattern = PATTERN.get_or_init(|| {
+        let number = r"([0-9０-９]+|[一二三四五六七八九十百〇零]+)";
+        regex::Regex::new(&format!(
+            r"(?i)第\s*{number}\s*[話话巻卷章回集部]|{number}\s*[巻卷]|\bvol(?:ume)?\.?\s*{number}|#\s*{number}"
+        ))
+        .expect("volume pattern")
+    });
+    pattern
+        .captures_iter(title)
+        .filter_map(|caps| caps.iter().skip(1).flatten().next().map(|m| m.as_str()))
+        .filter_map(parse_number)
+        .collect()
+}
+
+fn parse_number(text: &str) -> Option<u32> {
+    let ascii: String = text
+        .chars()
+        .map(|c| match c {
+            '０'..='９' => char::from(b'0' + (c as u32 - '０' as u32) as u8),
+            _ => c,
+        })
+        .collect();
+    if let Ok(n) = ascii.parse() {
+        return Some(n);
+    }
+    // Kanji numerals up to the hundreds: 七, 十二, 二十, 百五.
+    let digit = |c: char| {
+        "〇一二三四五六七八九"
+            .chars()
+            .position(|d| d == c)
+            .map(|n| n as u32)
+    };
+    let (mut total, mut current) = (0u32, 0u32);
+    for c in text.chars() {
+        match c {
+            '零' | '〇' => current = 0,
+            '十' => {
+                total += current.max(1) * 10;
+                current = 0;
+            }
+            '百' => {
+                total += current.max(1) * 100;
+                current = 0;
+            }
+            _ => current = digit(c)?,
+        }
+    }
+    Some(total + current)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn episodes_and_volumes_of_one_series_are_not_duplicates() {
+        use super::different_volumes;
+        let ep = |n: &str| {
+            format!("[作者] 同じゼミの染谷さん 第{n}話 (アナンガ・ランガ Vol.10{n}) [中国翻訳]")
+        };
+        assert!(different_volumes(&ep("2"), &ep("7")));
+        assert!(different_volumes("作品 上 第１巻", "作品 上 第２巻"));
+        assert!(different_volumes("Series Vol.3", "Series vol 4"));
+        assert!(different_volumes("作品 第七話", "作品 第十二話"));
+        assert!(different_volumes("Title #5", "Title #6"));
+        // Same number, or only one side numbered: still compared as possible duplicates.
+        assert!(!different_volumes(
+            "作品 第3話 [DL版]",
+            "作品 第３話 [中国翻訳]"
+        ));
+        assert!(!different_volumes("作品 第3話", "作品"));
+        assert!(!different_volumes("Plain title", "Plain title [DL]"));
+    }
+
     use super::*;
 
     fn meta(id: &str, title: &str, tags: &[&str], pages: u32, size: u64) -> ArchiveMeta {
