@@ -559,12 +559,11 @@ async fn combined_history(
         {
             library_deleted_by_source.insert((subscription.id.clone(), source), at / 1000);
         }
-        for source in state
+        for (source, _) in state
             .subscriptions
             .accepted_all(&subscription.id)
             .await
             .unwrap_or_default()
-            .into_keys()
         {
             accepted_by_source.insert((subscription.id.clone(), source));
         }

@@ -933,7 +933,7 @@
   "settings.howLongAfterLoggingIn": "ログイン後、パスワードの再入力が必要になるまで離席していられる時間です。上記のサイレント更新はいずれも、更新の瞬間ではなくログイン時点からこの期間を延長します。",
   "settings.howLongAnArchiveKeeps": "アーカイブがライブラリに追加された後、「新着」バッジを表示し続ける期間です。",
   "settings.howLongYouStayLogged": "ブラウザがセッションをサイレント更新する必要が生じるまで、ログイン状態を維持する期間です（下記の更新猶予期間が切れていない限り、再ログインは不要です）。",
-  "settings.ianaTimezoneIdentifierEG": "IANA タイムゾーン識別子（例：Asia/Tokyo、UTC）。date_added タグの表示や、date_added:YYYY-MM-DD 検索を暦日として解決する際に使用されます。デフォルトは UTC です。",
+  "settings.ianaTimezoneIdentifierEG": "IANA タイムゾーン識別子（例：Asia/Tokyo、UTC）。date_added タグや date_added:YYYY-MM-DD 検索を暦日として解決し、「直近 N 日」のような絞り込み期間（サブスクリプションの時間窓判定を含む）の境界をこのタイムゾーンで計算します。時刻の表示はブラウザのローカルタイムゾーンのままです。デフォルトは UTC です。",
   "settings.id": "ID",
   "app.iconColor": "アイコンの色",
   "app.iconPosition": "アイコンの位置",

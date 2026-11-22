@@ -561,7 +561,7 @@
   "settings.howLongYouStayLogged": "登录后多久，浏览器需要在后台静默刷新一次会话（只要下方的刷新窗口期还没过期，就不需要重新登录）。",
   "reader.howManyImagesToPreload": "预加载图片数量",
   "I don't know everything, but I sure as hell know this database's busted lads": "我虽然不是无所不知，但我肯定知道这个数据库坏了，伙计",
-  "settings.ianaTimezoneIdentifierEG": "IANA 时区标识符（例如 Asia/Tokyo、UTC）。用于显示 date_added 标签，并将 date_added:YYYY-MM-DD 搜索解析为对应日历日。默认为 UTC。",
+  "settings.ianaTimezoneIdentifierEG": "IANA 时区标识符（例如 Asia/Tokyo、UTC）。用于把 date_added 标签与 date_added:YYYY-MM-DD 搜索解析到某个日历日，并按此时区计算「最近 N 天」这类筛选窗口（含订阅的时间窗判定）；时间的显示仍按浏览器本地时区。默认为 UTC。",
   "settings.id": "ID",
   "edit.id": "ID：",
   "app.iconColor": "图标颜色",
