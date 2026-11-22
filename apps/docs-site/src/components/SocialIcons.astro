@@ -28,7 +28,14 @@ const offered = versions.slice(0, ALL_VERSIONS)
 // The build's own base (`/v1.0.0/` for a released version, `/` for a local build). The selector
 // keeps the reader's current page by swapping only this prefix.
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, '')
-const currentVersion = BASE.replace(/^\//, '') || versions[0]?.version || 'dev'
+// A versioned build names itself in its base (`/v1.0.0-beta.7`); the latest version is built for the
+// site root (#305), where `DOCS_VERSION` (the workspace version, set in `astro.config.mjs`) says which
+// one it is — the release tag may not exist yet when the docs are built.
+const currentVersion =
+  BASE.match(/v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/)?.[1] ??
+  import.meta.env.DOCS_VERSION ??
+  versions[0]?.version ??
+  'dev'
 // Where the version trees live. A per-version build has a base like `/1.0.0-beta.1`; the
 // unversioned offline copy has `/docs`, and its single tree stays right where it is.
 const ROOT = BASE.replace(/\/v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, '')
@@ -162,7 +169,12 @@ const versionLabel = locale === 'zh' ? '文档版本' : 'Documentation version'
       window.location.href = `${select.dataset.base ?? ''}/versions/`;
       return;
     }
-    const rest = window.location.pathname.replace(/^.*?\/v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\//, '');
+    // The page path inside the version: after `/v<version>/`, or — on the latest version, served
+    // from the site root — after the build's own base.
+    const versioned = /^.*?\/v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\//.exec(window.location.pathname);
+    const rest = versioned
+      ? window.location.pathname.slice(versioned[0].length)
+      : window.location.pathname.slice((select.dataset.base ?? '').length).replace(/^\//, '');
     const known = await pages(version, root);
     const target = !known || known.size === 0 || known.has(rest) ? rest : '';
     window.location.href = `${prefix}v${version}/${target}`;

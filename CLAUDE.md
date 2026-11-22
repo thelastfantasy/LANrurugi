@@ -55,7 +55,7 @@ a build-time binary that recovers the route table by parsing `crates/lanrurugi-a
 merges it with the vendored upstream LANraragi OpenAPI document (`docs/api/legacy-openapi.yaml`,
 which supplies field-level documentation for the ~55 paths the two projects share) and hand-written
 fragments (`docs/api/sidecar/`), emitting one OpenAPI 3.1 JSON document; (b) a Starlight +
-`@scalar/starlight` documentation site under `docs/`, published from CI to Cloudflare Pages and
+`@scalar/starlight` documentation site under `apps/docs-site/` (moved out of `docs/` by #305), published from CI to Cloudflare Pages and
 shipped inside the image at `/docs` (`LANRURUGI_DOCS_DIR`) for offline reading. The route scan is
 applied *last* as the completeness authority, which makes "documented but not served" and "served but
 not documented" structurally impossible; the gates catch the residue (an unresolvable route, an
@@ -240,8 +240,8 @@ actually been run and the values shown to agree — not assumed, not eyeballed f
   `create_or_replace` is for new records and deliberate whole replacements only (constitution
   Principle III, #302). Writes/moves into library directories go through `fsutil::in_dir` (a
   concurrent prune can remove a bucket directory); the file also has a race-hunting checklist.
-- `docs/dev/release.md` — the release order (Dependabot, version bump, `dev` → `main`, tag, docs
-  republish, post-release checks).
+- `docs/dev/release.md` — the release order (Dependabot, version bump, `dev` → `main`, tag,
+  post-release checks).
 - `docs/dev/labels.md` — every issue and PR gets one `type:` label and at least one `area:` label;
   apply them when creating the issue/PR (`gh issue create --label …`, `gh pr create --label …`).
 

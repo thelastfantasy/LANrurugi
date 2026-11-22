@@ -18,6 +18,28 @@ importers:
         specifier: ^4.164.0
         version: 4.164.0(@types/node@26.6.6)
 
+  apps/docs-site:
+    dependencies:
+      '@astrojs/starlight':
+        specifier: ^0.43.1
+        version: 0.43.1(astro@7.4.12(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))(supports-color@10.2.2)(typescript@6.0.3)
+      '@scalar/api-reference':
+        specifier: ^1.80.0
+        version: 1.80.0(@oxc-project/types@0.156.0)(axios@1.21.1(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2))(esbuild@0.28.2)(lightningcss@1.33.0)(rolldown@1.2.19)(supports-color@10.2.2)(tailwindcss@4.3.5)(typescript@6.0.3)(vite@8.3.8(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))(zod@4.6.7)
+      '@scalar/starlight':
+        specifier: ^0.2.24
+        version: 0.2.24(@astrojs/starlight@0.43.1(astro@7.4.12(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))(supports-color@10.2.2)(typescript@6.0.3))(astro@7.4.12(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
+      astro:
+        specifier: ^7.4.12
+        version: 7.4.12(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1)
+      starlight-llms-txt:
+        specifier: 0.12.0
+        version: 0.12.0(@astrojs/markdown-satteri@0.4.10)(@astrojs/starlight@0.43.1(astro@7.4.12(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))(supports-color@10.2.2)(typescript@6.0.3))(astro@7.4.12(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))(supports-color@10.2.2)
+    devDependencies:
+      swagger-ui-dist:
+        specifier: ^5.35.0
+        version: 5.35.0
+
   apps/frontend:
     dependencies:
       '@base-ui/react':
@@ -219,28 +241,6 @@ importers:
       vitest:
         specifier: 5.1.1
         version: 5.1.1(@opentelemetry/api@1.9.0)(@types/node@26.6.6)(jsdom@31.0.1)(vite@8.3.8(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
-
-  docs:
-    dependencies:
-      '@astrojs/starlight':
-        specifier: ^0.43.1
-        version: 0.43.1(astro@7.4.12(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))(supports-color@10.2.2)(typescript@6.0.3)
-      '@scalar/api-reference':
-        specifier: ^1.80.0
-        version: 1.80.0(@oxc-project/types@0.156.0)(axios@1.21.1(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2))(esbuild@0.28.2)(lightningcss@1.33.0)(rolldown@1.2.19)(supports-color@10.2.2)(tailwindcss@4.3.5)(typescript@6.0.3)(vite@8.3.8(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))(zod@4.6.7)
-      '@scalar/starlight':
-        specifier: ^0.2.24
-        version: 0.2.24(@astrojs/starlight@0.43.1(astro@7.4.12(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))(supports-color@10.2.2)(typescript@6.0.3))(astro@7.4.12(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
-      astro:
-        specifier: ^7.4.12
-        version: 7.4.12(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1)
-      starlight-llms-txt:
-        specifier: 0.12.0
-        version: 0.12.0(@astrojs/markdown-satteri@0.4.10)(@astrojs/starlight@0.43.1(astro@7.4.12(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))(supports-color@10.2.2)(typescript@6.0.3))(astro@7.4.12(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))(supports-color@10.2.2)
-    devDependencies:
-      swagger-ui-dist:
-        specifier: ^5.35.0
-        version: 5.35.0
 
 packages:
 

@@ -31,10 +31,10 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url))
 const docsRoot = join(here, '..')
-const repoRoot = join(docsRoot, '..')
+const repoRoot = join(docsRoot, '..', '..')
 
 const specPath = join(docsRoot, 'public', 'openapi.json')
-const overlayPath = join(docsRoot, 'api', 'i18n', 'zh.json')
+const overlayPath = join(repoRoot, 'docs', 'api', 'i18n', 'zh.json')
 const outDir = join(docsRoot, 'dist-swagger')
 
 if (!existsSync(specPath)) {

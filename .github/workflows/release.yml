@@ -426,7 +426,7 @@ jobs:
       - name: Package
         run: |
           set -euo pipefail
-          cd docs/dist
+          cd apps/docs-site/dist
           zip -qr "$GITHUB_WORKSPACE/docs-${GITHUB_REF_NAME#v}.zip" .
           ls -la "$GITHUB_WORKSPACE"/docs-*.zip
       - uses: actions/upload-artifact@v7

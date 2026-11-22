@@ -33,7 +33,7 @@ const themeDir = join(docsRoot, 'theme')
 copyFileSync(join(themeDir, 'tokens.css'), join(outDir, 'lanrurugi-tokens.css'))
 copyFileSync(join(themeDir, 'sdk.css'), join(outDir, 'lanrurugi-sdk.css'))
 copyFileSync(join(themeDir, 'sdk.js'), join(outDir, 'lanrurugi-sdk.js'))
-copyFileSync(join(docsRoot, '..', 'apps', 'frontend', 'public', 'favicon.svg'), join(outDir, 'lanrurugi.svg'))
+copyFileSync(join(docsRoot, '..', 'frontend', 'public', 'favicon.svg'), join(outDir, 'lanrurugi.svg'))
 
 const MARKER = 'lanrurugi-sdk.css'
 

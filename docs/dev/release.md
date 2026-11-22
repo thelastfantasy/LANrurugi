@@ -13,12 +13,12 @@
 3. **改版本号**：开一个 PR 到 `dev`，改三处：
    - `Cargo.toml` 的 `[workspace.package] version`；
    - `Cargo.lock` 里所有 `lanrurugi-*` 包的版本；
-   - `docs/public/versions.json` 开头加一条（`version`、`tag`、`date`、`prerelease`）。文档站构建时会按 git tag 重新生成这个文件，这里改的是仓库里的副本。
+   - `apps/docs-site/public/versions.json` 开头加一条（`version`、`tag`、`date`、`prerelease`）。文档站构建时会按 git tag 重新生成这个文件，这里改的是仓库里的副本。
 
    改完版本号后不再往 `dev` 合并别的东西，否则就要回到第 2 步。
 4. **`dev` → `main` 的 PR**：标题 `release: <版本号>`，正文列出这次合入 `dev` 的 PR。CI 全部通过后合并。
-   - 推送到 `main` 时 `ci.yml` 会发布三个 Cloudflare Pages 站点：docs（`docs.lrrg.dev`，本版本放在 `/v<版本号>/`）、API（`api.lrrg.dev`）、SDK（`sdk.lrrg.dev`）。
-   - 这时还没有 tag，所以 docs 的「版本历史」页还不会列出新版本（页头的版本选择器按已部署的目录生成，不受影响），第 6 步补上。
+   - 推送到 `main` 时 `ci.yml` 会发布三个 Cloudflare Pages 站点：docs（`docs.lrrg.dev`）、API（`api.lrrg.dev`）、SDK（`sdk.lrrg.dev`）。docs 的最新版本放在根路径，`/v<版本号>/` 301 到根路径的同一页；旧版本在 `/v<旧版本号>/` 下，最近几个是静态文件，更早的由 Pages Function 从 R2 里的发布 zip 读出（#305）。
+   - 这时还没有 tag，但构建时会把正在构建的版本放进版本列表，「版本历史」页和版本选择器都已经有新版本。
 5. **打 tag**：在 `main` 的合并提交上打 `v<版本号>` 并推送：
 
    ```sh
@@ -28,11 +28,10 @@
    ```
 
    `release.yml` 会先检查 tag 和 `Cargo.toml` 版本一致，不一致直接失败。之后构建镜像和各平台安装包，全部成功后才发布 Release。带预发布后缀（如 `-beta.7`）的版本推到镜像的 `beta` tag，Release 标为 pre-release；正式版推到 `latest`。
-6. **重新发布文档站**：release 完成后，在 Actions 里打开第 4 步合并到 `main` 那次的 CI，重跑 “Docs (build + publish all three)” job（`gh run rerun <run-id> --job <job-id>`）。重跑时会重新 checkout、拿到新 tag，「版本历史」页才会出现新版本。
-7. **发布后检查**：
+6. **发布后检查**：
    - GitHub Release：`SHA256SUMS`、`docs-<版本号>.zip`、四个平台的 `lanrurugi-<版本号>-*.tar.gz` 都在（`release.yml` 最后一步也会核对）；
    - 镜像：`ghcr.io/thelastfantasy/lanrurugi` 和 Docker Hub 上有 `<版本号>` 和 `beta`/`latest`；
-   - 文档站：docs 的版本选择器里有新版本、首页跳到正确的版本，API 和 SDK 站点显示新版本号。
+   - 文档站：`docs.lrrg.dev/` 是新版本（版本选择器选中它），`/v<新版本号>/` 跳到根路径，上一个版本在 `/v<上一版本号>/` 可以打开；API 和 SDK 站点显示新版本号。
 
 ## 出问题时
 
