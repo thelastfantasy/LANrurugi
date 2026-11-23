@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next"
 import { BottomSheet, SheetGrid, SheetTile, Tooltip } from "@/components/common-ui/Display"
 import { useLongPress } from "@/hooks/useLongPress"
 import { useMenuPalette } from "@/hooks/useMenuPalette"
-import { TOC_CHAPTER_COUNT, tocChapterIdentifier } from "@/lib/utils/tocValidation"
+import { displayTocName, TOC_CHAPTER_COUNT, tocChapterIdentifier } from "@/lib/utils/tocValidation"
 import { Z_OVERLAY_ABOVE_LEGACY_MODAL } from "@/theme"
 
 import { QuickAddTocPopover, useQuickTocPresets } from "./shared"
@@ -150,6 +150,7 @@ export function PageGridCell({
   isTank,
   isPatch = false,
   chapterName,
+  toc = [],
   cornerButtons = true,
 }: {
   /** False on touch screens, where a long press opens the same actions as a sheet. */
@@ -172,6 +173,9 @@ export function PageGridCell({
   /** Set only when this page starts a chapter — painted top-left, always visible (unlike the
    * hover-only page-number label and action icons, a chapter start is worth seeing at a glance). */
   chapterName?: string
+  /** The archive's whole ToC, so the phone sheet's quick-add buttons can say where an entry each
+   * button would add already sits. Pages are whatever the grid shows (global in Tankoubon mode). */
+  toc?: { page: number; name: string }[]
 }) {
   const { t } = useTranslation()
   const [hovered, setHovered] = useState(false)
@@ -398,22 +402,53 @@ export function PageGridCell({
                     setPresetSheetOpen(false)
                     closeSheetThen(() => onQuickAddToc(page, title))()
                   }
+                  // Where an entry this button would add already sits, if it was set before. Matches
+                  // the stored identifier (`c3`, `toc`) and its visible label, because older quick
+                  // adds stored the label; the lowest page wins if it was set twice.
+                  const pageOf = (identifier: string) => {
+                    const wanted = [identifier.trim().toLowerCase(), displayTocName(identifier, t).trim().toLowerCase()]
+                    let setAt: number | undefined
+                    for (const entry of toc) {
+                      if (!wanted.includes(entry.name.trim().toLowerCase())) continue
+                      if (setAt === undefined || entry.page < setAt) setAt = entry.page
+                    }
+                    return setAt
+                  }
+                  const tile = (key: string | number, icon: string, label: string, identifier: string) => {
+                    const setAt = pageOf(identifier)
+                    return (
+                      <SheetTile key={key} icon={icon} style={{ position: "relative" }} onClick={() => pick(identifier)}>
+                        {label}
+                        {/* Phone only in practice: this sheet is the long-press path. A bare page
+                            number, so it reads as "already at 86" without another label. */}
+                        {setAt !== undefined && (
+                          <span
+                            title={t("common.pageN", { n: setAt })}
+                            style={{
+                              position: "absolute",
+                              right: 7,
+                              bottom: 3,
+                              fontSize: 11,
+                              lineHeight: 1.1,
+                              opacity: 0.55,
+                              fontVariantNumeric: "tabular-nums",
+                              pointerEvents: "none",
+                            }}
+                          >
+                            {setAt}
+                          </span>
+                        )}
+                      </SheetTile>
+                    )
+                  }
                   return (
                     <>
-                      <SheetGrid>
-                        {presets.map((p) => (
-                          <SheetTile key={p.title} icon={p.icon} onClick={() => pick(p.value)}>
-                            {p.title}
-                          </SheetTile>
-                        ))}
-                      </SheetGrid>
+                      <SheetGrid>{presets.map((p) => tile(p.title, p.icon, p.title, p.value))}</SheetGrid>
                       <div style={{ height: 10 }} />
                       <SheetGrid separator={palette.separator}>
-                        {Array.from({ length: TOC_CHAPTER_COUNT }, (_, i) => i + 1).map((n) => (
-                          <SheetTile key={n} icon="fa-book-medical" onClick={() => pick(tocChapterIdentifier(n))}>
-                            {t("reader.chapterN", { n })}
-                          </SheetTile>
-                        ))}
+                        {Array.from({ length: TOC_CHAPTER_COUNT }, (_, i) => i + 1).map((n) =>
+                          tile(n, "fa-book-medical", t("reader.chapterN", { n }), tocChapterIdentifier(n)),
+                        )}
                       </SheetGrid>
                     </>
                   )
