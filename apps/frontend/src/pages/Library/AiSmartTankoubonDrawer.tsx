@@ -593,11 +593,10 @@ function SuggestionFilter({
 }) {
   const { t } = useTranslation()
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-      <i className="fa fa-magnifying-glass" aria-hidden="true" style={{ opacity: 0.6, fontSize: 12 }} />
+    <div className="ai-grouping-filter">
+      <i className="fa fa-magnifying-glass" aria-hidden="true" />
       <input
         className="stdinput"
-        style={{ flex: 1, minWidth: 0 }}
         value={value}
         placeholder={t("library.aiGroupingSearchPlaceholder") ?? undefined}
         aria-label={t("library.aiGroupingSearchPlaceholder") ?? undefined}
@@ -610,12 +609,11 @@ function SuggestionFilter({
           title={t("library.aiGroupingSearchClear") ?? undefined}
           aria-label={t("library.aiGroupingSearchClear") ?? undefined}
           onClick={() => onChange("")}
-          style={{ flexShrink: 0, minWidth: 28, padding: "0 6px" }}
         >
           <i className="fa fa-xmark" aria-hidden="true"></i>
         </button>
       )}
-      <span style={{ fontSize: 11, opacity: 0.6, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
+      <span className="ai-grouping-filter-count">
         {t("library.aiGroupingSearchMatched", { matched, total })}
       </span>
     </div>
