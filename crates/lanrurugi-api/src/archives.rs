@@ -1186,8 +1186,9 @@ pub(crate) async fn serve_download_file(
                         ),
                         (header::ACCEPT_RANGES, "bytes".to_string()),
                     ],
-                    axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(
+                    axum::body::Body::from_stream(tokio_util::io::ReaderStream::with_capacity(
                         tokio::io::AsyncReadExt::take(file, end - start + 1),
+                        crate::common::STREAM_CHUNK_SIZE,
                     )),
                 )
                     .into_response();
@@ -1213,7 +1214,10 @@ pub(crate) async fn serve_download_file(
             (header::CONTENT_DISPOSITION, disposition),
             (header::ACCEPT_RANGES, "bytes".to_string()),
         ],
-        axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file)),
+        axum::body::Body::from_stream(tokio_util::io::ReaderStream::with_capacity(
+            file,
+            crate::common::STREAM_CHUNK_SIZE,
+        )),
     )
         .into_response();
     if let Some(length) = length {
@@ -1629,7 +1633,10 @@ async fn inline_pdf(archive: &Archive) -> Response {
             (header::CONTENT_TYPE, "application/pdf".to_string()),
             (header::CONTENT_DISPOSITION, disposition),
         ],
-        axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file)),
+        axum::body::Body::from_stream(tokio_util::io::ReaderStream::with_capacity(
+            file,
+            crate::common::STREAM_CHUNK_SIZE,
+        )),
     )
         .into_response();
     if let Some(length) = length {
