@@ -618,14 +618,19 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             );
         }
     }
-    // specs/028: the automatic daily snapshot runs in the background — a first-run full backup of
-    // a large library must not delay the server from accepting connections.
+    // specs/028: the configurable daily/weekly snapshot schedule, on its own one-minute tick. The
+    // task is spawned (not awaited) so a first-run full backup of a large library never delays the
+    // server from accepting connections, and an interval's first tick is immediate — which is also
+    // the catch-up after downtime (see `snapshots::schedule_tick`). Settings are re-read on every
+    // tick, so a saved change applies within a minute instead of at the next restart.
     {
         let state = state.clone();
         tokio::spawn(async move {
-            let outcome = lanrurugi_api::snapshots::daily_on_startup(&state).await;
-            if let Some(name) = outcome.name {
-                tracing::info!(snapshot = %name, "automatic daily backup written");
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                interval.tick().await;
+                lanrurugi_api::snapshots::schedule_tick(&state).await;
             }
         });
     }
@@ -636,9 +641,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             interval.tick().await; // consume the immediate first tick; startup already swept
             loop {
                 interval.tick().await;
-                // A process that runs for days never restarts, so "daily on startup" also has to
-                // happen here; it is a no-op when today's snapshot already exists.
-                lanrurugi_api::snapshots::daily_on_startup(&state).await;
+                // Retention only — the daily/weekly *generation* moved to the minute tick above.
                 lanrurugi_api::recycle::sweep(&state).await;
             }
         });

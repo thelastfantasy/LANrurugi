@@ -9,7 +9,7 @@
 给「档案记录被永久删除」这个动作装三层安全网，并把它们串成一次交付：
 
 1. **删除台账**（Redis，按记录）：`purge_one_archive` 是所有删除路径的唯一出口，在它真正删除前把整条记录序列化进 `LANRURUGI_DELETION_JOURNAL`，保留 30 天，提供列表 / 单条恢复 / 全部恢复。这样 Clean Database、单条删除、修订版取代、拆分原始档等路径一次性全覆盖。
-2. **自动快照**（文件，按全库）：复用现有的 `lanrurugi_backup::build` 文档，落到 `<library>/.lanrurugi-backups/`（与回收站 `.lanrurugi-recycle/` 同一套「库内点目录、扫描忽略」约定，容器无需新增挂载），每天首次启动一份 + 每个破坏性操作前一份，保留 7 份每日 + 4 份每周。
+2. **自动快照**（文件，按全库）：复用现有的 `lanrurugi_backup::build` 文档，落到 `<library>/.lanrurugi-backups/`（与回收站 `.lanrurugi-recycle/` 同一套「库内点目录、扫描忽略」约定，容器无需新增挂载），**按可配置计划**（默认每天本地 03:00 一份 `daily`、每周一同一时刻一份 `weekly`，可在设置里改时间/星期/关闭）生成 + 每个破坏性操作前一份，保留 7 份每日 + 4 份每周；每份快照旁边写一份 `<name>.summary.json` 内容摘要。
 3. **批量删除守卫 + 诊断**：Clean Database 在真正删除前先算计划删除量，超过「>25% 且 ≥50 条」就拒绝并要求 `force`；扫描与清理把「扫描文件数 / 记录数 / 重合度 / 库目录来源」写进日志与任务结果。
 
 ## Technical Context
@@ -78,7 +78,7 @@ crates/
 ├── lanrurugi-scanner/src/full_scan.rs  # 修改：诊断字段进 summary 与日志；忽略备份目录
 ├── lanrurugi-storage/src/keys.rs       # 修改：新键常量
 └── lanrurugi-server/src/main.rs        # 修改：启动时每日快照 + 把诊断字段写进任务结果
-apps/frontend/src/pages/Settings/Backup.tsx  # 修改：快照列表 + 最近删除列表
+apps/frontend/src/pages/Settings/Backup.tsx  # 修改：快照列表 + 最近删除列表 + 计划设置
 ```
 
 ## Phase 0: Research

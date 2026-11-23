@@ -17,16 +17,24 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
-use chrono::{DateTime, Datelike, Local, SecondsFormat, TimeZone, Utc};
-use serde::Serialize;
+use chrono::{
+    DateTime, Datelike, Days, Local, LocalResult, NaiveDate, NaiveDateTime, SecondsFormat,
+    TimeZone, Utc,
+};
+use deadpool_redis::redis::AsyncCommands;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::activity::record_manual;
 use crate::auth_context::AuthContext;
 use crate::common::{error, not_found};
-use crate::settings::{read_snapshot_daily_keep, read_snapshot_week_keep};
+use crate::settings::{
+    read_snapshot_daily_at, read_snapshot_daily_keep, read_snapshot_schedule_enabled,
+    read_snapshot_week_keep, read_snapshot_weekly_day,
+};
 use crate::AppState;
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
+use lanrurugi_storage::keys::SNAPSHOT_SCHEDULE_KEY;
 use lanrurugi_storage::paths::snapshot_dir;
 
 /// How many `pre-*` snapshots survive retention, independent of the daily/weekly tiers.
@@ -49,6 +57,42 @@ pub struct SnapshotEntry {
     /// Cheap syntactic check (readable, braced, carries an `archives` array). `false` disables the
     /// UI's restore button; the real schema check happens when a restore actually parses it.
     pub usable: bool,
+    /// Contents of the sibling `<name>.summary.json`, or `null` when it is missing/unreadable
+    /// (a snapshot taken by a build that predates summaries, or a moved-in file). Never derived by
+    /// opening the snapshot itself — that would cost as much as a restore just to draw a list.
+    pub summary: Option<SnapshotSummary>,
+}
+
+/// What a snapshot holds, written next to it as `<name>.summary.json` so the backups list can show
+/// it without parsing a multi-megabyte document. `bytes` is the snapshot file's own size.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotSummary {
+    pub archives: u64,
+    pub archives_with_tags: u64,
+    pub categories: u64,
+    pub tankoubons: u64,
+    pub stamps: u64,
+    pub bookmarks: u64,
+    pub bytes: u64,
+}
+
+/// Counts the document's own vectors. Pure (no filesystem, no Redis) so the counting rule —
+/// "with tags" means at least one non-blank tag — is unit-testable; `bytes` is filled in by
+/// [`take_snapshot`] once the file is actually written.
+pub fn summarize(doc: &lanrurugi_backup::build::BackupDocument) -> SnapshotSummary {
+    SnapshotSummary {
+        archives: doc.archives.len() as u64,
+        archives_with_tags: doc
+            .archives
+            .iter()
+            .filter(|archive| !archive.tags.trim().is_empty())
+            .count() as u64,
+        categories: doc.categories.len() as u64,
+        tankoubons: doc.tankoubons.len() as u64,
+        stamps: doc.stamps.len() as u64,
+        bookmarks: doc.bookmarks.len() as u64,
+        bytes: 0,
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -78,12 +122,300 @@ impl SnapshotOutcome {
     }
 }
 
-/// One process-wide marker: the local date whose automatic snapshot was already attempted. A
-/// failed attempt must not be retried every hour for the rest of the day (`research.md` D9).
-static ATTEMPTED_DAY: AtomicI64 = AtomicI64::new(0);
+// ---------------------------------------------------------------------------------------------
+// Configurable schedule.
+//
+// Replaces "snapshot on startup, plus a check every hour": one tick a minute asks whether the most
+// recent scheduled instant has been served yet. Recording the served slot in Redis makes a restart
+// harmless (no duplicate), makes a missed slot owed exactly once after downtime (catch-up, however
+// many slots were missed), and makes a saved settings change apply on the next tick.
+// ---------------------------------------------------------------------------------------------
 
-fn day_ordinal() -> i64 {
-    Local::now().date_naive().num_days_from_ce() as i64
+/// The schedule as configured right now, in the server's local timezone — the same `Local` the
+/// retention plan already groups daily snapshots by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapshotSchedule {
+    pub enabled: bool,
+    pub hour: u32,
+    pub minute: u32,
+    /// 0 = Sunday, the frontend's `Date.getDay()` numbering.
+    pub weekly_day: u32,
+}
+
+impl SnapshotSchedule {
+    pub async fn load(state: &AppState) -> Self {
+        let (hour, minute) = read_snapshot_daily_at(state).await;
+        Self {
+            enabled: read_snapshot_schedule_enabled(state).await,
+            hour,
+            minute,
+            // Only a hand-edited Redis can hold something outside 0..=6; fall back to Monday
+            // rather than selecting no day at all.
+            weekly_day: u32::try_from(read_snapshot_weekly_day(state).await)
+                .ok()
+                .filter(|day| *day <= 6)
+                .unwrap_or(1),
+        }
+    }
+
+    pub fn daily_at(&self) -> String {
+        format!("{:02}:{:02}", self.hour, self.minute)
+    }
+
+    /// The next due instants. Both are `None` while the schedule is off — a disabled schedule has
+    /// no next occurrence, and reporting one would suggest a snapshot is coming.
+    pub fn next(&self, now: DateTime<Local>) -> (Option<DateTime<Local>>, Option<DateTime<Local>>) {
+        if !self.enabled {
+            return (None, None);
+        }
+        (
+            Some(next_daily_at(now, self.hour, self.minute)),
+            Some(next_weekly_at(now, self.hour, self.minute, self.weekly_day)),
+        )
+    }
+}
+
+/// What Redis remembers about the slots already served.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScheduleState {
+    pub last_daily_at: Option<DateTime<Utc>>,
+    pub last_weekly_at: Option<DateTime<Utc>>,
+}
+
+const LAST_DAILY_FIELD: &str = "last_daily_at";
+const LAST_WEEKLY_FIELD: &str = "last_weekly_at";
+
+/// Instants whose automatic attempt already failed in this process, so a full disk does not retry —
+/// and keep warning — every minute until the next slot (`research.md` D9). The next slot has a
+/// different timestamp, which is what re-arms it.
+static FAILED_DAILY_SLOT: AtomicI64 = AtomicI64::new(0);
+static FAILED_WEEKLY_SLOT: AtomicI64 = AtomicI64::new(0);
+
+async fn read_slot(state: &AppState, field: &str) -> Option<DateTime<Utc>> {
+    let raw: Option<String> = match state.redis.config.get().await {
+        Ok(mut conn) => conn.hget(SNAPSHOT_SCHEDULE_KEY, field).await.ok()?,
+        Err(_) => return None,
+    };
+    DateTime::parse_from_rfc3339(raw.as_deref()?)
+        .ok()
+        .map(|at| at.with_timezone(&Utc))
+}
+
+pub async fn read_schedule_state(state: &AppState) -> ScheduleState {
+    ScheduleState {
+        last_daily_at: read_slot(state, LAST_DAILY_FIELD).await,
+        last_weekly_at: read_slot(state, LAST_WEEKLY_FIELD).await,
+    }
+}
+
+/// Returns `false` when Redis refused the write, so the caller can stop re-running the same slot.
+async fn record_slot(state: &AppState, field: &str, at: DateTime<Utc>) -> bool {
+    let Ok(mut conn) = state.redis.config.get().await else {
+        return false;
+    };
+    let stored = at.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let result: Result<i64, _> = conn.hset(SNAPSHOT_SCHEDULE_KEY, field, stored).await;
+    match result {
+        Ok(_) => true,
+        Err(e) => {
+            tracing::warn!(field, error = %e, "could not record the automatic snapshot slot");
+            false
+        }
+    }
+}
+
+fn at_hhmm(date: NaiveDate, hour: u32, minute: u32) -> NaiveDateTime {
+    date.and_hms_opt(hour, minute, 0).unwrap_or_else(|| {
+        date.and_hms_opt(0, 0, 0)
+            .expect("midnight is always a valid time")
+    })
+}
+
+/// Resolves a local wall-clock time to an instant.
+///
+/// DST has two holes. A time inside the spring-forward gap does not exist, so it runs when the gap
+/// ends (up to a couple of hours later in the rare zones that shift by two). A fall-back time
+/// exists twice, and the *earlier* instant is chosen — deterministically, so that the "most recent
+/// slot" computed at 04:00 still equals the instant recorded when the job ran at the first 02:30,
+/// rather than looking due a second time.
+fn resolve_local(naive: NaiveDateTime) -> DateTime<Local> {
+    match Local.from_local_datetime(&naive) {
+        LocalResult::Single(at) => return at,
+        LocalResult::Ambiguous(earlier, _) => return earlier,
+        LocalResult::None => {}
+    }
+    for extra_hours in 1..=3 {
+        match Local.from_local_datetime(&(naive + chrono::Duration::hours(extra_hours))) {
+            LocalResult::Single(at) => return at,
+            LocalResult::Ambiguous(earlier, _) => return earlier,
+            LocalResult::None => {}
+        }
+    }
+    Local.from_utc_datetime(&naive)
+}
+
+/// The most recent `hour:minute` local instant at or before `now` — today's slot if it has passed,
+/// otherwise yesterday's. This is what a due check compares against: if the last served instant is
+/// older, the slot is owed exactly once, no matter how long the process was down.
+pub fn most_recent_daily_at(now: DateTime<Local>, hour: u32, minute: u32) -> DateTime<Local> {
+    let today = now.date_naive();
+    let slot = resolve_local(at_hhmm(today, hour, minute));
+    if slot <= now {
+        return slot;
+    }
+    let yesterday = today.pred_opt().unwrap_or(today);
+    resolve_local(at_hhmm(yesterday, hour, minute))
+}
+
+/// The next `hour:minute` local instant strictly after `now`.
+pub fn next_daily_at(now: DateTime<Local>, hour: u32, minute: u32) -> DateTime<Local> {
+    let today = now.date_naive();
+    let slot = resolve_local(at_hhmm(today, hour, minute));
+    if slot > now {
+        return slot;
+    }
+    let tomorrow = today.succ_opt().unwrap_or(today);
+    resolve_local(at_hhmm(tomorrow, hour, minute))
+}
+
+/// The most recent instant of the configured weekday's `hour:minute` at or before `now` — today's
+/// if today is that weekday and its time has passed, otherwise the same weekday a week earlier.
+pub fn most_recent_weekly_at(
+    now: DateTime<Local>,
+    hour: u32,
+    minute: u32,
+    weekly_day: u32,
+) -> DateTime<Local> {
+    let today = now.date_naive();
+    let behind = (today.weekday().num_days_from_sunday() as i64 - weekly_day as i64).rem_euclid(7);
+    let day = today
+        .checked_sub_days(Days::new(behind as u64))
+        .unwrap_or(today);
+    let slot = resolve_local(at_hhmm(day, hour, minute));
+    if slot <= now {
+        return slot;
+    }
+    // The slot is later today, so the most recent one is a week ago.
+    let earlier = day.checked_sub_days(Days::new(7)).unwrap_or(day);
+    resolve_local(at_hhmm(earlier, hour, minute))
+}
+
+/// The next instant of the configured weekday's `hour:minute` strictly after `now`.
+pub fn next_weekly_at(
+    now: DateTime<Local>,
+    hour: u32,
+    minute: u32,
+    weekly_day: u32,
+) -> DateTime<Local> {
+    let today = now.date_naive();
+    let ahead = (weekly_day as i64 - today.weekday().num_days_from_sunday() as i64).rem_euclid(7);
+    let day = today
+        .checked_add_days(Days::new(ahead as u64))
+        .unwrap_or(today);
+    let slot = resolve_local(at_hhmm(day, hour, minute));
+    if slot > now {
+        return slot;
+    }
+    let later = day.checked_add_days(Days::new(7)).unwrap_or(day);
+    resolve_local(at_hhmm(later, hour, minute))
+}
+
+/// Has `slot` been served already? A missing record means "never", which is what makes a fresh
+/// install (or a first upgrade from the pre-schedule behaviour) take one snapshot at startup.
+pub fn slot_is_due(last: Option<DateTime<Utc>>, slot: DateTime<Local>) -> bool {
+    last.is_none_or(|last| last < slot.with_timezone(&Utc))
+}
+
+/// Writes one scheduled snapshot and records the slot. A failure is remembered in-process so the
+/// failed slot is not retried every minute.
+async fn run_slot(
+    state: &AppState,
+    reason: &'static str,
+    slot: DateTime<Local>,
+    failed: &AtomicI64,
+    field: &'static str,
+) -> bool {
+    let instant = slot.timestamp();
+    if failed.load(Ordering::SeqCst) == instant {
+        return false;
+    }
+    match take_snapshot(state, reason).await {
+        Ok(entry) => {
+            if record_slot(state, field, Utc::now()).await {
+                failed.store(0, Ordering::SeqCst);
+            } else {
+                failed.store(instant, Ordering::SeqCst);
+            }
+            tracing::info!(snapshot = %entry.name, reason, "scheduled automatic snapshot written");
+            true
+        }
+        Err(e) => {
+            failed.store(instant, Ordering::SeqCst);
+            tracing::warn!(reason, error = %e, "scheduled automatic snapshot failed; not retrying this slot");
+            false
+        }
+    }
+}
+
+/// One scheduler tick. `lanrurugi-server` calls this once a minute, and an interval's first tick is
+/// immediate — which is also the startup catch-up.
+pub async fn schedule_tick(state: &AppState) {
+    let schedule = SnapshotSchedule::load(state).await;
+    if !schedule.enabled {
+        return;
+    }
+    let now = Local::now();
+    let served = read_schedule_state(state).await;
+    let mut wrote = false;
+    let daily_slot = most_recent_daily_at(now, schedule.hour, schedule.minute);
+    if slot_is_due(served.last_daily_at, daily_slot) {
+        wrote |= run_slot(
+            state,
+            "daily",
+            daily_slot,
+            &FAILED_DAILY_SLOT,
+            LAST_DAILY_FIELD,
+        )
+        .await;
+    }
+    let weekly_slot =
+        most_recent_weekly_at(now, schedule.hour, schedule.minute, schedule.weekly_day);
+    if slot_is_due(served.last_weekly_at, weekly_slot) {
+        wrote |= run_slot(
+            state,
+            "weekly",
+            weekly_slot,
+            &FAILED_WEEKLY_SLOT,
+            LAST_WEEKLY_FIELD,
+        )
+        .await;
+    }
+    if wrote {
+        // A fresh daily/weekly may push an older one out of its tier immediately.
+        retention_sweep(state).await;
+    }
+}
+
+/// The `schedule` object on `GET /api/backups`. Pure, so the "disabled means both next are null"
+/// rule has a unit test.
+fn schedule_json(
+    schedule: &SnapshotSchedule,
+    served: &ScheduleState,
+    now: DateTime<Local>,
+) -> serde_json::Value {
+    fn iso(at: DateTime<Utc>) -> String {
+        at.to_rfc3339_opts(SecondsFormat::Secs, true)
+    }
+    let (next_daily, next_weekly) = schedule.next(now);
+    json!({
+        "enabled": schedule.enabled,
+        "daily_at": schedule.daily_at(),
+        "weekly_day": schedule.weekly_day,
+        "last_daily_at": served.last_daily_at.map(iso),
+        "last_weekly_at": served.last_weekly_at.map(iso),
+        "next_daily_at": next_daily.map(|at| iso(at.with_timezone(&Utc))),
+        "next_weekly_at": next_weekly.map(|at| iso(at.with_timezone(&Utc))),
+    })
 }
 
 fn now_utc() -> DateTime<Utc> {
@@ -150,6 +482,7 @@ pub fn list_in(dir: &Path) -> std::io::Result<Vec<SnapshotEntry>> {
             reason,
             size_bytes,
             usable: looks_like_backup(&path),
+            summary: read_summary(dir, name),
         });
     }
     entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -293,13 +626,74 @@ pub async fn take_snapshot(state: &AppState, reason: &str) -> Result<SnapshotEnt
     .await
     .map_err(|e| format!("could not write snapshot {name}: {e}"))?;
 
+    // The summary is a convenience for the list view, so a failure here must not fail the snapshot
+    // itself — the entry simply reports `summary: null`, exactly like a snapshot written before
+    // summaries existed.
+    let summary = SnapshotSummary {
+        bytes: size,
+        ..summarize(&doc)
+    };
+    let summary = if let Err(e) = write_summary_file(&dir, &name, &summary).await {
+        tracing::warn!(name, error = %e, "could not write the snapshot summary");
+        None
+    } else {
+        Some(summary)
+    };
+
     Ok(SnapshotEntry {
         name,
         created_at: created.to_rfc3339_opts(SecondsFormat::Secs, true),
         reason: reason.to_string(),
         size_bytes: size,
         usable: true,
+        summary,
     })
+}
+
+/// `<name>.summary.json` — the sibling holding [`SnapshotSummary`].
+fn summary_path(dir: &Path, name: &str) -> PathBuf {
+    dir.join(format!("{name}.summary.json"))
+}
+
+/// Reads a snapshot's summary. Small file, never the snapshot itself; anything unreadable or
+/// unparsable is simply "no summary".
+fn read_summary(dir: &Path, name: &str) -> Option<SnapshotSummary> {
+    let bytes = std::fs::read(summary_path(dir, name)).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Writes the summary atomically, the same `.tmp` + rename as the snapshot, so a crash cannot leave
+/// a half-written summary next to a complete snapshot.
+async fn write_summary_file(
+    dir: &Path,
+    name: &str,
+    summary: &SnapshotSummary,
+) -> std::io::Result<()> {
+    let final_path = summary_path(dir, name);
+    let tmp_path = dir.join(format!("{name}.summary.json.tmp"));
+    let summary = summary.clone();
+    tokio::task::spawn_blocking(move || {
+        let file = std::fs::File::create(&tmp_path)?;
+        let mut writer = std::io::BufWriter::new(file);
+        serde_json::to_writer(&mut writer, &summary).map_err(std::io::Error::other)?;
+        std::io::Write::flush(&mut writer)?;
+        drop(writer);
+        std::fs::File::open(&tmp_path)?.sync_all()?;
+        std::fs::rename(&tmp_path, &final_path)
+    })
+    .await
+    .map_err(std::io::Error::other)?
+}
+
+/// Removes a snapshot together with its summary. A missing summary is not an error: snapshots
+/// written before summaries existed have none.
+async fn remove_snapshot_files(dir: &Path, name: &str) -> std::io::Result<()> {
+    tokio::fs::remove_file(dir.join(name)).await?;
+    match tokio::fs::remove_file(summary_path(dir, name)).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 /// Serializes `doc` to `tmp`, flushes it to disk, then renames onto `final_path`. Atomic from a
@@ -339,52 +733,6 @@ pub async fn take_for_operation(state: &AppState, reason: &str) -> SnapshotOutco
     }
 }
 
-/// Once per local day (and once per ISO week for the weekly tier): make sure today has a snapshot.
-/// A failure is not retried until tomorrow.
-pub async fn daily_on_startup(state: &AppState) -> SnapshotOutcome {
-    let today = day_ordinal();
-    if ATTEMPTED_DAY.swap(today, Ordering::SeqCst) == today {
-        return SnapshotOutcome::default();
-    }
-    let dir = snapshot_dir(&state.library.archive_dir);
-    let entries = list_in(&dir).unwrap_or_default();
-    let now = now_utc();
-    let today_local = Local::now().date_naive();
-    let has_today = entries.iter().any(|entry| {
-        entry.reason == "daily"
-            && entry.usable
-            && parse_name(&entry.name)
-                .map(|(at, _)| at.with_timezone(&Local).date_naive() == today_local)
-                .unwrap_or(false)
-    });
-    let iso = now.iso_week();
-    let week_key = (iso.year(), iso.week());
-    let has_week = entries.iter().any(|entry| {
-        entry.reason == "weekly"
-            && entry.usable
-            && parse_name(&entry.name)
-                .map(|(at, _)| {
-                    let iso = at.iso_week();
-                    (iso.year(), iso.week()) == week_key
-                })
-                .unwrap_or(false)
-    });
-
-    let mut last = SnapshotOutcome::default();
-    if !has_today {
-        last = take_for_operation(state, "daily").await;
-        if !last.ok {
-            return last;
-        }
-    }
-    if !has_week {
-        last = take_for_operation(state, "weekly").await;
-    }
-    // A freshly written daily/weekly may push an older one out immediately.
-    retention_sweep(state).await;
-    last
-}
-
 /// Applies [`retention_plan`]. Returns how many files were removed.
 pub async fn retention_sweep(state: &AppState) -> usize {
     let dir = snapshot_dir(&state.library.archive_dir);
@@ -405,7 +753,7 @@ pub async fn retention_sweep(state: &AppState) -> usize {
         if parse_name(&name).is_none() {
             continue;
         }
-        match tokio::fs::remove_file(dir.join(&name)).await {
+        match remove_snapshot_files(&dir, &name).await {
             Ok(()) => removed += 1,
             Err(e) => tracing::warn!(name, error = %e, "could not remove an expired snapshot"),
         }
@@ -437,20 +785,28 @@ fn entry_json(entry: &SnapshotEntry) -> serde_json::Value {
         "reason": entry.reason,
         "size_bytes": entry.size_bytes,
         "usable": entry.usable,
+        // `null` (never omitted) when the sibling summary is missing, so a client can rely on the
+        // key existing.
+        "summary": entry.summary.as_ref(),
     })
 }
 
 async fn list_backups(State(state): State<AppState>) -> Response {
     let dir = snapshot_dir(&state.library.archive_dir);
     match list_in(&dir) {
-        Ok(entries) => axum::Json(json!({
-            "operation": "list_backups",
-            "success": 1,
-            "daily_keep": read_snapshot_daily_keep(&state).await,
-            "week_keep": read_snapshot_week_keep(&state).await,
-            "entries": entries.iter().map(entry_json).collect::<Vec<_>>(),
-        }))
-        .into_response(),
+        Ok(entries) => {
+            let schedule = SnapshotSchedule::load(&state).await;
+            let served = read_schedule_state(&state).await;
+            axum::Json(json!({
+                "operation": "list_backups",
+                "success": 1,
+                "daily_keep": read_snapshot_daily_keep(&state).await,
+                "week_keep": read_snapshot_week_keep(&state).await,
+                "schedule": schedule_json(&schedule, &served, Local::now()),
+                "entries": entries.iter().map(entry_json).collect::<Vec<_>>(),
+            }))
+            .into_response()
+        }
         Err(e) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "list_backups",
@@ -619,13 +975,15 @@ async fn delete_backup(
     auth: Option<axum::extract::Extension<AuthContext>>,
     UrlPath(name): UrlPath<String>,
 ) -> Response {
-    let Some(path) = resolve_name(&state, &name) else {
+    // Name validation only — the files themselves are removed by name below, together with each
+    // summary, so no caller-supplied string is ever joined into a path here.
+    if resolve_name(&state, &name).is_none() {
         return error(
             StatusCode::BAD_REQUEST,
             "serve_backup",
             "Invalid backup name.",
         );
-    };
+    }
     let dir = snapshot_dir(&state.library.archive_dir);
     let entries = list_in(&dir).unwrap_or_default();
     if !entries.iter().any(|entry| entry.name == name) {
@@ -647,7 +1005,9 @@ async fn delete_backup(
         )
             .into_response();
     }
-    if let Err(e) = tokio::fs::remove_file(&path).await {
+    // The path was checked above; removing by name (rather than by that path) lets the summary go
+    // with it.
+    if let Err(e) = remove_snapshot_files(&dir, &name).await {
         return error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "delete_backup",
@@ -688,6 +1048,7 @@ mod tests {
             reason,
             size_bytes: 10,
             usable,
+            summary: None,
         }
     }
 
@@ -747,6 +1108,7 @@ mod tests {
                 reason: "manual".to_string(),
                 size_bytes: 1,
                 usable: true,
+                summary: None,
             })
             .collect();
         let victims = retention_plan(&entries, 7, 4);
@@ -905,5 +1267,287 @@ mod tests {
     fn listing_a_missing_directory_is_empty_not_an_error() {
         let tmp = tempfile::tempdir().unwrap();
         assert!(list_in(&tmp.path().join("nope")).unwrap().is_empty());
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Configurable schedule. Every instant below is built through `resolve_local`, the same
+    // function the scheduler uses, so these assertions hold in any timezone (a DST gap shifts both
+    // sides identically). 2026-11-23 is a Monday.
+    // -----------------------------------------------------------------------------------------
+
+    fn local_at(date: &str, hour: u32, minute: u32) -> DateTime<Local> {
+        let date = NaiveDate::parse_from_str(date, "%Y-%m-%d").expect("test date is well formed");
+        resolve_local(
+            date.and_hms_opt(hour, minute, 0)
+                .expect("test time is valid"),
+        )
+    }
+
+    #[test]
+    fn next_daily_slot_crosses_midnight() {
+        assert_eq!(
+            next_daily_at(local_at("2026-11-23", 1, 0), 3, 0),
+            local_at("2026-11-23", 3, 0),
+            "before today's time, today's slot is next"
+        );
+        assert_eq!(
+            next_daily_at(local_at("2026-11-23", 5, 0), 3, 0),
+            local_at("2026-11-24", 3, 0),
+            "after today's time, tomorrow's slot is next"
+        );
+        assert_eq!(
+            next_daily_at(local_at("2026-11-23", 3, 0), 3, 0),
+            local_at("2026-11-24", 3, 0),
+            "strictly after: the instant itself is never reported as still upcoming"
+        );
+        assert_eq!(
+            next_daily_at(local_at("2026-12-31", 23, 30), 3, 0),
+            local_at("2027-01-01", 3, 0),
+            "a year boundary is just another midnight"
+        );
+    }
+
+    #[test]
+    fn most_recent_daily_slot_is_today_or_yesterday() {
+        assert_eq!(
+            most_recent_daily_at(local_at("2026-11-23", 5, 0), 3, 0),
+            local_at("2026-11-23", 3, 0)
+        );
+        assert_eq!(
+            most_recent_daily_at(local_at("2026-11-23", 1, 0), 3, 0),
+            local_at("2026-11-22", 3, 0)
+        );
+    }
+
+    #[test]
+    fn a_missed_slot_is_owed_exactly_once() {
+        // Catch-up: the comparison is against the newest *past* slot, so three missed days still
+        // owe a single snapshot after the restart rather than three.
+        let now = local_at("2026-11-23", 12, 0);
+        let slot = most_recent_daily_at(now, 3, 0);
+        assert!(slot_is_due(None, slot), "a fresh install owes one snapshot");
+        assert!(
+            slot_is_due(Some(local_at("2026-11-20", 3, 0).with_timezone(&Utc)), slot),
+            "a slot missed while the process was down is owed"
+        );
+        assert!(
+            !slot_is_due(Some(local_at("2026-11-23", 3, 0).with_timezone(&Utc)), slot),
+            "already served today: a restart must not duplicate it"
+        );
+        assert!(
+            !slot_is_due(Some(now.with_timezone(&Utc)), slot),
+            "the instant recorded by a just-finished run is not due again"
+        );
+    }
+
+    #[test]
+    fn next_weekly_slot_crosses_the_week() {
+        // 2026-11-23 is a Monday (0 = Sunday, the frontend's `Date.getDay()` numbering).
+        assert_eq!(
+            next_weekly_at(local_at("2026-11-23", 1, 0), 3, 0, 1),
+            local_at("2026-11-23", 3, 0),
+            "Monday before 03:00: today"
+        );
+        assert_eq!(
+            next_weekly_at(local_at("2026-11-23", 5, 0), 3, 0, 1),
+            local_at("2026-11-30", 3, 0),
+            "Monday after 03:00: next Monday"
+        );
+        assert_eq!(
+            next_weekly_at(local_at("2026-11-23", 1, 0), 3, 0, 0),
+            local_at("2026-11-29", 3, 0),
+            "Sunday from a Monday is next week, never the past"
+        );
+        assert_eq!(
+            next_weekly_at(local_at("2026-11-23", 1, 0), 3, 0, 6),
+            local_at("2026-11-28", 3, 0),
+            "Saturday from a Monday is this week"
+        );
+    }
+
+    #[test]
+    fn most_recent_weekly_slot_is_within_the_last_seven_days() {
+        assert_eq!(
+            most_recent_weekly_at(local_at("2026-11-23", 1, 0), 3, 0, 1),
+            local_at("2026-11-16", 3, 0),
+            "before today's weekly time: last week's"
+        );
+        assert_eq!(
+            most_recent_weekly_at(local_at("2026-11-23", 5, 0), 3, 0, 1),
+            local_at("2026-11-23", 3, 0),
+            "after it: today's"
+        );
+        assert_eq!(
+            most_recent_weekly_at(local_at("2026-11-23", 5, 0), 3, 0, 0),
+            local_at("2026-11-22", 3, 0),
+            "Sunday 0 is the day before Monday 1"
+        );
+    }
+
+    #[test]
+    fn a_disabled_schedule_has_no_next_slots() {
+        let enabled = SnapshotSchedule {
+            enabled: true,
+            hour: 3,
+            minute: 0,
+            weekly_day: 1,
+        };
+        let now = local_at("2026-11-23", 5, 0);
+        assert_eq!(
+            enabled.next(now),
+            (
+                Some(local_at("2026-11-24", 3, 0)),
+                Some(local_at("2026-11-30", 3, 0))
+            )
+        );
+        let disabled = SnapshotSchedule {
+            enabled: false,
+            ..enabled
+        };
+        assert_eq!(disabled.next(now), (None, None));
+    }
+
+    #[test]
+    fn schedule_json_reports_last_and_next() {
+        let schedule = SnapshotSchedule {
+            enabled: true,
+            hour: 3,
+            minute: 0,
+            weekly_day: 1,
+        };
+        let served = ScheduleState {
+            last_daily_at: Some(
+                Utc.with_ymd_and_hms(2026, 11, 23, 3, 0, 0)
+                    .single()
+                    .expect("unambiguous UTC instant"),
+            ),
+            last_weekly_at: None,
+        };
+        let now = local_at("2026-11-23", 5, 0);
+        let value = schedule_json(&schedule, &served, now);
+        assert_eq!(value["enabled"], json!(true));
+        assert_eq!(value["daily_at"], json!("03:00"));
+        assert_eq!(value["weekly_day"], json!(1));
+        assert_eq!(value["last_daily_at"], json!("2026-11-23T03:00:00Z"));
+        assert_eq!(value["last_weekly_at"], serde_json::Value::Null);
+        assert!(value["next_daily_at"].is_string());
+        assert!(value["next_weekly_at"].is_string());
+
+        // Disabled: both next are null, but what was already served is still reported honestly.
+        let off = SnapshotSchedule {
+            enabled: false,
+            ..schedule
+        };
+        let value = schedule_json(&off, &served, now);
+        assert_eq!(value["next_daily_at"], serde_json::Value::Null);
+        assert_eq!(value["next_weekly_at"], serde_json::Value::Null);
+        assert_eq!(value["last_daily_at"], json!("2026-11-23T03:00:00Z"));
+    }
+
+    fn backup_archive(id: &str, tags: &str) -> lanrurugi_backup::build::BackupArchive {
+        lanrurugi_backup::build::BackupArchive {
+            arcid: id.to_string(),
+            title: id.to_string(),
+            tags: tags.to_string(),
+            summary: None,
+            thumbhash: None,
+            filename: format!("{id}.zip"),
+        }
+    }
+
+    fn backup_doc_with(
+        archives: Vec<lanrurugi_backup::build::BackupArchive>,
+    ) -> lanrurugi_backup::build::BackupDocument {
+        lanrurugi_backup::build::BackupDocument {
+            archives,
+            categories: vec![],
+            tankoubons: vec![],
+            stamps: vec![],
+            bookmarks: vec![],
+            terminology_glossaries: vec![],
+            volume_font_patterns: vec![],
+            text_regions: vec![],
+            share_node_secret: None,
+        }
+    }
+
+    #[test]
+    fn summarize_counts_archives_carrying_at_least_one_tag() {
+        let doc = backup_doc_with(vec![
+            backup_archive("a", "artist:x"),
+            backup_archive("b", "   "),
+            backup_archive("c", ""),
+        ]);
+        let summary = summarize(&doc);
+        assert_eq!(summary.archives, 3);
+        assert_eq!(
+            summary.archives_with_tags, 1,
+            "blank and empty tag strings are not tags"
+        );
+        assert_eq!(
+            summary.bytes, 0,
+            "filled in by `take_snapshot` from the file"
+        );
+        assert_eq!(
+            (
+                summary.categories,
+                summary.tankoubons,
+                summary.stamps,
+                summary.bookmarks
+            ),
+            (0, 0, 0, 0)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_summary_round_trips_beside_its_snapshot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let name = "20261123T030000Z-daily.json";
+        write(tmp.path(), name, "{\"archives\":[],\"categories\":[]}");
+        let summary = SnapshotSummary {
+            archives: 384,
+            archives_with_tags: 360,
+            categories: 12,
+            tankoubons: 5,
+            stamps: 3,
+            bookmarks: 8,
+            bytes: 412_345,
+        };
+        write_summary_file(tmp.path(), name, &summary)
+            .await
+            .unwrap();
+
+        // The `...summary.json` sibling is never listed as a snapshot of its own.
+        let entries = list_in(tmp.path()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].summary.as_ref(), Some(&summary));
+        // The API's own `entry_json` carries it (and `null` rather than omitting the key).
+        assert_eq!(entry_json(&entries[0])["summary"]["archives"], json!(384));
+
+        // A missing summary is `null`; so is one that does not parse. Neither is an error.
+        let other = "20261124T030000Z-daily.json";
+        write(tmp.path(), other, "{\"archives\":[],\"categories\":[]}");
+        let entries = list_in(tmp.path()).unwrap();
+        let by_name = |n: &str| entries.iter().find(|entry| entry.name == n).unwrap();
+        assert!(by_name(other).summary.is_none());
+        assert_eq!(
+            entry_json(by_name(other))["summary"],
+            serde_json::Value::Null
+        );
+
+        write(tmp.path(), &format!("{other}.summary.json"), "not json");
+        let entries = list_in(tmp.path()).unwrap();
+        assert!(entries
+            .iter()
+            .find(|e| e.name == other)
+            .unwrap()
+            .summary
+            .is_none());
+
+        // Removing a snapshot takes its summary with it; a missing summary is not an error.
+        remove_snapshot_files(tmp.path(), name).await.unwrap();
+        assert!(!tmp.path().join(name).exists());
+        assert!(!tmp.path().join(format!("{name}.summary.json")).exists());
+        remove_snapshot_files(tmp.path(), other).await.unwrap();
     }
 }

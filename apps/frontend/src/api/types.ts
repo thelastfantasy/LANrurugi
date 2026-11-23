@@ -148,6 +148,14 @@ export interface Settings {
   recycle_retention_days: number
   /** Recycle-bin size cap in GiB; `0` means unlimited. */
   recycle_max_size_gb: number
+  /** specs/028: whether the timed automatic snapshot runs at all (`GET`/`PUT /api/settings`).
+   *  Optional because the backups page treats a missing value as "not configured yet". */
+  snapshot_schedule_enabled?: boolean
+  /** `"HH:MM"` in the server's local timezone — a scheduling instant, not a display string, so the
+   *  backend rejects anything but exactly `HH:MM` (`validation` in `settings.rs`). */
+  snapshot_daily_at?: string
+  /** `0` (Sunday) to `6` (Saturday), matching `Date.getDay()`. */
+  snapshot_weekly_day?: number
   /** Absolute refresh-token lifetime in seconds — an optional hard cap anchored to the original
    *  login; silent refreshes never extend it. `0` means no cap at all, so a session lives as long
    *  as it is used at least once per `refresh_token_idle_lifetime_secs`. */
@@ -1822,6 +1830,35 @@ export interface IntegrityScanStatus {
 
 // --- specs/028 deletion safety net: automatic snapshots & deletion journal ----------------
 
+/** What one snapshot contains — the counts the dashboard reads off the snapshot's own document,
+ *  plus the file's size on disk. `null` on a snapshot the server could not read (or one taken by
+ *  an older server that did not record a summary). */
+export interface BackupSummary {
+  archives: number
+  archives_with_tags: number
+  categories: number
+  tankoubons: number
+  stamps: number
+  bookmarks: number
+  bytes: number
+}
+
+/** The automatic snapshot schedule as the server has it, including the instants it computed
+ *  (`last_*` are what actually ran, `next_*` what the scheduler will run next; both RFC 3339, or
+ *  `null` when nothing is scheduled/known). Editing writes the three `PUT /api/settings` fields
+ *  instead — this shape is read-only. */
+export interface BackupSchedule {
+  enabled: boolean
+  /** `"HH:MM"`, local time of the server. */
+  daily_at: string
+  /** `0` = Sunday, matching `Date.getDay()`. */
+  weekly_day: number
+  last_daily_at: string | null
+  last_weekly_at: string | null
+  next_daily_at: string | null
+  next_weekly_at: string | null
+}
+
 /** One snapshot file under `<library>/.lanrurugi-backups/` (`GET /api/backups`), newest first.
  *  `usable: false` means the file exists but isn't a parseable backup document. */
 export interface BackupEntry {
@@ -1830,6 +1867,9 @@ export interface BackupEntry {
   reason: string
   size_bytes: number
   usable: boolean
+  /** Absent as well as `null` while a server that predates the field answers — the page renders
+   *  both as an unknown summary rather than crashing. */
+  summary?: BackupSummary | null
 }
 
 export interface BackupsResponse {
@@ -1838,6 +1878,8 @@ export interface BackupsResponse {
   daily_keep: number
   week_keep: number
   entries: BackupEntry[]
+  /** Optional for the same reason as `BackupEntry.summary`: an older server simply omits it. */
+  schedule?: BackupSchedule | null
 }
 
 export interface CreateBackupResponse {

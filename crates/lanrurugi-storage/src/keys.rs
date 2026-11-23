@@ -315,6 +315,13 @@ pub const RECYCLE_TANKS_KEY: &str = "LANRURUGI_RECYCLE_TANKS";
 /// itself is configurable (`deletion_journal_days`).
 pub const DELETION_JOURNAL_KEY: &str = "LANRURUGI_DELETION_JOURNAL";
 
+/// Additive, LANrurugi-only (`specs/028-deletion-safety-net`). Hash on the **config** logical DB
+/// (next to the settings it is driven by): `last_daily_at` / `last_weekly_at` as RFC 3339 UTC
+/// strings. Remembering the last slot served is what keeps a restart from duplicating a snapshot
+/// and a missed slot from being skipped forever — the scheduler compares it against the most recent
+/// scheduled instant rather than against "today".
+pub const SNAPSHOT_SCHEDULE_KEY: &str = "LANRURUGI_SNAPSHOT_SCHEDULE";
+
 /// Records restored from the journal whose file is still missing (#specs/028, FR-004). The startup
 /// zombie repair deletes any record whose `file` is gone, which would undo exactly the restore that
 /// is meant to survive until the file comes back; this set exempts them for the journal's retention

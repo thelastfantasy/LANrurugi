@@ -63,41 +63,45 @@ function ImportConflictExample({
     ],
   ]
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "auto minmax(120px, auto) minmax(120px, auto) minmax(120px, auto)",
-        columnGap: 20,
-        rowGap: 0,
-        marginTop: 6,
-        fontSize: FONT_SIZE_SM,
-        opacity: 0.7,
-      }}
-    >
-      <span style={{ padding: "3px 0", fontWeight: "bold" }} />
-      <span style={{ padding: "3px 0", fontWeight: "bold" }}>
-        {t("settings.importLegacyExampleHere")}
-      </span>
-      <span style={{ padding: "3px 0", fontWeight: "bold" }}>
-        {t("settings.importLegacyExampleLegacy")}
-      </span>
-      <span style={{ padding: "3px 0", fontWeight: "bold" }}>
-        {t("settings.importLegacyExampleResult")}
-      </span>
-      {rows.map(([field, here, legacy, result], i) => {
-        const rowStyle: CSSProperties = {
-          padding: "3px 0",
-          backgroundColor: i % 2 === 1 ? "rgba(128, 128, 128, 0.08)" : undefined,
-        }
-        return (
-          <Fragment key={field}>
-            <span style={rowStyle}>{field}</span>
-            <span style={rowStyle}>{here}</span>
-            <span style={rowStyle}>{legacy}</span>
-            <span style={rowStyle}>{result}</span>
-          </Fragment>
-        )
-      })}
+    // The four columns have a hard 120px floor each, so the sample can be wider than a phone's
+    // viewport on its own; scrolling it inside this wrapper keeps that off the page's own width.
+    <div className="backup-records-scroll">
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "auto minmax(120px, auto) minmax(120px, auto) minmax(120px, auto)",
+          columnGap: 20,
+          rowGap: 0,
+          marginTop: 6,
+          fontSize: FONT_SIZE_SM,
+          opacity: 0.7,
+        }}
+      >
+        <span style={{ padding: "3px 0", fontWeight: "bold" }} />
+        <span style={{ padding: "3px 0", fontWeight: "bold" }}>
+          {t("settings.importLegacyExampleHere")}
+        </span>
+        <span style={{ padding: "3px 0", fontWeight: "bold" }}>
+          {t("settings.importLegacyExampleLegacy")}
+        </span>
+        <span style={{ padding: "3px 0", fontWeight: "bold" }}>
+          {t("settings.importLegacyExampleResult")}
+        </span>
+        {rows.map(([field, here, legacy, result], i) => {
+          const rowStyle: CSSProperties = {
+            padding: "3px 0",
+            backgroundColor: i % 2 === 1 ? "rgba(128, 128, 128, 0.08)" : undefined,
+          }
+          return (
+            <Fragment key={field}>
+              <span style={rowStyle}>{field}</span>
+              <span style={rowStyle}>{here}</span>
+              <span style={rowStyle}>{legacy}</span>
+              <span style={rowStyle}>{result}</span>
+            </Fragment>
+          )
+        })}
+      </div>
     </div>
   )
 }

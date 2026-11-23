@@ -65,6 +65,12 @@ pub(crate) const DEFAULT_DELETION_GUARD_MIN: i64 = 50;
 /// specs/028: automatic snapshot retention.
 pub(crate) const DEFAULT_SNAPSHOT_DAILY_KEEP: i64 = 7;
 pub(crate) const DEFAULT_SNAPSHOT_WEEK_KEEP: i64 = 4;
+/// specs/028 follow-up: the automatic snapshot schedule. On by default (a deployment that never
+/// touches these fields keeps the behaviour the feature shipped with), picked at 03:00 local and
+/// on Monday — quiet hours by default.
+pub(crate) const DEFAULT_SNAPSHOT_SCHEDULE_ENABLED: bool = true;
+pub(crate) const DEFAULT_SNAPSHOT_DAILY_AT: &str = "03:00";
+pub(crate) const DEFAULT_SNAPSHOT_WEEKLY_DAY: i64 = 1;
 
 pub fn router() -> Router<AppState> {
     // `/settings/password` ("账号安全类" danger) — no API token, admin-role or not, may change the
@@ -314,6 +320,64 @@ pub(crate) async fn read_snapshot_daily_keep(state: &AppState) -> i64 {
 
 pub(crate) async fn read_snapshot_week_keep(state: &AppState) -> i64 {
     read_number(state, "snapshot_week_keep", DEFAULT_SNAPSHOT_WEEK_KEEP).await
+}
+
+/// specs/028 follow-up: the automatic snapshot schedule's master switch, its daily time and its
+/// weekly weekday. All three are read live on every scheduler tick, so a saved change applies on
+/// the next minute rather than at the next restart.
+pub(crate) async fn read_snapshot_schedule_enabled(state: &AppState) -> bool {
+    match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "snapshot_schedule_enabled")
+            .await
+            .ok()
+            .flatten()
+            .map(|v| v != "0")
+            .unwrap_or(DEFAULT_SNAPSHOT_SCHEDULE_ENABLED),
+        Err(_) => DEFAULT_SNAPSHOT_SCHEDULE_ENABLED,
+    }
+}
+
+/// `0` = Sunday, matching the frontend's `Date.getDay()`.
+pub(crate) async fn read_snapshot_weekly_day(state: &AppState) -> i64 {
+    read_number(state, "snapshot_weekly_day", DEFAULT_SNAPSHOT_WEEKLY_DAY).await
+}
+
+/// The configured daily time as `(hour, minute)`. A stored value that no longer parses (hand-edited
+/// Redis, a value written by an older/newer client) falls back to the default instead of silently
+/// switching the schedule off.
+pub(crate) async fn read_snapshot_daily_at(state: &AppState) -> (u32, u32) {
+    let raw = match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "snapshot_daily_at")
+            .await
+            .ok()
+            .flatten(),
+        Err(_) => None,
+    };
+    raw.as_deref()
+        .and_then(parse_hhmm)
+        .unwrap_or_else(|| parse_hhmm(DEFAULT_SNAPSHOT_DAILY_AT).expect("default parses"))
+}
+
+/// `"HH:MM"`, exactly five ASCII characters, 00:00–23:59. Strict on purpose: the value becomes a
+/// scheduler instant, and accepting `"3:00"` or `"03:00:00"` here would make the same field mean
+/// different things to the browser and to the server.
+pub(crate) fn parse_hhmm(value: &str) -> Option<(u32, u32)> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 5 || bytes[2] != b':' {
+        return None;
+    }
+    if !bytes
+        .iter()
+        .enumerate()
+        .all(|(i, b)| i == 2 || b.is_ascii_digit())
+    {
+        return None;
+    }
+    let hour: u32 = value.get(0..2)?.parse().ok()?;
+    let minute: u32 = value.get(3..5)?.parse().ok()?;
+    (hour < 24 && minute < 60).then_some((hour, minute))
 }
 
 /// Which release line the update check follows. An explicit setting wins; otherwise the track the
@@ -601,6 +665,10 @@ const STRING_FIELDS: &[(&str, &str)] = &[
     // queues a full rebuild job (see the side-effect branch in `put_settings` below) since a
     // tier change can't be applied retroactively by the incremental one-way backfill alone.
     ("recommendprecision", "medium"),
+    // specs/028 follow-up: the wall-clock time the automatic snapshot runs, in the server's local
+    // timezone. `HH:MM`, validated by `parse_hhmm` — this is a scheduling *instant*, not a display
+    // string, so the format is strict rather than free-form.
+    ("snapshot_daily_at", DEFAULT_SNAPSHOT_DAILY_AT),
 ];
 
 /// `STRING_FIELDS`' own `tagrules` default, exposed for `plugins.rs::get_computed_tagrules` to
@@ -684,6 +752,9 @@ const NUMBER_FIELDS: &[(&str, i64)] = &[
     ("deletion_guard_min", DEFAULT_DELETION_GUARD_MIN),
     ("snapshot_daily_keep", DEFAULT_SNAPSHOT_DAILY_KEEP),
     ("snapshot_week_keep", DEFAULT_SNAPSHOT_WEEK_KEEP),
+    // The automatic snapshot schedule's weekday: `0` = Sunday, i.e. the frontend's own
+    // `Date.getDay()` numbering, so the Settings picker needs no translation table.
+    ("snapshot_weekly_day", DEFAULT_SNAPSHOT_WEEKLY_DAY),
     // Log rotation (`lanrurugi_server::telemetry`): a category file rolls when it passes this many
     // megabytes, and only this many files are kept per category (the active one included). Read
     // once at startup and on every rollover decision, so a saved change applies without a restart.
@@ -760,6 +831,13 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     // "stored in `LRR_CONFIG` but driven from a page other than Settings" precedent as
     // `replacetitles` above. Read by `login::status` to compute `first_run_wizard_pending`.
     ("first_run_wizard_done", false),
+    // specs/028 follow-up: whether the automatic daily/weekly snapshot schedule runs at all. Off
+    // leaves the manual `POST /api/backups` and every `pre-*` snapshot working — only the timed
+    // generation stops. On by default so an untouched deployment still gets a daily backup.
+    (
+        "snapshot_schedule_enabled",
+        DEFAULT_SNAPSHOT_SCHEDULE_ENABLED,
+    ),
 ];
 
 /// Normalizes a configured/request origin to a `scheme://host:port` string with a known default
@@ -881,13 +959,16 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
             | "deletion_guard_min"
             | "snapshot_daily_keep"
             | "snapshot_week_keep"
+            | "snapshot_weekly_day"
     ) {
         // data-model.md §4's ranges: a guard of 0% or a keep-count of 0 would disable the safety
         // net by accident, so both are rejected rather than silently meaningless.
+        // `snapshot_weekly_day` is the exception that legitimately accepts 0 — 0 is Sunday.
         let (min, max) = match key {
             "deletion_journal_days" => (0, 3_650),
             "deletion_guard_percent" => (1, 100),
             "deletion_guard_min" => (1, 1_000_000),
+            "snapshot_weekly_day" => (0, 6),
             _ => (1, 365),
         };
         let Some(value) = value.as_i64() else {
@@ -896,6 +977,12 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
         if value < min || value > max {
             return Err(format!("Field \"{key}\" must be between {min} and {max}."));
         }
+    }
+    if key == "snapshot_daily_at" && value.as_str().and_then(parse_hhmm).is_none() {
+        return Err(format!(
+            "Field \"snapshot_daily_at\" must be an \"HH:MM\" local time between 00:00 and 23:59, \
+             got {value}."
+        ));
     }
     if key == "plugin_bind_interface" {
         let name = value.as_str().unwrap_or("").trim();
@@ -1828,6 +1915,47 @@ mod validate_setting_field_tests {
             validate_setting_field("first_run_wizard_done", &json!(true)).unwrap(),
             "1"
         );
+    }
+
+    /// specs/028 follow-up: the snapshot schedule's three fields. `snapshot_weekly_day` accepting
+    /// `0` is the point — 0 is Sunday in the frontend's own `Date.getDay()` numbering.
+    #[test]
+    fn snapshot_schedule_fields_validate() {
+        assert!(BOOL_FIELDS
+            .iter()
+            .any(|(k, default)| *k == "snapshot_schedule_enabled" && *default));
+        assert_eq!(
+            validate_setting_field("snapshot_schedule_enabled", &json!(false)).unwrap(),
+            "0"
+        );
+        assert_eq!(
+            validate_setting_field("snapshot_schedule_enabled", &json!(true)).unwrap(),
+            "1"
+        );
+        for good in ["00:00", "03:00", "23:59"] {
+            assert_eq!(
+                validate_setting_field("snapshot_daily_at", &json!(good)).unwrap(),
+                good
+            );
+        }
+        for bad in ["24:00", "3:00", "03:60", "03:00:00", "", "0320", "03-00"] {
+            assert!(
+                validate_setting_field("snapshot_daily_at", &json!(bad)).is_err(),
+                "{bad:?} must be refused"
+            );
+        }
+        assert!(validate_setting_field("snapshot_daily_at", &json!(300)).is_err());
+        assert_eq!(
+            validate_setting_field("snapshot_weekly_day", &json!(0)).unwrap(),
+            "0"
+        );
+        assert_eq!(
+            validate_setting_field("snapshot_weekly_day", &json!(6)).unwrap(),
+            "6"
+        );
+        for bad in [-1, 7, 1000] {
+            assert!(validate_setting_field("snapshot_weekly_day", &json!(bad)).is_err());
+        }
     }
 
     #[test]

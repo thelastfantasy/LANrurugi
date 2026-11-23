@@ -59,3 +59,28 @@
 - [x] T031 按 `quickstart.md` 在**数据库副本实例**上跑完 S1–S5，记录实际输出。
 - [x] T032 回归：`mise run test-crate -- lanrurugi-api lanrurugi-storage lanrurugi-scanner`、`mise run clippy`、`mise run fmt-check`、前端 `tsc -b --force` + `eslint`。
 - [ ] T033 提交（一个 commit）→ push → PR（body 引用 #351 并把归因更正写进去）。
+
+## Phase 8: 可配置备份计划 + 快照摘要（追加，2026-11-23）
+
+- [x] T034 `settings.rs`：新增 `snapshot_schedule_enabled`（bool，默认 true，进 `BOOL_FIELDS`）、
+  `snapshot_daily_at`（string `"HH:MM"`，默认 `"03:00"`，进 `STRING_FIELDS`）、`snapshot_weekly_day`
+  （number，默认 1，进 `NUMBER_FIELDS`）；`validate_setting_field` 加 `parse_hhmm` 校验（严格 `HH:MM`、
+  00:00–23:59）与 `snapshot_weekly_day` 0–6（**0 = 周日**）范围；三个读取函数供调度与列表用。
+- [x] T035 `snapshots.rs`：`SnapshotSchedule` / `ScheduleState` + 纯函数 `next_daily_at`、
+  `most_recent_daily_at`、`next_weekly_at`、`most_recent_weekly_at`、`slot_is_due`、`resolve_local`
+  （DST：缺口顺延、重复取较早瞬时），槽位记录在 Redis hash `LANRURUGI_SNAPSHOT_SCHEDULE`
+  （config 库，`last_daily_at` / `last_weekly_at`，RFC 3339 UTC）。
+- [x] T036 `snapshots.rs::schedule_tick`：每分钟 tick 的调度实现（取代 `daily_on_startup`），比较最近槽位与
+  `last_*`——重启不重复、停机只补一次、失败槽位进程内不重试、生成后立即跑一次保留期清理；关闭时不生成。
+- [x] T037 `main.rs`：把「启动时 daily + 每小时补跑」换成单个每分钟 tick（首 tick 立即 = 启动补跑），
+  每小时任务只保留 `recycle::sweep` 的保留期清理。
+- [x] T038 `snapshots.rs`：生成快照时同目录写 `<name>.summary.json`（原子写），`list_in` 读它并放进
+  `SnapshotEntry.summary`（缺失/损坏为 `null`，不读快照本体）；删除/保留清理时连摘要一起删。
+- [x] T039 `GET /api/backups` 增加 `schedule` 字段（`enabled/daily_at/weekly_day/last_*/next_*`，关闭时两个
+  `next_*` 为 null）与每条 entry 的 `summary`。
+- [x] T040 [P] 测试：跨天/跨周的下一次到期、关闭时两个 next 为 null、catch-up 只欠一次、摘要往返
+  （含 `.summary.json` 不被当成快照、缺失/损坏为 null、删除时一并删掉）、`parse_hhmm`/`snapshot_weekly_day`
+  的校验矩阵。
+- [x] T041 文档：`data-model.md` 设置项表与快照摘要/槽位状态、`contracts/backups-api.md` 的
+  `schedule` + `summary` + 计划语义（时区/DST）、`quickstart.md` 的 S5「改计划后一分钟内生效」、
+  `docs/dev/deletion-safety-net.md` 的生成时机与设置项表。

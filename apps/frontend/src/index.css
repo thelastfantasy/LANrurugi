@@ -4309,3 +4309,143 @@ div.gt.gt-single > span {
   font-size: 16px;
   border-radius: 6px;
 }
+
+/* Backup page (`pages/Settings/Backup.tsx`) — the three record tables (import rollback snapshots,
+ * automatic snapshots, recently deleted) share one responsive shape.
+ *
+ * Wide: an aligned grid, where each record's cells are the grid's own children (`display: contents`
+ * on the row wrapper, so columns still line up across records without a real `<table>`). The grid
+ * is `fit-content` and the wrapper scrolls, because a snapshot name next to a full contents summary
+ * can exceed the viewport well above the phone breakpoint too.
+ *
+ * Narrow (≤640px): every record becomes a stacked block instead, so no row can widen the page.
+ * That is the actual fix for the phone report — the import-snapshot table was four `auto` columns
+ * at `fit-content`, so a timestamp plus contents summary pushed the whole page past the viewport
+ * and the left-hand text got clipped. Only `currentColor` is used for the row divider, so all five
+ * themes keep their own text colour. */
+.backup-records-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.backup-records {
+  display: grid;
+  column-gap: 20px;
+  row-gap: 4px;
+  align-items: center;
+  margin: 0 auto;
+  width: fit-content;
+  text-align: left;
+}
+
+.backup-records--import-snapshots {
+  grid-template-columns: auto minmax(0, 28em) auto;
+}
+
+/* The contents column is capped and wraps in place rather than taking the width of the longest
+ * summary, which would otherwise widen the whole grid past a laptop screen. */
+.backup-records--auto-snapshots {
+  grid-template-columns: auto auto auto auto minmax(0, 22em) auto;
+}
+
+.backup-records--deletions {
+  grid-template-columns: auto auto auto auto;
+}
+
+.backup-records-head,
+.backup-records-row {
+  display: contents;
+}
+
+/* The one cell allowed to be long on a wide screen: ellipsized, and it wraps once stacked. */
+.backup-cell-title {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backup-cell-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+/* A record's expanded "details" panel — spans every column on a wide grid. */
+.backup-row-detail {
+  grid-column: 1 / -1;
+}
+
+/* `ImportConflictExample` sits inside a radio item's `inline-flex` label, which makes its text span
+ * a flex item: the flex item's automatic minimum size is the sample's min-content width, so the
+ * sample would widen the page no matter how the sample itself scrolls. Zeroing it only where this
+ * wrapper is present keeps the fix scoped to that one usage. */
+.ido label:has(.backup-records-scroll),
+.ido label span:has(.backup-records-scroll) {
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .backup-records {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    gap: 0;
+  }
+
+  /* The column headers only describe the grid, so they go with it. */
+  .backup-records-head {
+    display: none;
+  }
+
+  .backup-records-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 2px 10px;
+    padding: 8px 0;
+  }
+
+  .backup-records-row + .backup-records-row {
+    border-top: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  }
+
+  /* Long cells (contents summary, the title, the details panel) take their own line instead of
+   * squeezing the timestamp off the left edge; unbreakable names break rather than overflow. */
+  .backup-cell-summary,
+  .backup-cell-name,
+  .backup-cell-title,
+  .backup-row-detail {
+    flex: 1 0 100%;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .backup-cell-summary,
+  .backup-row-detail {
+    order: 2;
+  }
+
+  .backup-cell-actions {
+    order: 1;
+    flex-wrap: wrap;
+    justify-content: center;
+    white-space: normal;
+  }
+
+  /* The automatic-snapshots table reads better with its contents summary directly under the
+     name/size/date line — only the action row needs to jump ahead of it here. */
+  .backup-records--auto-snapshots .backup-cell-summary {
+    order: 0;
+  }
+
+  .backup-cell-title {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+}

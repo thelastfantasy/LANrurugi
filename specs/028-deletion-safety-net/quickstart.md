@@ -64,7 +64,11 @@ cat /tmp/clean1.json
 curl -fsS -b $J "$BASE/api/backups" | python3 -m json.tool | head -30
 ```
 
-**期望**：至少一条 `reason=daily`，`usable=true`；`<library>/.lanrurugi-backups/` 下能看到同名文件。
+**期望**：至少一条 `reason=daily`，`usable=true`；`<library>/.lanrurugi-backups/` 下能看到同名文件，以及同一份
+`<文件名>.summary.json`（内容含 `archives / archives_with_tags / categories / tankoubons / stamps / bookmarks / bytes`）。
+同一响应里的 `schedule` 应给出 `enabled / daily_at / weekly_day / last_* / next_*`，且 `next_daily_at` 是「下一个
+`snapshot_daily_at` 本地时刻」对应的 UTC 瞬时。刷新一次列表：`last_daily_at` 已记录，`next_daily_at` 因此变成明天
+—— 重启进程后**不应**再出现第二份同槽位 `daily`。
 
 2. 手动生成：`curl -fsS -b $J -X POST "$BASE/api/backups"`
 
@@ -85,7 +89,52 @@ curl -fsS -b $J "$BASE/api/jobs" | python3 -c 'import json,sys;d=json.load(sys.s
 
 **期望**：结果里含 `scanned_files`、`records_total`、`overlap_percent`、`library_source`；非 Linux 或拿不到挂载信息时 `library_source_known=false` 且其它字段照常。
 
-## S5 台账保留期
+## S5 计划可配置：改完一分钟内生效
+
+1. 把每日时间改到「一分钟后就到」的本地时刻，并把星期改到两天后（用来确认 weekly 不会跟着立刻生成）：
+
+```bash
+AT=$(date -d '+2 minutes' +%H:%M 2>/dev/null || date -v+2m +%H:%M)
+WD=$(( ($(date +%w) + 2) % 7 ))
+curl -fsS -b $J -X PUT -H 'Content-Type: application/json' \
+  -d "{\"snapshot_daily_at\":\"$AT\",\"snapshot_weekly_day\":$WD}" $BASE/api/settings >/dev/null
+curl -fsS -b $J "$BASE/api/backups" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["schedule"])'
+```
+
+**期望**：`schedule.daily_at` 已经是 `$AT`、`weekly_day` 是 `$WD`，`next_daily_at` 指向今天 `$AT`（未到则今天，已过则明天）。
+
+2. 等过那个时刻（最多 1 分钟 tick + 生成耗时），再查一次列表：
+
+```bash
+sleep 90
+curl -fsS -b $J "$BASE/api/backups" | python3 -c 'import json,sys;d=json.load(sys.stdin);s=d["schedule"];print(s["last_daily_at"],s["next_daily_at"],[e["name"] for e in d["entries"][:3]])'
+```
+
+**期望**：`last_daily_at` 变成刚才那次生成的瞬时（不为 null），`next_daily_at` 变成明天同一时刻；列表里出现一条新的
+`reason=daily`，且它的 `summary.archives` 等于库里档案数。**不需要重启**。
+
+3. 关闭计划：
+
+```bash
+curl -fsS -b $J -X PUT -H 'Content-Type: application/json' -d '{"snapshot_schedule_enabled":false}' $BASE/api/settings >/dev/null
+curl -fsS -b $J "$BASE/api/backups" | python3 -c 'import json,sys;s=json.load(sys.stdin)["schedule"];print(s["enabled"],s["next_daily_at"],s["next_weekly_at"])'
+```
+
+**期望**：`False None None`（两个 next 都是 null，`last_*` 保留）；此后等两分钟不再出现新的计划快照。
+手动 `POST /api/backups` 仍然能生成 `manual`，`POST /api/database/clean` 仍然会先落 `pre-clean`。
+
+4. 非法值必须被拒：
+
+```bash
+curl -sS -b $J -o /dev/null -w '%{http_code}\n' -X PUT -H 'Content-Type: application/json' \
+  -d '{"snapshot_daily_at":"25:00"}' $BASE/api/settings
+curl -sS -b $J -o /dev/null -w '%{http_code}\n' -X PUT -H 'Content-Type: application/json' \
+  -d '{"snapshot_weekly_day":7}' $BASE/api/settings
+```
+
+**期望**：两次都是 `400`（`snapshot_daily_at` 必须是 `HH:MM` 且 00:00–23:59；`snapshot_weekly_day` 必须 0–6，0 = 周日）。
+
+## S6 台账保留期
 
 1. 把 `deletion_journal_days` 设为 0，触发一次删除 → 台账**不**记录（关闭台账）。
 2. 设为 1，删除一条，手工把该条的 `deleted_at_ms` 改到 2 天前，运行 sweep → **期望**该条被清除且日志里有计数。

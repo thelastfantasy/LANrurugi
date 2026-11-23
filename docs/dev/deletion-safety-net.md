@@ -23,10 +23,18 @@
 
 - 文件名 `<UTC yyyymmddThhmmssZ>-<reason>.json`，内容与 `GET /api/database/backup` 完全一致，可直接用
   现有的恢复入口导入。
-- 生成时机：每天首次启动 / 每小时检查一次（当天没有 `daily` 就补一份，每个 ISO 周补一份 `weekly`）；
-  每个破坏性操作前（`pre-clean` / `pre-restore` / `pre-reindex` / `pre-journal-purge`）；以及
-  `POST /api/backups` 手动触发。
-- 写入是 `.json.tmp` + `rename`，崩溃最多留下被忽略的 `.tmp`。
+- 生成时机：**按可配置计划**，每天本地 `snapshot_daily_at`（默认 03:00）一份 `daily`、每周
+  `snapshot_weekly_day`（默认 1，0 = 周日）那天的同一时刻一份 `weekly`；`snapshot_schedule_enabled=false`
+  时完全不生成计划快照。另外每个破坏性操作前各一份（`pre-clean` / `pre-restore` / `pre-reindex` /
+  `pre-journal-purge`），以及 `POST /api/backups` 手动触发。
+- 调度是一个**每分钟 tick** 的后台任务：比较「最近一个已到点的槽位」与 Redis hash
+  `LANRURUGI_SNAPSHOT_SCHEDULE`（config 库）里的 `last_daily_at` / `last_weekly_at`（RFC 3339 UTC）。
+  所以重启不会重复生成，停机错过的槽位在启动后只补一次，改设置后下一分钟即生效（无需重启）。
+  时间按**服务器本地时区**算；DST 缺口顺延到缺口结束，重复的时刻取较早的那一次。
+- 每份快照旁边有同名 `<文件名>.summary.json`（`archives / archives_with_tags / categories /
+  tankoubons / stamps / bookmarks / bytes`），`GET /api/backups` 的每条 entry 用 `summary` 字段带上它
+  （缺失或损坏为 `null`，不会为此解析快照本身）。
+- 写入是 `.json.tmp` + `rename`，崩溃最多留下被忽略的 `.tmp`；摘要同理（`.summary.json.tmp`）。
 - 保留：`snapshot_daily_keep`（默认 7，按本地日期去重）+ `snapshot_week_keep`（默认 4，按 ISO 周分组）
   + 最近 5 份 `pre-*`；**最新一份可用快照永不删除**（`DELETE /api/backups/{name}` 对它返回 409）。
 - 快照失败只写 warning，并在操作的返回/任务结果里带 `snapshot: {ok:false, error}`，不阻塞操作；同一天
@@ -60,3 +68,6 @@ library_source_known`：
 | `deletion_guard_min` | 50 | 守卫的绝对量下限（条） |
 | `snapshot_daily_keep` | 7 | 每日快照保留份数 |
 | `snapshot_week_keep` | 4 | 每周快照保留份数 |
+| `snapshot_schedule_enabled` | true | 自动快照计划总开关（关闭后手动与 `pre-*` 照旧） |
+| `snapshot_daily_at` | `"03:00"` | 每天生成 `daily` 的本地时间，必须是 `HH:MM`（00:00–23:59） |
+| `snapshot_weekly_day` | 1 | 生成 `weekly` 的星期，0 = 周日（与前端 `Date.getDay()` 一致），0–6 |
