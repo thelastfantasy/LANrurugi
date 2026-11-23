@@ -58,6 +58,22 @@ pub fn load_for_height(bytes: &[u8], min_height: u32) -> image::ImageResult<Dyna
     load_from_memory(bytes)
 }
 
+/// Like [`load_from_memory`], for a page that will be scaled down into a box of `min_edge`: a JPEG
+/// is decoded at 1/2, 1/4 or 1/8 straight from its DCT, the sharpest scale whose *both* sides are
+/// still at least `min_edge`. The reader caps a page at a 1064px short edge, so a 4535×6307 page
+/// decodes into ~5 MiB of pixels instead of the ~82 MiB a full decode allocates, measured 13 MiB
+/// against 85 MiB of peak RSS (#330) — the same trick
+/// [`load_for_height`] already applies to thumbnails, applied to the page path. Any other format,
+/// a CMYK JPEG, or one this decoder refuses takes the full-size path.
+pub fn load_for_min_edge(bytes: &[u8], min_edge: u32) -> image::ImageResult<DynamicImage> {
+    if is_jpeg(bytes) && min_edge > 0 {
+        if let Some(image) = decode_jpeg_covering(bytes, min_edge) {
+            return Ok(image);
+        }
+    }
+    load_from_memory(bytes)
+}
+
 fn is_jpeg(bytes: &[u8]) -> bool {
     bytes.starts_with(&[0xFF, 0xD8, 0xFF])
 }
@@ -73,6 +89,42 @@ fn decode_jpeg_scaled(bytes: &[u8], min_height: u32) -> Option<DynamicImage> {
     // `scale` picks the smallest IDCT size at least this large in both dimensions.
     let min_width = (u64::from(width) * u64::from(min_height)).div_ceil(u64::from(height)) as u16;
     let (out_width, out_height) = decoder.scale(min_width.max(1), min_height as u16).ok()?;
+    let pixels = decoder.decode().ok()?;
+    let (out_width, out_height) = (u32::from(out_width), u32::from(out_height));
+    match decoder.info()?.pixel_format {
+        jpeg_decoder::PixelFormat::RGB24 => {
+            image::RgbImage::from_raw(out_width, out_height, pixels).map(DynamicImage::ImageRgb8)
+        }
+        jpeg_decoder::PixelFormat::L8 => {
+            image::GrayImage::from_raw(out_width, out_height, pixels).map(DynamicImage::ImageLuma8)
+        }
+        _ => None,
+    }
+}
+
+/// Decodes `bytes` at the largest DCT scale that still covers `min_edge` on both sides, or `None`
+/// when no scaling is needed (the picture is already that small) or this decoder refuses it.
+fn decode_jpeg_covering(bytes: &[u8], min_edge: u32) -> Option<DynamicImage> {
+    let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.read_info().ok()?;
+    let info = decoder.info()?;
+    let (width, height) = (u32::from(info.width), u32::from(info.height));
+    if width == 0 || height == 0 || width.min(height) <= min_edge {
+        return None;
+    }
+    // `choose_idct_size` returns the smallest scale where *either* requested dimension is covered,
+    // so the request has to be the pair that corresponds to one scale factor — the same shape
+    // `decode_jpeg_scaled` builds from `min_height` — or a square request would pick a scale too
+    // coarse for the other side (400px wide for a 600px box, then upscaled back). Both rounded up,
+    // so the decode never comes out under the box.
+    let short_edge = width.min(height);
+    let ratio = f64::from(min_edge) / f64::from(short_edge);
+    let request_width = ((f64::from(width) * ratio).ceil() as u32).min(u32::from(u16::MAX)) as u16;
+    let request_height =
+        ((f64::from(height) * ratio).ceil() as u32).min(u32::from(u16::MAX)) as u16;
+    let (out_width, out_height) = decoder
+        .scale(request_width.max(1), request_height.max(1))
+        .ok()?;
     let pixels = decoder.decode().ok()?;
     let (out_width, out_height) = (u32::from(out_width), u32::from(out_height));
     match decoder.info()?.pixel_format {
@@ -287,6 +339,39 @@ mod tests {
     fn a_jpeg_already_short_enough_decodes_at_full_size() {
         let small = jpeg_of(DynamicImage::ImageRgb8(image::RgbImage::new(300, 400)));
         let decoded = load_for_height(&small, 500).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (300, 400));
+    }
+
+    #[test]
+    fn a_page_decodes_at_a_dct_scale_that_still_covers_its_box() {
+        // 1600x2400 into a 600px box: 1/4 is 400 wide, so 1/2 (800x1200) is the sharpest scale
+        // that still covers it — a quarter of the pixels a full decode would allocate.
+        let page = jpeg_of(DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            1600,
+            2400,
+            image::Rgb([30, 120, 200]),
+        )));
+        let decoded = load_for_min_edge(&page, 600).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (800, 1200));
+
+        // A landscape page is covered by the same rule, which is why the target is a square.
+        let wide = jpeg_of(DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            2400,
+            1600,
+            image::Rgb([30, 120, 200]),
+        )));
+        let decoded = load_for_min_edge(&wide, 600).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (1200, 800));
+    }
+
+    #[test]
+    fn a_page_smaller_than_its_box_is_not_upscaled() {
+        let small = jpeg_of(DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            300,
+            400,
+            image::Rgb([10, 20, 30]),
+        )));
+        let decoded = load_for_min_edge(&small, 1064).unwrap();
         assert_eq!((decoded.width(), decoded.height()), (300, 400));
     }
 
