@@ -1982,6 +1982,11 @@ body:has([data-overlay="modal"]) {
 .ai-checkable-btn-toggle .fa-robot {
   position: absolute;
   inset: 0 0 0 10px;
+  /* Font Awesome 7 gives every `.fa` a fixed `1.25em` width. An absolutely positioned box that
+     already has a width ignores the `inset` stretch, so both glyphs below ended up in a small box at
+     the toggle's left instead of filling it — which put the check ~3px left of the circle's centre. */
+  width: auto;
+  height: auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1991,6 +1996,8 @@ body:has([data-overlay="modal"]) {
 .ai-checkable-btn-toggle-circle .fa-check {
   position: absolute;
   inset: 0;
+  width: auto;
+  height: auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2363,9 +2370,53 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 }
 .mobile-reader-toolbar a,
 .mobile-reader-toolbar .pagecount,
+.mobile-reader-toolbar .mobile-reader-toolbar-chapter,
 .mobile-reader-toolbar-icons button,
 .mobile-reader-toolbar-icons button i {
   color: #fff;
+}
+
+/* The page row: the page counter (and, on the paged toolbar, its arrow links) on the left, the
+   current chapter at the row's right edge — the phone's counterpart to headless reading's
+   bottom-left chapter line. `margin-left: auto` on the chapter is what pins it right in both the
+   centred paged row and the left-aligned infinite-scroll one; without a chapter it collapses to
+   nothing and the row keeps its old centred look. */
+.mobile-reader-toolbar-page-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 10px;
+  align-self: stretch;
+  min-width: 0;
+}
+
+.mobile-reader-toolbar-page-row--spread {
+  justify-content: flex-start;
+}
+
+.mobile-reader-toolbar-chapter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 58%;
+  margin-left: auto;
+  overflow: hidden;
+  font-size: 0.9rem;
+  line-height: 1.3;
+}
+
+/* Icons keep their own width; only the chapter name gives way on a narrow bar. */
+.mobile-reader-toolbar-chapter > i {
+  flex: none;
+  opacity: 0.85;
+}
+
+.mobile-reader-toolbar-chapter-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Settings → Security → Active Devices: rename/cancel are inline text actions, not standalone
@@ -4183,6 +4234,42 @@ div.gt.gt-single > span {
 .batch-drawer-body .batch-picker {
   height: calc(100dvh - 140px);
 }
+/* The AI-grouping filter row: `.stdinput` and `.stdbtn` are two different legacy controls, with
+   different heights (21px + 2+2px padding vs 28px) and different margins (4px 1px 0 vs 1px), so the
+   clear button stood a few pixels taller than the field beside it. One height, no margins, both
+   border-box. */
+.ai-grouping-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ai-grouping-filter .stdinput,
+.ai-grouping-filter .stdbtn {
+  height: 28px;
+  margin: 0;
+  box-sizing: border-box;
+}
+.ai-grouping-filter .stdinput {
+  flex: 1;
+  min-width: 0;
+  padding: 0 8px;
+}
+.ai-grouping-filter .stdbtn {
+  flex-shrink: 0;
+  min-width: 28px;
+  padding: 0 6px;
+}
+.ai-grouping-filter > .fa-magnifying-glass {
+  font-size: 12px;
+  opacity: 0.6;
+}
+.ai-grouping-filter-count {
+  font-size: 11px;
+  opacity: 0.6;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 .batch-ops-sheet {
   padding: 8px 12px;
   text-align: left;

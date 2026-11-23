@@ -524,26 +524,31 @@ export function Reader() {
   const translationArchiveId = isTank
     ? tankReading.getArchiveForPage(currentPage)?.arcId ?? null
     : archiveId;
-  // The chapter the current page belongs to, for headless mode's bottom-left line. Chapters have
-  // two sources and both count: a Tankoubon's member archives, and a plain archive's own ToC.
-  const currentChapter = useMemo(() => {
-    if (isTank) {
-      const chapter = tankReading.chapters.find(
-        (c) => currentPage >= c.startPage && currentPage <= c.endPage,
-      );
-      return chapter
-        ? { title: displayTocName(chapter.title, t), startPage: chapter.startPage }
-        : null;
-    }
-    // The last ToC entry at or before the current page — the same "which chapter am I in"
-    // question the overview's chapter selector answers. First entry wins on a shared page.
-    let entry: TocEntry | undefined;
-    for (const candidate of metadata.data?.toc ?? []) {
-      if (candidate.page > currentPage) continue;
-      if (!entry || candidate.page > entry.page) entry = candidate;
-    }
-    return entry ? { title: displayTocName(entry.name, t), startPage: entry.page } : null;
-  }, [currentPage, isTank, tankReading.chapters, metadata.data?.toc, t]);
+  // The chapter a page belongs to, for headless mode's bottom-left line and the phone toolbar's
+  // page row. Chapters have two sources and both count: a Tankoubon's member archives, and a plain
+  // archive's own ToC.
+  const chapterForPage = useCallback(
+    (page: number) => {
+      if (isTank) {
+        const chapter = tankReading.chapters.find(
+          (c) => page >= c.startPage && page <= c.endPage,
+        );
+        return chapter
+          ? { title: displayTocName(chapter.title, t), startPage: chapter.startPage }
+          : null;
+      }
+      // The last ToC entry at or before the page — the same "which chapter am I in" question the
+      // overview's chapter selector answers. First entry wins on a shared page.
+      let entry: TocEntry | undefined;
+      for (const candidate of metadata.data?.toc ?? []) {
+        if (candidate.page > page) continue;
+        if (!entry || candidate.page > entry.page) entry = candidate;
+      }
+      return entry ? { title: displayTocName(entry.name, t), startPage: entry.page } : null;
+    },
+    [isTank, tankReading.chapters, metadata.data?.toc, t],
+  );
+  const currentChapter = useMemo(() => chapterForPage(currentPage), [chapterForPage, currentPage]);
   // Chapters for the headless jump OSD (`t`). A Tankoubon's members are the top level and each
   // member's own ToC entries hang under it; a plain archive's ToC is a flat list.
   const chapterGroups = useMemo(() => {
@@ -4034,6 +4039,27 @@ export function Reader() {
       </BottomSheet>
     </>
   );
+  // The toolbar's page row can name a page other than `currentPage`: in infinite scroll it is the
+  // page the long press summoned the bar on, so the chapter has to follow that page.
+  const toolbarPage =
+    readerSettings.infiniteScroll && infiniteToolbarPage !== null
+      ? infiniteToolbarPage
+      : currentPage;
+  const toolbarChapter = chapterForPage(toolbarPage);
+  // The phone counterpart to headless reading's bottom-left chapter line: which chapter this page
+  // belongs to, plus legacy's flag on the chapter's own first page. A caption, not a control.
+  const toolbarChapterLabel = toolbarChapter && (
+    <span className="mobile-reader-toolbar-chapter" title={toolbarChapter.title}>
+      <i className="fas fa-bookmark" aria-hidden="true" />
+      <span className="mobile-reader-toolbar-chapter-title">{toolbarChapter.title}</span>
+      {toolbarPage === toolbarChapter.startPage && (
+        <i
+          className="fas fa-flag mobile-reader-toolbar-chapter-start"
+          title={t("reader.chapterStart")}
+        />
+      )}
+    </span>
+  );
   const mobileToolbar = (!readerSettings.infiniteScroll ||
     (touchInfiniteToolbar && infiniteToolbarPage !== null)) && (
     <div
@@ -4044,7 +4070,12 @@ export function Reader() {
         readerSettings.infiniteScroll ? " mobile-reader-toolbar--sheet" : ""
       }`}
     >
-      {arrows}
+      {arrows && (
+        <div className="mobile-reader-toolbar-page-row">
+          {arrows}
+          {toolbarChapterLabel}
+        </div>
+      )}
       {readerSettings.infiniteScroll && infiniteToolbarPage !== null && (
         // Infinite scroll has no paginator, so the page the toolbar was summoned on is named here.
         <div
@@ -4056,8 +4087,14 @@ export function Reader() {
             alignSelf: "stretch",
           }}
         >
-          <div style={{ whiteSpace: "nowrap" }}>
-            {infiniteToolbarPage} / {totalPages}
+          <div
+            className="mobile-reader-toolbar-page-row mobile-reader-toolbar-page-row--spread"
+            style={{ whiteSpace: "nowrap" }}
+          >
+            <span>
+              {infiniteToolbarPage} / {totalPages}
+            </span>
+            {toolbarChapterLabel}
           </div>
           <div style={{ fontSize: "0.75em", overflowWrap: "anywhere" }}>
             {pageInfoBody(infiniteToolbarPage)}

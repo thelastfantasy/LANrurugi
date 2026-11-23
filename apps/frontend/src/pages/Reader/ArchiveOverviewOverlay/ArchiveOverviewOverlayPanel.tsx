@@ -1126,6 +1126,7 @@ export function ArchiveOverviewOverlay({
                   isTank={isTank}
                   isPatch={patchPageSet?.has(page) ?? false}
                   chapterName={chapterNameByPage.get(page)}
+                  toc={archive.toc}
                   cornerButtons={supportsHover}
                 />
               )
