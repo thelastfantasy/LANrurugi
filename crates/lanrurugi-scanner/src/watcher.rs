@@ -24,11 +24,13 @@ pub fn is_watched_archive_path(path: &Path) -> bool {
     }
     // The recycle bin's payload lives inside the library (specs/019) and must be invisible to the
     // watcher, `full_scan::walk` and both subfolder scripts, which all share this filter — without
-    // this, moving a file into the bin would immediately re-catalogue it.
-    if path
-        .components()
-        .any(|c| c.as_os_str() == lanrurugi_storage::recycle::RECYCLE_DIR_NAME)
-    {
+    // this, moving a file into the bin would immediately re-catalogue it. The automatic backup
+    // directory (specs/028) is the same shape of dot-directory inside the library: its JSON
+    // snapshots are not archives, and a walker that descends into it would try to ingest them.
+    if path.components().any(|c| {
+        c.as_os_str() == lanrurugi_storage::recycle::RECYCLE_DIR_NAME
+            || c.as_os_str() == lanrurugi_storage::paths::SNAPSHOT_DIR_NAME
+    }) {
         return false;
     }
     // A page patch (`crates/lanrurugi-scanner/src/patch.rs`) is itself a `.zip` file, sharing its
@@ -239,5 +241,15 @@ mod recycle_exclusion_tests {
         assert!(!is_watched_archive_path(bin));
         let normal = Path::new("/library/books/book.zip");
         assert!(is_watched_archive_path(normal));
+    }
+
+    /// specs/028: snapshots live in their own dot-directory inside the library; a `.json` there
+    /// is not an archive anyway, but a library walk must not even descend into it.
+    #[test]
+    fn the_backup_directory_is_never_a_watched_archive() {
+        let snapshot = Path::new("/library/.lanrurugi-backups/20261123T050000Z-daily.json");
+        assert!(!is_watched_archive_path(snapshot));
+        let inside = Path::new("/library/.lanrurugi-backups/nested/book.zip");
+        assert!(!is_watched_archive_path(inside));
     }
 }

@@ -282,7 +282,7 @@ pub(crate) async fn recycle_archive(
         crate::subscriptions::api::archive_source(archive.primary_source.as_deref(), &archive.tags);
     if archive.file.is_empty() || !Path::new(&archive.file).is_file() {
         tracing::warn!(%id, file = %archive.file, "deleting an archive whose file is already gone");
-        let outcome = purge_one_archive(state, id, auth, PurgeOptions::PERMANENT).await;
+        let outcome = purge_one_archive(state, id, auth, PurgeOptions::SINGLE).await;
         if let (DeleteOneOutcome::Deleted { .. }, Some(source)) = (&outcome, &source) {
             crate::subscriptions::api::record_library_deletion(state, source).await;
         }
@@ -359,6 +359,7 @@ pub(crate) async fn recycle_archive(
 
     DeleteOneOutcome::Deleted {
         filename: archive.name,
+        journal_failed: false,
     }
 }
 
@@ -1490,6 +1491,10 @@ pub struct SweepReport {
     pub over_capacity: u64,
     pub leftovers: u64,
     pub bytes: u64,
+    /// specs/028's share of the same hourly maintenance: deletion-journal entries past their
+    /// retention window, and automatic snapshots removed by the daily/weekly retention plan.
+    pub journal_purged: u64,
+    pub snapshots_removed: u64,
 }
 
 /// Enforces the retention window and the size cap (FR-028–FR-031). The newest entry is never
@@ -1516,6 +1521,17 @@ async fn purge_unit(state: &AppState, unit: &SweepUnit) -> Result<(), String> {
 }
 
 pub async fn sweep(state: &AppState) -> SweepReport {
+    // specs/028's half of the hourly maintenance runs first and unconditionally: both early
+    // returns below (a bin that cannot be listed) must not also stop journal expiry or snapshot
+    // retention. `purge_expired` snapshots before clearing anything; retention runs after it so
+    // that snapshot is itself subject to the plan.
+    let journal_purged = crate::deletions::purge_expired(state).await;
+    let snapshots_removed = crate::snapshots::retention_sweep(state).await as u64;
+    let mut report = SweepReport {
+        journal_purged,
+        snapshots_removed,
+        ..SweepReport::default()
+    };
     let policy = read_policy(state).await;
     let repo = repository(state);
     let tanks = match repo.list_tanks().await {
@@ -1562,7 +1578,6 @@ pub async fn sweep(state: &AppState) -> SweepReport {
     units.sort_by_key(|u| std::cmp::Reverse(u.deleted_at));
     let newest = units.first().map(|u| u.key.clone());
     let now = lanrurugi_storage::recycle::now_secs();
-    let mut report = SweepReport::default();
     let mut remaining: Vec<SweepUnit> = Vec::new();
 
     for unit in units {

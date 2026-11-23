@@ -55,6 +55,16 @@ pub(crate) const DEFAULT_RECYCLE_RETENTION_DAYS: i64 = 30;
 /// default — the retention window is the bound until an operator opts into a cap. GiB rather than
 /// MiB so the smallest meaningful cap is 1 GiB instead of a one-megabyte foot-gun.
 pub(crate) const DEFAULT_RECYCLE_MAX_SIZE_GB: i64 = 0;
+/// specs/028: how long a deletion-journal entry stays restorable. `0` turns the journal off
+/// (nothing recorded, and the sweep clears what an earlier setting left behind).
+pub(crate) const DEFAULT_DELETION_JOURNAL_DAYS: i64 = 30;
+/// specs/028: a clean that plans to delete `> deletion_guard_min` records *and* at least this
+/// percentage of the library is refused unless the request repeats it with `force=1`.
+pub(crate) const DEFAULT_DELETION_GUARD_PERCENT: i64 = 25;
+pub(crate) const DEFAULT_DELETION_GUARD_MIN: i64 = 50;
+/// specs/028: automatic snapshot retention.
+pub(crate) const DEFAULT_SNAPSHOT_DAILY_KEEP: i64 = 7;
+pub(crate) const DEFAULT_SNAPSHOT_WEEK_KEEP: i64 = 4;
 
 pub fn router() -> Router<AppState> {
     // `/settings/password` ("账号安全类" danger) — no API token, admin-role or not, may change the
@@ -255,6 +265,55 @@ pub(crate) async fn read_skipped_retention_days(state: &AppState) -> i64 {
             .unwrap_or(DEFAULT_SKIPPED_RETENTION_DAYS),
         Err(_) => DEFAULT_SKIPPED_RETENTION_DAYS,
     }
+}
+
+/// One numeric `LRR_CONFIG` field, with the declared default when it was never written or is
+/// unparsable. specs/028's four settings all come through here rather than each repeating the
+/// pattern.
+async fn read_number(state: &AppState, key: &str, default: i64) -> i64 {
+    match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, key)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(default),
+        Err(_) => default,
+    }
+}
+
+/// specs/028: journal retention in days; `0` disables recording.
+pub(crate) async fn read_deletion_journal_days(state: &AppState) -> i64 {
+    read_number(
+        state,
+        "deletion_journal_days",
+        DEFAULT_DELETION_JOURNAL_DAYS,
+    )
+    .await
+}
+
+/// specs/028: batch-deletion guard, in percent of the library and an absolute floor.
+pub(crate) async fn read_deletion_guard_percent(state: &AppState) -> i64 {
+    read_number(
+        state,
+        "deletion_guard_percent",
+        DEFAULT_DELETION_GUARD_PERCENT,
+    )
+    .await
+}
+
+pub(crate) async fn read_deletion_guard_min(state: &AppState) -> i64 {
+    read_number(state, "deletion_guard_min", DEFAULT_DELETION_GUARD_MIN).await
+}
+
+/// specs/028: how many daily / weekly snapshots the retention sweep keeps.
+pub(crate) async fn read_snapshot_daily_keep(state: &AppState) -> i64 {
+    read_number(state, "snapshot_daily_keep", DEFAULT_SNAPSHOT_DAILY_KEEP).await
+}
+
+pub(crate) async fn read_snapshot_week_keep(state: &AppState) -> i64 {
+    read_number(state, "snapshot_week_keep", DEFAULT_SNAPSHOT_WEEK_KEEP).await
 }
 
 /// Which release line the update check follows. An explicit setting wins; otherwise the track the
@@ -617,6 +676,14 @@ const NUMBER_FIELDS: &[(&str, i64)] = &[
     // specs/019 — the recycle bin's two bounds, enforced by `recycle::sweep`.
     ("recycle_retention_days", DEFAULT_RECYCLE_RETENTION_DAYS),
     ("recycle_max_size_gb", DEFAULT_RECYCLE_MAX_SIZE_GB),
+    // specs/028 — deletion safety net. The journal's own retention, the batch-delete guard
+    // (`> N records` and `>= P% of the library`), and automatic snapshot retention. All read live
+    // on every use, so a saved change applies without a restart.
+    ("deletion_journal_days", DEFAULT_DELETION_JOURNAL_DAYS),
+    ("deletion_guard_percent", DEFAULT_DELETION_GUARD_PERCENT),
+    ("deletion_guard_min", DEFAULT_DELETION_GUARD_MIN),
+    ("snapshot_daily_keep", DEFAULT_SNAPSHOT_DAILY_KEEP),
+    ("snapshot_week_keep", DEFAULT_SNAPSHOT_WEEK_KEEP),
     // Log rotation (`lanrurugi_server::telemetry`): a category file rolls when it passes this many
     // megabytes, and only this many files are kept per category (the active one included). Read
     // once at startup and on every rollover decision, so a saved change applies without a restart.
@@ -805,6 +872,29 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
         };
         if count < 0 {
             return Err("Field \"max_login_devices\" must be >= 0 (0 = unlimited).".to_string());
+        }
+    }
+    if matches!(
+        key,
+        "deletion_journal_days"
+            | "deletion_guard_percent"
+            | "deletion_guard_min"
+            | "snapshot_daily_keep"
+            | "snapshot_week_keep"
+    ) {
+        // data-model.md §4's ranges: a guard of 0% or a keep-count of 0 would disable the safety
+        // net by accident, so both are rejected rather than silently meaningless.
+        let (min, max) = match key {
+            "deletion_journal_days" => (0, 3_650),
+            "deletion_guard_percent" => (1, 100),
+            "deletion_guard_min" => (1, 1_000_000),
+            _ => (1, 365),
+        };
+        let Some(value) = value.as_i64() else {
+            return Err(format!("Field \"{key}\" must be a number."));
+        };
+        if value < min || value > max {
+            return Err(format!("Field \"{key}\" must be between {min} and {max}."));
         }
     }
     if key == "plugin_bind_interface" {

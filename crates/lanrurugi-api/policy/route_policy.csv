@@ -130,6 +130,18 @@ p, token_admin, /api/recycle-bin/:id/thumbnail, GET, deny
 p, token_admin, /api/recycle-bin/:id/restore, POST, deny
 p, token_admin, /api/recycle-bin/:id, DELETE, deny
 p, token_admin, /api/recycle-bin, DELETE, deny
+# 028 deletion safety net: the deletion journal and automatic backups can restore or destroy the
+# whole library, so both are session-cookie only — no API token, admin role or not.
+p, token_admin, /api/deletions, GET, deny
+p, token_admin, /api/deletions, DELETE, deny
+p, token_admin, /api/deletions/restore-all, POST, deny
+p, token_admin, /api/deletions/:id, DELETE, deny
+p, token_admin, /api/deletions/:id/restore, POST, deny
+p, token_admin, /api/backups, GET, deny
+p, token_admin, /api/backups, POST, deny
+p, token_admin, /api/backups/:name, GET, deny
+p, token_admin, /api/backups/:name, DELETE, deny
+p, token_admin, /api/backups/:name/restore, POST, deny
 p, token_admin, /api/safety-password, GET, deny
 p, token_admin, /api/safety-password, POST, deny
 p, token_admin, /api/safety-password/reset, POST, deny
@@ -183,6 +195,16 @@ p, token_guest, /api/recycle-bin/:id/thumbnail, GET, deny
 p, token_guest, /api/recycle-bin/:id/restore, POST, deny
 p, token_guest, /api/recycle-bin/:id, DELETE, deny
 p, token_guest, /api/recycle-bin, DELETE, deny
+p, token_guest, /api/deletions, GET, deny
+p, token_guest, /api/deletions, DELETE, deny
+p, token_guest, /api/deletions/restore-all, POST, deny
+p, token_guest, /api/deletions/:id, DELETE, deny
+p, token_guest, /api/deletions/:id/restore, POST, deny
+p, token_guest, /api/backups, GET, deny
+p, token_guest, /api/backups, POST, deny
+p, token_guest, /api/backups/:name, GET, deny
+p, token_guest, /api/backups/:name, DELETE, deny
+p, token_guest, /api/backups/:name/restore, POST, deny
 p, token_guest, /api/safety-password, GET, deny
 p, token_guest, /api/safety-password, POST, deny
 p, token_guest, /api/safety-password/reset, POST, deny

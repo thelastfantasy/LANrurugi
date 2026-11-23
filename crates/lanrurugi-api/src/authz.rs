@@ -369,6 +369,43 @@ mod tests {
 
     /// 018: the diagnostics surface carries captured errors, breadcrumbs, server logs and the
     /// tracker credential. It is a real session's alone — not a token's, not a guest's.
+    /// specs/028: the deletion journal and automatic backup snapshots can restore or destroy the
+    /// whole library, so they sit on the same session-cookie-only boundary as `/database/drop`.
+    #[tokio::test]
+    async fn deletion_and_backup_routes_are_session_only() {
+        let e = route_enforcer().await;
+        let paths = [
+            ("/api/deletions", "GET"),
+            ("/api/deletions", "DELETE"),
+            ("/api/deletions/restore-all", "POST"),
+            ("/api/deletions/abc", "DELETE"),
+            ("/api/deletions/abc/restore", "POST"),
+            ("/api/backups", "GET"),
+            ("/api/backups", "POST"),
+            ("/api/backups/20261123T050000Z-daily.json", "GET"),
+            ("/api/backups/20261123T050000Z-daily.json", "DELETE"),
+            ("/api/backups/20261123T050000Z-daily.json/restore", "POST"),
+        ];
+        for (path, method) in paths {
+            assert!(
+                check_route(&e, Some(&session_auth()), path, method),
+                "a session must reach {method} {path}"
+            );
+            assert!(
+                !check_route(&e, Some(&token_auth(TokenRole::Admin)), path, method),
+                "an admin token must not reach {method} {path}"
+            );
+            assert!(
+                !check_route(&e, Some(&token_auth(TokenRole::Guest)), path, method),
+                "a guest token must not reach {method} {path}"
+            );
+            assert!(
+                !check_route(&e, Some(&guest_visitor_auth()), path, method),
+                "a guest visitor must not reach {method} {path}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn diagnostics_routes_are_session_only() {
         let e = route_enforcer().await;

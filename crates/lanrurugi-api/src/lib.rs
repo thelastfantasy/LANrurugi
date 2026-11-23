@@ -13,6 +13,7 @@ pub mod categories;
 pub mod common;
 pub mod cors;
 pub mod database;
+pub mod deletions;
 pub mod device_info;
 pub mod diagnostics;
 pub mod diagnostics_settings;
@@ -32,6 +33,7 @@ pub mod heartbeat;
 pub mod integrity_backfill;
 pub mod integrity_scan;
 pub mod jobs;
+pub mod library_diagnostics;
 pub mod llm_prompts;
 pub mod llm_usage;
 pub mod login;
@@ -60,6 +62,7 @@ pub mod search;
 pub mod search_history;
 pub mod sessions;
 pub mod settings;
+pub mod snapshots;
 pub mod source_lookup;
 pub mod tank_members;
 pub use lanrurugi_share::attempts as share_attempts;
@@ -134,6 +137,8 @@ pub fn router() -> Router<AppState> {
         .merge(preferences::router())
         .merge(search_history::router())
         .merge(database::router())
+        .merge(deletions::router())
+        .merge(snapshots::router())
         .merge(download_queue::router())
         .merge(subscriptions::api::router())
         .merge(duplicates::router())

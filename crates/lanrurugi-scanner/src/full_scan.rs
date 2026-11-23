@@ -131,6 +131,26 @@ pub struct ScanSummary {
     pub relocation_outside: usize,
     pub relocation_repaired: usize,
     pub relocation_failed: usize,
+    /// specs/028 library diagnostics: files walked, records in the DB, and how many of those
+    /// records still resolve to a file. Diagnostic only — never a reason to refuse anything.
+    pub records_total: usize,
+    pub overlap_percent: u8,
+    pub library_source: String,
+    pub library_source_known: bool,
+}
+
+impl ScanSummary {
+    /// The exact five fields the scan job result and the log line publish (the file count is
+    /// `scanned`; the alias is what an operator's script reads).
+    pub fn diagnostics_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "scanned_files": self.scanned,
+            "records_total": self.records_total,
+            "overlap_percent": self.overlap_percent,
+            "library_source": self.library_source,
+            "library_source_known": self.library_source_known,
+        })
+    }
 }
 
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -422,6 +442,33 @@ pub async fn full_scan(
             tracing::warn!(error = %e, "cannot list archives for the _byname relocation pass");
         }
     }
+
+    // specs/028: what the scan saw vs. what the database holds vs. where the library directory
+    // actually comes from. Computed last so `records_total` includes what this run catalogued,
+    // and never allowed to fail the scan.
+    match archives.list_all().await {
+        Ok(records) => {
+            summary.records_total = records.len();
+            summary.overlap_percent = lanrurugi_core::library_diagnostics::overlap_percent(
+                records.iter().map(|a| a.file.as_str()),
+            );
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "library scan: could not count records for diagnostics")
+        }
+    }
+    let source = lanrurugi_core::library_diagnostics::detect(library_path);
+    summary.library_source = source.value;
+    summary.library_source_known = source.known;
+    tracing::info!(
+        scanned_files = summary.scanned,
+        records_total = summary.records_total,
+        overlap_percent = summary.overlap_percent,
+        library_source = %summary.library_source,
+        library_source_known = summary.library_source_known,
+        library = %library_path.display(),
+        "library scan diagnostics"
+    );
 
     summary
 }

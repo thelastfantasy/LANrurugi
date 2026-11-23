@@ -260,8 +260,12 @@ async fn run_catch_up(config: &ScannerConfig, reason: &str) {
         scanned = summary.scanned,
         newly_catalogued = summary.catalogued,
         errors = summary.errors,
+        records_total = summary.records_total,
+        overlap_percent = summary.overlap_percent,
+        library_source = %summary.library_source,
         "watcher catch-up scan complete"
     );
+    let diagnostics = summary.diagnostics_json();
     config
         .jobs
         .finish(
@@ -272,6 +276,7 @@ async fn run_catch_up(config: &ScannerConfig, reason: &str) {
                 "already_known": summary.already_known,
                 "newly_catalogued": summary.catalogued,
                 "errors": summary.errors,
+                "diagnostics": diagnostics,
             }),
         )
         .await;

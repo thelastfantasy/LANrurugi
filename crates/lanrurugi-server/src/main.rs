@@ -610,6 +610,24 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 "recycle bin swept at startup"
             );
         }
+        if report.journal_purged + report.snapshots_removed > 0 {
+            tracing::info!(
+                journal_purged = report.journal_purged,
+                snapshots_removed = report.snapshots_removed,
+                "deletion safety net swept at startup"
+            );
+        }
+    }
+    // specs/028: the automatic daily snapshot runs in the background — a first-run full backup of
+    // a large library must not delay the server from accepting connections.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let outcome = lanrurugi_api::snapshots::daily_on_startup(&state).await;
+            if let Some(name) = outcome.name {
+                tracing::info!(snapshot = %name, "automatic daily backup written");
+            }
+        });
     }
     {
         let state = state.clone();
@@ -618,6 +636,9 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             interval.tick().await; // consume the immediate first tick; startup already swept
             loop {
                 interval.tick().await;
+                // A process that runs for days never restarts, so "daily on startup" also has to
+                // happen here; it is a no-op when today's snapshot already exists.
+                lanrurugi_api::snapshots::daily_on_startup(&state).await;
                 lanrurugi_api::recycle::sweep(&state).await;
             }
         });
@@ -1158,6 +1179,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 errors = scan_summary.errors,
                 "startup scan complete"
             );
+            let diagnostics = scan_summary.diagnostics_json();
             lanrurugi_core::memory::release_free_heap_soon("startup scan finished");
             // Same pools as the scan above — this is background work, not a request.
             let heal_summary =
@@ -1169,6 +1191,12 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     "already_known": scan_summary.already_known,
                     "newly_catalogued": scan_summary.catalogued,
                     "errors": scan_summary.errors,
+                    "scanned_files": scan_summary.scanned,
+                    "records_total": scan_summary.records_total,
+                    "overlap_percent": scan_summary.overlap_percent,
+                    "library_source": scan_summary.library_source,
+                    "library_source_known": scan_summary.library_source_known,
+                    "diagnostics": diagnostics,
                     "pagecount_heal": {
                         "checked": heal_summary.checked,
                         "healed": heal_summary.healed,
@@ -1440,6 +1468,17 @@ async fn repair_zombie_archives(state: &AppState) {
     for (mut archive, file_exists) in checked {
         let stale = archive.file.is_empty() || in_temp(&archive.file) || !file_exists;
         if !stale {
+            // The file is back: the restored-missing exemption has done its job.
+            if lanrurugi_api::deletions::is_restored_missing(state, archive.id.as_str()).await {
+                lanrurugi_api::deletions::clear_restored_missing(state, archive.id.as_str()).await;
+            }
+            continue;
+        }
+        // #{specs/028}: a record restored from the deletion journal is waiting for its file to come
+        // back (a not-yet-remounted library, a wrong mount that got fixed). Deleting it here would
+        // undo the restore before the operator can act, so it is exempt for the journal's window.
+        if lanrurugi_api::deletions::is_restored_missing(state, archive.id.as_str()).await {
+            kept += 1;
             continue;
         }
 

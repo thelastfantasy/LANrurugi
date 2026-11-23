@@ -7,6 +7,7 @@ pub mod http_client;
 pub mod ids;
 pub mod io;
 pub mod jobs;
+pub mod library_diagnostics;
 pub mod logging;
 pub mod memory;
 pub mod password;

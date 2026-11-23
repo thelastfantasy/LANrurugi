@@ -439,7 +439,12 @@ async fn get_archive_metadata(
 /// none of them drift on what "delete an archive" actually does.
 pub(crate) enum DeleteOneOutcome {
     NotFound,
-    Deleted { filename: String },
+    Deleted {
+        filename: String,
+        /// The record could not be copied into the deletion journal, so this delete cannot be
+        /// undone from the UI. The delete itself still succeeded (`research.md` D9).
+        journal_failed: bool,
+    },
     Error(String),
 }
 
@@ -455,15 +460,36 @@ pub(crate) struct PurgeOptions {
     /// The recycle path writes its own `archive.recycle` entry, so the purge tail must not also
     /// log "deleted".
     pub record_activity: bool,
+    /// What the deletion journal records as the origin (`specs/028`): `clean` / `single` /
+    /// `superseded` / `split` / `other`.
+    pub journal_source: &'static str,
 }
 
 impl PurgeOptions {
-    /// A permanent delete of a live archive (superseded revision, clean-database cleanup).
+    /// A permanent delete of a live archive with no more specific origin (superseded revision).
     pub(crate) const PERMANENT: Self = Self {
         remove_archive_file: true,
         keep_thumbnails: false,
         permanent: true,
         record_activity: true,
+        journal_source: "superseded",
+    };
+    /// A user-initiated delete of one archive (the reader's own delete button), including the
+    /// case where its file was already gone.
+    pub(crate) const SINGLE: Self = Self {
+        remove_archive_file: true,
+        keep_thumbnails: false,
+        permanent: true,
+        record_activity: true,
+        journal_source: "single",
+    };
+    /// Clean Database's own second pass.
+    pub(crate) const CLEAN: Self = Self {
+        remove_archive_file: true,
+        keep_thumbnails: false,
+        permanent: true,
+        record_activity: true,
+        journal_source: "clean",
     };
     /// Specs/019: the payload already moved into the bin, and its cover must survive there.
     pub(crate) const AFTER_RECYCLE: Self = Self {
@@ -471,6 +497,7 @@ impl PurgeOptions {
         keep_thumbnails: true,
         permanent: false,
         record_activity: false,
+        journal_source: "single",
     };
 }
 
@@ -487,6 +514,13 @@ pub(crate) async fn purge_one_archive(
         Ok(None) => return DeleteOneOutcome::NotFound,
         Err(e) => return DeleteOneOutcome::Error(e.to_string()),
     };
+    // specs/028: copy the whole record into the deletion journal *before* the record is gone. A
+    // failure never blocks the delete — it only means this particular one cannot be undone, which
+    // the caller has to report.
+    let journal =
+        crate::deletions::journal_put_best_effort(state, &archive, options.journal_source).await;
+    let journaled = matches!(journal, crate::deletions::JournalWrite::Recorded);
+    let journal_failed = matches!(journal, crate::deletions::JournalWrite::Failed);
     match state.repos.archives.delete(id).await {
         Ok(()) => {
             // The only success-path log line this handler had before this was added — every other
@@ -658,9 +692,17 @@ pub(crate) async fn purge_one_archive(
             }
             DeleteOneOutcome::Deleted {
                 filename: archive.name,
+                journal_failed,
             }
         }
         Err(e) => {
+            // The record survived, so its journal entry is wrong: a later restore would find the
+            // id already present. Best-effort drop, matching every other cleanup on a failure.
+            if journaled {
+                if let Err(e) = crate::deletions::forget_journal_entry(state, id.as_str()).await {
+                    tracing::warn!(%id, error = %e, "could not drop a journal entry for a failed delete");
+                }
+            }
             // The archive was found (a real target existed) but the actual DB delete failed —
             // a genuine attempted-and-failed deletion, not a pre-execution lookup miss.
             if options.record_activity {
@@ -732,12 +774,16 @@ async fn delete_archive(
     }
     match crate::recycle::recycle_archive(&state, &id, auth.as_ref().map(|e| &e.0)).await {
         DeleteOneOutcome::NotFound => not_found("delete_archive", format!("{id} does not exist.")),
-        DeleteOneOutcome::Deleted { filename } => axum::Json(json!({
+        DeleteOneOutcome::Deleted {
+            filename,
+            journal_failed,
+        } => axum::Json(json!({
             "operation": "delete_archive",
             "id": id,
             "filename": filename,
             "success": 1,
             "recycled": true,
+            "journal_failed": journal_failed,
         }))
         .into_response(),
         DeleteOneOutcome::Error(e) => error(StatusCode::INTERNAL_SERVER_ERROR, "delete_archive", e),
@@ -797,7 +843,7 @@ async fn batch_delete_archives(
                 filename: None,
                 error: Some(format!("{id} does not exist.")),
             },
-            DeleteOneOutcome::Deleted { filename } => {
+            DeleteOneOutcome::Deleted { filename, .. } => {
                 deleted_count += 1;
                 BatchDeleteResult {
                     id: id.to_string(),

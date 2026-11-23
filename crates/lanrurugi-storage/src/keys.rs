@@ -309,6 +309,18 @@ pub const RECYCLE_BIN_KEY: &str = "LANRURUGI_RECYCLE_BIN";
 /// purged.
 pub const RECYCLE_TANKS_KEY: &str = "LANRURUGI_RECYCLE_TANKS";
 
+/// Additive, LANrurugi-only (`specs/028-deletion-safety-net`). Hash on the **archive** logical DB
+/// (same DB as the archive records): archive id -> JSON journal entry. Holds at most 20,000
+/// entries, oldest evicted first, so a clean that drops 100k records cannot fill Redis. Retention
+/// itself is configurable (`deletion_journal_days`).
+pub const DELETION_JOURNAL_KEY: &str = "LANRURUGI_DELETION_JOURNAL";
+
+/// Records restored from the journal whose file is still missing (#specs/028, FR-004). The startup
+/// zombie repair deletes any record whose `file` is gone, which would undo exactly the restore that
+/// is meant to survive until the file comes back; this set exempts them for the journal's retention
+/// window. Field: archive id, value: restore timestamp in ms.
+pub const RESTORED_MISSING_KEY: &str = "LANRURUGI_RESTORED_MISSING";
+
 /// `LRR_CONFIG` field holding the safety password's bcrypt hash (absent = not configured). Excluded
 /// from the generic settings GET/PUT like legacy's own `password` field.
 pub const SAFETY_PASSWORD_HASH_FIELD: &str = "safety_password_hash";

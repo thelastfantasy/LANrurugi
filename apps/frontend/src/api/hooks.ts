@@ -39,6 +39,7 @@ import type {
   ArchiveMetadata,
   ArchiveSplitTreeResponse,
   AuthBridgeConfig,
+  BackupsResponse,
   BatchDeleteArchivesResponse,
   BookmarkedPageResponse,
   BookmarkSort,
@@ -47,6 +48,8 @@ import type {
   ChangelogRelease,
   CheckCycle,
   Condition,
+  CreateBackupResponse,
+  DeletionsResponse,
   DownloadQueueItem,
   DownloadQueueListResponse,
   DuplicateCompare,
@@ -78,6 +81,9 @@ import type {
   RandomArchivesResponse,
   RecycleBinView,
   ReservationListItem,
+  RestoreAllDeletionsResponse,
+  RestoreBackupResponse,
+  RestoreDeletionResponse,
   RestoreResult,
   SafetyPasswordStatus,
   SearchResponse,
@@ -2732,6 +2738,7 @@ export function useRecycleBin() {
 function invalidateAfterBinChange(queryClient: ReturnType<typeof useQueryClient>) {
   void queryClient.invalidateQueries({ queryKey: ["recycle-bin"] })
   void queryClient.invalidateQueries({ queryKey: ["archives"] })
+  void queryClient.invalidateQueries({ queryKey: ["backups"] })
   void queryClient.invalidateQueries({ queryKey: ["bookmarks"] })
   void queryClient.invalidateQueries({ queryKey: ["tankoubon"] })
   void queryClient.invalidateQueries({ queryKey: ["stats"] })
@@ -2802,5 +2809,70 @@ export function useResetSafetyPassword() {
       queryClient.setQueryData(["safety-password"], status)
       void queryClient.invalidateQueries({ queryKey: ["recycle-bin"] })
     },
+  })
+}
+
+// --- specs/028 deletion safety net: automatic snapshots + deletion journal -----------------
+
+/** Everything a restore can have changed — a database restore can touch any of these. */
+function invalidateAfterDataRestore(queryClient: ReturnType<typeof useQueryClient>) {
+  void queryClient.invalidateQueries({ queryKey: ["archives"] })
+  void queryClient.invalidateQueries({ queryKey: ["backups"] })
+  void queryClient.invalidateQueries({ queryKey: ["bookmarks"] })
+  void queryClient.invalidateQueries({ queryKey: ["categories"] })
+  void queryClient.invalidateQueries({ queryKey: ["deletions"] })
+  void queryClient.invalidateQueries({ queryKey: ["library-status"] })
+  void queryClient.invalidateQueries({ queryKey: ["stats"] })
+  void queryClient.invalidateQueries({ queryKey: ["tankoubon"] })
+}
+
+export function useBackups() {
+  return useQuery({
+    queryKey: ["backups"],
+    queryFn: () => fetchJson<BackupsResponse>("/backups"),
+  })
+}
+
+/** Synchronous on the server (a large library can take seconds); the response carries the new entry. */
+export function useCreateBackup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => sendJson<CreateBackupResponse>("POST", "/backups"),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["backups"] }),
+  })
+}
+
+/** Whole-database restore from one snapshot; the server takes a `pre-restore` snapshot first. */
+export function useRestoreBackup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) =>
+      sendJson<RestoreBackupResponse>("POST", `/backups/${encodeURIComponent(name)}/restore`),
+    onSuccess: () => invalidateAfterDataRestore(queryClient),
+  })
+}
+
+export function useDeletions() {
+  return useQuery({
+    queryKey: ["deletions"],
+    queryFn: () => fetchJson<DeletionsResponse>("/deletions"),
+  })
+}
+
+export function useRestoreDeletion() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<RestoreDeletionResponse>("POST", `/deletions/${encodeURIComponent(id)}/restore`),
+    onSuccess: () => invalidateAfterDataRestore(queryClient),
+  })
+}
+
+/** Each entry is restored independently — one failure doesn't abort the rest. */
+export function useRestoreAllDeletions() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => sendJson<RestoreAllDeletionsResponse>("POST", "/deletions/restore-all"),
+    onSuccess: () => invalidateAfterDataRestore(queryClient),
   })
 }

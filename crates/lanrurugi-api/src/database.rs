@@ -160,6 +160,18 @@ async fn stats(
 // no gain on a path that has already failed.
 #[allow(clippy::result_large_err)]
 async fn build_backup_document(state: &AppState) -> Result<BackupDocument, Response> {
+    build_backup_document_result(state)
+        .await
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, "serve_backup", e))
+}
+
+/// The same document, as a plain error — for the automatic snapshot path
+/// (`snapshots::take_snapshot`), which reports failures into an operation's result rather than
+/// answering an HTTP request. Both share this one builder so a snapshot and a manual export can
+/// never drift on what they contain.
+pub(crate) async fn build_backup_document_result(
+    state: &AppState,
+) -> Result<BackupDocument, String> {
     let mut doc = lanrurugi_backup::build::build(
         &state.repos.archives,
         &state.repos.categories,
@@ -168,13 +180,7 @@ async fn build_backup_document(state: &AppState) -> Result<BackupDocument, Respo
         &state.bookmarks,
     )
     .await
-    .map_err(|e| {
-        error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "serve_backup",
-            e.to_string(),
-        )
-    })?;
+    .map_err(|e| e.to_string())?;
 
     add_translation_state(state, &mut doc).await;
     add_share_identity(state, &mut doc).await;
@@ -332,12 +338,27 @@ async fn queue_restore(
     )
     .await;
 
+    // specs/028: a full snapshot before the library is rewritten. Reported in the job result but
+    // never blocking.
+    let snapshot = crate::snapshots::take_for_operation(&state, "pre-restore").await;
+    let job_id = start_restore_job(&state, doc, auth.as_ref().map(|e| e.0.clone()), snapshot).await;
+    axum::Json(json!({ "operation": "queue_restore", "success": 1, "job": job_id })).into_response()
+}
+
+/// Starts the background restore shared by the multipart upload endpoint and
+/// `POST /backups/{name}/restore`. The caller has already recorded the activity entry and taken
+/// the pre-restore snapshot (they want its name in their own response); this only runs the job.
+pub(crate) async fn start_restore_job(
+    state: &AppState,
+    doc: BackupDocument,
+    auth_for_task: Option<AuthContext>,
+    snapshot: crate::snapshots::SnapshotOutcome,
+) -> String {
     let job_id = state.jobs.create("restore").await;
     let jobs = state.jobs.clone();
     let repos = state.repos.clone();
     let job_id_for_task = job_id.clone();
     let state_for_task = state.clone();
-    let auth_for_task = auth.as_ref().map(|e| e.0.clone());
 
     tokio::spawn(async move {
         jobs.mark_active(&job_id_for_task).await;
@@ -383,6 +404,7 @@ async fn queue_restore(
                         "glossaries_restored": translation.glossaries_restored,
                         "font_patterns_restored": translation.font_patterns_restored,
                         "text_region_sets_restored": translation.text_region_sets_restored,
+                        "snapshot": snapshot,
                     }),
                 )
                 .await;
@@ -412,7 +434,7 @@ async fn queue_restore(
         }
     });
 
-    axum::Json(json!({ "operation": "queue_restore", "success": 1, "job": job_id })).into_response()
+    job_id
 }
 
 async fn clear_new_all(
@@ -568,9 +590,42 @@ async fn tidy_tags(State(state): State<AppState>) -> Response {
 /// outright. This differs from legacy's exact trigger (a `LRR_FILEMAP` cross-reference mismatch,
 /// verified in `Utils/Database.pm::clean_database`) but preserves the same observable two-run
 /// behavior for the common case (file deleted from disk out from under LANrurugi).
+/// `POST /database/clean?force=1` — the one destructive batch operation whose scale is known up
+/// front, so `specs/028` gates it. `force` accepts `1`/`true` (query-string bools only parse
+/// `true`/`false`, and the documented spelling is `force=1`).
+#[derive(Debug, Deserialize, Default)]
+pub struct CleanParams {
+    #[serde(default)]
+    force: Option<String>,
+}
+
+fn wants_force(value: Option<&str>) -> bool {
+    matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("1" | "true" | "yes" | "on")
+    )
+}
+
+/// The guard's own arithmetic, extracted so its boundaries can be tested without a real library
+/// (`research.md` D6). Both conditions must hold: a *big number* alone in a large library is fine,
+/// and a large *fraction* of a tiny library is fine too.
+pub(crate) fn needs_guard(
+    planned: usize,
+    total: usize,
+    guard_percent: i64,
+    guard_min: i64,
+) -> bool {
+    if total == 0 || planned == 0 {
+        return false;
+    }
+    let percent = (planned as i64) * 100 / total as i64;
+    planned as i64 > guard_min && percent >= guard_percent
+}
+
 async fn clean_database(
     State(state): State<AppState>,
     auth: Option<axum::extract::Extension<AuthContext>>,
+    Query(params): Query<CleanParams>,
 ) -> Response {
     let archives = match state.repos.archives.list_all().await {
         Ok(a) => a,
@@ -583,8 +638,60 @@ async fn clean_database(
         }
     };
 
+    // specs/028: the batch-deletion guard. Only the second pass (records whose `file` was already
+    // cleared) actually deletes; clearing `file` is reversible and must never be blocked, or a
+    // normal clean can never make progress. `planned > guard_min` *and* `planned >= percent%` of
+    // the library is what "a large fraction in one go" means — both must hold.
+    let total = archives.len();
+    let planned = archives.iter().filter(|a| a.file.is_empty()).count();
+    let guard_percent = crate::settings::read_deletion_guard_percent(&state).await;
+    let guard_min = crate::settings::read_deletion_guard_min(&state).await;
+    let percent = if total == 0 {
+        0
+    } else {
+        (planned as i64) * 100 / total as i64
+    };
+    if !wants_force(params.force.as_deref())
+        && needs_guard(planned, total, guard_percent, guard_min)
+    {
+        tracing::warn!(
+            planned,
+            total,
+            percent,
+            guard_percent,
+            guard_min,
+            "clean database refused: planned deletion is above the guard"
+        );
+        return (
+            StatusCode::CONFLICT,
+            axum::Json(json!({
+                "operation": "clean_database",
+                "success": 0,
+                "error": format!(
+                    "This clean would delete {planned} records ({percent}% of {total}), above the \
+                     {guard_percent}%/{guard_min} guard. Re-run with force=1 to confirm."
+                ),
+                "planned": planned,
+                "total": total,
+                "percent": percent,
+                "guard_percent": guard_percent,
+                "guard_min": guard_min,
+            })),
+        )
+            .into_response();
+    }
+
+    // specs/028: a full snapshot before anything irreversible happens. A failure is reported in
+    // the response but never stops the clean (`research.md` D9).
+    let snapshot = crate::snapshots::take_for_operation(&state, "pre-clean").await;
+
     let mut deleted = 0u32;
     let mut unlinked = 0u32;
+    let mut journaled = 0u32;
+    let mut journal_failed = 0u32;
+    let overlap_percent = crate::library_diagnostics::overlap_percent(&archives);
+    let (library_source, library_source_known) =
+        crate::library_diagnostics::library_source(&state.library.archive_dir);
     for archive in archives {
         if archive.file.is_empty() {
             // Reuses the single-delete path rather than repeating a subset of it (issue #102).
@@ -599,12 +706,23 @@ async fn clean_database(
                 &state,
                 &archive.id,
                 auth.as_ref().map(|e| &e.0),
-                crate::archives::PurgeOptions::PERMANENT,
+                crate::archives::PurgeOptions::CLEAN,
             )
             .await
             {
                 crate::archives::DeleteOneOutcome::Error(e) => {
                     tracing::warn!(id = %archive.id, error = %e, "clean_database failed to delete an archive");
+                }
+                crate::archives::DeleteOneOutcome::Deleted {
+                    journal_failed: failed,
+                    ..
+                } => {
+                    deleted += 1;
+                    if failed {
+                        journal_failed += 1;
+                    } else {
+                        journaled += 1;
+                    }
                 }
                 _ => deleted += 1,
             }
@@ -620,6 +738,14 @@ async fn clean_database(
         }
     }
 
+    let diagnostics = json!({
+        "records_total": total,
+        "records_total_after": total - deleted as usize,
+        "overlap_percent": overlap_percent,
+        "library_source": library_source,
+        "library_source_known": library_source_known,
+    });
+
     record_manual(
         &state,
         auth.as_ref().map(|e| &e.0),
@@ -631,7 +757,14 @@ async fn clean_database(
         },
         Outcome::Success,
         None,
-        Some(json!({ "deleted": deleted, "unlinked": unlinked })),
+        Some(json!({
+            "deleted": deleted,
+            "unlinked": unlinked,
+            "journaled": journaled,
+            "journal_failed": journal_failed,
+            "snapshot": snapshot,
+            "diagnostics": diagnostics,
+        })),
     )
     .await;
 
@@ -640,6 +773,10 @@ async fn clean_database(
         "success": 1,
         "deleted": deleted,
         "unlinked": unlinked,
+        "journaled": journaled,
+        "journal_failed": journal_failed,
+        "snapshot": snapshot,
+        "diagnostics": diagnostics,
     }))
     .into_response()
 }
@@ -800,6 +937,7 @@ async fn run_rebuild_sequence(
     }
 
     Ok(json!({
+        "diagnostics": scan_summary.diagnostics_json(),
         "rekeyed": rekey_summary.rekeyed.len(),
         "unchanged": rekey_summary.unchanged,
         "missing_file": rekey_summary.missing_file,
@@ -867,6 +1005,9 @@ async fn rebuild_index(
 
     tokio::spawn(async move {
         jobs.mark_active(&job_id_for_task).await;
+        // specs/028: a full snapshot before re-keying/rescanning the library. A failure is
+        // reported in the job result, never fatal.
+        let snapshot = crate::snapshots::take_for_operation(&state_for_task, "pre-reindex").await;
         match run_rebuild_sequence(
             &state_for_task,
             &job_id_for_task,
@@ -875,7 +1016,15 @@ async fn rebuild_index(
         )
         .await
         {
-            Ok(result) => jobs.finish(&job_id_for_task, result).await,
+            Ok(mut result) => {
+                if let Some(map) = result.as_object_mut() {
+                    map.insert(
+                        "snapshot".to_string(),
+                        serde_json::to_value(&snapshot).unwrap_or(serde_json::Value::Null),
+                    );
+                }
+                jobs.finish(&job_id_for_task, result).await
+            }
             Err(e) => jobs.fail(&job_id_for_task, e).await,
         }
     });
@@ -1246,5 +1395,33 @@ async fn delete_import_snapshot(
             "delete_import_snapshot",
             e.to_string(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// specs/028 T024 — the documented boundary: `> min` records **and** `>= percent` of the
+    /// library. A clean just under either bound must execute unguarded.
+    #[test]
+    fn the_guard_needs_both_the_absolute_and_the_relative_floor() {
+        // 51 records of 100 = 51%: over both 25% and 50 records -> guarded.
+        assert!(needs_guard(51, 100, 25, 50));
+        // Exactly the floor: `> 50` is false at 50, so this is allowed.
+        assert!(!needs_guard(50, 100, 25, 50));
+        // 51 records of 10,000 = 0%: a big number but a tiny fraction -> allowed.
+        assert!(!needs_guard(51, 10_000, 25, 50));
+        // 60 records of 1,000 = 6%, under the percentage -> allowed.
+        assert!(!needs_guard(60, 1_000, 25, 50));
+        // Exactly 25% of 400 = 100 records: the percentage is inclusive, so guarded.
+        assert!(needs_guard(100, 400, 25, 50));
+        // A tiny library cannot trip the absolute floor at all.
+        assert!(!needs_guard(3, 4, 1, 50));
+        // An empty library never needs confirmation.
+        assert!(!needs_guard(0, 0, 25, 50));
+        // `force` is applied by the caller; the arithmetic itself has no notion of it.
+        assert!(!wants_force(None));
+        assert!(wants_force(Some("1")));
     }
 }

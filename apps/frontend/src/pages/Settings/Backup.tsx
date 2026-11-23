@@ -3,10 +3,21 @@ import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
 import { waitForJob } from "@/api/client"
-import { useDeleteImportSnapshot, useImportSnapshots } from "@/api/hooks"
+import {
+  useBackups,
+  useCreateBackup,
+  useDeleteImportSnapshot,
+  useDeletions,
+  useImportSnapshots,
+  useRestoreAllDeletions,
+  useRestoreBackup,
+  useRestoreDeletion,
+} from "@/api/hooks"
+import type { BackupEntry, DeletionEntry } from "@/api/types"
 import { Button, IconButton } from "@/components/common-ui/Form"
 import { confirmDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
+import { formatBytes } from "@/lib/formatBytes"
 import { routes } from "@/lib/routes"
 import { FONT_SIZE_SM, useApplyTheme } from "@/theme"
 
@@ -20,9 +31,25 @@ export function Backup() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [status, setStatus] = useState<string>("")
   const [busy, setBusy] = useState(false)
+  const [snapshotStatus, setSnapshotStatus] = useState<string>("")
+  const [deletionStatus, setDeletionStatus] = useState<string>("")
 
   const snapshotsQuery = useImportSnapshots()
   const deleteSnapshot = useDeleteImportSnapshot()
+
+  // specs/028 deletion safety net — same query/mutation style as the import-snapshot list above.
+  const backupsQuery = useBackups()
+  const createBackup = useCreateBackup()
+  const restoreBackup = useRestoreBackup()
+  const deletionsQuery = useDeletions()
+  const restoreDeletion = useRestoreDeletion()
+  const restoreAllDeletions = useRestoreAllDeletions()
+
+  /** A reason/source a newer server adds isn't in this build's locale files — show it verbatim. */
+  const reasonLabel = (reason: string) =>
+    t(`settings.snapshotReason.${reason}`, { defaultValue: reason })
+  const sourceLabel = (source: string) =>
+    t(`settings.deletionSource.${source}`, { defaultValue: source })
 
   async function handleBackup() {
     setBusy(true)
@@ -79,6 +106,74 @@ export function Backup() {
     } finally {
       setBusy(false)
       if (fileInputRef.current) fileInputRef.current.value = ""
+    }
+  }
+
+  async function handleCreateSnapshot() {
+    setSnapshotStatus(t("settings.autoSnapshotsCreating"))
+    try {
+      const response = await createBackup.mutateAsync()
+      setSnapshotStatus(t("settings.autoSnapshotsCreated", { name: response.entry.name }))
+    } catch (e) {
+      setSnapshotStatus(t("settings.autoSnapshotsCreateFailed", { error: String(e) }))
+    }
+  }
+
+  async function handleRestoreSnapshot(entry: BackupEntry) {
+    const proceed = await confirmDialog(
+      t("settings.autoSnapshotsRestoreConfirm", {
+        name: entry.name,
+        createdAt: new Date(entry.created_at).toLocaleString(),
+      }),
+      true,
+    )
+    if (!proceed) return
+
+    setSnapshotStatus(t("settings.autoSnapshotsRestoring", { name: entry.name }))
+    try {
+      const response = await restoreBackup.mutateAsync(entry.name)
+      setSnapshotStatus(
+        t("settings.autoSnapshotsRestored", { name: entry.name, safety: response.safety }),
+      )
+    } catch (e) {
+      setSnapshotStatus(t("settings.autoSnapshotsRestoreFailed", { error: String(e) }))
+    }
+  }
+
+  /** Restoring only re-creates records, so no confirmation — only "restore all" (many at once) asks. */
+  async function handleRestoreDeletion(entry: DeletionEntry) {
+    setDeletionStatus(t("settings.recentDeletionsRestoring", { title: entry.title }))
+    try {
+      const response = await restoreDeletion.mutateAsync(entry.id)
+      setDeletionStatus(
+        response.file_missing
+          ? t("settings.recentDeletionsRestoredFileMissing", { title: entry.title })
+          : t("settings.recentDeletionsRestored", { title: entry.title }),
+      )
+    } catch (e) {
+      setDeletionStatus(
+        t("settings.recentDeletionsRestoreFailed", { title: entry.title, error: String(e) }),
+      )
+    }
+  }
+
+  async function handleRestoreAllDeletions() {
+    const proceed = await confirmDialog(t("settings.recentDeletionsRestoreAllConfirm"), true)
+    if (!proceed) return
+
+    setDeletionStatus(t("settings.recentDeletionsRestoringAll"))
+    try {
+      const response = await restoreAllDeletions.mutateAsync()
+      setDeletionStatus(
+        t("settings.recentDeletionsRestoredAll", {
+          restored: response.restored,
+          skipped: response.skipped,
+          missing: response.missing_files,
+          failed: response.failed,
+        }),
+      )
+    } catch (e) {
+      setDeletionStatus(t("settings.recentDeletionsRestoreAllFailed", { error: String(e) }))
     }
   }
 
@@ -248,6 +343,229 @@ export function Backup() {
           ))}
         </div>
       )}
+
+      <hr style={{ margin: "30px auto", width: "60%" }} />
+
+      <h3>{t("settings.autoSnapshotsTitle")}</h3>
+      <span
+        style={{
+          display: "block",
+          margin: "0 auto 16px",
+          fontSize: FONT_SIZE_SM,
+          width: "80%",
+          textAlign: "center",
+        }}
+      >
+        {t("settings.autoSnapshotsDescription")}
+      </span>
+
+      <Button
+        disabled={createBackup.isPending}
+        style={{ minHeight: 34, padding: "4px 16px" }}
+        onClick={() => void handleCreateSnapshot()}
+      >
+        {t("settings.autoSnapshotsCreateNow")}
+      </Button>
+
+      {backupsQuery.data && (
+        <span
+          style={{
+            display: "block",
+            margin: "12px auto 0",
+            fontSize: FONT_SIZE_SM,
+            opacity: 0.7,
+          }}
+        >
+          {t("settings.autoSnapshotsRetention", {
+            daily: backupsQuery.data.daily_keep,
+            weekly: backupsQuery.data.week_keep,
+          })}
+        </span>
+      )}
+
+      {backupsQuery.isLoading && (
+        <span style={{ display: "block", marginTop: 12, fontSize: FONT_SIZE_SM, opacity: 0.7 }}>
+          {t("settings.autoSnapshotsLoading")}
+        </span>
+      )}
+      {backupsQuery.isError && (
+        <span style={{ display: "block", marginTop: 12, fontSize: FONT_SIZE_SM }}>
+          {t("settings.autoSnapshotsError", { error: String(backupsQuery.error) })}
+        </span>
+      )}
+      {backupsQuery.data && backupsQuery.data.entries.length === 0 && (
+        <span style={{ display: "block", marginTop: 12, fontSize: FONT_SIZE_SM, opacity: 0.7 }}>
+          {t("settings.autoSnapshotsEmpty")}
+        </span>
+      )}
+
+      {backupsQuery.data && backupsQuery.data.entries.length > 0 && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "auto auto auto auto auto auto",
+            columnGap: 20,
+            rowGap: 4,
+            margin: "16px auto 0",
+            width: "fit-content",
+            fontSize: FONT_SIZE_SM,
+            textAlign: "left",
+            alignItems: "center",
+          }}
+        >
+          <span style={{ fontWeight: "bold" }}>{t("settings.autoSnapshotsName")}</span>
+          <span style={{ fontWeight: "bold" }}>{t("settings.autoSnapshotsReason")}</span>
+          <span style={{ fontWeight: "bold" }}>{t("settings.autoSnapshotsSize")}</span>
+          <span style={{ fontWeight: "bold" }}>{t("settings.autoSnapshotsCreatedAt")}</span>
+          <span />
+          <span />
+          {backupsQuery.data.entries.map((entry) => (
+            <Fragment key={entry.name}>
+              <span>{entry.name}</span>
+              <span>{reasonLabel(entry.reason)}</span>
+              <span>{formatBytes(entry.size_bytes)}</span>
+              <span>{new Date(entry.created_at).toLocaleString()}</span>
+              {/* A real link, so the browser downloads the file itself (and can save/open it in a
+                  new tab) instead of the page buffering it through fetch. */}
+              <a
+                href={`/api/backups/${encodeURIComponent(entry.name)}`}
+                download={entry.name}
+                title={t("settings.autoSnapshotsDownload")}
+                aria-label={t("settings.autoSnapshotsDownload")}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 24,
+                  height: 18,
+                }}
+              >
+                <i className="fa fa-download" aria-hidden="true" />
+              </a>
+              <span style={{ whiteSpace: "nowrap" }}>
+                <Button
+                  disabled={!entry.usable || restoreBackup.isPending}
+                  title={entry.usable ? undefined : t("settings.autoSnapshotsUnusable")}
+                  style={{ minHeight: 24, padding: "2px 10px", fontSize: FONT_SIZE_SM }}
+                  onClick={() => void handleRestoreSnapshot(entry)}
+                >
+                  {t("settings.autoSnapshotsRestore")}
+                </Button>
+              </span>
+            </Fragment>
+          ))}
+        </div>
+      )}
+
+      <h3 style={{ marginTop: 16 }}>{snapshotStatus}</h3>
+
+      <hr style={{ margin: "30px auto", width: "60%" }} />
+
+      <h3>{t("settings.recentDeletionsTitle")}</h3>
+      <span
+        style={{
+          display: "block",
+          margin: "0 auto 16px",
+          fontSize: FONT_SIZE_SM,
+          width: "80%",
+          textAlign: "center",
+        }}
+      >
+        {t("settings.recentDeletionsDescription")}
+      </span>
+
+      <Button
+        disabled={
+          restoreAllDeletions.isPending ||
+          !deletionsQuery.data ||
+          deletionsQuery.data.entries.length === 0
+        }
+        style={{ minHeight: 34, padding: "4px 16px" }}
+        onClick={() => void handleRestoreAllDeletions()}
+      >
+        {t("settings.recentDeletionsRestoreAll")}
+      </Button>
+
+      {deletionsQuery.data && (
+        <span
+          style={{
+            display: "block",
+            margin: "12px auto 0",
+            fontSize: FONT_SIZE_SM,
+            opacity: 0.7,
+          }}
+        >
+          {t("settings.recentDeletionsRetention", { days: deletionsQuery.data.retention_days })}
+        </span>
+      )}
+
+      {deletionsQuery.isLoading && (
+        <span style={{ display: "block", marginTop: 12, fontSize: FONT_SIZE_SM, opacity: 0.7 }}>
+          {t("settings.recentDeletionsLoading")}
+        </span>
+      )}
+      {deletionsQuery.isError && (
+        <span style={{ display: "block", marginTop: 12, fontSize: FONT_SIZE_SM }}>
+          {t("settings.recentDeletionsError", { error: String(deletionsQuery.error) })}
+        </span>
+      )}
+      {deletionsQuery.data && deletionsQuery.data.entries.length === 0 && (
+        <span style={{ display: "block", marginTop: 12, fontSize: FONT_SIZE_SM, opacity: 0.7 }}>
+          {t("settings.recentDeletionsEmpty")}
+        </span>
+      )}
+
+      {deletionsQuery.data && deletionsQuery.data.entries.length > 0 && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "auto auto auto auto",
+            columnGap: 20,
+            rowGap: 4,
+            margin: "16px auto 0",
+            width: "fit-content",
+            fontSize: FONT_SIZE_SM,
+            textAlign: "left",
+            alignItems: "center",
+          }}
+        >
+          <span style={{ fontWeight: "bold" }}>{t("settings.recentDeletionsTitleColumn")}</span>
+          <span style={{ fontWeight: "bold" }}>{t("settings.recentDeletionsDeletedAt")}</span>
+          <span style={{ fontWeight: "bold" }}>{t("settings.recentDeletionsSource")}</span>
+          <span />
+          {deletionsQuery.data.entries.map((entry) => (
+            <Fragment key={entry.id}>
+              <span
+                title={entry.title}
+                style={{
+                  maxWidth: 320,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {entry.title}
+              </span>
+              <span>{new Date(entry.deleted_at).toLocaleString()}</span>
+              <span>{sourceLabel(entry.source)}</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Button
+                  disabled={restoreDeletion.isPending}
+                  style={{ minHeight: 24, padding: "2px 10px", fontSize: FONT_SIZE_SM }}
+                  onClick={() => void handleRestoreDeletion(entry)}
+                >
+                  {t("settings.recentDeletionsRestore")}
+                </Button>
+                {!entry.file_exists && (
+                  <span style={{ opacity: 0.7 }}>{t("settings.recentDeletionsFileMissing")}</span>
+                )}
+              </span>
+            </Fragment>
+          ))}
+        </div>
+      )}
+
+      <h3 style={{ marginTop: 16 }}>{deletionStatus}</h3>
 
       <div style={{ marginTop: 30 }}>
         <Button onClick={() => navigate(routes.library())}>{t("common.returnToLibrary")}</Button>

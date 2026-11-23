@@ -1819,3 +1819,74 @@ export interface IntegrityScanStatus {
   last_run: { finished_at: number; checked: number; damaged: number; cancelled: boolean } | null
   archives: DamagedArchive[]
 }
+
+// --- specs/028 deletion safety net: automatic snapshots & deletion journal ----------------
+
+/** One snapshot file under `<library>/.lanrurugi-backups/` (`GET /api/backups`), newest first.
+ *  `usable: false` means the file exists but isn't a parseable backup document. */
+export interface BackupEntry {
+  name: string
+  created_at: string
+  reason: string
+  size_bytes: number
+  usable: boolean
+}
+
+export interface BackupsResponse {
+  operation: string
+  success: number
+  daily_keep: number
+  week_keep: number
+  entries: BackupEntry[]
+}
+
+export interface CreateBackupResponse {
+  operation: string
+  success: number
+  entry: BackupEntry
+}
+
+export interface RestoreBackupResponse {
+  operation: string
+  success: number
+  restored_from: string
+  /** The `pre-restore` snapshot taken before this restore ran. */
+  safety: string
+}
+
+/** One journal entry that can still be restored (`GET /api/deletions`). */
+export interface DeletionEntry {
+  id: string
+  title: string
+  deleted_at: string
+  /** What removed the record: `clean` | `single` | `superseded` | `split` | `other`. */
+  source: string
+  path: string
+  /** A `stat` at read time — false means restoring leaves the record without its file. */
+  file_exists: boolean
+}
+
+export interface DeletionsResponse {
+  operation: string
+  success: number
+  retention_days: number
+  total: number
+  entries: DeletionEntry[]
+}
+
+export interface RestoreDeletionResponse {
+  operation: string
+  success: number
+  id: string
+  restored: number
+  file_missing: boolean
+}
+
+export interface RestoreAllDeletionsResponse {
+  operation: string
+  success: number
+  restored: number
+  skipped: number
+  missing_files: number
+  failed: number
+}
