@@ -90,7 +90,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
     gID = match[1];
     gToken = match[2];
     logger.debug(`Skipping search and using gallery ${gID} / ${gToken} from oneshot args`);
-  } else if ((match = lrr_info["existing_tags"].match(/.*source:\s*(?:https?:\/\/)?e(?:x|-)hentai\.org\/g\/([0-9]*)\/([0-z]*)\/*.*/gi))) {
+  } else if ((match = lrr_info["existing_tags"].match(/.*source:\s*(?:https?:\/\/)?e(?:x|-)hentai\.org\/g\/([0-9]*)\/([0-z]*)\/*.*/i))) {
     gID = match[1];
     gToken = match[2];
     hasSrc = 1;
@@ -134,7 +134,7 @@ async function lookup_gallery(title: any, tags: any, thumbhash: any, ua: any, do
       return [gId, gToken];
     }
   }
-  let [title_gid] = (match = title.match(/\[([0-9]+)\]/g));
+  let [, title_gid] = (match = title.match(/\[([0-9]+)\]/));
   if (search_gid && title_gid) {
     URL = domain + "?f_search=" + encodeURIComponent(`gid:${title_gid}`);
     logger.debug(`Found gID: ${title_gid}, Using URL ${URL} (gID from archive title)`);
@@ -145,7 +145,7 @@ async function lookup_gallery(title: any, tags: any, thumbhash: any, ua: any, do
   }
   URL = domain + "?advsearch=1&f_sfu=on&f_sft=on&f_sfl=on" + "&f_search=" + encodeURIComponent("\"" + title + "\"");
   let has_artist = 0;
-  if ((match = tags.match(/.*artist:\s?([^,]*),*.*/gi))) {
+  if ((match = tags.match(/.*artist:\s?([^,]*),*.*/i))) {
     let artist = match[1];
     if ((match = artist.match(/^[\x00-\x7F]*$/))) {
       URL = URL + "+" + encodeURIComponent(`artist:${artist}`);

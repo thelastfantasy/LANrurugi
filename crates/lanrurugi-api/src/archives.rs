@@ -3012,6 +3012,9 @@ async fn update_archive_metadata(
     // The values it replaced are read under the record's lock along with the change, so the tag
     // diff and the index updates below describe exactly this write.
     let mut before: Option<(String, String, String)> = None;
+    // Set when this edit brought in a `source:` tag the record did not carry as its primary source
+    // yet — the sidecar is written after the record write succeeds, never before.
+    let mut source_changed = false;
     let updated = state
         .repos
         .archives
@@ -3028,6 +3031,16 @@ async fn update_archive_metadata(
                 }
                 if let Some(tags) = params.tags {
                     archive.tags = tags;
+                    // A hand-typed (or plugin-supplied) `source:` tag is the archive's origin, and
+                    // the record's `primary_source` plus its sidecar copy are where a rebuild reads
+                    // that from. Removing the tag deliberately does *not* clear `primary_source`:
+                    // where an archive came from is history, not a live tag.
+                    if let Some(source) = crate::download_sources::source_tag_value(&archive.tags) {
+                        if archive.primary_source.as_deref() != Some(source.as_str()) {
+                            archive.primary_source = Some(source);
+                            source_changed = true;
+                        }
+                    }
                 }
                 if let Some(summary) = params.summary {
                     archive.summary = summary;
@@ -3061,6 +3074,10 @@ async fn update_archive_metadata(
                 .collect();
             let tags_added: Vec<&str> = new_tag_set.difference(&old_tag_set).copied().collect();
             let tags_removed: Vec<&str> = old_tag_set.difference(&new_tag_set).copied().collect();
+
+            if source_changed {
+                crate::download_sources::sync_sidecar_primary(&state, &archive).await;
+            }
 
             // A rating-only change (the Library page's right-click star widget's own write path,
             // `useLibrary.ts::updateRating`) rebuilds and resends the *entire* tags string just to
