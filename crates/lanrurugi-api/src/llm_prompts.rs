@@ -740,6 +740,22 @@ pub(crate) fn grouping_review_system() -> String {
         + library_data_rule()
 }
 
+/// Cross-group merge of grouping suggestions (see `tankoubon_grouping::merge`).
+///
+/// The input is clusters of suggestions that share a creator; the answer says which of them are the
+/// same series. Distinct from the per-group reviewer below: that one may only drop members of one
+/// group, which is why one series could arrive split across three cards with each card saying "same
+/// series" and nobody joining them up.
+pub(crate) fn grouping_merge_system() -> String {
+    "你是漫画/同人志书库的整理助手。系统用本地相似度把作品分成若干建议分组（准备建成单行本），\
+     但相似度是逐对判定的，同一系列可能被拆成几条建议。现在给你同一作者/社团名下的若干建议，\
+     你要指出哪些建议其实属于同一系列或同一作品，应该合并。\n\n     合并的判断：同一系列的连载各卷、续篇、同一作品的不同版本/不同话；同一合集的各期。\n     不要合并：同一作者但彼此无关的不同作品；只是题材、语言或通用标签相似；\
+     只是都带「中国翻訳」「DL版」「無修正」这类发布信息。拿不准就不要合并。\n\n     只输出 JSON 对象，不要输出其它文字：\n     {\"merges\":[[\"s1\",\"s4\"]]}\n     编号一律用输入里的 s<数字> 形式；每个数组至少两个编号；空行分隔的块之间不要合并；\
+     没有要合并的就输出 {\"merges\":[]}。\n\n"
+        .to_string()
+        + library_data_rule()
+}
+
 /// The duplicate reviewer: decide which copies to keep and which to drop.
 ///
 /// The input is numbers and text only (never images) — the local perceptual hash already decided
