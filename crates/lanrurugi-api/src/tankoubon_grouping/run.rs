@@ -548,6 +548,8 @@ async fn run_once(
     let hub_for_task = hub.clone();
     let handle_for_task = handle.clone();
     let task_ids = all_ids.clone();
+    // Kept for building the orphan list after the grouping task has consumed its own copy.
+    let all_ids_for_orphans = all_ids.clone();
     // `Arc` rather than a clone: 7k vectors of 1024 f32 is ~28 MB, and copies of that would be
     // both slower and a needless second peak. The maps stay readable here afterwards.
     let vectors_shared = Arc::new(vectors_by_id);
@@ -565,9 +567,30 @@ async fn run_once(
             .iter()
             .map(|(id, v)| (id.as_str(), v.as_slice()))
             .collect();
+        // Creator named only in the title (see `title_creator`): fed to the scorer as an `artist:`
+        // tag so the creator gate and tag overlap can see it, without rewriting the archive's tags
+        // (the review payload still shows the archive's own tags).
+        let derived_creators: HashMap<String, String> = tags_for_task
+            .iter()
+            .filter(|(_, tags)| {
+                !tags
+                    .split(',')
+                    .any(|tag| super::creator_value(tag.trim()).is_some())
+            })
+            .filter_map(|(id, _)| {
+                let title = titles_for_task.get(id)?;
+                super::title_creator(title).map(|creator| (id.clone(), format!("artist:{creator}")))
+            })
+            .collect();
         let tag_refs: HashMap<&str, HashSet<&str>> = tags_for_task
             .iter()
-            .map(|(id, t)| (id.as_str(), tag_set(t)))
+            .map(|(id, t)| {
+                let mut set = tag_set(t);
+                if let Some(creator) = derived_creators.get(id.as_str()) {
+                    set.insert(creator.as_str());
+                }
+                (id.as_str(), set)
+            })
             .collect();
         let token_refs: HashMap<&str, HashSet<&str>> = titles_for_task
             .iter()
@@ -601,6 +624,19 @@ async fn run_once(
     if handle.is_cancelled() {
         return Ok(None);
     }
+
+    // Works the graph left out entirely: they are in the candidate set but in no group, so they would
+    // never be suggested — and therefore never be merged either. `merge` offers them to the model as
+    // one-member candidates (see its own docs).
+    let grouped: HashSet<&str> = groups
+        .iter()
+        .flat_map(|(group, _, _)| group.iter().map(String::as_str))
+        .collect();
+    let orphans: Vec<String> = all_ids_for_orphans
+        .iter()
+        .filter(|id| !grouped.contains(id.as_str()))
+        .cloned()
+        .collect();
 
     // 5. Group -> suggestion shape. At most one existing-Tankoubon node per group, by
     // `tankoubon_pair_gate`'s own guarantee.
@@ -656,6 +692,18 @@ async fn run_once(
         "reviewed": false,
         "computed_at": computed_at,
     }));
+
+    // Cross-group merge before the reviews: a series the graph split into several suggestions should
+    // be one card by the time anything reviews it (see `merge`'s own docs).
+    let suggestions = super::merge::same_series(
+        state,
+        suggestions,
+        &orphans,
+        &titles_shared,
+        &tags_shared,
+        &settings,
+    )
+    .await;
 
     let enriched =
         enrich_suggestions(state, suggestions, &titles_shared, &tags_shared, &settings).await;
