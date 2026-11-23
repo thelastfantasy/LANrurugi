@@ -1982,6 +1982,11 @@ body:has([data-overlay="modal"]) {
 .ai-checkable-btn-toggle .fa-robot {
   position: absolute;
   inset: 0 0 0 10px;
+  /* Font Awesome 7 gives every `.fa` a fixed `1.25em` width. An absolutely positioned box that
+     already has a width ignores the `inset` stretch, so both glyphs below ended up in a small box at
+     the toggle's left instead of filling it — which put the check ~3px left of the circle's centre. */
+  width: auto;
+  height: auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1991,6 +1996,8 @@ body:has([data-overlay="modal"]) {
 .ai-checkable-btn-toggle-circle .fa-check {
   position: absolute;
   inset: 0;
+  width: auto;
+  height: auto;
   display: flex;
   align-items: center;
   justify-content: center;

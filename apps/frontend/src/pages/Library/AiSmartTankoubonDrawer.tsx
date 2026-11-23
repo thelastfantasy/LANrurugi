@@ -573,6 +573,55 @@ function SuggestionCard({
  *  score pairs (~20 s on a 6 000-archive library, measured on the NAS). The drawer body remounts on
  *  every open, so without this each open paid that again. A short client-side cache makes reopening
  *  instant; creating or ignoring a group drops it, and the explicit re-check button forces past it. */
+/** From this many suggestions on, the filter box appears: below it, paging is faster than typing. */
+const SEARCH_VISIBLE_FROM = 20
+
+/** Narrow the suggestion list by member title.
+ *
+ * The list is a pager, not a table, so this cannot hide rows the way a list filter would: it narrows
+ * what prev/next walk, and says how many of the whole run matched. */
+function SuggestionFilter({
+  value,
+  onChange,
+  matched,
+  total,
+}: {
+  value: string
+  onChange: (value: string) => void
+  matched: number
+  total: number
+}) {
+  const { t } = useTranslation()
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <i className="fa fa-magnifying-glass" aria-hidden="true" style={{ opacity: 0.6, fontSize: 12 }} />
+      <input
+        className="stdinput"
+        style={{ flex: 1, minWidth: 0 }}
+        value={value}
+        placeholder={t("library.aiGroupingSearchPlaceholder") ?? undefined}
+        aria-label={t("library.aiGroupingSearchPlaceholder") ?? undefined}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {value !== "" && (
+        <button
+          type="button"
+          className="stdbtn"
+          title={t("library.aiGroupingSearchClear") ?? undefined}
+          aria-label={t("library.aiGroupingSearchClear") ?? undefined}
+          onClick={() => onChange("")}
+          style={{ flexShrink: 0, minWidth: 28, padding: "0 6px" }}
+        >
+          <i className="fa fa-xmark" aria-hidden="true"></i>
+        </button>
+      )}
+      <span style={{ fontSize: 11, opacity: 0.6, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
+        {t("library.aiGroupingSearchMatched", { matched, total })}
+      </span>
+    </div>
+  )
+}
+
 /** Above this many suggestions the footer shows one compact pager instead of one dot per card. */
 const MAX_PAGE_DOTS = 20
 
@@ -739,14 +788,20 @@ function SuggestionsBody({
   const [dismissed, setDismissed] = useState<string[]>([])
   const [page, setPage] = useState(0)
   const [showIgnored, setShowIgnored] = useState(false)
+  // Hundreds of suggestions on a real library, so a text filter is the difference between paging
+  // through 1400 cards and finding the one group you already know you want.
+  const [filter, setFilter] = useState("")
 
   const tankoubons = useTankoubons()
   const ignoredSuggestions = useIgnoredGroupSuggestions(true)
 
-  const titleById = new Map<string, string>()
-  for (const a of archives.data ?? []) {
-    titleById.set(a.arcid, a.title)
-  }
+  const titleById = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const a of archives.data ?? []) {
+      map.set(a.arcid, a.title)
+    }
+    return map
+  }, [archives.data])
   const tankoubonNameById = new Map<string, string>()
   for (const tank of tankoubons.data?.result ?? []) {
     tankoubonNameById.set(tank.id, tank.name)
@@ -807,22 +862,36 @@ function SuggestionsBody({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiGroupState])
 
-  const current = suggestions?.[page]
+  // The list the pager walks: the same suggestions, narrowed by the filter box. `suggestions`
+  // stays the whole set so the header can still say how many of them matched.
+  const visible = useMemo(() => {
+    if (!suggestions) return null
+    const needle = filter.trim().toLowerCase()
+    if (!needle) return suggestions
+    return suggestions.filter((s) =>
+      s.archive_ids.some((id) => (titleById.get(id) ?? "").toLowerCase().includes(needle)),
+    )
+  }, [suggestions, filter, titleById])
+
   // On touch, a sideways drag anywhere in the body slides between suggestions (the drawer's own
   // swipe-to-close is off there while a page back exists); the body fills the drawer so short
   // cards leave no dead area.
-  const count = suggestions?.length ?? 0
-  const canPageBack = !showIgnored && count > 1 && page > 0
+  const count = visible?.length ?? 0
+  // The filter can shrink the list under an open page; clamping where the page is read keeps the
+  // card, the pager and the swipe offsets on one page without a state-syncing effect.
+  const safePage = Math.min(page, Math.max(0, count - 1))
+  const current = visible?.[safePage]
+  const canPageBack = !showIgnored && count > 1 && safePage > 0
   useEffect(() => {
     onCanPageBackChange(canPageBack)
   }, [canPageBack, onCanPageBackChange])
   // The next open starts on the first page.
   useEffect(() => () => onCanPageBackChange(false), [onCanPageBackChange])
-  const pager = useSwipePager({ page, count: showIgnored ? 0 : count, onPageChange: setPage })
+  const pager = useSwipePager({ page: safePage, count: showIgnored ? 0 : count, onPageChange: setPage })
   const { go } = pager
 
   useEffect(() => {
-    if (!suggestions || suggestions.length <= 1 || showIgnored) return
+    if (!visible || visible.length <= 1 || showIgnored) return
     function onKeyDown(e: KeyboardEvent) {
       if ((e.target as HTMLElement)?.tagName === "INPUT") return
       if (e.key === "ArrowLeft") go(-1)
@@ -830,10 +899,10 @@ function SuggestionsBody({
     }
     document.addEventListener("keydown", onKeyDown)
     return () => document.removeEventListener("keydown", onKeyDown)
-  }, [suggestions, showIgnored, go])
+  }, [visible, showIgnored, go])
   // Prefetch the next two reviews so paging forward rarely waits; the card reviews itself.
-  useGroupSuggestionReview(suggestions?.[page + 1], !showIgnored)
-  useGroupSuggestionReview(suggestions?.[page + 2], !showIgnored)
+  useGroupSuggestionReview(visible?.[safePage + 1], !showIgnored)
+  useGroupSuggestionReview(visible?.[safePage + 2], !showIgnored)
 
   return (
     <div
@@ -920,28 +989,41 @@ function SuggestionsBody({
               {t("library.aiGroupingRecheck")}
             </button>
           </div>
-        ) : current ? (
+        ) : (
           <>
-          <TopPager page={page} total={suggestions.length} onPrev={() => go(-1)} onNext={() => go(1)} />
-          {/* Clipped sideways only, so a taller neighbour is not cut to the current card's height. */}
+          <TopPager page={safePage} total={count} onPrev={() => go(-1)} onNext={() => go(1)} />
+          {suggestions.length > SEARCH_VISIBLE_FROM && (
+            <SuggestionFilter
+              value={filter}
+              onChange={(value) => {
+                // A new filter re-answers the question, so it starts from the first match.
+                setFilter(value)
+                setPage(0)
+              }}
+              matched={count}
+              total={suggestions.length}
+            />
+          )}
+          {current ? (
+          // Clipped sideways only, so a taller neighbour is not cut to the current card's height.
           <div style={{ overflowX: "clip" }}>
             <div ref={pager.trackRef} style={{ position: "relative" }}>
-              {[page - 1, page, page + 1].map((i) => {
-                const s = suggestions[i]
+              {[safePage - 1, safePage, safePage + 1].map((i) => {
+                const s = visible?.[i]
                 if (!s) return null
                 return (
-                  <div key={s.suggestion_id} style={pager.slotStyle(i)} inert={i !== page}>
+                  <div key={s.suggestion_id} style={pager.slotStyle(i)} inert={i !== safePage}>
                     <SuggestionCard
                       suggestion={s}
                       page={i}
-                      total={suggestions.length}
+                      total={count}
                       titleById={titleById}
                       tankoubonNameById={tankoubonNameById}
-                      preview={i !== page}
+                      preview={i !== safePage}
                       onJump={setPage}
                       onDismissed={() => {
                         setDismissed((prev) => [...prev, s.suggestion_id])
-                        setPage((p) => Math.max(0, Math.min(p, suggestions.length - 2)))
+                        setPage((p) => Math.max(0, Math.min(p, count - 2)))
                       }}
                     />
                   </div>
@@ -949,8 +1031,34 @@ function SuggestionsBody({
               })}
             </div>
           </div>
+          ) : (
+            // The filter is the only thing that can empty this list, so the way out is to clear it.
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 10,
+                padding: "32px 16px",
+                opacity: 0.85,
+              }}
+            >
+              <i className="fas fa-2x fa-magnifying-glass" aria-hidden="true" />
+              <div style={{ fontSize: 14 }}>{t("library.aiGroupingSearchNoMatch")}</div>
+              <button
+                type="button"
+                className="stdbtn"
+                onClick={() => {
+                  setFilter("")
+                  setPage(0)
+                }}
+              >
+                {t("library.aiGroupingSearchClear")}
+              </button>
+            </div>
+          )}
           </>
-        ) : null}
+        )}
 
         {ignoredSuggestions.data && ignoredSuggestions.data.ignored.length > 0 && (
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.8, alignSelf: "flex-start" }}>
