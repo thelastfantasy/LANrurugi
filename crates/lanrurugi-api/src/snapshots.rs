@@ -31,6 +31,10 @@ use lanrurugi_storage::paths::snapshot_dir;
 
 /// How many `pre-*` snapshots survive retention, independent of the daily/weekly tiers.
 pub const PRE_KEEP: usize = 5;
+/// User-requested snapshots ("立即生成快照") have no time window either, so they get their own
+/// count cap. Without it they would accumulate forever: the sweep only knows the reasons it is
+/// told about, and everything else used to fall through to "keep".
+pub const MANUAL_KEEP: usize = 5;
 const NAME_LEN: usize = 16; // yyyymmddThhmmssZ
 const USABLE_PROBE_BYTES: u64 = 4096;
 
@@ -214,6 +218,7 @@ pub fn retention_plan(
     let mut day_seen: Vec<String> = Vec::new();
     let mut week_seen: Vec<(i32, u32)> = Vec::new();
     let mut pre_seen = 0usize;
+    let mut manual_seen = 0usize;
     for entry in &sorted {
         let Some((created, _)) = parse_name(&entry.name) else {
             continue;
@@ -248,6 +253,15 @@ pub fn retention_plan(
                     victims.push(entry.name.clone());
                 }
             }
+            "manual" => {
+                if manual_seen < MANUAL_KEEP {
+                    manual_seen += 1;
+                } else {
+                    victims.push(entry.name.clone());
+                }
+            }
+            // An unknown reason is left alone on purpose: a newer version may have written it, and
+            // deleting files this version does not understand is worse than keeping them.
             _ => {}
         }
     }
@@ -720,6 +734,25 @@ mod tests {
         assert_eq!(removed_weekly, 2, "6 weekly -> 4 kept");
         assert_eq!(removed_pre, 3, "8 pre -> 5 kept");
         assert!(!victims.contains(&"20261110T050000Z-daily.json".to_string()));
+    }
+
+    #[test]
+    fn retention_caps_manual_snapshots_too() {
+        // "立即生成快照" has no time window, so only a count cap bounds it; without one these
+        // accumulate forever and the total snapshot budget is unbounded.
+        let entries: Vec<SnapshotEntry> = (1..=8)
+            .map(|d| SnapshotEntry {
+                name: format!("202611{d:02}T050000Z-manual.json"),
+                created_at: format!("2026-11-{d:02}T05:00:00Z"),
+                reason: "manual".to_string(),
+                size_bytes: 1,
+                usable: true,
+            })
+            .collect();
+        let victims = retention_plan(&entries, 7, 4);
+        let removed_manual = victims.iter().filter(|n| n.contains("manual")).count();
+        assert_eq!(removed_manual, 3, "8 manual -> 5 kept");
+        assert!(!victims.contains(&"20261108T050000Z-manual.json".to_string()));
     }
 
     #[test]
