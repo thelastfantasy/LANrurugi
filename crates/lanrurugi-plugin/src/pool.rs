@@ -361,11 +361,24 @@ struct TransientWorker {
     _slot: tokio::sync::OwnedSemaphorePermit,
 }
 
+/// The persistent worker for one namespace, behind its own lock.
+///
+/// `worker` is `None` before the first call, after the plugin file changed, and after a failed
+/// call — in all three cases the next call spawns a fresh process while holding this slot's lock,
+/// so a cold start of one plugin never blocks a call into another.
+struct WorkerSlot {
+    worker: Option<Worker>,
+}
+
 pub struct PluginPool {
     deno_binary: String,
     dispatcher_path: PathBuf,
     plugins_dir: PathBuf,
-    workers: Arc<Mutex<HashMap<String, Worker>>>,
+    /// One lock per namespace, so a call into plugin A never waits behind plugin B's network I/O
+    /// (a metadata fetch can take seconds). Calls into the *same* plugin still serialize — that is
+    /// what keeps it at one process — but the map lock itself is only taken to find the slot.
+    workers: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<WorkerSlot>>>>>,
+
     /// Slots for throwaway declaration/introspection workers, so discovering a whole library at
     /// once cannot boot more Deno processes than [`worker_limit`] at a time.
     transient_slots: Arc<tokio::sync::Semaphore>,
@@ -419,9 +432,9 @@ impl PluginPool {
         // that may be in the middle of a login, a metadata fetch or `execDownload`. New calls
         // already go to a freshly spawned worker; the old ones only have to be stopped once their
         // current call answers, so an interface change no longer fails work in flight.
-        let drained: Vec<Worker> = {
+        let drained: Vec<Arc<tokio::sync::Mutex<WorkerSlot>>> = {
             let mut map = self.workers.lock().await;
-            map.drain().map(|(_, worker)| worker).collect()
+            map.drain().map(|(_, slot)| slot).collect()
         };
         if drained.is_empty() {
             return;
@@ -431,14 +444,14 @@ impl PluginPool {
             let mut left = drained;
             while !left.is_empty() && std::time::Instant::now() < deadline {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                // `pending` is only held while the worker has requests in flight, so an unlockable
-                // or empty map means the call it was serving has finished.
-                left.retain(|worker| {
-                    !worker
-                        .pending
-                        .try_lock()
-                        .map(|pending| pending.is_empty())
-                        .unwrap_or(false)
+                // Taking a drained slot's own lock proves no call is in flight on it (a call holds
+                // that lock from spawn through answer), so its process can be stopped now.
+                left.retain(|slot| match slot.try_lock() {
+                    Ok(mut slot) => {
+                        slot.worker = None;
+                        false
+                    }
+                    Err(_) => true,
                 });
             }
             if !left.is_empty() {
@@ -736,6 +749,10 @@ impl PluginPool {
     /// Executes `method` against `namespace`'s persistent worker, starting it (with exactly its
     /// declared permissions) on first use, and respawning it if the plugin file's `mtime` has
     /// advanced since (a running worker never reloads its module on its own).
+    ///
+    /// Only this namespace's slot is locked for the call's duration, so a slow plugin cannot delay
+    /// any other plugin's calls — callers into the *same* plugin queue in arrival order, which is
+    /// what keeps that plugin at exactly one process.
     pub async fn execute(
         &self,
         namespace: &str,
@@ -745,20 +762,21 @@ impl PluginPool {
         if !is_safe_namespace(namespace) {
             return Err(PoolError::NotFound(namespace.to_string()));
         }
-        let mut workers = self.workers.lock().await;
+        let slot = self.worker_slot(namespace).await;
+        let mut slot = slot.lock().await;
 
         // A stat failure here just means the freshness check is skipped this time — the real
         // request below will surface whatever's actually wrong.
         let current_mtime = plugin_mtime(&self.plugins_dir.join(format!("{namespace}.ts"))).ok();
-        let stale = match (workers.get(namespace), current_mtime) {
+        let stale = match (slot.worker.as_ref(), current_mtime) {
             (Some(worker), Some(current)) => current > worker.mtime,
             _ => false,
         };
         if stale {
-            workers.remove(namespace);
+            slot.worker = None;
         }
 
-        if !workers.contains_key(namespace) {
+        if slot.worker.is_none() {
             let info = self.plugin_info(namespace).await?;
             let flags = build_flags(&info.declared_permissions);
             let worker = Worker::spawn(
@@ -774,21 +792,29 @@ impl PluginPool {
                 },
             )
             .await?;
-            workers.insert(namespace.to_string(), worker);
+            slot.worker = Some(worker);
         }
 
-        let worker = workers
-            .get_mut(namespace)
-            .expect("just inserted or present");
+        let worker = slot.worker.as_mut().expect("just spawned or present");
         let result = worker.call(namespace, method, args).await;
 
         // Failure isolation: drop this plugin's worker on any error so the next call gets a
         // fresh process, without touching any other plugin's worker or in-flight request.
         if result.is_err() {
-            workers.remove(namespace);
+            slot.worker = None;
         }
 
         response_to_result(result?)
+    }
+
+    /// This namespace's slot, created empty on first use. The map lock is held only across the
+    /// lookup/insert, never across a call.
+    async fn worker_slot(&self, namespace: &str) -> Arc<tokio::sync::Mutex<WorkerSlot>> {
+        let mut workers = self.workers.lock().await;
+        workers
+            .entry(namespace.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(WorkerSlot { worker: None })))
+            .clone()
     }
 }
 
@@ -919,6 +945,17 @@ mod tests {
                 "export function pluginInfo() {\n  throw new Error(\"broken on purpose\");\n}\n",
             )
             .expect("write scratch plugin");
+        }
+
+        /// Well-formed declaration plus one metadata method that sits on a timer — a stand-in for
+        /// the site round trip a real plugin spends its call in, so "did these overlap" is
+        /// observable as elapsed time.
+        fn declare_sleeping(&self, sleep_ms: u64) {
+            let source = format!(
+                "export function pluginInfo() {{\n  return {{\n    namespace: \"{}\",\n    type: \"metadata\",\n    parameters: [],\n    declared_permissions: {{ net: [], read: false, write: false }},\n    name: \"t\",\n    author: \"t\",\n    description: \"t\",\n    version: \"1\",\n  }};\n}}\nexport async function execMetadata() {{\n  await new Promise((resolve) => setTimeout(resolve, {sleep_ms}));\n  return {{ title: \"x\" }};\n}}\n",
+                self.namespace
+            );
+            std::fs::write(self.module(), source).expect("write scratch plugin");
         }
     }
 
@@ -1077,6 +1114,71 @@ mod tests {
         // The timed-out attempt and the successful one both have to hand their slot back, or the
         // next library-wide discover would stall behind a phantom holder.
         assert_eq!(pool.transient_slots.available_permits(), limit);
+    }
+
+    /// FR-015: two plugins waiting on their own sites must wait at the same time, not one after the
+    /// other — the global worker-map lock used to make the second call queue behind the first.
+    #[tokio::test]
+    async fn two_plugins_slow_methods_run_at_the_same_time() {
+        let (Some(first), Some(second)) = (
+            Scratch::new("parallel-plugin-a"),
+            Scratch::new("parallel-plugin-b"),
+        ) else {
+            eprintln!("skipping: deno not found on PATH");
+            return;
+        };
+        const SLEEP_MS: u64 = 150;
+        first.declare_sleeping(SLEEP_MS);
+        second.declare_sleeping(SLEEP_MS);
+        // One pool with both plugins in it, like a real installation.
+        let pool = PluginPool::new("deno", first.dispatcher.clone(), first.dir.clone());
+        std::fs::copy(second.module(), first.dir.join("parallel-plugin-b.ts"))
+            .expect("copy the second scratch plugin next to the first");
+
+        let started = std::time::Instant::now();
+        let (a, b) = tokio::join!(
+            pool.execute(&first.namespace, "exec_metadata", serde_json::json!({})),
+            pool.execute("parallel-plugin-b", "exec_metadata", serde_json::json!({})),
+        );
+        let elapsed = started.elapsed();
+        a.expect("first plugin answered");
+        b.expect("second plugin answered");
+        assert!(
+            elapsed < std::time::Duration::from_millis(SLEEP_MS * 2),
+            "two plugins must not queue behind each other, took {elapsed:?}"
+        );
+        assert_eq!(pool.workers.lock().await.len(), 2);
+    }
+
+    /// The other half of FR-015: the *same* plugin still answers one call at a time from one
+    /// process, so its calls queue in arrival order rather than racing inside one dispatcher.
+    #[tokio::test]
+    async fn one_plugin_still_answers_its_calls_one_at_a_time() {
+        let Some(scratch) = Scratch::new("serialized-plugin") else {
+            eprintln!("skipping: deno not found on PATH");
+            return;
+        };
+        const SLEEP_MS: u64 = 150;
+        scratch.declare_sleeping(SLEEP_MS);
+        let pool = scratch.pool();
+
+        let started = std::time::Instant::now();
+        let (a, b) = tokio::join!(
+            pool.execute(&scratch.namespace, "exec_metadata", serde_json::json!({})),
+            pool.execute(&scratch.namespace, "exec_metadata", serde_json::json!({})),
+        );
+        let elapsed = started.elapsed();
+        a.expect("first call answered");
+        b.expect("second call answered");
+        assert!(
+            elapsed >= std::time::Duration::from_millis(SLEEP_MS * 2),
+            "calls into one plugin must not overlap, took {elapsed:?}"
+        );
+        assert_eq!(
+            pool.workers.lock().await.len(),
+            1,
+            "one namespace stays one process however many calls arrive"
+        );
     }
 
     #[tokio::test]

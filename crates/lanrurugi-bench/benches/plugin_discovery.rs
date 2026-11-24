@@ -1,10 +1,13 @@
-//! [029] microbenchmarks: what a plugin declaration read costs, and what recording a job phase
-//! costs. The first is the number the descriptor cache is supposed to remove from every plugin
-//! call; the second exists to show the new timing instrumentation is noise next to it.
+//! [029] microbenchmarks: what a plugin declaration read costs, what recording a job phase costs,
+//! and whether two different plugins can talk to their sites at the same time. The first is the
+//! number the descriptor cache is supposed to remove from every plugin call; the second exists to
+//! show the new timing instrumentation is noise next to it; the third is the number the
+//! per-namespace worker lock is supposed to fix (a global one serialized every plugin in the
+//! process behind whichever was waiting on a site).
 //!
-//! Both run against a real `deno` process with a scratch plugin, because that spawn *is* the cost
-//! being measured — a mock would measure nothing. Without `deno` on `PATH` the benchmarks print a
-//! skip line and return, so the target stays runnable anywhere.
+//! All of them run against a real `deno` process with a scratch plugin, because that spawn *is*
+//! the cost being measured — a mock would measure nothing. Without `deno` on `PATH` the benchmarks
+//! print a skip line and return, so the target stays runnable anywhere.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -159,5 +162,86 @@ fn bench_phase_recording(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(plugin_discovery, bench_descriptor, bench_phase_recording);
+/// A plugin that declares one metadata method which sits on a timer. The timer stands in for the
+/// site round trip a real metadata plugin spends its time in — what matters here is only that the
+/// call is *waiting*, so whether another plugin's call can proceed meanwhile is visible as time.
+fn write_sleepy_plugin(path: &Path, namespace: &str, sleep_ms: u64) {
+    std::fs::write(
+        path,
+        format!(
+            "export function pluginInfo() {{\n  return {{\n    namespace: \"{namespace}\",\n    type: \"metadata\",\n    parameters: [],\n    declared_permissions: {{ net: [], read: false, write: false }},\n    name: \"{namespace}\",\n    author: \"t\",\n    description: \"t\",\n    version: \"1\",\n  }};\n}}\nexport async function execMetadata() {{\n  await new Promise((resolve) => setTimeout(resolve, {sleep_ms}));\n  return {{ title: \"x\" }};\n}}\n"
+        ),
+    )
+    .expect("write sleepy plugin");
+}
+
+fn bench_cross_plugin_concurrency(c: &mut Criterion) {
+    let Some(scratch) = Scratch::new() else {
+        eprintln!("skipping plugin_call_concurrency: deno not found on PATH");
+        return;
+    };
+    const SLEEP_MS: u64 = 25;
+    const A: &str = "metadata/bench-a";
+    const B: &str = "metadata/bench-b";
+    for namespace in [A, B] {
+        let path = scratch.dir.join(format!("{namespace}.ts"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        write_sleepy_plugin(&path, namespace, SLEEP_MS);
+    }
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let pool = scratch.pool();
+    // Warm both workers up outside the measurement: the spawn is the other benchmark's subject.
+    rt.block_on(async {
+        pool.execute(A, "exec_metadata", serde_json::json!({}))
+            .await
+            .unwrap();
+        pool.execute(B, "exec_metadata", serde_json::json!({}))
+            .await
+            .unwrap();
+    });
+
+    let mut group = c.benchmark_group("plugin_call_concurrency");
+    group
+        .sample_size(10)
+        .warm_up_time(Duration::from_secs(1))
+        .measurement_time(Duration::from_secs(10));
+
+    // The baseline the global lock used to impose on *every* pair of calls, whatever plugins they
+    // belonged to: the second call cannot start until the first answers.
+    group.bench_function("two_plugins_one_after_the_other", |b| {
+        b.iter(|| {
+            rt.block_on(async {
+                pool.execute(A, "exec_metadata", serde_json::json!({}))
+                    .await
+                    .unwrap();
+                pool.execute(B, "exec_metadata", serde_json::json!({}))
+                    .await
+                    .unwrap();
+            });
+        });
+    });
+
+    group.bench_function("two_plugins_at_the_same_time", |b| {
+        b.iter(|| {
+            rt.block_on(async {
+                let (first, second) = tokio::join!(
+                    pool.execute(A, "exec_metadata", serde_json::json!({})),
+                    pool.execute(B, "exec_metadata", serde_json::json!({})),
+                );
+                first.unwrap();
+                second.unwrap();
+            });
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    plugin_discovery,
+    bench_descriptor,
+    bench_phase_recording,
+    bench_cross_plugin_concurrency
+);
 criterion_main!(plugin_discovery);

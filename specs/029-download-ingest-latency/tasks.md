@@ -165,6 +165,10 @@ Rust workspace（`crates/*`）+ 前端（`apps/frontend`）+ 插件（`plugins/`
 - [ ] T035 跑 quickstart 场景 9（NAS beta 整批对照，需真实负载与用户配合），记录聚合吞吐与入库段 p95 对比。
 - [x] T036 填 Implementation Record：每条 SC 的实测值、与基线的对比、未验证项（视觉确认归用户）。
 - [x] T037 收尾加固（用户 2026-11-25 追问“一大批同时下载会不会起一堆 Deno 进程”时补的）：给“读声明/自省”这类临时 Deno 进程加自动上限（`lanrurugi_plugin::pool::worker_limit()`，核数/2 夹在 2–8），常驻 worker 不淘汰；新增两个测试（上限边界、槽位被占满时读取会等待且事后归还）。
+- [x] T038 收尾加固（用户 2026-11-25 要求“下载全流程能合并的步骤都优化”时补的，对应 spec 的 FR-015）：
+  - ① `crates/lanrurugi-plugin/src/pool.rs` 的 `execute` 原先持整张 worker 表的全局锁直到调用返回，等于“A 插件在等站点响应时，B 插件的所有调用都在排队”；改为 `workers: Mutex<HashMap<String, Arc<tokio::sync::Mutex<WorkerSlot>>>>`，表锁只在取/插槽位时持有，`WorkerSlot { worker: Option<Worker> }` 在**槽锁内**做 mtime 新鲜度检查、冷启与调用失败后的丢弃。同一插件仍严格串行、仍是一个进程；`restart_workers` 改为按槽等待（能拿到槽锁就说明没有在飞调用）后才停进程。
+  - ② `crates/lanrurugi-api/src/plugins.rs` 的元数据链去重：每次入库的 `LRR_CONFIG` 由“每插件 2 次 `HGETALL`”降为整轮 1 次（`PluginRunConfig` + `relevant_settings`/`tag_rules_text` 两个纯函数复用），`file_modified_time` 由“每插件一次 `std::fs::metadata`”降为整轮 1 次（它是档案属性，不是插件属性）。
+  - 新增两个测试把 FR-015 的两半都钉住：不同插件计时方法并发执行、耗时小于两倍睡眠；同一插件的两次并发调用仍串行（耗时 ≥ 两倍睡眠）且 worker 表只有 1 项。
 
 ---
 
@@ -305,7 +309,17 @@ Task: "T031 单测 in crates/lanrurugi-scanner/src/pipeline.rs"
 
 按基线的一次入库 34 次发现折算：14.30 ms × 34 ≈ 486 ms 的纯进程启动时间 → 1.85 µs × 34 ≈ 63 µs，稳态 0 次启动（SC-003 的"34 → 0"由 `pool::tests` 的两个用例同时证明：同一插件二次读取 `fetched_at` 不变、8 个并发读只加载一次）。62 条批量按 2 100 次启动折算 ≈ 30 s 的纯启动时间。
 
-注意这几条是**插件发现**的独立开销，不等于端到端的入库 p50/p95——后者还受网络、解码与索引影响，仍待 NAS 实测。
+跨插件并发（T038 的锁粒度改造，`mise run bench -- plugin_call_concurrency`，两个各睡眠 25 ms 的插件）：
+
+| 场景 | 改动前（全局锁） | 改动后（按插件加锁） |
+| --- | --- | --- |
+| 两个插件先后调用 | 52.97 ms | 52.82 ms |
+| 两个插件**同时**调用 | 52.81 ms（第二个在等第一个） | 26.40 ms |
+| 同时调用的收益 | — | **2.00×**（52.81 → 26.40 ms） |
+
+改动前的 `同时调用` 与 `先后调用` 都是 52.8 ms —— 这就是"全局锁"的证据：并发写法拿到串行结果。改动后 `同时调用` 降到一条调用的耗时（26.4 ms），说明第二个插件不再等第一个答完；同一插件的串行语义由新测试 `one_plugin_still_answers_its_calls_one_at_a_time` 钉住（耗时 ≥ 两倍睡眠、worker 表仍只有 1 项）。折算到真实场景：一个元数据插件的站点往返按 1 s 计，改动前另一个插件的调用要白等 1 s，改动后只等自己的。
+
+注意这几条是**插件发现 / 插件调用调度**的独立开销，不等于端到端的入库 p50/p95——后者还受网络、解码与索引影响，仍待 NAS 实测。
 
 未实测（需要真实部署 / 真实负载，留给部署验证）：
 
