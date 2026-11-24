@@ -291,6 +291,20 @@ Task: "T031 单测 in crates/lanrurugi-scanner/src/pipeline.rs"
 - 前端：`tests/unit/queuePhases.test.ts` 9 passed、`tests/unit/queueRowStats.test.tsx` 12 passed（3 个新用例覆盖完整五段、无 `phases` 回退、传输中未闭合 ingest）。`npx tsc -b`、`npx eslint`（改动文件）通过。
 - 门禁：`mise run clippy`（workspace，`-D warnings`）通过；`mise run check`（lefthook pre-push：rust-check 32.56 s + frontend-lint 34.69 s）通过；`mise run docs-api -- --check` 通过（`document: 269 path(s), 343 operation(s)`，`--check: gates passed, nothing written.`），确认 `docs/api/sidecar/_shared.yaml` 的 `phases` 增补与路由表一致。
 
+基准测试（`mise run bench -- plugin_descriptor` / `-- job_phase`，`crates/lanrurugi-bench/benches/plugin_discovery.rs`，dev 容器、tmpfs 上的临时插件目录、真实 deno 进程）：
+
+| 项目 | 实测 |
+| --- | --- |
+| 读一次插件声明（冷，含启动 deno） | 14.30 ms（10 样本，95% CI 14.15–14.40 ms） |
+| 同一插件再次读（缓存命中） | 1.848 µs（95% CI 1.846–1.852 µs） |
+| 比值 | ×7 740 |
+| 一次下载任务的全部阶段打点（mark_active + 5 次 begin + 1 次 end） | 0.44 µs |
+| 对照：一次 `set_progress`（既有每块进度写入） | 30 ns |
+
+按基线的一次入库 34 次发现折算：14.30 ms × 34 ≈ 486 ms 的纯进程启动时间 → 1.85 µs × 34 ≈ 63 µs，稳态 0 次启动（SC-003 的"34 → 0"由 `pool::tests` 的两个用例同时证明：同一插件二次读取 `fetched_at` 不变、8 个并发读只加载一次）。62 条批量按 2 100 次启动折算 ≈ 30 s 的纯启动时间。
+
+注意这几条是**插件发现**的独立开销，不等于端到端的入库 p50/p95——后者还受网络、解码与索引影响，仍待 NAS 实测。
+
 未实测（需要真实部署 / 真实负载，留给部署验证）：
 
 - **T011（场景 3）**：单条入库 p50/p95 的前后对比，以及场景 1 的发现进程计数——本机没有 NAS 那批真实下载，未跑。基线仍是 1.88 s / 23.5 s / 44 s、34 次发现。

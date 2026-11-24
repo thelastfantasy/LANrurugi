@@ -8,6 +8,7 @@ license.workspace = true
 lanrurugi-storage = { workspace = true }
 lanrurugi-core = { workspace = true }
 lanrurugi-scanner = { workspace = true }
+lanrurugi-plugin = { workspace = true }
 rayon = { workspace = true }
 image = { workspace = true }
 zip = { workspace = true }
@@ -51,5 +52,11 @@ path = "src/bin/compare.rs"
 [[bench]]
 name = "microbenches"
 path = "benches/benches.rs"
+harness = false
+required-features = ["bench"]
+
+[[bench]]
+name = "plugin_discovery"
+path = "benches/plugin_discovery.rs"
 harness = false
 required-features = ["bench"]
