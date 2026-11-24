@@ -5096,7 +5096,7 @@ div.gt.gt-single > span {
  * a centred line box leaves the label's ink ~1px above the pin's. Nudged to match the icon. */
 .backup-card-badge-label {
   position: relative;
-  top: 1.5px;
+  top: 0.5px;
 }
 
 /* The alias row: one clamped line of text plus its pencil, or a muted "add a note" affordance. */
@@ -5124,39 +5124,59 @@ div.gt.gt-single > span {
   overflow-wrap: anywhere;
 }
 
-/* Icon-only, so it must not inherit `.stdbtn`'s 150px floor. */
-/* Save/cancel in the note editor are icon buttons: the row already has a text field, and two word
- * buttons next to it read as a second, competing action bar. */
-.stdbtn.backup-note-btn {
-  flex: none;
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
+/* An existing note: the text plus a small inline pencil, the whole row a click target. A bordered
+ * square button next to two lines of text read as a third action in the card. */
+.backup-note-view {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: block;
   padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.9em;
-  line-height: 1;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
-.stdbtn.backup-note-btn > svg {
-  flex: none;
-  font-size: 14px;
+.backup-note-view:hover .backup-note-text,
+.backup-note-view:focus-visible .backup-note-text {
+  text-decoration: underline;
 }
 
-.stdbtn.backup-note-edit {
-  flex: none;
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
+/* Inline, immediately after the last character — a separate flex item would sit at the end of the
+ * block instead of following the text, which reads as a stray icon on its own line. */
+.backup-note-pen {
+  display: inline;
+  vertical-align: -1px;
+  margin-left: 5px;
+  font-size: 11px;
+  opacity: 0.65;
+}
+
+/* Editing happens in place: no border, no background, the same font and metrics as the note text,
+ * so the row only differs by a caret and an underline while it is being edited. */
+.backup-note-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: auto;
   padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  border: 0;
+  border-bottom: 1px solid currentColor;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
 }
 
-.stdbtn.backup-note-edit > svg,
+.backup-note-input:focus,
+.backup-note-input:focus-visible {
+  outline: none;
+  border-bottom-color: currentColor;
+  box-shadow: none;
+}
+
 .stdbtn.backup-note-add > svg {
   flex: none;
   font-size: 14px;
@@ -5174,13 +5194,6 @@ div.gt.gt-single > span {
   background: none;
   color: inherit;
   opacity: 0.65;
-}
-
-.stdinput.backup-note-input {
-  flex: 1 1 120px;
-  width: auto;
-  min-width: 0;
-  height: 32px;
 }
 
 .backup-note-error {

@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { FaCheck, FaPen, FaPlus, FaTrash, FaXmark } from "react-icons/fa6"
+import { FaCheck, FaPen, FaPlus, FaTrash } from "react-icons/fa6"
 import { PiPushPin, PiPushPinFill } from "react-icons/pi"
 import { useLocation, useNavigate } from "react-router-dom"
 
@@ -24,7 +24,7 @@ import {
   useUpdateSettings,
 } from "@/api/hooks"
 import type { BackupEntry, BackupJobStatus, BackupScheduleItem, BackupSummary } from "@/api/types"
-import { Button, IconButton, Switch } from "@/components/common-ui/Form"
+import { Button, IconButton, NumberInput, Switch } from "@/components/common-ui/Form"
 import { Tabs } from "@/components/common-ui/Tabs"
 import { choiceDialog, confirmDialog, typedConfirmDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
@@ -241,15 +241,21 @@ function BackupNote({ entry }: { entry: BackupEntry }) {
   }
 
   if (editing) {
+    // Edits in place: the text itself becomes the field, so the card does not grow a bordered form
+    // with its own two buttons. Enter saves, Escape cancels, blur saves.
     return (
       <div className="backup-note backup-note--editing">
         <input
-          className="stdinput backup-note-input"
+          className="backup-note-input"
           value={draft}
           placeholder={t("settings.backupNotePlaceholder")}
           aria-label={t("settings.backupNoteEdit")}
+          maxLength={NOTE_MAX_LENGTH}
           autoFocus
           onChange={(event) => setDraft(event.target.value)}
+          onBlur={() => {
+            if (!setNote.isPending) save()
+          }}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault()
@@ -260,26 +266,6 @@ function BackupNote({ entry }: { entry: BackupEntry }) {
             }
           }}
         />
-        <button
-          type="button"
-          className="stdbtn backup-note-btn"
-          disabled={setNote.isPending}
-          title={t("settings.backupNoteSave")}
-          aria-label={t("settings.backupNoteSave")}
-          onClick={save}
-        >
-          <FaCheck aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          className="stdbtn backup-note-btn"
-          disabled={setNote.isPending}
-          title={t("settings.backupNoteCancel")}
-          aria-label={t("settings.backupNoteCancel")}
-          onClick={cancel}
-        >
-          <FaXmark aria-hidden="true" />
-        </button>
         {error && (
           <p className="backup-note-error" role="alert">
             {error}
@@ -301,17 +287,17 @@ function BackupNote({ entry }: { entry: BackupEntry }) {
 
   return (
     <div className="backup-note">
-      <span className="backup-note-text" title={entry.note}>
-        {entry.note}
-      </span>
       <button
         type="button"
-        className="stdbtn backup-note-edit"
+        className="backup-note-view"
         title={t("settings.backupNoteEdit")}
         aria-label={t("settings.backupNoteEdit")}
         onClick={begin}
       >
-        <FaPen aria-hidden="true" />
+        <span className="backup-note-text">
+          {entry.note}
+          <FaPen className="backup-note-pen" aria-hidden="true" />
+        </span>
       </button>
     </div>
   )
@@ -352,7 +338,19 @@ export function Backup() {
   /** Full snapshots kept per schedule. The server owns the number; the page only edits it. */
   const fullKeep = backupsQuery.data?.full_keep ?? SNAPSHOT_KEEP_FALLBACK
   const [keepStatus, setKeepStatus] = useState("")
+  /** The value on screen while the user types or steps; `null` means "follow the server". */
+  const [keepDraft, setKeepDraft] = useState<number | null>(null)
+  const keepTimer = useRef<number | null>(null)
+  /** Clears the pending debounce; used by every path that saves right now. */
+  const flushKeepTimer = () => {
+    if (keepTimer.current !== null) {
+      window.clearTimeout(keepTimer.current)
+      keepTimer.current = null
+    }
+  }
+  useEffect(() => flushKeepTimer, [])
   const saveFullKeep = async (raw: string, event?: { currentTarget: HTMLInputElement }) => {
+    flushKeepTimer()
     const parsed = Number.parseInt(raw, 10)
     if (!Number.isFinite(parsed) || parsed < 1 || parsed > 365) {
       setKeepStatus(t("settings.snapshotKeepInvalid"))
@@ -361,13 +359,34 @@ export function Backup() {
       return
     }
     setKeepStatus("")
-    if (parsed === fullKeep) return
+    if (parsed === fullKeep) {
+      setKeepDraft(null)
+      return
+    }
     try {
       await updateSettings.mutateAsync({ snapshot_full_keep: parsed })
       await queryClient.invalidateQueries({ queryKey: ["backups"] })
+      setKeepDraft(null)
     } catch (error) {
       setKeepStatus(String(error))
     }
+  }
+  /** Typing and the number input's own stepper arrows both land here; `onBlur` alone missed the
+   *  arrows, since clicking them never takes focus away from the field. Debounced so a typed "10"
+   *  is one request, not two (for "1" then "10"). */
+  const queueFullKeep = (raw: string) => {
+    flushKeepTimer()
+    const parsed = Number.parseInt(raw, 10)
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > 365) {
+      setKeepStatus(t("settings.snapshotKeepInvalid"))
+      return
+    }
+    keepTimer.current = window.setTimeout(() => {
+      keepTimer.current = null
+      // No event: React's `currentTarget` is null once the handler returned, and only the invalid
+      // path would read it — that path falls back to the saved value anyway.
+      void saveFullKeep(raw)
+    }, 700)
   }
   const createBackup = useCreateBackup()
   const createExport = useCreateExport()
@@ -1266,15 +1285,18 @@ export function Backup() {
             {pinnedSnapshotCount > 0 && <span>{t("settings.snapshotPinnedNote")}</span>}
             <label className="backup-keep-editor">
               <span>{t("settings.snapshotKeepLabel")}</span>
-              <input
-                className="stdinput backup-control--keep"
-                type="number"
+              <NumberInput
+                style={{ width: 78 }}
+                inputStyle={{ textAlign: "center", height: 32 }}
                 min={1}
                 max={365}
                 step={1}
-                defaultValue={fullKeep}
-                key={fullKeep}
+                value={keepDraft ?? fullKeep}
                 aria-label={t("settings.snapshotKeepLabel")}
+                onValueChange={(next) => {
+                  setKeepDraft(next)
+                  queueFullKeep(String(next))
+                }}
                 onBlur={(event) => void saveFullKeep(event.currentTarget.value, event)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") void saveFullKeep(event.currentTarget.value, event)
