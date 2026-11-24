@@ -360,6 +360,14 @@ jobs:
       - name: Generate the API document
         run: cargo run -p lanrurugi-api-docgen
 
+      # The per-group page generator owns two gates the Rust generator cannot see — a group with no
+      # entry in `docs/api/tag-names.json`, and two operations in one group sharing a title. They
+      # only ran inside the site build, and `docs-build` skips everything outside `main`, so a new
+      # route module could reach `dev` and break nothing until the Docker image built the docs.
+      # Plain Node with no install needed: it reads the document generated above.
+      - name: Docs — API group pages (known tag names, unique operation titles)
+        run: node apps/docs-site/scripts/generate-api-pages.mjs
+
       - name: Generate the plugin SDK reference
         run: mise run docs-sdk
 

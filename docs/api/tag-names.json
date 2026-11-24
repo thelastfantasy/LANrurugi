@@ -19,6 +19,20 @@
     "description_en": "Recycle-bin entries and restore/purge, plus safety-password status and verification."
   },
   {
+    "key": "deletions",
+    "zh": "删除日志",
+    "en": "Deletion Journal",
+    "description_zh": "永久删除的档案记录在删除落定前被抄进日志（spec 028）：列出、还原单个或全部、彻底清除。",
+    "description_en": "Archive records are journaled before a permanent delete commits (spec 028): list, restore one or all, purge."
+  },
+  {
+    "key": "snapshots",
+    "zh": "书库备份",
+    "en": "Library Backups",
+    "description_zh": "书库内 `.lanrurugi-backups/` 的导出快照与整库 RDB 备份：列出、创建、还原、固定与定时。",
+    "description_en": "Export snapshots and full RDB copies under the library's `.lanrurugi-backups/`: list, create, restore, pin and schedule."
+  },
+  {
     "key": "database",
     "zh": "数据库 API",
     "en": "Database API"
