@@ -5100,7 +5100,10 @@ div.gt.gt-single > span {
 }
 
 /* The alias row: one clamped line of text plus its pencil, or a muted "add a note" affordance. */
+/* The note row keeps the same height whether it holds a note or the "add" affordance, so the
+ * "N 分钟前 · 大小 · 原因" line below lines up across a grid of cards. */
 .backup-note {
+  min-height: 20px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -5126,6 +5129,10 @@ div.gt.gt-single > span {
 
 /* An existing note: the text plus a small inline pencil, the whole row a click target. A bordered
  * square button next to two lines of text read as a third action in the card. */
+.backup-note-view--empty {
+  opacity: 0.55;
+}
+
 .backup-note-view {
   flex: 1 1 auto;
   min-width: 0;
@@ -5175,25 +5182,6 @@ div.gt.gt-single > span {
   outline: none;
   border-bottom-color: currentColor;
   box-shadow: none;
-}
-
-.stdbtn.backup-note-add > svg {
-  flex: none;
-  font-size: 14px;
-}
-
-/* A text affordance rather than a button: no border, no background, just dimmed currentColor. */
-.stdbtn.backup-note-add {
-  height: 32px;
-  padding: 0 2px;
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 0;
-  background: none;
-  color: inherit;
-  opacity: 0.65;
 }
 
 .backup-note-error {

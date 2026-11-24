@@ -40,6 +40,9 @@ import { LegacyImportPanel } from "./LegacyImportPanel"
 
 /** How many `pre-*` exports retention keeps (`PRE_KEEP` in `crates/lanrurugi-api/src/snapshots.rs`). */
 const PRE_KEEP = 5
+/** Manual exports are capped by count instead (`MANUAL_KEEP` in the same file) — exports are never
+ *  produced on a schedule, so the daily/weekly tiers only ever match pre-existing files. */
+const MANUAL_KEEP = 5
 
 /** Fallback for the per-schedule full-snapshot budget when an older server omits `full_keep`. */
 const SNAPSHOT_KEEP_FALLBACK = 3
@@ -276,10 +279,19 @@ function BackupNote({ entry }: { entry: BackupEntry }) {
   }
 
   if (!entry.note) {
+    // Same line as a filled-in note (text, then a small pencil), just dimmer — a boxed button here
+    // was both taller than the filled state and read as a third action in the card.
     return (
       <div className="backup-note">
-        <button type="button" className="stdbtn backup-note-add" onClick={begin}>
-          <FaPen aria-hidden="true" /> {t("settings.backupNoteAdd")}
+        <button
+          type="button"
+          className="backup-note-view backup-note-view--empty"
+          onClick={begin}
+        >
+          <span className="backup-note-text">
+            {t("settings.backupNoteAdd")}
+            <FaPen className="backup-note-pen" aria-hidden="true" />
+          </span>
         </button>
       </div>
     )
@@ -1508,11 +1520,7 @@ export function Backup() {
             <span>
               {t("settings.exportSummaryCount", { total: exports.length })}
               {" · "}
-              {t("settings.exportRetention", {
-                daily: backupsQuery.data.daily_keep,
-                weekly: backupsQuery.data.week_keep,
-                pre: PRE_KEEP,
-              })}
+              {t("settings.exportRetention", { manual: MANUAL_KEEP, pre: PRE_KEEP })}
             </span>
           </div>
         )}
