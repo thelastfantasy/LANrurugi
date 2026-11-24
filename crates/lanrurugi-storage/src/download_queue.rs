@@ -231,6 +231,12 @@ pub struct DownloadQueueItem {
     /// decide whether the cached result is still fresh (10-min TTL) or needs a fresh plugin call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata_preview_at: Option<i64>,
+    /// The metadata plugin that produced `metadata_preview`, recorded so cataloguing can skip
+    /// *that one* plugin and run every other enabled one (spec 029 FR-005). Absent means the
+    /// preview came from nothing at all — an older server, a failed fetch, or auto-fetch turned
+    /// off — and the full chain must run; "preview exists" is never a substitute for this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_preview_namespace: Option<String>,
     /// Structured, translatable failure detail (`lanrurugi_core::queue_error::QueueError`) — no
     /// free-text message; the frontend maps `.kind` to an i18n key and renders its own fields
     /// into it. See that type's own docs for why no raw Rust `Display` string is stored here.
@@ -407,6 +413,7 @@ impl DownloadQueueRepository {
             title: None,
             metadata_preview: None,
             metadata_preview_at: None,
+            metadata_preview_namespace: None,
             error: None,
             pending_filename_conflict: None,
             pending_revision_confirmation: None,
@@ -584,6 +591,7 @@ mod tests {
             title: None,
             metadata_preview: None,
             metadata_preview_at: None,
+            metadata_preview_namespace: None,
             error: None,
             pending_filename_conflict: None,
             pending_revision_confirmation: None,

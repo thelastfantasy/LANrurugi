@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
@@ -102,8 +102,37 @@ impl RelayAccess {
 /// A plugin `.ts` file's current `mtime` — used both to stamp a freshly spawned [`Worker`] and,
 /// on every later [`PluginPool::execute`] call, to detect whether the file has changed since that
 /// worker's own `import()` last read it.
-fn plugin_mtime(plugin_module: &Path) -> Result<std::time::SystemTime> {
+fn plugin_mtime(plugin_module: &Path) -> Result<SystemTime> {
     Ok(std::fs::metadata(plugin_module)?.modified()?)
+}
+
+/// How long a descriptor entry may be reused even when the file's `(mtime, size)` still match.
+/// Bounds the "replaced in place, same mtime and size" case (`cp -p`, some network filesystems),
+/// which no stat-based key can see (contract P6).
+const INFO_CACHE_TTL: Duration = Duration::from_secs(60);
+
+/// A plugin's own declaration, cached per namespace (029 US1, `contracts/plugin-descriptor-cache.md`).
+///
+/// Only the *declaration* is cached: type, parameters, the permissions it declares. Nothing here
+/// decides what a real load is granted — that still comes from the freshly fetched entry, and the
+/// entry itself is only ever read to hand those flags to `Worker::spawn` (P3/V4).
+#[derive(Clone)]
+struct CachedPluginInfo {
+    /// Stamped at fetch time from the file itself, never from a caller-supplied value (V1).
+    mtime: SystemTime,
+    size: u64,
+    info: PluginInfo,
+    /// `Some(None)` means "asked, the plugin exports no `pluginOptions()`"; `None` means this
+    /// entry has never been asked yet.
+    options: Option<Option<PluginOptionsResult>>,
+    fetched_at: Instant,
+}
+
+impl CachedPluginInfo {
+    /// P1/P6: still describes the same file version, and has not aged out.
+    fn is_current(&self, mtime: SystemTime, size: u64) -> bool {
+        self.mtime == mtime && self.size == size && self.fetched_at.elapsed() < INFO_CACHE_TTL
+    }
 }
 
 struct Worker {
@@ -312,6 +341,12 @@ pub struct PluginPool {
     dispatcher_path: PathBuf,
     plugins_dir: PathBuf,
     workers: Arc<Mutex<HashMap<String, Worker>>>,
+    /// Last declaration fetched per namespace, keyed by the file version it came from (029 US1).
+    info_cache: Mutex<HashMap<String, CachedPluginInfo>>,
+    /// One lock per namespace, so concurrent discovers of the same plugin coalesce into a single
+    /// real load instead of N (contract P4): the losers wake up, re-check the cache and read the
+    /// winner's entry.
+    inflight: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Shared by every worker this pool spawns: one revalidation store and one coalescing map for
     /// the whole process, not one per plugin namespace.
     http: Arc<HostHttp>,
@@ -328,6 +363,8 @@ impl PluginPool {
             dispatcher_path,
             plugins_dir,
             workers: Arc::new(Mutex::new(HashMap::new())),
+            info_cache: Mutex::new(HashMap::new()),
+            inflight: Mutex::new(HashMap::new()),
             http: Arc::new(HostHttp::new()),
         }
     }
@@ -383,17 +420,49 @@ impl PluginPool {
         &self.deno_binary
     }
 
-    /// Queries a plugin's declared metadata/permissions via a throwaway, zero-permission
-    /// subprocess — never the persistent worker (which doesn't exist yet at this point).
-    pub async fn plugin_info(&self, namespace: &str) -> Result<PluginInfo> {
-        if !is_safe_namespace(namespace) {
-            return Err(PoolError::NotFound(namespace.to_string()));
+    /// Current `(mtime, size)` of a plugin file — the cache key (V1). A missing file also drops any
+    /// cached entry for it, so a deleted plugin cannot keep being listed (P2).
+    async fn plugin_stamp(
+        &self,
+        namespace: &str,
+        plugin_module: &Path,
+    ) -> Result<(SystemTime, u64)> {
+        match std::fs::metadata(plugin_module) {
+            Ok(meta) => Ok((meta.modified()?, meta.len())),
+            Err(_) => {
+                self.info_cache.lock().await.remove(namespace);
+                Err(PoolError::NotFound(namespace.to_string()))
+            }
         }
-        let plugin_module = self.plugins_dir.join(format!("{namespace}.ts"));
-        if !plugin_module.is_file() {
-            return Err(PoolError::NotFound(namespace.to_string()));
+    }
+
+    async fn cache_lookup(
+        &self,
+        namespace: &str,
+        mtime: SystemTime,
+        size: u64,
+    ) -> Option<CachedPluginInfo> {
+        match self.info_cache.lock().await.get(namespace) {
+            Some(entry) if entry.is_current(mtime, size) => Some(entry.clone()),
+            _ => None,
         }
-        let mut worker = Worker::spawn(
+    }
+
+    /// The per-namespace single-flight gate: everyone asking about one plugin waits on the same
+    /// lock, and the winner's result lands in the cache before the losers re-check it (P4).
+    async fn discovery_gate(&self, namespace: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.inflight
+            .lock()
+            .await
+            .entry(namespace.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    }
+
+    /// A throwaway, **zero-permission** worker — the only thing allowed to answer "what does this
+    /// plugin declare?" before the host knows what to grant it (constitutional Principle IV).
+    async fn spawn_declaration_worker(&self, namespace: &str) -> Result<Worker> {
+        Worker::spawn(
             &self.deno_binary,
             &self.dispatcher_path,
             &self.plugins_dir,
@@ -402,45 +471,109 @@ impl PluginPool {
             false,
             RelayAccess::none(self.http.clone()),
         )
-        .await?;
+        .await
+    }
+
+    /// The cached declaration for `namespace`, loading it once if this file version has not been
+    /// described yet. Every caller — `plugin_info`, `plugin_options`, and `execute`'s own
+    /// permission lookup — goes through here, which is what makes a library of 34 plugins cost 34
+    /// loads *in total* rather than 34 per ingest (FR-004).
+    async fn cached_descriptor(&self, namespace: &str) -> Result<CachedPluginInfo> {
+        if !is_safe_namespace(namespace) {
+            return Err(PoolError::NotFound(namespace.to_string()));
+        }
+        let plugin_module = self.plugins_dir.join(format!("{namespace}.ts"));
+        let (mtime, size) = self.plugin_stamp(namespace, &plugin_module).await?;
+        if let Some(hit) = self.cache_lookup(namespace, mtime, size).await {
+            return Ok(hit);
+        }
+
+        let gate = self.discovery_gate(namespace).await;
+        let _held = gate.lock().await;
+        // Second look: while this call queued, the winner may have filled the entry — and the file
+        // may have changed again, so the stamp is taken fresh rather than reused.
+        let (mtime, size) = self.plugin_stamp(namespace, &plugin_module).await?;
+        if let Some(hit) = self.cache_lookup(namespace, mtime, size).await {
+            return Ok(hit);
+        }
+
+        let mut worker = self.spawn_declaration_worker(namespace).await?;
         let response = worker
             .call(namespace, "plugin_info", serde_json::json!({}))
             .await?;
-        response_to_result(response).and_then(|v| Ok(serde_json::from_value(v)?))
+        let info: PluginInfo = serde_json::from_value(response_to_result(response)?)?;
+        if info.namespace != namespace {
+            // P7/FR-012: a template leftover (`metadata/chaika` declaring `trabant`) must not be
+            // silently adopted under whichever name the caller happened to use.
+            tracing::warn!(
+                requested = namespace,
+                declared = %info.namespace,
+                "plugin declares a namespace that differs from its install path"
+            );
+        }
+        let entry = CachedPluginInfo {
+            mtime,
+            size,
+            info,
+            options: None,
+            fetched_at: Instant::now(),
+        };
+        // P5: only a successful load is written. An error above returns before this point, so the
+        // next call retries instead of inheriting a failure.
+        self.info_cache
+            .lock()
+            .await
+            .insert(namespace.to_string(), entry.clone());
+        Ok(entry)
     }
 
-    /// Queries a download plugin's optional `pluginOptions()` declaration via the same kind of
-    /// throwaway, zero-permission subprocess as [`plugin_info`](Self::plugin_info) — cheap,
-    /// side-effect-free, safe to call on every settings-page load. Returns `Ok(None)` (not an
-    /// error) when the plugin exports no `pluginOptions()` at all (spec FR-015), which the
-    /// dispatcher signals by returning `null`.
+    /// Queries a plugin's declared metadata/permissions. Cached per `(mtime, size)` — the first
+    /// call for a file version spawns a zero-permission worker, every later one reads that
+    /// declaration (029 US1).
+    pub async fn plugin_info(&self, namespace: &str) -> Result<PluginInfo> {
+        Ok(self.cached_descriptor(namespace).await?.info)
+    }
+
+    /// Queries a download plugin's optional `pluginOptions()` declaration, on the same cached
+    /// declaration as [`plugin_info`](Self::plugin_info) — cheap and side-effect-free, safe to call
+    /// on every settings-page load. Returns `Ok(None)` (not an error) when the plugin exports no
+    /// `pluginOptions()` at all (spec FR-015), which the dispatcher signals by returning `null`.
     pub async fn plugin_options(&self, namespace: &str) -> Result<Option<PluginOptionsResult>> {
-        if !is_safe_namespace(namespace) {
-            return Err(PoolError::NotFound(namespace.to_string()));
+        let entry = self.cached_descriptor(namespace).await?;
+        if let Some(options) = entry.options {
+            return Ok(options);
         }
+
         let plugin_module = self.plugins_dir.join(format!("{namespace}.ts"));
-        if !plugin_module.is_file() {
-            return Err(PoolError::NotFound(namespace.to_string()));
+        let (mtime, size) = self.plugin_stamp(namespace, &plugin_module).await?;
+        let gate = self.discovery_gate(namespace).await;
+        let _held = gate.lock().await;
+        // Re-read under the gate: a concurrent call may have answered this while we queued.
+        if let Some(options) = self
+            .cache_lookup(namespace, mtime, size)
+            .await
+            .and_then(|entry| entry.options)
+        {
+            return Ok(options);
         }
-        let mut worker = Worker::spawn(
-            &self.deno_binary,
-            &self.dispatcher_path,
-            &self.plugins_dir,
-            namespace,
-            &[],
-            false,
-            RelayAccess::none(self.http.clone()),
-        )
-        .await?;
+
+        let mut worker = self.spawn_declaration_worker(namespace).await?;
         let response = worker
             .call(namespace, "plugin_options", serde_json::json!({}))
             .await?;
         let value = response_to_result(response)?;
-        if value.is_null() {
-            Ok(None)
+        let options = if value.is_null() {
+            None
         } else {
-            Ok(Some(serde_json::from_value(value)?))
+            Some(serde_json::from_value(value)?)
+        };
+        if let Some(entry) = self.info_cache.lock().await.get_mut(namespace) {
+            // Only if the declaration still describes the same file version we just asked about.
+            if entry.mtime == mtime && entry.size == size {
+                entry.options = Some(options.clone());
+            }
         }
+        Ok(options)
     }
 
     /// Reports what a plugin's own *source* says it supports, without running its entry points —
@@ -677,6 +810,171 @@ mod tests {
         // path.
         assert!(is_safe_namespace("metadata/ehentai"));
         assert!(is_safe_namespace("custom/metadata/foo"));
+    }
+
+    /// A scratch plugins directory with one plugin this test owns, so the descriptor cache can be
+    /// driven the way a real edit/delete would drive it — the pool's whole point is *not* spawning a
+    /// process per call, which only a file it can rewrite proves.
+    struct Scratch {
+        dir: PathBuf,
+        dispatcher: PathBuf,
+        namespace: String,
+    }
+
+    impl Scratch {
+        fn new(namespace: &str) -> Option<Self> {
+            which_deno()?;
+            let dispatcher =
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dispatcher/dispatcher.ts");
+            // `plugin-sdk.ts` must sit beside the dispatcher wherever it runs from (see
+            // `Worker::spawn`).
+            std::fs::write(
+                dispatcher.parent()?.join("plugin-sdk.ts"),
+                crate::PLUGIN_SDK_SCRIPT,
+            )
+            .ok()?;
+            let dir = std::env::temp_dir().join(format!(
+                "lrr-descriptor-{namespace}-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()?
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).ok()?;
+            Some(Self {
+                dir,
+                dispatcher,
+                namespace: namespace.to_string(),
+            })
+        }
+
+        fn pool(&self) -> PluginPool {
+            PluginPool::new("deno", self.dispatcher.clone(), self.dir.clone())
+        }
+
+        fn module(&self) -> PathBuf {
+            self.dir.join(format!("{}.ts", self.namespace))
+        }
+
+        /// Writes a well-formed declaration whose `name` the caller can vary — the observable that
+        /// says "this read came from the file, not from the cache".
+        fn declare(&self, name: &str) {
+            let source = format!(
+                "export function pluginInfo() {{\n  return {{\n    namespace: \"{}\",\n    type: \"metadata\",\n    parameters: [],\n    declared_permissions: {{ net: [], read: false, write: false }},\n    name: \"{name}\",\n    author: \"t\",\n    description: \"t\",\n    version: \"1\",\n  }};\n}}\n",
+                self.namespace
+            );
+            std::fs::write(self.module(), source).expect("write scratch plugin");
+        }
+
+        fn declare_broken(&self) {
+            std::fs::write(
+                self.module(),
+                "export function pluginInfo() {\n  throw new Error(\"broken on purpose\");\n}\n",
+            )
+            .expect("write scratch plugin");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_second_descriptor_read_is_served_from_the_cache() {
+        let Some(scratch) = Scratch::new("cachehit") else {
+            eprintln!("skipping: deno not found on PATH");
+            return;
+        };
+        scratch.declare("first");
+        let pool = scratch.pool();
+
+        let first = pool.cached_descriptor(&scratch.namespace).await.unwrap();
+        let second = pool.cached_descriptor(&scratch.namespace).await.unwrap();
+        assert_eq!(
+            first.fetched_at, second.fetched_at,
+            "a hit returns the entry already held — a fresh timestamp would mean a second deno process"
+        );
+        assert_eq!(second.info.name, "first");
+    }
+
+    #[tokio::test]
+    async fn rewriting_the_plugin_file_invalidates_the_cached_declaration() {
+        let Some(scratch) = Scratch::new("cachebust") else {
+            eprintln!("skipping: deno not found on PATH");
+            return;
+        };
+        scratch.declare("first");
+        let pool = scratch.pool();
+        let before = pool.cached_descriptor(&scratch.namespace).await.unwrap();
+        assert_eq!(before.info.name, "first");
+
+        // Deliberately a different length as well as different content: `(mtime, size)` is the key,
+        // so this must miss even on a filesystem whose mtime resolution is coarse.
+        scratch.declare("renamed-and-longer");
+        let after = pool.cached_descriptor(&scratch.namespace).await.unwrap();
+        assert_eq!(after.info.name, "renamed-and-longer");
+        assert_ne!(before.fetched_at, after.fetched_at);
+    }
+
+    #[tokio::test]
+    async fn a_deleted_plugin_is_not_found_and_drops_its_cached_entry() {
+        let Some(scratch) = Scratch::new("cachegone") else {
+            eprintln!("skipping: deno not found on PATH");
+            return;
+        };
+        scratch.declare("first");
+        let pool = scratch.pool();
+        pool.plugin_info(&scratch.namespace).await.unwrap();
+
+        std::fs::remove_file(scratch.module()).unwrap();
+        let err = pool.plugin_info(&scratch.namespace).await.unwrap_err();
+        assert!(matches!(err, PoolError::NotFound(_)));
+        assert!(
+            pool.info_cache.lock().await.is_empty(),
+            "a deleted plugin must not keep being listed from a stale cached declaration"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_plugin_that_fails_to_declare_is_not_cached() {
+        let Some(scratch) = Scratch::new("cachefail") else {
+            eprintln!("skipping: deno not found on PATH");
+            return;
+        };
+        scratch.declare_broken();
+        let pool = scratch.pool();
+        let err = pool.plugin_info(&scratch.namespace).await.unwrap_err();
+        assert!(!matches!(err, PoolError::NotFound(_)), "got {err:?}");
+        assert!(
+            pool.info_cache.lock().await.is_empty(),
+            "a failure must not be remembered as if it were a declaration"
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_reads_of_a_cold_cache_load_the_plugin_once() {
+        let Some(scratch) = Scratch::new("cacherace") else {
+            eprintln!("skipping: deno not found on PATH");
+            return;
+        };
+        scratch.declare("first");
+        let pool = Arc::new(scratch.pool());
+        let mut tasks = Vec::new();
+        for _ in 0..8 {
+            let pool = Arc::clone(&pool);
+            let namespace = scratch.namespace.clone();
+            tasks.push(tokio::spawn(async move {
+                pool.cached_descriptor(&namespace)
+                    .await
+                    .map(|entry| entry.fetched_at)
+            }));
+        }
+        let mut stamps = Vec::new();
+        for task in tasks {
+            stamps.push(task.await.unwrap().unwrap());
+        }
+        assert!(
+            stamps.windows(2).all(|pair| pair[0] == pair[1]),
+            "every concurrent caller must observe the same load, not one load per caller"
+        );
+        assert_eq!(pool.info_cache.lock().await.len(), 1);
     }
 
     #[tokio::test]

@@ -924,6 +924,22 @@ export interface JobStatus {
 /** Native job-console shape, distinct from the legacy-mimicking `JobStatus` above. */
 export type JobRecordState = "queued" | "active" | "finished" | "failed"
 
+/** One entry of a job's own phase timeline (029, `contracts/jobs-phases.md`). Epoch milliseconds. */
+export interface JobPhase {
+  name: DownloadPhaseName
+  started_at: number
+  ended_at?: number | null
+}
+
+/** The fixed vocabulary shared with the server: anything else is a bug, not a future phase. */
+export type DownloadPhaseName =
+  | "queued"
+  | "negotiate"
+  | "waiting"
+  | "transfer"
+  | "ingest"
+  | "publish"
+
 export interface JobRecord {
   id: string
   name: string
@@ -945,6 +961,11 @@ export interface JobRecord {
   /** Absent means unlimited (or non-download job). */
   rate_limit_bytes_per_sec?: number
   rate_limit_matched_pattern?: string
+  /** Fixed phase timeline of a download task (029). Absent — the whole key, not `[]` — for every
+   *  job that never reports phases, which is also the fallback the queue row uses to show a single
+   *  total instead of a breakdown. At most one entry is still open (`ended_at` absent) while it runs;
+   *  a finished/failed job has them all closed. */
+  phases?: JobPhase[]
   result: unknown | null
   /** `true` when the result exceeded the server's size cap and was dropped (not partially kept). */
   result_truncated: boolean

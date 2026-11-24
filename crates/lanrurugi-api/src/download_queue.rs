@@ -1302,6 +1302,9 @@ async fn start_one_in(
         item.title = None;
         item.metadata_preview = None;
         item.metadata_preview_at = None;
+        // Same lifetime as the preview itself (029 contract Q2): a retry re-fetches at start time,
+        // and a stale namespace would tell cataloguing to skip a plugin whose output is gone.
+        item.metadata_preview_namespace = None;
         // A retry after a filename-conflict `Error` must also drop the stale conflict record —
         // otherwise `QueueItemRow.tsx`'s right-side button rendering (`item.pending_filename_
         // conflict ? <ConflictMenu> : ...`) keeps showing the old resolve-conflict button through
@@ -1946,6 +1949,7 @@ mod tests {
 
     fn item(id: &str, url: &str, state: DownloadQueueState) -> DownloadQueueItem {
         DownloadQueueItem {
+            metadata_preview_namespace: None,
             subscription_id: None,
             share_import_id: None,
             id: id.to_string(),

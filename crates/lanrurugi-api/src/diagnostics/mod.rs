@@ -10,6 +10,7 @@
 pub mod attachment;
 pub mod bundle;
 pub mod cron;
+pub mod download_trace;
 pub mod forward;
 pub mod issue;
 pub mod logs;

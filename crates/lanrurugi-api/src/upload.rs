@@ -927,6 +927,7 @@ async fn finalize_staged_upload(
             let plugin_summary = crate::plugins::run_enabled_metadata_plugins_on_archive(
                 state,
                 &ingested.archive_id,
+                None,
             )
             .await;
             if let Some(pending) = pending {

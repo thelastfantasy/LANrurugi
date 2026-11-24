@@ -23,7 +23,10 @@
 
 export function pluginInfo() {
   return {
-    namespace: "trabant",
+    // Must match this file's own name under `plugins/` (`metadata/chaika`): the host caches a
+    // plugin's declaration under the namespace it was asked for, and a mismatch here is a bug the
+    // pool can only warn about. The converter filled in a placeholder; don't copy that back.
+    namespace: "metadata/chaika",
     type: "metadata" as const,
     parameters: [
       { name: "param1", description: "Add the following tags if available: download URL, gallery ID, category, timestamp", required: false, type: "bool" },

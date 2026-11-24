@@ -1,7 +1,7 @@
 <!-- SPECKIT START -->
 Twenty-nine feature specs exist. Status below is read from each spec's own `tasks.md` checkbox counts,
 not from memory — a spec's header status is worth re-checking against its task list whenever this
-block is regenerated, because it has gone stale before. Counts last re-read 2026-11-24; `docs`-only
+block is regenerated, because it has gone stale before. Counts last re-read 2026-11-24 (029 added the same day); `docs`-only
 and bookkeeping churn moves them, so treat a specific figure as a hint, not a fact.
 
 - **Implemented (all tasks complete)**: `001-lanrurugi-full-rewrite` (96/96), `002-job-console`
@@ -57,8 +57,15 @@ and bookkeeping churn moves them, so treat a specific figure as a hint, not a fa
   `/archives/{id}/split-suggestion`, `/split/execute`, `/split/stream`, `/split-tree`, the reader's
   `TankoubonSplitModal.tsx`). Only `plan.md` exists for each, so their checkbox counts read 0 —
   don't treat that as unbuilt work.
-- **Not started**: `029-download-ingest-latency` (0/36 — spec/plan/research/contracts only; neither
-  `crates/lanrurugi-core/src/jobs.rs` phase tracking nor the frontend's `JobPhase` type exists yet).
+- **Code implemented, deployment verification outstanding**: `029-download-ingest-latency` (29/36).
+  Per-job phase timing (`JobStatus.phases`, six-phase vocabulary in `crates/lanrurugi-core/src/jobs.rs`),
+  the queue row's three-segment readout (`apps/frontend/src/pages/Upload/queuePhases.ts`), the plugin
+  descriptor cache with single-flight (`crates/lanrurugi-plugin/src/pool.rs`), skipping the metadata
+  plugin whose answer the queue row already carries, a `download_url` transaction with one span per
+  phase, and the `content_lock_held` timeout split in `crates/lanrurugi-scanner/src/pipeline.rs`.
+  Every unit test passes; the open tasks are the quickstart scenarios that need a real deployment
+  (T011/T020/T026/T029/T032/T035) plus T034's workspace gates. Its `tasks.md` Implementation Record
+  lists the four departures from plan.md.
 
 **Phase 1 — `001-lanrurugi-full-rewrite`** (build this first): plan at
 `specs/001-lanrurugi-full-rewrite/plan.md`. User Stories 1–8 — library continuity, non-merging

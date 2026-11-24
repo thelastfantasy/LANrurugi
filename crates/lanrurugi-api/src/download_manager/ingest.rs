@@ -431,6 +431,68 @@ async fn ingest_staged_download(
     .await
 }
 
+/// The queue row this task's download belongs to, when it has one — the carrier of the preview
+/// taken before the download started (029 US3). Keyed on the task's own clock rather than passed
+/// down through every cataloguing call, which has no business knowing about queue rows.
+async fn download_metadata_preview(
+    state: &AppState,
+) -> Option<lanrurugi_storage::download_queue::DownloadQueueItem> {
+    let item_id = crate::ingest_clock::queue_item_id()?;
+    state.download_queue.get(&item_id).await.ok().flatten()
+}
+
+/// Applies the preview's title and tags to the archive that was just catalogued, because the
+/// plugin that produced them is being skipped, not its result. Written through the same
+/// `update_then` + reindex path the plugin chain uses — never a whole-record overwrite.
+async fn apply_preview_metadata(state: &AppState, archive_id: &str, preview: &serde_json::Value) {
+    let title = preview
+        .get("title")
+        .and_then(serde_json::Value::as_str)
+        .filter(|t| !t.trim().is_empty())
+        .map(str::to_string);
+    let tags = match preview.get("tags").and_then(serde_json::Value::as_str) {
+        Some(tags) if !tags.trim().is_empty() => {
+            Some(match crate::plugins::get_computed_tagrules(state).await {
+                Some(rules) => crate::tag_rules::apply_tag_rules(tags, &rules),
+                None => tags.to_string(),
+            })
+        }
+        _ => None,
+    };
+    if title.is_none() && tags.is_none() {
+        return;
+    }
+    let updated = state
+        .repos
+        .archives
+        .update_then(
+            &lanrurugi_core::ids::ArchiveId(archive_id.to_string()),
+            |archive| {
+                if let Some(tags) = &tags {
+                    // `set_tags(..., append=1)`: new tags after the existing ones, first occurrence
+                    // wins — the same merge the plugin chain performs for a live result.
+                    let mut seen = std::collections::HashSet::new();
+                    let merged: Vec<&str> = archive
+                        .tags
+                        .split(',')
+                        .chain(tags.split(','))
+                        .map(str::trim)
+                        .filter(|t| !t.is_empty() && seen.insert(*t))
+                        .collect();
+                    archive.tags = merged.join(",");
+                }
+                if let Some(title) = &title {
+                    archive.title = title.clone();
+                }
+            },
+            |old, new| crate::archives::reindex_title_and_tags(state, old, new),
+        )
+        .await;
+    if let Err(e) = updated {
+        tracing::warn!(%archive_id, error = %e, "failed to apply the cached metadata preview");
+    }
+}
+
 /// Runs `ingest_file_with_policy` against `staging_path` with the given `intended_filename`/
 /// `duplicate_policy`, then (on a successful `Catalogued`/`Rekeyed`/`Unchanged`) finishes
 /// cataloguing exactly like this module's own original single-path logic always did — move into
@@ -763,8 +825,24 @@ pub(crate) async fn catalogue_staged_file(
     // Skipped when the caller defers publication: that caller (the upload path) runs its own
     // plugin pass *after* the user's own title/tags are saved — which is the pass whose results
     // actually matter — so running one here as well made every upload pay for two full passes.
+    // 029 US2/T014: the plugin chain is the publish step, marked on its own because it waits on
+    // remote metadata APIs rather than on this host's disk. A no-op outside a download task (an
+    // upload or share import has no job clock), and the phase is closed by the job's own finish.
+    crate::ingest_clock::mark(lanrurugi_core::jobs::PHASE_PUBLISH).await;
     if !defer_publication {
-        crate::plugins::run_enabled_metadata_plugins_on_archive(state, archive_id.as_str()).await;
+        // 029 US3: the download's start-time metadata fetch already asked one plugin; asking it
+        // again here is a second round trip for an answer this row has been carrying all along.
+        let preview = download_metadata_preview(state).await;
+        let skip = preview
+            .as_ref()
+            .and_then(|item| item.metadata_preview_namespace.as_deref());
+        crate::plugins::run_enabled_metadata_plugins_on_archive(state, archive_id.as_str(), skip)
+            .await;
+        if let (Some(_), Some(item)) = (skip, &preview) {
+            if let Some(preview_data) = item.metadata_preview.as_ref() {
+                apply_preview_metadata(state, archive_id.as_str(), preview_data).await;
+            }
+        }
     }
 
     // Published: the archive now carries whatever the plugins found (a failure inside the run is
@@ -1713,6 +1791,68 @@ mod tests {
             .expect("a record was written");
         assert_eq!(archive.name, "[DL版] (中国翻訳)");
         assert_eq!(archive.title, archive.name, "an empty title is unusable");
+    }
+    /// 029 FR-005: skipping the plugin whose answer the queue row already carries must still land
+    /// that answer on the archive — the round trip is what is being skipped, not its result.
+    #[tokio::test]
+    async fn a_skipped_plugin_still_contributes_its_preview_title_and_tags() {
+        let root = tempfile::tempdir().unwrap();
+        let Some(state) = state_with_temp_dirs(root.path()).await else {
+            return;
+        };
+        let _lock = lanrurugi_storage::test_support::RedisTestLock::acquire(
+            &state.redis.archive,
+            "preview_metadata",
+        )
+        .await;
+
+        let download = staged_zip(root.path(), &format!("preview-{}", uuid::Uuid::new_v4()));
+        let done = catalogue_staged_file(
+            &state,
+            &download,
+            "Preview.zip",
+            None,
+            None,
+            DuplicatePolicy::Reject,
+            false,
+            false,
+            false,
+        )
+        .await
+        .expect("catalogued");
+        // A catalogued file's own title is derived from the filename; the preview must replace it.
+        state
+            .repos
+            .archives
+            .update(
+                &lanrurugi_core::ids::ArchiveId(done.archive_id.clone()),
+                |archive| {
+                    archive.title = "from-the-filename".to_string();
+                    archive.tags = "language:japanese,artist:existing".to_string();
+                },
+            )
+            .await
+            .unwrap();
+
+        let preview = serde_json::json!({
+            "title": "Plugin Title",
+            // `artist:existing` is already on the archive: the merge keeps one copy.
+            "tags": "artist:existing,language:english",
+        });
+        apply_preview_metadata(&state, done.archive_id.as_str(), &preview).await;
+
+        let record = state
+            .repos
+            .archives
+            .get(&lanrurugi_core::ids::ArchiveId(done.archive_id.clone()))
+            .await
+            .unwrap()
+            .expect("the archive is still there");
+        assert_eq!(record.title, "Plugin Title");
+        assert_eq!(
+            record.tags,
+            "language:japanese,artist:existing,language:english"
+        );
     }
 }
 
