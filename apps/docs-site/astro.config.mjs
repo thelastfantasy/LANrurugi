@@ -19,11 +19,19 @@ const apiNav = JSON.parse(
 const base = process.env.DOCS_BASE ?? '/'
 const site = process.env.DOCS_SITE_URL
 // The workspace version this tree documents. The latest version is built for the site root, where
-// the base no longer names it (#305); the version picker reads this instead.
-const docsVersion =
-  process.env.DOCS_VERSION ??
-  /^version = "(.*)"/m.exec(readFileSync(new URL('../../Cargo.toml', import.meta.url), 'utf8'))?.[1] ??
-  'dev'
+// the base no longer names it (#305); the version picker reads this instead. A build context that
+// carries only the site (no workspace manifest above it) still has to build, so a missing manifest
+// degrades to `dev` rather than failing the whole image build.
+function workspaceVersion() {
+  try {
+    const manifest = new URL('../../Cargo.toml', import.meta.url)
+    return /^version = "(.*)"/m.exec(readFileSync(manifest, 'utf8'))?.[1] ?? null
+  } catch {
+    return null
+  }
+}
+
+const docsVersion = process.env.DOCS_VERSION ?? workspaceVersion() ?? 'dev'
 
 /** @type {import('astro/config').AstroUserConfig} */
 // Where the SDK reference lives. Its own Cloudflare Pages project in production, and a sibling
