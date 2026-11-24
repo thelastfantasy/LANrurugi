@@ -1,12 +1,17 @@
 <!-- SPECKIT START -->
-Seventeen feature specs exist. Status below is read from each spec's own `tasks.md` checkbox counts,
+Twenty-nine feature specs exist. Status below is read from each spec's own `tasks.md` checkbox counts,
 not from memory — a spec's header status is worth re-checking against its task list whenever this
-block is regenerated, because it has gone stale before.
+block is regenerated, because it has gone stale before. Counts last re-read 2026-11-24; `docs`-only
+and bookkeeping churn moves them, so treat a specific figure as a hint, not a fact.
 
 - **Implemented (all tasks complete)**: `001-lanrurugi-full-rewrite` (96/96), `002-job-console`
   (23/23), `003-ui-test-automation` (52/52), `005-download-plugin-progress` (41/41),
-  `006-ai-plugin-wizard` (53/53), `011-api-docs-site` (this feature's own list),
-  `013-ebook-formats` (31/31).
+  `006-ai-plugin-wizard` (53/53), `013-ebook-formats` (31/31), `015-native-platforms` (22/22),
+  `016-tankoubon-grouping-harness` (30/30), `018-error-telemetry-feedback` (70/70 — its 70 boxes
+  were ticked in one retrospective pass on 2026-11-24; its Implementation Record says what was
+  actually built and what was not verified), `020-hash-named-library` (30/30),
+  `023-share-crate-extraction` (22/22), `025-ingest-visibility-gate` (31/31),
+  `028-deletion-safety-net` (94/94).
 - **Code implemented, some tasks outstanding** — in every case the remainder is real-deployment
   or real-asset verification rather than unbuilt code: `004-ocr-manga-translation` (70/76,
   awaiting the `quickstart.md` scenarios that need real OCR model files),
@@ -17,7 +22,12 @@ block is regenerated, because it has gone stale before.
   already worked; its one open task is the repo-wide `mise run clippy` gate, blocked by
   pre-existing `result_large_err` warnings in crates this feature never touched. Its `tasks.md`
   Implementation Record states exactly what was and was not verified — notably that the
-  reader-facing HTTP end of its quickstart scenario 4 and all of scenario 5 were not exercised).
+  reader-facing HTTP end of its quickstart scenario 4 and all of scenario 5 were not exercised),
+  `011-api-docs-site` (46/50), `019-recycle-bin-safety-password` (43/49),
+  `021-direct-download-domain` (14/17), `022-share-network-hardening` (31/40 —
+  T025's FreeBSD `setfib` platform routing is the one genuinely unbuilt item, no `setfib`
+  anywhere in the tree; the rest is verification), `024-duplicate-review` (29/30),
+  `026-reading-aware-recommendations` (17/18), `027-ingest-integrity` (36/44).
 - **Code implemented, release verification outstanding**: `015-native-platforms` — native packages for
   Linux x86_64/aarch64, macOS arm64 and FreeBSD x86_64; the Linux package is verified locally in a clean
   Debian container, while macOS, FreeBSD and Linux aarch64 are only verified by
@@ -40,7 +50,15 @@ block is regenerated, because it has gone stale before.
   Record lists the network matrix (15 environments, all importing), the defects it found and fixed,
   and every departure from plan.md. `scripts/share-network-matrix.sh` / `share-traffic-check.sh`
   rerun them.
-- **Plan only, no `tasks.md` yet**: `008-subfolder-tankoubon`, `009-archive-split-suggestions`.
+- **Shipped, but no `tasks.md` ever generated**: `008-subfolder-tankoubon` (the
+  `POST /database/scripts/subfolders-to-tankoubons` script in `crates/lanrurugi-api/src/scripts.rs`
+  builds tankoubons from the library's top-level subfolders, LLM-enriched) and
+  `009-archive-split-suggestions` (`crates/lanrurugi-api/src/archive_split.rs` +
+  `/archives/{id}/split-suggestion`, `/split/execute`, `/split/stream`, `/split-tree`, the reader's
+  `TankoubonSplitModal.tsx`). Only `plan.md` exists for each, so their checkbox counts read 0 —
+  don't treat that as unbuilt work.
+- **Not started**: `029-download-ingest-latency` (0/36 — spec/plan/research/contracts only; neither
+  `crates/lanrurugi-core/src/jobs.rs` phase tracking nor the frontend's `JobPhase` type exists yet).
 
 **Phase 1 — `001-lanrurugi-full-rewrite`** (build this first): plan at
 `specs/001-lanrurugi-full-rewrite/plan.md`. User Stories 1–8 — library continuity, non-merging
