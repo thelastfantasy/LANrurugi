@@ -618,15 +618,16 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             );
         }
     }
-    // specs/028: the configurable daily/weekly snapshot schedule, on its own one-minute tick. The
-    // task is spawned (not awaited) so a first-run full backup of a large library never delays the
-    // server from accepting connections, and an interval's first tick is immediate — which is also
-    // the catch-up after downtime (see `snapshots::schedule_tick`). Settings are re-read on every
-    // tick, so a saved change applies within a minute instead of at the next restart.
+    // specs/028: the configurable snapshot schedule, on its own five-second tick — the crontab it
+    // evaluates has second granularity. The task is spawned (not awaited) so a first-run full backup
+    // of a large library never delays the server from accepting connections, and an interval's
+    // first tick is immediate — which is also the catch-up after downtime (see
+    // `snapshots::schedule_tick`). Settings are re-read on every tick, so a saved change applies
+    // within seconds instead of at the next restart.
     {
         let state = state.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 interval.tick().await;
@@ -641,7 +642,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             interval.tick().await; // consume the immediate first tick; startup already swept
             loop {
                 interval.tick().await;
-                // Retention only — the daily/weekly *generation* moved to the minute tick above.
+                // Retention only — snapshot *generation* lives on the five-second schedule tick above.
                 lanrurugi_api::recycle::sweep(&state).await;
             }
         });

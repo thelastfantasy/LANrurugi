@@ -2812,6 +2812,7 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   outline-offset: -2px;
 }
 
+
 /* Preview listing: one work per row, with enough room between rows to tell them apart. The rows were
    previously flush against each other, which made a long listing read as a wall of text. */
 /* Preview listing as a grid: the number, the title, its publication time, who uploaded it, its
@@ -2929,6 +2930,97 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   opacity: 1;
 }
 
+/* Shared `common-ui/Tabs`: the download queue's `.queue-tab` palette (same class, same theme
+ * colours/opacity) on a fixed 32px line, plus a 3px currentColor bottom border for the active tab. */
+.common-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Tabs never show a focus ring or a focus border colour. Firefox (confirmed on Android) matches
+ * `:focus-visible` on a tapped button, so `:focus:not(:focus-visible)` was not enough — the gold
+ * focus border stayed on the active tab. The active tab already has its own selection colour, so the
+ * ring adds nothing but a second, conflicting highlight. */
+.stdbtn.queue-tab.common-tab,
+.stdbtn.queue-tab.common-tab:focus,
+.stdbtn.queue-tab.common-tab:focus-visible,
+.stdbtn.queue-tab.common-tab:hover {
+  outline: none;
+  border-color: currentColor;
+}
+
+/* The five themes' `.stdbtn:focus` repaints the whole button (e.g. g.css: background #F2EFDF,
+ * color #9B4E03) — that is the gold tab in the screenshots, not a border. `background`/`color` are
+ * inherited from the strip here, which is how these themes draw a resting `.stdbtn` anyway, so a
+ * focused tab is pixel-identical to an unfocused one. */
+.stdbtn.queue-tab.common-tab {
+  /* Transparent in every state, so the theme's `:focus` repaint (`background: #F2EFDF` on g) has
+   * nothing of ours to override and focusing cannot change what the tab looks like. */
+  background: transparent;
+}
+
+.stdbtn.queue-tab.common-tab:focus,
+.stdbtn.queue-tab.common-tab:focus-visible {
+  background: transparent;
+  color: inherit;
+}
+
+.stdbtn.common-tab {
+  box-sizing: border-box;
+  flex: 0 1 auto;
+  height: 32px;
+  min-height: 32px;
+  margin: 0;
+  padding: 0 8px;
+  /* Every tab keeps the theme's own four-sided border. The active tab adds only the thick bottom
+     bar below (and the caller's own active colours); no font-weight change. */
+}
+
+.stdbtn.common-tab.common-tab--active {
+  /* The active tab's thick bottom bar. Drawn as an inset shadow rather than a border so it adds no
+     width and cannot shift the strip: the box model of every tab stays identical. */
+  box-shadow: inset 0 -3px 0 currentColor;
+}
+
+
+/* The backup page's tab strip: three equal segments, one row down to a 375px phone. */
+.backup-tabs {
+  margin-bottom: 12px;
+}
+
+.backup-tabs > .stdbtn.common-tab {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* Inside the download queue's group heading the strip is as wide as its labels, not the row. */
+.queue-group-tabs.common-tabs {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  margin-left: auto;
+}
+
+/* The download queue's group tabs: the shared 32px baseline on desktop, the queue's own compact
+   icon-over-count box on a phone (the ≤640 `.stdbtn.queue-tab` rule below). Horizontal padding is
+   pinned so the count never touches the edge. */
+.queue-group-tabs > .stdbtn.common-tab {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+/* The numeric count beside a tab's label: smaller than the label, tight line box, tabular digits,
+ * and a little breathing room from the icon/label. */
+.queue-tab-count {
+  display: inline-block;
+  margin: 2px 0 2px 3px;
+  font-size: 0.7rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  vertical-align: middle;
+}
+
 /* Download rows on a phone: every extra item in this wrapping flex row costs a whole line, and the
    two flag checkboxes are non-actionable once an item leaves `queued` — they were drawing an empty
    box and a tick on a line of their own, which is most of the wasted height (reported 2026-11-04). */
@@ -3012,6 +3104,25 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
     line-height: 1.1;
     white-space: nowrap;
   }
+
+  .queue-tab-count {
+    /* The column layout stacks icon over count, so the count sat directly on the tab's bottom
+       border; the breathing room has to come from the tab's own padding. */
+    margin: 3px 0 0;
+  }
+
+  /* Tighten the icon-to-count gap and give the count room underneath. Both live inside the fixed
+     40px line, so the button's own height and the icon's position do not move. */
+  .queue-group-tabs > .stdbtn.common-tab {
+    gap: 0;
+    padding-top: 1px;
+    padding-bottom: 5px;
+  }
+
+  .queue-group-tabs > .stdbtn.common-tab .fa {
+    line-height: 1;
+  }
+
 }
 
 /* The icon-only twin of `.pill-btn`, for sitting immediately beside it: square in purpose, round
@@ -4310,8 +4421,8 @@ div.gt.gt-single > span {
   border-radius: 6px;
 }
 
-/* Backup page (`pages/Settings/Backup.tsx`) — the three record tables (import rollback snapshots,
- * automatic snapshots, recently deleted) share one responsive shape.
+/* Backup page (`pages/Settings/Backup.tsx`) — the import-rollback snapshot table at the top is the
+ * last record table left; the snapshot/export lists below it are card grids (`.backup-card-*`).
  *
  * Wide: an aligned grid, where each record's cells are the grid's own children (`display: contents`
  * on the row wrapper, so columns still line up across records without a real `<table>`). The grid
@@ -4342,27 +4453,9 @@ div.gt.gt-single > span {
   grid-template-columns: auto minmax(0, 28em) auto;
 }
 
-/* The contents column is capped and wraps in place rather than taking the width of the longest
- * summary, which would otherwise widen the whole grid past a laptop screen. */
-.backup-records--auto-snapshots {
-  grid-template-columns: auto auto auto auto minmax(0, 22em) auto;
-}
-
-.backup-records--deletions {
-  grid-template-columns: auto auto auto auto;
-}
-
 .backup-records-head,
 .backup-records-row {
   display: contents;
-}
-
-/* The one cell allowed to be long on a wide screen: ellipsized, and it wraps once stacked. */
-.backup-cell-title {
-  max-width: 320px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .backup-cell-actions {
@@ -4372,10 +4465,389 @@ div.gt.gt-single > span {
   white-space: nowrap;
 }
 
-/* A record's expanded "details" panel — spans every column on a wide grid. */
-.backup-row-detail {
-  grid-column: 1 / -1;
+/* specs/028 snapshot & export management (`Backup.tsx`) — the page's legacy top half stays
+ * centered; these two blocks are left-aligned, following the Settings page's own row language.
+ *
+ * One control style for every input/select/button in them: legacy `.stdinput`/`.stdbtn` each pick
+ * their own height per theme (g/ex ≈ 21px, modern 28px), so a mixed row was visibly misaligned.
+ * Only `currentColor`-derived colours are used, so all five themes keep their own palette. */
+.backup-settings {
+  max-width: 960px;
+  margin: 0 auto;
+  text-align: left;
 }
+
+.backup-block-title {
+  margin: 0 0 4px;
+  text-align: left;
+}
+
+.backup-block-subtitle {
+  margin: 18px 0 4px;
+  text-align: left;
+}
+
+.backup-block-note {
+  margin: 0 0 12px;
+  text-align: left;
+  opacity: 0.85;
+}
+
+.backup-hint {
+  margin: 8px 0 0;
+  text-align: left;
+}
+
+/* Live create-job progress: the same 8px track/25% grey as the Job console's bar, filled with the
+ * page's own text colour so every theme keeps its palette. */
+.backup-run-progress {
+  margin-top: 8px;
+}
+
+.backup-progress-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: rgba(128, 128, 128, 0.25);
+}
+
+.backup-progress-fill {
+  height: 100%;
+  background: currentColor;
+  transition: width 120ms linear;
+}
+
+.backup-run-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin: 6px 0 0;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* The percentage and the byte counts each get their own line on a phone. */
+@media (max-width: 600px) {
+  .backup-run-status {
+    flex-direction: column;
+    gap: 2px;
+  }
+}
+
+.backup-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* One compact row per group: switches together, then the two labelled controls. Every item is a
+ * 32px line so the labels and controls share a baseline; only a phone wraps them. */
+.backup-inline-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 24px;
+}
+
+.backup-inline-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 32px;
+}
+
+.backup-inline-field > .lrr-switch {
+  min-height: 32px;
+}
+
+.backup-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.backup-status {
+  margin-top: 12px;
+  text-align: left;
+}
+
+.backup-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 4px;
+}
+
+/* Size-only modifiers for the snapshot/export blocks: `.stdinput` (inputs/selects) and `.stdbtn`
+ * (buttons) keep their own theme look; these only put every control on the same 32px line. */
+.stdinput.backup-control {
+  box-sizing: border-box;
+  height: 32px;
+  margin: 0;
+  /* `.stdbtn` borders are 2px in every theme; matching the width here (style/colour still come
+   * from the theme's own `.stdinput`) keeps a mixed row visually aligned. */
+  border-width: 2px;
+}
+
+.stdbtn.backup-btn {
+  box-sizing: border-box;
+  height: 32px;
+  margin: 0;
+}
+
+/* `.stdbtn`'s own 150px floor is sized for full-width settings forms; inside a card it would put
+ * one action per row. Width is the only thing dropped here — the theme's look stays as-is. */
+.backup-card-actions .stdbtn.backup-btn {
+  min-width: 0;
+}
+
+.backup-control--time,
+.stdinput.backup-control--time {
+  width: 120px;
+}
+
+.backup-control--day,
+.stdinput.backup-control--day {
+  width: 140px;
+}
+
+.backup-control--preset,
+.stdinput.backup-control--preset {
+  width: 160px;
+}
+
+/* Seven fixed-width cron fields: second, minute, hour, day, month, weekday, year. */
+.backup-cron-fields {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  max-width: 428px;
+  margin-top: 10px;
+}
+
+.backup-cron-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.backup-cron-field > span {
+  font-size: 0.9em;
+  opacity: 0.8;
+}
+
+.backup-control--cron,
+.stdinput.backup-control--cron {
+  width: 100%;
+}
+
+/* The plan form and its preview sit side by side on a wide screen and stack on a phone. */
+.backup-plan {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 1fr);
+  gap: 24px;
+  align-items: start;
+  margin-bottom: 12px;
+}
+
+.backup-plan-form {
+  min-width: 0;
+}
+
+.backup-plan-preview {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-radius: 4px;
+}
+
+.backup-preview-title {
+  margin: 0 0 6px;
+  text-align: left;
+}
+
+.backup-preview-meta {
+  margin: 4px 0 0;
+  text-align: left;
+  opacity: 0.85;
+}
+
+.backup-cron-value {
+  display: block;
+  margin: 6px 0;
+  overflow-wrap: anywhere;
+  font-family: monospace;
+  text-align: left;
+}
+
+.backup-preview-runs {
+  margin: 4px 0 0;
+  padding-left: 22px;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.backup-hint--error {
+  opacity: 1;
+}
+
+@media (max-width: 700px) {
+  .backup-plan {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+}
+
+.backup-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 12px;
+  text-align: left;
+  opacity: 0.85;
+}
+
+/* Loading and the empty states are the only centered text in these blocks. */
+.backup-state {
+  margin: 16px 0;
+  text-align: center;
+  opacity: 0.75;
+}
+
+.backup-error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 4px;
+}
+
+.backup-error-title {
+  margin: 0;
+  font-weight: 700;
+}
+
+.backup-error details {
+  margin-top: 6px;
+}
+
+.backup-error summary {
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.backup-error-detail {
+  max-width: 100%;
+  margin: 6px 0 0;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.9em;
+}
+
+/* Automatic snapshots and exports are cards rather than record tables: `auto-fill` with a 260px
+ * minimum collapses to a single column on a phone, so no horizontal scroll container is needed and
+ * no card can widen the page. */
+.backup-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+  align-items: stretch;
+}
+
+.backup-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-radius: 4px;
+  text-align: left;
+}
+
+.backup-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.backup-card-name {
+  flex: 1 1 100%;
+  min-width: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.backup-card-badge {
+  flex: none;
+  padding: 0 8px;
+  font-size: 0.9em;
+  line-height: 1.7;
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  border-radius: 999px;
+}
+
+.backup-card-badge--pinned {
+  margin-left: auto;
+}
+
+.backup-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+.backup-card-meta > span + span::before {
+  content: "·";
+  margin-right: 8px;
+  opacity: 0.7;
+}
+
+.backup-card-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 12px;
+  margin: 0;
+}
+
+.backup-card-fact {
+  display: contents;
+}
+
+.backup-card-facts dt {
+  opacity: 0.75;
+}
+
+.backup-card-facts dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.backup-card-summary-missing {
+  opacity: 0.6;
+}
+
+.backup-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
 
 /* `ImportConflictExample` sits inside a radio item's `inline-flex` label, which makes its text span
  * a flex item: the flex item's automatic minimum size is the sample's min-content width, so the
@@ -4414,38 +4886,18 @@ div.gt.gt-single > span {
     border-top: 1px solid color-mix(in srgb, currentColor 20%, transparent);
   }
 
-  /* Long cells (contents summary, the title, the details panel) take their own line instead of
-   * squeezing the timestamp off the left edge; unbreakable names break rather than overflow. */
-  .backup-cell-summary,
-  .backup-cell-name,
-  .backup-cell-title,
-  .backup-row-detail {
+  /* The contents summary takes its own line instead of squeezing the timestamp off the left
+   * edge; unbreakable text breaks rather than overflowing. */
+  .backup-cell-summary {
     flex: 1 0 100%;
     max-width: 100%;
     overflow-wrap: anywhere;
-  }
-
-  .backup-cell-summary,
-  .backup-row-detail {
-    order: 2;
   }
 
   .backup-cell-actions {
     order: 1;
     flex-wrap: wrap;
     justify-content: center;
-    white-space: normal;
-  }
-
-  /* The automatic-snapshots table reads better with its contents summary directly under the
-     name/size/date line — only the action row needs to jump ahead of it here. */
-  .backup-records--auto-snapshots .backup-cell-summary {
-    order: 0;
-  }
-
-  .backup-cell-title {
-    overflow: visible;
-    text-overflow: clip;
     white-space: normal;
   }
 }

@@ -425,7 +425,13 @@ pub async fn purge_expired(state: &AppState) -> u64 {
     if expired.is_empty() {
         return 0;
     }
-    if let Err(e) = crate::snapshots::take_snapshot(state, "pre-journal-purge").await {
+    if let Err(e) = crate::snapshots::take_export(
+        state,
+        "pre-journal-purge",
+        std::sync::Arc::new(crate::snapshots::NoProgress),
+    )
+    .await
+    {
         tracing::warn!(error = %e, "could not snapshot before purging expired deletions");
     }
     match state.redis.archive.get().await {
@@ -697,7 +703,13 @@ async fn clear_deletions(
     let purged = entries.len();
     // A bulk purge is destructive enough to deserve the same pre-operation snapshot as a clean.
     if purged > 0 {
-        if let Err(e) = crate::snapshots::take_snapshot(&state, "pre-journal-purge").await {
+        if let Err(e) = crate::snapshots::take_export(
+            &state,
+            "pre-journal-purge",
+            std::sync::Arc::new(crate::snapshots::NoProgress),
+        )
+        .await
+        {
             tracing::warn!(error = %e, "could not snapshot before clearing the deletion journal");
         }
     }

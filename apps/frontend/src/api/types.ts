@@ -151,11 +151,11 @@ export interface Settings {
   /** specs/028: whether the timed automatic snapshot runs at all (`GET`/`PUT /api/settings`).
    *  Optional because the backups page treats a missing value as "not configured yet". */
   snapshot_schedule_enabled?: boolean
-  /** `"HH:MM"` in the server's local timezone — a scheduling instant, not a display string, so the
-   *  backend rejects anything but exactly `HH:MM` (`validation` in `settings.rs`). */
-  snapshot_daily_at?: string
-  /** `0` (Sunday) to `6` (Saturday), matching `Date.getDay()`. */
-  snapshot_weekly_day?: number
+  /** 5-field crontab in the server's own timezone; the server default is `0 3 * * 1`. */
+  snapshot_cron?: string
+  /** The preset the UI last chose (`hourly` | `daily` | `weekly` | `monthly` | `custom`). The cron
+   *  string remains the source of truth; this only remembers which picker state to show. */
+  snapshot_cron_preset?: string
   /** Absolute refresh-token lifetime in seconds — an optional hard cap anchored to the original
    *  login; silent refreshes never extend it. `0` means no cap at all, so a session lives as long
    *  as it is used at least once per `refresh_token_idle_lifetime_secs`. */
@@ -1843,32 +1843,48 @@ export interface BackupSummary {
   bytes: number
 }
 
-/** The automatic snapshot schedule as the server has it, including the instants it computed
- *  (`last_*` are what actually ran, `next_*` what the scheduler will run next; both RFC 3339, or
- *  `null` when nothing is scheduled/known). Editing writes the three `PUT /api/settings` fields
- *  instead — this shape is read-only. */
+/** The automatic snapshot schedule as the server has it (`GET /api/backups`). The cron string is
+ *  the source of truth; `next_runs` is what the server computed from it, and `timezone` is the
+ *  zone it evaluates that cron in. Editing writes the three `PUT /api/settings` fields instead —
+ *  this shape is read-only. */
 export interface BackupSchedule {
   enabled: boolean
-  /** `"HH:MM"`, local time of the server. */
-  daily_at: string
-  /** `0` = Sunday, matching `Date.getDay()`. */
-  weekly_day: number
-  last_daily_at: string | null
-  last_weekly_at: string | null
-  next_daily_at: string | null
-  next_weekly_at: string | null
+  /** 5-field crontab (`minute hour day month weekday`). */
+  cron: string
+  /** `hourly` | `daily` | `weekly` | `monthly` | `custom`. */
+  preset: string
+  /** IANA zone (the server's own local zone) the cron is evaluated in. */
+  timezone: string
+  /** RFC 3339 instant of the last automatic run, or `null` before the first one. */
+  last_fire_at: string | null
+  /** The next five fire instants, RFC 3339, empty when the schedule is off or the cron never fires. */
+  next_runs: string[]
 }
 
-/** One snapshot file under `<library>/.lanrurugi-backups/` (`GET /api/backups`), newest first.
- *  `usable: false` means the file exists but isn't a parseable backup document. */
+/** `POST /api/backups/schedule/preview` — validation + the next five runs for a candidate cron. */
+export interface CronPreviewResponse {
+  valid: boolean
+  error?: string | null
+  next_runs: string[]
+}
+
+/** One file under `<library>/.lanrurugi-backups/` (`GET /api/backups`), newest first.
+ *  `"backup"` is a full Redis RDB dump (only an operator can put it back, by replacing the file and
+ *  restarting Redis); `"export"` is a JSON document this page can restore by itself. */
 export interface BackupEntry {
   name: string
   created_at: string
   reason: string
   size_bytes: number
+  /** `false` means the file exists but isn't a parseable backup document (for a `backup` entry: an
+   *  unreadable RDB) — the restore action is offered for exports only. */
   usable: boolean
+  /** `"backup"` | `"export"`; absent while a server that predates the split answers. */
+  kind?: string
+  /** Kept forever regardless of the daily/weekly/`pre-*` retention windows. */
+  pinned?: boolean
   /** Absent as well as `null` while a server that predates the field answers — the page renders
-   *  both as an unknown summary rather than crashing. */
+   *  both as an unknown summary rather than crashing. Only JSON exports carry one. */
   summary?: BackupSummary | null
 }
 
@@ -1882,10 +1898,40 @@ export interface BackupsResponse {
   schedule?: BackupSchedule | null
 }
 
-export interface CreateBackupResponse {
+/** `POST /api/backups` / `POST /api/backups/export` — both start an asynchronous job. */
+export interface BackupJobResponse {
+  job_id: string
+}
+
+/** `GET /api/backups/jobs/{id}` and the SSE stream's event payloads. */
+export interface BackupJobStatus {
+  /** `queued` | `running` | `done` | `failed` (a newer server may add states). */
+  state: string
+  /** 0–100, one-decimal precision. */
+  percent: number
+  bytes_written: number
+  bytes_expected: number
+  started_at: string | null
+  finished_at: string | null
+  error?: string | null
+  /** Present once the job is done. */
+  entry?: BackupEntry | null
+  /** The legacy import's summary object, when the job carries one. */
+  notes?: unknown
+}
+
+export interface DeleteBackupResponse {
   operation: string
   success: number
-  entry: BackupEntry
+  deleted: string
+}
+
+/** `POST`/`DELETE /api/backups/{name}/pin` — both idempotent, both answer with the resulting state. */
+export interface PinBackupResponse {
+  operation: string
+  success: number
+  name: string
+  pinned: boolean
 }
 
 export interface RestoreBackupResponse {
@@ -1894,6 +1940,8 @@ export interface RestoreBackupResponse {
   restored_from: string
   /** The `pre-restore` snapshot taken before this restore ran. */
   safety: string
+  /** The asynchronous restore job to follow over `/api/backups/jobs/{id}/events`. */
+  job_id: string
 }
 
 /** One journal entry that can still be restored (`GET /api/deletions`). */

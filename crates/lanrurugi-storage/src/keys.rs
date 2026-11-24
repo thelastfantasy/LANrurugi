@@ -322,6 +322,12 @@ pub const DELETION_JOURNAL_KEY: &str = "LANRURUGI_DELETION_JOURNAL";
 /// scheduled instant rather than against "today".
 pub const SNAPSHOT_SCHEDULE_KEY: &str = "LANRURUGI_SNAPSHOT_SCHEDULE";
 
+/// Additive, LANrurugi-only (`specs/028-deletion-safety-net`). Set on the **config** logical DB
+/// whose members are snapshot file names the user pinned: retention never evicts a pinned snapshot,
+/// whatever its tier's keep count says. Members are cleaned up whenever the snapshot file is
+/// deleted, so the set cannot outlive what it points at.
+pub const SNAPSHOT_PINS_KEY: &str = "LANRURUGI_SNAPSHOT_PINS";
+
 /// Records restored from the journal whose file is still missing (#specs/028, FR-004). The startup
 /// zombie repair deletes any record whose `file` is gone, which would undo exactly the restore that
 /// is meant to survive until the file comes back; this set exempts them for the journal's retention

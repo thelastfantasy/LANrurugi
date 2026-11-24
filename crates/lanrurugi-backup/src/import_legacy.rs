@@ -372,6 +372,35 @@ fn minimize_legacy_tags(tags: &str) -> String {
 // bytes behind a pointer on a path that has already failed.
 #[allow(clippy::result_large_err)]
 pub async fn import_from_legacy(
+    doc: LegacyBackupDocument,
+    on_existing: ImportConflictMode,
+    minimize_tags: bool,
+    archives: &ArchiveRepository,
+    categories: &CategoryRepository,
+    groupings: &GroupingRepository,
+    stamps: &StampRepository,
+) -> Result<
+    (ImportLegacySummary, BackupDocument),
+    (RepositoryError, ImportLegacySummary, BackupDocument),
+> {
+    import_from_legacy_with_progress(
+        doc,
+        on_existing,
+        minimize_tags,
+        archives,
+        categories,
+        groupings,
+        stamps,
+        &|_, _| {},
+    )
+    .await
+}
+
+/// [`import_from_legacy`], reporting `(written, total)` archive writes. `total` is the number of
+/// archives this import will actually write — the legacy document's own count minus everything the
+/// conflict mode skipped — so the bar reaches 100 exactly when the last record lands.
+#[allow(clippy::too_many_arguments, clippy::result_large_err)]
+pub async fn import_from_legacy_with_progress(
     mut doc: LegacyBackupDocument,
     on_existing: ImportConflictMode,
     minimize_tags: bool,
@@ -379,6 +408,7 @@ pub async fn import_from_legacy(
     categories: &CategoryRepository,
     groupings: &GroupingRepository,
     stamps: &StampRepository,
+    progress: crate::restore::RecordProgress<'_>,
 ) -> Result<
     (ImportLegacySummary, BackupDocument),
     (RepositoryError, ImportLegacySummary, BackupDocument),
@@ -408,6 +438,7 @@ pub async fn import_from_legacy(
         stamps,
         &mut summary,
         &mut snapshot,
+        progress,
     )
     .await
     {
@@ -427,6 +458,7 @@ async fn import_from_legacy_inner(
     stamps: &StampRepository,
     summary: &mut ImportLegacySummary,
     snapshot: &mut BackupDocument,
+    progress: crate::restore::RecordProgress<'_>,
 ) -> Result<(), RepositoryError> {
     // Pass -1: drop any record whose own id-shaped field (`arcid`/`catid`/`tankid`/`stamp_id`,
     // plus a category/tankoubon's own `archives` references and a stamp's `archive_id` — every
@@ -668,6 +700,9 @@ async fn import_from_legacy_inner(
         }
     }
 
+    let total_writes = archives_to_write.len() as u64;
+    let mut written = 0u64;
+    progress(written, total_writes);
     for (id, title, tags, summary_text, thumbhash) in archives_to_write {
         // The undo snapshot and the change are taken under the record's lock, so the snapshot is
         // exactly what this write replaced.
@@ -700,6 +735,8 @@ async fn import_from_legacy_inner(
             snapshot.archives.extend(before);
             summary.archives_updated += 1;
         }
+        written += 1;
+        progress(written, total_writes);
     }
 
     // Pass 4: rewrite every archive-id reference using `id_map`, dropping references with no

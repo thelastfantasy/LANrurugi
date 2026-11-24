@@ -13,6 +13,7 @@ import {
 import type { ArchiveMetadata, DownloadQueueItem, JobRecord, PluginInfo } from "@/api/types"
 import { MenuItem, MenuSeparator, Tooltip } from "@/components/common-ui/Display"
 import { SplitButton } from "@/components/common-ui/Form"
+import { Tabs } from "@/components/common-ui/Tabs"
 import { CollapsibleSection } from "@/components/Display"
 import { useIsNarrowViewport } from "@/hooks"
 import { FONT_SIZE_XS } from "@/theme"
@@ -389,45 +390,47 @@ export function DownloadQueuePanel({
                     )}
                     {tabs && (
                       // The heading itself toggles the section; a tab click must not also do that.
-                      <span className="queue-group-tabs" onClick={(e) => e.stopPropagation()}>
-                        {(["manual", "subscription"] as const).map((which) => (
-                          <button
-                            key={which}
-                            type="button"
-                            className={`stdbtn queue-tab${tab === which ? " queue-tab-active" : ""}`}
-                            aria-pressed={tab === which}
-                            disabled={which === "manual" && manual.length === 0}
-                            // The accessible name never depends on the icon being understood, and it
-                            // stays present in both layouts.
-                            aria-label={which === "manual" ? t("upload.tabManual") : t("upload.tabSubscription")}
-                            onClick={() => setTabByGroup((prev) => ({ ...prev, [namespace]: which }))}
-                          >
-                            {narrow ? (
-                              <Tooltip
-                                label={which === "manual" ? t("upload.tabManual") : t("upload.tabSubscription")}
-                              >
-                                <i
-                                  className={`fa ${which === "manual" ? "fa-download" : "fa-rss"}`}
-                                  aria-hidden="true"
-                                ></i>
-                              </Tooltip>
-                            ) : which === "manual" ? (
-                              t("upload.tabManual")
-                            ) : (
-                              t("upload.tabSubscription")
-                            )}{" "}
-                            {which === "manual" ? manual.length : fromSubscriptions.length}
-                            {undecided[which] > 0 && (
-                              <Tooltip label={t("upload.tabUndecided", { count: undecided[which] }) ?? ""}>
-                                <span style={{ color: "#c79121", marginLeft: 4 }}>
-                                  <i className="fa fa-exclamation-circle" aria-hidden="true"></i>{" "}
-                                  {undecided[which]}
+                      <Tabs
+                        className="queue-group-tabs"
+                        activeKey={tab}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(which) =>
+                          setTabByGroup((prev) => ({ ...prev, [namespace]: which as QueueTab }))
+                        }
+                        items={(["manual", "subscription"] as const).map((which) => {
+                          const label = which === "manual" ? t("upload.tabManual") : t("upload.tabSubscription")
+                          return {
+                            key: which,
+                            disabled: which === "manual" && manual.length === 0,
+                            ariaLabel: label,
+                            label: (
+                              <>
+                                {narrow ? (
+                                  <Tooltip label={label}>
+                                    <i
+                                      className={`fa ${which === "manual" ? "fa-download" : "fa-rss"}`}
+                                      aria-hidden="true"
+                                    ></i>
+                                  </Tooltip>
+                                ) : (
+                                  label
+                                )}
+                                <span className="queue-tab-count">
+                                  {which === "manual" ? manual.length : fromSubscriptions.length}
                                 </span>
-                              </Tooltip>
-                            )}
-                          </button>
-                        ))}
-                      </span>
+                                {undecided[which] > 0 && (
+                                  <Tooltip label={t("upload.tabUndecided", { count: undecided[which] }) ?? ""}>
+                                    <span style={{ color: "#c79121", marginLeft: 4 }}>
+                                      <i className="fa fa-exclamation-circle" aria-hidden="true"></i>{" "}
+                                      {undecided[which]}
+                                    </span>
+                                  </Tooltip>
+                                )}
+                              </>
+                            ),
+                          }
+                        })}
+                      />
                     )}
                   </span>
                 }

@@ -39,6 +39,8 @@ import type {
   ArchiveMetadata,
   ArchiveSplitTreeResponse,
   AuthBridgeConfig,
+  BackupJobResponse,
+  BackupJobStatus,
   BackupsResponse,
   BatchDeleteArchivesResponse,
   BookmarkedPageResponse,
@@ -48,7 +50,8 @@ import type {
   ChangelogRelease,
   CheckCycle,
   Condition,
-  CreateBackupResponse,
+  CronPreviewResponse,
+  DeleteBackupResponse,
   DeletionsResponse,
   DownloadQueueItem,
   DownloadQueueListResponse,
@@ -72,6 +75,7 @@ import type {
   OnlyMatchingBookmarksResponse,
   PageDimensionsResponse,
   PendingApproval,
+  PinBackupResponse,
   PluginInfo,
   PluginOptions,
   PluginOptionsUpdate,
@@ -2815,7 +2819,7 @@ export function useResetSafetyPassword() {
 // --- specs/028 deletion safety net: automatic snapshots + deletion journal -----------------
 
 /** Everything a restore can have changed — a database restore can touch any of these. */
-function invalidateAfterDataRestore(queryClient: ReturnType<typeof useQueryClient>) {
+export function invalidateAfterDataRestore(queryClient: ReturnType<typeof useQueryClient>) {
   void queryClient.invalidateQueries({ queryKey: ["archives"] })
   void queryClient.invalidateQueries({ queryKey: ["backups"] })
   void queryClient.invalidateQueries({ queryKey: ["bookmarks"] })
@@ -2833,22 +2837,163 @@ export function useBackups() {
   })
 }
 
-/** Synchronous on the server (a large library can take seconds); the response carries the new entry. */
-export function useCreateBackup() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: () => sendJson<CreateBackupResponse>("POST", "/backups"),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["backups"] }),
+/** Validation + the next five fire instants for a candidate cron. A POST because the expression
+ *  can be far too long for a query string, but it is a pure preview — safe to cache per expression. */
+export function useCronPreview(cron: string | null) {
+  return useQuery({
+    queryKey: ["cron-preview", cron],
+    queryFn: () => sendJson<CronPreviewResponse>("POST", "/backups/schedule/preview", { cron }),
+    enabled: cron !== null && cron.trim() !== "",
+    retry: false,
+    staleTime: 30_000,
   })
 }
 
-/** Whole-database restore from one snapshot; the server takes a `pre-restore` snapshot first. */
+/** Both create actions return a job id; progress arrives over SSE, and the list refreshes once the
+ *  job reports `done` (the component does that, not the mutation). */
+export function useCreateBackup() {
+  return useMutation({
+    mutationFn: () => sendJson<BackupJobResponse>("POST", "/backups"),
+  })
+}
+
+/** The JSON half of the manual actions — `POST /api/backups` now takes a full RDB snapshot. */
+export function useCreateExport() {
+  return useMutation({
+    mutationFn: () => sendJson<BackupJobResponse>("POST", "/backups/export"),
+  })
+}
+
+/** One-shot status read, used only as the fallback when the SSE stream cannot be established. */
+export function fetchBackupJob(jobId: string) {
+  return fetchJson<BackupJobStatus>(`/backups/jobs/${encodeURIComponent(jobId)}`)
+}
+
+/** Live progress for one backup job over SSE — the same pattern as this file's other stream hooks
+ *  (`useSubscriptionCheckProgress`): the `EventSource` lives in the effect, named events update
+ *  state, and the effect's cleanup closes it. When the stream cannot be established at all, one
+ *  `GET /api/backups/jobs/{id}` fills in the last known state and `live` turns false.
+ *
+ *  `onTerminal` fires from the event/response callback (not from an effect), so callers can freeze
+ *  their own result state without a state-in-effect round trip. */
+const EMPTY_JOB_STATUS: BackupJobStatus = {
+  state: "running",
+  percent: 0,
+  bytes_written: 0,
+  bytes_expected: 0,
+  started_at: null,
+  finished_at: null,
+  error: null,
+  entry: null,
+}
+
+export function useBackupJobProgress(
+  jobId: string | null,
+  onTerminal?: (status: BackupJobStatus) => void,
+) {
+  const [stream, setStream] = useState<{
+    jobId: string
+    status: BackupJobStatus
+    live: boolean
+  } | null>(null)
+  const terminalRef = useRef(onTerminal)
+  terminalRef.current = onTerminal
+
+  useEffect(() => {
+    if (!jobId) return
+    // Catch-up read on (re)connect: a panel switch closes the stream, and the job may have finished
+    // while it was hidden. Cheap, and skipped whenever a stream status already exists.
+    void fetchBackupJob(jobId)
+      .then((status) => {
+        setStream((old) => (old && old.jobId === jobId ? old : { jobId, status, live: true }))
+        if (status.state === "done" || status.state === "failed") terminalRef.current?.(status)
+      })
+      .catch(() => undefined)
+    const source = new EventSource(`/api/backups/jobs/${encodeURIComponent(jobId)}/events`)
+    const onEvent = (event: Event) => {
+      const raw = (event as MessageEvent<string>).data
+      // A native connection failure fires `error` with no data; `onerror` below handles that.
+      if (!raw) return
+      const data = JSON.parse(raw) as Partial<BackupJobStatus>
+      const next: BackupJobStatus = {
+        state:
+          event.type === "done"
+            ? "done"
+            : event.type === "error"
+              ? "failed"
+              : (data.state ?? "running"),
+        percent: data.percent ?? 0,
+        bytes_written: data.bytes_written ?? 0,
+        bytes_expected: data.bytes_expected ?? 0,
+        started_at: data.started_at ?? null,
+        finished_at: data.finished_at ?? null,
+        error: data.error ?? null,
+        entry: data.entry ?? null,
+      }
+      setStream({ jobId, status: next, live: true })
+      if (event.type === "done" || event.type === "error") {
+        source.close()
+        terminalRef.current?.(next)
+      }
+    }
+    for (const name of ["progress", "done", "error"]) source.addEventListener(name, onEvent)
+    source.onerror = () => {
+      // `CONNECTING` means the browser is retrying by itself; only a closed stream falls back.
+      if (source.readyState !== EventSource.CLOSED) return
+      setStream((old) =>
+        old && old.jobId === jobId ? { ...old, live: false } : { jobId, status: EMPTY_JOB_STATUS, live: false },
+      )
+      void fetchBackupJob(jobId)
+        .then((status) => {
+          setStream({ jobId, status, live: false })
+          if (status.state === "done" || status.state === "failed") terminalRef.current?.(status)
+        })
+        .catch(() => undefined)
+    }
+    return () => source.close()
+  }, [jobId])
+
+  const current = stream && stream.jobId === jobId ? stream : null
+  return { status: current?.status ?? null, live: current?.live ?? true }
+}
+
+/** Whole-database restore from one export; the server takes a `pre-restore` export first. */
 export function useRestoreBackup() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (name: string) =>
       sendJson<RestoreBackupResponse>("POST", `/backups/${encodeURIComponent(name)}/restore`),
     onSuccess: () => invalidateAfterDataRestore(queryClient),
+  })
+}
+
+/** Remove one snapshot or export by name. The server refuses the newest usable one with a 409
+ *  (`reason: "last_usable"`) — the guard that keeps at least one restorable file on disk. */
+export function useDeleteBackup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) =>
+      sendJson<DeleteBackupResponse>("DELETE", `/backups/${encodeURIComponent(name)}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["backups"] }),
+  })
+}
+
+/** Pin/unpin are both idempotent; a pinned file is skipped by the retention sweep. */
+export function usePinBackup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) =>
+      sendJson<PinBackupResponse>("POST", `/backups/${encodeURIComponent(name)}/pin`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["backups"] }),
+  })
+}
+
+export function useUnpinBackup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) =>
+      sendJson<PinBackupResponse>("DELETE", `/backups/${encodeURIComponent(name)}/pin`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["backups"] }),
   })
 }
 

@@ -16,6 +16,7 @@ use serde_json::json;
 use crate::activity::record_manual;
 use crate::auth_context::AuthContext;
 use crate::common::{error, not_found};
+use crate::snapshots::BackupProgress;
 use crate::AppState;
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 use lanrurugi_storage::keys::CONFIG_KEY;
@@ -165,10 +166,10 @@ async fn build_backup_document(state: &AppState) -> Result<BackupDocument, Respo
         .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, "serve_backup", e))
 }
 
-/// The same document, as a plain error — for the automatic snapshot path
-/// (`snapshots::take_snapshot`), which reports failures into an operation's result rather than
-/// answering an HTTP request. Both share this one builder so a snapshot and a manual export can
-/// never drift on what they contain.
+/// The same document, as a plain error — for the export path (`snapshots::take_export`), which
+/// reports failures into an operation's result rather than answering an HTTP request. Both share
+/// this one builder so an export and a manual `GET /database/backup` can never drift on what they
+/// contain.
 pub(crate) async fn build_backup_document_result(
     state: &AppState,
 ) -> Result<BackupDocument, String> {
@@ -341,8 +342,19 @@ async fn queue_restore(
     // specs/028: a full snapshot before the library is rewritten. Reported in the job result but
     // never blocking.
     let snapshot = crate::snapshots::take_for_operation(&state, "pre-restore").await;
-    let job_id = start_restore_job(&state, doc, auth.as_ref().map(|e| e.0.clone()), snapshot).await;
-    axum::Json(json!({ "operation": "queue_restore", "success": 1, "job": job_id })).into_response()
+    let (job_id, progress_job) =
+        start_restore_job(&state, doc, auth.as_ref().map(|e| e.0.clone()), snapshot).await;
+    axum::Json(json!({
+        "operation": "queue_restore",
+        "success": 1,
+        // `job` keeps the Jobs-console entry the endpoint always returned; `job_id` is the
+        // progress job the SSE stream is keyed by.
+        "job": job_id,
+        "job_id": progress_job.id,
+        "started_at": progress_job.status().started_at,
+        "events": format!("/api/backups/jobs/{}/events", progress_job.id),
+    }))
+    .into_response()
 }
 
 /// Starts the background restore shared by the multipart upload endpoint and
@@ -353,22 +365,33 @@ pub(crate) async fn start_restore_job(
     doc: BackupDocument,
     auth_for_task: Option<AuthContext>,
     snapshot: crate::snapshots::SnapshotOutcome,
-) -> String {
+) -> (String, std::sync::Arc<crate::snapshots::BackupJob>) {
     let job_id = state.jobs.create("restore").await;
+    let progress_job = crate::snapshots::start_progress_job("restore");
     let jobs = state.jobs.clone();
     let repos = state.repos.clone();
     let job_id_for_task = job_id.clone();
     let state_for_task = state.clone();
+    let progress_job_for_task = progress_job.clone();
 
     tokio::spawn(async move {
         jobs.mark_active(&job_id_for_task).await;
-        let result = lanrurugi_backup::restore::restore(
+        // Record-counted: `percent = done / total` through the same sink the backups use.
+        // Archive writes are 0–90 %; the categories/stamps/bookmarks and translation state that
+        // follow are the remaining 10 %, which the terminal event then closes out at 100.
+        let sink = progress_job_for_task.clone();
+        let progress = move |done: u64, total: u64| {
+            let percent = crate::snapshots::record_percent(done, total) * 0.9;
+            sink.update(done, total, percent);
+        };
+        let result = lanrurugi_backup::restore::restore_with_progress(
             &doc,
             &repos.archives,
             &repos.categories,
             &repos.groupings,
             &repos.stamps,
             &state_for_task.bookmarks,
+            &progress,
         )
         .await;
         match result {
@@ -392,22 +415,22 @@ pub(crate) async fn start_restore_job(
                 )
                 .await;
 
-                jobs.finish(
-                    &job_id_for_task,
-                    json!({
-                        "archives_updated": summary.archives_updated,
-                        "archives_skipped_missing": summary.archives_skipped_missing,
-                        "categories_restored": summary.categories_restored,
-                        "tankoubons_restored": summary.tankoubons_restored,
-                        "stamps_restored": summary.stamps_restored,
-                        "bookmarks_restored": summary.bookmarks_restored,
-                        "glossaries_restored": translation.glossaries_restored,
-                        "font_patterns_restored": translation.font_patterns_restored,
-                        "text_region_sets_restored": translation.text_region_sets_restored,
-                        "snapshot": snapshot,
-                    }),
-                )
-                .await;
+                let result = json!({
+                    "restored": summary.archives_updated,
+                    "skipped": summary.archives_skipped_missing,
+                    "archives_updated": summary.archives_updated,
+                    "archives_skipped_missing": summary.archives_skipped_missing,
+                    "categories_restored": summary.categories_restored,
+                    "tankoubons_restored": summary.tankoubons_restored,
+                    "stamps_restored": summary.stamps_restored,
+                    "bookmarks_restored": summary.bookmarks_restored,
+                    "glossaries_restored": translation.glossaries_restored,
+                    "font_patterns_restored": translation.font_patterns_restored,
+                    "text_region_sets_restored": translation.text_region_sets_restored,
+                    "snapshot": snapshot,
+                });
+                progress_job_for_task.finish_with_result(result.clone());
+                jobs.finish(&job_id_for_task, result).await;
             }
             Err(e) => {
                 // The restore was actually attempted (request already accepted, task running) and
@@ -429,12 +452,13 @@ pub(crate) async fn start_restore_job(
                     None,
                 )
                 .await;
+                progress_job_for_task.fail(e.to_string());
                 jobs.fail(&job_id_for_task, e.to_string()).await;
             }
         }
     });
 
-    job_id
+    (job_id, progress_job)
 }
 
 async fn clear_new_all(
@@ -1134,6 +1158,8 @@ async fn queue_import_legacy(
     let on_existing: lanrurugi_backup::import_legacy::ImportConflictMode = query.on_existing.into();
     let minimize_tags = query.minimize_tags;
     let job_id = state.jobs.create("import_legacy").await;
+    let progress_job = crate::snapshots::start_progress_job("import");
+    let progress_job_for_task = progress_job.clone();
     let jobs = state.jobs.clone();
     let repos = state.repos.clone();
     let job_id_for_task = job_id.clone();
@@ -1144,7 +1170,14 @@ async fn queue_import_legacy(
 
     tokio::spawn(async move {
         jobs.mark_active(&job_id_for_task).await;
-        let import_result = lanrurugi_backup::import_legacy::import_from_legacy(
+        // The archive writes are the bulk of the import; keep the last 10 % for the rollback
+        // snapshot and the index rebuild that follow.
+        let sink = progress_job_for_task.clone();
+        let progress = move |done: u64, total: u64| {
+            let percent = crate::snapshots::record_percent(done, total) * 0.9;
+            sink.update(done, total, percent);
+        };
+        let import_result = lanrurugi_backup::import_legacy::import_from_legacy_with_progress(
             doc,
             on_existing,
             minimize_tags,
@@ -1152,6 +1185,7 @@ async fn queue_import_legacy(
             &repos.categories,
             &repos.groupings,
             &repos.stamps,
+            &progress,
         )
         .await;
 
@@ -1233,6 +1267,7 @@ async fn queue_import_legacy(
             && summary.tankoubons_restored == 0
             && summary.stamps_restored == 0;
         if nothing_written && import_error.is_none() {
+            progress_job_for_task.finish_with_result(summary_json.clone());
             jobs.finish(&job_id_for_task, summary_json).await;
         } else {
             match run_rebuild_sequence(
@@ -1252,18 +1287,20 @@ async fn queue_import_legacy(
                         // rather than only "it failed" with no indication of the partial write.
                         Some(e) => {
                             result["partial"] = json!(true);
-                            jobs.fail(
-                                &job_id_for_task,
-                                format!("{e} (partial progress: {result})"),
-                            )
-                            .await;
+                            let message = format!("{e} (partial progress: {result})");
+                            progress_job_for_task.fail(message.clone());
+                            jobs.fail(&job_id_for_task, message).await;
                         }
                         None => {
+                            progress_job_for_task.finish_with_result(result.clone());
                             jobs.finish(&job_id_for_task, result).await;
                         }
                     }
                 }
-                Err(e) => jobs.fail(&job_id_for_task, e).await,
+                Err(e) => {
+                    progress_job_for_task.fail(e.clone());
+                    jobs.fail(&job_id_for_task, e).await;
+                }
             }
         }
     });
@@ -1272,6 +1309,9 @@ async fn queue_import_legacy(
         "operation": "queue_import_legacy",
         "success": 1,
         "job": job_id,
+        "job_id": progress_job.id,
+        "started_at": progress_job.status().started_at,
+        "events": format!("/api/backups/jobs/{}/events", progress_job.id),
     }))
     .into_response()
 }

@@ -84,3 +84,152 @@
 - [x] T041 文档：`data-model.md` 设置项表与快照摘要/槽位状态、`contracts/backups-api.md` 的
   `schedule` + `summary` + 计划语义（时区/DST）、`quickstart.md` 的 S5「改计划后一分钟内生效」、
   `docs/dev/deletion-safety-net.md` 的生成时机与设置项表。
+
+## Phase 9: 分档开关（追加，2026-11-24）
+
+背景：整库快照在生产规模的库上不是免费的，默认每天一份偏重。改成两档各自独立开关，**默认只每周一次**，
+`daily` 由用户主动开启。
+
+- [x] T042 `settings.rs`：`BOOL_FIELDS` 新增 `snapshot_daily_enabled`（默认 **false**）、
+  `snapshot_weekly_enabled`（默认 **true**），配默认值常量与 `read_snapshot_daily_enabled` /
+  `read_snapshot_weekly_enabled` 两个读取函数（与 `read_snapshot_schedule_enabled` 同形，抽出
+  `read_bool(state, key, default)` 共用）；写侧放行沿用 `validate_setting_field` 的 `BOOL_FIELDS` 检查。
+- [x] T043 `snapshots.rs`：`SnapshotSchedule` 增加 `daily_enabled` / `weekly_enabled`，`load()` 读取、
+  `next()` 对关闭的一档返回 `None`、`schedule_tick()` 跳过关闭的一档（不比较槽位、不写 `last_*`）；
+  `schedule_json` 增加 `"daily_enabled"` / `"weekly_enabled"` 两个字段。
+- [x] T044 [P] 测试：`next()` 在仅 weekly（默认）/ 两档都开 / 都关 / 仅 daily 四组下的返回值；
+  `schedule_json` 对每档开关的 `next_*` 为 null 的断言；`settings.rs` 的两个新布尔键默认值与写侧校验。
+- [x] T045 文档：`data-model.md`（§1 不变量、§2.1 语义、§4 表与默认语义）、
+  `contracts/backups-api.md`（`schedule` 字段与生成时机、分档语义）、`quickstart.md`（S3 默认只有
+  weekly、S5 先开 daily 再改时间、只关一档的验证）、`docs/dev/deletion-safety-net.md`（生成时机与设置项表）。
+
+## Phase 10: 快照（RDB）与导出（JSON）分家 + pin + zip 导出（追加，2026-11-24）
+
+背景：用户拍板方案 A。此前目录里只有一种 JSON「快照」，既当自动备份又当可恢复导出，语义含混：
+JSON 恢复不了配置/文件映射/搜索索引，而一次真正的全量备份在 JSON 里根本表达不出来。现在拆成两类：
+
+- **快照 `kind=backup`**：`snapshot-<时间戳>-<reason>.rdb`，Redis 全量 RDB（`BGSAVE` + 拷文件），只能运维还原。
+- **导出 `kind=export`**：`export-<时间戳>-<reason>.json`，可选择性数据，app 内可还原；历史无前缀的
+  `<时间戳>-<reason>.json` 仍按导出列出。
+
+- [x] T046 `snapshots.rs`：`SnapshotKind` + 文件名解析按**前缀**判 kind（`snapshot-`/`export-`/历史无前缀），
+  `parse_name` 返回 `{created, kind, reason}`；`SnapshotEntry` 增加 `kind`，`entry_json` 输出它；
+  `looks_like_rdb` 只读前 5 字节校验 `REDIS` 魔数。
+- [x] T047 `snapshots.rs`：`take_export`（原 `take_snapshot` 改名）与新增 `take_full_backup`
+  （`CONFIG GET dir/dbfilename` → `BGSAVE` → 轮询 `LASTSAVE` → 拷到 `.tmp` → 校验魔数 → `rename`），
+  远程/托管 Redis 与禁 `CONFIG` 时返回明确错误；`copy_rdb` 全部在 `spawn_blocking` 内。
+- [x] T048 调度与操作路径：`schedule_tick`/`run_slot` 生成**快照**；`take_for_operation` 与
+  `deletions.rs` 的两处 `pre-journal-purge` 仍是**导出**。
+- [x] T049 端点：`POST /api/backups` = 立即生成快照（RDB），新增 `POST /api/backups/export` = 立即生成导出；
+  `GET /api/backups` 一个 `entries` 数组带 `kind`；共用 `GET|DELETE /api/backups/{name}`、
+  `POST|DELETE /api/backups/{name}/pin`；`POST /api/backups/{name}/restore` 只接受导出（RDB → 409
+  `full_backup_not_restorable`）；`route_policy.csv` 补 `POST /api/backups/export` 与 pin 的 deny 行。
+- [x] T050 pin：Redis set `LANRURUGI_SNAPSHOT_PINS`（`keys.rs`）、`read_pins`/`set_pin`、
+  `retention_plan` 跳过 pinned 且不占名额、删除文件时清 pin、列表每条带 `pinned`；读不到 pin 时跳过清理。
+- [x] T051 保留：快照类固定最近 3 份（`FULL_BACKUP_KEEP`，不做成设置项），导出类沿用 7/4/5/5；
+  两类都不删「最新一份可用文件」。
+- [x] T052 下载：导出支持 `?format=zip`（单成员、文件名 `<name>.zip`、`Content-Disposition` 用它）；
+  快照始终是单文件 `.rdb`（`application/octet-stream`），导出是 `application/json`。
+- [x] T053 [P] 测试：两类命名解析（含历史无前缀、前缀与扩展名不匹配）、快照 3 份上限、pin 永不入选且
+  取消后可淘汰、pin 不占名额、zip 可读回且只含该文件、pinning 往返 + 删除清 pin、
+  全量备份落盘且拒绝 app 内还原（远程 Redis 走显式错误分支）。
+- [x] T054 文档：`data-model.md`（§2 两类文件与字段、§2.2 pin、§4 设置项）、
+  `contracts/backups-api.md`（两类契约 + 运维还原 + 保留/pin 表）、`quickstart.md`（S3 两类、S5 计划生成 RDB）、
+  `docs/dev/deletion-safety-net.md`（含运维还原步骤与远程 Redis 限制）。
+
+## Phase 11: cron 驱动的快照计划（追加，2026-11-24）
+
+背景：用户要的是 TrueNAS 那种「任意粒度」的计划，而不是「每天几点 + 每周星期几」两个旋钮。Phase 8 的
+`snapshot_daily_at` / `snapshot_weekly_day`（以及 Phase 9 的两档开关）全部移除，换成一个 6–7 段 crontab：
+
+- [x] T055 新建 `crates/lanrurugi-api/src/snapshots/cron.rs`：自研的 6–7 段解析器（`秒 分 时 日 月 星期 [年]`），
+  标准 cron 语义——数字星期 `0`/`7`=周日、`1`=周一，`SUN`…`SAT`/`JAN`…`DEC` 名字，`*`/`?`/`a`/`a-b`/`*/n`/`a/n`/`a-b/n`/逗号列表，
+  **日与星期都受限时取「或」**（Vixie 规则）；`CronError` 带字段名，`Display` 输出 `seconds (segment 1): "61" is outside 0-59`；
+  `next_after`（按年/月/日/时/分/秒边界推进，不逐秒扫描）与 `next_runs`（10 个）；DST 缺口跳过、重复取较早。
+- [x] T056 `settings.rs`：移除 `snapshot_daily_at` / `snapshot_weekly_day` / `snapshot_daily_enabled` /
+  `snapshot_weekly_enabled` 及 `parse_hhmm`；新增 `snapshot_cron`（string，默认 `"0 0 3 * * 1"`）与
+  `snapshot_cron_preset`（string，默认 `"weekly"`，闭集 `hourly|daily|weekly|monthly|custom`）；读取函数
+  `read_snapshot_cron` / `read_snapshot_cron_preset`（共用新的 `read_string`）；校验非法表达式 400 且指出字段。
+- [x] T057 `snapshots.rs`：`SnapshotSchedule` 改为 `{enabled, cron, cron_text, preset}`；`schedule_tick` 每 5 秒
+  （`main.rs` 的 interval 同步改成 5 秒）；纯函数 `due_firing`（重启不重复 / 停机只补一次 / 首次安装不追溯）；
+  Redis `LANRURUGI_SNAPSHOT_SCHEDULE` 的 `last_cron_fire` 记**生成完成**的时间；计划快照 reason 改为 `scheduled`。
+- [x] T058 `GET /api/backups` 的 `schedule` 改为 `{enabled, cron, preset, timezone, last_fire_at, next_runs}`：
+  `next_runs` 是 10 个秒级 ISO 时刻（带本地偏移），停用时为 `[]`；`timezone` 用 `iana-time-zone`（已在
+  `Cargo.lock` 里，经 chrono 引入，不新增下载）+ `chrono::Local` 的偏移，形如 `Asia/Tokyo (+09:00)`。
+- [x] T059 新增 `POST /api/backups/schedule/preview`（`{"cron": "..."}` → `{valid, error?, timezone, next_runs}`，
+  恒 200），`route_policy.csv` 补两个 token 角色的 deny 行。
+- [x] T060 [P] 测试：`cron.rs` 覆盖秒级 `*/10`、每小时/每周一/每月 1 号、跨日/跨年、年字段、闰日、名字、
+  dom/dow 的「或」语义、非法段（数量/范围/步长）与 `next_runs` 严格递增；`snapshots.rs` 覆盖 `due_firing`
+  的首次安装不追溯、已服务的不重复、错过的 tick 仍服务、停机只补一次，以及 `schedule_json` 的形状与停用时的空 `next_runs`。
+- [x] T061 文档：`data-model.md`（§2.1 状态字段、§2 不变量、§4 设置项）、`contracts/backups-api.md`
+  （`schedule` 形状 + cron 语义 + preview 端点 + 生成时机）、`quickstart.md`（S3/S5 重写）、
+  `docs/dev/deletion-safety-net.md`（tick 频率、cron 语义、时限）；`spec.md` FR-007 与 `research.md` D11 同步。
+
+## Phase 12: 快照/导出的异步任务与 SSE 进度（追加，2026-11-24）
+
+背景：用户要「精确到 0.1% 的进度」，前端每 250 ms 显示一次。同步端点无法给进度（RDB 的 `BGSAVE` 可能几十秒），
+所以两个创建端点改为异步任务 + SSE，复用仓库已有的 SSE 连接管理。
+
+- [x] T062 新建 `snapshots/progress.rs`：`BackupProgress` trait（`update(written, expected, percent)`）+ `NoProgress`；
+  导出用 `write_document`（逐条记录序列化，输出与 `serde_json::to_writer` **字节一致**，有测试），按记录数报进度，
+  `bytes_expected` 随进度收敛；采样 150 ms。
+- [x] T063 `snapshots.rs`：`take_full_backup` 增加进度参数——`BGSAVE` 阶段每 200 ms 采样 Redis 的 `temp-*.rdb`
+  大小 ÷ 分母（`INFO memory` 的 `used_memory`，取不到则上一次 RDB ×1.05）走 0–90%，`copy_rdb` 改为手写分块拷贝
+  按字节走 90–100%；`take_export` / `write_atomic` 接进度；`run_firing` 与 `take_for_operation` 用 `NoProgress`。
+- [x] T064 新建 `snapshots/jobs.rs`：进程内任务注册表（完成/失败保留 1 小时、最多 32 个）、`BackupJob`
+  （`percent` 单调不减、终态 100、失败带 error）、`start_full_backup` / `start_export`；SSE 复用
+  `tankoubon_grouping/run.rs` / `archive_split.rs` 的 axum `Sse` + `broadcast` + `KeepAlive` 组合，
+  首事件为绝对状态快照，终态后关闭流；响应带 `Cache-Control: no-cache` 与 `X-Accel-Buffering: no`，
+  空闲每 12 s 一行 `: keep-alive`。
+- [x] T065 端点：`POST /api/backups` / `POST /api/backups/export` 返回
+  `{job_id, started_at, events}`；新增 `GET /api/backups/jobs/{job_id}`（轮询兜底）与
+  `GET /api/backups/jobs/{job_id}/events`（SSE）；`route_policy.csv` 补两条 GET 的 deny 行。
+- [x] T066 [P] 测试：进度单调不减 + 终态 100 + 失败带 error；broadcast 上先 `progress` 后 `done`、失败为 `error`；
+  逐条序列化的文档与 `serde_json::to_writer` 字节一致（含 `share_node_secret` 与非空集合）；两个 create 端点
+  经 `wait_for_job` 断言 `state=done` / `percent=100` / `entry.kind`。
+- [x] T067 文档：`contracts/backups-api.md`（任务端点 + SSE 事件与百分比来源 + 头）、`data-model.md` §2.3
+  （任务状态字段与保留规则）、`quickstart.md`（S3 第 2 步改成 job + SSE）、
+  `docs/dev/deletion-safety-net.md`（异步任务与进度来源）。
+
+## Phase 13: 其余长耗时数据操作接入同一任务通道（追加，2026-11-24）
+
+背景：用户要求「所有长耗时数据操作都要有准确进度」，统一走 Phase 12 的任务 + SSE 基建，不另造一套。
+
+- [x] T068 `lanrurugi-backup`：`restore::restore_with_progress`（按 `doc.archives` 逐条报 `(done,total)`，
+  旧 `restore` 保留为无进度包装）；`import_legacy::import_from_legacy_with_progress`（按实际要写入的档案数报进度，
+  旧函数保留）；`RecordProgress` 类型。
+- [x] T069 `snapshots/jobs.rs` 泛化：`kind` 由 `SnapshotKind` 改为自由字符串（`backup`/`export`/`restore`/`import`），
+  新增 `result` 字段与 `finish_with_result`、`start_progress_job(kind)`、`record_percent(done,total)`；
+  终态事件同时带 `entry` 与 `result`（不适用的那个为 `null`）。
+- [x] T070 `database.rs`：`start_restore_job` 同时创建进度任务并返回 `(jobs 控制台 id, 进度 job)`；
+  `restore_with_progress` 驱动它；`done.result` 带 `restored`/`skipped`/各分类计数/`snapshot`。
+  `POST /api/database/restore` 与 `POST /api/backups/{name}/restore` 的响应都加
+  `job_id`/`started_at`/`events`（`job` 字段保留兼容）。
+- [x] T071 `database.rs`：`queue_import_legacy` 同样创建进度任务、用
+  `import_from_legacy_with_progress` 驱动；`done.result` 是导入汇总 + `rebuild`；部分失败进 `error`
+  并附已完成的计数。响应加 `job_id`/`started_at`/`events`。
+- [x] T072 记录口径的进度统一：档案写入占 0–90%，收尾占最后 10%，终态 100；`bytes_written`/`bytes_expected`
+  在 restore/import 里表示「已处理/总记录数」。
+- [x] T073 [P] 测试：`jobs.rs` 新增记录口径任务的单调进度 + 终态 100 + `result` 汇总 + 失败带 error；
+  `record_percent` 的 0/0 与 100 边界。
+- [x] T074 文档：`contracts/backups-api.md`（restore 的异步响应 + 任务通道承载的操作表）、
+  `data-model.md` §2.3（`kind` 取值、`result` 字段、记录口径）、`quickstart.md`（restore 走 SSE）、
+  `docs/dev/deletion-safety-net.md`（操作表与百分比分配）。
+
+## Phase 14: 修「计划从不触发」+ 快照等待信号（追加，2026-11-24）
+
+现场复现：隔离实例里 `snapshot_cron=*/10 * * * * *`，`GET /api/backups` 的 `schedule` 正常、
+`next_runs` 每 10 秒，但等 3 个槽位也没有任何快照、`last_fire_at` 恒为 `null`。
+
+- [x] T075 根因：首次判定要求「当前这一秒正好命中」，而 tick 是 5 秒一次——`*/10` 这类周期与 5 秒不对齐时，
+  tick 永远落不到命中秒上，第一份永远不生成，也就永远没有 `last_cron_fire` 让后续的补发规则生效。
+  改为**没有记录时第一个 tick 立即生成一份**（等价于旧版启动快照），之后交给 cron；文档同步。
+- [x] T076 tick 可见性：每次判定命中写一条 `tracing::info!`（含 cron、槽位、是否首份），未命中写 `debug!`，
+  现场能直接看出调度是否在跑。
+- [x] T077 等待信号：`BGSAVE` 完成判定由只看 `LASTSAVE`（整秒）改为 `LASTSAVE` 前进 / RDB mtime 变化 /
+  `INFO persistence` 显示无进行中的保存（fork 起跑后 500 ms 才采信）三者任一，避免「同一秒内的保存 +
+  远程 RDB 路径」导致 120 秒空转。
+- [x] T078 可测性：`schedule_tick` 拆出 `tick_with(state, now, 注入的写入闭包)`，生产路径注入真实
+  `take_full_backup`；测试注入写文件的闭包，于是「`*/5` + 连续 tick ⇒ ≥1 份 `snapshot-*.rdb` 且
+  `last_fire_at` 非空」可以在不依赖 Redis RDB 可读的环境里跑（真 RDB 路径在测试容器里不可读，只会 skip）。
+  同时补「同一水位不重复触发」。

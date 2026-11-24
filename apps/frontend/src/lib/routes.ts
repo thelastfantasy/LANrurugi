@@ -12,6 +12,9 @@ export const routes = {
   duplicates: () => "/duplicates",
   stats: () => "/stats",
   backup: () => "/backup",
+  /** Deep link to one Backup tab. The snapshot tab is the bare `/backup` path. */
+  backupTab: (tab: "snapshot" | "import-export" | "legacy-import") =>
+    tab === "snapshot" ? "/backup" : `/backup/${tab}`,
   logs: () => "/logs",
   jobs: () => "/jobs",
   activity: () => "/activity",

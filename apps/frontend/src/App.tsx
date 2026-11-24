@@ -1,5 +1,5 @@
 import { lazy,Suspense } from "react"
-import { BrowserRouter, Route, Routes, useParams } from "react-router-dom"
+import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom"
 import { ToastContainer } from "react-toastify"
 
 import { AndroidToastTransition } from "@/toast"
@@ -120,6 +120,10 @@ export function App() {
             <Route path="/duplicates" element={<Duplicates />} />
             <Route path="/stats" element={<Stats />} />
             <Route path="/backup" element={<Backup />} />
+            <Route path="/backup/import-export" element={<Backup />} />
+            <Route path="/backup/legacy-import" element={<Backup />} />
+            {/* Any other /backup/... falls back to the default tab rather than the 404 page. */}
+            <Route path="/backup/*" element={<Navigate to="/backup" replace />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/jobs" element={<Jobs />} />
             {/* Admin-only, like everything else in this block: it edits the admin password and the
