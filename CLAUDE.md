@@ -57,12 +57,14 @@ and bookkeeping churn moves them, so treat a specific figure as a hint, not a fa
   `/archives/{id}/split-suggestion`, `/split/execute`, `/split/stream`, `/split-tree`, the reader's
   `TankoubonSplitModal.tsx`). Only `plan.md` exists for each, so their checkbox counts read 0 —
   don't treat that as unbuilt work.
-- **Code implemented, deployment verification outstanding**: `029-download-ingest-latency` (32/38).
+- **Code implemented, deployment verification outstanding**: `029-download-ingest-latency` (33/39).
   Per-job phase timing (`JobStatus.phases`, six-phase vocabulary in `crates/lanrurugi-core/src/jobs.rs`),
   the queue row's three-segment readout (`apps/frontend/src/pages/Upload/queuePhases.ts`), the plugin
-  descriptor cache with single-flight plus an automatic cap on transient declaration processes
-  (`worker_limit()` in `crates/lanrurugi-plugin/src/pool.rs` — cores/2 clamped to 2–8; persistent
-  per-plugin workers are deliberately never evicted), one lock **per plugin namespace** rather than one
+  descriptor cache keyed by `mtime`+`size`+`ctime`+`inode` (so a `cp -p`-style replacement still
+  invalidates it; the 10-minute TTL is only a backstop), single-flight plus an automatic cap on
+  transient declaration processes (`worker_limit()` in `crates/lanrurugi-plugin/src/pool.rs` —
+  cores/2 clamped to 2–8; persistent per-plugin workers are deliberately never evicted, and they
+  have no idle timeout either), one lock **per plugin namespace** rather than one
   for the whole worker table (so a plugin waiting on its site cannot delay another plugin's calls, while
   one namespace still answers one call at a time from one process), skipping the metadata plugin whose
   answer the queue row already carries, a `download_url` transaction with one span per phase, and the

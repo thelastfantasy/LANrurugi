@@ -106,10 +106,12 @@ fn plugin_mtime(plugin_module: &Path) -> Result<SystemTime> {
     Ok(std::fs::metadata(plugin_module)?.modified()?)
 }
 
-/// How long a descriptor entry may be reused even when the file's `(mtime, size)` still match.
-/// Bounds the "replaced in place, same mtime and size" case (`cp -p`, some network filesystems),
-/// which no stat-based key can see (contract P6).
-const INFO_CACHE_TTL: Duration = Duration::from_secs(60);
+/// How long a descriptor entry may be reused even when the file still carries the same stamp.
+///
+/// Purely a memory backstop now: [`PluginStamp`] already sees an in-place replacement (it reads
+/// `ctime` and `inode`, neither of which `cp -p`/`rsync -a`/untarring can preserve), so this no
+/// longer decides correctness — ten minutes keeps an entry warm across an idle stretch.
+const INFO_CACHE_TTL: Duration = Duration::from_secs(600);
 
 /// How many throwaway dispatchers may exist at once — the ones that answer "what does this plugin
 /// declare?" and then exit.
@@ -135,8 +137,7 @@ pub fn worker_limit() -> usize {
 #[derive(Clone)]
 struct CachedPluginInfo {
     /// Stamped at fetch time from the file itself, never from a caller-supplied value (V1).
-    mtime: SystemTime,
-    size: u64,
+    stamp: PluginStamp,
     info: PluginInfo,
     /// `Some(None)` means "asked, the plugin exports no `pluginOptions()`"; `None` means this
     /// entry has never been asked yet.
@@ -146,8 +147,49 @@ struct CachedPluginInfo {
 
 impl CachedPluginInfo {
     /// P1/P6: still describes the same file version, and has not aged out.
-    fn is_current(&self, mtime: SystemTime, size: u64) -> bool {
-        self.mtime == mtime && self.size == size && self.fetched_at.elapsed() < INFO_CACHE_TTL
+    fn is_current(&self, stamp: PluginStamp) -> bool {
+        self.stamp == stamp && self.fetched_at.elapsed() < INFO_CACHE_TTL
+    }
+}
+
+/// A plugin file's identity for cache purposes.
+///
+/// `mtime`+size alone cannot see an in-place replacement that preserves timestamps (`cp -p`,
+/// `rsync -a`, untarring a backup over the file). `ctime` cannot be set from userspace and `inode`
+/// changes on a write-then-rename swap, so reading them closes that hole at no extra IO — the same
+/// `stat` already in hand returns both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PluginStamp {
+    modified: SystemTime,
+    size: u64,
+    /// Unix `ctime` as (seconds, nanoseconds); `(0, 0)` where the platform has no such field.
+    changed: (i64, i64),
+    inode: u64,
+}
+
+impl PluginStamp {
+    fn of(meta: &std::fs::Metadata) -> std::io::Result<Self> {
+        let modified = meta.modified()?;
+        let size = meta.len();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Ok(Self {
+                modified,
+                size,
+                changed: (meta.ctime(), meta.ctime_nsec()),
+                inode: meta.ino(),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(Self {
+                modified,
+                size,
+                changed: (0, 0),
+                inode: 0,
+            })
+        }
     }
 }
 
@@ -472,15 +514,11 @@ impl PluginPool {
         &self.deno_binary
     }
 
-    /// Current `(mtime, size)` of a plugin file — the cache key (V1). A missing file also drops any
+    /// Current [`PluginStamp`] of a plugin file — the cache key (V1). A missing file also drops any
     /// cached entry for it, so a deleted plugin cannot keep being listed (P2).
-    async fn plugin_stamp(
-        &self,
-        namespace: &str,
-        plugin_module: &Path,
-    ) -> Result<(SystemTime, u64)> {
+    async fn plugin_stamp(&self, namespace: &str, plugin_module: &Path) -> Result<PluginStamp> {
         match std::fs::metadata(plugin_module) {
-            Ok(meta) => Ok((meta.modified()?, meta.len())),
+            Ok(meta) => Ok(PluginStamp::of(&meta)?),
             Err(_) => {
                 self.info_cache.lock().await.remove(namespace);
                 Err(PoolError::NotFound(namespace.to_string()))
@@ -488,14 +526,9 @@ impl PluginPool {
         }
     }
 
-    async fn cache_lookup(
-        &self,
-        namespace: &str,
-        mtime: SystemTime,
-        size: u64,
-    ) -> Option<CachedPluginInfo> {
+    async fn cache_lookup(&self, namespace: &str, stamp: PluginStamp) -> Option<CachedPluginInfo> {
         match self.info_cache.lock().await.get(namespace) {
-            Some(entry) if entry.is_current(mtime, size) => Some(entry.clone()),
+            Some(entry) if entry.is_current(stamp) => Some(entry.clone()),
             _ => None,
         }
     }
@@ -548,8 +581,8 @@ impl PluginPool {
             return Err(PoolError::NotFound(namespace.to_string()));
         }
         let plugin_module = self.plugins_dir.join(format!("{namespace}.ts"));
-        let (mtime, size) = self.plugin_stamp(namespace, &plugin_module).await?;
-        if let Some(hit) = self.cache_lookup(namespace, mtime, size).await {
+        let stamp = self.plugin_stamp(namespace, &plugin_module).await?;
+        if let Some(hit) = self.cache_lookup(namespace, stamp).await {
             return Ok(hit);
         }
 
@@ -557,8 +590,8 @@ impl PluginPool {
         let _held = gate.lock().await;
         // Second look: while this call queued, the winner may have filled the entry — and the file
         // may have changed again, so the stamp is taken fresh rather than reused.
-        let (mtime, size) = self.plugin_stamp(namespace, &plugin_module).await?;
-        if let Some(hit) = self.cache_lookup(namespace, mtime, size).await {
+        let stamp = self.plugin_stamp(namespace, &plugin_module).await?;
+        if let Some(hit) = self.cache_lookup(namespace, stamp).await {
             return Ok(hit);
         }
 
@@ -578,8 +611,7 @@ impl PluginPool {
             );
         }
         let entry = CachedPluginInfo {
-            mtime,
-            size,
+            stamp,
             info,
             options: None,
             fetched_at: Instant::now(),
@@ -611,12 +643,12 @@ impl PluginPool {
         }
 
         let plugin_module = self.plugins_dir.join(format!("{namespace}.ts"));
-        let (mtime, size) = self.plugin_stamp(namespace, &plugin_module).await?;
+        let stamp = self.plugin_stamp(namespace, &plugin_module).await?;
         let gate = self.discovery_gate(namespace).await;
         let _held = gate.lock().await;
         // Re-read under the gate: a concurrent call may have answered this while we queued.
         if let Some(options) = self
-            .cache_lookup(namespace, mtime, size)
+            .cache_lookup(namespace, stamp)
             .await
             .and_then(|entry| entry.options)
         {
@@ -636,7 +668,7 @@ impl PluginPool {
         };
         if let Some(entry) = self.info_cache.lock().await.get_mut(namespace) {
             // Only if the declaration still describes the same file version we just asked about.
-            if entry.mtime == mtime && entry.size == size {
+            if entry.stamp == stamp {
                 entry.options = Some(options.clone());
             }
         }
@@ -988,12 +1020,98 @@ mod tests {
         let before = pool.cached_descriptor(&scratch.namespace).await.unwrap();
         assert_eq!(before.info.name, "first");
 
-        // Deliberately a different length as well as different content: `(mtime, size)` is the key,
-        // so this must miss even on a filesystem whose mtime resolution is coarse.
+        // Deliberately a different length as well as different content: this must miss even on a
+        // filesystem whose mtime resolution is coarse.
         scratch.declare("renamed-and-longer");
         let after = pool.cached_descriptor(&scratch.namespace).await.unwrap();
         assert_eq!(after.info.name, "renamed-and-longer");
         assert_ne!(before.fetched_at, after.fetched_at);
+    }
+
+    /// The case the old 60 s TTL existed to bound: a swap that keeps both `mtime` and `size`
+    /// (`cp -p`, `rsync -a`, untarring a backup over the file). The stamp still has to move —
+    /// neither `ctime` nor `inode` travels with that kind of replacement.
+    #[test]
+    fn a_swap_that_preserves_the_timestamp_still_changes_the_stamp() {
+        let path = std::env::temp_dir().join(format!(
+            "lrr-stamp-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(
+            &path,
+            "export function pluginInfo() { return { name: 'a' }; }\n",
+        )
+        .unwrap();
+        let before = PluginStamp::of(&std::fs::metadata(&path).unwrap()).unwrap();
+
+        // Same length, old mtime restored the way `cp -p` does it, landing via `rename` the way an
+        // editor's write-to-temp replacement does.
+        let staged = path.with_extension("staged");
+        std::fs::write(
+            &staged,
+            "export function pluginInfo() { return { name: 'b' }; }\n",
+        )
+        .unwrap();
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&staged)
+            .unwrap();
+        file.set_times(std::fs::FileTimes::new().set_modified(before.modified))
+            .unwrap();
+        drop(file);
+        std::fs::rename(&staged, &path).unwrap();
+
+        let after = PluginStamp::of(&std::fs::metadata(&path).unwrap()).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(
+            after.size, before.size,
+            "the replacement is the same length"
+        );
+        assert_eq!(
+            after.modified, before.modified,
+            "…and carries the old mtime, which is what defeats a `(mtime, size)` cache key"
+        );
+        assert_ne!(
+            after, before,
+            "inode/ctime still moved, so the cached declaration must miss"
+        );
+    }
+
+    /// The TTL is a backstop, not the freshness mechanism: a five-minute-old entry is still
+    /// current, which is what keeps an idle library from re-spawning 21 declaration processes on
+    /// the next ingest.
+    #[test]
+    fn an_entry_stays_current_across_an_idle_stretch_longer_than_one_minute() {
+        let info: PluginInfo = serde_json::from_value(serde_json::json!({
+            "namespace": "idle",
+            "type": "metadata",
+            "declared_permissions": { "net": [], "read": false, "write": false },
+        }))
+        .unwrap();
+        let stamp = PluginStamp {
+            modified: SystemTime::UNIX_EPOCH,
+            size: 10,
+            changed: (1, 2),
+            inode: 3,
+        };
+        let entry = CachedPluginInfo {
+            stamp,
+            info,
+            options: None,
+            fetched_at: Instant::now() - Duration::from_secs(5 * 60),
+        };
+        assert!(
+            entry.is_current(stamp),
+            "a 60 s TTL would have made this stale"
+        );
+        assert!(
+            !entry.is_current(PluginStamp { size: 11, ..stamp }),
+            "any stamp field moving must still invalidate it"
+        );
     }
 
     #[tokio::test]

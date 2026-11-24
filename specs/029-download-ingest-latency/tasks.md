@@ -54,9 +54,9 @@ Rust workspace（`crates/*`）+ 前端（`apps/frontend`）+ 插件（`plugins/`
 **Independent Test**: quickstart 场景 1（一次入库的进程新增数）与场景 2（编辑/上传/删除即时生效）。
 
 - [x] T006 [P] [US1] 在 `crates/lanrurugi-plugin/src/pool.rs` 新增缓存条目与存储：
-  - `struct CachedPluginInfo { mtime: SystemTime, size: u64, info: PluginInfo, options: Option<PluginOptionsResult>, fetched_at: Instant }`。
+  - `struct CachedPluginInfo { stamp: PluginStamp, info: PluginInfo, options: Option<PluginOptionsResult>, fetched_at: Instant }`（`PluginStamp` 后由 T039 扩为 `mtime`+`size`+`ctime`+`inode`）。
   - `PluginPool` 加 `info_cache: Mutex<HashMap<String, CachedPluginInfo>>` 与 `inflight: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>`（按 namespace 的 single-flight）。
-  - `const INFO_CACHE_TTL: Duration = Duration::from_secs(60)`（契约 P6 的保守上限）。
+  - `const INFO_CACHE_TTL`（契约 P6 的保守上限；初始 60 s，T039 后改为 10 分钟纯兜底）。
   - 失效键取自 `plugin_mtime()` + `std::fs::metadata().len()`（数据模型 V1）。
 - [x] T007 [US1] 让 `plugin_info`（`pool.rs:388-410`）与 `plugin_options`（`:417-440`）走缓存：
   - 命中且 `(mtime,size)` 未变且未过 TTL → 直接返回克隆，**不 spawn**。
@@ -169,6 +169,7 @@ Rust workspace（`crates/*`）+ 前端（`apps/frontend`）+ 插件（`plugins/`
   - ① `crates/lanrurugi-plugin/src/pool.rs` 的 `execute` 原先持整张 worker 表的全局锁直到调用返回，等于“A 插件在等站点响应时，B 插件的所有调用都在排队”；改为 `workers: Mutex<HashMap<String, Arc<tokio::sync::Mutex<WorkerSlot>>>>`，表锁只在取/插槽位时持有，`WorkerSlot { worker: Option<Worker> }` 在**槽锁内**做 mtime 新鲜度检查、冷启与调用失败后的丢弃。同一插件仍严格串行、仍是一个进程；`restart_workers` 改为按槽等待（能拿到槽锁就说明没有在飞调用）后才停进程。
   - ② `crates/lanrurugi-api/src/plugins.rs` 的元数据链去重：每次入库的 `LRR_CONFIG` 由“每插件 2 次 `HGETALL`”降为整轮 1 次（`PluginRunConfig` + `relevant_settings`/`tag_rules_text` 两个纯函数复用），`file_modified_time` 由“每插件一次 `std::fs::metadata`”降为整轮 1 次（它是档案属性，不是插件属性）。
   - 新增两个测试把 FR-015 的两半都钉住：不同插件计时方法并发执行、耗时小于两倍睡眠；同一插件的两次并发调用仍串行（耗时 ≥ 两倍睡眠）且 worker 表只有 1 项。
+- [x] T039 收尾加固（用户 2026-11-25 问“拉长 TTL 有没有副作用”后补的）：把描述符缓存的键从 `(mtime, size)` 换成 `PluginStamp { modified, size, ctime, inode }`（`#[cfg(unix)]` 走 `std::os::unix::fs::MetadataExt`，非 unix 回落 `(0,0)`/`0`），`INFO_CACHE_TTL` 60 s → 600 s。理由：`cp -p`/`rsync -a`/解 tar 覆盖会保留 `mtime`+`size`，旧键只能靠 60 秒兜底；`ctime` 用户态改不掉、`inode` 在“写临时文件再 rename”时必变，于是这类替换也能即时生效，TTL 退化为内存卫生。新增测试 `a_swap_that_preserves_the_timestamp_still_changes_the_stamp`（同长度、恢复旧 mtime、经 rename 落地，断言 `size`/`mtime` 相等而整枚 stamp 不等）与 `an_entry_stays_current_across_an_idle_stretch_longer_than_one_minute`（五分钟旧条目仍 current，旧 60 秒 TTL 下会失效）。契约 P1/P6 与可验证观测点同步改写。
 
 ---
 
@@ -273,7 +274,7 @@ Task: "T031 单测 in crates/lanrurugi-scanner/src/pipeline.rs"
 
 - **阶段计时（FR-001/FR-007）**：`crates/lanrurugi-core/src/jobs.rs` 的 `JobStatus.phases`（`Vec<JobPhase>`，`started_at`/`ended_at` 毫秒，`ended_at` 缺失序列化为 `null`，`phases` 为空时整键省略）由 `JobRegistry::begin_phase`/`end_phase` 维护；`mark_active` 清空（重试即新时间线），`finish`/`fail` 闭合所有未闭合段。打点在 `crates/lanrurugi-api/src/plugins.rs` 的 queued/negotiate/waiting/transfer/ingest 五个边界，加 `crates/lanrurugi-api/src/download_manager/ingest.rs` 的 `ingest_clock::mark(PHASE_PUBLISH)`；`crates/lanrurugi-api/src/ingest_clock.rs`（`task_local`，带 job id 与队列项 id）让 ingest 内部不必一路透传 job id。
 - **前端呈现（FR-002）**：`apps/frontend/src/pages/Upload/queuePhases.ts` 把六段折成排队/下载/入库三段（`negotiate`+`waiting` → 排队，`publish` → 入库），未闭合段按当前时刻收尾；`QueueItemRow.tsx` 两处 `ingesting` 判定都改走 `ingestingNow`（时间线优先，旧 `transferring` 字段回退），队列行写成「排队 13:03 · 下载 4:27 · 入库 0:06」，平均速率 tooltip 说明只统计传输段。14 个 locale 全部补齐 5 个 key。
-- **插件声明缓存（FR-003/FR-004）**：`crates/lanrurugi-plugin/src/pool.rs` 的 `CachedPluginInfo`（mtime + size + 60 秒 TTL）+ 每命名空间 single-flight 的 `inflight` 表；`plugin_info`/`plugin_options` 都先查缓存，零权限 worker 只用来问声明。写插件、删除插件、改文件都会让缓存失效（stamp 变化即重读）。`plugins/metadata/chaika.ts` 的 `namespace` 从 `trabant` 改回与路径一致的 `metadata/chaika`。
+- **插件声明缓存（FR-003/FR-004）**：`crates/lanrurugi-plugin/src/pool.rs` 的 `CachedPluginInfo`（`PluginStamp`：mtime + size + ctime + inode，外加 10 分钟兜底 TTL）+ 每命名空间 single-flight 的 `inflight` 表；`plugin_info`/`plugin_options` 都先查缓存，零权限 worker 只用来问声明。写插件、删除插件、改文件、以及 `cp -p` 式的原地替换都会让缓存失效（stamp 变化即重读）。`plugins/metadata/chaika.ts` 的 `namespace` 从 `trabant` 改回与路径一致的 `metadata/chaika`。
 - **跳过重复元数据（FR-005/FR-006）**：`DownloadQueueItem.metadata_preview_namespace` 记录"这份预览是哪个插件答的"，随 preview 一起清空；`run_enabled_metadata_plugins_on_archive` 新增 `skip: Option<&str>` 参数（5 处调用方），只跳过声明过的那一个，其余插件照常跑；跳过时 `apply_preview_metadata` 把缓存的 title/tags 落到档案上（`update_then` + `reindex_title_and_tags`，不整条覆写）。
 - **追踪（FR-008）**：`crates/lanrurugi-api/src/diagnostics/download_trace.rs` 为每个下载任务开一条 `download_url` 事务，六个阶段各一个子 span（`queue.wait`/`plugin.exec`/`http.wait`/`file.transfer`/`file.ingest`/`plugin.metadata`），与 `phases` 共用同一份词表和同一个打点函数。
 - **临时进程闸（FR-014）**：`crates/lanrurugi-plugin/src/pool.rs` 的 `worker_limit()`（核数/2，夹在 2–8）给“读声明/自省”这类一次性 worker 设并发上限，`spawn_transient_worker` 返回的 `TransientWorker` 在存活期间持有 `OwnedSemaphorePermit`，`Drop` 时连同 worker 一起归还；冷启动时整库发现最多同时 8 个临时进程，而不是一次一个插件。**常驻 worker 不设上限、也不淘汰**：它本来就是一个插件一个进程、并被该插件的所有并发调用共用，淘汰等于杀掉可能正在被调用的进程。
@@ -291,7 +292,7 @@ Task: "T031 单测 in crates/lanrurugi-scanner/src/pipeline.rs"
 已实测（`mise run test-one`，各自临时 Redis）：
 
 - `crates/lanrurugi-core` `jobs::tests` → 29 passed（新增 7 个阶段契约测试）。
-- `crates/lanrurugi-plugin` `pool::tests` → 25 passed（新增 5 个：缓存命中、改文件失效、删除失效、声明失败不缓存、冷缓存并发只加载一次；以及 T037 的 2 个：进程上限落在 2–8、槽位被占满时声明读取会等待且事后归还）。
+- `crates/lanrurugi-plugin` `pool::tests` → 29 passed（新增 5 个：缓存命中、改文件失效、删除失效、声明失败不缓存、冷缓存并发只加载一次；T037 的 2 个：进程上限落在 2–8、槽位被占满时声明读取会等待且事后归还；T038 的 2 个并发/串行；T039 的 2 个：保留时间戳的替换仍改 stamp、五分钟旧的条目仍算 current）。
 - `crates/lanrurugi-scanner` `pipeline::tests` → 10 passed（新增 2 个：别人持锁时超时不算失败、无人持锁仍算失败）。
 - `crates/lanrurugi-api` `download_manager::ingest::tests` → 14 passed（新增 1 个：被跳过的插件仍贡献 title/tags）、`diagnostics::download_trace` → 2 passed、`only_the_recorded_plugin_is_skipped_*` → 1 passed。
 - 前端：`tests/unit/queuePhases.test.ts` 9 passed、`tests/unit/queueRowStats.test.tsx` 12 passed（3 个新用例覆盖完整五段、无 `phases` 回退、传输中未闭合 ingest）。`npx tsc -b`、`npx eslint`（改动文件）通过。
