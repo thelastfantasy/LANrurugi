@@ -55,7 +55,8 @@ const TIMELINE_MAX_DAYS: u64 = 2000;
 const READ_COUNTER_HORIZON_DAYS: u64 = 400;
 /// How many recent ingestions / readings / largest archives / re-read works to return.
 const RECENT_LIMIT: usize = 10;
-/// Rows per namespace in the preference analysis, and how many namespaces get rows at all.
+/// Rows per namespace in the preference analysis, and how many namespaces get rows at all
+/// ([`HIGHLIGHTED_NAMESPACES`] included — they are pinned entries of that same list, not extra ones).
 const TOP_TAGS_PER_NAMESPACE: usize = 8;
 const MAX_NAMESPACES: usize = 12;
 /// How many dynamic categories are resolved through the search engine before this endpoint stops
@@ -80,7 +81,10 @@ const INGEST_SOURCE_ROWS: &[&str] = &["download", "scanner", "upload_browser", "
 /// excluded because it is a *weight* on a work rather than a property of one (see
 /// [`preference_weights`]); it gets its own breakdown in [`Preferences::ratings`] instead.
 /// `download`/`gallery` (metadata plugins' download URL and gallery id) are one value per archive:
-/// a list of them is every entry at one archive.
+/// a list of them is every entry at one archive. `uploader` is the source site's account that
+/// posted the gallery — the same kind of thing as `source`, and the one nobody picks works by, so
+/// it was ranking into the per-namespace list while the axes a reader does pick (artist, circle,
+/// cosplayer) sat pinned above it.
 const NON_CONTENT_NAMESPACES: &[&str] = &[
     "date_added",
     "timestamp",
@@ -88,6 +92,7 @@ const NON_CONTENT_NAMESPACES: &[&str] = &[
     "rating",
     "download",
     "gallery",
+    "uploader",
 ];
 
 /// Tag *values* that are not what their namespace's name promises, dropped from that namespace's
@@ -98,15 +103,15 @@ const NON_CONTENT_NAMESPACES: &[&str] = &[
 /// perfectly meaningful value anywhere else.
 const NON_AXIS_TAG_VALUES: &[(&str, &str)] = &[("language", "translated")];
 
-/// Namespaces the preferences section promotes into their own list, in display order: the axes a
+/// Namespaces the per-namespace preference list pins to its front, in display order: the axes a
 /// reader actually picks works by (interface language, author, circle, cosplayer), which otherwise
-/// share a single "top tags per namespace" list with the long tail of content tags — where a small
-/// library can leave them out of the top-[`MAX_NAMESPACES`] entirely, or leave `cosplayer` below the
-/// per-namespace cap. `circle` is here for the same reason `artist` is: a doujin circle is a much
-/// better predictor of what a reader wants next than the content tags it competes with, and on this
-/// library its weight is far below the cap that would otherwise hide it. Whatever appears here is
-/// excluded from [`Preferences::by_namespace`], so nothing is listed twice. Adding another axis is a
-/// one-line change to this roster.
+/// share the list with the long tail of content tags — where a small library can leave them out of
+/// the top-[`MAX_NAMESPACES`] entirely, or leave `cosplayer` below the per-namespace cap. `circle`
+/// is here for the same reason `artist` is: a doujin circle is a much better predictor of what a
+/// reader wants next than the content tags it competes with, and on this library its weight is far
+/// below the cap that would otherwise hide it. They are pinned, not split out: the list is meant to
+/// be *the* namespace statistics, so leaving these out of it read as "the important axes are
+/// missing". Adding another axis is a one-line change to this roster.
 const HIGHLIGHTED_NAMESPACES: &[&str] = &["language", "artist", "circle", "cosplayer"];
 
 /// Half-life of the recency term in [`preference_weights`], in days: a read half as recent as
@@ -263,9 +268,8 @@ pub struct Preferences {
     /// Every content tag namespace seen across the read archives, weighted by
     /// [`preference_weights`].
     pub namespaces: Vec<NamespaceStat>,
-    /// The promoted axes ([`HIGHLIGHTED_NAMESPACES`]) — always shown, however low they rank.
-    pub highlights: Vec<NamespaceTags>,
-    /// Top tags within each of the highest-weighted of the *remaining* namespaces.
+    /// Top tags per namespace: the pinned axes ([`HIGHLIGHTED_NAMESPACES`]) first, in roster order,
+    /// then the highest-weighted of the remaining namespaces.
     pub by_namespace: Vec<NamespaceTags>,
     /// How the read archives split across the reader's own 1–5 ratings (`stars: 0` = unrated),
     /// counted rather than weighted: the rating is already a factor in every weight above, so
@@ -478,25 +482,12 @@ async fn overview(State(state): State<AppState>, auth: Option<Extension<AuthCont
                 .into_iter()
                 .take(MAX_NAMESPACES)
                 .collect(),
-            highlights: tags_for_namespaces(
+            by_namespace: tags_for_namespaces(
                 &archives,
                 &weights,
                 &excluded,
-                &HIGHLIGHTED_NAMESPACES
-                    .iter()
-                    .map(|ns| ns.to_string())
-                    .collect::<Vec<_>>(),
+                &namespace_roster(&namespace_weights(&archives, &weights, &excluded)),
             ),
-            by_namespace: {
-                // The promoted axes are already listed on their own above.
-                let rest: Vec<String> = namespace_weights(&archives, &weights, &excluded)
-                    .into_iter()
-                    .take(MAX_NAMESPACES)
-                    .map(|ns| ns.namespace)
-                    .filter(|ns| !HIGHLIGHTED_NAMESPACES.contains(&ns.as_str()))
-                    .collect();
-                tags_for_namespaces(&archives, &weights, &excluded, &rest)
-            },
             ratings: rating_tiers(&archives, &weights),
             categories: category_stats,
             categories_truncated,
@@ -1374,6 +1365,25 @@ fn namespace_weights(
     out
 }
 
+/// The per-namespace list's roster: [`HIGHLIGHTED_NAMESPACES`] pinned first, in their own order,
+/// then the highest-weighted of the rest, with [`MAX_NAMESPACES`] capping the two parts *together*
+/// (the pinned axes are entries of that list, not extra rows beyond its cap).
+fn namespace_roster(ranked: &[NamespaceStat]) -> Vec<String> {
+    let mut roster: Vec<String> = HIGHLIGHTED_NAMESPACES
+        .iter()
+        .map(|ns| ns.to_string())
+        .collect();
+    roster.extend(
+        ranked
+            .iter()
+            .map(|ns| ns.namespace.as_str())
+            .filter(|ns| !HIGHLIGHTED_NAMESPACES.contains(ns))
+            .take(MAX_NAMESPACES.saturating_sub(HIGHLIGHTED_NAMESPACES.len()))
+            .map(|ns| ns.to_string()),
+    );
+    roster
+}
+
 /// Top tags for each namespace in `roster`, in the roster's own order — so a caller can pin the
 /// axes it wants to show first ([`HIGHLIGHTED_NAMESPACES`]) instead of only ever getting the
 /// highest-weighted ones. Namespaces absent from the library are simply skipped.
@@ -1888,7 +1898,7 @@ mod tests {
         let now = 1_800_000_000;
         let archives = vec![read_archive(
             "a",
-            "artist:alpha,artist:beta,date_added:1700000000,rating:4,tag:school,download:https://x.test/1/,gallery:70641",
+            "artist:alpha,artist:beta,date_added:1700000000,rating:4,tag:school,download:https://x.test/1/,gallery:70641,uploader:somebody",
             10,
             10,
             now,
@@ -1899,6 +1909,8 @@ mod tests {
         assert!(names.contains(&"artist") && names.contains(&"tag"));
         assert!(!names.contains(&"date_added") && !names.contains(&"rating"));
         assert!(!names.contains(&"download") && !names.contains(&"gallery"));
+        // Who posted the gallery to the source site is not a property of the work.
+        assert!(!names.contains(&"uploader"));
 
         let artist = namespaces.iter().find(|n| n.namespace == "artist").unwrap();
         let tag = namespaces.iter().find(|n| n.namespace == "tag").unwrap();
@@ -1951,6 +1963,36 @@ mod tests {
             .find(|n| n.namespace == "language")
             .unwrap();
         assert_eq!(language.tags[0].text, "chinese");
+    }
+
+    #[test]
+    fn namespace_roster_pins_the_axes_ahead_of_the_ranking() {
+        let ranked: Vec<NamespaceStat> = (0..(MAX_NAMESPACES + 4))
+            .map(|i| NamespaceStat {
+                // Filler namespaces all outrank the pinned axes on purpose.
+                namespace: format!("filler{i}"),
+                weight: 100.0,
+                archives: 1,
+            })
+            .chain(HIGHLIGHTED_NAMESPACES.iter().map(|ns| NamespaceStat {
+                namespace: ns.to_string(),
+                weight: 1.0,
+                archives: 1,
+            }))
+            .collect();
+
+        let roster = namespace_roster(&ranked);
+        let head: Vec<&str> = roster
+            .iter()
+            .take(HIGHLIGHTED_NAMESPACES.len())
+            .map(|s| s.as_str())
+            .collect();
+        assert_eq!(head, HIGHLIGHTED_NAMESPACES.to_vec());
+        assert_eq!(
+            roster.len(),
+            MAX_NAMESPACES,
+            "the pinned axes are listed inside the cap, not on top of it"
+        );
     }
 
     #[test]

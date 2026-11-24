@@ -898,10 +898,8 @@ export interface StatsNamespaceTags {
 export interface StatsPreferences {
   read_archives: number
   namespaces: { namespace: string; weight: number; archives: number }[]
-  /** The promoted axes (`language`, `artist`, `circle`, `cosplayer`) — always shown, in that order, however
-   *  low they rank among all namespaces; excluded from `by_namespace`. */
-  highlights: StatsNamespaceTags[]
-  /** Top tags for the remaining namespaces. */
+  /** Top tags per namespace: the promoted axes (`language`, `artist`, `circle`, `cosplayer`) first,
+   *  in that order however low they rank, then the highest-weighted of the rest. */
   by_namespace: StatsNamespaceTags[]
   /** Read archives per rating, `stars: 0` meaning unrated. */
   ratings: { stars: number; archives: number }[]

@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next"
 
-import type { StatsNamespaceTags, StatsOverview } from "@/api/types"
+import type { StatsOverview } from "@/api/types"
 import { buildSearchToken } from "@/lib/tagFormat"
 
 import { useChartPalette } from "./chartPalette"
@@ -19,59 +19,9 @@ function readTagSearchURL(namespace: string, tag: string): string {
   return `/?q=${encodeURIComponent(`${buildSearchToken(namespace, tag, true)} is:read`)}`
 }
 
-/** One promoted axis (`language` / `artist` / `circle` / `cosplayer`) as its own block: its tags, each with
- *  the bar length of its preference weight and the number of read archives behind it. */
 /** A fixed line height for the column headings: with `normal`, a Latin-only label ("Coser") sat a
  *  few pixels shorter than a CJK one, so its column started higher than its neighbours. */
 const HEADING_LINE_HEIGHT = 1.4
-
-function HighlightBlock({
-  namespace,
-  data,
-  label,
-  color,
-}: {
-  namespace: string
-  data: StatsNamespaceTags | undefined
-  label: string
-  color: string
-}) {
-  const { t } = useTranslation()
-  if (!data || data.tags.length === 0) {
-    return (
-      <div style={{ flex: "1 1 260px", minWidth: 240 }}>
-        <div style={{ fontSize: "0.9rem", lineHeight: HEADING_LINE_HEIGHT, marginBottom: 6 }}>
-          <LegendSwatch color={color} />
-          <b>{label}</b>
-        </div>
-        <p style={{ fontSize: "0.75rem", opacity: 0.7, margin: 0 }}>{t("stats.noSuchTags")}</p>
-      </div>
-    )
-  }
-  const maxTag = data.tags.reduce((max, tag) => Math.max(max, tag.weight), 0)
-  const total = data.tags.reduce((sum, tag) => sum + tag.weight, 0)
-  return (
-    <div style={{ flex: "1 1 260px", minWidth: 240 }} data-namespace={namespace}>
-      <div style={{ fontSize: "0.9rem", lineHeight: HEADING_LINE_HEIGHT, marginBottom: 6 }}>
-        <LegendSwatch color={color} />
-        <b>{label}</b>
-      </div>
-      {data.tags.map((tag) => (
-        <BarRow
-          key={tag.text}
-          label={tag.text}
-          value={tag.weight}
-          max={maxTag}
-          valueLabel={t("stats.readArchivesValue", { count: tag.archives })}
-          hint={formatPercent(tag.weight, total)}
-          color={color}
-          href={readTagSearchURL(namespace, tag.text)}
-          linkTitle={t("stats.searchReadWithTag", { tag: `${namespace}:${tag.text}` })}
-        />
-      ))}
-    </div>
-  )
-}
 
 /** Which tags, authors and categories the reading history actually points at.
  *
@@ -102,17 +52,33 @@ export function Preferences({ preferences }: { preferences: StatsOverview["prefe
       hint={t("stats.preferenceAnalysisModel", { count: preferences.read_archives })}
     >
       <div style={{ marginTop: 16 }}>
-        <h4 style={{ fontSize: "0.9rem", margin: "0 0 8px" }}>{t("stats.highlightedAxes")}</h4>
+        <h4 style={{ fontSize: "0.9rem", margin: "0 0 8px" }}>{t("stats.topTagsPerNamespace")}</h4>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 18 }}>
-          {preferences.highlights.map((ns, index) => (
-            <HighlightBlock
-              key={ns.namespace}
-              namespace={ns.namespace}
-              data={ns}
-              label={t(namespaceLabelKey(ns.namespace), { defaultValue: ns.namespace })}
-              color={seriesColor(palette, index)}
-            />
-          ))}
+          {preferences.by_namespace.map((ns, nsIndex) => {
+            const maxTag = ns.tags.reduce((max, tag) => Math.max(max, tag.weight), 0)
+            const total = ns.tags.reduce((sum, tag) => sum + tag.weight, 0)
+            return (
+              <div key={ns.namespace} style={{ flex: "1 1 260px", minWidth: 240 }} data-namespace={ns.namespace}>
+                <div style={{ fontSize: "0.9rem", lineHeight: HEADING_LINE_HEIGHT, marginBottom: 6 }}>
+                  <LegendSwatch color={seriesColor(palette, nsIndex)} />
+                  <b>{t(namespaceLabelKey(ns.namespace), { defaultValue: ns.namespace })}</b>
+                </div>
+                {ns.tags.map((tag) => (
+                  <BarRow
+                    key={tag.text}
+                    label={tag.text}
+                    value={tag.weight}
+                    max={maxTag}
+                    valueLabel={t("stats.readArchivesValue", { count: tag.archives })}
+                    hint={formatPercent(tag.weight, total)}
+                    color={seriesColor(palette, nsIndex)}
+                    href={readTagSearchURL(ns.namespace, tag.text)}
+                    linkTitle={t("stats.searchReadWithTag", { tag: `${ns.namespace}:${tag.text}` })}
+                  />
+                ))}
+              </div>
+            )
+          })}
         </div>
       </div>
 
@@ -137,35 +103,6 @@ export function Preferences({ preferences }: { preferences: StatsOverview["prefe
           <p style={{ flex: "1 1 260px", minWidth: 240, ...muted, fontSize: "0.78rem", margin: 0 }}>
             {t("stats.ratingAmongReadHint", { count: preferences.read_archives })}
           </p>
-        </div>
-      </div>
-
-      <div style={{ marginTop: 16 }}>
-        <h4 style={{ fontSize: "0.9rem", margin: "0 0 8px" }}>{t("stats.topTagsPerNamespace")}</h4>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 18 }}>
-          {preferences.by_namespace.map((ns, nsIndex) => {
-            const maxTag = ns.tags.reduce((max, tag) => Math.max(max, tag.weight), 0)
-            return (
-              <div key={ns.namespace} style={{ flex: "1 1 260px", minWidth: 240 }}>
-                <div style={{ fontSize: "0.82rem", lineHeight: HEADING_LINE_HEIGHT, marginBottom: 6 }}>
-                  <LegendSwatch color={seriesColor(palette, nsIndex)} />
-                  <b>{ns.namespace}</b>
-                </div>
-                {ns.tags.map((tag) => (
-                  <BarRow
-                    key={tag.text}
-                    label={tag.text}
-                    value={tag.weight}
-                    max={maxTag}
-                    valueLabel={t("stats.readArchivesValue", { count: tag.archives })}
-                    color={seriesColor(palette, nsIndex)}
-                    href={readTagSearchURL(ns.namespace, tag.text)}
-                    linkTitle={t("stats.searchReadWithTag", { tag: `${ns.namespace}:${tag.text}` })}
-                  />
-                ))}
-              </div>
-            )
-          })}
         </div>
       </div>
 
