@@ -1678,6 +1678,7 @@
   "subscriptions.historyBand.all": "すべて",
   "subscriptions.historyBand.match": "取り込み",
   "subscriptions.colSubscription": "購読",
+  "subscriptions.colAdded": "追加日時",
   "subscriptions.colWhen": "チェック日時",
   "subscriptions.operator.is_empty": "が付いていない",
   "subscriptions.operator.is_not_empty": "が付いている",

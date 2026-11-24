@@ -706,6 +706,11 @@ export interface HistoryEntry {
    *  source: the finished queue rows are swept by the retention setting, and a deleted one leaves
    *  nothing behind — hence "已入库" in the library yet "added to the download queue" here. */
   held?: boolean
+  /** When the library's own archive for this source entered the library (its `date_added:`).
+   *  Present for every row the library still holds — a row the queue also reports on included,
+   *  since a finished download is not when the work was catalogued. Absent when the work is gone
+   *  from the library, or its archive was stamped without one (`usedateadded` off). */
+  added_at?: number | null
   /** This subscription queued the work for download. The accepted tab's membership predicate, kept
    *  on the subscription's own record so a row only ever leaves that tab by expiring. */
   accepted?: boolean

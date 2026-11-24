@@ -703,6 +703,7 @@
   "subscriptions.historyBand.match": "Aceptadas",
   "subscriptions.historyBand.excluded": "Descartadas",
   "subscriptions.colSubscription": "Suscripción",
+  "subscriptions.colAdded": "Añadida",
   "subscriptions.colWhen": "Comprobada",
   "subscriptions.operator.is_empty": "no está",
   "subscriptions.operator.is_not_empty": "está presente",

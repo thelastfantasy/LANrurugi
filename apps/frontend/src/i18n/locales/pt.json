@@ -697,6 +697,7 @@
   "subscriptions.historyBand.match": "Aceites",
   "subscriptions.historyBand.excluded": "Recusadas",
   "subscriptions.colSubscription": "Subscrição",
+  "subscriptions.colAdded": "Adicionada",
   "subscriptions.colWhen": "Verificada",
   "subscriptions.operator.is_empty": "está ausente",
   "subscriptions.operator.is_not_empty": "está presente",

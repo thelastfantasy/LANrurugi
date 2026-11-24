@@ -714,6 +714,7 @@
   "subscriptions.historyBand.match": "Tatt",
   "subscriptions.historyBand.excluded": "Avvist",
   "subscriptions.colSubscription": "Abonnement",
+  "subscriptions.colAdded": "Lagt til",
   "subscriptions.colWhen": "Sjekket",
   "subscriptions.operator.is_empty": "mangler",
   "subscriptions.operator.is_not_empty": "finnes",

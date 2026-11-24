@@ -482,7 +482,7 @@ async fn blocked_works(State(state): State<AppState>) -> Response {
     axum::Json(json!({ "blocked": entries })).into_response_owned()
 }
 
-/// Every subscription's recent candidates, newest first, as one stream.
+/// Every subscription's recent candidates, newest publication first, as one stream.
 ///
 /// Per-subscription history already exists, but it answers "what did *this* rule do" — the question
 /// actually asked is usually the other one: what has arrived lately, and why did something expected
@@ -773,23 +773,18 @@ async fn combined_history(
             entry["deleted"] = json!({ "at": at, "kind": kind });
         }
     }
-    // The library itself, for every row the queue can no longer speak for: its finished rows are
-    // swept after `download_queue_retention_days` and a deleted one leaves nothing behind, which is
-    // how a work sitting in the library came to read "added to the download queue". Only read when
-    // some row actually needs it — the queue's own state is the better answer whenever it exists.
-    let needs_library = entries
-        .iter()
-        .any(|e| e["download"].is_null() && e["deleted"].is_null());
-    let held_by_source = if needs_library {
-        match state.repos.archives.held_sources().await {
-            Ok(sources) => sources,
-            Err(e) => {
-                tracing::warn!(error = %e, "could not read the library's sources");
-                Default::default()
-            }
+    // The library itself, read for two things a row cannot answer on its own: whether the work is
+    // still held (the queue's finished rows are swept after `download_queue_retention_days` and a
+    // deleted one leaves nothing behind, which is how a work sitting in the library came to read
+    // "added to the download queue"), and when it entered the library — the time a catalogued row is
+    // actually about, and the one the reader asked to see. It is one scan of the library's tags, so
+    // it runs once per request rather than only for the rows the queue cannot speak for.
+    let held_by_source = match state.repos.archives.held_sources().await {
+        Ok(sources) => sources,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not read the library's sources");
+            Default::default()
         }
-    } else {
-        Default::default()
     };
     for entry in entries.iter_mut() {
         let subscription_id = entry["subscription_id"]
@@ -814,19 +809,58 @@ async fn combined_history(
         {
             entry["accepted"] = json!(true);
         }
-        if !entry["download"].is_null() || !entry["deleted"].is_null() {
+        let Some(held) = held_by_source.get(&source) else {
             continue;
+        };
+        // The library's own record of the arrival, for any row whose work it holds — a row the queue
+        // is still reporting on included: that the download finished is not when the work entered
+        // the library.
+        if let Some(added_at) = held.added_at {
+            entry["added_at"] = json!(added_at);
         }
-        if held_by_source.contains_key(&source) {
+        // `held` itself is only the fallback verdict for a row the queue no longer speaks for.
+        if entry["download"].is_null() && entry["deleted"].is_null() {
             entry["held"] = json!(true);
         }
     }
+    // Two orders: the window is cut by recency of the event, then the rows are presented by
+    // publication time. Sorting by publication first would let a work accepted today fall outside
+    // `limit` in favour of newer publications that were merely listed.
     entries.sort_by_key(|e| std::cmp::Reverse(e["checked_at"].as_i64().unwrap_or(0)));
-
     let limit = params.limit.unwrap_or(1000).min(1000);
     entries.truncate(limit);
 
+    // One check gives every work it accepted the same `checked_at`, so the sort above leaves those
+    // rows in whatever order the snapshot HashMap iterated — a different order on every request,
+    // which made the list appear to shuffle. Publication order is the one a reader expects; the
+    // source URL makes it total, so the same data always reads the same way.
+    sort_newest_publication_first(&mut entries);
+
     axum::Json(json!({ "history": entries })).into_response_owned()
+}
+
+/// Orders history rows for display: newest publication first; rows with no publication time (a
+/// source that exposes none, or one known only from the download queue) last.
+///
+/// The remaining keys are what make the order total. Without them, rows a single check stamped with
+/// the same `checked_at` keep the snapshot `HashMap`'s iteration order, which differs per request —
+/// the list visibly reshuffling between two reads of identical data.
+fn sort_newest_publication_first(entries: &mut [serde_json::Value]) {
+    fn posted(e: &serde_json::Value) -> Option<i64> {
+        e["candidate"]["posted_at"].as_i64()
+    }
+    fn checked(e: &serde_json::Value) -> i64 {
+        e["checked_at"].as_i64().unwrap_or(0)
+    }
+    fn source(e: &serde_json::Value) -> &str {
+        e["candidate"]["source_url"].as_str().unwrap_or_default()
+    }
+    entries.sort_by(|a, b| {
+        posted(b)
+            .cmp(&posted(a))
+            .then_with(|| checked(b).cmp(&checked(a)))
+            .then_with(|| source(a).cmp(source(b)))
+    });
 }
 
 /// The works still in the recycle bin, by trimmed source URL → when it was deleted (epoch seconds).
@@ -1719,4 +1753,76 @@ async fn stream_progress(State(state): State<AppState>) -> Response {
     Sse::new(events)
         .keep_alive(KeepAlive::default())
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sort_newest_publication_first;
+    use serde_json::json;
+
+    fn row(source: &str, posted: Option<i64>, checked: i64) -> serde_json::Value {
+        json!({
+            "checked_at": checked,
+            "candidate": { "source_url": source, "posted_at": posted },
+        })
+    }
+
+    fn sources(entries: &[serde_json::Value]) -> Vec<&str> {
+        entries
+            .iter()
+            .map(|e| e["candidate"]["source_url"].as_str().unwrap_or_default())
+            .collect()
+    }
+
+    #[test]
+    fn newest_publication_first_whatever_order_the_snapshot_iterated() {
+        // One check accepted all three, so `checked_at` is identical: only publication time may
+        // decide, or the list depends on the snapshot HashMap's iteration order.
+        let mut entries = vec![
+            row("https://e/old", Some(100), 1_700_000_000),
+            row("https://e/new", Some(300), 1_700_000_000),
+            row("https://e/mid", Some(200), 1_700_000_000),
+        ];
+        sort_newest_publication_first(&mut entries);
+        assert_eq!(
+            sources(&entries),
+            ["https://e/new", "https://e/mid", "https://e/old"]
+        );
+
+        // The same rows arriving in another order must read the same way.
+        entries.reverse();
+        sort_newest_publication_first(&mut entries);
+        assert_eq!(
+            sources(&entries),
+            ["https://e/new", "https://e/mid", "https://e/old"]
+        );
+    }
+
+    #[test]
+    fn rows_without_a_publication_time_come_last_newest_check_first() {
+        let mut entries = vec![
+            row("https://e/queued-old", None, 10),
+            row("https://e/dated", Some(5), 20),
+            row("https://e/queued-new", None, 30),
+        ];
+        sort_newest_publication_first(&mut entries);
+        assert_eq!(
+            sources(&entries),
+            [
+                "https://e/dated",
+                "https://e/queued-new",
+                "https://e/queued-old"
+            ]
+        );
+    }
+
+    #[test]
+    fn identical_timestamps_fall_back_to_the_source_url() {
+        let mut entries = vec![
+            row("https://e/b", Some(100), 7),
+            row("https://e/a", Some(100), 7),
+        ];
+        sort_newest_publication_first(&mut entries);
+        assert_eq!(sources(&entries), ["https://e/a", "https://e/b"]);
+    }
 }

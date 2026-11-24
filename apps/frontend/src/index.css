@@ -3388,6 +3388,55 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   opacity: 0.7;
 }
 
+/* A heading the reader can click to order the list by that column. It keeps the caller's own
+   `preview-*` class (the grid's tracks are measured from those) and resets what a `<button>` brings
+   along — border, background, the font shorthand, centred text. */
+.preview-head-sort {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  /* `.preview-row > *` already sets this; a button's own default padding would otherwise win. */
+  padding: 0 8px;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The verdict column is right-aligned, so its own heading has to end at the same edge. */
+.preview-head-sort.preview-verdict {
+  justify-content: flex-end;
+}
+
+.preview-head-sort-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Inactive: a fainter caret so a sortable column reads as sortable without competing with the
+   values. Active: full strength, on the theme's own text colour — no new colours, so no per-theme
+   rules. */
+.preview-head-sort .fa {
+  font-size: 0.95em;
+  opacity: 0.45;
+}
+
+.preview-head-sort:hover,
+.preview-head-sort-active {
+  opacity: 1;
+}
+
+.preview-head-sort-active .fa,
+.preview-head-sort:hover .fa {
+  opacity: 1;
+}
+
 /* Ordered language preference. A list rather than a single dropdown because the order itself is the
    setting — which language wins is decided by position, not by one choice. */
 .lang-order-list {

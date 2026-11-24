@@ -756,6 +756,7 @@
   "subscriptions.historyBand.match": "Übernommen",
   "subscriptions.historyBand.excluded": "Abgewiesen",
   "subscriptions.colSubscription": "Abonnement",
+  "subscriptions.colAdded": "Hinzugefügt",
   "subscriptions.colWhen": "Geprüft",
   "subscriptions.operator.is_empty": "fehlt",
   "subscriptions.operator.is_not_empty": "ist vorhanden",

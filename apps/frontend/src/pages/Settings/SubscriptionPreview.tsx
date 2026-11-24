@@ -112,8 +112,9 @@ function Reason({ record }: { record: CandidateRecord }) {
   )
 }
 
-/** The short column label and the full sentence behind it, for one verdict. */
-function reasonText(
+/** The short column label and the full sentence behind it, for one verdict. Exported because the
+ *  history list sorts this column by the wording it shows. */
+export function reasonText(
   t: TFunction,
   record: CandidateRecord,
 ): { short: string; full: string } {
@@ -282,7 +283,17 @@ export function SubscriptionPreview({
   const forget = useForgetSeen()
   const block = useBlockSubscriptionSources()
   const titleOrder = useLanguageOrder()
-  const rows = preview.candidates
+  // Publication time, newest first — the only order a reader can predict, and the one the history
+  // list also opens in. A candidate the listing carried no date for is not "the oldest", so it goes
+  // last; the source URL settles ties, which keeps the table from reordering between renders.
+  const rows = [...preview.candidates].sort((a, b) => {
+    if (a.posted_at !== b.posted_at) {
+      if (a.posted_at == null) return 1
+      if (b.posted_at == null) return -1
+      return b.posted_at - a.posted_at
+    }
+    return a.source_url < b.source_url ? -1 : a.source_url > b.source_url ? 1 : 0
+  })
   const includeField = (field: string) => fields === undefined || fields.includes(field)
   const columns = previewGridColumns(fields)
 

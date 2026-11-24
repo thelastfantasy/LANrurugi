@@ -771,6 +771,7 @@
   "subscriptions.historyBand.match": "Diambil",
   "subscriptions.historyBand.excluded": "Ditolak",
   "subscriptions.colSubscription": "Langganan",
+  "subscriptions.colAdded": "Ditambahkan",
   "subscriptions.colWhen": "Diperiksa",
   "subscriptions.operator.is_empty": "tidak ada",
   "subscriptions.operator.is_not_empty": "ada",
