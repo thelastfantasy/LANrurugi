@@ -131,6 +131,29 @@ pub struct ScanSummary {
     pub relocation_outside: usize,
     pub relocation_repaired: usize,
     pub relocation_failed: usize,
+    /// specs/028 library diagnostics: files walked, records in the DB, and how many of those
+    /// records still resolve to a file. Diagnostic only — never a reason to refuse anything.
+    /// A full database restore closed the write gate and this scan stopped early. Nothing on disk
+    /// was touched; run the scan again after the restore.
+    pub aborted: bool,
+    pub records_total: usize,
+    pub overlap_percent: u8,
+    pub library_source: String,
+    pub library_source_known: bool,
+}
+
+impl ScanSummary {
+    /// The exact five fields the scan job result and the log line publish (the file count is
+    /// `scanned`; the alias is what an operator's script reads).
+    pub fn diagnostics_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "scanned_files": self.scanned,
+            "records_total": self.records_total,
+            "overlap_percent": self.overlap_percent,
+            "library_source": self.library_source,
+            "library_source_known": self.library_source_known,
+        })
+    }
 }
 
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -151,6 +174,9 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
 /// as `pipeline::run`'s own parameter of the same name: `Catalogued` for a genuinely brand-new
 /// archive (never `Rekeyed`/`Unchanged`/`Rejected`; see that function's own docs for why), and
 /// `Failed` for a real error/timeout (or a panicked task, where the path is unknown).
+// The two trailing optional channels (ingest events, restore gate) are both "may be absent"
+// controls; bundling them into a struct would only move the argument count around.
+#[allow(clippy::too_many_arguments)]
 pub async fn full_scan(
     library_path: &Path,
     pools: &ScannerPools,
@@ -159,6 +185,10 @@ pub async fn full_scan(
     jobs: &JobRegistry,
     job_id: &str,
     new_archive_tx: Option<tokio::sync::mpsc::UnboundedSender<IngestEvent>>,
+    // A running full-restore replaces every Redis key at once; a scan checkpoint stops here rather
+    // than writing rows for archives the restored dataset may not contain. `None` for callers that
+    // cannot race a restore (the offline CLI, tests).
+    restore_gate: Option<&lanrurugi_core::restore_gate::RestoreGate>,
 ) -> ScanSummary {
     // Every write this scan makes goes through the scanner's own pools, so it queues behind other
     // scan writes rather than behind (or in front of) the API's requests — issue #206.
@@ -272,6 +302,7 @@ pub async fn full_scan(
     ));
     let floor = Arc::new(tokio::sync::Mutex::new(FloorRate::new()));
     let completed = Arc::new(AtomicUsize::new(0));
+    let gate = restore_gate.cloned();
     let mut tasks = tokio::task::JoinSet::new();
 
     for path in paths {
@@ -341,7 +372,15 @@ pub async fn full_scan(
         });
     }
 
+    // The checkpoint: once the gate closes, stop taking results and abort the in-flight ingests
+    // before they write. Checked once per batch of completions, not per file, so the cost is
+    // negligible against a scan that touches the disk.
     while let Some(joined) = tasks.join_next().await {
+        if gate.as_ref().is_some_and(|g| g.closed()) {
+            summary.aborted = true;
+            tasks.abort_all();
+            break;
+        }
         // A panicked/cancelled task must not take the rest of the scan down with it — every
         // other spawned task in this `JoinSet` is still running independently and its own result
         // still needs to be collected by a later loop iteration. Counted alongside `errors` (the
@@ -422,6 +461,33 @@ pub async fn full_scan(
             tracing::warn!(error = %e, "cannot list archives for the _byname relocation pass");
         }
     }
+
+    // specs/028: what the scan saw vs. what the database holds vs. where the library directory
+    // actually comes from. Computed last so `records_total` includes what this run catalogued,
+    // and never allowed to fail the scan.
+    match archives.list_all().await {
+        Ok(records) => {
+            summary.records_total = records.len();
+            summary.overlap_percent = lanrurugi_core::library_diagnostics::overlap_percent(
+                records.iter().map(|a| a.file.as_str()),
+            );
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "library scan: could not count records for diagnostics")
+        }
+    }
+    let source = lanrurugi_core::library_diagnostics::detect(library_path);
+    summary.library_source = source.value;
+    summary.library_source_known = source.known;
+    tracing::info!(
+        scanned_files = summary.scanned,
+        records_total = summary.records_total,
+        overlap_percent = summary.overlap_percent,
+        library_source = %summary.library_source,
+        library_source_known = summary.library_source_known,
+        library = %library_path.display(),
+        "library scan diagnostics"
+    );
 
     summary
 }
@@ -779,6 +845,7 @@ mod tests {
             &jobs,
             &scan_job_id,
             None,
+            None,
         )
         .await;
         assert_eq!(
@@ -822,6 +889,41 @@ mod tests {
     /// silently "rekeyed" to the real one, or (since nothing is tracked under the placeholder id)
     /// the file would come back as freshly `Catalogued` — neither may happen once this path is
     /// already a filemap-known path.
+    /// A restore closes the gate mid-scan; the scan must stop taking results instead of writing
+    /// rows for archives the restored dataset may not contain.
+    #[tokio::test]
+    async fn a_closed_restore_gate_stops_the_scan() {
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(5).await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let pools = scanner_pools(&archive_pool, &config_pool, &search_pool);
+        let dir = tempfile::tempdir().unwrap();
+        let thumb_dir = tempfile::tempdir().unwrap();
+        for name in ["a.zip", "b.zip", "c.zip"] {
+            std::fs::write(dir.path().join(name), b"not a real archive").unwrap();
+        }
+
+        let gate = lanrurugi_core::restore_gate::RestoreGate::new();
+        gate.close();
+        let jobs = lanrurugi_core::jobs::JobRegistry::new();
+        let job_id = jobs.create("scan").await;
+        let summary = full_scan(
+            dir.path(),
+            &pools,
+            std::sync::Arc::new(Equivalence::default()),
+            thumb_dir.path(),
+            &jobs,
+            &job_id,
+            None,
+            Some(&gate),
+        )
+        .await;
+
+        assert!(summary.aborted, "a closed gate must abort the scan");
+        gate.open();
+    }
+
     #[tokio::test]
     async fn already_tracked_paths_are_skipped_without_rehashing() {
         let Some((archive_pool, config_pool, search_pool)) = test_pools(3).await else {
@@ -891,6 +993,7 @@ mod tests {
             thumb_dir.path(),
             &jobs,
             &job_id,
+            None,
             None,
         )
         .await;
@@ -978,6 +1081,7 @@ mod tests {
             &jobs,
             &job_id,
             None,
+            None,
         )
         .await;
 
@@ -1026,6 +1130,7 @@ mod tests {
             &jobs,
             &job_id,
             None,
+            None,
         )
         .await;
 
@@ -1054,6 +1159,7 @@ mod tests {
             thumb_dir.path(),
             &jobs,
             &job_id,
+            None,
             None,
         )
         .await;
@@ -1131,6 +1237,7 @@ mod tests {
             thumb_dir.path(),
             &jobs,
             &job_id,
+            None,
             None,
         )
         .await;

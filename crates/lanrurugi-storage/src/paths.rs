@@ -19,6 +19,16 @@ use std::path::{Path, PathBuf};
 /// directory — the point is that a user browsing over SMB finds their own files first.
 pub const BYNAME_DIR: &str = "_byname";
 
+/// Automatic backup snapshots (`specs/028-deletion-safety-net`), inside the library so a container
+/// needs no new volume and the backups travel with the content. Dot-prefixed and excluded from
+/// every library walker, exactly like [`lanrurugi_storage::recycle::RECYCLE_DIR_NAME`].
+pub const SNAPSHOT_DIR_NAME: &str = ".lanrurugi-backups";
+
+/// `<library>/.lanrurugi-backups`.
+pub fn snapshot_dir(library: &Path) -> PathBuf {
+    library.join(SNAPSHOT_DIR_NAME)
+}
+
 /// Bucket directory for an id: its first two hex characters. 256 buckets keeps the root readable
 /// (100k archives ≈ 390 per bucket) and needs no fan-out below it; growing to 4,096+ buckets moves
 /// the problem to the root, where every `ls`, backup walk and SMB listing pays for it.

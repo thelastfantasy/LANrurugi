@@ -52,6 +52,18 @@ pub async fn lookup(state: &AppState, url: &str) -> Option<String> {
     (!archive.file.trim().is_empty()).then_some(id)
 }
 
+/// The `source:` tag's own value (the trimmed URL the archive came from), when the tag string has
+/// one. `Archive::primary_source` is exactly this value, and the sidecar is its on-disk copy — so a
+/// user who types a `source:` tag into the reader's metadata editor gets both, not just the tag.
+pub(crate) fn source_tag_value(tags: &str) -> Option<String> {
+    tags.split(',')
+        .map(str::trim)
+        .find_map(|t| t.strip_prefix("source:"))
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
 /// Copies an archive's primary source into its sidecar, the copy a rebuild after a lost Redis reads
 /// back. A no-op for an archive without one, or without a sidecar (by-name archives).
 pub(crate) async fn sync_sidecar_primary(
@@ -85,8 +97,15 @@ pub async fn backfill_primary_sources(state: &AppState) -> usize {
     if done {
         return 0;
     }
-    let entries: std::collections::HashMap<String, String> =
-        conn.hgetall(SOURCES_KEY).await.unwrap_or_default();
+    let entries: std::collections::HashMap<String, String> = match conn.hgetall(SOURCES_KEY).await {
+        Ok(entries) => entries,
+        Err(e) => {
+            // A failed read is not an empty registry: marking the back-fill done here would mean
+            // it never runs again and those archives keep no primary source forever.
+            tracing::warn!(error = %e, "could not read the download source registry; leaving the primary-source back-fill unmarked");
+            return 0;
+        }
+    };
     drop(conn);
     let mut marked = 0;
     for (url, id) in entries {
@@ -117,6 +136,17 @@ pub async fn backfill_primary_sources(state: &AppState) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_source_tag_is_what_becomes_the_primary_source() {
+        assert_eq!(
+            source_tag_value("date_added:1,source:e-hentai.org/g/1/abc,artist:x"),
+            Some("e-hentai.org/g/1/abc".to_string())
+        );
+        assert_eq!(source_tag_value("date_added:1,artist:x"), None);
+        assert_eq!(source_tag_value("source:"), None);
+        assert_eq!(source_tag_value(""), None);
+    }
 
     #[tokio::test]
     async fn a_non_http_source_is_never_recorded() {

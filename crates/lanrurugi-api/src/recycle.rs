@@ -282,7 +282,7 @@ pub(crate) async fn recycle_archive(
         crate::subscriptions::api::archive_source(archive.primary_source.as_deref(), &archive.tags);
     if archive.file.is_empty() || !Path::new(&archive.file).is_file() {
         tracing::warn!(%id, file = %archive.file, "deleting an archive whose file is already gone");
-        let outcome = purge_one_archive(state, id, auth, PurgeOptions::PERMANENT).await;
+        let outcome = purge_one_archive(state, id, auth, PurgeOptions::SINGLE).await;
         if let (DeleteOneOutcome::Deleted { .. }, Some(source)) = (&outcome, &source) {
             crate::subscriptions::api::record_library_deletion(state, source).await;
         }
@@ -359,6 +359,7 @@ pub(crate) async fn recycle_archive(
 
     DeleteOneOutcome::Deleted {
         filename: archive.name,
+        journal_failed: false,
     }
 }
 
@@ -1092,30 +1093,53 @@ async fn restore_record(
     let computed =
         lanrurugi_storage::id::size_aware_id(Path::new(destination)).map_err(|e| e.to_string())?;
     if let Ok(mut conn) = state.redis.config.get().await {
-        let _: Result<(), _> = conn.hset(FILEMAP_KEY, destination, &computed).await;
+        let stored: Result<(), _> = conn.hset(FILEMAP_KEY, destination, &computed).await;
+        if let Err(e) = stored {
+            tracing::warn!(id = %entry.id, error = %e, "failed to restore a recycled archive's filemap entry");
+        }
     }
 
+    // A restored archive that is not re-indexed is back on disk but unsearchable, so each of these
+    // failures is reported even though none of them fails the restore itself.
     let search = &state.redis.search;
-    let _ = lanrurugi_search::indexer::index_new_archive(
+    if let Err(e) = lanrurugi_search::indexer::index_new_archive(
         search,
         &state.equivalence,
         entry.id.as_str(),
         &archive.title,
     )
-    .await;
-    let _ = lanrurugi_search::indexer::update_tag_indexes(
+    .await
+    {
+        tracing::warn!(id = %entry.id, error = %e, "failed to re-index a recycled archive");
+    }
+    if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
         search,
         &state.equivalence,
         entry.id.as_str(),
         "",
         &archive.tags,
     )
-    .await;
-    let _ =
-        lanrurugi_search::indexer::set_isnew_index(search, entry.id.as_str(), archive.isnew).await;
-    if let Ok(tanks) = state.repos.groupings.for_archive(&entry.id).await {
-        let joined: Vec<String> = tanks.into_iter().map(|g| g.tankid.0).collect();
-        let _ = lanrurugi_search::indexer::sync_tank_membership(search, &joined, &[]).await;
+    .await
+    {
+        tracing::warn!(id = %entry.id, error = %e, "failed to re-index a recycled archive's tags");
+    }
+    if let Err(e) =
+        lanrurugi_search::indexer::set_isnew_index(search, entry.id.as_str(), archive.isnew).await
+    {
+        tracing::warn!(id = %entry.id, error = %e, "failed to restore the new flag index");
+    }
+    match state.repos.groupings.for_archive(&entry.id).await {
+        Ok(tanks) => {
+            let joined: Vec<String> = tanks.into_iter().map(|g| g.tankid.0).collect();
+            if let Err(e) =
+                lanrurugi_search::indexer::sync_tank_membership(search, &joined, &[]).await
+            {
+                tracing::warn!(id = %entry.id, error = %e, "failed to restore a recycled archive's tankoubon membership index");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(id = %entry.id, error = %e, "failed to read a recycled archive's tankoubons for the index");
+        }
     }
 
     Ok(())
@@ -1490,6 +1514,12 @@ pub struct SweepReport {
     pub over_capacity: u64,
     pub leftovers: u64,
     pub bytes: u64,
+    /// specs/028's share of the same hourly maintenance: deletion-journal entries past their
+    /// retention window.
+    pub journal_purged: u64,
+    /// Always 0 since snapshot retention moved to backup-creation time; kept so the sweep's JSON
+    /// shape does not change under clients.
+    pub snapshots_removed: u64,
 }
 
 /// Enforces the retention window and the size cap (FR-028–FR-031). The newest entry is never
@@ -1516,6 +1546,19 @@ async fn purge_unit(state: &AppState, unit: &SweepUnit) -> Result<(), String> {
 }
 
 pub async fn sweep(state: &AppState) -> SweepReport {
+    // specs/028's journal expiry runs first and unconditionally: the early returns below (a bin
+    // that cannot be listed) must not also stop it.
+    let journal_purged = crate::deletions::purge_expired(state).await;
+    // Snapshot retention deliberately does *not* run here. Lowering `snapshot_full_keep` must not
+    // delete anything on its own — the extras go when the next backup (manual or scheduled) is
+    // written, which is the moment the count actually exceeds the budget. `take_full_backup` /
+    // `take_export` call `retention_sweep` for exactly that reason.
+    let snapshots_removed = 0u64;
+    let mut report = SweepReport {
+        journal_purged,
+        snapshots_removed,
+        ..SweepReport::default()
+    };
     let policy = read_policy(state).await;
     let repo = repository(state);
     let tanks = match repo.list_tanks().await {
@@ -1562,7 +1605,6 @@ pub async fn sweep(state: &AppState) -> SweepReport {
     units.sort_by_key(|u| std::cmp::Reverse(u.deleted_at));
     let newest = units.first().map(|u| u.key.clone());
     let now = lanrurugi_storage::recycle::now_secs();
-    let mut report = SweepReport::default();
     let mut remaining: Vec<SweepUnit> = Vec::new();
 
     for unit in units {

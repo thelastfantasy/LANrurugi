@@ -51,6 +51,8 @@ enum Command {
     EvalGrouping(lanrurugi_server::cli::eval_grouping::EvalGroupingArgs),
     /// Run a sharing rendezvous/relay node for other instances, with no library and no Redis.
     ShareNode(lanrurugi_server::cli::share_node::ShareNodeArgs),
+    /// List full backups, or restore the whole database from one without the HTTP server running.
+    Snapshots(lanrurugi_server::cli::snapshots::SnapshotsArgs),
     /// Clear the safety password (`specs/019`) and any verification lockout. For an operator who
     /// cannot log in; never accepts a password argument.
     ResetSafetyPassword(ResetSafetyPasswordArgs),
@@ -277,6 +279,7 @@ async fn run(from_install_prefix: Vec<(&'static str, PathBuf)>) -> anyhow::Resul
         Command::ResetSafetyPassword(args) => reset_safety_password(args).await,
         Command::EvalGrouping(args) => lanrurugi_server::cli::eval_grouping::run(args).await,
         Command::ShareNode(args) => lanrurugi_server::cli::share_node::run(args).await,
+        Command::Snapshots(args) => lanrurugi_server::cli::snapshots::run(args).await,
         Command::TelemetryIngest(args) => lanrurugi_server::cli::telemetry_ingest::run(args).await,
         Command::Formats(args) => {
             tokio::task::spawn_blocking(move || lanrurugi_server::cli::formats::run(args)).await?
@@ -516,6 +519,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     lanrurugi_api::authz::Authz::get().await;
 
     let state = AppState {
+        restore_gate: lanrurugi_core::restore_gate::RestoreGate::new(),
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         redis: redis.clone(),
         repos: repos.clone(),
@@ -610,6 +614,30 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 "recycle bin swept at startup"
             );
         }
+        if report.journal_purged + report.snapshots_removed > 0 {
+            tracing::info!(
+                journal_purged = report.journal_purged,
+                snapshots_removed = report.snapshots_removed,
+                "deletion safety net swept at startup"
+            );
+        }
+    }
+    // specs/028: the configurable snapshot schedule, on its own five-second tick — the crontab it
+    // evaluates has second granularity. The task is spawned (not awaited) so a first-run full backup
+    // of a large library never delays the server from accepting connections, and an interval's
+    // first tick is immediate — which is also the catch-up after downtime (see
+    // `snapshots::schedule_tick`). Settings are re-read on every tick, so a saved change applies
+    // within seconds instead of at the next restart.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                interval.tick().await;
+                lanrurugi_api::snapshots::schedule_tick(&state).await;
+            }
+        });
     }
     {
         let state = state.clone();
@@ -618,6 +646,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             interval.tick().await; // consume the immediate first tick; startup already swept
             loop {
                 interval.tick().await;
+                // Retention only — snapshot *generation* lives on the five-second schedule tick above.
                 lanrurugi_api::recycle::sweep(&state).await;
             }
         });
@@ -1108,6 +1137,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             new_archive_tx: Some(new_archive_tx.clone()),
             locks: filename_locks.clone(),
             jobs: jobs.clone(),
+            restore_gate: Some(state.restore_gate.clone()),
         };
         // No catch-up here: the startup scan below covers what is already on disk.
         if let Err(e) = scanner.start(config, false).await {
@@ -1139,6 +1169,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let thumb_dir = args.thumb_dir.clone();
         let new_archive_tx = new_archive_tx.clone();
         let equivalence = state.equivalence.clone();
+        let restore_gate = state.restore_gate.clone();
         tokio::spawn(async move {
             jobs.mark_active(&job_id).await;
             let scan_summary = lanrurugi_scanner::full_scan::full_scan(
@@ -1149,8 +1180,17 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 &jobs,
                 &job_id,
                 Some(new_archive_tx),
+                Some(&restore_gate),
             )
             .await;
+            if scan_summary.aborted {
+                jobs.fail(
+                    &job_id,
+                    lanrurugi_core::restore_gate::RESTORE_ABORTED_MESSAGE,
+                )
+                .await;
+                return;
+            }
             tracing::info!(
                 scanned = scan_summary.scanned,
                 already_known = scan_summary.already_known,
@@ -1158,6 +1198,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 errors = scan_summary.errors,
                 "startup scan complete"
             );
+            let diagnostics = scan_summary.diagnostics_json();
             lanrurugi_core::memory::release_free_heap_soon("startup scan finished");
             // Same pools as the scan above — this is background work, not a request.
             let heal_summary =
@@ -1169,6 +1210,12 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     "already_known": scan_summary.already_known,
                     "newly_catalogued": scan_summary.catalogued,
                     "errors": scan_summary.errors,
+                    "scanned_files": scan_summary.scanned,
+                    "records_total": scan_summary.records_total,
+                    "overlap_percent": scan_summary.overlap_percent,
+                    "library_source": scan_summary.library_source,
+                    "library_source_known": scan_summary.library_source_known,
+                    "diagnostics": diagnostics,
                     "pagecount_heal": {
                         "checked": heal_summary.checked,
                         "healed": heal_summary.healed,
@@ -1440,6 +1487,17 @@ async fn repair_zombie_archives(state: &AppState) {
     for (mut archive, file_exists) in checked {
         let stale = archive.file.is_empty() || in_temp(&archive.file) || !file_exists;
         if !stale {
+            // The file is back: the restored-missing exemption has done its job.
+            if lanrurugi_api::deletions::is_restored_missing(state, archive.id.as_str()).await {
+                lanrurugi_api::deletions::clear_restored_missing(state, archive.id.as_str()).await;
+            }
+            continue;
+        }
+        // #{specs/028}: a record restored from the deletion journal is waiting for its file to come
+        // back (a not-yet-remounted library, a wrong mount that got fixed). Deleting it here would
+        // undo the restore before the operator can act, so it is exempt for the journal's window.
+        if lanrurugi_api::deletions::is_restored_missing(state, archive.id.as_str()).await {
+            kept += 1;
             continue;
         }
 
@@ -1608,6 +1666,7 @@ async fn rebuild_index(args: RebuildIndexArgs) -> anyhow::Result<()> {
         &args.thumb_dir,
         &jobs,
         &job_id,
+        None,
         None,
     )
     .await;

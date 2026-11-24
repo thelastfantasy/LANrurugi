@@ -157,6 +157,15 @@ pub mod action_types {
     pub const DATABASE_REBUILD_INDEX: &str = "database.rebuild_index";
     pub const DATABASE_BLAKE3_BACKFILL: &str = "database.blake3_backfill";
     pub const DATABASE_IMPORT_LEGACY: &str = "database.import_legacy";
+    /// specs/028: restoring/purging deletion-journal entries and managing automatic snapshots.
+    /// Distinct from `DATABASE_RESTORE`/`ARCHIVE_RESTORE` because "one record came back from the
+    /// journal" and "the whole library was rewritten from a snapshot" are very different events.
+    pub const DELETION_RESTORE: &str = "deletion.restore";
+    pub const DELETION_PURGE: &str = "deletion.purge";
+    pub const DELETION_CLEAR: &str = "deletion.clear";
+    pub const BACKUP_CREATE: &str = "backup.create";
+    pub const BACKUP_RESTORE: &str = "backup.restore";
+    pub const BACKUP_DELETE: &str = "backup.delete";
     pub const PLUGIN_EXECUTE: &str = "plugin.execute";
     pub const PLUGIN_UPLOAD: &str = "plugin.upload";
     pub const PLUGIN_PRIORITY_UPDATE: &str = "plugin.priority_update";

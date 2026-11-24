@@ -763,6 +763,7 @@ mod tests {
         )
         .expect("failed to write out the real plugin SDK script");
         let state = AppState {
+            restore_gate: lanrurugi_core::restore_gate::RestoreGate::new(),
             equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
             discovery_singleflight: std::sync::Arc::new(
                 lanrurugi_core::singleflight::Singleflight::new(8),

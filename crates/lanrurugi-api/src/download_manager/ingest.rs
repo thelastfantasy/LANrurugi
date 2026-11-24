@@ -71,6 +71,10 @@ pub enum IngestDownloadError {
         /// The page's own text, when it was a web page: usually the server saying why.
         page_excerpt: Option<String>,
     },
+    /// A full database restore is in progress: nothing was written and the staged file is intact,
+    /// so the download can be retried once the restore finishes.
+    #[error("{0}")]
+    RestoreInProgress(String),
 }
 
 /// Refuses a staged download that cannot be opened as an archive or has no pages. A library scan
@@ -225,6 +229,9 @@ impl From<&IngestDownloadError> for lanrurugi_core::queue_error::QueueError {
             IngestDownloadError::PendingRename(conflict) => QueueError::DuplicateFilename {
                 existing_id: conflict.existing_id.clone(),
                 filename: conflict.original_filename.clone(),
+            },
+            IngestDownloadError::RestoreInProgress(message) => QueueError::IngestFailed {
+                reason: message.clone(),
             },
             IngestDownloadError::AlreadyPatched {
                 existing_id,
@@ -446,6 +453,11 @@ pub(crate) async fn catalogue_staged_file(
     restore_staging_on_failure: bool,
     defer_publication: bool,
 ) -> Result<IngestedDownload, IngestDownloadError> {
+    if state.restore_gate.closed() {
+        return Err(IngestDownloadError::RestoreInProgress(
+            lanrurugi_core::restore_gate::RESTORE_ABORTED_MESSAGE.to_string(),
+        ));
+    }
     // The destination is derived from the bytes, not from the name: the id is the content hash and
     // the file is `<bucket>/<id>.<ext>`, so two downloads can never want the same path for
     // different bytes (020). That removes the filename lock, the collision policy and the

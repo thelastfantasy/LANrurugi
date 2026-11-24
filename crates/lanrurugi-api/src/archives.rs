@@ -439,7 +439,12 @@ async fn get_archive_metadata(
 /// none of them drift on what "delete an archive" actually does.
 pub(crate) enum DeleteOneOutcome {
     NotFound,
-    Deleted { filename: String },
+    Deleted {
+        filename: String,
+        /// The record could not be copied into the deletion journal, so this delete cannot be
+        /// undone from the UI. The delete itself still succeeded (`research.md` D9).
+        journal_failed: bool,
+    },
     Error(String),
 }
 
@@ -455,15 +460,36 @@ pub(crate) struct PurgeOptions {
     /// The recycle path writes its own `archive.recycle` entry, so the purge tail must not also
     /// log "deleted".
     pub record_activity: bool,
+    /// What the deletion journal records as the origin (`specs/028`): `clean` / `single` /
+    /// `superseded` / `split` / `other`.
+    pub journal_source: &'static str,
 }
 
 impl PurgeOptions {
-    /// A permanent delete of a live archive (superseded revision, clean-database cleanup).
+    /// A permanent delete of a live archive with no more specific origin (superseded revision).
     pub(crate) const PERMANENT: Self = Self {
         remove_archive_file: true,
         keep_thumbnails: false,
         permanent: true,
         record_activity: true,
+        journal_source: "superseded",
+    };
+    /// A user-initiated delete of one archive (the reader's own delete button), including the
+    /// case where its file was already gone.
+    pub(crate) const SINGLE: Self = Self {
+        remove_archive_file: true,
+        keep_thumbnails: false,
+        permanent: true,
+        record_activity: true,
+        journal_source: "single",
+    };
+    /// Clean Database's own second pass.
+    pub(crate) const CLEAN: Self = Self {
+        remove_archive_file: true,
+        keep_thumbnails: false,
+        permanent: true,
+        record_activity: true,
+        journal_source: "clean",
     };
     /// Specs/019: the payload already moved into the bin, and its cover must survive there.
     pub(crate) const AFTER_RECYCLE: Self = Self {
@@ -471,6 +497,7 @@ impl PurgeOptions {
         keep_thumbnails: true,
         permanent: false,
         record_activity: false,
+        journal_source: "single",
     };
 }
 
@@ -487,6 +514,13 @@ pub(crate) async fn purge_one_archive(
         Ok(None) => return DeleteOneOutcome::NotFound,
         Err(e) => return DeleteOneOutcome::Error(e.to_string()),
     };
+    // specs/028: copy the whole record into the deletion journal *before* the record is gone. A
+    // failure never blocks the delete — it only means this particular one cannot be undone, which
+    // the caller has to report.
+    let journal =
+        crate::deletions::journal_put_best_effort(state, &archive, options.journal_source).await;
+    let journaled = matches!(journal, crate::deletions::JournalWrite::Recorded);
+    let journal_failed = matches!(journal, crate::deletions::JournalWrite::Failed);
     match state.repos.archives.delete(id).await {
         Ok(()) => {
             // The only success-path log line this handler had before this was added — every other
@@ -658,9 +692,17 @@ pub(crate) async fn purge_one_archive(
             }
             DeleteOneOutcome::Deleted {
                 filename: archive.name,
+                journal_failed,
             }
         }
         Err(e) => {
+            // The record survived, so its journal entry is wrong: a later restore would find the
+            // id already present. Best-effort drop, matching every other cleanup on a failure.
+            if journaled {
+                if let Err(e) = crate::deletions::forget_journal_entry(state, id.as_str()).await {
+                    tracing::warn!(%id, error = %e, "could not drop a journal entry for a failed delete");
+                }
+            }
             // The archive was found (a real target existed) but the actual DB delete failed —
             // a genuine attempted-and-failed deletion, not a pre-execution lookup miss.
             if options.record_activity {
@@ -694,13 +736,15 @@ pub(crate) async fn tank_member_delete_refusal(
     state: &AppState,
     id: &lanrurugi_core::ids::ArchiveId,
 ) -> Option<axum::response::Response> {
-    let in_tank = state
-        .repos
-        .groupings
-        .for_archive(id)
-        .await
-        .map(|tanks| !tanks.is_empty())
-        .unwrap_or(false);
+    let in_tank = match state.repos.groupings.for_archive(id).await {
+        Ok(tanks) => !tanks.is_empty(),
+        Err(e) => {
+            // Advisory only: refusing every delete while Redis is unreachable would be worse than
+            // letting this one tankoubon member go, which the user asked for explicitly.
+            tracing::warn!(id = %id, error = %e, "could not check whether an archive belongs to a Tankoubon; allowing the delete");
+            false
+        }
+    };
     if !in_tank {
         return None;
     }
@@ -732,12 +776,16 @@ async fn delete_archive(
     }
     match crate::recycle::recycle_archive(&state, &id, auth.as_ref().map(|e| &e.0)).await {
         DeleteOneOutcome::NotFound => not_found("delete_archive", format!("{id} does not exist.")),
-        DeleteOneOutcome::Deleted { filename } => axum::Json(json!({
+        DeleteOneOutcome::Deleted {
+            filename,
+            journal_failed,
+        } => axum::Json(json!({
             "operation": "delete_archive",
             "id": id,
             "filename": filename,
             "success": 1,
             "recycled": true,
+            "journal_failed": journal_failed,
         }))
         .into_response(),
         DeleteOneOutcome::Error(e) => error(StatusCode::INTERNAL_SERVER_ERROR, "delete_archive", e),
@@ -797,7 +845,7 @@ async fn batch_delete_archives(
                 filename: None,
                 error: Some(format!("{id} does not exist.")),
             },
-            DeleteOneOutcome::Deleted { filename } => {
+            DeleteOneOutcome::Deleted { filename, .. } => {
                 deleted_count += 1;
                 BatchDeleteResult {
                     id: id.to_string(),
@@ -807,13 +855,18 @@ async fn batch_delete_archives(
                     error: None,
                 }
             }
-            DeleteOneOutcome::Error(e) => BatchDeleteResult {
-                id: id.to_string(),
-                success: false,
-                recycled: false,
-                filename: None,
-                error: Some(e),
-            },
+            DeleteOneOutcome::Error(e) => {
+                // The response is a 200 with per-id results, so without this the only trace of a
+                // failed delete is a field a client may never look at.
+                tracing::error!(id = %id, error = %e, "batch delete failed for one archive");
+                BatchDeleteResult {
+                    id: id.to_string(),
+                    success: false,
+                    recycled: false,
+                    filename: None,
+                    error: Some(e),
+                }
+            }
         });
     }
     axum::Json(json!({
@@ -2966,6 +3019,9 @@ async fn update_archive_metadata(
     // The values it replaced are read under the record's lock along with the change, so the tag
     // diff and the index updates below describe exactly this write.
     let mut before: Option<(String, String, String)> = None;
+    // Set when this edit brought in a `source:` tag the record did not carry as its primary source
+    // yet — the sidecar is written after the record write succeeds, never before.
+    let mut source_changed = false;
     let updated = state
         .repos
         .archives
@@ -2982,6 +3038,16 @@ async fn update_archive_metadata(
                 }
                 if let Some(tags) = params.tags {
                     archive.tags = tags;
+                    // A hand-typed (or plugin-supplied) `source:` tag is the archive's origin, and
+                    // the record's `primary_source` plus its sidecar copy are where a rebuild reads
+                    // that from. Removing the tag deliberately does *not* clear `primary_source`:
+                    // where an archive came from is history, not a live tag.
+                    if let Some(source) = crate::download_sources::source_tag_value(&archive.tags) {
+                        if archive.primary_source.as_deref() != Some(source.as_str()) {
+                            archive.primary_source = Some(source);
+                            source_changed = true;
+                        }
+                    }
                 }
                 if let Some(summary) = params.summary {
                     archive.summary = summary;
@@ -3015,6 +3081,10 @@ async fn update_archive_metadata(
                 .collect();
             let tags_added: Vec<&str> = new_tag_set.difference(&old_tag_set).copied().collect();
             let tags_removed: Vec<&str> = old_tag_set.difference(&new_tag_set).copied().collect();
+
+            if source_changed {
+                crate::download_sources::sync_sidecar_primary(&state, &archive).await;
+            }
 
             // A rating-only change (the Library page's right-click star widget's own write path,
             // `useLibrary.ts::updateRating`) rebuilds and resends the *entire* tags string just to

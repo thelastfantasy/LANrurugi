@@ -56,6 +56,7 @@ pub async fn test_state() -> Option<(AppState, RedisDbs)> {
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
     let state = AppState {
+        restore_gate: lanrurugi_core::restore_gate::RestoreGate::new(),
         subscriptions: Arc::new(
             lanrurugi_storage::subscriptions::SubscriptionRepository::new(redis.config.clone()),
         ),

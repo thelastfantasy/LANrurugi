@@ -19,6 +19,10 @@ p, token_admin, /api/*, GET, allow
 p, token_admin, /api/*, POST, allow
 p, token_admin, /api/*, PUT, allow
 p, token_admin, /api/*, DELETE, allow
+# PATCH was missing from the wildcard above, which made every PATCH route (rename a share, a queue
+# item, a token) unreachable for an admin token — a silent 403, not a deliberate restriction. The
+# routes that really are session-only keep their own explicit deny below, and a deny wins.
+p, token_admin, /api/*, PATCH, allow
 
 p, token_guest, /api/*, GET, allow
 # A POST that only reads. The batch source lookup answers the same question `GET
@@ -130,8 +134,42 @@ p, token_admin, /api/recycle-bin/:id/thumbnail, GET, deny
 p, token_admin, /api/recycle-bin/:id/restore, POST, deny
 p, token_admin, /api/recycle-bin/:id, DELETE, deny
 p, token_admin, /api/recycle-bin, DELETE, deny
+# 028 deletion safety net: the deletion journal and automatic backups can restore or destroy the
+# whole library, so both are session-cookie only — no API token, admin role or not.
+p, token_admin, /api/deletions, GET, deny
+p, token_admin, /api/deletions, DELETE, deny
+p, token_admin, /api/deletions/restore-all, POST, deny
+p, token_admin, /api/deletions/:id, DELETE, deny
+p, token_admin, /api/deletions/:id/restore, POST, deny
+p, token_admin, /api/backups, GET, deny
+p, token_admin, /api/backups, POST, deny
+p, token_admin, /api/backups/export, POST, deny
+p, token_admin, /api/backups/schedule/preview, POST, deny
+p, token_admin, /api/backups/jobs/:job_id, GET, deny
+p, token_admin, /api/backups/jobs/:job_id/events, GET, deny
+p, token_admin, /api/backups/:name, GET, deny
+p, token_admin, /api/backups/:name, DELETE, deny
+# A note names a snapshot for a human; letting a token rewrite it would be a token editing
+# admin-only state, and PATCH is newly reachable for admin tokens thanks to the wildcard above.
+p, token_admin, /api/backups/:name, PATCH, deny
+p, token_admin, /api/backups/:name/restore, POST, deny
+p, token_admin, /api/backups/:name/pin, POST, deny
+p, token_admin, /api/backups/:name/pin, DELETE, deny
 p, token_admin, /api/safety-password, GET, deny
 p, token_admin, /api/safety-password, POST, deny
+# 028: the pre-028 backup/restore endpoints behind `/api/database/*` are the same data boundary
+# as `/api/backups/*` above — the export carries the share node secret, restore and clean rewrite
+# or delete the whole library. `drop` was already covered; these were not, so a read-only guest
+# token could download the backup and trigger the mass delete.
+p, token_admin, /api/database/backup, GET, deny
+p, token_admin, /api/database/backup, POST, deny
+p, token_admin, /api/database/backup/:jobid, GET, deny
+p, token_admin, /api/database/restore, POST, deny
+p, token_admin, /api/database/clean, POST, deny
+p, token_admin, /api/database/isnew, DELETE, deny
+p, token_admin, /api/database/tidy-tags, POST, deny
+p, token_admin, /api/database/rebuild-index, POST, deny
+p, token_admin, /api/database/scripts/:name, POST, deny
 p, token_admin, /api/safety-password/reset, POST, deny
 p, token_admin, /api/tokens, GET, deny
 p, token_admin, /api/tokens, POST, deny
@@ -183,9 +221,40 @@ p, token_guest, /api/recycle-bin/:id/thumbnail, GET, deny
 p, token_guest, /api/recycle-bin/:id/restore, POST, deny
 p, token_guest, /api/recycle-bin/:id, DELETE, deny
 p, token_guest, /api/recycle-bin, DELETE, deny
+p, token_guest, /api/deletions, GET, deny
+p, token_guest, /api/deletions, DELETE, deny
+p, token_guest, /api/deletions/restore-all, POST, deny
+p, token_guest, /api/deletions/:id, DELETE, deny
+p, token_guest, /api/deletions/:id/restore, POST, deny
+p, token_guest, /api/backups, GET, deny
+p, token_guest, /api/backups, POST, deny
+p, token_guest, /api/backups/export, POST, deny
+p, token_guest, /api/backups/schedule/preview, POST, deny
+p, token_guest, /api/backups/jobs/:job_id, GET, deny
+p, token_guest, /api/backups/jobs/:job_id/events, GET, deny
+p, token_guest, /api/backups/:name, GET, deny
+p, token_guest, /api/backups/:name, DELETE, deny
+p, token_guest, /api/backups/:name, PATCH, deny
+p, token_guest, /api/backups/:name/restore, POST, deny
+p, token_guest, /api/backups/:name/pin, POST, deny
+p, token_guest, /api/backups/:name/pin, DELETE, deny
 p, token_guest, /api/safety-password, GET, deny
 p, token_guest, /api/safety-password, POST, deny
 p, token_guest, /api/safety-password/reset, POST, deny
+# A read-only library token has no business reading server logs, plugin source, or the full admin
+# configuration (the desensitised answer is keyed off a session, not off the credential's role).
+p, token_guest, /api/logs/*, GET, deny
+p, token_guest, /api/plugins/export, GET, deny
+p, token_guest, /api/settings, GET, deny
+p, token_guest, /api/database/backup, GET, deny
+p, token_guest, /api/database/backup, POST, deny
+p, token_guest, /api/database/backup/:jobid, GET, deny
+p, token_guest, /api/database/restore, POST, deny
+p, token_guest, /api/database/clean, POST, deny
+p, token_guest, /api/database/isnew, DELETE, deny
+p, token_guest, /api/database/tidy-tags, POST, deny
+p, token_guest, /api/database/rebuild-index, POST, deny
+p, token_guest, /api/database/scripts/:name, POST, deny
 p, token_guest, /api/tokens, GET, deny
 p, token_guest, /api/tokens, POST, deny
 p, token_guest, /api/tokens/:id, PATCH, deny

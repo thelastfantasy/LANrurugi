@@ -1371,6 +1371,10 @@ async fn run_split_job(
                 .await;
             }
         }
+        // specs/028: this branch deletes the record directly (not through `purge_one_archive`), so
+        // it journals explicitly — otherwise "split, then keep only the parts" would be the one
+        // permanent delete with no way back.
+        crate::deletions::journal_put_best_effort(state, &archive, "split").await;
         let _ = state.repos.archives.delete(archive_id).await;
         // The archive id no longer names anything, so its thumbnail failure memory has to go with
         // it — an id is only `SHA-1(first 512 KB)`, and a later import can land on the same id with

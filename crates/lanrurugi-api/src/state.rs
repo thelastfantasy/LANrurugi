@@ -90,6 +90,9 @@ pub struct AppState {
     pub redis: RedisDbs,
     pub repos: Repositories,
     pub jobs: JobRegistry,
+    /// Closed while a full database restore replaces the keyspace: the HTTP layer refuses new
+    /// writes and long jobs stop at their next checkpoint.
+    pub restore_gate: lanrurugi_core::restore_gate::RestoreGate,
     pub auth: AuthConfig,
     /// 搜索通假实例：索引写入和查询匹配共用同一 `FoldConfig`/归一化管线。
     pub equivalence: Arc<Equivalence>,

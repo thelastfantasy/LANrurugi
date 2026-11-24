@@ -37,6 +37,11 @@ differences), see [docs/comparison-with-lanraragi.md](./docs/comparison-with-lan
   and size cap; restoring brings back tags, categories, bookmarks and reading progress. Permanent delete
   and emptying the bin need a separate four-digit safety password (lockout after repeated failures),
   resettable with the login password or from the CLI.
+- **Backups and a deletion safety net**: scheduled RDB snapshots and JSON exports, driven by cron
+  expressions (down to seconds) in the instance's own timezone; the list shows what each file contains,
+  lets you add a note and pin one against cleanup. Every batch delete records a ledger first, so a deleted
+  archive's record — with its tags, categories, bookmarks and reading progress — can be restored from the
+  backup page, and a cleanup touching more than a quarter of the library asks for confirmation first.
 - **Native packages**: Linux (x86_64 / aarch64), macOS (Apple Silicon) and FreeBSD — unpack and run, no container.
 
 ## Quick start
