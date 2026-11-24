@@ -58,7 +58,12 @@
 - [x] T030 文档：`docs/dev/` 增补一页说明台账/快照的位置、保留策略与恢复流程；`docs/comparison-with-lanraragi.md` 记一条「删除可撤销」。
 - [x] T031 按 `quickstart.md` 在**数据库副本实例**上跑完 S1–S5，记录实际输出。
 - [x] T032 回归：`mise run test-crate -- lanrurugi-api lanrurugi-storage lanrurugi-scanner`、`mise run clippy`、`mise run fmt-check`、前端 `tsc -b --force` + `eslint`。
-- [ ] T033 提交（一个 commit）→ push → PR（body 引用 #351 并把归因更正写进去）。
+- [x] T033 提交（一个 commit）→ push → PR（body 引用 #351 并把归因更正写进去）。
+  分支的全部改动于 2026-11-24 进 `dev`：PR #355 合并为 `f3a4b2c`，其后的收尾提交
+  （`137a68b` 订阅排序 / 入库时间 / 表头排序，`8df5b5f` 补 `deletions`/`snapshots` 的 API
+  分组名并让 CI 提前跑分组页生成器）是直接推 `dev` 的，没有单独开 PR。因此 T033 唯一没按
+  原样发生的是"PR body 里写 #351 的归因更正"这一步：那次合并的 PR body 没带这段，更正只落在
+  本 spec 的文档里。
 
 ## Phase 8: 可配置备份计划 + 快照摘要（追加，2026-11-23）
 
