@@ -104,15 +104,24 @@ const NON_CONTENT_NAMESPACES: &[&str] = &[
 const NON_AXIS_TAG_VALUES: &[(&str, &str)] = &[("language", "translated")];
 
 /// Namespaces the per-namespace preference list pins to its front, in display order: the axes a
-/// reader actually picks works by (interface language, author, circle, cosplayer), which otherwise
-/// share the list with the long tail of content tags — where a small library can leave them out of
-/// the top-[`MAX_NAMESPACES`] entirely, or leave `cosplayer` below the per-namespace cap. `circle`
-/// is here for the same reason `artist` is: a doujin circle is a much better predictor of what a
-/// reader wants next than the content tags it competes with, and on this library its weight is far
-/// below the cap that would otherwise hide it. They are pinned, not split out: the list is meant to
-/// be *the* namespace statistics, so leaving these out of it read as "the important axes are
-/// missing". Adding another axis is a one-line change to this roster.
-const HIGHLIGHTED_NAMESPACES: &[&str] = &["language", "artist", "circle", "cosplayer"];
+/// reader actually picks works by (interface language, author, circle, group, cosplayer), which
+/// otherwise share the list with the long tail of content tags — where a small library can leave
+/// them out of the top-[`MAX_NAMESPACES`] entirely, or leave `cosplayer` below the per-namespace
+/// cap. `circle` is here for the same reason `artist` is: a doujin circle is a much better
+/// predictor of what a reader wants next than the content tags it competes with, and on this
+/// library its weight is far below the cap that would otherwise hide it.
+///
+/// `group` is the same real-world axis in a different tag vocabulary (e-hentai's `group:` versus
+/// `plugins/metadata/ksk.ts`'s `circle:`), and is pinned at the same level on purpose — but *not*
+/// merged into `circle`: on this library the two spellings barely coincide (1737 archives carry
+/// `group`, 1885 carry `circle`, 1261 carry both, and only 25 of those share an identical value),
+/// so summing them would pretend to unify values nothing has reconciled. Pinning both keeps each
+/// vocabulary's own numbers visible and comparable.
+///
+/// They are pinned, not split out: the list is meant to be *the* namespace statistics, so leaving
+/// these out of it read as "the important axes are missing". Adding another axis is a one-line
+/// change to this roster.
+const HIGHLIGHTED_NAMESPACES: &[&str] = &["language", "artist", "circle", "group", "cosplayer"];
 
 /// Half-life of the recency term in [`preference_weights`], in days: a read half as recent as
 /// another counts half as much.
