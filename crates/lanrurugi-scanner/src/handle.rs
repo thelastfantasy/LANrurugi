@@ -32,6 +32,9 @@ pub struct ScannerConfig {
     pub new_archive_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::events::IngestEvent>>,
     pub locks: FilenameLocks,
     pub jobs: JobRegistry,
+    /// The API's restore gate, so a scan running while the database is being restored stops at
+    /// its next checkpoint. `None` in a process that cannot race a restore.
+    pub restore_gate: Option<lanrurugi_core::restore_gate::RestoreGate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -253,8 +256,19 @@ async fn run_catch_up(config: &ScannerConfig, reason: &str) {
         &config.jobs,
         &job_id,
         config.new_archive_tx.clone(),
+        config.restore_gate.as_ref(),
     )
     .await;
+    if summary.aborted {
+        config
+            .jobs
+            .fail(
+                &job_id,
+                lanrurugi_core::restore_gate::RESTORE_ABORTED_MESSAGE,
+            )
+            .await;
+        return;
+    }
     tracing::info!(
         reason,
         scanned = summary.scanned,

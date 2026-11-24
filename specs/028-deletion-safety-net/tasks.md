@@ -108,7 +108,8 @@
 背景：用户拍板方案 A。此前目录里只有一种 JSON「快照」，既当自动备份又当可恢复导出，语义含混：
 JSON 恢复不了配置/文件映射/搜索索引，而一次真正的全量备份在 JSON 里根本表达不出来。现在拆成两类：
 
-- **快照 `kind=backup`**：`snapshot-<时间戳>-<reason>.rdb`，Redis 全量 RDB（`BGSAVE` + 拷文件），只能运维还原。
+- **快照 `kind=backup`**：`snapshot-<时间戳>-<reason>.rdb`，Redis 全量 RDB（`BGSAVE` + 拷文件），
+  app 内可异步还原（`DEBUG RELOAD NOSAVE` + `BGREWRITEAOF`），也可用 CLI / 纯 shell 还原。
 - **导出 `kind=export`**：`export-<时间戳>-<reason>.json`，可选择性数据，app 内可还原；历史无前缀的
   `<时间戳>-<reason>.json` 仍按导出列出。
 
@@ -122,8 +123,9 @@ JSON 恢复不了配置/文件映射/搜索索引，而一次真正的全量备�
   `deletions.rs` 的两处 `pre-journal-purge` 仍是**导出**。
 - [x] T049 端点：`POST /api/backups` = 立即生成快照（RDB），新增 `POST /api/backups/export` = 立即生成导出；
   `GET /api/backups` 一个 `entries` 数组带 `kind`；共用 `GET|DELETE /api/backups/{name}`、
-  `POST|DELETE /api/backups/{name}/pin`；`POST /api/backups/{name}/restore` 只接受导出（RDB → 409
-  `full_backup_not_restorable`）；`route_policy.csv` 补 `POST /api/backups/export` 与 pin 的 deny 行。
+  `POST|DELETE /api/backups/{name}/pin`；`POST /api/backups/{name}/restore` 两类都接受，快照走异步 job（`start_full_restore`，
+  `GET /api/backups/jobs/{id}/events` 复用导出还原的 SSE）；`route_policy.csv` 补 `POST /api/backups/export`
+  与 pin 的 deny 行。
 - [x] T050 pin：Redis set `LANRURUGI_SNAPSHOT_PINS`（`keys.rs`）、`read_pins`/`set_pin`、
   `retention_plan` 跳过 pinned 且不占名额、删除文件时清 pin、列表每条带 `pinned`；读不到 pin 时跳过清理。
 - [x] T051 保留：快照类固定最近 3 份（`FULL_BACKUP_KEEP`，不做成设置项），导出类沿用 7/4/5/5；
@@ -132,7 +134,7 @@ JSON 恢复不了配置/文件映射/搜索索引，而一次真正的全量备�
   快照始终是单文件 `.rdb`（`application/octet-stream`），导出是 `application/json`。
 - [x] T053 [P] 测试：两类命名解析（含历史无前缀、前缀与扩展名不匹配）、快照 3 份上限、pin 永不入选且
   取消后可淘汰、pin 不占名额、zip 可读回且只含该文件、pinning 往返 + 删除清 pin、
-  全量备份落盘且拒绝 app 内还原（远程 Redis 走显式错误分支）。
+  全量备份落盘；非 RDB 文件被 `preflight` 拒绝（400 `not_a_redis_backup`，远程 Redis 走显式错误分支）。
 - [x] T054 文档：`data-model.md`（§2 两类文件与字段、§2.2 pin、§4 设置项）、
   `contracts/backups-api.md`（两类契约 + 运维还原 + 保留/pin 表）、`quickstart.md`（S3 两类、S5 计划生成 RDB）、
   `docs/dev/deletion-safety-net.md`（含运维还原步骤与远程 Redis 限制）。
@@ -251,3 +253,37 @@ JSON 恢复不了配置/文件映射/搜索索引，而一次真正的全量备�
   `UTC` 对照用例；`America/New_York` 春季缺口跳过 02:30、冬夏偏移分别为 `-05:00`/`-04:00`、墙钟仍 03:00。
 - [x] T084 文档：contracts（计划语义的时区段 + DST 段）、data-model（§2/§2.1/§4）、
   `docs/dev/deletion-safety-net.md`（生成时机与设置项表）。
+
+## Phase 16: 快照全量还原（追加，2026-11-24）
+
+背景：「用快照还原整个数据库」原先直接 409，只能停机手工拷 RDB，Web UI 不可用时更没法做。现在三条路径
+（Web UI、CLI、纯 shell）都可用，且还原期间暂停写入。
+
+- [x] T085 `snapshots/full_restore.rs`：`restore_full(state, name, progress)` / `restore_full_with(redis, archive_dir, name, progress)`；
+  `preflight`（名字/kind/存在/非空/`REDIS` 魔数）；`pre-restore` 全量快照作为安全副本，失败即中止；
+  同目录 `<dir>/.lanrurugi-restore-backup-<ts>.rdb` 回滚副本 + `.lanrurugi-restore-<ts>.tmp` + rename；
+  `DEBUG RELOAD NOSAVE`（**不是** `DEBUG RELOAD`——后者会先把内存写回文件，等于丢弃还原）；
+  `appendonly=yes` 时 `BGREWRITEAOF` 并轮询 `aof_rewrite_in_progress`（上限 5 分钟）；成功清理临时文件并回 `{restored_from, previous_state, entries}`。
+- [x] T086 错误类型：`FullRestoreErrorKind` → `reason` → HTTP 状态（`invalid_backup_name` 400、`not_found` 404、
+  `not_a_full_backup` 400、`not_a_redis_backup` 400、`safety_backup_failed` 500、`redis_unavailable` 503、
+  `debug_command_disabled` 409（附 `enable-debug-command local` 提示）、`reload_failed` 500、`aof_rewrite_timeout` 500、`io_error` 500）。
+- [x] T087 HTTP：`POST /api/backups/{name}/restore` 对 `kind=backup` 返回 `{operation, success, job, job_id, started_at, events}`，
+  `jobs::start_full_restore` 写 `BACKUP_RESTORE` 活动（成功 Success / 失败 Failure）；删除 `full_backup_not_restorable` 与 409 分支。
+- [x] T088 并发写入闸门：`lanrurugi_core::restore_gate::RestoreGate`（`closed/close/open` + 在途计数 + `Notify`）；
+  `procedure::restore_write_gate` 中间件挂在 `/api`——关闭后 `POST/PUT/PATCH/DELETE` 503 `restore_in_progress`，
+  `GET`、登录/登出、以及「还原 job 自己的 `GET /api/backups/jobs/*`」放行，重复还原请求 409；关闭后最多等 30 秒在途写入，超时 `warn!` 并继续。
+- [x] T089 后台任务检查点：全量/增量扫描（`ScanSummary.aborted` + `abort_all`）、缩略图批量、重复档案检测、
+  单行本归组、下载入库（`IngestDownloadError::RestoreInProgress` → `QueueError::IngestFailed`）每 200 条/每批检查一次闸门，
+  关闭即提前正常结束并把 job 标为 `failed`（error 为「数据库正在还原，任务已中止；还原完成后请重新运行」）；磁盘文件不动。
+- [x] T090 进度：`BackupProgress::note` 默认空实现；`BackupJobStatus.note` 与 SSE 的 `note` 字段（人话阶段说明）；
+  里程碑 5/20/35/60/90/100，`bytes_expected` 为快照文件大小。
+- [x] T091 CLI：`lanrurugi-server snapshots list`（不需要 Redis）与 `snapshots restore <name> [--yes]`
+  （`StdoutProgress` 打到 stdout，未 `--yes` 时打印将覆盖整库并等回车）；位于 `crates/lanrurugi-server/src/cli/snapshots.rs`。
+- [x] T092 `redis.conf`：新增 `enable-debug-command local`（`local` = 只允许回环连接）；`Dockerfile`/`Dockerfile.dev`
+  的 Redis 8.2.1 支持该指令，无需改动。
+- [x] T093 [P] 测试：`full_restore.rs` 单测（非 REDIS 头、空文件、合法头、缺失/异类名字、reason↔状态表、DEBUG 禁用识别）；
+  `crates/lanrurugi-api/tests/full_restore_redis.rs` 起临时 `redis-server`（随机端口 + 临时目录 + `appendonly yes`）
+  验证还原后值回退、`pre-restore` 副本存在、AOF 重写完成、SIGKILL 重启后仍是旧值；另一台**未开** `--enable-debug-command`
+  的临时 Redis 断言返回 `debug_command_disabled` 且原 RDB 字节被放回。找不到 `redis-server` 时 `eprintln!` 跳过。
+- [x] T094 文档：`docs/dev/deletion-safety-net.md`（UI / CLI / 纯 shell 三条路径 + 闸门行为表 + 「还原期间跑扫描」说明）、
+  `contracts/backups-api.md`、`quickstart.md`、`docs/dev` 的生成时机表；前端契约（`note`）在此记录，UI 由用户另行实现。

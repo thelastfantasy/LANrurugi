@@ -4770,6 +4770,7 @@ pub(crate) mod tests {
         let redis = lanrurugi_storage::test_support::test_redis_dbs().await?;
         let repos = crate::Repositories::new(&redis);
         Some(AppState {
+            restore_gate: lanrurugi_core::restore_gate::RestoreGate::new(),
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         discovery_singleflight: std::sync::Arc::new(
             lanrurugi_core::singleflight::Singleflight::new(8),

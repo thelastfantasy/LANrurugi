@@ -89,6 +89,11 @@ async fn scan_duplicates(
 }
 
 pub(crate) async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, String> {
+    // A restore replaces the keyspace; stop before hashing covers into records that may not exist
+    // afterwards.
+    if state.restore_gate.closed() {
+        return Err(lanrurugi_core::restore_gate::RESTORE_ABORTED_MESSAGE.to_string());
+    }
     let archives = state
         .repos
         .archives
@@ -172,6 +177,9 @@ pub(crate) async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Res
     let mut last_publish = Instant::now();
     let mut no_cover = 0usize;
     for (done, id) in missing.iter().enumerate() {
+        if done.is_multiple_of(200) && state.restore_gate.closed() {
+            return Err(lanrurugi_core::restore_gate::RESTORE_ABORTED_MESSAGE.to_string());
+        }
         match cover::hash_and_store(state, id).await {
             Some(bytes) => {
                 hashes.insert((*id).clone(), bytes);
@@ -232,6 +240,9 @@ pub(crate) async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Res
     // copy the read endpoints use.
     let mut reviews = review::load_all(state).await;
     for (done, group) in groups.iter().enumerate() {
+        if done.is_multiple_of(200) && state.restore_gate.closed() {
+            return Err(lanrurugi_core::restore_gate::RESTORE_ABORTED_MESSAGE.to_string());
+        }
         if last_tick.elapsed() >= PROGRESS_INTERVAL {
             scan::set_progress(scan::ScanPhase::Reviewing, done, groups.len());
             state

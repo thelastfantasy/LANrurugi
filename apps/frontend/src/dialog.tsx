@@ -124,8 +124,10 @@ type DialogRequest =
       kind: "confirm"
       message: ReactNode
       danger: boolean
-      // The confirm button stays disabled until typed text matches the localized "delete" word.
+      // The confirm button stays disabled until typed text matches the localized "delete" word
+      // (`typedWord` overrides that word for actions whose verb is not "delete").
       requireTypedConfirmation: boolean
+      typedWord?: string
       resolve: (value: boolean) => void
     }
   | {
@@ -197,6 +199,14 @@ export function confirmDialog(
 ): Promise<boolean> {
   return new Promise((resolve) => {
     setRequest({ kind: "confirm", message, danger, requireTypedConfirmation, resolve })
+  })
+}
+
+/** `confirmDialog` with a caller-chosen word to type, for actions too large to approve with one
+ *  click (a full database restore reads "type 还原", not "type 删除"). */
+export function typedConfirmDialog(message: ReactNode, word: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    setRequest({ kind: "confirm", message, danger: true, requireTypedConfirmation: true, typedWord: word, resolve })
   })
 }
 
@@ -1242,9 +1252,10 @@ export function DialogHost() {
 
   const requiredConfirmationWord =
     request.kind === "confirm" && request.requireTypedConfirmation
-      ? i18n.resolvedLanguage === "en"
-        ? (t("common.delete") ?? "DELETE").toUpperCase()
-        : (t("common.delete") ?? "DELETE")
+      ? (request.typedWord ??
+        (i18n.resolvedLanguage === "en"
+          ? (t("common.delete") ?? "DELETE").toUpperCase()
+          : (t("common.delete") ?? "DELETE")))
       : null
 
   function close() {

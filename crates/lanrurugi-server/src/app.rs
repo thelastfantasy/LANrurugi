@@ -66,6 +66,12 @@ pub fn build_app(
         .fallback(|| async {
             lanrurugi_api::common::not_found("api_not_found", "No such API endpoint.")
         })
+        // After auth (source order: the layer added first runs last) — an unauthenticated caller
+        // gets its usual 401 rather than a 503 that would leak that a restore is running.
+        .layer(axum::middleware::from_fn_with_state(
+            state.restore_gate.clone(),
+            lanrurugi_api::procedure::restore_write_gate,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             require_api_key,

@@ -58,6 +58,9 @@ pub struct BackupJobStatus {
     pub entry: Option<Value>,
     /// The summary a restore/import finishes with; `null` for a backup or export.
     pub result: Option<Value>,
+    /// A human-readable phase note for long jobs ("waiting for in-flight writes", ...). `null`
+    /// when the job has nothing extra to say; the percentage fields are unaffected.
+    pub note: Option<String>,
 }
 
 struct Inner {
@@ -74,6 +77,7 @@ struct Inner {
     /// `entry` in the terminal event, under its own key so a client never has to guess which shape
     /// it is looking at.
     result: Option<Value>,
+    note: Option<String>,
     last_emit: Instant,
     /// Whether any progress line has been published yet. The first real change always goes out,
     /// even if it arrives inside the 100 ms throttle window — a UI that connects before any event
@@ -109,6 +113,7 @@ impl BackupJob {
                 error: None,
                 entry: None,
                 result: None,
+                note: None,
                 last_emit: Instant::now(),
                 emitted: false,
             }),
@@ -133,6 +138,7 @@ impl BackupJob {
             error: inner.error.clone(),
             entry: inner.entry.clone(),
             result: inner.result.clone(),
+            note: inner.note.clone(),
         }
     }
 
@@ -146,6 +152,7 @@ impl BackupJob {
             "bytes_written": inner.bytes_written,
             "bytes_expected": inner.bytes_expected,
             "elapsed_ms": self.elapsed_ms(),
+            "note": inner.note,
         })
     }
 
@@ -170,6 +177,7 @@ impl BackupJob {
                 "elapsed_ms": self.elapsed_ms(),
                 "entry": serde_json::Value::Null,
                 "result": result,
+                "note": inner.note,
             })
         };
         let _ = self.tx.send(event);
@@ -216,6 +224,31 @@ impl BackupJob {
                 "error": message,
                 "percent": inner.percent,
                 "elapsed_ms": self.elapsed_ms(),
+                "note": inner.note,
+            })
+        };
+        let _ = self.tx.send(event);
+    }
+}
+
+impl BackupJob {
+    /// Publishes a phase note and remembers it for `status()`/the terminal events. Throttled like
+    /// progress: a note is an annotation, not a measurement worth a burst of events.
+    pub(crate) fn note(&self, text: impl Into<String>) {
+        let text = text.into();
+        let event = {
+            let mut inner = self.inner.lock().expect("job status lock");
+            if inner.state != "running" || inner.note.as_deref() == Some(text.as_str()) {
+                return;
+            }
+            inner.note = Some(text.clone());
+            json!({
+                "kind": "note",
+                "note": text,
+                "percent": inner.percent,
+                "bytes_written": inner.bytes_written,
+                "bytes_expected": inner.bytes_expected,
+                "elapsed_ms": self.elapsed_ms(),
             })
         };
         let _ = self.tx.send(event);
@@ -223,6 +256,10 @@ impl BackupJob {
 }
 
 impl BackupProgress for BackupJob {
+    fn note(&self, text: &str) {
+        BackupJob::note(self, text);
+    }
+
     fn update(&self, written: u64, expected: u64, percent: f64) {
         let event = {
             let mut inner = self.inner.lock().expect("job status lock");
@@ -405,6 +442,69 @@ pub async fn start_export(state: &AppState, auth: Option<AuthContext>) -> Arc<Ba
         }
     });
     job
+}
+
+/// `POST /api/backups/{name}/restore` for a full RDB backup: replaces Redis's live RDB, reloads it
+/// and rewrites the AOF. Returns the Jobs-console registry id plus the progress job, like
+/// `database::start_restore_job`.
+pub async fn start_full_restore(
+    state: &AppState,
+    name: &str,
+    auth: Option<AuthContext>,
+) -> (String, Arc<BackupJob>) {
+    let registry_id = state.jobs.create("restore").await;
+    state.jobs.mark_active(&registry_id).await;
+    let job = BackupJob::create("restore");
+    register(&job);
+    let state = state.clone();
+    let task_job = job.clone();
+    let task_registry_id = registry_id.clone();
+    let name = name.to_string();
+    tokio::spawn(async move {
+        let progress: Arc<dyn BackupProgress> = task_job.clone();
+        let target = ActivityTarget {
+            id: None,
+            label: Some(name.clone()),
+            kind: Some("backup".to_string()),
+        };
+        match super::restore_full(&state, &name, progress.as_ref()).await {
+            Ok(outcome) => {
+                let result = serde_json::to_value(&outcome)
+                    .unwrap_or_else(|e| json!({ "restored_from": name, "error": e.to_string() }));
+                task_job.finish_with_result(result.clone());
+                state.jobs.finish(&task_registry_id, result).await;
+                record_manual(
+                    &state,
+                    auth.as_ref(),
+                    action_types::BACKUP_RESTORE,
+                    target,
+                    Outcome::Success,
+                    None,
+                    None,
+                )
+                .await;
+            }
+            Err(e) => {
+                tracing::error!(snapshot = %name, error = %e, "full restore failed");
+                let message = e.to_string();
+                task_job.fail(message.clone());
+                state.jobs.fail(&task_registry_id, message).await;
+                record_manual(
+                    &state,
+                    auth.as_ref(),
+                    action_types::BACKUP_RESTORE,
+                    target,
+                    Outcome::Failure {
+                        reason: e.reason().to_string(),
+                    },
+                    None,
+                    None,
+                )
+                .await;
+            }
+        }
+    });
+    (registry_id, job)
 }
 
 /// `GET /api/backups/jobs/{job_id}` — the polling fallback for clients that cannot hold an

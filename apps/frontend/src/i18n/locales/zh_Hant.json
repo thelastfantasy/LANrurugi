@@ -1525,5 +1525,13 @@
   "settings.backupRunFailed": "失敗於 {{percent}}%（已用 {{seconds}} 秒）· {{error}}",
   "settings.backupRunRealtimeUnavailable": "即時進度不可用，最多只顯示最後一次查詢到的狀態。",
   "settings.backupRunProgressRestore": "還原中… {{percent}}%（已用 {{seconds}} 秒）",
-  "settings.backupRunProgressImport": "匯入中… {{percent}}%（已用 {{seconds}} 秒）"
+  "settings.backupRunProgressImport": "匯入中… {{percent}}%（已用 {{seconds}} 秒）",
+  "settings.snapshotRestore": "還原",
+  "settings.snapshotRestoreWarnTitle": "用這份快照還原整個資料庫？",
+  "settings.snapshotRestoreWarnReplace": "會用「{{name}}」整體取代目前資料庫：檔案紀錄、標籤、分類、書籤、索引、設定和登入狀態都會回到快照時點。",
+  "settings.snapshotRestoreWarnCreated": "快照時間：{{createdAt}}",
+  "settings.snapshotRestoreWarnLose": "快照之後新增或修改的內容會遺失（磁碟上的檔案不會被刪除）。",
+  "settings.snapshotRestoreWarnLogout": "還原時站點會短暫無法使用，可能需要重新登入。",
+  "settings.snapshotRestoreWarnSafety": "還原前會先自動產生一份 pre-restore 快照，出問題可以再還原回目前狀態。",
+  "settings.snapshotRestoreConfirmWord": "還原"
 }

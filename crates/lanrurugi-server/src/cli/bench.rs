@@ -120,6 +120,7 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         tokio::sync::mpsc::unbounded_channel::<lanrurugi_scanner::events::IngestEvent>();
 
     let state = AppState {
+        restore_gate: lanrurugi_core::restore_gate::RestoreGate::new(),
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         discovery_singleflight: std::sync::Arc::new(
             lanrurugi_core::singleflight::Singleflight::new(8),

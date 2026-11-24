@@ -381,6 +381,7 @@ async fn run_once(
     candidates: &CandidateSet,
 ) -> Result<Option<CachedSuggestions>, RunError> {
     let started = Instant::now();
+    restore_check(state)?;
     let settings = GroupingSettings::default();
 
     // 1. Everything already known: title, tags, and the persisted vector when it still matches the
@@ -396,6 +397,9 @@ async fn run_once(
     for (i, id) in candidates.ungrouped_ids.iter().enumerate() {
         if handle.is_cancelled() {
             return Ok(None);
+        }
+        if i.is_multiple_of(200) {
+            restore_check(state)?;
         }
         let Ok(Some(archive)) = state
             .repos
@@ -734,6 +738,18 @@ async fn write_cache(state: &AppState, entry: &CachedSuggestions) -> Result<(), 
 struct RunError {
     code: &'static str,
     message: String,
+}
+
+/// The restore checkpoint: grouping caches vectors and suggestions, both of which would be written
+/// into a keyspace that is about to be replaced.
+fn restore_check(state: &AppState) -> Result<(), RunError> {
+    if state.restore_gate.closed() {
+        return Err(RunError {
+            code: lanrurugi_core::restore_gate::RESTORE_IN_PROGRESS_REASON,
+            message: lanrurugi_core::restore_gate::RESTORE_ABORTED_MESSAGE.to_string(),
+        });
+    }
+    Ok(())
 }
 
 async fn execute(

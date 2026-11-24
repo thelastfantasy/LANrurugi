@@ -91,18 +91,31 @@ curl -N -sS -b $J "$BASE/api/backups/jobs/$EJOB/events"
 两者都能被 `GET /api/backups/<name>` 原样下载（导出可加 `?format=zip`，得到只含该 JSON 的 zip；`.rdb` 即使带
 `format=zip` 也返回单文件）。空闲时流里会出现 `: keep-alive` 注释行。
 
-3. **快照不能一键还原、导出可以**（恢复也是异步任务，进度按「已应用档案数 / 总数」）：
+3. **两种快照都能一键还原**（都是异步任务；RDB 的进度按 5/20/35/60/90/100 六步走）：
 
 ```bash
-curl -sS -b $J -o /dev/null -w '%{http_code}\n' -X POST "$BASE/api/backups/<snapshot-name>/restore"   # 409
-RJOB=$(curl -fsS -b $J -X POST "$BASE/api/backups/<export-name>/restore" | python3 -c 'import json,sys;print(json.load(sys.stdin)["job_id"])')
-curl -N -sS -b $J "$BASE/api/backups/jobs/$RJOB/events"   # progress … done(result.restored/skipped)
+RJOB=$(curl -fsS -b $J -X POST "$BASE/api/backups/<snapshot-name>/restore" | python3 -c 'import json,sys;print(json.load(sys.stdin)["job_id"])')
+curl -N -sS -b $J "$BASE/api/backups/jobs/$RJOB/events"   # progress/note … done(result)
+EJOB=$(curl -fsS -b $J -X POST "$BASE/api/backups/<export-name>/restore" | python3 -c 'import json,sys;print(json.load(sys.stdin)["job_id"])')
+curl -N -sS -b $J "$BASE/api/backups/jobs/$EJOB/events"   # progress … done(result.restored/skipped)
 ```
 
-**期望**：第一条 `409`（`reason=full_backup_not_restorable`，提示「停 Redis → 替换 RDB → 启动」）；第二条
-返回 `job_id` + `events`，流里 `progress.percent` 按「已应用档案数 / 总数」递增，最后 `done` 的 `result`
-带 `restored`/`skipped` 等计数，并额外生成一份 `pre-restore` **导出**。
-真正还原快照由运维执行：下载 `.rdb`、停 Redis、用它替换 `CONFIG GET dir` + `dbfilename` 指向的文件、启动 Redis。
+**期望**：两条都返回 `job_id` + `events`。RDB 那条的 `done.result` 是
+`{restored_from, previous_state, entries}`，且 `previous_state` 指向的 `pre-restore` **全量快照**已经出现在
+`GET /api/backups` 列表里；导出那条的 `done.result` 带 `restored`/`skipped` 等计数，并额外生成一份
+`pre-restore` **导出**。RDB 还原期间 `GET` 之外的写请求返回 `503`（`reason=restore_in_progress`），重复的
+还原请求返回 `409`（同一 reason）。
+
+UI 不可用时用 CLI（同样三步，不需要 HTTP 服务）：
+
+```bash
+lanrurugi-server snapshots list
+lanrurugi-server snapshots restore <snapshot-name>        # 打印警告，回车确认
+lanrurugi-server snapshots restore <snapshot-name> --yes
+```
+
+三者都不行时（连本程序都起不来），纯 `redis-cli` 兜底见 `docs/dev/deletion-safety-net.md` 的
+「还原一份快照（RDB）」一节——关键是 `DEBUG RELOAD NOSAVE` 而非 `DEBUG RELOAD`，然后 `BGREWRITEAOF`。
 
 4. pin：`curl -fsS -b $J -X POST "$BASE/api/backups/<name>/pin"` → `{"pinned":true}`，列表里该条 `pinned=true`；
 `-X DELETE .../pin` 取消。pin 之后无论保留策略怎么算都不会删它（下一步可验证）。

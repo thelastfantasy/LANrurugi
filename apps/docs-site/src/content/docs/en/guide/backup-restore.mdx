@@ -1,0 +1,161 @@
+---
+title: Backup and restore
+description: Snapshots (a whole-Redis RDB) versus exports (metadata JSON), automatic schedules, and the two restore paths.
+---
+
+Settings → “Backup / Restore” gathers every backup in one place, in three tabs: **Snapshots**,
+**Import / export**, and **Import from LANraragi**. Elsewhere in these docs, an unqualified
+“backup” means a snapshot.
+
+## Two kinds of backup, for different jobs
+
+| | Snapshot (`.rdb`) | Export (`.json`) |
+|---|---|---|
+| What it holds | the whole Redis data file | archive metadata, tags, categories, tankoubon, stamps, bookmarks |
+| Portable? | reliable only on a structurally identical database, and it replaces everything | yes, importable into any instance |
+| What it restores | everything — settings, tokens, reading progress and the search index all go back to that moment | metadata only, and only for archives already in this library |
+| Partial rollback? | no, it is an all-or-nothing swap | yes, it only overwrites fields per record |
+| Where it lives | `<library>/.lanrurugi-backups/` | same directory |
+
+A snapshot is a copy of the RDB that `redis-server` writes for itself with `BGSAVE`, so it is a
+*point in time for the whole database*, not a list of records.
+
+:::tip[Which one]
+Undoing a mistake (cleared archives, a bulk tag change) → snapshot. Moving to another machine, or
+restoring just tags and categories → export.
+:::
+
+## Automatic schedules
+
+“Snapshot schedule” can hold several plans, each with a name and a 7-field cron expression
+(`sec min hour day month weekday year`, the year optional), each producing snapshots on its own
+cadence:
+
+- Times are interpreted in the **instance's configured time zone**, not the process's UTC. Change the
+  time zone and the same expression lands on that wall clock in the new zone — nothing to rewrite.
+  The preset buttons under the form cover the common cadences (hourly, daily 03:00, weekly on Sunday,
+  the 1st of each month, the first Sunday of each month `0 0 3 * * 0#1 *`, and so on).
+- Each plan keeps N snapshots (`Keep per plan []`, 3 by default). **Retention only runs when a new
+  backup is written**: lowering the number never deletes a file on the spot — the extras are pruned
+  when the next manual or scheduled backup lands.
+- Pinned snapshots are never pruned and do not count against the quota.
+- The first plan defaults to “every Sunday 03:00”; rename it, change the expression, or delete it.
+
+## Restoring in the UI
+
+### From a snapshot (whole database)
+
+The first button on a snapshot card is “Restore”. It opens a confirmation that lists the
+consequences and requires you to **type the confirmation word** — because it swaps the entire
+dataset:
+
+- archive records, tags, categories, bookmarks, stamps, the search index, **settings and your login
+  state** all return to that snapshot's moment;
+- anything added or changed after the snapshot is lost;
+- archive files **on disk are not deleted** — only the database goes back (run a scan afterwards to
+  reconcile);
+- the site is briefly unavailable during the restore, and you may have to sign in again (the
+  snapshot carries the tokens of its own moment).
+
+The restore reports a percentage over SSE — the same channel that snapshot creation, export and
+import use — stepping through: verify the snapshot → write a `pre-restore` safety copy → swap the
+RDB → reload the Redis dataset → rewrite the AOF.
+
+### From an export (metadata)
+
+The “Restore” button on an export card only overwrites metadata, so a single confirmation is enough.
+A `pre-restore` snapshot is still taken first.
+
+## What happens to work in flight
+
+A restore is **exclusive**, and the server handles the collisions itself:
+
+| In progress | During a restore |
+|---|---|
+| Uploads, downloads being imported, tag edits, archive deletions (writes) | rejected immediately with `503 restore_in_progress`; reads are unaffected |
+| Writes already inside a handler | allowed to finish (up to 30 s) before the dataset is swapped; a timeout is logged as a warning |
+| Full scan, bulk thumbnail generation, duplicate detection, tankoubon grouping | abort at the next checkpoint (about every 200 items) *before* writing to the database; the job is marked failed with “a database restore is in progress; run it again afterwards” |
+| Downloads in the queue | the import step aborts the same way; files already written to disk stay there and the next scan picks them up |
+
+The reason for refusing writes rather than letting them through: `DEBUG RELOAD NOSAVE` clears and reloads
+the whole dataset, so anything written inside that window is either lost or lands on the
+just-restored older world (a thumbnail record for an archive that no longer exists, for instance) —
+indistinguishable afterwards from real data.
+
+## Restoring without the UI
+
+Two fallbacks, neither of which needs a working web page.
+
+### Command line inside the container (recommended)
+
+This needs Redis to be up — nothing else. It works when the HTTP server is down, the frontend
+errors out, or you have lost the password:
+
+```sh
+# List snapshots (does not need Redis)
+docker exec -it <container> lanrurugi-server snapshots list
+
+# Restore one (prints what it is about to do and waits for Enter; --yes skips that)
+docker exec -it <container> lanrurugi-server snapshots restore snapshot-20261124T065921Z-manual.rdb
+```
+
+It runs exactly the same logic as the web UI: verify the file, write a `pre-restore` snapshot,
+atomically replace the RDB, `DEBUG RELOAD NOSAVE`, rewrite the AOF — printing each step with a
+one-line explanation, and finally `restored …; previous state kept as <safety copy>`. Native packages
+are the same, minus the `docker exec`.
+
+Point it at a specific target with `LANRURUGI_REDIS_URL` / `LANRURUGI_LIBRARY_PATH`; explicit
+parent options such as `--redis-url` have to go **before** the subcommand
+(`snapshots --redis-url … restore <name>`).
+
+### Plain shell (when even that binary is unusable)
+
+All you need is the `redis-cli` bundled with the image. Ask Redis where it keeps its files rather
+than guessing:
+
+```sh
+docker exec <container> redis-cli -p 16379 CONFIG GET dir
+docker exec <container> redis-cli -p 16379 CONFIG GET dbfilename
+docker exec <container> redis-cli -p 16379 CONFIG GET appendonly
+```
+
+Then copy the snapshot over the RDB Redis is using, make it reload, and rewrite the AOF to match:
+
+```sh
+# <dir> / <dbfilename> come from the queries above (container paths)
+docker exec <container> cp "/home/koyomi/lanrurugi/content/.lanrurugi-backups/<snapshot file>" "<dir>/<dbfilename>"
+docker exec <container> redis-cli -p 16379 DEBUG RELOAD NOSAVE
+docker exec <container> redis-cli -p 16379 BGREWRITEAOF
+```
+
+`DEBUG RELOAD NOSAVE` is the only lossless way to make a running Redis re-read the RDB on disk — the
+`NOSAVE` matters: without it Redis writes the **current in-memory** dataset back to the RDB first and
+then loads it, which simply overwrites the snapshot you just copied in (measured on 8.2.1: the values
+stayed at the post-snapshot ones). The bundled
+`redis.conf` already enables `enable-debug-command local` (loopback connections only); with an
+**external** Redis you have to enable it yourself, otherwise the UI/CLI restore returns
+`debug_command_disabled` (409, already rolled back, nothing damaged) and the shell route gets
+`DEBUG command not allowed`.
+
+:::caution[The AOF must be rewritten]
+The image runs with `appendonly yes`. Replacing the RDB without `BGREWRITEAOF` looks right in the
+running process, but the next Redis restart reloads the AOF — still the new data — so nothing
+actually changed. Before doing any of this by hand, `docker exec <container> redis-cli -p 16379
+BGSAVE` first, so you have the current state as a fallback.
+:::
+
+## FAQ
+
+**Do I have to log in again after a restore?** Yes. The snapshot carries the sessions and tokens of
+its own moment, so the current one may no longer exist. Log in with the admin password.
+
+**Why can't I delete a snapshot?** The newest usable snapshot is protected; deleting it returns
+`409 last_usable`. Create a newer one (“Create snapshot now”) and delete the older file, or pin it as
+a long-lived baseline.
+
+**The archive count is wrong after a restore.** The database is back at the snapshot's moment; the
+files never moved. Run a full scan to re-register files that exist on disk but not in the database;
+records pointing at missing files are cleaned up by the database cleaner.
+
+**Can I restore a single archive?** No. A snapshot is a whole-database point in time and has no
+record-level rollback. To undo a change to one archive, use its edit page or tag history.

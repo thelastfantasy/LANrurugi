@@ -106,16 +106,80 @@ crontab 的语义（与标准 cron 一致）：数字星期 `0` 和 `7` 都是�
 **远程 / 托管 Redis 不能这样备份**：`CONFIG` 被禁用、或者它报告的路径本进程读不到时，端点返回 `500` 并在
 `error` 里写明原因，计划任务则只 `warn!`（该槽位记进进程内标记，不重试）。不会产生空文件，也不会写半截文件。
 
-### 运维还原一份快照
+### 还原一份快照（RDB）
 
-1. `GET /api/backups/<name>` 下载 `.rdb`；
-2. 停掉 Redis；
-3. 用它替换 Redis 的 RDB（路径见 `redis-cli CONFIG GET dir` / `CONFIG GET dbfilename`，通常 `dump.rdb`；
-   若开了 AOF，注意 AOF 会在启动时优先恢复——必要时同时处理 `appendonlydir`）；
-4. 启动 Redis，再启动本服务。
+`.rdb` 是整库备份：档案记录、分类、单行本、设置、token、索引全在里面。还原它会**覆盖整个 Redis 数据集**，
+所以三条路径都先写一份 `pre-restore` 全量快照（`take_full_backup`，reason 固定 `pre-restore`）——没有这份
+安全副本就拒绝继续。
 
-app 内的 `POST /api/backups/{name}/restore` 对 `.rdb` 返回 `409`（`reason=full_backup_not_restorable`），
-只接受导出。
+#### 1. Web UI / HTTP（服务正常时）
+
+`POST /api/backups/{name}/restore`，`kind=backup` 现在和导出一样是**异步任务**：立刻返回 `job_id` +
+`events`，客户端订阅 `GET /api/backups/jobs/{job_id}/events`。进度按 5/20/35/60/90/100 六步报，
+事件里额外有 `note`（人话阶段说明，例如「已暂停新的写入请求」「正在重载 Redis 数据集」「正在重写 AOF」）。
+
+```bash
+curl -fsS -b $J -X POST "$BASE/api/backups/snapshot-20261124T120000Z-manual.rdb/restore"
+curl -N -sS -b $J "$BASE/api/backups/jobs/<job_id>/events"
+```
+
+`done` 的 `result` 是 `{restored_from, previous_state, entries}`：`previous_state` 就是那份 `pre-restore`
+快照的文件名，`entries` 是还原后 LRR 的档案记录数。
+
+#### 2. CLI（HTTP 服务起不来，但 Redis 在跑）
+
+`lanrurugi-server snapshots` 不构造 HTTP 服务、不需要 Deno/插件池，只连 Redis 和库目录，所以可以直接
+`docker exec`：
+
+```bash
+docker exec -it <容器> lanrurugi-server snapshots list
+docker exec -it <容器> lanrurugi-server snapshots restore snapshot-20261124T120000Z-manual.rdb
+docker exec -it <容器> lanrurugi-server snapshots restore snapshot-20261124T120000Z-manual.rdb --yes
+```
+
+`list` 只读快照目录，Redis 不在线也能列（名字、大小、时间、reason、是否可用）。`restore` 不带 `--yes`
+时会打印「这会覆盖整个数据库」、快照名、大小和将要写的安全副本说明，等你按一次回车。
+
+#### 3. 纯 shell（不需要本程序，只要 redis-cli）
+
+先确认路径与端口，下面三条命令里的 `/data/database/database.rdb` 只是示例：
+
+```bash
+docker exec <容器> redis-cli -p 16379 CONFIG GET dir          # 例：/data/database
+docker exec <容器> redis-cli -p 16379 CONFIG GET dbfilename   # 例：database.rdb
+```
+
+然后：
+
+```bash
+docker exec <容器> cp "/library/.lanrurugi-backups/<快照>" /data/database/database.rdb
+docker exec <容器> redis-cli -p 16379 DEBUG RELOAD NOSAVE
+docker exec <容器> redis-cli -p 16379 BGREWRITEAOF
+```
+
+注意 **`DEBUG RELOAD NOSAVE`**，不是 `DEBUG RELOAD`：后者会先把当前内存数据集写回 RDB 文件，再加载它，
+等于把刚拷进去的快照覆盖掉（在 8.2.1 上实测确认）。`enable-debug-command local` 由仓库根 `redis.conf`
+提供；`local` 只允许回环连接，容器外连不进来。`BGREWRITEAOF` 必须等它完成（`INFO persistence` 里
+`aof_rewrite_in_progress:0`），否则 AOF 里仍是旧数据集，下一次重启会把它加载回来。
+
+### 还原期间：写入被暂停
+
+`DEBUG RELOAD NOSAVE` 会一次性换掉整个 keyspace，窗口里的并发写入要么随旧数据集消失，要么落在刚还原的
+旧世界上。因此还原任务全程持有一个进程内 `RestoreGate`：
+
+| 请求 | 闸门关闭时的行为 |
+|---|---|
+| `GET` / `HEAD`（含管理页轮询、SSE 进度） | 放行 |
+| `POST /api/login`、`POST /api/logout` | 放行（否则会话过期后连登录都做不到） |
+| 其它 `POST/PUT/PATCH/DELETE` | `503`，`reason=restore_in_progress` |
+| 再次 `POST /api/backups/{name}/restore` | `409`，`reason=restore_in_progress` |
+
+闸门关闭后先等在途写入归零（最多 30 秒，超时只 `warn!` 并继续）。会写 Redis 的长任务在各自循环里设了
+检查点（每 200 条 / 每批）——全库与增量扫描、缩略图批量生成、重复档案检测、单行本归组分析、下载入库落库：
+
+- 检查到闸门关闭就**提前正常结束**，任务标为失败，`error` 写「数据库正在还原，任务已中止；还原完成后请重新运行」；
+- **磁盘上的文件一律不动**（扫描不删档、下载暂存文件保留），还原后重跑一次扫描即可对账；
+- 扫描的检查点在 `full_scan` 的完成批次上，`ScannerConfig.restore_gate` 由 `serve` 注入。
 
 ### pin（永久保留）
 

@@ -8,9 +8,10 @@
 //!   restorable from inside the app (`POST /api/backups/{name}/restore`), and it is what the
 //!   schedule and every `pre-*` safety snapshot write.
 //! - **backup** (`<stamp>-backup.rdb`) — a byte copy of Redis's own RDB, i.e. *everything* in every
-//!   logical database. It is a full backup, written only on demand
-//!   (`POST /api/backups/full`), and it is **not** restorable in-app: restoring means stopping
-//!   Redis, replacing the RDB file and starting it again (see `docs/dev/deletion-safety-net.md`).
+//!   logical database. It is a full backup, written on demand (`POST /api/backups/full`) and by the
+//!   schedule; restoring one replaces Redis's live RDB and reloads it, see
+//!   [`full_restore::restore_full`]. That path needs `enable-debug-command`, which is why it also
+//!   has an offline CLI and a `redis-cli`-only fallback (`docs/dev/deletion-safety-net.md`).
 //!
 //! Both live inside the library, like the recycle bin, so containers need no extra volume and they
 //! travel with the content. Nothing here may ever block or fail an operation it is protecting: a
@@ -47,12 +48,18 @@ use crate::AppState;
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 use lanrurugi_storage::keys::{BACKUP_NOTES_KEY, SNAPSHOT_PINS_KEY, SNAPSHOT_SCHEDULE_KEY};
 use lanrurugi_storage::paths::snapshot_dir;
+use lanrurugi_storage::redis::RedisDbs;
 
 pub mod cron;
+mod full_restore;
 mod jobs;
 pub mod progress;
 
 use self::cron::CronSchedule;
+pub use self::full_restore::{
+    preflight as preflight_full_restore, restore_full, restore_full_with, FullRestoreError,
+    FullRestoreErrorKind, FullRestoreOutcome,
+};
 pub(crate) use self::jobs::{record_percent, start_progress_job, BackupJob};
 use self::progress::write_document;
 pub use self::progress::{BackupProgress, NoProgress};
@@ -717,12 +724,16 @@ pub fn is_known_reason(reason: &str) -> bool {
 }
 
 /// Reasons a *full Redis backup* may carry: `scheduled` for a cron firing, `manual` for
-/// `POST /api/backups`, plus the `daily` / `weekly` an earlier build wrote (kept parseable so those
-/// files still list and still count against the three-backup cap). No `pre-*`: a destructive
-/// operation gets a cheap JSON export, never a multi-hundred-megabyte RDB write in its critical
-/// path.
+/// `POST /api/backups`, `pre-restore` for the safety copy a full restore writes first, plus the
+/// `daily` / `weekly` an earlier build wrote (kept parseable so those files still list and still
+/// count against the three-backup cap). Ordinary destructive operations get a cheap JSON export,
+/// never a multi-hundred-megabyte RDB write in their critical path — but a restore of the whole
+/// database is exactly the case where only an RDB can undo it.
 fn is_known_backup_reason(reason: &str) -> bool {
-    if matches!(reason, "scheduled" | "manual" | "daily" | "weekly") {
+    if matches!(
+        reason,
+        "scheduled" | "manual" | "daily" | "weekly" | "pre-restore"
+    ) {
         return true;
     }
     // `scheduled-<id>`: which schedule fired (see `SnapshotSchedule::reason`).
@@ -1056,9 +1067,8 @@ fn summary_path(dir: &Path, name: &str) -> PathBuf {
 // ---------------------------------------------------------------------------------------------
 
 /// `CONFIG GET dir` + `CONFIG GET dbfilename`, i.e. where `redis-server` keeps its RDB.
-async fn redis_rdb_path(state: &AppState) -> Result<PathBuf, String> {
-    let mut conn = state
-        .redis
+pub(super) async fn redis_rdb_path(redis: &RedisDbs) -> Result<PathBuf, String> {
+    let mut conn = redis
         .config
         .get()
         .await
@@ -1093,20 +1103,29 @@ async fn redis_rdb_path(state: &AppState) -> Result<PathBuf, String> {
 }
 
 /// Takes a full Redis backup: `BGSAVE`, wait for the save, copy the RDB into the backup directory
-/// atomically. `reason` is `daily` / `weekly` / `manual` — the same vocabulary the exports use, so
-/// a listing reads the same way for both kinds.
+/// atomically. `reason` is `daily` / `weekly` / `manual` / `pre-restore` — the same vocabulary the
+/// exports use, so a listing reads the same way for both kinds.
 pub async fn take_full_backup(
     state: &AppState,
+    reason: &str,
+    progress: Arc<dyn BackupProgress>,
+) -> Result<SnapshotEntry, String> {
+    take_full_backup_in(&state.redis, &state.library.archive_dir, reason, progress).await
+}
+
+/// [`take_full_backup`] without an `AppState`, for the offline `snapshots restore` CLI.
+pub(super) async fn take_full_backup_in(
+    redis: &RedisDbs,
+    archive_dir: &Path,
     reason: &str,
     progress: Arc<dyn BackupProgress>,
 ) -> Result<SnapshotEntry, String> {
     if !is_known_backup_reason(reason) {
         return Err(format!("unknown backup reason: {reason}"));
     }
-    let source = redis_rdb_path(state).await?;
+    let source = redis_rdb_path(redis).await?;
 
-    let mut conn = state
-        .redis
+    let mut conn = redis
         .config
         .get()
         .await
@@ -1200,7 +1219,7 @@ pub async fn take_full_backup(
         ));
     }
 
-    let dir = snapshot_dir(&state.library.archive_dir);
+    let dir = snapshot_dir(archive_dir);
     let created = now_utc();
     let name = format_name(created, SnapshotKind::Backup, reason);
     let final_path = dir.join(&name);
@@ -1208,13 +1227,19 @@ pub async fn take_full_backup(
     let size = copy_rdb(&source, &tmp_path, &final_path, progress).await?;
 
     // `scheduled-<id>` in the file name, `scheduled` in the entry: the id is what the list groups
-    // by, and it has to survive a file moved between installs.
+    // by, and it has to survive a file moved between installs. `pre-restore` keeps its full reason
+    // so a safety copy is distinguishable from a `pre-*` export.
     let schedule_id = reason.strip_prefix("scheduled-").map(|id| id.to_string());
+    let reason_label = if reason.starts_with("scheduled-") {
+        "scheduled".to_string()
+    } else {
+        reason.to_string()
+    };
     Ok(SnapshotEntry {
         name,
         kind: SnapshotKind::Backup,
         created_at: created.to_rfc3339_opts(SecondsFormat::Secs, true),
-        reason: reason.split('-').next().unwrap_or(reason).to_string(),
+        reason: reason_label,
         schedule_id,
         schedule_label: None,
         size_bytes: size,
@@ -1749,27 +1774,38 @@ fn zip_snapshot(name: &str, document: &[u8]) -> std::io::Result<Vec<u8>> {
     Ok(buf.into_inner())
 }
 
-/// `POST /api/backups/{name}/restore` — restores a JSON **export**. A full Redis backup is
-/// deliberately not restorable here: replacing a live server's RDB is an operator action (stop
-/// Redis, replace the file, start it), and doing it from inside a running process would corrupt the
-/// server it is talking to.
+/// `POST /api/backups/{name}/restore` — restores either kind. An export restores through the backup
+/// document path; a full RDB goes through `full_restore`, which swaps Redis's own file and reloads
+/// it, and runs as a job because it can take minutes.
 async fn restore_backup(
     State(state): State<AppState>,
     auth: Option<axum::extract::Extension<AuthContext>>,
     UrlPath(name): UrlPath<String>,
 ) -> Response {
     if parse_name(&name).is_some_and(|parsed| parsed.kind == SnapshotKind::Backup) {
-        return (
-            StatusCode::CONFLICT,
-            axum::Json(json!({
-                "operation": "restore_backup",
-                "success": 0,
-                "error": "A full Redis backup cannot be restored from inside the app. Download the \
-                          .rdb, stop Redis, replace its RDB file with this one, then start Redis again.",
-                "reason": "full_backup_not_restorable",
-            })),
+        // Fail fast for a name that cannot work (missing file, not an RDB) instead of starting a job
+        // whose only possible outcome is an error event.
+        if let Err(e) = full_restore::preflight(&state.library.archive_dir, &name) {
+            return e.into_response("restore_backup");
+        }
+        let (job, progress_job) = jobs::start_full_restore(
+            &state,
+            &name,
+            auth.as_ref().map(|extension| extension.0.clone()),
         )
-            .into_response();
+        .await;
+        return axum::Json(json!({
+            "operation": "restore_backup",
+            "success": 1,
+            "restored_from": name,
+            // `job` keys the Jobs console; `job_id` keys the progress stream. The safety copy's
+            // name is only known once the job has run, so it arrives in the job result.
+            "job": job,
+            "job_id": progress_job.id,
+            "started_at": progress_job.status().started_at,
+            "events": format!("/api/backups/jobs/{}/events", progress_job.id),
+        }))
+        .into_response();
     }
     let Some(path) = resolve_name(&state, &name) else {
         return error(
@@ -2519,12 +2555,30 @@ mod tests {
             .unwrap();
         assert_eq!(bytes.as_ref(), on_disk.as_slice());
 
-        let restored = restore_backup(State(state.clone()), None, UrlPath(name.clone())).await;
-        assert_eq!(restored.status(), StatusCode::CONFLICT);
-        assert_eq!(
-            response_json(restored).await["reason"],
-            json!("full_backup_not_restorable")
-        );
+        // The handler now starts a restore job that replaces the live Redis, so it is asserted
+        // through `preflight` here; the reload itself runs against a disposable Redis in
+        // `snapshots/full_restore.rs`'s tests.
+        assert!(full_restore::preflight(tmp.path(), &name).is_ok());
+    }
+
+    /// A corrupt `.rdb` is refused synchronously, before any job exists and before Redis is touched.
+    #[tokio::test]
+    async fn restoring_a_corrupt_rdb_is_a_400_not_a_job() {
+        let Some(state) = crate::plugins::tests::test_state().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let name = "snapshot-20261124T000000Z-manual.rdb";
+        let path = snapshot_dir(&state.library.archive_dir).join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"definitely not an rdb").unwrap();
+
+        let response = restore_backup(State(state), None, UrlPath(name.to_string())).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response_json(response).await;
+        assert_eq!(body["reason"], json!("not_a_redis_backup"));
+        assert!(body.get("job_id").is_none(), "no job was started");
+        std::fs::remove_file(&path).unwrap();
     }
 
     /// Pinning round-trips through the handlers, is idempotent both ways, and the pin is cleared

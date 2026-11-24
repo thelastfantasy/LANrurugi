@@ -26,6 +26,10 @@ const SAMPLE_INTERVAL: Duration = Duration::from_millis(150);
 pub trait BackupProgress: Send + Sync {
     /// `written` / `expected` are bytes (`expected` is `0` while unknown), `percent` is 0–100.
     fn update(&self, written: u64, expected: u64, percent: f64);
+
+    /// A human-readable phase note. Unlike `update`, this says *what* is happening rather than how
+    /// far it has got; sinks with no one watching ignore it.
+    fn note(&self, _text: &str) {}
 }
 
 /// The sink for work nobody is watching: the schedule's own firings and the `pre-*` exports.

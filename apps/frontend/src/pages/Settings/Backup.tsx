@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { FaCheck, FaPen, FaPlus, FaTrash } from "react-icons/fa6"
+import { FaCheck, FaPen, FaPlus, FaTrash, FaXmark } from "react-icons/fa6"
 import { PiPushPin, PiPushPinFill } from "react-icons/pi"
 import { useLocation, useNavigate } from "react-router-dom"
 
@@ -26,7 +26,7 @@ import {
 import type { BackupEntry, BackupJobStatus, BackupScheduleItem, BackupSummary } from "@/api/types"
 import { Button, IconButton, Switch } from "@/components/common-ui/Form"
 import { Tabs } from "@/components/common-ui/Tabs"
-import { choiceDialog, confirmDialog } from "@/dialog"
+import { choiceDialog, confirmDialog, typedConfirmDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { absoluteTimestamp, formatRelativeTime } from "@/lib/relativeTime"
 import { routes } from "@/lib/routes"
@@ -260,11 +260,25 @@ function BackupNote({ entry }: { entry: BackupEntry }) {
             }
           }}
         />
-        <button type="button" className="stdbtn backup-btn" disabled={setNote.isPending} onClick={save}>
-          {t("settings.backupNoteSave")}
+        <button
+          type="button"
+          className="stdbtn backup-note-btn"
+          disabled={setNote.isPending}
+          title={t("settings.backupNoteSave")}
+          aria-label={t("settings.backupNoteSave")}
+          onClick={save}
+        >
+          <FaCheck aria-hidden="true" />
         </button>
-        <button type="button" className="stdbtn backup-btn" disabled={setNote.isPending} onClick={cancel}>
-          {t("settings.backupNoteCancel")}
+        <button
+          type="button"
+          className="stdbtn backup-note-btn"
+          disabled={setNote.isPending}
+          title={t("settings.backupNoteCancel")}
+          aria-label={t("settings.backupNoteCancel")}
+          onClick={cancel}
+        >
+          <FaXmark aria-hidden="true" />
         </button>
         {error && (
           <p className="backup-note-error" role="alert">
@@ -813,6 +827,29 @@ export function Backup() {
     }
   }
 
+  /** A full `.rdb` snapshot replaces the whole dataset, so it gets a stronger gate than the JSON
+   *  export restore below: the warning spell out what is overwritten, and the button stays disabled
+   *  until the verb is typed. */
+  async function handleRestoreFullSnapshot(entry: BackupEntry) {
+    const proceed = await typedConfirmDialog(
+      <>
+        <p>
+          <strong>{t("settings.snapshotRestoreWarnTitle")}</strong>
+        </p>
+        <p>{t("settings.snapshotRestoreWarnReplace", { name: entry.name })}</p>
+        <p>{t("settings.snapshotRestoreWarnCreated", { createdAt: new Date(entry.created_at).toLocaleString() })}</p>
+        <ul className="dialog-warning-list">
+          <li>{t("settings.snapshotRestoreWarnLose")}</li>
+          <li>{t("settings.snapshotRestoreWarnLogout")}</li>
+          <li>{t("settings.snapshotRestoreWarnSafety")}</li>
+        </ul>
+      </>,
+      t("settings.snapshotRestoreConfirmWord") ?? "",
+    )
+    if (!proceed) return
+    await startJob("restore", () => restoreBackup.mutateAsync(entry.name))
+  }
+
   async function handleRestoreSnapshot(entry: BackupEntry) {
     const proceed = await confirmDialog(
       t("settings.autoSnapshotsRestoreConfirm", {
@@ -823,7 +860,8 @@ export function Backup() {
     )
     if (!proceed) return
 
-    // A full `.rdb` snapshot is never restored from here (the server rejects it); only exports are.
+    // Export restore: metadata only, applied by the server job (a full `.rdb` goes through
+    // `handleRestoreFullSnapshot` above).
     await startJob("restore", () => restoreBackup.mutateAsync(entry.name))
   }
 
@@ -1188,6 +1226,9 @@ export function Backup() {
         )}
 
         {jobNode("snapshot")}
+        {/* A restore can be started from a snapshot card on this tab, so its progress bar is
+            rendered here too — the job itself lives at the page level. */}
+        {jobNode("restore")}
 
         {backupsQuery.isLoading && (
           <p className="backup-state">{t("settings.autoSnapshotsLoading")}</p>
@@ -1280,9 +1321,21 @@ export function Backup() {
                         {entry.pinned && (
                           <span className="backup-card-badge backup-card-badge--pinned">
                             <PiPushPinFill aria-hidden="true" />
-                            {t("settings.autoSnapshotsPinned")}
+                            <span className="backup-card-badge-label">
+                              {t("settings.autoSnapshotsPinned")}
+                            </span>
                           </span>
                         )}
+                      <button
+                        type="button"
+                        className="stdbtn stdbtn-danger backup-card-delete"
+                        disabled={deleteBackup.isPending}
+                        title={t("settings.autoSnapshotsDelete") ?? undefined}
+                        aria-label={t("settings.autoSnapshotsDelete") ?? undefined}
+                        onClick={() => void handleDeleteSnapshot(entry)}
+                      >
+                        <i className="fa fa-trash" aria-hidden="true" />
+                      </button>
                       </div>
                       <BackupNote entry={entry} />
                       <div className="backup-card-meta">
@@ -1293,6 +1346,16 @@ export function Backup() {
                         <span>{reasonLabel(entry.reason)}</span>
                       </div>
                       <div className="backup-card-actions">
+                        <button
+                          type="button"
+                          className="stdbtn backup-btn"
+                          disabled={!entry.usable || jobBusy}
+                          title={entry.usable ? undefined : t("settings.autoSnapshotsUnusable")}
+                          onClick={() => void handleRestoreFullSnapshot(entry)}
+                        >
+                          <i className="fa fa-clock-rotate-left" aria-hidden="true" />{" "}
+                          {t("settings.snapshotRestore")}
+                        </button>
                         <a
                           className="stdbtn backup-btn"
                           href={`/api/backups/${encodeURIComponent(entry.name)}`}
@@ -1315,14 +1378,6 @@ export function Backup() {
                           {entry.pinned
                             ? t("settings.autoSnapshotsUnpin")
                             : t("settings.autoSnapshotsPin")}
-                        </button>
-                        <button
-                          type="button"
-                          className="stdbtn stdbtn-danger backup-btn"
-                          disabled={deleteBackup.isPending}
-                          onClick={() => void handleDeleteSnapshot(entry)}
-                        >
-                          {t("settings.autoSnapshotsDelete")}
                         </button>
                       </div>
                     </article>
@@ -1456,9 +1511,21 @@ export function Backup() {
                   {entry.pinned && (
                     <span className="backup-card-badge backup-card-badge--pinned">
                       <PiPushPinFill aria-hidden="true" />
-                      {t("settings.autoSnapshotsPinned")}
+                      <span className="backup-card-badge-label">
+                        {t("settings.autoSnapshotsPinned")}
+                      </span>
                     </span>
                   )}
+                <button
+                  type="button"
+                  className="stdbtn stdbtn-danger backup-card-delete"
+                  disabled={deleteBackup.isPending}
+                  title={t("settings.autoSnapshotsDelete") ?? undefined}
+                  aria-label={t("settings.autoSnapshotsDelete") ?? undefined}
+                  onClick={() => void handleDeleteSnapshot(entry)}
+                >
+                  <i className="fa fa-trash" aria-hidden="true" />
+                </button>
                 </div>
                 <BackupNote entry={entry} />
                 <div className="backup-card-meta">
@@ -1517,14 +1584,6 @@ export function Backup() {
                       <PiPushPin aria-hidden="true" />
                     )}{" "}
                     {entry.pinned ? t("settings.autoSnapshotsUnpin") : t("settings.autoSnapshotsPin")}
-                  </button>
-                  <button
-                    type="button"
-                    className="stdbtn stdbtn-danger backup-btn"
-                    disabled={deleteBackup.isPending}
-                    onClick={() => void handleDeleteSnapshot(entry)}
-                  >
-                    {t("settings.autoSnapshotsDelete")}
                   </button>
                 </div>
               </article>

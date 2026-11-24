@@ -13,6 +13,7 @@ pub mod memory;
 pub mod password;
 pub mod queue_error;
 pub mod rate_limit;
+pub mod restore_gate;
 pub mod session;
 pub mod singleflight;
 pub mod tags;

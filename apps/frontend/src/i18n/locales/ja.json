@@ -3559,5 +3559,13 @@
   "settings.backupRunFailed": "{{percent}}% で失敗（経過 {{seconds}} 秒）· {{error}}",
   "settings.backupRunRealtimeUnavailable": "リアルタイム進捗は利用できません。最後に取得できた状態を表示しています。",
   "settings.backupRunProgressRestore": "復元中… {{percent}}%（経過 {{seconds}} 秒）",
-  "settings.backupRunProgressImport": "インポート中… {{percent}}%（経過 {{seconds}} 秒）"
+  "settings.backupRunProgressImport": "インポート中… {{percent}}%（経過 {{seconds}} 秒）",
+  "settings.snapshotRestore": "復元",
+  "settings.snapshotRestoreWarnTitle": "このスナップショットでデータベース全体を復元しますか？",
+  "settings.snapshotRestoreWarnReplace": "「{{name}}」で現在のデータベースを丸ごと置き換えます。アーカイブ、タグ、カテゴリ、ブックマーク、インデックス、設定、ログイン状態がすべてスナップショット時点に戻ります。",
+  "settings.snapshotRestoreWarnCreated": "スナップショットの日時：{{createdAt}}",
+  "settings.snapshotRestoreWarnLose": "スナップショット以降の追加・変更は失われます（ディスク上のファイルは削除されません）。",
+  "settings.snapshotRestoreWarnLogout": "復元中はサイトが一時的に使えなくなり、再ログインが必要になる場合があります。",
+  "settings.snapshotRestoreWarnSafety": "復元前に pre-restore スナップショットを自動で作成するので、問題があれば元に戻せます。",
+  "settings.snapshotRestoreConfirmWord": "復元"
 }

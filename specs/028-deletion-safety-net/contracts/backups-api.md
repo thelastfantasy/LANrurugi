@@ -220,7 +220,12 @@ data: {"kind":"error","error":"could not ask Redis where its RDB lives (…)", "
 
 ## POST `/api/backups/{name}/restore`
 
-只接受 `kind=export`：用该导出恢复整库（复用既有恢复流程，并在恢复前先落一份 `pre-restore` 导出）。
+两种 `kind` 都接受：
+
+- `kind=export`（`.json`）：用该导出恢复整库（复用既有恢复流程，并在恢复前先落一份 `pre-restore` 导出）。
+- `kind=backup`（`.rdb`）：用整库 RDB 快照还原。**这是破坏性最大的一条路径**，语义与「把文件拷成 Redis 的
+  RDB 再重启」完全一致，只是在本进程内完成：先落一份 `pre-restore` **全量快照**，再用
+  `DEBUG RELOAD NOSAVE` 让 Redis 丢掉内存数据集并重新读 RDB，随后 `BGREWRITEAOF`（仅当 `appendonly yes`）。
 **异步**：立刻返回进度任务号，客户端按 `GET /api/backups/jobs/{job_id}/events` 看「已应用记录数 / 总记录数」。
 
 ```json
@@ -241,12 +246,27 @@ data: {"kind":"error","error":"could not ask Redis where its RDB lives (…)", "
 `bookmarks_restored` / `glossaries_restored` / `font_patterns_restored` / `text_region_sets_restored` /
 `snapshot`（本次的 `pre-restore` 结果）。
 
-对 `kind=backup`（`.rdb`）返回 `409`，`"reason": "full_backup_not_restorable"`，`error` 写明运维步骤：
+`kind=backup` 的 `done.result` 是 `{restored_from, previous_state, entries}`：`previous_state` 是这次
+`pre-restore` 安全副本的文件名（返回前就已落盘），`entries` 是还原后的档案记录数。
 
-1. 下载 `.rdb`；
-2. 停掉 Redis；
-3. 用它替换 Redis 的 RDB 文件（`CONFIG GET dir` / `dbfilename` 指向的位置，通常是 `dump.rdb`）；
-4. 启动 Redis。
+还原的错误一律是 `{operation, success:0, error, reason, hint?}`，`hint` 只在有可操作建议时出现：
+
+| HTTP | `reason` | 含义 / 处理 |
+|---|---|---|
+| 400 | `invalid_backup_name` | 名字不是 `snapshot-<stamp>-<reason>.rdb` |
+| 404 | `not_found` | 文件不存在 |
+| 400 | `not_a_full_backup` | 是导出（`.json`）却发到了快照分支 |
+| 400 | `not_a_redis_backup` | 空文件，或开头不是 5 字节 `REDIS` 魔数 |
+| 500 | `safety_backup_failed` | `pre-restore` 全量快照没写成——**拒绝动线上数据** |
+| 503 | `redis_unavailable` | `CONFIG GET` 失败，或 Redis 报告的 RDB 路径本进程读不到（远程/别的容器） |
+| 409 | `debug_command_disabled` | Redis 拒绝 `DEBUG RELOAD`；把上一份 RDB 放回原位后返回。需要 `enable-debug-command local`（仓库根 `redis.conf` 已带） |
+| 500 | `reload_failed` | 其它重载错误；同样回滚文件并尝试重新加载旧 RDB |
+| 500 | `aof_rewrite_timeout` | 数据集已加载，但 5 分钟内 AOF 没重写完——**此时不要重启 Redis**，重启会回到旧数据 |
+| 500 | `io_error` | 复制/替换 RDB 文件失败；回滚后返回 |
+
+还原期间进程内 `RestoreGate` 关闭：除 `GET`、登录/登出、以及还原任务自己的进度查询外，写请求返回
+`503`（`reason=restore_in_progress`）；重复的还原请求返回 `409`（同一 `reason`）。快照还原的 SSE 事件与
+`GET /api/backups/jobs/{id}` 多一个可选字段 `note`（阶段说明），`percent`/`bytes_*`/`elapsed_ms` 不变。
 
 `400` 当导出不可解析；`404` 当不存在。
 
@@ -256,7 +276,7 @@ data: {"kind":"error","error":"could not ask Redis where its RDB lives (…)", "
 |---|---|---|---|
 | 计划开启（`snapshot_schedule_enabled`）且 `snapshot_cron` 命中时（5 秒一次的 tick 判定） | `backup`（RDB） | `scheduled` | 后台，不阻塞 HTTP 服务就绪 |
 | `POST /api/database/clean` 开始前 | `export`（JSON） | `pre-clean` | 同步（job 线程内） |
-| 恢复（上传或从导出）开始前 | `export` | `pre-restore` | 同步 |
+| 恢复（上传/导出/快照）开始前 | `export` | `pre-restore` | 同步 |
 | `rebuild-index` 开始前 | `export` | `pre-reindex` | 同步 |
 | 台账到期批量清除前（若本次将清除 > 0 条） | `export` | `pre-journal-purge` | 同步 |
 | `POST /api/backups` / `POST /api/backups/export` | `backup` / `export` | `manual` | 同步 |

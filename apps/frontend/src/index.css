@@ -4604,7 +4604,9 @@ div.gt.gt-single > span {
  * left over is split evenly. A card with five actions therefore wraps to a second row instead of
  * clipping the longest label. */
 .backup-card-actions .stdbtn.backup-btn {
-  flex: 1 1 auto;
+  /* Content-sized and never the only thing growing: a card with more actions than fit wraps into
+     rows of same-size buttons instead of stretching the leftover one across the whole width. */
+  flex: 0 1 auto;
   width: auto;
   min-width: max-content;
   height: 32px;
@@ -4614,7 +4616,8 @@ div.gt.gt-single > span {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 0 10px;
+  /* 8px keeps four actions on one row inside a card at the narrowest grid width. */
+  padding: 0 8px;
   font-size: inherit;
   line-height: 1;
   text-decoration: none;
@@ -4630,6 +4633,21 @@ div.gt.gt-single > span {
 
 /* react-icons draws an `1em` SVG instead of a font glyph, so it needs the same optical size and
  * must not be squeezed by the flex line when the label is long. */
+/* The delete action lives in the card head, right-aligned: keeping it out of the action row is what
+ * lets download/restore/pin stay on one line at the narrowest grid width. */
+.backup-card-delete {
+  margin-left: auto;
+  min-width: 32px;
+  width: 32px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9em;
+  line-height: 1;
+}
+
 .backup-card-actions .stdbtn.backup-btn > svg {
   flex: none;
   margin: 0;
@@ -4652,6 +4670,18 @@ div.gt.gt-single > span {
   width: 68px;
   height: 32px;
   text-align: center;
+}
+
+/* Warning bullets inside a confirmation dialog (the full-restore prompt). Themed as plain text so
+ * it inherits whatever the dialog's own colour is. */
+.dialog-warning-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  list-style: disc;
+}
+
+.dialog-warning-list > li {
+  margin: 2px 0;
 }
 
 .backup-keep-editor {
@@ -5000,7 +5030,9 @@ div.gt.gt-single > span {
  * no card can widen the page. */
 .backup-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  /* 280px is the narrowest card that still fits the three actions (restore / download / pin) on one
+     row once "unpin" makes the label longer; below that the buttons would wrap on desktop only. */
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 16px;
   margin-top: 16px;
   align-items: stretch;
@@ -5044,7 +5076,8 @@ div.gt.gt-single > span {
 }
 
 .backup-card-badge--pinned {
-  margin-left: auto;
+  /* No auto margin: the card's delete button owns the "push right" role now, and two auto margins
+     would split the free space and strand this pill in the middle of the head row. */
   /* The pin sits in the badge too now, so the pill's own line box cannot be what sets its height:
      `inline-flex` + a gap keeps the glyph and the label on one centred line. */
   display: inline-flex;
@@ -5057,6 +5090,13 @@ div.gt.gt-single > span {
 .backup-card-badge--pinned > svg {
   flex: none;
   font-size: 0.85em;
+}
+
+/* CJK glyphs sit high inside their line box (the font's ascent is much larger than its descent), so
+ * a centred line box leaves the label's ink ~1px above the pin's. Nudged to match the icon. */
+.backup-card-badge-label {
+  position: relative;
+  top: 1.5px;
 }
 
 /* The alias row: one clamped line of text plus its pencil, or a muted "add a note" affordance. */
@@ -5085,6 +5125,26 @@ div.gt.gt-single > span {
 }
 
 /* Icon-only, so it must not inherit `.stdbtn`'s 150px floor. */
+/* Save/cancel in the note editor are icon buttons: the row already has a text field, and two word
+ * buttons next to it read as a second, competing action bar. */
+.stdbtn.backup-note-btn {
+  flex: none;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9em;
+  line-height: 1;
+}
+
+.stdbtn.backup-note-btn > svg {
+  flex: none;
+  font-size: 14px;
+}
+
 .stdbtn.backup-note-edit {
   flex: none;
   width: 32px;

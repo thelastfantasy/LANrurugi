@@ -51,6 +51,8 @@ enum Command {
     EvalGrouping(lanrurugi_server::cli::eval_grouping::EvalGroupingArgs),
     /// Run a sharing rendezvous/relay node for other instances, with no library and no Redis.
     ShareNode(lanrurugi_server::cli::share_node::ShareNodeArgs),
+    /// List full backups, or restore the whole database from one without the HTTP server running.
+    Snapshots(lanrurugi_server::cli::snapshots::SnapshotsArgs),
     /// Clear the safety password (`specs/019`) and any verification lockout. For an operator who
     /// cannot log in; never accepts a password argument.
     ResetSafetyPassword(ResetSafetyPasswordArgs),
@@ -277,6 +279,7 @@ async fn run(from_install_prefix: Vec<(&'static str, PathBuf)>) -> anyhow::Resul
         Command::ResetSafetyPassword(args) => reset_safety_password(args).await,
         Command::EvalGrouping(args) => lanrurugi_server::cli::eval_grouping::run(args).await,
         Command::ShareNode(args) => lanrurugi_server::cli::share_node::run(args).await,
+        Command::Snapshots(args) => lanrurugi_server::cli::snapshots::run(args).await,
         Command::TelemetryIngest(args) => lanrurugi_server::cli::telemetry_ingest::run(args).await,
         Command::Formats(args) => {
             tokio::task::spawn_blocking(move || lanrurugi_server::cli::formats::run(args)).await?
@@ -516,6 +519,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     lanrurugi_api::authz::Authz::get().await;
 
     let state = AppState {
+        restore_gate: lanrurugi_core::restore_gate::RestoreGate::new(),
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         redis: redis.clone(),
         repos: repos.clone(),
@@ -1133,6 +1137,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             new_archive_tx: Some(new_archive_tx.clone()),
             locks: filename_locks.clone(),
             jobs: jobs.clone(),
+            restore_gate: Some(state.restore_gate.clone()),
         };
         // No catch-up here: the startup scan below covers what is already on disk.
         if let Err(e) = scanner.start(config, false).await {
@@ -1164,6 +1169,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let thumb_dir = args.thumb_dir.clone();
         let new_archive_tx = new_archive_tx.clone();
         let equivalence = state.equivalence.clone();
+        let restore_gate = state.restore_gate.clone();
         tokio::spawn(async move {
             jobs.mark_active(&job_id).await;
             let scan_summary = lanrurugi_scanner::full_scan::full_scan(
@@ -1174,8 +1180,17 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 &jobs,
                 &job_id,
                 Some(new_archive_tx),
+                Some(&restore_gate),
             )
             .await;
+            if scan_summary.aborted {
+                jobs.fail(
+                    &job_id,
+                    lanrurugi_core::restore_gate::RESTORE_ABORTED_MESSAGE,
+                )
+                .await;
+                return;
+            }
             tracing::info!(
                 scanned = scan_summary.scanned,
                 already_known = scan_summary.already_known,
@@ -1651,6 +1666,7 @@ async fn rebuild_index(args: RebuildIndexArgs) -> anyhow::Result<()> {
         &args.thumb_dir,
         &jobs,
         &job_id,
+        None,
         None,
     )
     .await;

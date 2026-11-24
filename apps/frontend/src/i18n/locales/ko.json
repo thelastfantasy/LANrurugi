@@ -1098,5 +1098,13 @@
   "settings.backupRunFailed": "Failed at {{percent}}% ({{seconds}}s elapsed) · {{error}}",
   "settings.backupRunRealtimeUnavailable": "Live progress unavailable — showing the last known state.",
   "settings.backupRunProgressRestore": "Restoring… {{percent}}% ({{seconds}}s elapsed)",
-  "settings.backupRunProgressImport": "Importing… {{percent}}% ({{seconds}}s elapsed)"
+  "settings.backupRunProgressImport": "Importing… {{percent}}% ({{seconds}}s elapsed)",
+  "settings.snapshotRestore": "Restore",
+  "settings.snapshotRestoreWarnTitle": "Restore the whole database from this snapshot?",
+  "settings.snapshotRestoreWarnReplace": "\"{{name}}\" replaces the entire database: archive records, tags, categories, bookmarks, the search index, settings and your login state all go back to that moment.",
+  "settings.snapshotRestoreWarnCreated": "Snapshot taken: {{createdAt}}",
+  "settings.snapshotRestoreWarnLose": "Anything added or changed after the snapshot is lost (files on disk are not deleted).",
+  "settings.snapshotRestoreWarnLogout": "The site is briefly unavailable during the restore, and you may have to sign in again.",
+  "settings.snapshotRestoreWarnSafety": "A pre-restore snapshot is written automatically first, so the current state can be restored afterwards.",
+  "settings.snapshotRestoreConfirmWord": "RESTORE"
 }

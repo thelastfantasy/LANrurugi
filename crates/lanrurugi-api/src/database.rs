@@ -913,8 +913,12 @@ async fn run_rebuild_sequence(
         jobs,
         job_id,
         Some(state.new_archive_tx.clone()),
+        Some(&state.restore_gate),
     )
     .await;
+    if scan_summary.aborted {
+        return Err(lanrurugi_core::restore_gate::RESTORE_ABORTED_MESSAGE.to_string());
+    }
 
     // Rewrite canonical title/tag indexes for every existing archive/tank. Without this,
     // `full_scan` alone only catalogs genuinely new files and existing archives would never get

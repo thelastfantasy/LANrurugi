@@ -3559,5 +3559,13 @@
   "settings.backupRunFailed": "失败于 {{percent}}%（已用 {{seconds}} 秒）· {{error}}",
   "settings.backupRunRealtimeUnavailable": "实时进度不可用，最多只显示最后一次查询到的状态。",
   "settings.backupRunProgressRestore": "恢复中… {{percent}}%（已用 {{seconds}} 秒）",
-  "settings.backupRunProgressImport": "导入中… {{percent}}%（已用 {{seconds}} 秒）"
+  "settings.backupRunProgressImport": "导入中… {{percent}}%（已用 {{seconds}} 秒）",
+  "settings.snapshotRestore": "还原",
+  "settings.snapshotRestoreWarnTitle": "用这份快照还原整个数据库？",
+  "settings.snapshotRestoreWarnReplace": "会用「{{name}}」整体替换当前数据库：档案记录、标签、分类、书签、索引、设置和登录状态都会回到快照时点。",
+  "settings.snapshotRestoreWarnCreated": "快照时间：{{createdAt}}",
+  "settings.snapshotRestoreWarnLose": "快照之后新增或修改的内容会丢失（磁盘上的档案文件不会被删除）。",
+  "settings.snapshotRestoreWarnLogout": "还原时站点会短暂不可用，可能需要重新登录。",
+  "settings.snapshotRestoreWarnSafety": "还原前会先自动生成一份 pre-restore 快照，出问题可以再还原回当前状态。",
+  "settings.snapshotRestoreConfirmWord": "还原"
 }
