@@ -328,6 +328,12 @@ pub const SNAPSHOT_SCHEDULE_KEY: &str = "LANRURUGI_SNAPSHOT_SCHEDULE";
 /// deleted, so the set cannot outlive what it points at.
 pub const SNAPSHOT_PINS_KEY: &str = "LANRURUGI_SNAPSHOT_PINS";
 
+/// Additive, LANrurugi-only (`specs/028-deletion-safety-net`). Hash on the **config** logical DB:
+/// snapshot file name -> free-text note ("why this snapshot exists"). Kept in Redis rather than in
+/// the snapshot so a note costs the backup nothing and a restore never has to understand it; a
+/// replaced RDB loses its notes, which is accepted. Fields are dropped together with their file.
+pub const BACKUP_NOTES_KEY: &str = "LANRURUGI_BACKUP_NOTES";
+
 /// Records restored from the journal whose file is still missing (#specs/028, FR-004). The startup
 /// zombie repair deletes any record whose `file` is gone, which would undo exactly the restore that
 /// is meant to survive until the file comes back; this set exempts them for the journal's retention

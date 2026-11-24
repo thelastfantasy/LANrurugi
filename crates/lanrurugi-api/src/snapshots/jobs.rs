@@ -335,6 +335,7 @@ pub async fn start_full_backup(state: &AppState, auth: Option<AuthContext>) -> A
                 .await;
             }
             Err(e) => {
+                tracing::error!(error = %e, "manual backup failed");
                 task_job.fail(e.clone());
                 record_manual(
                     &state,
@@ -384,6 +385,7 @@ pub async fn start_export(state: &AppState, auth: Option<AuthContext>) -> Arc<Ba
                 .await;
             }
             Err(e) => {
+                tracing::error!(error = %e, "manual export failed");
                 task_job.fail(e.clone());
                 record_manual(
                     &state,
@@ -630,10 +632,13 @@ mod tests {
             kind: SnapshotKind::Backup,
             created_at: "2026-11-23T03:00:00Z".to_string(),
             reason: "manual".to_string(),
+            schedule_id: None,
+            schedule_label: None,
             size_bytes: size,
             usable: true,
             summary: None,
             pinned: false,
+            note: None,
         }
     }
 }

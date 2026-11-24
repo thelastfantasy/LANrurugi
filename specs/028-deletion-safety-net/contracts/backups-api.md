@@ -9,7 +9,7 @@
 | `backup`（快照） | `snapshot-YYYYMMDDTHHMMSSZ-<reason>.rdb` | Redis **全量** RDB：逻辑库 0（档案）、2（配置/文件映射）、3（搜索索引）全部数据 | **只能由运维执行**：停 Redis → 用该文件替换 RDB → 启动 Redis。**app 内没有一键还原** |
 | `export`（导出） | `export-YYYYMMDDTHHMMSSZ-<reason>.json` | **可选择性数据**：档案、标签、分类、单行本、stamp、书签、翻译状态等（与 `GET /api/database/backup` 同一份文档） | app 内 `POST /api/backups/{name}/restore` |
 
-`<reason>`：快照为 `scheduled`（计划 cron 命中）/ `manual`；导出为 `manual` / `pre-clean` / `pre-restore` / `pre-reindex` / `pre-journal-purge`。旧版本写下的 `daily` / `weekly`（两类都有）仍能识别、仍会列出、仍按原来的保留规则处理，只是新版本不再写这两个 reason。
+`<reason>`：快照为 `scheduled-<计划 id>`（某条计划命中，如 `scheduled-plan-1`）/ `manual`；导出为 `manual` / `pre-clean` / `pre-restore` / `pre-reindex` / `pre-journal-purge`。旧版本写下的裸 `scheduled` 仍然识别、仍然列出，但 `schedule_id` 为空，界面归到「无归属」组。旧版本写下的 `daily` / `weekly`（两类都有）仍能识别、仍会列出、仍按原来的保留规则处理，只是新版本不再写这两个 reason。
 
 历史文件（旧版只写 `<stamp>-<reason>.json`，没有前缀）仍然会列出来，按 `kind=export` 处理。
 
@@ -22,22 +22,21 @@
   "daily_keep": 7,
   "week_keep": 4,
   "schedule": {
-    "enabled": true,
-    "cron": "0 0 3 * * 1",
-    "preset": "weekly",
     "timezone": "Asia/Tokyo (+09:00)",
-    "last_fire_at": "2026-11-23T03:00:00+09:00",
-    "next_runs": [
-      "2026-11-30T03:00:00+09:00",
-      "2026-12-07T03:00:00+09:00",
-      "2026-12-14T03:00:00+09:00",
-      "2026-12-21T03:00:00+09:00",
-      "2026-12-28T03:00:00+09:00",
-      "2027-01-04T03:00:00+09:00",
-      "2027-01-11T03:00:00+09:00",
-      "2027-01-18T03:00:00+09:00",
-      "2027-01-25T03:00:00+09:00",
-      "2027-02-01T03:00:00+09:00"
+    "timezone_name": "Asia/Tokyo",
+    "items": [
+      {
+        "id": "plan-1",
+        "label": "",
+        "enabled": true,
+        "cron": "0 0 3 * * 0 *",
+        "preset": "weekly",
+        "last_fire_at": "2026-11-23T03:00:00+09:00",
+        "next_runs": [
+          "2026-11-30T03:00:00+09:00",
+          "2026-12-07T03:00:00+09:00"
+        ]
+      }
     ]
   },
   "entries": [
@@ -49,7 +48,10 @@
       "size_bytes": 52428800,
       "usable": true,
       "summary": null,
-      "pinned": false
+      "pinned": false,
+      "schedule_id": "plan-1",
+      "schedule_label": null,
+      "note": "before the reindex run"
     },
     {
       "name": "export-20261123T050000Z-manual.json",
@@ -167,6 +169,19 @@ data: {"kind":"error","error":"could not ask Redis where its RDB lives (…)", "
 
 `404` 当任务号不存在（超过保留时间或进程重启后）。
 
+## PATCH `/api/backups/{name}`
+
+```json
+{"note": "换 NAS 之前的一份"}
+```
+
+给一份快照/导出写一句备注（人类可读的「为什么留着它」），或 `{"note": null}` / `{"note": ""}` 清除。
+先 `trim()`，再按字符数判定：超过 200 → 400；含控制字符（含换行、制表）→ 400；名字不合法 → 400；
+文件不存在 → 404；Redis 失败 → 500。成功返回 **200 且 body 就是本节 `entries[]` 里的那一条**（不套
+`operation`/`success` 外壳），客户端可以直接替换缓存里的那一项。备注与 pin 彼此独立，也不影响 `usable`
+与保留策略；文件被删除或被保留策略清掉时备注一起删（失败只记 warning，不影响删除本身）。
+只允许会话调用：`token_admin` 与 `token_guest` 都是 deny。
+
 ## GET `/api/backups/{name}`
 
 下载该文件的原始字节：
@@ -250,7 +265,7 @@ data: {"kind":"error","error":"could not ask Redis where its RDB lives (…)", "
 
 ## 计划语义（`schedule` 字段的行为）
 
-- 设置项是一个 **6–7 段 crontab**：`秒 分 时 日 月 星期 [年]`，按服务器本地时区求值。默认 `0 0 3 * * 1`（每周一 03:00:00），即开箱只有每周一次全量备份。
+- 设置项是一个 **6–7 段 crontab**：`秒 分 时 日 月 星期 [年]`，按**应用设置 `timezone`**（IANA 名，默认 `UTC`；非法/为空回退 `UTC`）的墙钟求值——**不是进程的 `TZ`**（容器通常是 UTC）。默认 `0 0 3 * * 1`（每周一 03:00:00），即开箱只有每周一次全量备份。`Asia/Tokyo` 下它是 JST 周一 03:00（= 周日 18:00 UTC）。文件命名里的时间戳始终是 UTC。
 - **标准 cron 语义**（与本项目其它地方一致，也方便照搬 TrueNAS/crontab 的经验）：
   - 数字星期 `0` 和 `7` 都表示周日、`1` 是周一；也接受 `SUN`…`SAT`、`JAN`…`DEC` 名字；
   - 支持 `*` / `?`、`a`、`a-b`、`*/n`、`a/n`、`a-b/n` 和逗号列表；
@@ -262,8 +277,8 @@ data: {"kind":"error","error":"could not ask Redis where its RDB lives (…)", "
   - **停机补一次**：有记录时取记录之后的第一个命中，无论错过多少次都只补**一份**；记录写的是这次生成完成的时间（不是被补的那个槽位），否则每个错过的槽位都会再触发一次；
   - **首次安装立即生成一份**：没有 `last_cron_fire` 记录时（新装、或第一次升级到 cron 计划），第一个 tick 立刻生成一份，之后交给 cron；这也是子分钟表达式能稳定工作的前提——若要求「当前这一秒正好命中」，5 秒的 tick 与 `*/10` 这类表达式可能永远错开；
   - **改设置立即生效**：每次 tick 都重新读设置，保存后下一个 tick 就按新表达式执行，无需重启。
-- **时区**：一律按服务器本地时区（`chrono::Local`，即进程的 `TZ`）计算；`schedule.timezone` 只是把它展示出来（`Asia/Tokyo (+09:00)`，读不到 IANA 名时只有偏移），不参与计算，也不是 `timezone` 设置项（那项只影响日期显示与搜索）。
-- **DST**：不存在的本地时刻（春季跳过的那一小时）跳过不执行；重复的本地时刻（秋季那一小时）取**较早**的那个瞬时，所以同一命中不会被算两次。
+- **时区**：按应用设置 `timezone`（`chrono_tz`，IANA 名；非法/为空回退 `UTC`）计算墙钟，**与进程 `TZ` 无关**。`schedule.timezone` 回传 `IANA 名 (+HH:MM)` 及该时区当下偏移，`next_runs`/`last_fire_at` 是带该偏移的 RFC3339。
+- **DST**：按该时区自己的墙钟算——不存在的本地时刻（春季跳过的那一小时）那天跳过；重复的本地时刻（秋季那一小时）取**较早**的瞬时。偏移随季节变化（`America/New_York` 冬 `-05:00`、夏 `-04:00`）。
 - `snapshot_schedule_enabled=false`：不生成任何计划快照，也不写 `last_cron_fire`；手动端点与所有 `pre-*` 照旧。
 - 存进 Redis 的表达式若损坏（只能手改造成）：服务端 `warn!` 并按默认表达式调度，`schedule.cron` 仍如实回显存着的字符串。
 - `snapshot_cron_preset`（`hourly|daily|weekly|monthly|custom`）只是 UI 的回显状态，服务端从不据它推算时间。

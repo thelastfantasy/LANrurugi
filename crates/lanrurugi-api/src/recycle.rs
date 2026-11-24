@@ -1093,30 +1093,53 @@ async fn restore_record(
     let computed =
         lanrurugi_storage::id::size_aware_id(Path::new(destination)).map_err(|e| e.to_string())?;
     if let Ok(mut conn) = state.redis.config.get().await {
-        let _: Result<(), _> = conn.hset(FILEMAP_KEY, destination, &computed).await;
+        let stored: Result<(), _> = conn.hset(FILEMAP_KEY, destination, &computed).await;
+        if let Err(e) = stored {
+            tracing::warn!(id = %entry.id, error = %e, "failed to restore a recycled archive's filemap entry");
+        }
     }
 
+    // A restored archive that is not re-indexed is back on disk but unsearchable, so each of these
+    // failures is reported even though none of them fails the restore itself.
     let search = &state.redis.search;
-    let _ = lanrurugi_search::indexer::index_new_archive(
+    if let Err(e) = lanrurugi_search::indexer::index_new_archive(
         search,
         &state.equivalence,
         entry.id.as_str(),
         &archive.title,
     )
-    .await;
-    let _ = lanrurugi_search::indexer::update_tag_indexes(
+    .await
+    {
+        tracing::warn!(id = %entry.id, error = %e, "failed to re-index a recycled archive");
+    }
+    if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
         search,
         &state.equivalence,
         entry.id.as_str(),
         "",
         &archive.tags,
     )
-    .await;
-    let _ =
-        lanrurugi_search::indexer::set_isnew_index(search, entry.id.as_str(), archive.isnew).await;
-    if let Ok(tanks) = state.repos.groupings.for_archive(&entry.id).await {
-        let joined: Vec<String> = tanks.into_iter().map(|g| g.tankid.0).collect();
-        let _ = lanrurugi_search::indexer::sync_tank_membership(search, &joined, &[]).await;
+    .await
+    {
+        tracing::warn!(id = %entry.id, error = %e, "failed to re-index a recycled archive's tags");
+    }
+    if let Err(e) =
+        lanrurugi_search::indexer::set_isnew_index(search, entry.id.as_str(), archive.isnew).await
+    {
+        tracing::warn!(id = %entry.id, error = %e, "failed to restore the new flag index");
+    }
+    match state.repos.groupings.for_archive(&entry.id).await {
+        Ok(tanks) => {
+            let joined: Vec<String> = tanks.into_iter().map(|g| g.tankid.0).collect();
+            if let Err(e) =
+                lanrurugi_search::indexer::sync_tank_membership(search, &joined, &[]).await
+            {
+                tracing::warn!(id = %entry.id, error = %e, "failed to restore a recycled archive's tankoubon membership index");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(id = %entry.id, error = %e, "failed to read a recycled archive's tankoubons for the index");
+        }
     }
 
     Ok(())

@@ -97,8 +97,15 @@ pub async fn backfill_primary_sources(state: &AppState) -> usize {
     if done {
         return 0;
     }
-    let entries: std::collections::HashMap<String, String> =
-        conn.hgetall(SOURCES_KEY).await.unwrap_or_default();
+    let entries: std::collections::HashMap<String, String> = match conn.hgetall(SOURCES_KEY).await {
+        Ok(entries) => entries,
+        Err(e) => {
+            // A failed read is not an empty registry: marking the back-fill done here would mean
+            // it never runs again and those archives keep no primary source forever.
+            tracing::warn!(error = %e, "could not read the download source registry; leaving the primary-source back-fill unmarked");
+            return 0;
+        }
+    };
     drop(conn);
     let mut marked = 0;
     for (url, id) in entries {

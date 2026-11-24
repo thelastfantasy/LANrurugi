@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next"
 import type { RecycleEntry } from "@/api/types"
 import { IconButton } from "@/components/common-ui/Form"
 import { formatBytes } from "@/lib/formatBytes"
+import { absoluteTimestamp, formatRelativeTime } from "@/lib/relativeTime"
 
 const CELL: CSSProperties = {
   display: "flex",
@@ -34,8 +35,11 @@ export function RecycleRow({
   expanded?: boolean
   onToggleExpand?: () => void
 }) {
-  const { t } = useTranslation()
-  const deletedAt = new Date(entry.deleted_at * 1000).toLocaleString()
+  const { t, i18n } = useTranslation()
+  const deletedAtIso = new Date(entry.deleted_at * 1000).toISOString()
+  // "5 分钟前" in the cell, the exact instant on hover.
+  const deletedAt = formatRelativeTime(deletedAtIso, t, i18n.language)
+  const deletedAtExact = absoluteTimestamp(deletedAtIso, i18n.language)
   const isTank = entry.kind === "tankoubon"
 
   if (isTank && narrow) {
@@ -65,7 +69,7 @@ export function RecycleRow({
               <span>{t("recycleBin.tankoubon")}</span>
               <span>{t("recycleBin.tankVolumeCount", { count: entry.member_count })}</span>
               <span>{formatBytes(entry.size)}</span>
-              <span>{deletedAt}</span>
+              <span title={deletedAtExact}>{deletedAt}</span>
               <span>{remainingLabel(entry, t)}</span>
             </div>
             {!entry.restorable && entry.conflict && (
@@ -132,7 +136,7 @@ export function RecycleRow({
           )}
         </div>
         <div style={{ ...CELL, whiteSpace: "nowrap" }}>{formatBytes(entry.size)}</div>
-        <div style={{ ...CELL, whiteSpace: "nowrap" }} title={deletedAt}>{deletedAt}</div>
+        <div style={{ ...CELL, whiteSpace: "nowrap" }} title={deletedAtExact}>{deletedAt}</div>
         <div style={{ ...CELL, whiteSpace: "nowrap" }}>{remainingLabel(entry, t)}</div>
         <div style={{ ...CELL, justifyContent: "flex-end", gap: 6 }}>
           <IconButton
@@ -227,7 +231,7 @@ export function RecycleRow({
           >
             <span>{formatBytes(entry.size)}</span>
             <span>{t("recycleBin.pageCount", { count: entry.page_count })}</span>
-            <span>{deletedAt}</span>
+            <span title={deletedAtExact}>{deletedAt}</span>
             <span>{remainingLabel(entry, t)}</span>
           </div>
         </div>
@@ -293,7 +297,7 @@ export function RecycleRow({
         </div>
       </div>
       <div style={{ ...CELL, whiteSpace: "nowrap" }}>{formatBytes(entry.size)}</div>
-      <div style={{ ...CELL, whiteSpace: "nowrap" }} title={deletedAt}>
+      <div style={{ ...CELL, whiteSpace: "nowrap" }} title={deletedAtExact}>
         {deletedAt}
       </div>
       <div style={{ ...CELL, whiteSpace: "nowrap" }}>{remainingLabel(entry, t)}</div>

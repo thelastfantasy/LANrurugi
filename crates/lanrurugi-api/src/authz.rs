@@ -384,7 +384,76 @@ mod tests {
             ("/api/backups", "POST"),
             ("/api/backups/20261123T050000Z-daily.json", "GET"),
             ("/api/backups/20261123T050000Z-daily.json", "DELETE"),
+            // A note is rename-by-another-name, and PATCH is reachable for admin tokens through the
+            // wildcard, so this route needs its own deny next to GET/DELETE.
+            ("/api/backups/20261123T050000Z-daily.json", "PATCH"),
             ("/api/backups/20261123T050000Z-daily.json/restore", "POST"),
+        ];
+        for (path, method) in paths {
+            assert!(
+                check_route(&e, Some(&session_auth()), path, method),
+                "a session must reach {method} {path}"
+            );
+            assert!(
+                !check_route(&e, Some(&token_auth(TokenRole::Admin)), path, method),
+                "an admin token must not reach {method} {path}"
+            );
+            assert!(
+                !check_route(&e, Some(&token_auth(TokenRole::Guest)), path, method),
+                "a guest token must not reach {method} {path}"
+            );
+            assert!(
+                !check_route(&e, Some(&guest_visitor_auth()), path, method),
+                "a guest visitor must not reach {method} {path}"
+            );
+        }
+    }
+
+    /// PATCH was missing from the admin token's wildcard, so renaming a share, a queue item or a
+    /// token answered 403 for a credential that may POST and DELETE the same resource.
+    #[tokio::test]
+    async fn an_admin_token_reaches_patch_routes() {
+        let e = route_enforcer().await;
+        for path in [
+            "/api/shares/abc",
+            "/api/shares/imports/abc",
+            "/api/download_queue/abc",
+        ] {
+            assert!(
+                check_route(&e, Some(&token_auth(TokenRole::Admin)), path, "PATCH"),
+                "an admin token must reach PATCH {path}"
+            );
+            assert!(
+                !check_route(&e, Some(&token_auth(TokenRole::Guest)), path, "PATCH"),
+                "a guest token must not reach PATCH {path}"
+            );
+        }
+        // The wildcard must not have reopened the PATCH routes that are session-only on purpose:
+        // renaming a login session or an API token stays out of a token's own reach.
+        for path in ["/api/sessions/fam", "/api/tokens/1"] {
+            assert!(
+                !check_route(&e, Some(&token_auth(TokenRole::Admin)), path, "PATCH"),
+                "an admin token must not reach {path}"
+            );
+        }
+    }
+
+    /// 028: the pre-028 `/database/*` backup boundary. `GET /database/backup` returns the same
+    /// document as `/backups/export` (share node secret included) and `restore`/`clean` rewrite or
+    /// delete the whole library, so all of them are session-only, like `/database/drop`.
+    #[tokio::test]
+    async fn legacy_database_data_routes_are_session_only() {
+        let e = route_enforcer().await;
+        let paths = [
+            ("/api/database/backup", "GET"),
+            ("/api/database/backup", "POST"),
+            ("/api/database/backup/abc", "GET"),
+            ("/api/database/restore", "POST"),
+            ("/api/database/clean", "POST"),
+            ("/api/database/isnew", "DELETE"),
+            ("/api/database/tidy-tags", "POST"),
+            ("/api/database/rebuild-index", "POST"),
+            ("/api/database/scripts/repair-mojibake", "POST"),
         ];
         for (path, method) in paths {
             assert!(

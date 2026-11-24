@@ -75,6 +75,16 @@ pub(crate) const DEFAULT_SNAPSHOT_CRON: &str = crate::snapshots::cron::DEFAULT_C
 /// Which preset the settings UI should highlight. Only an echo for the UI: the expression itself is
 /// authoritative, so a hand-edited `snapshot_cron` in Redis still schedules what it says.
 pub(crate) const DEFAULT_SNAPSHOT_CRON_PRESET: &str = "weekly";
+/// The scheduled snapshots themselves: a JSON array of
+/// `{id, label, enabled, preset, cron}`. Empty means "never configured", which the scheduler
+/// resolves to one default schedule built from the three legacy single-schedule keys.
+/// A fresh install ships one enabled plan: every Sunday at 03:00 **in the instance's own
+/// timezone** (`read_timezone`), not UTC — a schedule is only meaningful as local wall-clock time.
+pub(crate) const DEFAULT_SNAPSHOT_SCHEDULES: &str =
+    r#"[{"id":"plan-1","label":"","enabled":true,"preset":"weekly","cron":"0 0 3 * * 0 *"}]"#;
+/// How many scheduled snapshots the UI may configure. Every enabled one takes a full Redis backup
+/// on its own cadence, and each keeps its own `FULL_BACKUP_KEEP` files.
+pub(crate) const MAX_SNAPSHOT_SCHEDULES: usize = 10;
 
 pub fn router() -> Router<AppState> {
     // `/settings/password` ("账号安全类" danger) — no API token, admin-role or not, may change the
@@ -349,6 +359,36 @@ pub(crate) async fn read_deletion_guard_min(state: &AppState) -> i64 {
     read_number(state, "deletion_guard_min", DEFAULT_DELETION_GUARD_MIN).await
 }
 
+/// The IANA timezone the operator chose (`Asia/Tokyo`, `UTC`, …). Read live like every other
+/// scheduling input; an unset, empty or unparseable value falls back to UTC, matching the search
+/// side's own fallback (`lanrurugi_search::engine`).
+pub(crate) async fn read_timezone(state: &AppState) -> chrono_tz::Tz {
+    let stored = match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "timezone")
+            .await
+            .ok()
+            .flatten(),
+        Err(_) => None,
+    };
+    let Some(name) = stored
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    else {
+        return chrono_tz::UTC;
+    };
+    match name.parse::<chrono_tz::Tz>() {
+        Ok(tz) => tz,
+        Err(_) => {
+            // A stored but unreadable value schedules snapshots at the wrong hour, so it is
+            // reported rather than silently treated as "no timezone configured".
+            tracing::warn!(timezone = %name, "stored timezone is not a valid IANA name; using UTC");
+            chrono_tz::UTC
+        }
+    }
+}
+
 /// specs/028: how many daily / weekly snapshots the retention sweep keeps.
 pub(crate) async fn read_snapshot_daily_keep(state: &AppState) -> i64 {
     read_number(state, "snapshot_daily_keep", DEFAULT_SNAPSHOT_DAILY_KEEP).await
@@ -374,6 +414,11 @@ pub(crate) async fn read_snapshot_schedule_enabled(state: &AppState) -> bool {
 /// that no longer parses is handled by the scheduler (warn + default) rather than here.
 pub(crate) async fn read_snapshot_cron(state: &AppState) -> String {
     read_string(state, "snapshot_cron", DEFAULT_SNAPSHOT_CRON).await
+}
+
+/// The scheduled snapshots as stored (a JSON array), or the empty string when never configured.
+pub(crate) async fn read_snapshot_schedules(state: &AppState) -> String {
+    read_string(state, "snapshot_schedules", DEFAULT_SNAPSHOT_SCHEDULES).await
 }
 
 /// Which preset button the settings UI should show as selected (`hourly` / `daily` / `weekly` /
@@ -667,13 +712,13 @@ const STRING_FIELDS: &[(&str, &str)] = &[
     // queues a full rebuild job (see the side-effect branch in `put_settings` below) since a
     // tier change can't be applied retroactively by the incremental one-way backfill alone.
     ("recommendprecision", "medium"),
-    // specs/028 follow-up: when the automatic snapshot runs, as a crontab expression
-    // (`秒 分 时 日 月 星期 [年]`) evaluated in the server's local timezone. Parsed and validated on
-    // write, so a bad expression is a 400 with the offending segment named rather than a schedule
-    // that silently never fires.
-    ("snapshot_cron", DEFAULT_SNAPSHOT_CRON),
-    // Which preset the settings UI highlights. An echo only: the expression above is authoritative.
-    ("snapshot_cron_preset", DEFAULT_SNAPSHOT_CRON_PRESET),
+    // specs/028 follow-up: the scheduled snapshots — a JSON array of
+    // `{id, label, enabled, preset, cron}`, each cron a crontab expression
+    // (`秒 分 时 日 月 星期 [年]`) evaluated in the app's `timezone` setting. Validated on write, so
+    // a bad expression is a 400 naming the offending segment rather than a schedule that silently
+    // never fires. The pre-multi-schedule `snapshot_cron` / `snapshot_cron_preset` /
+    // `snapshot_schedule_enabled` fields are still *read* as the fallback when this is empty.
+    ("snapshot_schedules", DEFAULT_SNAPSHOT_SCHEDULES),
 ];
 
 /// `STRING_FIELDS`' own `tagrules` default, exposed for `plugins.rs::get_computed_tagrules` to
@@ -833,13 +878,8 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     // "stored in `LRR_CONFIG` but driven from a page other than Settings" precedent as
     // `replacetitles` above. Read by `login::status` to compute `first_run_wizard_pending`.
     ("first_run_wizard_done", false),
-    // specs/028 follow-up: whether the scheduled snapshot runs at all. Off leaves the manual
-    // `POST /api/backups` / `POST /api/backups/export` and every `pre-*` export working — only the
-    // timed generation stops. On by default so an untouched deployment still gets a weekly backup.
-    (
-        "snapshot_schedule_enabled",
-        DEFAULT_SNAPSHOT_SCHEDULE_ENABLED,
-    ),
+    // (The per-schedule `enabled` flag lives inside `snapshot_schedules`, above: each schedule
+    // switches on and off on its own.)
 ];
 
 /// Normalizes a configured/request origin to a `scheme://host:port` string with a known default
@@ -872,6 +912,86 @@ pub(crate) fn normalize_origin(value: &str) -> Option<String> {
 /// out of `put_settings`'s write loop as a plain, `Redis`-free function so the field/value matrix
 /// (unknown key, wrong JSON type, invalid `theme` value) can be unit-tested directly rather than
 /// only reachable through a real HTTP request against a live Redis (issue #65).
+/// One scheduled snapshot, as the settings JSON array carries it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct SnapshotScheduleSetting {
+    /// Filename-safe slug: it ends up in the snapshot's own name (`…-scheduled-<id>.rdb`).
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub preset: String,
+    pub cron: String,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Checks the whole array and rejects the first bad schedule by index, so the settings UI can point
+/// at the row instead of failing the save with "invalid JSON somewhere".
+fn validate_snapshot_schedules(text: &str) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Ok(());
+    }
+    let items: Vec<SnapshotScheduleSetting> = serde_json::from_str(text).map_err(|e| {
+        format!("Field \"snapshot_schedules\" is not a JSON array of schedules: {e}")
+    })?;
+    if items.len() > MAX_SNAPSHOT_SCHEDULES {
+        return Err(format!(
+            "Field \"snapshot_schedules\" holds {} schedules; at most {MAX_SNAPSHOT_SCHEDULES} are allowed.",
+            items.len()
+        ));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for (index, item) in items.iter().enumerate() {
+        let position = index + 1;
+        let id = item.id.trim();
+        if id.is_empty()
+            || id.len() > 32
+            || !id
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        {
+            return Err(format!(
+                "Schedule {position}: id must be 1-32 characters of a-z, 0-9 or '-', got \"{}\".",
+                item.id
+            ));
+        }
+        if !seen.insert(id.to_string()) {
+            return Err(format!("Schedule {position}: id \"{id}\" is used twice."));
+        }
+        if item.label.chars().count() > 64 {
+            return Err(format!(
+                "Schedule {position}: the label is longer than 64 characters."
+            ));
+        }
+        // The preset is only the UI's echo of which button produced this expression, so it is a
+        // short slug rather than an enum — an enum here would reject every preset the UI adds.
+        if item.preset.is_empty()
+            || item.preset.len() > 32
+            || !item
+                .preset
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        {
+            return Err(format!(
+                "Schedule {position}: preset must be 1-32 characters of a-z, 0-9 or '-', got \"{}\".",
+                item.preset
+            ));
+        }
+        if let Err(e) = item.cron.parse::<crate::snapshots::cron::CronSchedule>() {
+            return Err(format!(
+                "Schedule {position}: \"{}\" is not a valid crontab: {e}",
+                item.cron
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
     // `llm_api_key` is deliberately absent from `STRING_FIELDS` — that list doubles as
     // `get_settings`'s own read-loop allowlist, and the real key must never be echoed back to the
@@ -977,25 +1097,22 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
             return Err(format!("Field \"{key}\" must be between {min} and {max}."));
         }
     }
-    if key == "snapshot_cron" {
-        let expression = value.as_str().unwrap_or("");
-        if let Err(e) = expression.parse::<crate::snapshots::cron::CronSchedule>() {
-            return Err(format!(
-                "Field \"snapshot_cron\" is not a valid crontab (seconds minutes hours \
-                 day-of-month month weekday [year]): {e}"
-            ));
-        }
-    }
-    if key == "snapshot_cron_preset"
-        && !matches!(
-            value.as_str(),
-            Some("hourly" | "daily" | "weekly" | "monthly" | "custom")
-        )
-    {
-        return Err(format!(
-            "Field \"snapshot_cron_preset\" must be one of hourly, daily, weekly, monthly or \
-             custom, got {value}."
-        ));
+    if key == "snapshot_schedules" {
+        // Stored as a JSON *string* (every setting in `CONFIG_KEY` is a Redis hash field), but a
+        // client may just as well send the array itself.
+        let text = match value {
+            Value::String(text) => text.clone(),
+            Value::Array(_) => serde_json::to_string(value)
+                .map_err(|e| format!("Field \"snapshot_schedules\" could not be stored: {e}"))?,
+            _ => {
+                return Err(
+                    "Field \"snapshot_schedules\" must be a JSON array (or its serialized form)."
+                        .to_string(),
+                )
+            }
+        };
+        validate_snapshot_schedules(&text)?;
+        return Ok(text);
     }
     if key == "plugin_bind_interface" {
         let name = value.as_str().unwrap_or("").trim();
@@ -1930,49 +2047,80 @@ mod validate_setting_field_tests {
         );
     }
 
-    /// specs/028 follow-up: the snapshot schedule's cron fields. A rejected expression must name
-    /// the offending segment, and the preset stays a closed vocabulary (it is a UI echo, so a
-    /// stray value would only make the Settings page show nothing selected).
+    /// specs/028 follow-up: the scheduled-snapshot array. Each entry is validated by position so
+    /// the Settings page can point at the offending row, an id stays filename-safe (it ends up in
+    /// the snapshot's own name), and the legacy single-schedule keys are still accepted on write
+    /// even though they no longer appear in the field lists.
     #[test]
-    fn snapshot_schedule_fields_validate() {
-        assert!(BOOL_FIELDS
-            .iter()
-            .any(|(k, default)| *k == "snapshot_schedule_enabled" && *default));
-        assert_eq!(
-            validate_setting_field("snapshot_schedule_enabled", &json!(false)).unwrap(),
-            "0"
-        );
-        assert_eq!(
-            validate_setting_field("snapshot_schedule_enabled", &json!(true)).unwrap(),
-            "1"
-        );
+    fn snapshot_schedules_validate() {
+        // A fresh install ships one Sunday 03:00 plan, and that default must itself validate.
         assert!(STRING_FIELDS
             .iter()
-            .any(|(k, default)| *k == "snapshot_cron" && *default == "0 0 3 * * 1"));
-        assert!(STRING_FIELDS
+            .any(|(k, _)| *k == "snapshot_schedules"));
+        assert!(validate_snapshot_schedules(DEFAULT_SNAPSHOT_SCHEDULES).is_ok());
+        assert!(DEFAULT_SNAPSHOT_SCHEDULES.contains(crate::snapshots::cron::DEFAULT_CRON));
+        assert!(!BOOL_FIELDS
             .iter()
-            .any(|(k, default)| *k == "snapshot_cron_preset" && *default == "weekly"));
+            .any(|(k, _)| *k == "snapshot_schedule_enabled"));
 
-        for good in ["0 0 3 * * 1", "*/10 * * * * *", "0 0 0 1 1 * 2030"] {
-            assert_eq!(
-                validate_setting_field("snapshot_cron", &json!(good)).unwrap(),
-                good
+        // Never configured, and one well-formed schedule.
+        assert_eq!(
+            validate_setting_field("snapshot_schedules", &json!("")).unwrap(),
+            ""
+        );
+        let one = json!([{
+            "id": "plan-1",
+            "label": "每周",
+            "enabled": true,
+            "preset": "weekly",
+            "cron": "0 0 3 * * 1"
+        }]);
+        assert!(validate_setting_field("snapshot_schedules", &one).is_ok());
+        // A cron carrying the optional year still passes.
+        let with_year = json!([{"id":"p","label":"","enabled":true,"preset":"custom","cron":"0 0 0 1 1 * 2030"}]);
+        assert!(validate_setting_field("snapshot_schedules", &with_year).is_ok());
+        // The "first Sunday of the month" preset is a real preset value, not an unknown string.
+        let first_sunday = json!([{
+            "id": "plan-2",
+            "label": "",
+            "enabled": true,
+            "preset": "monthly-first-weekday",
+            "cron": "0 0 3 * * 0#1 *"
+        }]);
+        assert!(validate_setting_field("snapshot_schedules", &first_sunday).is_ok());
+
+        // The second entry's bad expression is reported against that entry.
+        let bad_cron = json!([
+            {"id":"a","label":"","enabled":true,"preset":"daily","cron":"0 0 3 * * *"},
+            {"id":"b","label":"","enabled":true,"preset":"daily","cron":"0 0 99 * * *"}
+        ]);
+        let err = validate_setting_field("snapshot_schedules", &bad_cron).unwrap_err();
+        assert!(err.contains("Schedule 2"), "{err}");
+        assert!(err.contains("hours"), "{err}");
+
+        // Ids and presets must be filename-safe slugs; ids must also be unique.
+        for bad in [
+            json!([{"id":"Plan 1","label":"","enabled":true,"preset":"daily","cron":"0 0 3 * * *"}]),
+            json!([{"id":"","label":"","enabled":true,"preset":"daily","cron":"0 0 3 * * *"}]),
+            json!([{"id":"a","label":"","enabled":true,"preset":"Sometimes!","cron":"0 0 3 * * *"}]),
+            json!([{"id":"a","label":"","enabled":true,"preset":"","cron":"0 0 3 * * *"}]),
+            json!([{"id":"a","label":"","enabled":true,"preset":"daily","cron":"0 0 3 * * *"},
+                   {"id":"a","label":"","enabled":true,"preset":"daily","cron":"0 0 4 * * *"}]),
+        ] {
+            assert!(
+                validate_setting_field("snapshot_schedules", &bad).is_err(),
+                "{bad}"
             );
         }
-        let err = validate_setting_field("snapshot_cron", &json!("61 0 3 * * 1")).unwrap_err();
-        assert!(err.contains("seconds"), "{err}");
-        assert!(err.contains("0-59"), "{err}");
-        let err = validate_setting_field("snapshot_cron", &json!("0 3 * * 1")).unwrap_err();
-        assert!(err.contains("6 or 7 fields"), "{err}");
-        assert!(validate_setting_field("snapshot_cron", &json!(300)).is_err());
+        assert!(validate_setting_field("snapshot_schedules", &json!("not json")).is_err());
+        assert!(validate_setting_field("snapshot_schedules", &json!(300)).is_err());
 
-        for preset in ["hourly", "daily", "weekly", "monthly", "custom"] {
-            assert_eq!(
-                validate_setting_field("snapshot_cron_preset", &json!(preset)).unwrap(),
-                preset
-            );
+        // The pre-multi-schedule keys are still *read* as the fallback (`SnapshotSchedule::
+        // load_all`), but no longer writable: `snapshot_schedules` replaced them.
+        for legacy in ["snapshot_cron", "snapshot_cron_preset"] {
+            let err = validate_setting_field(legacy, &json!("0 0 3 * * 1")).unwrap_err();
+            assert!(err.contains("Unknown settings field"), "{err}");
         }
-        assert!(validate_setting_field("snapshot_cron_preset", &json!("sometimes")).is_err());
     }
 
     #[test]

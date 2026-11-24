@@ -288,7 +288,12 @@ pub async fn restore_one(state: &AppState, id: &str) -> RestoreOne {
 pub(crate) async fn mark_restored_missing(state: &AppState, id: &str) {
     match state.redis.archive.get().await {
         Ok(mut conn) => {
-            let _: Result<(), _> = conn.hset(RESTORED_MISSING_KEY, id, now_ms()).await;
+            let stored: Result<(), _> = conn.hset(RESTORED_MISSING_KEY, id, now_ms()).await;
+            if let Err(e) = stored {
+                // Without the marker the zombie sweep deletes this restored record on the next
+                // restart, which is precisely what restoring it for a missing library avoids.
+                tracing::warn!(%id, error = %e, "could not record the restored-missing marker");
+            }
         }
         Err(e) => tracing::warn!(%id, error = %e, "could not record the restored-missing marker"),
     }

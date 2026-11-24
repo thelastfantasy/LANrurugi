@@ -20,7 +20,7 @@
 use std::collections::BTreeSet;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::OnceLock;
 
 use std::io::Write;
 use std::sync::Arc;
@@ -30,7 +30,7 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
-use chrono::{DateTime, Datelike, Local, SecondsFormat, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Local, Offset, SecondsFormat, TimeZone, Utc};
 use deadpool_redis::redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -40,11 +40,12 @@ use crate::auth_context::AuthContext;
 use crate::common::{error, not_found};
 use crate::settings::{
     read_snapshot_cron, read_snapshot_cron_preset, read_snapshot_daily_keep,
-    read_snapshot_schedule_enabled, read_snapshot_week_keep,
+    read_snapshot_schedule_enabled, read_snapshot_schedules, read_snapshot_week_keep,
+    read_timezone,
 };
 use crate::AppState;
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
-use lanrurugi_storage::keys::{SNAPSHOT_PINS_KEY, SNAPSHOT_SCHEDULE_KEY};
+use lanrurugi_storage::keys::{BACKUP_NOTES_KEY, SNAPSHOT_PINS_KEY, SNAPSHOT_SCHEDULE_KEY};
 use lanrurugi_storage::paths::snapshot_dir;
 
 pub mod cron;
@@ -91,8 +92,17 @@ pub struct SnapshotEntry {
     /// RFC 3339, UTC — derived from the filename, so a file moved into the directory by hand is
     /// either well-formed or not listed at all.
     pub created_at: String,
-    /// `daily` / `weekly` / `manual` / `pre-*` for an export, or `backup` for a full Redis backup.
+    /// `daily` / `weekly` / `manual` / `pre-*` for an export, or `scheduled` / `manual` for a full
+    /// Redis backup.
     pub reason: String,
+    /// The schedule that wrote it, so the list can group by schedule. `None` for a manual snapshot,
+    /// a `pre-*` export, and the single-schedule files older builds wrote.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule_id: Option<String>,
+    /// That schedule's configured name, resolved against the settings when the list is served;
+    /// `None` when the schedule has since been deleted (the snapshot still lists).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule_label: Option<String>,
     pub size_bytes: u64,
     /// Cheap syntactic check (readable, braced, carries an `archives` array for an export; the RDB
     /// magic for a full backup). `false` marks a crash-truncated file; the real schema check
@@ -106,6 +116,10 @@ pub struct SnapshotEntry {
     /// Pinned by the user: retention never evicts it. Filled in from Redis by the list/sweep
     /// callers — the filesystem on its own knows nothing about pins.
     pub pinned: bool,
+    /// The user's free-text note for this file, filled in from Redis like `pinned`. `None` when no
+    /// note is set; the JSON omits the field rather than emitting `null`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// What a snapshot holds, written next to it as `<name>.summary.json` so the backups list can show
@@ -176,85 +190,222 @@ impl SnapshotOutcome {
 // change apply on the next tick.
 // ---------------------------------------------------------------------------------------------
 
-/// The schedule as configured right now.
-#[derive(Debug, Clone)]
+/// One scheduled snapshot, as configured right now.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotSchedule {
+    /// Filename-safe slug, carried into the snapshot's own name so the list can group by it.
+    pub id: String,
+    /// Operator-facing name; empty means the UI supplies a fallback.
+    pub label: String,
     pub enabled: bool,
     pub cron: CronSchedule,
+    /// The zone the expression is evaluated in, from the app's `timezone` setting (never the
+    /// process's own `TZ`: a container running in UTC would otherwise fire a "03:00" schedule at
+    /// local noon for a JST operator).
+    pub tz: chrono_tz::Tz,
     /// The expression as stored, so the list response can echo exactly what was configured (even
     /// when it is the fallback, which the server-side warning then explains).
     pub cron_text: String,
-    /// The settings UI's preset echo (`hourly` / `daily` / `weekly` / `monthly` / `custom`).
+    /// The settings UI's preset echo (`hourly` / `daily` / `weekly` / `monthly` /
+    /// `monthly-first-weekday` / `custom`).
     pub preset: String,
 }
 
+/// The id the migrated single-schedule configuration gets: an untouched deployment that upgrades
+/// into this build keeps exactly one schedule, under a stable name.
+pub const LEGACY_SCHEDULE_ID: &str = "plan-1";
+
 impl SnapshotSchedule {
-    pub async fn load(state: &AppState) -> Self {
-        let cron_text = read_snapshot_cron(state).await;
-        // Only a hand-edited Redis can hold something unparseable — `PUT /settings` validates it.
-        // Falling back to the default beats silently switching the schedule off.
-        let cron = cron_text.parse::<CronSchedule>().unwrap_or_else(|e| {
-            tracing::warn!(
-                cron = %cron_text,
-                error = %e,
-                "stored snapshot cron does not parse; falling back to the default"
-            );
-            CronSchedule::default()
-        });
-        Self {
-            enabled: read_snapshot_schedule_enabled(state).await,
-            cron,
-            cron_text,
-            preset: read_snapshot_cron_preset(state).await,
+    /// Every configured schedule, newest configuration wins over the legacy single one. Never
+    /// empty: a deployment that has never saved the array gets one schedule built from the three
+    /// legacy keys, which is what it was running before this field existed.
+    pub async fn load_all(state: &AppState) -> Vec<Self> {
+        let tz = read_timezone(state).await;
+        let configured = parse_schedules(&read_snapshot_schedules(state).await, tz);
+        if !configured.is_empty() {
+            return configured;
         }
+        vec![Self {
+            id: LEGACY_SCHEDULE_ID.to_string(),
+            label: String::new(),
+            enabled: read_snapshot_schedule_enabled(state).await,
+            cron: parse_cron_or_default(&read_snapshot_cron(state).await),
+            cron_text: read_snapshot_cron(state).await,
+            preset: read_snapshot_cron_preset(state).await,
+            tz,
+        }]
     }
 
     /// The next firings, or none at all while the schedule is off — a disabled schedule has no next
     /// occurrence, and reporting one would suggest a snapshot is coming.
-    pub fn next_runs(&self, now: DateTime<Local>, count: usize) -> Vec<DateTime<Local>> {
+    pub fn next_runs(
+        &self,
+        now: DateTime<chrono_tz::Tz>,
+        count: usize,
+    ) -> Vec<DateTime<chrono_tz::Tz>> {
         if !self.enabled {
             return Vec::new();
         }
         self.cron.next_runs(now, count)
     }
+
+    /// The reason a snapshot this schedule writes carries: `scheduled-<id>`, so every snapshot
+    /// names the schedule that wrote it and the list can group by it. Files written before
+    /// multiple schedules existed say just `scheduled` and stay unattributed.
+    pub fn reason(&self) -> String {
+        format!("scheduled-{}", self.id)
+    }
 }
 
-/// The Redis field remembering the last instant served.
+/// Parses the stored JSON array. Pure, so "a broken entry is skipped, not fatal" is testable.
+fn parse_schedules(text: &str, tz: chrono_tz::Tz) -> Vec<SnapshotSchedule> {
+    if text.trim().is_empty() {
+        return Vec::new();
+    }
+    let items: Vec<crate::settings::SnapshotScheduleSetting> = match serde_json::from_str(text) {
+        Ok(items) => items,
+        Err(e) => {
+            tracing::warn!(error = %e, "stored snapshot schedules do not parse; using the default");
+            return Vec::new();
+        }
+    };
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let cron = item.cron.parse::<CronSchedule>().ok().or_else(|| {
+                tracing::warn!(cron = %item.cron, "stored snapshot cron does not parse; skipped");
+                None
+            })?;
+            Some(SnapshotSchedule {
+                id: item.id,
+                label: item.label,
+                enabled: item.enabled,
+                cron,
+                tz,
+                cron_text: item.cron,
+                preset: item.preset,
+            })
+        })
+        .collect()
+}
+
+fn parse_cron_or_default(text: &str) -> CronSchedule {
+    // Only a hand-edited Redis can hold something unparseable — `PUT /settings` validates it.
+    // Falling back to the default beats silently switching the schedule off.
+    text.parse::<CronSchedule>().unwrap_or_else(|e| {
+        tracing::warn!(
+            cron = %text,
+            error = %e,
+            "stored snapshot cron does not parse; falling back to the default"
+        );
+        CronSchedule::default()
+    })
+}
+
+/// The Redis field remembering the last instant served, per schedule id (`last_cron_fire:<id>`).
+/// The plain `last_cron_fire` field is the single-schedule build's, still read for the legacy id.
 const LAST_FIRE_FIELD: &str = "last_cron_fire";
 
 /// How many upcoming firings `GET /api/backups` and the preview endpoint report.
 pub const NEXT_RUNS: usize = 10;
 
-/// The instant whose automatic attempt already failed in this process, so a full disk does not
-/// retry — and keep warning — every 5 seconds until the next firing (`research.md` D9). The next
-/// firing has a different timestamp, which is what re-arms it.
-static FAILED_CRON_SLOT: AtomicI64 = AtomicI64::new(0);
+/// Per schedule id, the instant whose automatic attempt already failed in this process, so a full
+/// disk does not retry — and keep warning — every 5 seconds until the next firing (`research.md`
+/// D9). The next firing has a different timestamp, which is what re-arms it.
+static FAILED_CRON_SLOTS: OnceLock<std::sync::Mutex<std::collections::BTreeMap<String, i64>>> =
+    OnceLock::new();
 
-async fn read_last_fire(state: &AppState) -> Option<DateTime<Utc>> {
-    let raw: Option<String> = match state.redis.config.get().await {
-        Ok(mut conn) => conn
-            .hget(SNAPSHOT_SCHEDULE_KEY, LAST_FIRE_FIELD)
-            .await
-            .ok()?,
-        Err(_) => return None,
+fn failed_cron_slots() -> &'static std::sync::Mutex<std::collections::BTreeMap<String, i64>> {
+    FAILED_CRON_SLOTS.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()))
+}
+
+fn failed_slot(id: &str) -> i64 {
+    failed_cron_slots()
+        .lock()
+        .map(|m| *m.get(id).unwrap_or(&0))
+        .unwrap_or(0)
+}
+
+fn set_failed_slot(id: &str, instant: i64) {
+    if let Ok(mut slots) = failed_cron_slots().lock() {
+        if instant == 0 {
+            slots.remove(id);
+        } else {
+            slots.insert(id.to_string(), instant);
+        }
+    }
+}
+
+fn last_fire_field(id: &str) -> String {
+    format!("{LAST_FIRE_FIELD}:{id}")
+}
+
+/// A schedule's stored watermark. "The store could not be read" is deliberately its own state:
+/// collapsing it into [`Watermark::Never`] makes an unreachable Redis look like a fresh install,
+/// which fires — and warns — on every tick for as long as the outage lasts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Watermark {
+    /// No firing has ever been recorded: one is owed immediately.
+    Never,
+    /// The instant of the last served firing.
+    At(DateTime<Utc>),
+    /// Redis refused the read; this tick must not act on a guess.
+    Unreadable,
+}
+
+impl Watermark {
+    fn at(self) -> Option<DateTime<Utc>> {
+        match self {
+            Watermark::At(at) => Some(at),
+            Watermark::Never | Watermark::Unreadable => None,
+        }
+    }
+}
+
+async fn read_last_fire(state: &AppState, id: &str) -> Watermark {
+    let Ok(mut conn) = state.redis.config.get().await else {
+        return Watermark::Unreadable;
     };
-    DateTime::parse_from_rfc3339(raw.as_deref()?)
-        .ok()
-        .map(|at| at.with_timezone(&Utc))
+    let mut raw: Option<String> = match conn.hget(SNAPSHOT_SCHEDULE_KEY, last_fire_field(id)).await
+    {
+        Ok(raw) => raw,
+        Err(_) => return Watermark::Unreadable,
+    };
+    if raw.is_none() && id == LEGACY_SCHEDULE_ID {
+        // A build from before multiple schedules wrote the un-suffixed field.
+        raw = match conn.hget(SNAPSHOT_SCHEDULE_KEY, LAST_FIRE_FIELD).await {
+            Ok(raw) => raw,
+            Err(_) => return Watermark::Unreadable,
+        };
+    }
+    let Some(raw) = raw else {
+        return Watermark::Never;
+    };
+    // A value that does not parse is treated as "never fired" (today's behaviour), not as an
+    // unreadable store: one corrupt field must not freeze the schedule forever.
+    DateTime::parse_from_rfc3339(&raw)
+        .map(|at| Watermark::At(at.with_timezone(&Utc)))
+        .unwrap_or(Watermark::Never)
 }
 
 pub async fn read_schedule_state(state: &AppState) -> Option<DateTime<Utc>> {
-    read_last_fire(state).await
+    let mut latest: Option<DateTime<Utc>> = None;
+    for schedule in SnapshotSchedule::load_all(state).await {
+        if let Some(at) = read_last_fire(state, &schedule.id).await.at() {
+            latest = Some(latest.map_or(at, |current| current.max(at)));
+        }
+    }
+    latest
 }
 
 /// Returns `false` when Redis refused the write, so the caller can stop re-running the same firing.
-async fn record_last_fire(state: &AppState, at: DateTime<Utc>) -> bool {
+async fn record_last_fire(state: &AppState, id: &str, at: DateTime<Utc>) -> bool {
     let Ok(mut conn) = state.redis.config.get().await else {
         return false;
     };
     let stored = at.to_rfc3339_opts(SecondsFormat::Secs, true);
     let result: Result<i64, _> = conn
-        .hset(SNAPSHOT_SCHEDULE_KEY, LAST_FIRE_FIELD, stored)
+        .hset(SNAPSHOT_SCHEDULE_KEY, last_fire_field(id), stored)
         .await;
     match result {
         Ok(_) => true,
@@ -279,130 +430,177 @@ async fn record_last_fire(state: &AppState, at: DateTime<Utc>) -> bool {
 /// the alignment problem and leaves a record for the real cadence to work from.
 pub fn due_firing(
     cron: &CronSchedule,
-    now: DateTime<Local>,
-    last_fire: Option<DateTime<Utc>>,
-) -> Option<DateTime<Local>> {
+    tz: chrono_tz::Tz,
+    now: DateTime<chrono_tz::Tz>,
+    last_fire: Watermark,
+) -> Option<DateTime<chrono_tz::Tz>> {
     match last_fire {
-        Some(last) => cron
-            .next_after(last.with_timezone(&Local))
+        // The watermark is stored in UTC; the comparison happens in the configured zone, which is
+        // the same instant either way.
+        Watermark::At(last) => cron
+            .next_after(last.with_timezone(&tz))
             .filter(|at| *at <= now),
-        None => Some(now),
+        Watermark::Never => Some(now),
+        // Nothing is owed on a guess. The caller also skips before calling this, so the rule is
+        // stated in both places on purpose: it is the one that stops the alert storm.
+        Watermark::Unreadable => None,
     }
 }
 
-/// The decision + watermark half of a tick, with the snapshot write injected.
+/// The decision + watermark half of a tick, with the snapshot write injected. Every enabled
+/// schedule is evaluated independently: each has its own watermark, its own failed-slot memory and
+/// its own files, so a broken one never silences the others.
 ///
 /// Split out so the scheduling policy (cron hit, restart-no-duplicate, catch-up-once, failed-firing
 /// memory) can be tested without a real Redis RDB — the one environment that can read Redis's RDB
 /// is not the one the test suite runs in.
-pub(crate) async fn tick_with<F>(
-    state: &AppState,
-    now: DateTime<Local>,
-    run: F,
-) -> Option<SnapshotEntry>
+pub(crate) async fn tick_with<F>(state: &AppState, now: DateTime<chrono_tz::Tz>, run: F) -> usize
 where
-    F: FnOnce(
-        DateTime<Local>,
+    F: Fn(
+        &SnapshotSchedule,
+        DateTime<chrono_tz::Tz>,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<SnapshotEntry, String>> + Send>,
     >,
 {
-    let schedule = SnapshotSchedule::load(state).await;
-    if !schedule.enabled {
-        return None;
-    }
-    let last_fire = read_last_fire(state).await;
-    let Some(slot) = due_firing(&schedule.cron, now, last_fire) else {
-        tracing::debug!(
+    let mut fired = 0usize;
+    for schedule in SnapshotSchedule::load_all(state).await {
+        if !schedule.enabled {
+            continue;
+        }
+        let last_fire = read_last_fire(state, &schedule.id).await;
+        if last_fire == Watermark::Unreadable {
+            // An unreadable watermark is not "never fired": treating it as such is what made an
+            // unreachable Redis fire — and warn — on every 5 s tick. Skip this schedule for this
+            // tick without logging; the read failure is already reported by the Redis layer.
+            continue;
+        }
+        let Some(slot) = due_firing(&schedule.cron, schedule.tz, now, last_fire) else {
+            tracing::debug!(
+                schedule = %schedule.id,
+                cron = %schedule.cron_text,
+                last_fire = ?last_fire,
+                "snapshot schedule tick: nothing due"
+            );
+            continue;
+        };
+        let instant = slot.timestamp();
+        // A firing whose automatic attempt already failed in this process is not retried every
+        // tick; the next firing has a different timestamp, which re-arms it.
+        if failed_slot(&schedule.id) == instant {
+            continue;
+        }
+        tracing::info!(
+            schedule = %schedule.id,
             cron = %schedule.cron_text,
-            last_fire = ?last_fire,
-            "snapshot schedule tick: nothing due"
+            slot = %slot.to_rfc3339(),
+            first = last_fire == Watermark::Never,
+            "snapshot schedule tick: firing"
         );
-        return None;
-    };
-    let instant = slot.timestamp();
-    // A firing whose automatic attempt already failed in this process is not retried every tick;
-    // the next firing has a different timestamp, which re-arms it.
-    if FAILED_CRON_SLOT.load(Ordering::SeqCst) == instant {
-        return None;
-    }
-    tracing::info!(
-        cron = %schedule.cron_text,
-        slot = %slot.to_rfc3339(),
-        first = last_fire.is_none(),
-        "snapshot schedule tick: firing"
-    );
-    match run(slot).await {
-        Ok(entry) => {
-            // The *serve* time, not the slot: recording the slot would leave every firing missed
-            // during a long downtime still ahead of the record, and the schedule would fire once
-            // per missed firing instead of once in total.
-            if record_last_fire(state, Utc::now()).await {
-                FAILED_CRON_SLOT.store(0, Ordering::SeqCst);
-            } else {
-                FAILED_CRON_SLOT.store(instant, Ordering::SeqCst);
+        match run(&schedule, slot).await {
+            Ok(entry) => {
+                // The *serve* time, not the slot: recording the slot would leave every firing
+                // missed during a long downtime still ahead of the record, and the schedule would
+                // fire once per missed firing instead of once in total.
+                if record_last_fire(state, &schedule.id, Utc::now()).await {
+                    set_failed_slot(&schedule.id, 0);
+                } else {
+                    set_failed_slot(&schedule.id, instant);
+                }
+                tracing::info!(
+                    snapshot = %entry.name,
+                    schedule = %schedule.id,
+                    "scheduled automatic snapshot written"
+                );
+                fired += 1;
             }
-            tracing::info!(snapshot = %entry.name, "scheduled automatic snapshot written");
-            Some(entry)
-        }
-        Err(e) => {
-            FAILED_CRON_SLOT.store(instant, Ordering::SeqCst);
-            tracing::warn!(error = %e, "scheduled automatic snapshot failed; not retrying this firing");
-            None
+            Err(e) => {
+                set_failed_slot(&schedule.id, instant);
+                tracing::warn!(
+                    schedule = %schedule.id,
+                    error = %e,
+                    "scheduled automatic snapshot failed; not retrying this firing"
+                );
+            }
         }
     }
+    fired
 }
 
 /// One scheduler tick. `lanrurugi-server` calls this every 5 seconds, and an interval's first tick
 /// is immediate — which is also the first firing a fresh install takes.
 pub async fn schedule_tick(state: &AppState) {
     let state_for_task = state.clone();
-    tick_with(state, Local::now(), move |_slot| {
-        Box::pin(async move {
-            let entry =
-                take_full_backup(&state_for_task, "scheduled", Arc::new(NoProgress)).await?;
-            // A fresh snapshot can immediately push the oldest one past `FULL_BACKUP_KEEP`.
-            retention_sweep(&state_for_task).await;
-            Ok(entry)
-        })
-    })
+    // Wall-clock now in the operator's zone; the cron expression is evaluated there.
+    let tz = read_timezone(state).await;
+    tick_with(
+        state,
+        Utc::now().with_timezone(&tz),
+        move |schedule, _slot| {
+            let reason = schedule.reason();
+            let state_for_task = state_for_task.clone();
+            Box::pin(async move {
+                let entry =
+                    take_full_backup(&state_for_task, &reason, Arc::new(NoProgress)).await?;
+                // A fresh snapshot can immediately push the oldest one past `FULL_BACKUP_KEEP`.
+                retention_sweep(&state_for_task).await;
+                Ok(entry)
+            })
+        },
+    )
     .await;
 }
 
-/// One instant as the API reports it: ISO 8601 with the server's own UTC offset, so a client never
-/// has to guess which zone a `next_runs` entry is in (the `timezone` field names it as well).
-fn iso_local(at: DateTime<Local>) -> String {
+/// One instant as the API reports it: ISO 8601 with the configured zone's UTC offset, so a client
+/// never has to guess which zone a `next_runs` entry is in (the `timezone` field names it too).
+fn iso_local(at: DateTime<chrono_tz::Tz>) -> String {
     at.to_rfc3339_opts(SecondsFormat::Secs, false)
 }
 
-/// The server's zone for display: `Asia/Tokyo (+09:00)` when the IANA name can be read, else just
-/// the offset. Never used for arithmetic — that is always `chrono::Local`.
-pub fn local_timezone_label() -> String {
-    let offset = Local::now().offset().to_string();
-    match iana_time_zone::get_timezone() {
-        Ok(name) if !name.trim().is_empty() => format!("{} ({offset})", name.trim()),
-        _ => offset,
-    }
+/// The configured zone for display: `Asia/Tokyo (+09:00)`. The offset is the zone's current one,
+/// so a DST-observing zone shows the offset in force right now (`-05:00` vs `-04:00`).
+pub fn timezone_label(tz: chrono_tz::Tz) -> String {
+    // `TzOffset`'s own `Display` is the abbreviation (`JST`); the numeric offset is what the UI
+    // and the contract promise.
+    let offset = Utc::now().with_timezone(&tz).offset().fix().to_string();
+    format!("{tz} ({offset})")
 }
 
-/// The `schedule` object on `GET /api/backups`. Pure, so "disabled means no next runs" and the
-/// reported shape have a unit test.
+/// The `schedule` object on `GET /api/backups`: the zone every cron is read in, plus one entry per
+/// configured schedule. Pure, so "a disabled schedule reports no next runs" and the reported shape
+/// have a unit test.
 fn schedule_json(
-    schedule: &SnapshotSchedule,
-    last_fire: Option<DateTime<Utc>>,
-    now: DateTime<Local>,
+    schedules: &[SnapshotSchedule],
+    last_fires: &std::collections::BTreeMap<String, Option<DateTime<Utc>>>,
+    now: DateTime<chrono_tz::Tz>,
+    tz: chrono_tz::Tz,
 ) -> serde_json::Value {
+    let items: Vec<serde_json::Value> = schedules
+        .iter()
+        .map(|schedule| {
+            let last_fire = last_fires.get(&schedule.id).copied().flatten();
+            json!({
+                "id": schedule.id,
+                "label": schedule.label,
+                "enabled": schedule.enabled,
+                "cron": schedule.cron_text,
+                "preset": schedule.preset,
+                "last_fire_at": last_fire
+                    .map(|at| iso_local(at.with_timezone(&schedule.tz))),
+                "next_runs": schedule
+                    .next_runs(now.with_timezone(&schedule.tz), NEXT_RUNS)
+                    .into_iter()
+                    .map(iso_local)
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect();
     json!({
-        "enabled": schedule.enabled,
-        "cron": schedule.cron_text,
-        "preset": schedule.preset,
-        "timezone": local_timezone_label(),
-        "last_fire_at": last_fire.map(|at| iso_local(at.with_timezone(&Local))),
-        "next_runs": schedule
-            .next_runs(now, NEXT_RUNS)
-            .into_iter()
-            .map(iso_local)
-            .collect::<Vec<_>>(),
+        "timezone": timezone_label(tz),
+        // `timezone` carries the human label (`Asia/Tokyo (+09:00)`), which is not an id any date
+        // library accepts; `Intl.DateTimeFormat` needs this one.
+        "timezone_name": tz.name(),
+        "items": items,
     })
 }
 
@@ -446,14 +644,51 @@ pub async fn set_pin(state: &AppState, name: &str, pinned: bool) -> Result<(), S
         .map_err(|e| format!("could not update the snapshot pin: {e}"))
 }
 
+// ---------------------------------------------------------------------------------------------
+// Notes.
+//
+// A note is the user's "why this snapshot exists" — an alias no other column can carry. Like a
+// pin it lives in Redis rather than in a sidecar file, so the backups directory stays plain
+// snapshots and a file moved in by hand still lists; unlike a pin it affects neither retention nor
+// restores. Clearing it whenever the file goes keeps the hash from growing without bound.
+// ---------------------------------------------------------------------------------------------
+
+/// Every note, or `None` when Redis could not be read. The read-only list treats that as "no
+/// notes": it is still correct about everything else and deletes nothing.
+async fn read_notes(state: &AppState) -> Option<std::collections::HashMap<String, String>> {
+    let mut conn = state.redis.config.get().await.ok()?;
+    let notes: std::collections::HashMap<String, String> =
+        conn.hgetall(BACKUP_NOTES_KEY).await.ok()?;
+    Some(notes)
+}
+
+/// Sets (`Some`) or clears (`None`) one note. `HSET`/`HDEL` are already idempotent, so repeating
+/// either is harmless.
+async fn set_note(state: &AppState, name: &str, note: Option<&str>) -> Result<(), String> {
+    let mut conn = state
+        .redis
+        .config
+        .get()
+        .await
+        .map_err(|e| format!("could not reach Redis: {e}"))?;
+    let result: Result<(), _> = match note {
+        Some(text) => conn.hset(BACKUP_NOTES_KEY, name, text).await,
+        None => conn.hdel(BACKUP_NOTES_KEY, name).await,
+    };
+    result.map_err(|e| format!("could not update the snapshot note: {e}"))
+}
+
 /// One parsed backup-directory file name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedName {
     pub created: DateTime<Utc>,
     pub kind: SnapshotKind,
-    /// `daily` / `weekly` / `manual` / `pre-*` for an export; `daily` / `weekly` / `manual` for a
-    /// full Redis backup.
+    /// `daily` / `weekly` / `manual` / `pre-*` for an export; `scheduled` / `daily` / `weekly` /
+    /// `manual` for a full Redis backup.
     pub reason: String,
+    /// The schedule that wrote it (`scheduled-<id>` in the file name), or `None` for a manual one
+    /// and for the single `scheduled` files an earlier build wrote.
+    pub schedule_id: Option<String>,
 }
 
 /// `snapshot-<stamp>-<reason>.rdb` for a full Redis backup, `export-<stamp>-<reason>.json` for a
@@ -485,7 +720,17 @@ pub fn is_known_reason(reason: &str) -> bool {
 /// operation gets a cheap JSON export, never a multi-hundred-megabyte RDB write in its critical
 /// path.
 fn is_known_backup_reason(reason: &str) -> bool {
-    matches!(reason, "scheduled" | "manual" | "daily" | "weekly")
+    if matches!(reason, "scheduled" | "manual" | "daily" | "weekly") {
+        return true;
+    }
+    // `scheduled-<id>`: which schedule fired (see `SnapshotSchedule::reason`).
+    reason.strip_prefix("scheduled-").is_some_and(|id| {
+        !id.is_empty()
+            && id.len() <= 32
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    })
 }
 
 /// Parses a filename this module wrote. The `snapshot-` / `export-` prefix decides the kind;
@@ -519,11 +764,17 @@ pub fn parse_name(name: &str) -> Option<ParsedName> {
     if !known {
         return None;
     }
+    // `scheduled-<id>` names the schedule; everything else has no schedule of its own.
+    let (reason, schedule_id) = match reason.strip_prefix("scheduled-") {
+        Some(id) => ("scheduled".to_string(), Some(id.to_string())),
+        None => (reason.to_string(), None),
+    };
     let naive = chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%dT%H%M%SZ").ok()?;
     Some(ParsedName {
         created: Utc.from_utc_datetime(&naive),
         kind,
-        reason: reason.to_string(),
+        reason,
+        schedule_id,
     })
 }
 
@@ -550,6 +801,8 @@ pub fn list_in(dir: &Path) -> std::io::Result<Vec<SnapshotEntry>> {
             kind: parsed.kind,
             created_at: parsed.created.to_rfc3339_opts(SecondsFormat::Secs, true),
             reason: parsed.reason,
+            schedule_id: parsed.schedule_id,
+            schedule_label: None,
             size_bytes,
             usable: match parsed.kind {
                 SnapshotKind::Export => looks_like_export(&path),
@@ -561,6 +814,7 @@ pub fn list_in(dir: &Path) -> std::io::Result<Vec<SnapshotEntry>> {
                 SnapshotKind::Backup => None,
             },
             pinned: false,
+            note: None,
         });
     }
     entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -646,7 +900,8 @@ pub fn retention_plan(
     let mut week_seen: Vec<(i32, u32)> = Vec::new();
     let mut pre_seen = 0usize;
     let mut manual_seen = 0usize;
-    let mut backup_seen = 0usize;
+    let mut backup_seen: std::collections::BTreeMap<Option<String>, usize> =
+        std::collections::BTreeMap::new();
     for entry in &sorted {
         let Some(parsed) = parse_name(&entry.name) else {
             continue;
@@ -656,11 +911,13 @@ pub fn retention_plan(
         if pins.contains(&entry.name) {
             continue;
         }
-        // Full Redis backups are one flat tier: the newest `FULL_BACKUP_KEEP` survive whatever
-        // their reason was (a scheduled `daily` RDB is still a full backup).
+        // Full Redis backups keep `FULL_BACKUP_KEEP` each *per schedule*, so adding a second
+        // schedule does not evict the first one's history — and the manual ones (`None`) form one
+        // bucket of their own.
         if entry.kind == SnapshotKind::Backup {
-            if backup_seen < FULL_BACKUP_KEEP {
-                backup_seen += 1;
+            let count = backup_seen.entry(entry.schedule_id.clone()).or_insert(0);
+            if *count < FULL_BACKUP_KEEP {
+                *count += 1;
             } else {
                 victims.push(entry.name.clone());
             }
@@ -770,10 +1027,13 @@ pub async fn take_export(
         kind: SnapshotKind::Export,
         created_at: created.to_rfc3339_opts(SecondsFormat::Secs, true),
         reason: reason.to_string(),
+        schedule_id: None,
+        schedule_label: None,
         size_bytes: size,
         usable: true,
         summary,
         pinned: false,
+        note: None,
     })
 }
 
@@ -861,9 +1121,14 @@ pub async fn take_full_backup(
     // A refused `BGSAVE` means a save is already running; the LASTSAVE poll below covers that case
     // too, so the reply itself is not interesting.
     let save_issued = std::time::Instant::now();
-    let _: Result<String, _> = deadpool_redis::redis::cmd("BGSAVE")
-        .query_async(&mut conn)
-        .await;
+    if let Err(e) = deadpool_redis::redis::cmd("BGSAVE")
+        .query_async::<String>(&mut conn)
+        .await
+    {
+        // A refusal (MISCONF, disk full) is also why no save will ever finish, so without this the
+        // only symptom is a misleading "did not finish in 120s" two minutes later.
+        tracing::warn!(error = %e, "BGSAVE was refused");
+    }
     let temp_dir = source.parent().map(Path::to_path_buf);
     // A completed save renames a freshly written file over the RDB, so its modification time moves
     // — a signal with sub-second resolution. `LASTSAVE` alone is not enough: it is whole seconds,
@@ -939,15 +1204,21 @@ pub async fn take_full_backup(
     let tmp_path = dir.join(format!("{name}.tmp"));
     let size = copy_rdb(&source, &tmp_path, &final_path, progress).await?;
 
+    // `scheduled-<id>` in the file name, `scheduled` in the entry: the id is what the list groups
+    // by, and it has to survive a file moved between installs.
+    let schedule_id = reason.strip_prefix("scheduled-").map(|id| id.to_string());
     Ok(SnapshotEntry {
         name,
         kind: SnapshotKind::Backup,
         created_at: created.to_rfc3339_opts(SecondsFormat::Secs, true),
-        reason: reason.to_string(),
+        reason: reason.split('-').next().unwrap_or(reason).to_string(),
+        schedule_id,
+        schedule_label: None,
         size_bytes: size,
         usable: true,
         summary: None,
         pinned: false,
+        note: None,
     })
 }
 
@@ -1150,7 +1421,14 @@ pub async fn retention_sweep(state: &AppState) -> usize {
             continue;
         }
         match remove_snapshot_files(&dir, &name).await {
-            Ok(()) => removed += 1,
+            Ok(()) => {
+                removed += 1;
+                // The file is gone, so its note can never be shown again; dropping it here is what
+                // keeps the hash bounded. A failure is a warning — the sweep's job is the file.
+                if let Err(e) = set_note(state, &name, None).await {
+                    tracing::warn!(name, error = %e, "could not clear a pruned snapshot's note");
+                }
+            }
             Err(e) => tracing::warn!(name, error = %e, "could not remove an expired snapshot"),
         }
     }
@@ -1177,7 +1455,9 @@ pub fn router() -> Router<AppState> {
         .route("/backups/jobs/{job_id}/events", get(jobs::job_events))
         .route(
             "/backups/{name}",
-            get(download_backup).delete(delete_backup),
+            get(download_backup)
+                .delete(delete_backup)
+                .patch(update_note),
         )
         .route("/backups/{name}/restore", post(restore_backup))
         .route("/backups/{name}/pin", post(pin_backup).delete(unpin_backup))
@@ -1191,12 +1471,17 @@ struct CronPreviewRequest {
 /// `POST /api/backups/schedule/preview` — validate an expression and show the next firings before
 /// it is saved. Answers `200` with `valid: false` for a bad expression: this is a form-validation
 /// helper, not a failed request, and the UI shows `error` inline.
-async fn preview_schedule(axum::Json(body): axum::Json<CronPreviewRequest>) -> Response {
-    let now = Local::now();
+async fn preview_schedule(
+    State(state): State<AppState>,
+    axum::Json(body): axum::Json<CronPreviewRequest>,
+) -> Response {
+    // Preview in the same zone the schedule will actually run in.
+    let tz = read_timezone(&state).await;
+    let now = Utc::now().with_timezone(&tz);
     match body.cron.parse::<CronSchedule>() {
         Ok(cron) => axum::Json(json!({
             "valid": true,
-            "timezone": local_timezone_label(),
+            "timezone": timezone_label(tz),
             "next_runs": cron
                 .next_runs(now, NEXT_RUNS)
                 .into_iter()
@@ -1207,7 +1492,7 @@ async fn preview_schedule(axum::Json(body): axum::Json<CronPreviewRequest>) -> R
         Err(e) => axum::Json(json!({
             "valid": false,
             "error": e.to_string(),
-            "timezone": local_timezone_label(),
+            "timezone": timezone_label(tz),
             "next_runs": [],
         }))
         .into_response(),
@@ -1215,13 +1500,18 @@ async fn preview_schedule(axum::Json(body): axum::Json<CronPreviewRequest>) -> R
 }
 
 fn entry_json(entry: &SnapshotEntry) -> serde_json::Value {
-    json!({
+    let mut value = json!({
         "name": entry.name,
         // "backup" (full Redis RDB) or "export" (JSON document). The one field a client must branch
         // on: only an export can be restored from inside the app.
         "kind": entry.kind,
         "created_at": entry.created_at,
         "reason": entry.reason,
+        // Which schedule wrote it, and that schedule's current name — `null` for a manual
+        // snapshot, a `pre-*` export, and a snapshot whose schedule has since been deleted (the
+        // client groups those as unattributed).
+        "schedule_id": entry.schedule_id,
+        "schedule_label": entry.schedule_label,
         "size_bytes": entry.size_bytes,
         "usable": entry.usable,
         // `null` (never omitted) when the sibling summary is missing, so a client can rely on the
@@ -1229,27 +1519,64 @@ fn entry_json(entry: &SnapshotEntry) -> serde_json::Value {
         "summary": entry.summary.as_ref(),
         // Always present, so a client never has to treat "missing" and "not pinned" differently.
         "pinned": entry.pinned,
-    })
+    });
+    // Omitted when empty (like `schedule_id`), so "no note" has one representation rather than
+    // `null` and `""` both standing for it.
+    if let Some(note) = &entry.note {
+        value["note"] = json!(note);
+    }
+    value
+}
+
+/// Reads the backup directory and fills in the state that lives in Redis (pin, note). The list and
+/// the note endpoint share this so a client never sees the two disagree about an entry's shape.
+async fn load_entries(state: &AppState) -> std::io::Result<Vec<SnapshotEntry>> {
+    let dir = snapshot_dir(&state.library.archive_dir);
+    let mut entries = list_in(&dir)?;
+    // A failed read means "no pins/notes shown" rather than a 500: the list is still correct about
+    // everything else, and nothing is deleted here.
+    let pins = read_pins(state).await.unwrap_or_default();
+    let notes = read_notes(state).await.unwrap_or_default();
+    for entry in &mut entries {
+        entry.pinned = pins.contains(&entry.name);
+        entry.note = notes
+            .get(&entry.name)
+            .filter(|note| !note.is_empty())
+            .cloned();
+    }
+    Ok(entries)
 }
 
 async fn list_backups(State(state): State<AppState>) -> Response {
-    let dir = snapshot_dir(&state.library.archive_dir);
-    match list_in(&dir) {
+    match load_entries(&state).await {
         Ok(mut entries) => {
-            // A failed read means "no pins shown" rather than a 500: the list is still correct
-            // about everything else, and nothing is deleted here.
-            let pins = read_pins(&state).await.unwrap_or_default();
-            for entry in &mut entries {
-                entry.pinned = pins.contains(&entry.name);
+            let schedules = SnapshotSchedule::load_all(&state).await;
+            let tz = read_timezone(&state).await;
+            let mut last_fires = std::collections::BTreeMap::new();
+            let labels: std::collections::BTreeMap<String, String> = schedules
+                .iter()
+                .map(|schedule| (schedule.id.clone(), schedule.label.clone()))
+                .collect();
+            for schedule in &schedules {
+                last_fires.insert(
+                    schedule.id.clone(),
+                    read_last_fire(&state, &schedule.id).await.at(),
+                );
             }
-            let schedule = SnapshotSchedule::load(&state).await;
-            let served = read_schedule_state(&state).await;
+            // A snapshot whose schedule no longer exists keeps listing, with no label: the UI
+            // collects those (and manual ones) into its unattributed group rather than hiding them.
+            for entry in &mut entries {
+                entry.schedule_label = entry
+                    .schedule_id
+                    .as_ref()
+                    .and_then(|id| labels.get(id).cloned());
+            }
             axum::Json(json!({
                 "operation": "list_backups",
                 "success": 1,
                 "daily_keep": read_snapshot_daily_keep(&state).await,
                 "week_keep": read_snapshot_week_keep(&state).await,
-                "schedule": schedule_json(&schedule, served, Local::now()),
+                "schedule": schedule_json(&schedules, &last_fires, Utc::now().with_timezone(&tz), tz),
                 "entries": entries.iter().map(entry_json).collect::<Vec<_>>(),
             }))
             .into_response()
@@ -1468,24 +1795,22 @@ async fn restore_backup(
         }
     };
     let safety = take_for_operation(&state, "pre-restore").await;
-    record_manual(
+    let safety_name = safety.name.clone();
+    let (job, progress_job) = crate::database::start_restore_job(
         &state,
-        auth.as_ref().map(|e| &e.0),
-        action_types::BACKUP_RESTORE,
-        ActivityTarget {
-            id: None,
-            label: Some(name.clone()),
-            kind: Some("backup".to_string()),
+        doc,
+        auth.as_ref().map(|e| e.0.clone()),
+        safety,
+        crate::database::RestoreActivity {
+            action_type: action_types::BACKUP_RESTORE,
+            target: ActivityTarget {
+                id: None,
+                label: Some(name.clone()),
+                kind: Some("backup".to_string()),
+            },
         },
-        Outcome::Success,
-        None,
-        None,
     )
     .await;
-    let safety_name = safety.name.clone();
-    let (job, progress_job) =
-        crate::database::start_restore_job(&state, doc, auth.as_ref().map(|e| e.0.clone()), safety)
-            .await;
     axum::Json(json!({
         "operation": "restore_backup",
         "success": 1,
@@ -1548,6 +1873,9 @@ async fn delete_backup(
     if let Err(e) = set_pin(&state, &name, false).await {
         tracing::warn!(name, error = %e, "could not clear the deleted snapshot's pin");
     }
+    if let Err(e) = set_note(&state, &name, None).await {
+        tracing::warn!(name, error = %e, "could not clear the deleted snapshot's note");
+    }
     record_manual(
         &state,
         auth.as_ref().map(|e| &e.0),
@@ -1602,6 +1930,76 @@ async fn unpin_backup(State(state): State<AppState>, UrlPath(name): UrlPath<Stri
     set_pin_response(state, name, false).await
 }
 
+/// Longest note accepted. Short enough that a client can render it on one row next to the file
+/// name, which is what a note is for; the reason field already carries the machine-readable why.
+const NOTE_MAX_CHARS: usize = 200;
+
+#[derive(Debug, Deserialize)]
+struct NoteRequest {
+    /// `null` (or an absent field) clears the note; so does an all-whitespace string.
+    note: Option<String>,
+}
+
+/// Validates and normalizes one note: surrounding whitespace is not part of it, empty means
+/// "cleared", and control characters are refused — they corrupt both the UI row and the log line.
+fn normalize_note(raw: Option<&str>) -> Result<Option<String>, String> {
+    let text = raw.unwrap_or_default().trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    if text.chars().count() > NOTE_MAX_CHARS {
+        return Err(format!(
+            "A note cannot be longer than {NOTE_MAX_CHARS} characters."
+        ));
+    }
+    if text.chars().any(char::is_control) {
+        return Err("A note cannot contain control characters.".to_string());
+    }
+    Ok(Some(text.to_string()))
+}
+
+/// `PATCH /api/backups/{name}` — sets or clears the free-text note on one snapshot or export. The
+/// note is a label for humans, nothing more: it never affects retention, a restore, or `usable`.
+async fn update_note(
+    State(state): State<AppState>,
+    UrlPath(name): UrlPath<String>,
+    axum::Json(body): axum::Json<NoteRequest>,
+) -> Response {
+    let Some(path) = resolve_name(&state, &name) else {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "update_note",
+            "Invalid backup name.",
+        );
+    };
+    if !path.is_file() {
+        return not_found("update_note", format!("Backup {name} does not exist."));
+    }
+    let note = match normalize_note(body.note.as_deref()) {
+        Ok(note) => note,
+        Err(message) => return error(StatusCode::BAD_REQUEST, "update_note", message),
+    };
+    if let Err(e) = set_note(&state, &name, note.as_deref()).await {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "update_note", e);
+    }
+    // Answer with the entry exactly as the list renders it, so a client can drop the response into
+    // its cached list instead of re-fetching the whole thing for one changed field.
+    let entries = match load_entries(&state).await {
+        Ok(entries) => entries,
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "update_note",
+                format!("could not read the backup directory: {e}"),
+            )
+        }
+    };
+    match entries.into_iter().find(|entry| entry.name == name) {
+        Some(entry) => axum::Json(entry_json(&entry)).into_response(),
+        None => not_found("update_note", format!("Backup {name} does not exist.")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1614,10 +2012,13 @@ mod tests {
             kind: parsed.kind,
             created_at: parsed.created.to_rfc3339_opts(SecondsFormat::Secs, true),
             reason: parsed.reason,
+            schedule_id: parsed.schedule_id,
+            schedule_label: None,
             size_bytes: 10,
             usable,
             summary: None,
             pinned: false,
+            note: None,
         }
     }
 
@@ -2162,6 +2563,345 @@ mod tests {
         assert_eq!(gone.status(), StatusCode::NOT_FOUND);
     }
 
+    /// The note hash field for `name`, read straight from Redis so a test can tell "cleared" from
+    /// "cleared in the response but left in the hash".
+    async fn stored_note(state: &AppState, name: &str) -> Option<String> {
+        let mut conn = state.redis.config.get().await.unwrap();
+        conn.hget::<_, _, Option<String>>(BACKUP_NOTES_KEY, name)
+            .await
+            .unwrap()
+    }
+
+    /// A note is a human alias, and both kinds carry one: a backup and an export are the same
+    /// entry shape everywhere else, so they must not differ here.
+    #[tokio::test]
+    async fn a_note_round_trips_through_the_list() {
+        let Some(mut state) = crate::plugins::tests::test_state().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        state.library.archive_dir = tmp.path().to_path_buf();
+        let dir = snapshot_dir(tmp.path());
+        let backup = "snapshot-20261121T030000Z-manual.rdb";
+        let export = "export-20261121T040000Z-daily.json";
+        write(&dir, backup, "REDIS0011\u{0}\u{0}\u{0}");
+        write(&dir, export, r#"{"archives":[],"categories":[]}"#);
+        // An earlier failed run of this test may have left its note behind.
+        set_note(&state, backup, None).await.unwrap();
+        set_note(&state, export, None).await.unwrap();
+
+        let response = update_note(
+            State(state.clone()),
+            UrlPath(backup.to_string()),
+            axum::Json(NoteRequest {
+                // Surrounding whitespace is not part of the note.
+                note: Some("  before the reindex run  ".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["name"], json!(backup));
+        assert_eq!(body["note"], json!("before the reindex run"));
+        assert_eq!(
+            listed_entry(&state, backup).await["note"],
+            json!("before the reindex run")
+        );
+
+        let exported = update_note(
+            State(state.clone()),
+            UrlPath(export.to_string()),
+            axum::Json(NoteRequest {
+                note: Some("kept for the migration".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(exported.status(), StatusCode::OK);
+        assert_eq!(
+            listed_entry(&state, export).await["note"],
+            json!("kept for the migration")
+        );
+
+        set_note(&state, backup, None).await.unwrap();
+        set_note(&state, export, None).await.unwrap();
+    }
+
+    /// Clearing is `""` (or whitespace) or `null`, and either way the field disappears from the
+    /// list rather than turning into `"note": null`.
+    #[tokio::test]
+    async fn clearing_a_note_removes_the_field() {
+        let Some(mut state) = crate::plugins::tests::test_state().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        state.library.archive_dir = tmp.path().to_path_buf();
+        let dir = snapshot_dir(tmp.path());
+        let name = "snapshot-20261120T030000Z-manual.rdb";
+        write(&dir, name, "REDIS0011\u{0}\u{0}\u{0}");
+        set_note(&state, name, None).await.unwrap();
+
+        let set = update_note(
+            State(state.clone()),
+            UrlPath(name.to_string()),
+            axum::Json(NoteRequest {
+                note: Some("temporary".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(set.status(), StatusCode::OK);
+        assert_eq!(
+            stored_note(&state, name).await.as_deref(),
+            Some("temporary")
+        );
+
+        let blank = update_note(
+            State(state.clone()),
+            UrlPath(name.to_string()),
+            axum::Json(NoteRequest {
+                note: Some("   ".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(blank.status(), StatusCode::OK);
+        assert!(response_json(blank).await.get("note").is_none());
+        assert!(stored_note(&state, name).await.is_none());
+        assert!(listed_entry(&state, name).await.get("note").is_none());
+
+        // `null` clears the same way.
+        update_note(
+            State(state.clone()),
+            UrlPath(name.to_string()),
+            axum::Json(NoteRequest {
+                note: Some("again".to_string()),
+            }),
+        )
+        .await;
+        let nulled = update_note(
+            State(state.clone()),
+            UrlPath(name.to_string()),
+            axum::Json(NoteRequest { note: None }),
+        )
+        .await;
+        assert_eq!(nulled.status(), StatusCode::OK);
+        assert!(response_json(nulled).await.get("note").is_none());
+        assert!(stored_note(&state, name).await.is_none());
+    }
+
+    /// The limit is 200 **characters**, not bytes: 200 two-byte characters are accepted, 201 are
+    /// not, and a rejected note is never stored. Control characters are refused outright.
+    #[tokio::test]
+    async fn a_note_is_limited_to_two_hundred_characters() {
+        let Some(mut state) = crate::plugins::tests::test_state().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        state.library.archive_dir = tmp.path().to_path_buf();
+        let dir = snapshot_dir(tmp.path());
+        let name = "snapshot-20261119T030000Z-manual.rdb";
+        write(&dir, name, "REDIS0011\u{0}\u{0}\u{0}");
+        set_note(&state, name, None).await.unwrap();
+
+        let rejected = update_note(
+            State(state.clone()),
+            UrlPath(name.to_string()),
+            axum::Json(NoteRequest {
+                note: Some("é".repeat(201)),
+            }),
+        )
+        .await;
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+        let body = response_json(rejected).await;
+        assert!(
+            body["error"].as_str().unwrap_or_default().contains("200"),
+            "the message names the limit: {body}"
+        );
+        assert!(stored_note(&state, name).await.is_none());
+
+        let accepted_note = "é".repeat(200);
+        let accepted = update_note(
+            State(state.clone()),
+            UrlPath(name.to_string()),
+            axum::Json(NoteRequest {
+                note: Some(accepted_note.clone()),
+            }),
+        )
+        .await;
+        assert_eq!(accepted.status(), StatusCode::OK);
+        assert_eq!(response_json(accepted).await["note"], json!(accepted_note));
+
+        let control = update_note(
+            State(state.clone()),
+            UrlPath(name.to_string()),
+            axum::Json(NoteRequest {
+                note: Some("two\nlines".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(control.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            listed_entry(&state, name).await["note"],
+            json!(accepted_note),
+            "a rejected note leaves the stored one alone"
+        );
+
+        set_note(&state, name, None).await.unwrap();
+    }
+
+    /// The note goes with the file: a deleted snapshot's note must not linger in the hash.
+    #[tokio::test]
+    async fn deleting_a_snapshot_removes_its_note() {
+        let Some(mut state) = crate::plugins::tests::test_state().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        state.library.archive_dir = tmp.path().to_path_buf();
+        let dir = snapshot_dir(tmp.path());
+        let older = "snapshot-20261118T030000Z-manual.rdb";
+        let newer = "snapshot-20261118T040000Z-manual.rdb";
+        write(&dir, older, "REDIS0011\u{0}\u{0}\u{0}");
+        write(&dir, newer, "REDIS0011\u{0}\u{0}\u{0}");
+        set_note(&state, older, Some("about to be deleted"))
+            .await
+            .unwrap();
+
+        let deleted = delete_backup(State(state.clone()), None, UrlPath(older.to_string())).await;
+        assert_eq!(deleted.status(), StatusCode::OK);
+        assert!(!dir.join(older).exists());
+        assert!(stored_note(&state, older).await.is_none());
+
+        // A name that no longer exists cannot carry a note.
+        let gone = update_note(
+            State(state.clone()),
+            UrlPath(older.to_string()),
+            axum::Json(NoteRequest {
+                note: Some("too late".to_string()),
+            }),
+        )
+        .await;
+        assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Retention pruning drops the note of what it pruned, so the hash cannot grow with every
+    /// evicted snapshot.
+    #[tokio::test]
+    async fn retention_pruning_removes_the_note() {
+        use lanrurugi_storage::keys::CONFIG_KEY;
+
+        let Some(mut state) = crate::plugins::tests::test_state().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        state.library.archive_dir = tmp.path().to_path_buf();
+        let dir = snapshot_dir(tmp.path());
+        let older = "export-20260101T000000Z-daily.json";
+        let newer = "export-20260102T000000Z-daily.json";
+        write(&dir, older, "{}");
+        write(&dir, newer, "{}");
+        set_note(&state, older, Some("pruned soon")).await.unwrap();
+        set_note(&state, newer, Some("kept")).await.unwrap();
+
+        // Keep one daily and no weekly, so the older daily is over its tier's budget. The previous
+        // values are read first and restored before any assertion, so a failure here cannot leak
+        // these keep counts into another test sharing this Redis.
+        let mut conn = state.redis.config.get().await.unwrap();
+        let old_daily: Option<String> = conn.hget(CONFIG_KEY, "snapshot_daily_keep").await.unwrap();
+        let old_week: Option<String> = conn.hget(CONFIG_KEY, "snapshot_week_keep").await.unwrap();
+        let _: () = conn
+            .hset(CONFIG_KEY, "snapshot_daily_keep", "1")
+            .await
+            .unwrap();
+        let _: () = conn
+            .hset(CONFIG_KEY, "snapshot_week_keep", "0")
+            .await
+            .unwrap();
+        drop(conn);
+
+        let removed = retention_sweep(&state).await;
+
+        let mut conn = state.redis.config.get().await.unwrap();
+        for (field, previous) in [
+            ("snapshot_daily_keep", old_daily),
+            ("snapshot_week_keep", old_week),
+        ] {
+            match previous {
+                Some(value) => {
+                    let _: () = conn.hset(CONFIG_KEY, field, value).await.unwrap();
+                }
+                None => {
+                    let _: () = conn.hdel(CONFIG_KEY, field).await.unwrap();
+                }
+            }
+        }
+        drop(conn);
+
+        assert_eq!(removed, 1, "only the older daily is over budget");
+        assert!(!dir.join(older).exists());
+        assert!(stored_note(&state, older).await.is_none());
+        assert_eq!(stored_note(&state, newer).await.as_deref(), Some("kept"));
+        set_note(&state, newer, None).await.unwrap();
+    }
+
+    /// A note is an annotation only: it must not change `usable`, and it must not act as a pin in
+    /// either direction.
+    #[tokio::test]
+    async fn a_note_neither_pins_nor_unpins_a_snapshot() {
+        let Some(mut state) = crate::plugins::tests::test_state().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        state.library.archive_dir = tmp.path().to_path_buf();
+        let dir = snapshot_dir(tmp.path());
+        let older = "snapshot-20261117T030000Z-manual.rdb";
+        let newer = "snapshot-20261117T040000Z-manual.rdb";
+        write(&dir, older, "REDIS0011\u{0}\u{0}\u{0}");
+        write(&dir, newer, "REDIS0011\u{0}\u{0}\u{0}");
+        set_pin(&state, older, false).await.unwrap();
+        set_note(&state, older, None).await.unwrap();
+        let before = listed_entry(&state, older).await;
+        assert_eq!(before["pinned"], json!(false));
+
+        update_note(
+            State(state.clone()),
+            UrlPath(older.to_string()),
+            axum::Json(NoteRequest {
+                note: Some("still just an old backup".to_string()),
+            }),
+        )
+        .await;
+        let after = listed_entry(&state, older).await;
+        assert_eq!(after["usable"], before["usable"]);
+        assert_eq!(after["pinned"], json!(false), "a note is not a pin");
+
+        // A pin and a note are independent: pinning keeps the note, clearing the note keeps the pin.
+        pin_backup(State(state.clone()), UrlPath(older.to_string())).await;
+        let pinned = listed_entry(&state, older).await;
+        assert_eq!(pinned["pinned"], json!(true));
+        assert_eq!(pinned["note"], json!("still just an old backup"));
+        assert_eq!(pinned["usable"], before["usable"]);
+
+        update_note(
+            State(state.clone()),
+            UrlPath(older.to_string()),
+            axum::Json(NoteRequest { note: None }),
+        )
+        .await;
+        let cleared = listed_entry(&state, older).await;
+        assert_eq!(
+            cleared["pinned"],
+            json!(true),
+            "clearing a note keeps the pin"
+        );
+        assert!(cleared.get("note").is_none());
+
+        unpin_backup(State(state.clone()), UrlPath(older.to_string())).await;
+    }
+
     /// The zip builder on its own: readable back, exactly one member, byte-identical contents.
     #[test]
     fn a_zip_holds_exactly_the_export_document() {
@@ -2183,12 +2923,20 @@ mod tests {
     // scheduling policy around it: when a firing is owed, and what the list reports.
     // -----------------------------------------------------------------------------------------
 
-    fn local_at(date: &str, hour: u32, minute: u32, second: u32) -> DateTime<Local> {
+    /// An instant on the given zone's wall clock. Every schedule test names its zone explicitly —
+    /// the whole point of the setting is that the process's own `TZ` does not decide this.
+    fn at(
+        tz: chrono_tz::Tz,
+        date: &str,
+        hour: u32,
+        minute: u32,
+        second: u32,
+    ) -> DateTime<chrono_tz::Tz> {
         let date =
             chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").expect("test date is well formed");
         date.and_hms_opt(hour, minute, second)
             .expect("test time is valid")
-            .and_local_timezone(Local)
+            .and_local_timezone(tz)
             .single()
             .expect("test instant exists in this timezone")
     }
@@ -2198,12 +2946,166 @@ mod tests {
     }
 
     fn test_schedule(enabled: bool, expression: &str) -> SnapshotSchedule {
+        test_schedule_in(chrono_tz::UTC, enabled, expression)
+    }
+
+    fn test_schedule_in(tz: chrono_tz::Tz, enabled: bool, expression: &str) -> SnapshotSchedule {
         SnapshotSchedule {
+            id: LEGACY_SCHEDULE_ID.to_string(),
+            label: String::new(),
             enabled,
             cron: cron(expression),
+            tz,
             cron_text: expression.to_string(),
             preset: "custom".to_string(),
         }
+    }
+
+    /// `scheduled-<id>` names the schedule that wrote a snapshot; everything else has none. The
+    /// id has to be a filename-safe slug, which is what the write-side validator enforces.
+    #[test]
+    fn a_scheduled_name_carries_its_schedule_id() {
+        let parsed = parse_name("snapshot-20261124T004942Z-scheduled-plan-1.rdb").unwrap();
+        assert_eq!(parsed.kind, SnapshotKind::Backup);
+        assert_eq!(parsed.reason, "scheduled");
+        assert_eq!(parsed.schedule_id.as_deref(), Some("plan-1"));
+        // Files from the single-schedule build, and manual ones, belong to no schedule.
+        assert_eq!(
+            parse_name("snapshot-20261124T004942Z-scheduled.rdb")
+                .unwrap()
+                .schedule_id,
+            None
+        );
+        assert_eq!(
+            parse_name("snapshot-20261124T004942Z-manual.rdb")
+                .unwrap()
+                .schedule_id,
+            None
+        );
+        // A slug with characters the validator rejects is not a snapshot name at all.
+        assert!(parse_name("snapshot-20261124T004942Z-scheduled-Plan_1.rdb").is_none());
+        assert!(parse_name("snapshot-20261124T004942Z-scheduled-.rdb").is_none());
+    }
+
+    /// One unparseable entry is skipped, not fatal: a hand-edited Redis (or a downgrade) must not
+    /// silence every other schedule.
+    #[test]
+    fn a_broken_schedule_entry_is_skipped() {
+        let text = r#"[
+            {"id":"a","label":"A","enabled":true,"preset":"daily","cron":"0 0 3 * * *"},
+            {"id":"b","label":"B","enabled":false,"preset":"custom","cron":"not a cron"},
+            {"id":"c","label":"C","enabled":true,"preset":"weekly","cron":"0 0 3 * * 1"}
+        ]"#;
+        let parsed = parse_schedules(text, chrono_tz::UTC);
+        assert_eq!(
+            parsed.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["a", "c"]
+        );
+        // The broken middle entry is gone; the enabled flag survives for the ones that parsed.
+        assert!(parsed[0].enabled);
+        assert_eq!(parsed[0].reason(), "scheduled-a");
+        // Every scheduled snapshot names its schedule, including the migrated single one.
+        assert_eq!(
+            test_schedule(true, "0 0 3 * * 1").reason(),
+            "scheduled-plan-1"
+        );
+        // Nothing configured at all parses to no schedules, which makes `load_all` fall back.
+        assert!(parse_schedules("", chrono_tz::UTC).is_empty());
+        assert!(parse_schedules("}{", chrono_tz::UTC).is_empty());
+    }
+
+    /// The expression is wall-clock in the instance's own timezone, so the same text fires at a
+    /// different instant after the timezone setting changes — that is the "schedules follow the
+    /// timezone" behaviour, and it needs no rewrite of the stored cron.
+    #[test]
+    fn the_same_expression_moves_with_the_timezone_setting() {
+        let text = r#"[{"id":"plan-1","label":"","enabled":true,"preset":"weekly","cron":"0 0 3 * * 0 *"}]"#;
+        let tokyo = parse_schedules(text, chrono_tz::Asia::Tokyo);
+        let los_angeles = parse_schedules(text, chrono_tz::America::Los_Angeles);
+        let now_utc = chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 11, 17, 12, 0, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let first_in = |tz: chrono_tz::Tz| {
+            tokyo_or(tz, text)
+                .next_runs(now_utc.with_timezone(&tz), 1)
+                .first()
+                .map(|at| at.with_timezone(&chrono::Utc))
+        };
+        // 03:00 Sunday in Tokyo is 18:00Z on Saturday; the same wall clock in Los Angeles is
+        // 11:00Z on Sunday. Same stored expression, different instants.
+        assert_eq!(
+            first_in(chrono_tz::Asia::Tokyo),
+            Some(chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 11, 21, 18, 0, 0).unwrap())
+        );
+        assert_eq!(
+            first_in(chrono_tz::America::Los_Angeles),
+            Some(chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 11, 22, 11, 0, 0).unwrap())
+        );
+        // Both parsed one enabled plan, so the assertions above are about the timezone alone.
+        assert!(tokyo.len() == 1 && los_angeles.len() == 1);
+    }
+
+    fn tokyo_or(tz: chrono_tz::Tz, text: &str) -> SnapshotSchedule {
+        parse_schedules(text, tz).into_iter().next().unwrap()
+    }
+
+    /// Retention is per schedule: adding a second schedule must not evict the first one's history.
+    #[test]
+    fn retention_keeps_three_backups_per_schedule() {
+        let entries = vec![
+            entry("snapshot-20261123T030000Z-scheduled-a.rdb", true),
+            entry("snapshot-20261122T030000Z-scheduled-a.rdb", true),
+            entry("snapshot-20261121T030000Z-scheduled-a.rdb", true),
+            entry("snapshot-20261120T030000Z-scheduled-a.rdb", true),
+            entry("snapshot-20261119T030000Z-scheduled-b.rdb", true),
+            entry("snapshot-20261118T030000Z-manual.rdb", true),
+        ];
+        assert_eq!(
+            retention_plan(&entries, 7, 4, &no_pins()),
+            vec!["snapshot-20261120T030000Z-scheduled-a.rdb".to_string()],
+            "only the fourth snapshot of schedule a goes; b and the manual one are their own buckets"
+        );
+    }
+
+    /// Two schedules are reported side by side, each with its own next runs.
+    #[test]
+    fn schedule_json_lists_every_schedule() {
+        let mut daily = test_schedule(true, "0 0 3 * * *");
+        daily.id = "daily".to_string();
+        daily.label = "每天".to_string();
+        let mut weekly = test_schedule(false, "0 0 3 * * 1");
+        weekly.id = "weekly".to_string();
+        let mut last_fires = std::collections::BTreeMap::new();
+        last_fires.insert("daily".to_string(), None);
+        last_fires.insert("weekly".to_string(), None);
+        let now = at(chrono_tz::UTC, "2026-11-23", 5, 0, 0);
+        let value = schedule_json(&[daily, weekly], &last_fires, now, chrono_tz::UTC);
+        assert_eq!(value["items"].as_array().unwrap().len(), 2);
+        assert_eq!(value["items"][0]["id"], json!("daily"));
+        assert_eq!(value["items"][0]["label"], json!("每天"));
+        assert_eq!(
+            value["items"][0]["next_runs"].as_array().unwrap().len(),
+            NEXT_RUNS
+        );
+        // A disabled schedule reports no next runs but still lists.
+        assert_eq!(value["items"][1]["id"], json!("weekly"));
+        assert_eq!(value["items"][1]["next_runs"], json!([]));
+    }
+
+    /// A `schedule` block for one schedule and one watermark.
+    fn schedule_block(
+        schedule: &SnapshotSchedule,
+        last_fire: Option<DateTime<Utc>>,
+        now: DateTime<chrono_tz::Tz>,
+    ) -> serde_json::Value {
+        let mut last_fires = std::collections::BTreeMap::new();
+        last_fires.insert(schedule.id.clone(), last_fire);
+        schedule_json(
+            std::slice::from_ref(schedule),
+            &last_fires,
+            now.with_timezone(&schedule.tz),
+            schedule.tz,
+        )
     }
 
     #[test]
@@ -2212,11 +3114,36 @@ mod tests {
         // makes a sub-minute expression reliable — requiring the tick to land exactly on a hit
         // second can miss every hit forever when the periods do not divide each other.
         let every_ten = cron("*/10 * * * * *");
+        let utc = chrono_tz::UTC;
         for second in [0, 3, 7, 13, 59] {
             assert_eq!(
-                due_firing(&every_ten, local_at("2026-11-23", 12, 0, second), None),
-                Some(local_at("2026-11-23", 12, 0, second)),
+                due_firing(
+                    &every_ten,
+                    utc,
+                    at(utc, "2026-11-23", 12, 0, second),
+                    Watermark::Never
+                ),
+                Some(at(utc, "2026-11-23", 12, 0, second)),
                 "a fresh install fires on the first tick, whatever second it lands on"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unreadable_watermark_never_fires() {
+        // An unreadable store is not a fresh install. Firing "because we could not check" is the
+        // bug that produced one warn per tick for as long as Redis was down; nothing is owed on a
+        // guess, whatever the cron expression says.
+        for expression in ["*/5 * * * * *", "0 0 3 * * *"] {
+            assert_eq!(
+                due_firing(
+                    &cron(expression),
+                    chrono_tz::UTC,
+                    at(chrono_tz::UTC, "2026-11-23", 12, 0, 0),
+                    Watermark::Unreadable,
+                ),
+                None,
+                "an unreadable watermark must skip the schedule, not fire it"
             );
         }
     }
@@ -2224,21 +3151,22 @@ mod tests {
     #[test]
     fn a_served_firing_is_never_served_twice() {
         let every_ten = cron("*/10 * * * * *");
-        let served = Some(local_at("2026-11-23", 12, 0, 10).with_timezone(&Utc));
+        let utc = chrono_tz::UTC;
+        let served = Watermark::At(at(utc, "2026-11-23", 12, 0, 10).with_timezone(&Utc));
         // The very second that was served: not due, even though it is still "now".
         assert_eq!(
-            due_firing(&every_ten, local_at("2026-11-23", 12, 0, 10), served),
+            due_firing(&every_ten, utc, at(utc, "2026-11-23", 12, 0, 10), served),
             None
         );
         // Nothing else is due until the next firing actually arrives.
         assert_eq!(
-            due_firing(&every_ten, local_at("2026-11-23", 12, 0, 12), served),
+            due_firing(&every_ten, utc, at(utc, "2026-11-23", 12, 0, 12), served),
             None
         );
         // Then the next one is served, not the already-served one.
         assert_eq!(
-            due_firing(&every_ten, local_at("2026-11-23", 12, 0, 22), served),
-            Some(local_at("2026-11-23", 12, 0, 20))
+            due_firing(&every_ten, utc, at(utc, "2026-11-23", 12, 0, 22), served),
+            Some(at(utc, "2026-11-23", 12, 0, 20))
         );
     }
 
@@ -2248,52 +3176,59 @@ mod tests {
         // the `*/10` firing at :10 is still picked up by a tick at :12, because the record only
         // says what was served *before* it.
         let every_ten = cron("*/10 * * * * *");
-        let served = Some(local_at("2026-11-23", 12, 0, 0).with_timezone(&Utc));
+        let utc = chrono_tz::UTC;
+        let served = Watermark::At(at(utc, "2026-11-23", 12, 0, 0).with_timezone(&Utc));
         assert_eq!(
-            due_firing(&every_ten, local_at("2026-11-23", 12, 0, 12), served),
-            Some(local_at("2026-11-23", 12, 0, 10))
+            due_firing(&every_ten, utc, at(utc, "2026-11-23", 12, 0, 12), served),
+            Some(at(utc, "2026-11-23", 12, 0, 10))
         );
     }
 
     #[test]
     fn downtime_catches_up_exactly_once() {
         let daily = cron("0 0 3 * * *");
-        let last = Some(local_at("2026-11-20", 3, 0, 0).with_timezone(&Utc));
-        let now = local_at("2026-11-23", 12, 0, 0);
+        let utc = chrono_tz::UTC;
+        let last = Watermark::At(at(utc, "2026-11-20", 3, 0, 0).with_timezone(&Utc));
+        let now = at(utc, "2026-11-23", 12, 0, 0);
         // Three days were missed; exactly one firing is owed.
         assert_eq!(
-            due_firing(&daily, now, last),
-            Some(local_at("2026-11-21", 3, 0, 0))
+            due_firing(&daily, utc, now, last),
+            Some(at(utc, "2026-11-21", 3, 0, 0))
         );
         // Once that tick records the serve time, nothing else is owed — the *serve* time is what
         // gets recorded, not the missed slot, which is what stops the schedule re-firing for every
         // slot it missed.
-        assert_eq!(due_firing(&daily, now, Some(now.with_timezone(&Utc))), None);
+        assert_eq!(
+            due_firing(&daily, utc, now, Watermark::At(now.with_timezone(&Utc))),
+            None
+        );
     }
 
     #[test]
     fn the_default_expression_is_monday_three_am() {
         let schedule = test_schedule(true, "0 0 3 * * 1");
-        let runs = schedule.next_runs(local_at("2026-11-17", 12, 0, 0), 3);
+        let utc = chrono_tz::UTC;
+        let runs = schedule.next_runs(at(utc, "2026-11-17", 12, 0, 0), 3);
         assert_eq!(
             runs,
             vec![
-                local_at("2026-11-23", 3, 0, 0),
-                local_at("2026-11-30", 3, 0, 0),
-                local_at("2026-12-07", 3, 0, 0),
+                at(utc, "2026-11-23", 3, 0, 0),
+                at(utc, "2026-11-30", 3, 0, 0),
+                at(utc, "2026-12-07", 3, 0, 0),
             ]
         );
     }
 
     #[test]
     fn a_disabled_schedule_has_no_next_runs() {
+        let utc = chrono_tz::UTC;
         let enabled = test_schedule(true, "0 0 3 * * 1");
         assert_eq!(
-            enabled.next_runs(local_at("2026-11-17", 12, 0, 0), 5).len(),
+            enabled.next_runs(at(utc, "2026-11-17", 12, 0, 0), 5).len(),
             5
         );
         assert!(test_schedule(false, "0 0 3 * * 1")
-            .next_runs(local_at("2026-11-17", 12, 0, 0), 5)
+            .next_runs(at(utc, "2026-11-17", 12, 0, 0), 5)
             .is_empty());
     }
 
@@ -2315,22 +3250,28 @@ mod tests {
         state.library.archive_dir = tmp.path().to_path_buf();
         let dir = snapshot_dir(tmp.path());
 
-        // Save the cron exactly as `PUT /settings` would store it, then clear the watermark so the
-        // instance looks fresh.
+        // Save the plan exactly as `PUT /settings` would store it, then clear both watermark fields
+        // so the instance looks fresh. `snapshot_schedules` is what a managed install reads; the
+        // legacy bare field stays cleared too because the plan below reuses the legacy id and would
+        // otherwise inherit whatever a previous run of this test recorded.
         {
             let mut conn = state.redis.config.get().await.unwrap();
             let stored: () = deadpool_redis::redis::cmd("HSET")
                 .arg(lanrurugi_storage::keys::CONFIG_KEY)
-                .arg("snapshot_cron")
-                .arg("*/5 * * * * *")
-                .arg("snapshot_schedule_enabled")
-                .arg("1")
+                .arg("snapshot_schedules")
+                .arg(
+                    // A once-a-year expression on purpose: "no watermark fires once, then not again"
+                    // is what this test proves, and a every-5-seconds plan can cross a real slot
+                    // between two ticks and make the "not twice" half flaky.
+                    r#"[{"id":"plan-1","label":"","enabled":true,"preset":"custom","cron":"0 0 0 1 1 * *"}]"#,
+                )
                 .query_async(&mut conn)
                 .await
                 .unwrap();
             assert_eq!(stored, ());
             let cleared: () = deadpool_redis::redis::cmd("HDEL")
                 .arg(SNAPSHOT_SCHEDULE_KEY)
+                .arg(last_fire_field(LEGACY_SCHEDULE_ID))
                 .arg(LAST_FIRE_FIELD)
                 .query_async(&mut conn)
                 .await
@@ -2341,32 +3282,40 @@ mod tests {
         let mut fired = 0usize;
         for _ in 0..4 {
             let dir_for_task = dir.clone();
-            let entry = tick_with(&state, Local::now(), move |_slot| {
-                Box::pin(async move {
-                    tokio::fs::create_dir_all(&dir_for_task)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    let created = now_utc();
-                    let name = format_name(created, SnapshotKind::Backup, "scheduled");
-                    tokio::fs::write(dir_for_task.join(&name), b"REDIS0011stub")
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    Ok(SnapshotEntry {
-                        name,
-                        kind: SnapshotKind::Backup,
-                        created_at: created.to_rfc3339_opts(SecondsFormat::Secs, true),
-                        reason: "scheduled".to_string(),
-                        size_bytes: 13,
-                        usable: true,
-                        summary: None,
-                        pinned: false,
+            let entry = tick_with(
+                &state,
+                Utc::now().with_timezone(&chrono_tz::UTC),
+                move |schedule, _slot| {
+                    let reason = schedule.reason();
+                    // `Fn`, not `FnOnce`: the same tick is driven several times.
+                    let dir_for_task = dir_for_task.clone();
+                    Box::pin(async move {
+                        tokio::fs::create_dir_all(&dir_for_task)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        let created = now_utc();
+                        let name = format_name(created, SnapshotKind::Backup, &reason);
+                        tokio::fs::write(dir_for_task.join(&name), b"REDIS0011stub")
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        Ok(SnapshotEntry {
+                            name,
+                            kind: SnapshotKind::Backup,
+                            created_at: created.to_rfc3339_opts(SecondsFormat::Secs, true),
+                            reason: "scheduled".to_string(),
+                            schedule_id: None,
+                            schedule_label: None,
+                            size_bytes: 13,
+                            usable: true,
+                            summary: None,
+                            pinned: false,
+                            note: None,
+                        })
                     })
-                })
-            })
+                },
+            )
             .await;
-            if entry.is_some() {
-                fired += 1;
-            }
+            fired += entry;
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
 
@@ -2374,7 +3323,10 @@ mod tests {
         // watermark must be recorded, and the list must show it as a real `scheduled` backup.
         assert!(fired >= 1, "the scheduler never fired");
         assert!(
-            read_last_fire(&state).await.is_some(),
+            read_last_fire(&state, LEGACY_SCHEDULE_ID)
+                .await
+                .at()
+                .is_some(),
             "the watermark is recorded once a firing is served"
         );
         let entries = list_in(&dir).unwrap();
@@ -2387,15 +3339,87 @@ mod tests {
 
         // Restart-no-duplicate: the same watermark immediately afterwards owes nothing, so the
         // injected writer must not even be called.
-        let again = tick_with(&state, Local::now(), move |_slot| {
-            Box::pin(async move {
-                panic!("a served firing must not be served twice");
-                #[allow(unreachable_code)]
-                Err::<SnapshotEntry, String>("unreachable".to_string())
-            })
-        })
+        let again = tick_with(
+            &state,
+            Utc::now().with_timezone(&chrono_tz::UTC),
+            move |_schedule, _slot| {
+                Box::pin(async move {
+                    panic!("a served firing must not be served twice");
+                    #[allow(unreachable_code)]
+                    Err::<SnapshotEntry, String>("unreachable".to_string())
+                })
+            },
+        )
         .await;
-        assert!(again.is_none());
+        assert_eq!(again, 0, "a served firing must not be served twice");
+    }
+
+    /// The schedule runs on the operator's zone, not the process's. A container running with
+    /// `TZ=UTC` must still fire "Monday 03:00" at 03:00 **JST**.
+    #[test]
+    fn the_schedule_runs_in_the_configured_timezone() {
+        let tokyo: chrono_tz::Tz = "Asia/Tokyo".parse().unwrap();
+        let schedule = test_schedule_in(tokyo, true, "0 0 3 * * 1");
+        // 2026-11-17 12:00 JST is a Tuesday; the next Monday 03:00 JST is the 23rd.
+        let runs = schedule.next_runs(at(tokyo, "2026-11-17", 12, 0, 0), 2);
+        assert_eq!(runs[0], at(tokyo, "2026-11-23", 3, 0, 0));
+        assert_eq!(
+            runs[0].with_timezone(&Utc),
+            at(chrono_tz::UTC, "2026-11-22", 18, 0, 0).with_timezone(&Utc),
+            "03:00 JST is 18:00 UTC the day before"
+        );
+
+        // The reported strings carry the zone's offset, and the label names the zone.
+        let value = schedule_block(
+            &schedule,
+            Some(runs[0].with_timezone(&Utc)),
+            at(tokyo, "2026-11-17", 12, 0, 0),
+        );
+        assert_eq!(value["timezone"], json!("Asia/Tokyo (+09:00)"));
+        assert_eq!(value["timezone_name"], json!("Asia/Tokyo"));
+        assert_eq!(
+            value["items"][0]["next_runs"][0],
+            json!("2026-11-23T03:00:00+09:00")
+        );
+        assert_eq!(
+            value["items"][0]["last_fire_at"],
+            json!("2026-11-23T03:00:00+09:00")
+        );
+
+        // The same expression under the default UTC setting is a different instant.
+        let utc = test_schedule(true, "0 0 3 * * 1");
+        assert_eq!(
+            utc.next_runs(at(chrono_tz::UTC, "2026-11-17", 12, 0, 0), 1)[0],
+            at(chrono_tz::UTC, "2026-11-23", 3, 0, 0)
+        );
+        let value = schedule_block(&utc, None, at(chrono_tz::UTC, "2026-11-17", 12, 0, 0));
+        assert_eq!(value["timezone"], json!("UTC (+00:00)"));
+        assert_eq!(
+            value["items"][0]["next_runs"][0],
+            json!("2026-11-23T03:00:00+00:00")
+        );
+    }
+
+    /// A DST-observing zone is evaluated on its own wall clock: the spring-forward gap has no
+    /// 02:30 (so that day is skipped), the displayed offset follows the season, and the wall-clock
+    /// time stays what the expression says.
+    #[test]
+    fn a_dst_zone_uses_its_own_wall_clock() {
+        let ny: chrono_tz::Tz = "America/New_York".parse().unwrap();
+        let rfc = |at: DateTime<chrono_tz::Tz>| at.to_rfc3339_opts(SecondsFormat::Secs, false);
+
+        let gap = test_schedule_in(ny, true, "0 30 2 * * *");
+        // 2026-03-08 is the US spring-forward date: 02:30 does not exist that day.
+        let next = gap.next_runs(at(ny, "2026-03-08", 0, 0, 0), 1)[0];
+        assert_eq!(next, at(ny, "2026-03-09", 2, 30, 0));
+        assert!(rfc(next).ends_with("-04:00"), "{}", rfc(next));
+
+        let weekly = test_schedule_in(ny, true, "0 0 3 * * 1");
+        let winter = weekly.next_runs(at(ny, "2026-01-05", 12, 0, 0), 1)[0];
+        assert!(rfc(winter).ends_with("-05:00"), "{}", rfc(winter));
+        let summer = weekly.next_runs(at(ny, "2026-07-06", 12, 0, 0), 1)[0];
+        assert!(rfc(summer).ends_with("-04:00"), "{}", rfc(summer));
+        assert_eq!(&rfc(summer)[11..19], "03:00:00", "still 03:00 wall clock");
     }
 
     #[test]
@@ -2406,29 +3430,35 @@ mod tests {
                 .single()
                 .expect("unambiguous UTC instant"),
         );
-        let now = local_at("2026-11-23", 5, 0, 0);
-        let value = schedule_json(&schedule, last_fire, now);
-        assert_eq!(value["enabled"], json!(true));
-        assert_eq!(value["cron"], json!("0 0 3 * * 1"));
-        assert_eq!(value["preset"], json!("custom"));
+        let now = at(chrono_tz::UTC, "2026-11-23", 5, 0, 0);
+        let value = schedule_block(&schedule, last_fire, now);
+        assert_eq!(value["items"][0]["enabled"], json!(true));
+        assert_eq!(value["items"][0]["cron"], json!("0 0 3 * * 1"));
+        assert_eq!(value["items"][0]["preset"], json!("custom"));
         assert!(value["timezone"].is_string());
         assert!(
-            value["last_fire_at"].is_string(),
+            value["items"][0]["last_fire_at"].is_string(),
             "ISO with the local offset"
         );
-        assert_eq!(value["next_runs"].as_array().unwrap().len(), NEXT_RUNS);
+        assert_eq!(
+            value["items"][0]["next_runs"].as_array().unwrap().len(),
+            NEXT_RUNS
+        );
         assert!(
-            value["next_runs"][0].as_str().unwrap().contains("03:00:00"),
+            value["items"][0]["next_runs"][0]
+                .as_str()
+                .unwrap()
+                .contains("03:00:00"),
             "{}",
-            value["next_runs"][0]
+            value["items"][0]["next_runs"][0]
         );
 
         // Disabled: no next runs suggested, but what already fired is still reported honestly.
-        let value = schedule_json(&test_schedule(false, "0 0 3 * * 1"), last_fire, now);
-        assert_eq!(value["next_runs"], json!([]));
-        assert!(value["last_fire_at"].is_string());
+        let value = schedule_block(&test_schedule(false, "0 0 3 * * 1"), last_fire, now);
+        assert_eq!(value["items"][0]["next_runs"], json!([]));
+        assert!(value["items"][0]["last_fire_at"].is_string());
         assert_eq!(
-            schedule_json(&schedule, None, now)["last_fire_at"],
+            schedule_block(&schedule, None, now)["items"][0]["last_fire_at"],
             json!(null)
         );
     }

@@ -126,10 +126,19 @@ pub async fn store(state: &AppState, archive_id: &str, record: &PatchRecord) -> 
 
 /// Drops the record — the patch is gone, so nothing about it is true any more.
 pub async fn forget(state: &AppState, archive_id: &str) {
-    let Ok(mut conn) = state.redis.archive.get().await else {
-        return;
+    let mut conn = match state.redis.archive.get().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            tracing::warn!(archive = %archive_id, error = %e, "could not reach Redis to forget a patch record");
+            return;
+        }
     };
-    let _: Result<(), _> = conn.hdel(KEY, archive_id).await;
+    let dropped: Result<(), _> = conn.hdel(KEY, archive_id).await;
+    if let Err(e) = dropped {
+        // A record left behind outlives the patch it describes and keeps being served to the
+        // damage report as if those pages still carried it.
+        tracing::warn!(archive = %archive_id, error = %e, "failed to forget a patch record");
+    }
 }
 
 /// Remembers that `source` contributed pages to `archive_id`'s patch, and re-records where those

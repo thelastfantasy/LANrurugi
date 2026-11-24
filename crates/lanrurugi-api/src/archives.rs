@@ -736,13 +736,15 @@ pub(crate) async fn tank_member_delete_refusal(
     state: &AppState,
     id: &lanrurugi_core::ids::ArchiveId,
 ) -> Option<axum::response::Response> {
-    let in_tank = state
-        .repos
-        .groupings
-        .for_archive(id)
-        .await
-        .map(|tanks| !tanks.is_empty())
-        .unwrap_or(false);
+    let in_tank = match state.repos.groupings.for_archive(id).await {
+        Ok(tanks) => !tanks.is_empty(),
+        Err(e) => {
+            // Advisory only: refusing every delete while Redis is unreachable would be worse than
+            // letting this one tankoubon member go, which the user asked for explicitly.
+            tracing::warn!(id = %id, error = %e, "could not check whether an archive belongs to a Tankoubon; allowing the delete");
+            false
+        }
+    };
     if !in_tank {
         return None;
     }
@@ -853,13 +855,18 @@ async fn batch_delete_archives(
                     error: None,
                 }
             }
-            DeleteOneOutcome::Error(e) => BatchDeleteResult {
-                id: id.to_string(),
-                success: false,
-                recycled: false,
-                filename: None,
-                error: Some(e),
-            },
+            DeleteOneOutcome::Error(e) => {
+                // The response is a 200 with per-id results, so without this the only trace of a
+                // failed delete is a field a client may never look at.
+                tracing::error!(id = %id, error = %e, "batch delete failed for one archive");
+                BatchDeleteResult {
+                    id: id.to_string(),
+                    success: false,
+                    recycled: false,
+                    filename: None,
+                    error: Some(e),
+                }
+            }
         });
     }
     axum::Json(json!({

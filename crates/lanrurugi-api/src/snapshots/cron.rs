@@ -15,11 +15,11 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;
 
-use chrono::{DateTime, Datelike, Local, LocalResult, TimeZone, Timelike};
+use chrono::{DateTime, Datelike, LocalResult, TimeZone, Timelike};
 
 /// The default expression: every Monday at 03:00:00, local time. One full backup a week is what a
 /// production-sized library wants unless the operator asks for more.
-pub const DEFAULT_CRON: &str = "0 0 3 * * 1";
+pub const DEFAULT_CRON: &str = "0 0 3 * * 0";
 
 /// How far ahead the day walk will look. The widest legal expression is a single leap day in a
 /// specific year (`0 0 0 29 2 * 2100`), so the bound is the year field's own ceiling.
@@ -40,6 +40,9 @@ pub struct CronSchedule {
     /// one is a star and ORs them when both are restricted.
     dom_any: bool,
     dow_any: bool,
+    /// `0#1` — the *n*-th (1–5) of the listed weekdays in the month, as Quartz spells it. Plain
+    /// cron cannot say "the first Sunday", which is an ordinary schedule for a weekly backup.
+    dow_nth: Option<u32>,
 }
 
 /// A rejection that names the field it came from, so the settings UI can say which segment is bad.
@@ -83,7 +86,7 @@ impl std::error::Error for CronError {}
 impl CronSchedule {
     /// The first matching instant strictly after `after`, or `None` when the expression can never
     /// match again (a year in the past, a single impossible day).
-    pub fn next_after(&self, after: DateTime<Local>) -> Option<DateTime<Local>> {
+    pub fn next_after<Z: TimeZone>(&self, after: DateTime<Z>) -> Option<DateTime<Z>> {
         let mut date = after.date_naive();
         while date.year() <= LAST_YEAR {
             if self.months.contains(&date.month())
@@ -103,14 +106,13 @@ impl CronSchedule {
                                     continue;
                                 }
                             }
-                            match Local.with_ymd_and_hms(
-                                date.year(),
-                                date.month(),
-                                date.day(),
-                                *hour,
-                                *minute,
-                                *second,
-                            ) {
+                            // Built from the *wall clock* of the configured zone, so DST is the
+                            // zone's own problem: a spring-forward gap has no instant (skipped)
+                            // and a fall-back hour has two (the earlier one is taken).
+                            let naive = date
+                                .and_hms_opt(*hour, *minute, *second)
+                                .expect("a walked date and a field value are always valid");
+                            match after.timezone().from_local_datetime(&naive) {
                                 LocalResult::Single(at) => return Some(at),
                                 // A doubled hour resolves to the earlier instant, matching the
                                 // rule the pre-cron scheduler used so a restart cannot see the
@@ -133,14 +135,14 @@ impl CronSchedule {
     }
 
     /// The next `count` matching instants, strictly increasing.
-    pub fn next_runs(&self, from: DateTime<Local>, count: usize) -> Vec<DateTime<Local>> {
+    pub fn next_runs<Z: TimeZone>(&self, from: DateTime<Z>, count: usize) -> Vec<DateTime<Z>> {
         let mut runs = Vec::with_capacity(count);
         let mut cursor = from;
         while runs.len() < count {
             let Some(at) = self.next_after(cursor) else {
                 break;
             };
-            runs.push(at);
+            runs.push(at.clone());
             cursor = at;
         }
         runs
@@ -148,9 +150,13 @@ impl CronSchedule {
 
     fn day_matches(&self, date: chrono::NaiveDate) -> bool {
         let dom_ok = self.days_of_month.contains(&date.day());
-        let dow_ok = self
+        let mut dow_ok = self
             .days_of_week
             .contains(&date.weekday().num_days_from_sunday());
+        if let Some(nth) = self.dow_nth {
+            // 1st..5th occurrence of that weekday: days 1-7 are the first, 8-14 the second, …
+            dow_ok = dow_ok && (date.day() - 1) / 7 + 1 == nth;
+        }
         if self.dom_any || self.dow_any {
             dom_ok && dow_ok
         } else {
@@ -183,9 +189,36 @@ impl FromStr for CronSchedule {
             });
         }
 
+        // `0#1` / `SUN#1`: the n-th (1–5) Sunday of the month. Standard cron has no syntax for
+        // this, and "first Sunday of the month" is an ordinary backup schedule. The weekday field
+        // is split before parsing, since `parse_field` does not accept `#` at all.
+        let (dow_expression, dow_nth) = match parts[5].split_once('#') {
+            Some((weekday, nth)) => {
+                let nth: u32 = nth.parse().map_err(|_| CronError {
+                    field: "weekdays",
+                    message: format!("\"{nth}\" after # is not a number"),
+                })?;
+                if !(1..=5).contains(&nth) {
+                    return Err(CronError {
+                        field: "weekdays",
+                        message: format!("\"#{nth}\" is outside 1-5 (first to fifth occurrence)"),
+                    });
+                }
+                if weekday.contains(',') {
+                    return Err(CronError {
+                        field: "weekdays",
+                        message: "\"#\" applies to a single weekday, not a list".to_string(),
+                    });
+                }
+                (weekday, Some(nth))
+            }
+            None => (parts[5], None),
+        };
+
         let mut parsed = Vec::with_capacity(parts.len());
         for (index, raw) in parts.iter().enumerate() {
-            parsed.push(parse_field(raw, &FIELDS[index])?);
+            let effective = if index == 5 { dow_expression } else { *raw };
+            parsed.push(parse_field(effective, &FIELDS[index])?);
         }
         let (seconds, _) = parsed[0].clone();
         let (minutes, _) = parsed[1].clone();
@@ -208,6 +241,7 @@ impl FromStr for CronSchedule {
             years,
             dom_any,
             dow_any,
+            dow_nth,
         })
     }
 }
@@ -373,8 +407,12 @@ fn point(
     }
     let lowered = raw.to_ascii_lowercase();
     for (name, value) in spec.names {
-        // Accept both the three-letter form and the full English word (`sep` / `september`).
-        if lowered == *name || lowered.starts_with(name) && lowered.len() > name.len() {
+        // Accept the three-letter form and the full English word (`sep` / `september`) — but only
+        // letters may follow, so `sun#1` is not accepted as `sun` (it used to be, silently).
+        let rest = lowered.strip_prefix(name).unwrap_or("");
+        let is_name =
+            lowered == *name || (!rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphabetic()));
+        if is_name {
             if *value < spec.min || *value > spec.max {
                 break;
             }
@@ -389,6 +427,7 @@ fn point(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Local;
 
     fn local(date: &str, hour: u32, minute: u32, second: u32) -> DateTime<Local> {
         let date =
@@ -406,10 +445,10 @@ mod tests {
     #[test]
     fn parses_the_default_expression() {
         let parsed = schedule(DEFAULT_CRON);
-        // 2026-11-17 is a Tuesday, so the next Monday 03:00:00 is the 23rd.
+        // 2026-11-17 is a Tuesday, so the next Sunday 03:00:00 is the 22nd.
         assert_eq!(
             parsed.next_after(local("2026-11-17", 12, 0, 0)),
-            Some(local("2026-11-23", 3, 0, 0))
+            Some(local("2026-11-22", 3, 0, 0))
         );
     }
 
@@ -502,6 +541,78 @@ mod tests {
         let from = local("2026-11-17", 12, 0, 0);
         assert_eq!(zero.next_after(from), Some(local("2026-11-22", 3, 0, 0)));
         assert_eq!(zero.next_after(from), seven.next_after(from));
+    }
+
+    /// Quarterly and yearly shapes are just cron month fields; nothing about them is special, but
+    /// they are the two the UI offers as examples, so they are pinned here.
+    #[test]
+    fn a_month_step_combines_with_an_nth_weekday() {
+        // Jan/Apr/Jul/Oct, first Sunday, 03:00 — 2027-01-03 is the next one after 2026-11-24.
+        let parsed = schedule("0 0 3 * */3 0#1 *");
+        let first = parsed.next_after(local("2026-11-24", 12, 0, 0)).unwrap();
+        assert_eq!(first, local("2027-01-03", 3, 0, 0));
+        assert_eq!(
+            parsed.next_after(first),
+            Some(local("2027-04-04", 3, 0, 0)),
+            "the next firing is a quarter later, not a month later"
+        );
+    }
+
+    #[test]
+    fn a_specific_month_combines_with_an_nth_weekday() {
+        // Every year, the first Sunday of March, at midnight — 2027-03-07.
+        let parsed = schedule("0 0 0 * 3 0#1 *");
+        assert_eq!(
+            parsed.next_after(local("2026-11-24", 12, 0, 0)),
+            Some(local("2027-03-07", 0, 0, 0))
+        );
+        assert_eq!(
+            parsed.next_after(local("2027-03-07", 0, 0, 0)),
+            Some(local("2028-03-05", 0, 0, 0)),
+            "it comes back next year, not next month"
+        );
+    }
+
+    #[test]
+    fn the_nth_weekday_of_the_month_is_supported() {
+        use chrono_tz::Asia::Tokyo;
+        let schedule: CronSchedule = "0 0 3 * * 0#1".parse().expect("parses");
+        let from = Tokyo.with_ymd_and_hms(2026, 11, 24, 12, 0, 0).unwrap();
+        let runs: Vec<String> = schedule
+            .next_runs(from, 3)
+            .into_iter()
+            .map(|at| at.format("%Y-%m-%d").to_string())
+            .collect();
+        // First Sundays: 2026-12-06, 2027-01-03, 2027-02-07.
+        assert_eq!(runs, vec!["2026-12-06", "2027-01-03", "2027-02-07"]);
+    }
+
+    #[test]
+    fn the_nth_form_is_also_accepted_as_a_name() {
+        let numeric: CronSchedule = "0 0 3 * * 0#1".parse().expect("parses");
+        let named: CronSchedule = "0 0 3 * * SUN#1".parse().expect("parses");
+        assert_eq!(numeric, named);
+    }
+
+    #[test]
+    fn a_fifth_occurrence_skips_months_without_one() {
+        // The fifth Friday only exists in some months.
+        let schedule: CronSchedule = "0 0 3 * * 5#5".parse().expect("parses");
+        let from = Local.with_ymd_and_hms(2026, 11, 1, 0, 0, 0).unwrap();
+        let runs: Vec<String> = schedule
+            .next_runs(from, 3)
+            .into_iter()
+            .map(|at| at.format("%Y-%m-%d").to_string())
+            .collect();
+        assert_eq!(runs, vec!["2027-01-29", "2027-04-30", "2027-07-30"]);
+    }
+
+    #[test]
+    fn a_bad_nth_suffix_is_named_as_a_weekday_problem() {
+        for expression in ["0 0 3 * * 0#0", "0 0 3 * * 0#6", "0 0 3 * * 0#x"] {
+            let error = expression.parse::<CronSchedule>().expect_err(expression);
+            assert_eq!(error.field, "weekdays", "{expression}");
+        }
     }
 
     #[test]

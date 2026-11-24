@@ -150,6 +150,12 @@ type DialogRequest =
       message: ReactNode
       resolve: () => void
     }
+  | {
+      kind: "choice"
+      message: ReactNode
+      choices: readonly DialogChoice[]
+      resolve: (value: string | null) => void
+    }
 
 let currentRequest: DialogRequest | null = null
 const requestKeys = new WeakMap<DialogRequest, number>()
@@ -198,6 +204,24 @@ export function confirmDialog(
 export function infoDialog(message: ReactNode): Promise<void> {
   return new Promise((resolve) => {
     setRequest({ kind: "info", message, resolve: () => resolve() })
+  })
+}
+
+/** One named option in a `choiceDialog`. */
+export interface DialogChoice {
+  value: string
+  label: string
+  danger?: boolean
+}
+
+/** Confirm dialog with named outcomes instead of yes/no — e.g. "delete these snapshots too" vs
+ *  "keep them". Resolves the picked `value`, or null when cancelled. */
+export function choiceDialog(
+  message: ReactNode,
+  choices: readonly DialogChoice[],
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    setRequest({ kind: "choice", message, choices, resolve })
   })
 }
 
@@ -1423,6 +1447,62 @@ export function DialogHost() {
             onSubmit={submitStampEditor}
             onCancel={cancelStampEditor}
           />
+        </div>
+      </>,
+      document.body,
+    )
+  }
+
+  if (request.kind === "choice") {
+    const choose = (value: string) => {
+      request.resolve(value)
+      close()
+    }
+    const cancelChoice = () => {
+      request.resolve(null)
+      close()
+    }
+    return createPortal(
+      <>
+        <div style={{ position: "fixed", inset: 0, zIndex: Z_DIALOG, background: "rgba(0,0,0,0.4)" }} onClick={cancelChoice} />
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="swal2-popup"
+          style={{
+            position: "fixed",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            zIndex: Z_DIALOG + 1,
+            display: "block",
+            width: 380,
+            maxWidth: "calc(100vw - 32px)",
+            boxSizing: "border-box",
+            padding: 20,
+            textAlign: "center",
+            borderRadius: ".2em",
+            boxShadow: "0 2px 10px rgba(0,0,0,.4)",
+            animation: "confirm-pop-in 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.2)",
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") cancelChoice()
+          }}
+        >
+          <div style={{ fontWeight: "bold", margin: "0 0 16px" }}>{request.message}</div>
+          <div className="swal2-actions" style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 8 }}>
+            {request.choices.map((choice) => (
+              <input
+                key={choice.value}
+                type="button"
+                className={choice.danger ? "stdbtn stdbtn-danger" : "stdbtn"}
+                value={choice.label}
+                onClick={() => choose(choice.value)}
+              />
+            ))}
+            {/* Focused by default so Enter never lands on a destructive choice. */}
+            <input type="button" className="stdbtn" value={t("common.cancel") ?? "Cancel"} onClick={cancelChoice} autoFocus />
+          </div>
         </div>
       </>,
       document.body,

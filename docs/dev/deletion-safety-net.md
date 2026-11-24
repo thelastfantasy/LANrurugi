@@ -29,26 +29,31 @@
 | `backup`（快照） | `snapshot-<UTC yyyymmddThhmmssZ>-<reason>.rdb` | **全量**：Redis 自己的 RDB 字节拷贝（逻辑库 0 档案 / 2 配置与文件映射 / 3 搜索索引） | **只能运维**：停 Redis → 用该文件替换 RDB → 启动 Redis。app 内没有一键还原 |
 | `export`（导出） | `export-<UTC yyyymmddThhmmssZ>-<reason>.json` | **可选择性数据**：档案/标签/分类/单行本/stamp/书签/翻译状态，与 `GET /api/database/backup` 同一份文档 | app 内 `POST /api/backups/{name}/restore`（或上传到 `/api/database/restore`） |
 
-`<reason>`：快照 = `daily` / `weekly` / `manual`；导出另加 `pre-clean` / `pre-restore` / `pre-reindex` /
+`<reason>`：快照 = `scheduled-<计划 id>` / `manual`；导出另加 `pre-clean` / `pre-restore` / `pre-reindex` /
 `pre-journal-purge`。旧版只写过 `<时间戳>-<reason>.json`（没有 `export-` 前缀），这些文件仍然会列出，按
-`kind=export` 处理。
+`kind=export` 处理；更早的 `<时间戳>-scheduled.rdb`（没有计划 id）也照旧列出，归到「无归属」组。
 
 ### 什么时候生成什么
 
-- **计划（`snapshot_cron` 命中）生成快照（RDB）**：设置项是一个 **6–7 段 crontab**
-  （`秒 分 时 日 月 星期 [年]`，本地时区），默认 `0 0 3 * * 1`（每周一 03:00:00）——一份全量快照不是免费的，
-  生产规模的库默认每周一次。总开关是 `snapshot_schedule_enabled`；`snapshot_cron_preset` 只是 UI 回显。
+- **计划命中时生成快照（RDB）**：设置项 `snapshot_schedules` 是一个 **JSON 数组**，每条计划
+  `{id, label, enabled, preset, cron}`，`cron` 是 6–7 段 crontab（`秒 分 时 日 月 星期 [年]`，按应用设置
+  `timezone` 求值——**不是**进程 `TZ`）。出厂带一条启用的「每周日 03:00」(`0 0 3 * * 0 *`)——一份全量快照
+  不是免费的，生产规模的库默认每周一次。最多 10 条；每条各自有水位线、失败槽记忆与保留名额（各 3 份），
+  文件名带自己的 id，所以删掉一条计划不会带走另一条的历史，删掉的计划留下的文件归「无归属」组。
 - **`pre-*` 生成导出（JSON）**：每个破坏性操作前一份（`pre-clean` / `pre-restore` / `pre-reindex` /
   `pre-journal-purge`）。这些在操作的关键路径上同步执行，绝不能在那里写几百 MB 的 RDB。
 - **手动**：`POST /api/backups` = 立刻生成快照（RDB，`reason=manual`）；`POST /api/backups/export` = 立刻
   生成导出（JSON，`reason=manual`）。
 
 计划调度是一个 **5 秒 tick** 的后台任务（秒级表达式需要它）：用 cron 表达式判定「自上次生成以来有没有命中」，
-Redis hash `LANRURUGI_SNAPSHOT_SCHEDULE`（config 库）里的 `last_cron_fire`（RFC 3339 UTC）记录**上一次生成完成的时间**。
+Redis hash `LANRURUGI_SNAPSHOT_SCHEDULE`（config 库）里的 `last_cron_fire:<计划 id>`（RFC 3339 UTC）记录**每一条计划上一次生成完成的时间**；
+读不到这个字段（Redis 故障）与「从没跑过」是两件事——前者这一 tick 直接跳过，不会按猜测生成（否则 Redis 一坏就每 5 秒刷一条告警）。
 所以重启不会重复生成；停机错过的命中在启动后只补**一份**（记录写完成时间，而不是被补的槽位，否则错过的每个槽位都会再触发一次）；
 改设置后下一个 tick 即生效（无需重启）。首次安装没有 `last_cron_fire` 记录时，**第一个 tick 立刻生成一份**（等价于旧版的启动快照），之后按 cron 走——
 否则 5 秒的 tick 与 `*/10` 这类表达式可能永远错开相位，一份也不生成。
-时间按**服务器本地时区**算；DST 不存在的时刻跳过，重复的时刻取较早的那一次。
+时间按应用设置 `timezone`（IANA 名，非法/为空回退 UTC）算墙钟；`schedule.timezone` 回传 `IANA 名 (+HH:MM)`，
+`next_runs`/`last_fire_at` 带该时区偏移；文件命名的时间戳始终是 UTC。DST 不存在的时刻跳过，重复的时刻取较早的一次，
+偏移随季节变化（`America/New_York` 冬 `-05:00` / 夏 `-04:00`）。
 
 crontab 的语义（与标准 cron 一致）：数字星期 `0` 和 `7` 都是周日、`1` 是周一；名字接受 `JAN`…`DEC` / `SUN`…`SAT`；
 支持 `*`、`a`、`a-b`、`*/n`、`a/n`、`a-b/n` 与逗号列表；**日与星期两个字段都受限时取「或」**，任一为 `*` 时取「且」。
@@ -166,8 +171,11 @@ library_source_known`：
 | `deletion_guard_min` | 50 | 守卫的绝对量下限（条） |
 | `snapshot_daily_keep` | 7 | `daily` **导出**的保留份数 |
 | `snapshot_week_keep` | 4 | `weekly` **导出**的保留份数 |
-| `snapshot_schedule_enabled` | true | 自动快照计划总开关（关闭后手动端点与 `pre-*` 照旧） |
-| `snapshot_cron` | `"0 0 3 * * 1"` | 6–7 段 crontab（`秒 分 时 日 月 星期 [年]`，本地时区）；默认每周一 03:00:00 |
-| `snapshot_cron_preset` | `weekly` | 仅供 UI 回显：`hourly` / `daily` / `weekly` / `monthly` / `custom` |
+| `snapshot_schedules` | 一条启用的 `{"id":"plan-1","cron":"0 0 3 * * 0 *","preset":"weekly"}` | 计划列表（JSON 数组，≤10 条）；每条 `{id,label,enabled,preset,cron}`，`cron` 为 6–7 段 crontab，按 `timezone` 求值 |
 
-快照（RDB）的保留份数固定 3，不是设置项；要长期留着某一份请用 pin（见上文）。
+快照（RDB）的保留份数是**每条计划各 3 份**，不是设置项；要长期留着某一份请用 pin（见上文）。旧版的
+`snapshot_cron` / `snapshot_schedule_enabled` / `snapshot_cron_preset` 三个键仍会被读（升级上来的实例用它
+们造出第一条计划），但已不接受写入（`PUT /settings` 对它们返回 Unknown settings field）。
+
+备注不是设置项：`PATCH /api/backups/{name}` `{"note":"…"}` 写进 Redis hash `LANRURUGI_BACKUP_NOTES`（200 字符上限、
+控制字符拒绝），只给人看，不影响保留、pin 与 `usable`；文件被删除或被保留策略清掉时备注一起删。

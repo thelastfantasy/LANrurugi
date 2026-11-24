@@ -35,8 +35,14 @@ async fn start_page(state: &AppState, grouping: &Grouping, index: usize) -> u32 
 /// They are deliberately left alone: moving them here would need the inverse on restore and on a
 /// re-download, all three agreeing.
 pub(crate) async fn after_recycle(state: &AppState, archive: &Archive) {
-    let Ok(groupings) = state.repos.groupings.for_archive(&archive.id).await else {
-        return;
+    let groupings = match state.repos.groupings.for_archive(&archive.id).await {
+        Ok(groupings) => groupings,
+        Err(e) => {
+            // The page marker stays inside a member nobody can read, so the failure is reported
+            // even though the recycle itself already succeeded.
+            tracing::warn!(id = %archive.id, error = %e, "could not read a recycled archive's tankoubons; its page markers are unchanged");
+            return;
+        }
     };
     for grouping in groupings {
         let Some(index) = grouping.archives.iter().position(|a| *a == archive.id) else {
@@ -77,8 +83,14 @@ pub(crate) async fn after_permanent_delete(state: &AppState, archive: &Archive) 
 /// The same cleanup when only the ID and page count are still known — a recycled member being
 /// purged from the bin, whose live record is long gone.
 pub(crate) async fn after_permanent_delete_with(state: &AppState, id: &ArchiveId, pagecount: u32) {
-    let Ok(groupings) = state.repos.groupings.for_archive(id).await else {
-        return;
+    let groupings = match state.repos.groupings.for_archive(id).await {
+        Ok(groupings) => groupings,
+        Err(e) => {
+            // The deleted member stays in its tanks' listings and page counts, so this is the only
+            // trace of a cleanup that did not run.
+            tracing::warn!(%id, error = %e, "could not read a deleted archive's tankoubons; it stays in their listings");
+            return;
+        }
     };
     let old_id = id.clone();
     for grouping in groupings {

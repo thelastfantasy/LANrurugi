@@ -267,7 +267,10 @@ async fn queue_backup(State(state): State<AppState>) -> Response {
                 let value = serde_json::to_value(doc).unwrap_or(serde_json::Value::Null);
                 jobs.finish(&job_id_for_task, value).await;
             }
-            Err(e) => jobs.fail(&job_id_for_task, e.to_string()).await,
+            Err(e) => {
+                tracing::error!(error = %e, "building a database backup failed");
+                jobs.fail(&job_id_for_task, e.to_string()).await
+            }
         }
     });
 
@@ -324,26 +327,24 @@ async fn queue_restore(
         }
     };
 
-    record_manual(
-        &state,
-        auth.as_ref().map(|e| &e.0),
-        action_types::DATABASE_RESTORE,
-        ActivityTarget {
-            id: None,
-            label: None,
-            kind: Some("database".to_string()),
-        },
-        Outcome::Success,
-        None,
-        None,
-    )
-    .await;
-
     // specs/028: a full snapshot before the library is rewritten. Reported in the job result but
     // never blocking.
     let snapshot = crate::snapshots::take_for_operation(&state, "pre-restore").await;
-    let (job_id, progress_job) =
-        start_restore_job(&state, doc, auth.as_ref().map(|e| e.0.clone()), snapshot).await;
+    let (job_id, progress_job) = start_restore_job(
+        &state,
+        doc,
+        auth.as_ref().map(|e| e.0.clone()),
+        snapshot,
+        RestoreActivity {
+            action_type: action_types::DATABASE_RESTORE,
+            target: ActivityTarget {
+                id: None,
+                label: None,
+                kind: Some("database".to_string()),
+            },
+        },
+    )
+    .await;
     axum::Json(json!({
         "operation": "queue_restore",
         "success": 1,
@@ -357,14 +358,23 @@ async fn queue_restore(
     .into_response()
 }
 
+/// How a restore is framed in the activity log. The job writes the entry only once the outcome is
+/// known, so history never claims Success for a restore that then failed.
+pub(crate) struct RestoreActivity {
+    pub action_type: &'static str,
+    pub target: ActivityTarget,
+}
+
 /// Starts the background restore shared by the multipart upload endpoint and
-/// `POST /backups/{name}/restore`. The caller has already recorded the activity entry and taken
-/// the pre-restore snapshot (they want its name in their own response); this only runs the job.
+/// `POST /backups/{name}/restore`. The caller has already taken the pre-restore snapshot (they want
+/// its name in their own response) and supplies the activity framing; this runs the job and
+/// records its outcome.
 pub(crate) async fn start_restore_job(
     state: &AppState,
     doc: BackupDocument,
     auth_for_task: Option<AuthContext>,
     snapshot: crate::snapshots::SnapshotOutcome,
+    activity: RestoreActivity,
 ) -> (String, std::sync::Arc<crate::snapshots::BackupJob>) {
     let job_id = state.jobs.create("restore").await;
     let progress_job = crate::snapshots::start_progress_job("restore");
@@ -396,7 +406,11 @@ pub(crate) async fn start_restore_job(
         .await;
         match result {
             Ok(summary) => {
-                let _ = lanrurugi_backup::restore::relink_stamp_ids(&doc, &repos.archives).await;
+                if let Err(e) =
+                    lanrurugi_backup::restore::relink_stamp_ids(&doc, &repos.archives).await
+                {
+                    tracing::warn!(error = %e, "failed to relink stamp ids after a restore");
+                }
                 restore_share_identity(&state_for_task, &doc).await;
 
                 // Phase 2 translation state (FR-022). A backup taken before this feature existed
@@ -431,20 +445,27 @@ pub(crate) async fn start_restore_job(
                 });
                 progress_job_for_task.finish_with_result(result.clone());
                 jobs.finish(&job_id_for_task, result).await;
+                record_manual(
+                    &state_for_task,
+                    auth_for_task.as_ref(),
+                    activity.action_type,
+                    activity.target,
+                    Outcome::Success,
+                    None,
+                    None,
+                )
+                .await;
             }
             Err(e) => {
+                tracing::error!(error = %e, "database restore failed");
                 // The restore was actually attempted (request already accepted, task running) and
                 // failed partway through — distinct from the earlier body/JSON validation
                 // rejections above, which never got this far.
                 record_manual(
                     &state_for_task,
                     auth_for_task.as_ref(),
-                    action_types::DATABASE_RESTORE,
-                    ActivityTarget {
-                        id: None,
-                        label: None,
-                        kind: Some("database".to_string()),
-                    },
+                    activity.action_type,
+                    activity.target,
                     Outcome::Failure {
                         reason: e.to_string(),
                     },
@@ -478,10 +499,15 @@ async fn clear_new_all(
     let mut cleared = 0u32;
     for archive in archives {
         if archive.isnew {
-            let _ = state.repos.archives.set_isnew(&archive.id, false).await;
-            let _ =
+            if let Err(e) = state.repos.archives.set_isnew(&archive.id, false).await {
+                tracing::warn!(error = %e, id = %archive.id, "failed to clear the new flag");
+            }
+            if let Err(e) =
                 lanrurugi_search::indexer::set_isnew_index(&state.redis.search, &archive.id, false)
-                    .await;
+                    .await
+            {
+                tracing::warn!(error = %e, id = %archive.id, "failed to clear the new flag index");
+            }
             cleared += 1;
         }
     }
@@ -528,10 +554,14 @@ async fn drop_database(
                     .query_async::<()>(&mut conn)
                     .await
                 {
+                    tracing::error!(error = %e, "FLUSHDB failed while dropping the database");
                     failures.push(e.to_string());
                 }
             }
-            Err(e) => failures.push(e.to_string()),
+            Err(e) => {
+                tracing::error!(error = %e, "could not reach Redis while dropping the database");
+                failures.push(e.to_string());
+            }
         }
     }
 
@@ -646,6 +676,12 @@ pub(crate) fn needs_guard(
     planned as i64 > guard_min && percent >= guard_percent
 }
 
+/// `1` only when the write succeeded: `unlinked` reports unlinks that happened, not attempts, so a
+/// failed write must not be added to the count the response shows.
+fn unlinked_by<T, E>(cleared: &Result<T, E>) -> u32 {
+    u32::from(cleared.is_ok())
+}
+
 async fn clean_database(
     State(state): State<AppState>,
     auth: Option<axum::extract::Extension<AuthContext>>,
@@ -753,12 +789,15 @@ async fn clean_database(
             continue;
         }
         if !std::path::Path::new(&archive.file).exists() {
-            let _ = state
+            let cleared = state
                 .repos
                 .archives
                 .update(&archive.id, |a| a.file.clear())
                 .await;
-            unlinked += 1;
+            if let Err(e) = &cleared {
+                tracing::warn!(error = %e, id = %archive.id, "clean_database failed to clear a missing archive's file field");
+            }
+            unlinked += unlinked_by(&cleared);
         }
     }
 
@@ -888,6 +927,23 @@ async fn run_rebuild_sequence(
     )
     .await
     {
+        tracing::error!(error = %e, "rebuilding folded indexes failed");
+        record_manual(
+            state,
+            auth,
+            action_type,
+            ActivityTarget {
+                id: None,
+                label: None,
+                kind: Some("database".to_string()),
+            },
+            Outcome::Failure {
+                reason: e.to_string(),
+            },
+            None,
+            None,
+        )
+        .await;
         return Err(e.to_string());
     }
 
@@ -1049,7 +1105,10 @@ async fn rebuild_index(
                 }
                 jobs.finish(&job_id_for_task, result).await
             }
-            Err(e) => jobs.fail(&job_id_for_task, e).await,
+            Err(e) => {
+                tracing::error!(error = %e, "index rebuild failed");
+                jobs.fail(&job_id_for_task, e).await
+            }
         }
     });
 
@@ -1199,6 +1258,7 @@ async fn queue_import_legacy(
             Err((e, summary, snapshot)) => (summary, snapshot, Some(e)),
         };
         if let Some(e) = &import_error {
+            tracing::error!(error = %e, "legacy import failed partway through");
             record_manual(
                 &state_for_task,
                 auth_for_task.as_ref(),
@@ -1298,6 +1358,7 @@ async fn queue_import_legacy(
                     }
                 }
                 Err(e) => {
+                    tracing::error!(error = %e, "post-import index rebuild failed");
                     progress_job_for_task.fail(e.clone());
                     jobs.fail(&job_id_for_task, e).await;
                 }
@@ -1463,5 +1524,16 @@ mod tests {
         // `force` is applied by the caller; the arithmetic itself has no notion of it.
         assert!(!wants_force(None));
         assert!(wants_force(Some("1")));
+    }
+
+    /// A clean that could not clear an archive's `file` field must not report it as unlinked —
+    /// the response's `unlinked` used to count the attempt, claiming a file was unlinked while the
+    /// record still pointed at it.
+    #[test]
+    fn a_failed_unlink_is_not_counted() {
+        let cleared: Result<Option<String>, String> = Ok(Some("ok".to_string()));
+        assert_eq!(unlinked_by(&cleared), 1);
+        let refused: Result<Option<String>, String> = Err("redis unreachable".to_string());
+        assert_eq!(unlinked_by(&refused), 0);
     }
 }

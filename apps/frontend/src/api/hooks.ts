@@ -39,6 +39,7 @@ import type {
   ArchiveMetadata,
   ArchiveSplitTreeResponse,
   AuthBridgeConfig,
+  BackupEntry,
   BackupJobResponse,
   BackupJobStatus,
   BackupsResponse,
@@ -188,7 +189,14 @@ export function useUpdateSettings() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (partial: SettingsUpdate) => sendJson("PUT", "/settings", partial),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
+    onSuccess: (_saved, partial) => {
+      void queryClient.invalidateQueries({ queryKey: ["settings"] })
+      // Snapshot plans carry server-computed `next_runs`, which a timezone change moves; without
+      // this the plan list keeps showing the old clock until the page is reloaded.
+      if (partial.timezone !== undefined) {
+        void queryClient.invalidateQueries({ queryKey: ["backups"] })
+      }
+    },
   })
 }
 
@@ -2993,6 +3001,17 @@ export function useUnpinBackup() {
   return useMutation({
     mutationFn: (name: string) =>
       sendJson<PinBackupResponse>("DELETE", `/backups/${encodeURIComponent(name)}/pin`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["backups"] }),
+  })
+}
+
+/** `PATCH /api/backups/{name}` — an alias lives beside the file, so the backup itself is untouched;
+ *  `null` (or an empty string) clears it. Saving answers with the updated entry. */
+export function useSetBackupNote() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ name, note }: { name: string; note: string | null }) =>
+      sendJson<BackupEntry>("PATCH", `/backups/${encodeURIComponent(name)}`, { note }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["backups"] }),
   })
 }

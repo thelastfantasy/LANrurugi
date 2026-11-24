@@ -62,7 +62,7 @@
 不变量：
 
 - 写入必须原子：导出先写 `*.json.tmp` 再 `rename`，不允许出现半截 `.json`；摘要文件同理（`*.summary.json.tmp`）。快照（RDB）先写 `*.rdb.tmp`，**rename 之前校验开头是 `REDIS` 魔数**，半截拷贝不会变成一份看起来能恢复的备份。
-- 计划快照由 **cron 命中**决定：`snapshot_cron`（6–7 段，本地时区，默认每周一 03:00:00）命中且上一次命中已被服务时生成一份 `scheduled` 快照（见 §2.1）。计划只生成**快照（RDB）**；`pre-*` 只生成**导出**（一次破坏性操作的关键路径上不能写几百 MB 的 RDB）。
+- 计划快照由 **cron 命中**决定：`snapshot_cron`（6–7 段，按 `timezone` 设置求值，默认每周一 03:00:00）命中且上一次命中已被服务时生成一份 `scheduled` 快照（见 §2.1）。计划只生成**快照（RDB）**；`pre-*` 只生成**导出**（一次破坏性操作的关键路径上不能写几百 MB 的 RDB）。
 - 旧的 `daily` / `weekly` 两类文件（RDB 或 JSON）仍然能解析、仍然按原来的规则保留；新版本不再写这两个 reason（快照写 `scheduled`，导出写 `manual` 或 `pre-*`）。
 - 导出类的 `weekly` 按 ISO 周分组，每组只保留最新一份，最多 `snapshot_week_keep` 组。
 - 快照类不分 `reason`，只按时间保留最近 **3** 份（`FULL_BACKUP_KEEP`，刻意不做成设置项：一个没人要求的旋钮，却可能让一份全量备份都不剩）。
@@ -78,12 +78,12 @@ Redis hash `LANRURUGI_SNAPSHOT_SCHEDULE`（**config** 逻辑库，与设置项�
 
 不变量 / 语义：
 
-- 调度每 **5 秒** tick 一次，判定的是 `snapshot_cron` 这个 **6–7 段 crontab**（`秒 分 时 日 月 星期 [年]`、服务器本地时区）有没有命中。
+- 调度每 **5 秒** tick 一次，判定的是 `snapshot_cron` 这个 **6–7 段 crontab**（`秒 分 时 日 月 星期 [年]`、按 `timezone` 设置求值）有没有命中。
 - 命中判定与 `last_cron_fire` 比较：候选时刻不晚于记录 → 不重复生成；记录之后的第一个命中 → 生成一次。因此重启不会重复生成（记录已写），停机错过的命中在下一次 tick 里**只补一次**。
 - 记录写的是**这次生成完成的时间**（不是被补的那个槽位）。写槽位时间的话，停机期间错过的每一个命中都会排在被补的那一个之后，于是每个 tick 都再补一份；写完成时间则把「补一次」真正封顶。
 - 首次安装（没有记录）时，第一个 tick 立刻生成一份并写下记录，之后按 cron 走；这样 5 秒 tick 与 `*/10` 这类表达式不会因相位错开而永远不触发。
 - `snapshot_schedule_enabled` 关闭时不写、不读记录，也不生成任何计划快照；手动 `POST /api/backups` / `POST /api/backups/export` 与所有 `pre-*` 不受影响。
-- 时区按 `chrono::Local`；DST 见 contracts 的说明（不存在的时刻跳过，重复的时刻取较早的那个瞬时）。
+- 时区按 `timezone` 设置（IANA 名，非法/为空回退 UTC），与进程 `TZ` 无关；文件命名的时间戳仍是 UTC。DST 见 contracts（不存在的时刻跳过，重复的时刻取较早的，偏移随季节变化）。
 - 生成失败只 `warn!`，并把该命中记在进程内标记里，**同一命中不再重试**（下个命中时间戳不同，自动重新启用）。
 
 ## 2.2 pin（Redis）
@@ -150,7 +150,7 @@ Redis set `LANRURUGI_SNAPSHOT_PINS`（**config** 逻辑库），成员 = 备份�
 | `snapshot_daily_keep` | number | 7 | `daily` **导出**的保留份数 |
 | `snapshot_week_keep` | number | 4 | `weekly` **导出**的保留份数 |
 | `snapshot_schedule_enabled` | bool | `true` | 自动快照计划总开关；关闭后不再按计划生成（手动端点与 `pre-*` 不受影响） |
-| `snapshot_cron` | string | `"0 0 3 * * 1"` | 6–7 段 crontab（`秒 分 时 日 月 星期 [年]`，本地时区）；默认每周一 03:00:00。非法表达式一律 400，错误信息指出是哪一段 |
+| `snapshot_cron` | string | `"0 0 3 * * 1"` | 6–7 段 crontab（`秒 分 时 日 月 星期 [年]`），按 `timezone` 设置的墙钟求值；默认每周一 03:00:00。非法表达式一律 400，错误信息指出是哪一段 |
 | `snapshot_cron_preset` | string | `"weekly"` | 仅供 UI 回显：`hourly` / `daily` / `weekly` / `monthly` / `custom`；服务端不据此算时间 |
 
 取值范围：`deletion_journal_days` 0–3650；`deletion_guard_percent` 1–100；`deletion_guard_min` 1–1,000,000；`snapshot_*_keep` 1–365；`snapshot_cron` 的字段范围见 contracts（秒 0–59、分 0–59、时 0–23、日 1–31、月 1–12、星期 0–7、年 1970–2100）。

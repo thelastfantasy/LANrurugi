@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
+import { FaCircleExclamation, FaDownload, FaRss } from "react-icons/fa6"
 
 import { fetchJson, sendJson } from "@/api/client"
 import {
@@ -407,10 +408,11 @@ export function DownloadQueuePanel({
                               <>
                                 {narrow ? (
                                   <Tooltip label={label}>
-                                    <i
-                                      className={`fa ${which === "manual" ? "fa-download" : "fa-rss"}`}
-                                      aria-hidden="true"
-                                    ></i>
+                                    {which === "manual" ? (
+                                      <FaDownload aria-hidden="true" />
+                                    ) : (
+                                      <FaRss aria-hidden="true" />
+                                    )}
                                   </Tooltip>
                                 ) : (
                                   label
@@ -421,7 +423,7 @@ export function DownloadQueuePanel({
                                 {undecided[which] > 0 && (
                                   <Tooltip label={t("upload.tabUndecided", { count: undecided[which] }) ?? ""}>
                                     <span style={{ color: "#c79121", marginLeft: 4 }}>
-                                      <i className="fa fa-exclamation-circle" aria-hidden="true"></i>{" "}
+                                      <FaCircleExclamation aria-hidden="true" />{" "}
                                       {undecided[which]}
                                     </span>
                                   </Tooltip>

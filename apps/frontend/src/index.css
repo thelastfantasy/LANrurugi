@@ -4600,8 +4600,40 @@ div.gt.gt-single > span {
 
 /* `.stdbtn`'s own 150px floor is sized for full-width settings forms; inside a card it would put
  * one action per row. Width is the only thing dropped here — the theme's look stays as-is. */
+/* Card actions: each button is at least as wide as its own icon + label, and whatever space is
+ * left over is split evenly. A card with five actions therefore wraps to a second row instead of
+ * clipping the longest label. */
 .backup-card-actions .stdbtn.backup-btn {
-  min-width: 0;
+  flex: 1 1 auto;
+  width: auto;
+  min-width: max-content;
+  height: 32px;
+  /* Centred content with one symmetric gap: the icon used to sit tight against the left edge and
+     push the label off-centre, and the anchor form of this button also carried an underline. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  font-size: inherit;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.backup-card-actions .stdbtn.backup-btn > .fa {
+  margin: 0;
+  font-size: 0.95em;
+  line-height: 1;
+  vertical-align: 0;
+}
+
+/* react-icons draws an `1em` SVG instead of a font glyph, so it needs the same optical size and
+ * must not be squeezed by the flex line when the label is long. */
+.backup-card-actions .stdbtn.backup-btn > svg {
+  flex: none;
+  margin: 0;
+  font-size: 0.95em;
 }
 
 .backup-control--time,
@@ -4612,11 +4644,6 @@ div.gt.gt-single > span {
 .backup-control--day,
 .stdinput.backup-control--day {
   width: 140px;
-}
-
-.backup-control--preset,
-.stdinput.backup-control--preset {
-  width: 160px;
 }
 
 /* Seven fixed-width cron fields: second, minute, hour, day, month, weekday, year. */
@@ -4645,61 +4672,267 @@ div.gt.gt-single > span {
   width: 100%;
 }
 
-/* The plan form and its preview sit side by side on a wide screen and stack on a phone. */
-.backup-plan {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(240px, 1fr);
-  gap: 24px;
-  align-items: start;
-  margin-bottom: 12px;
+/* The plan list: one bordered row per plan, in saved order. A row is a column so the seven cron
+ * fields get the full width instead of being squeezed between the name and the preset; only the
+ * header line wraps on a phone. */
+.backup-plan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
 }
 
-.backup-plan-form {
-  min-width: 0;
-}
-
-.backup-plan-preview {
+.backup-plan-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-sizing: border-box;
   min-width: 0;
   padding: 12px;
   border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
   border-radius: 4px;
 }
 
-.backup-preview-title {
-  margin: 0 0 6px;
-  text-align: left;
+.backup-plan-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
-.backup-preview-meta {
-  margin: 4px 0 0;
+/* The name takes whatever the switch and the preset leave, and shrinks rather than overflowing. */
+.stdinput.backup-plan-name {
+  flex: 1 1 140px;
+  width: auto;
+  min-width: 0;
+}
+
+/* Icon-only, so it must not inherit `.stdbtn`'s 150px floor. 32px is also the touch target. */
+.stdbtn.backup-plan-action {
+  flex: none;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* A saved plan, collapsed to one line: switch + name, then its cron, its runs and its two actions.
+ * The actions never leave their line — the text beside them wraps instead. */
+.backup-plan-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  min-width: 0;
+}
+
+.backup-plan-summary-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.backup-plan-title {
+  font-weight: bold;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.backup-plan-summary-rest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  min-width: 0;
+}
+
+.backup-plan-cron {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 0.9em;
+  opacity: 0.85;
+  overflow-wrap: anywhere;
+}
+
+/* Only rendered when nothing could be said about the expression; the list row otherwise shows the
+ * sentence alone and keeps the expression in its `title`. */
+.backup-plan-cron-raw {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  opacity: 0.7;
+  overflow-wrap: anywhere;
+}
+
+/* Nothing could be put into words, so the expression is the label and keeps full size. */
+.backup-plan-cron-raw--primary {
+  font-size: 1em;
+  opacity: 1;
+}
+
+.backup-plan-run-sep {
+  opacity: 0.6;
+}
+
+.backup-plan-run {
+  font-size: 0.9em;
+  opacity: 0.85;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.backup-plan-actions {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  margin-left: auto;
+}
+
+.backup-plan-actions--edit {
+  justify-content: flex-end;
+}
+
+/* Two named buttons per row rather than 150px-wide ones. */
+.backup-plan-actions--edit .stdbtn {
+  min-width: 0;
+  height: 32px;
+  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+/* 14px rather than the inherited ~13px: a lone glyph in a 32px target reads too small. */
+.stdbtn.backup-plan-action > svg,
+.backup-plan-actions--edit .stdbtn > svg {
+  flex: none;
+  font-size: 14px;
+}
+
+/* A phone stacks the row: switch + name, then the cron/runs line with both actions beside it. */
+@media (max-width: 700px) {
+  .backup-plan-summary {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .backup-plan-summary-main {
+    flex: none;
+  }
+
+  .backup-plan-summary-rest {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+}
+
+/* One chip per common shape. Selection reuses the theme's own `.queue-tab-active` accent, so no
+   colour is introduced here; the resting chip is the theme's own `.stdbtn`, dimmed like a tab. */
+.backup-preset-label {
+  display: block;
+  margin: 8px 0 4px;
+  font-size: 0.9em;
+  opacity: 0.8;
+}
+
+.backup-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.stdbtn.backup-preset {
+  box-sizing: border-box;
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 0;
+  height: 32px;
+  min-height: 32px;
+  margin: 0;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.9em;
+  opacity: 0.6;
+}
+
+.stdbtn.backup-preset:hover,
+.stdbtn.backup-preset.queue-tab-active {
+  opacity: 1;
+}
+
+/* The themes repaint a focused `.stdbtn` (g.css fills it gold); the active chip already carries the
+   selection accent, so focusing must not change it. Mirrors the queue tabs' own override. */
+.stdbtn.backup-preset:focus,
+.stdbtn.backup-preset:focus-visible {
+  outline: none;
+  background: transparent;
+  color: inherit;
+  border-color: currentColor;
+}
+
+/* The edit form's own rendering of the draft: sentence first, expression beside it for proof. */
+.backup-plan-sentence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin: 6px 0 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.backup-plan-sentence-sep {
+  opacity: 0.6;
+}
+
+.backup-plan-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
   text-align: left;
   opacity: 0.85;
 }
 
-.backup-cron-value {
-  display: block;
-  margin: 6px 0;
-  overflow-wrap: anywhere;
-  font-family: monospace;
-  text-align: left;
-}
-
-.backup-preview-runs {
-  margin: 4px 0 0;
-  padding-left: 22px;
-  text-align: left;
-  font-variant-numeric: tabular-nums;
-}
-
-.backup-hint--error {
+/* Validation text keeps the row's size but not its faded colour. */
+.backup-plan-error {
   opacity: 1;
 }
 
-@media (max-width: 700px) {
-  .backup-plan {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 16px;
-  }
+/* One group per plan: a heading, then that plan's own card grid. */
+.backup-group {
+  margin-top: 20px;
+  min-width: 0;
+}
+
+.backup-group-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 0;
+  text-align: left;
+}
+
+.backup-group-next {
+  font-weight: normal;
+  opacity: 0.8;
+}
+
+/* The heading already separates the grids, so the first one needs no extra top gap. */
+.backup-group .backup-card-grid {
+  margin-top: 10px;
 }
 
 .backup-summary {
@@ -4798,11 +5031,98 @@ div.gt.gt-single > span {
 
 .backup-card-badge--pinned {
   margin-left: auto;
+  /* The pin sits in the badge too now, so the pill's own line box cannot be what sets its height:
+     `inline-flex` + a gap keeps the glyph and the label on one centred line. */
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* `1em` SVG inside `line-height: 1.7` would grow the pill, so it is drawn slightly below the
+ * label's size and the line box keeps its height. */
+.backup-card-badge--pinned > svg {
+  flex: none;
+  font-size: 0.85em;
+}
+
+/* The alias row: one clamped line of text plus its pencil, or a muted "add a note" affordance. */
+.backup-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 2px;
+}
+
+.backup-note--editing {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.backup-note-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Two lines at most; the full text stays available through `title`. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* Icon-only, so it must not inherit `.stdbtn`'s 150px floor. */
+.stdbtn.backup-note-edit {
+  flex: none;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stdbtn.backup-note-edit > svg,
+.stdbtn.backup-note-add > svg {
+  flex: none;
+  font-size: 14px;
+}
+
+/* A text affordance rather than a button: no border, no background, just dimmed currentColor. */
+.stdbtn.backup-note-add {
+  height: 32px;
+  padding: 0 2px;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: none;
+  color: inherit;
+  opacity: 0.65;
+}
+
+.stdinput.backup-note-input {
+  flex: 1 1 120px;
+  width: auto;
+  min-width: 0;
+  height: 32px;
+}
+
+.backup-note-error {
+  flex: 1 1 100%;
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .backup-card-meta {
   display: flex;
   flex-wrap: wrap;
+  /* A CJK run builds a taller inline box than the digits and Latin beside it, so with flex's
+     default stretch each fragment got its own baseline and the Chinese dropped a couple of pixels.
+     One explicit line-height plus baseline alignment keeps all three on the same line. */
+  align-items: baseline;
+  line-height: 1.5;
   gap: 2px 8px;
   font-variant-numeric: tabular-nums;
   opacity: 0.85;
@@ -4817,6 +5137,10 @@ div.gt.gt-single > span {
 .backup-card-facts {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
+  /* Same reason as `.backup-card-meta`: a CJK label and a numeric value build different inline
+     boxes, so without a shared baseline and line-height the value sits a pixel or two high. */
+  align-items: baseline;
+  line-height: 1.5;
   gap: 2px 12px;
   margin: 0;
 }
@@ -4844,6 +5168,7 @@ div.gt.gt-single > span {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  row-gap: 8px;
   margin-top: auto;
   padding-top: 4px;
 }

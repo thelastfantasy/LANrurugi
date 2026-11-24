@@ -233,3 +233,21 @@ JSON 恢复不了配置/文件映射/搜索索引，而一次真正的全量备�
   `take_full_backup`；测试注入写文件的闭包，于是「`*/5` + 连续 tick ⇒ ≥1 份 `snapshot-*.rdb` 且
   `last_fire_at` 非空」可以在不依赖 Redis RDB 可读的环境里跑（真 RDB 路径在测试容器里不可读，只会 skip）。
   同时补「同一水位不重复触发」。
+
+## Phase 15: 计划按应用 `timezone` 求值（追加，2026-11-24）
+
+现场：dev 容器 `TZ=UTC`，应用设置 `timezone=Asia/Tokyo`，`schedule.timezone` 却回 `+00:00`；于是
+`0 0 3 * * 1` 实际在 UTC 03:00（= JST 12:00）触发，UI 却写「下次 03:00:00」——差 9 小时。
+
+- [x] T079 `settings.rs`：新增 `read_timezone`（读 `timezone` 字段，`chrono_tz::Tz` 解析，非法/空回退 `UTC`）。
+- [x] T080 `snapshots/cron.rs`：`next_after`/`next_runs` 泛化为 `Z: TimeZone`；候选时刻由目标时区自己的墙钟构造
+  （DST 缺口 → 无该瞬时并跳过；重复小时取较早）。
+- [x] T081 `snapshots.rs`：`SnapshotSchedule.tz`、`due_firing(cron, tz, now, last)`、`tick_with`/`schedule_tick`
+  用 `Utc::now().with_timezone(&tz)`；`schedule_json`/`preview` 用同一时区，`timezone` 回传 `IANA 名 (+HH:MM)`，
+  `next_runs`/`last_fire_at` 为带偏移 RFC3339；文件命名仍是 UTC（`now_utc()`，未改）。
+- [x] T082 去掉不再需要的 `iana-time-zone` 直接依赖（时区名现在来自设置，不是探测宿主）。
+- [x] T083 [P] 测试：`Asia/Tokyo` + `0 0 3 * * 1` ⇒ 下一次是 JST 周一 03:00（= UTC 周日 18:00），
+  `next_runs[0] == "2026-11-23T03:00:00+09:00"`、`schedule.timezone == "Asia/Tokyo (+09:00)"`；
+  `UTC` 对照用例；`America/New_York` 春季缺口跳过 02:30、冬夏偏移分别为 `-05:00`/`-04:00`、墙钟仍 03:00。
+- [x] T084 文档：contracts（计划语义的时区段 + DST 段）、data-model（§2/§2.1/§4）、
+  `docs/dev/deletion-safety-net.md`（生成时机与设置项表）。
