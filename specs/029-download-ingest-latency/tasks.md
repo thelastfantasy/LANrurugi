@@ -164,6 +164,7 @@ Rust workspace（`crates/*`）+ 前端（`apps/frontend`）+ 插件（`plugins/`
 - [x] T034 [P] 跑 `mise run check`（rust-check + frontend-lint），并对改动到的 crate 跑 `mise run clippy -- -p <crate>`（若 `result_large_err` 等既有告警拦截，记录在 Implementation Record，不擅自改无关 crate）。
 - [ ] T035 跑 quickstart 场景 9（NAS beta 整批对照，需真实负载与用户配合），记录聚合吞吐与入库段 p95 对比。
 - [x] T036 填 Implementation Record：每条 SC 的实测值、与基线的对比、未验证项（视觉确认归用户）。
+- [x] T037 收尾加固（用户 2026-11-25 追问“一大批同时下载会不会起一堆 Deno 进程”时补的）：给“读声明/自省”这类临时 Deno 进程加自动上限（`lanrurugi_plugin::pool::worker_limit()`，核数/2 夹在 2–8），常驻 worker 不淘汰；新增两个测试（上限边界、槽位被占满时读取会等待且事后归还）。
 
 ---
 
@@ -271,6 +272,7 @@ Task: "T031 单测 in crates/lanrurugi-scanner/src/pipeline.rs"
 - **插件声明缓存（FR-003/FR-004）**：`crates/lanrurugi-plugin/src/pool.rs` 的 `CachedPluginInfo`（mtime + size + 60 秒 TTL）+ 每命名空间 single-flight 的 `inflight` 表；`plugin_info`/`plugin_options` 都先查缓存，零权限 worker 只用来问声明。写插件、删除插件、改文件都会让缓存失效（stamp 变化即重读）。`plugins/metadata/chaika.ts` 的 `namespace` 从 `trabant` 改回与路径一致的 `metadata/chaika`。
 - **跳过重复元数据（FR-005/FR-006）**：`DownloadQueueItem.metadata_preview_namespace` 记录"这份预览是哪个插件答的"，随 preview 一起清空；`run_enabled_metadata_plugins_on_archive` 新增 `skip: Option<&str>` 参数（5 处调用方），只跳过声明过的那一个，其余插件照常跑；跳过时 `apply_preview_metadata` 把缓存的 title/tags 落到档案上（`update_then` + `reindex_title_and_tags`，不整条覆写）。
 - **追踪（FR-008）**：`crates/lanrurugi-api/src/diagnostics/download_trace.rs` 为每个下载任务开一条 `download_url` 事务，六个阶段各一个子 span（`queue.wait`/`plugin.exec`/`http.wait`/`file.transfer`/`file.ingest`/`plugin.metadata`），与 `phases` 共用同一份词表和同一个打点函数。
+- **临时进程闸（FR-014）**：`crates/lanrurugi-plugin/src/pool.rs` 的 `worker_limit()`（核数/2，夹在 2–8）给“读声明/自省”这类一次性 worker 设并发上限，`spawn_transient_worker` 返回的 `TransientWorker` 在存活期间持有 `OwnedSemaphorePermit`，`Drop` 时连同 worker 一起归还；冷启动时整库发现最多同时 8 个临时进程，而不是一次一个插件。**常驻 worker 不设上限、也不淘汰**：它本来就是一个插件一个进程、并被该插件的所有并发调用共用，淘汰等于杀掉可能正在被调用的进程。
 - **超时分类（FR-010）**：`crates/lanrurugi-scanner/src/pipeline.rs` 的 `content_lock_held` 用 `try_lock` 区分"别人正在入库同一内容"与真超时，前者只记 `debug` 并静默退出，不再发 `IngestEvent::Failed`。
 
 ### 与计划的偏离
@@ -285,7 +287,7 @@ Task: "T031 单测 in crates/lanrurugi-scanner/src/pipeline.rs"
 已实测（`mise run test-one`，各自临时 Redis）：
 
 - `crates/lanrurugi-core` `jobs::tests` → 29 passed（新增 7 个阶段契约测试）。
-- `crates/lanrurugi-plugin` `pool::tests` → 23 passed（新增 5 个：缓存命中、改文件失效、删除失效、声明失败不缓存、冷缓存并发只加载一次）。
+- `crates/lanrurugi-plugin` `pool::tests` → 25 passed（新增 5 个：缓存命中、改文件失效、删除失效、声明失败不缓存、冷缓存并发只加载一次；以及 T037 的 2 个：进程上限落在 2–8、槽位被占满时声明读取会等待且事后归还）。
 - `crates/lanrurugi-scanner` `pipeline::tests` → 10 passed（新增 2 个：别人持锁时超时不算失败、无人持锁仍算失败）。
 - `crates/lanrurugi-api` `download_manager::ingest::tests` → 14 passed（新增 1 个：被跳过的插件仍贡献 title/tags）、`diagnostics::download_trace` → 2 passed、`only_the_recorded_plugin_is_skipped_*` → 1 passed。
 - 前端：`tests/unit/queuePhases.test.ts` 9 passed、`tests/unit/queueRowStats.test.tsx` 12 passed（3 个新用例覆盖完整五段、无 `phases` 回退、传输中未闭合 ingest）。`npx tsc -b`、`npx eslint`（改动文件）通过。

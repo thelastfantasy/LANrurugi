@@ -111,6 +111,22 @@ fn plugin_mtime(plugin_module: &Path) -> Result<SystemTime> {
 /// which no stat-based key can see (contract P6).
 const INFO_CACHE_TTL: Duration = Duration::from_secs(60);
 
+/// How many throwaway dispatchers may exist at once — the ones that answer "what does this plugin
+/// declare?" and then exit.
+///
+/// Persistent per-plugin workers are deliberately **not** capped: each one is already shared by
+/// every concurrent call into that plugin, and evicting one to make room would mean killing a
+/// process that a download may be talking to. Only the transient fan-out needs a gate, and a
+/// halved-core number (2–8) is what the machine can afford rather than something to tune: a Deno
+/// dispatcher costs ~14 ms to boot and tens of MB resident, so a cold library-wide discover would
+/// otherwise start one process per installed plugin at the same moment.
+pub fn worker_limit() -> usize {
+    let cores = std::thread::available_parallelism()
+        .map(|cores| cores.get())
+        .unwrap_or(4);
+    (cores / 2).clamp(2, 8)
+}
+
 /// A plugin's own declaration, cached per namespace (029 US1, `contracts/plugin-descriptor-cache.md`).
 ///
 /// Only the *declaration* is cached: type, parameters, the permissions it declares. Nothing here
@@ -336,11 +352,23 @@ impl Worker {
     }
 }
 
+/// A throwaway worker (declaration, introspection) and the slot it holds while alive.
+///
+/// Dropping the wrapper drops the worker — `kill_on_drop` ends the process — and returns the slot,
+/// which is what keeps a library-wide discover from booting every plugin at once.
+struct TransientWorker {
+    worker: Worker,
+    _slot: tokio::sync::OwnedSemaphorePermit,
+}
+
 pub struct PluginPool {
     deno_binary: String,
     dispatcher_path: PathBuf,
     plugins_dir: PathBuf,
     workers: Arc<Mutex<HashMap<String, Worker>>>,
+    /// Slots for throwaway declaration/introspection workers, so discovering a whole library at
+    /// once cannot boot more Deno processes than [`worker_limit`] at a time.
+    transient_slots: Arc<tokio::sync::Semaphore>,
     /// Last declaration fetched per namespace, keyed by the file version it came from (029 US1).
     info_cache: Mutex<HashMap<String, CachedPluginInfo>>,
     /// One lock per namespace, so concurrent discovers of the same plugin coalesce into a single
@@ -358,11 +386,22 @@ impl PluginPool {
         dispatcher_path: PathBuf,
         plugins_dir: PathBuf,
     ) -> Self {
+        Self::with_worker_limit(deno_binary, dispatcher_path, plugins_dir, worker_limit())
+    }
+
+    /// Same pool with an explicit process cap — only the tests need to pin it.
+    fn with_worker_limit(
+        deno_binary: impl Into<String>,
+        dispatcher_path: PathBuf,
+        plugins_dir: PathBuf,
+        limit: usize,
+    ) -> Self {
         Self {
             deno_binary: deno_binary.into(),
             dispatcher_path,
             plugins_dir,
             workers: Arc::new(Mutex::new(HashMap::new())),
+            transient_slots: Arc::new(tokio::sync::Semaphore::new(limit)),
             info_cache: Mutex::new(HashMap::new()),
             inflight: Mutex::new(HashMap::new()),
             http: Arc::new(HostHttp::new()),
@@ -461,8 +500,17 @@ impl PluginPool {
 
     /// A throwaway, **zero-permission** worker — the only thing allowed to answer "what does this
     /// plugin declare?" before the host knows what to grant it (constitutional Principle IV).
-    async fn spawn_declaration_worker(&self, namespace: &str) -> Result<Worker> {
-        Worker::spawn(
+    ///
+    /// The returned value holds its [`worker_limit`] slot until it is dropped, so a settings-page
+    /// load that touches the whole library waits in line instead of booting every plugin at once.
+    async fn spawn_transient_worker(&self, namespace: &str) -> Result<TransientWorker> {
+        let slot = self
+            .transient_slots
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("the transient semaphore is never closed");
+        let worker = Worker::spawn(
             &self.deno_binary,
             &self.dispatcher_path,
             &self.plugins_dir,
@@ -471,7 +519,11 @@ impl PluginPool {
             false,
             RelayAccess::none(self.http.clone()),
         )
-        .await
+        .await?;
+        Ok(TransientWorker {
+            worker,
+            _slot: slot,
+        })
     }
 
     /// The cached declaration for `namespace`, loading it once if this file version has not been
@@ -497,8 +549,9 @@ impl PluginPool {
             return Ok(hit);
         }
 
-        let mut worker = self.spawn_declaration_worker(namespace).await?;
-        let response = worker
+        let mut transient = self.spawn_transient_worker(namespace).await?;
+        let response = transient
+            .worker
             .call(namespace, "plugin_info", serde_json::json!({}))
             .await?;
         let info: PluginInfo = serde_json::from_value(response_to_result(response)?)?;
@@ -557,8 +610,9 @@ impl PluginPool {
             return Ok(options);
         }
 
-        let mut worker = self.spawn_declaration_worker(namespace).await?;
-        let response = worker
+        let mut transient = self.spawn_transient_worker(namespace).await?;
+        let response = transient
+            .worker
             .call(namespace, "plugin_options", serde_json::json!({}))
             .await?;
         let value = response_to_result(response)?;
@@ -590,17 +644,9 @@ impl PluginPool {
         if !plugin_module.is_file() {
             return Err(PoolError::NotFound(namespace.to_string()));
         }
-        let mut worker = Worker::spawn(
-            &self.deno_binary,
-            &self.dispatcher_path,
-            &self.plugins_dir,
-            namespace,
-            &[],
-            false,
-            RelayAccess::none(self.http.clone()),
-        )
-        .await?;
-        let response = worker
+        let mut transient = self.spawn_transient_worker(namespace).await?;
+        let response = transient
+            .worker
             .call(namespace, "plugin_introspect", serde_json::json!({}))
             .await?;
         Ok(serde_json::from_value(response_to_result(response)?)?)
@@ -975,6 +1021,62 @@ mod tests {
             "every concurrent caller must observe the same load, not one load per caller"
         );
         assert_eq!(pool.info_cache.lock().await.len(), 1);
+    }
+
+    #[test]
+    fn the_process_cap_is_bounded_whatever_the_machine_reports() {
+        // Derived from the core count, but always something a dispatcher-heavy box can afford:
+        // never zero (nothing would ever load) and never unbounded (a 64-core host does not get
+        // 32 Deno processes out of this).
+        assert!((2..=8).contains(&worker_limit()));
+    }
+
+    #[tokio::test]
+    async fn a_declaration_read_waits_for_a_free_slot_and_returns_it() {
+        let Some(scratch) = Scratch::new("gated-plugin") else {
+            eprintln!("skipping: deno not found on PATH");
+            return;
+        };
+        scratch.declare("gated");
+        let limit = 2;
+        let pool = PluginPool::with_worker_limit(
+            "deno",
+            scratch.dispatcher.clone(),
+            scratch.dir.clone(),
+            limit,
+        );
+
+        // Take every slot first, so the read below is provably gated rather than merely fast.
+        let held: Vec<_> = (0..limit)
+            .map(|_| {
+                pool.transient_slots
+                    .clone()
+                    .try_acquire_owned()
+                    .expect("the scratch pool starts with every slot free")
+            })
+            .collect();
+        let gated = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            pool.plugin_info(&scratch.namespace),
+        )
+        .await;
+        assert!(
+            gated.is_err(),
+            "a declaration read must not start while every slot is taken"
+        );
+
+        drop(held);
+        let info = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            pool.plugin_info(&scratch.namespace),
+        )
+        .await
+        .expect("a freed slot lets the read through")
+        .expect("read the declaration");
+        assert_eq!(info.namespace, scratch.namespace);
+        // The timed-out attempt and the successful one both have to hand their slot back, or the
+        // next library-wide discover would stall behind a phantom holder.
+        assert_eq!(pool.transient_slots.available_permits(), limit);
     }
 
     #[tokio::test]
