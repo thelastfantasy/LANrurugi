@@ -721,6 +721,7 @@
   "subscriptions.historyBand.match": "Đã nhận",
   "subscriptions.historyBand.excluded": "Bị loại",
   "subscriptions.colSubscription": "Đăng ký",
+  "subscriptions.colAdded": "Thêm vào lúc",
   "subscriptions.colWhen": "Kiểm tra lúc",
   "subscriptions.operator.is_empty": "không có",
   "subscriptions.operator.is_not_empty": "có",

@@ -281,6 +281,7 @@
   "subscriptions.historyBand.match": "লোৱা হ'ল",
   "subscriptions.historyBand.excluded": "বাদ পৰিল",
   "subscriptions.colSubscription": "চন্দা",
+  "subscriptions.colAdded": "লাইব্ৰেৰীত যোগৰ সময়",
   "subscriptions.colWhen": "পৰীক্ষাৰ সময়",
   "subscriptions.operator.is_empty": "নাই",
   "subscriptions.operator.is_not_empty": "আছে",

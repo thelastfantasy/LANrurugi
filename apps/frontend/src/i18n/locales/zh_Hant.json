@@ -958,6 +958,7 @@
   "subscriptions.historyBand.match": "已接受",
   "subscriptions.historyBand.excluded": "被排除",
   "subscriptions.colSubscription": "訂閱",
+  "subscriptions.colAdded": "入庫時間",
   "subscriptions.colWhen": "檢查時間",
   "subscriptions.operator.is_empty": "不存在",
   "subscriptions.operator.is_not_empty": "存在",

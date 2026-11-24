@@ -32,14 +32,26 @@ import { toast } from "@/toast"
 
 import { CandidateTitleLink } from "../Settings/CandidateTitleLink"
 import { PendingApprovals } from "../Settings/PendingApprovals"
+import { preferredTitle } from "../Settings/preferredTitle"
 import { SubscriptionGroupHead, useCollapsedGroups } from "../Settings/SubscriptionGroupHead"
 import {
   PostedCell,
   RatingCell,
+  reasonText,
   SUBSCRIPTION_LIST_COLUMNS,
   UploaderCell,
 } from "../Settings/SubscriptionPreview"
-import { groupBySubscription, reservationReasonText, tooSoonText } from "../Settings/subscriptionVerdicts"
+import { SortHead } from "../Settings/SubscriptionSortHead"
+import type { SortFields, SubscriptionSort, SubscriptionSortKey } from "../Settings/subscriptionVerdicts"
+import {
+  compareBySort,
+  comparePostedDesc,
+  groupBySubscription,
+  nextSubscriptionSort,
+  reservationReasonText,
+  SUBSCRIPTION_DEFAULT_SORT,
+  tooSoonText,
+} from "../Settings/subscriptionVerdicts"
 import { ICON_BUTTON_STYLE } from "./shared"
 
 export type SubscriptionsBand = "pending" | "all" | "match" | "failed" | "blocked"
@@ -436,7 +448,7 @@ export function SubscriptionsModal({
           reservation: r,
         }
       })
-      return [...queued, ...unqueued].sort((a, b) => b.checked_at - a.checked_at)
+      return [...queued, ...unqueued]
     }
     // "Accepted" is about what happened, not about what the cycle's verdict says *now*: a work that
     // was queued and has since been catalogued reads `already_held`, and one still sitting in the
@@ -453,6 +465,53 @@ export function SubscriptionsModal({
     (e) =>
       (!subscriptionFilter || e.subscription_id === subscriptionFilter) &&
       (band !== "all" || !skippedOnly || (e.skipped && !e.download)),
+  )
+
+  // Every band reads in the clicked column's order, not just the ones the API already sorts: the
+  // blocked list comes from its own endpoint in block order, and the failure list merges two
+  // sources. Publication time is the default and stays the tie-breaker underneath every column, so
+  // the list is never left in an order two equal values could shuffle (`comparePostedDesc` is what
+  // makes that a total order).
+  const [sort, setSort] = useState<SubscriptionSort>(SUBSCRIPTION_DEFAULT_SORT)
+  const onSort = useCallback(
+    (key: SubscriptionSortKey) => setSort((current) => nextSubscriptionSort(current, key)),
+    [],
+  )
+  const sortFields = useCallback(
+    (e: Row): SortFields => {
+      const outcome = e.reservation ? { key: "subscriptions.outcomeDownloadFailed" } : outcomeOf(e)
+      return {
+        // The title the row shows, so sorting this column reorders what the reader is reading.
+        title: preferredTitle(e.candidate.title, titleOrder) ?? e.candidate.source_url,
+        posted: e.candidate.posted_at ?? null,
+        uploader: e.candidate.uploader ?? "",
+        rating: e.candidate.rating ?? null,
+        // Likewise the verdict's own wording: a blocked work and an outcome the queue recorded read
+        // as different answers, and those answers are what this column is being sorted by.
+        verdict:
+          band === "blocked"
+            ? t("subscriptions.blockedWork")
+            : outcome
+              ? t(outcome.key)
+              : reasonText(t, e.candidate).short,
+      }
+    },
+    [band, t, titleOrder],
+  )
+  const sortedRows = useMemo(() => {
+    const keyed = rows.map((e) => ({ e, fields: sortFields(e) }))
+    keyed.sort((a, b) => compareBySort(a.fields, b.fields, sort) || comparePostedDesc(a.e, b.e))
+    return keyed.map((k) => k.e)
+  }, [rows, sort, sortFields])
+
+  // Groups keep the order of the subscription filter's own list (the order `useSubscriptions`
+  // answers in, which is the order the select above offers): a heading click reorders the works
+  // *inside* a subscription and nothing else. Grouping the sorted rows without that order is what
+  // made a column click reshuffle whole subscriptions instead of rows.
+  const groups = groupBySubscription(
+    sortedRows,
+    (e) => e.subscription_id,
+    (subscriptions.data ?? []).map((sub) => sub.id),
   )
   const all = subscriptions.data ?? []
   const pendingShown = (pending.data ?? []).filter(
@@ -532,7 +591,7 @@ export function SubscriptionsModal({
         )
       ) : history.isPending || (band === "blocked" && blocked.isPending) ? (
         <HistorySkeleton />
-      ) : rows.length === 0 ? (
+      ) : sortedRows.length === 0 ? (
         <p className="sub-form-hint">
           {t(
             band === "blocked"
@@ -554,14 +613,44 @@ export function SubscriptionsModal({
         >
           <div className="preview-row preview-head">
             <span className="preview-index">#</span>
-            <span className="preview-title">{t("subscriptions.colWork")}</span>
-            <span className="preview-posted">{t("subscriptions.field.posted_at")}</span>
-            <span className="preview-uploader">{t("subscriptions.colUploader")}</span>
-            <span className="preview-rating">{t("subscriptions.field.rating")}</span>
-            <span className="preview-verdict">{t("subscriptions.colVerdict")}</span>
+            <SortHead
+              className="preview-title"
+              label={t("subscriptions.colWork")}
+              sortKey="title"
+              sort={sort}
+              onSort={onSort}
+            />
+            <SortHead
+              className="preview-posted"
+              label={t("subscriptions.field.posted_at")}
+              sortKey="posted"
+              sort={sort}
+              onSort={onSort}
+            />
+            <SortHead
+              className="preview-uploader"
+              label={t("subscriptions.colUploader")}
+              sortKey="uploader"
+              sort={sort}
+              onSort={onSort}
+            />
+            <SortHead
+              className="preview-rating"
+              label={t("subscriptions.field.rating")}
+              sortKey="rating"
+              sort={sort}
+              onSort={onSort}
+            />
+            <SortHead
+              className="preview-verdict"
+              label={t("subscriptions.colVerdict")}
+              sortKey="verdict"
+              sort={sort}
+              onSort={onSort}
+            />
           </div>
 
-          {groupBySubscription(rows, (e) => e.subscription_id).map((group) => (
+          {groups.map((group) => (
             <Fragment key={group.subscriptionId}>
               <SubscriptionGroupHead
                 name={
@@ -585,6 +674,12 @@ export function SubscriptionsModal({
               : e.download?.error
                 ? <QueueErrorText error={e.download.error as QueueError} />
                 : null
+            // The row's own time: when it was thrown away, when it entered the library — the fact a
+            // catalogued row is about — or, failing both, when a check last saw it. The tooltip
+            // names which of the three it is showing.
+            const happenedAt = e.deleted?.at ?? e.added_at ?? e.checked_at
+            const happenedWhat =
+              !e.deleted && e.added_at ? "subscriptions.colAdded" : "subscriptions.colWhen"
             return (
             <div
               key={`${e.subscription_id}-${e.candidate.source_url}-${e.checked_at}-${i}`}
@@ -653,8 +748,8 @@ export function SubscriptionsModal({
                   ) : (
                     <Verdict record={e.candidate} />
                   )}
-                <span className="history-when" title={t("subscriptions.colWhen")}>
-                  {new Date((e.deleted?.at ?? e.checked_at) * 1000).toLocaleString()}
+                <span className="history-when" title={t(happenedWhat)}>
+                  {new Date(happenedAt * 1000).toLocaleString()}
                 </span>
                 {/* Both directions from the row itself. The history cannot mark a blocked work by
                     itself — in it, a blocked work reads exactly like any other seen one — so the

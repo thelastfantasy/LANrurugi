@@ -766,6 +766,7 @@
   "subscriptions.historyBand.match": "Retenues",
   "subscriptions.historyBand.excluded": "Écartées",
   "subscriptions.colSubscription": "Abonnement",
+  "subscriptions.colAdded": "Ajoutée",
   "subscriptions.colWhen": "Vérifiée",
   "subscriptions.operator.is_empty": "est absent",
   "subscriptions.operator.is_not_empty": "est présent",

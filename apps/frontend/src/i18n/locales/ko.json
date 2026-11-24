@@ -851,6 +851,7 @@
   "subscriptions.historyBand.match": "가져옴",
   "subscriptions.historyBand.excluded": "제외됨",
   "subscriptions.colSubscription": "구독",
+  "subscriptions.colAdded": "추가 시각",
   "subscriptions.colWhen": "확인 시각",
   "subscriptions.operator.is_empty": "없음",
   "subscriptions.operator.is_not_empty": "있음",

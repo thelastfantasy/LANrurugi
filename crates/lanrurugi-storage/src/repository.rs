@@ -77,6 +77,25 @@ where
 /// 40 lowercase-hex-char pattern, matching legacy `$redis->keys('????????????????????????????????????????')`.
 const ARCHIVE_KEY_GLOB: &str = "????????????????????????????????????????";
 
+/// A library archive that claims a subscription source. `added_at` is its own `date_added:` —
+/// when it entered the library — and is absent when the tag was never stamped (`usedateadded` off,
+/// or an archive catalogued by something that skipped it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldSource {
+    pub archive_id: String,
+    pub added_at: Option<u64>,
+}
+
+/// The `date_added:<unix_seconds>` value out of a raw `tags` string, matching
+/// [`lanrurugi_core::entities::Archive::date_added`]'s tolerance for a missing or malformed one.
+fn date_added_of(tags: &str) -> Option<u64> {
+    tags.split(',').find_map(|t| {
+        t.trim()
+            .strip_prefix("date_added:")
+            .and_then(|v| v.trim().parse().ok())
+    })
+}
+
 #[derive(Clone)]
 pub struct ArchiveRepository {
     pool: Pool,
@@ -165,7 +184,7 @@ impl ArchiveRepository {
         Ok(archives)
     }
 
-    /// Every in-library archive's canonical `source:` tag, `source -> archive id` (first archive
+    /// Every in-library archive's canonical `source:` tag, `source -> [`HeldSource`]` (first archive
     /// wins when several share one). One `KEYS` plus one pipelined `HGET … tags`, cheaper than the
     /// full [`Self::list_all`] a caller would otherwise use.
     ///
@@ -174,7 +193,11 @@ impl ArchiveRepository {
     /// `download_queue_retention_days`, and a deleted row leaves nothing behind at all. There is no
     /// source index (legacy's `LRR_URLMAP` has no equivalent here), so this is a scan, the same
     /// trade-off `plugins::get_existing_archive_id_for_url` already makes.
-    pub async fn held_sources(&self) -> Result<std::collections::HashMap<String, String>> {
+    ///
+    /// Each entry also carries the archive's own `date_added:`, read from the same `tags` string the
+    /// scan already has in hand: it is when the work entered the library, which is the time a
+    /// catalogued row is about.
+    pub async fn held_sources(&self) -> Result<std::collections::HashMap<String, HeldSource>> {
         let mut conn = self.pool.get().await?;
         let ids: Vec<String> = conn.keys(ARCHIVE_KEY_GLOB).await?;
         let mut out = std::collections::HashMap::new();
@@ -186,13 +209,24 @@ impl ArchiveRepository {
             let tags: Vec<Option<String>> = pipe.query_async(&mut conn).await?;
             for (id, tags) in chunk.iter().zip(tags) {
                 let Some(tags) = tags else { continue };
+                let added_at = date_added_of(&tags);
                 for tag in tags.split(',') {
-                    if let Some(source) = tag.trim().strip_prefix("source:") {
-                        let source = source.trim();
-                        if !source.is_empty() {
-                            out.entry(source.to_string()).or_insert_with(|| id.clone());
-                        }
+                    let Some(source) = tag.trim().strip_prefix("source:") else {
+                        continue;
+                    };
+                    let source = source.trim();
+                    // First archive wins, as this used to: a duplicate of the same source in the
+                    // library reports whichever id was indexed first.
+                    if source.is_empty() || out.contains_key(source) {
+                        continue;
                     }
+                    out.insert(
+                        source.to_string(),
+                        HeldSource {
+                            archive_id: id.clone(),
+                            added_at,
+                        },
+                    );
                 }
             }
         }
@@ -1507,6 +1541,42 @@ mod tests {
 
         repo.delete(&id).await.unwrap();
         assert!(repo.get(&id).await.unwrap().is_none());
+    }
+
+    /// The subscription history reads this to answer "when did it enter the library", so the archive
+    /// id and its own `date_added:` both have to survive the scan — and an archive stamped without
+    /// one (`usedateadded` off) must still be found, just without a time.
+    #[tokio::test]
+    async fn held_sources_reports_the_archive_and_when_it_entered() {
+        let Some(pool) = test_pool().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let repo = ArchiveRepository::new(pool);
+        let dated = ArchiveId("5".repeat(40));
+        let undated = ArchiveId("6".repeat(40));
+        let mut dated_archive = minimal_archive(&dated, 1);
+        dated_archive.tags = "source:e-hentai.org/g/1/abc,date_added:1793928516".to_string();
+        let mut undated_archive = minimal_archive(&undated, 1);
+        undated_archive.tags = "source:e-hentai.org/g/2/def,artist:x".to_string();
+        repo.create_or_replace(&dated_archive).await.unwrap();
+        repo.create_or_replace(&undated_archive).await.unwrap();
+
+        let held = repo.held_sources().await.unwrap();
+        assert_eq!(
+            held.get("e-hentai.org/g/1/abc"),
+            Some(&HeldSource {
+                archive_id: dated.as_str().to_string(),
+                added_at: Some(1_793_928_516),
+            })
+        );
+        assert_eq!(
+            held.get("e-hentai.org/g/2/def").map(|h| h.added_at),
+            Some(None)
+        );
+
+        repo.delete(&dated).await.unwrap();
+        repo.delete(&undated).await.unwrap();
     }
 
     /// #302: a whole-record save from a snapshot taken before a progress write must not put the

@@ -14,7 +14,7 @@ import { CandidateTitleLink } from "./CandidateTitleLink"
 import { preferredTitle } from "./preferredTitle"
 import { SubscriptionGroupHead, useCollapsedGroups } from "./SubscriptionGroupHead"
 import { PostedCell, RatingCell, SUBSCRIPTION_LIST_COLUMNS, UploaderCell } from "./SubscriptionPreview"
-import { groupBySubscription } from "./subscriptionVerdicts"
+import { comparePostedDesc, groupBySubscription } from "./subscriptionVerdicts"
 
 /** Sized to its label: the theme's fixed `.stdbtn` width made two of them take half the row. */
 const ROW_BUTTON_STYLE: React.CSSProperties = { width: "auto", minWidth: "4em", padding: "0 10px" }
@@ -42,7 +42,27 @@ export function PendingApprovals({
   const groupsState = useCollapsedGroups()
 
   const history = useSubscriptionHistory()
-  const items = (pending.data ?? []).filter((p) => !subscriptionId || p.subscription_id === subscriptionId)
+  // A pending work carries only its title; what the listing said about it (posted, uploader, rating,
+  // tags) is in the check that matched it, read from the same history the other tabs show.
+  const bySource = new Map((history.data ?? []).map((e) => [`${e.subscription_id}\u0000${e.candidate.source_url}`, e.candidate]))
+  const candidateOf = (p: PendingApproval) => bySource.get(`${p.subscription_id}\u0000${p.source_url}`)
+  // Publication order, like every other subscription list. `created_at` alone is not enough: one
+  // check matches a whole batch at the same second, so sorting by it left these rows in the order
+  // the pending index happened to iterate — a different order per request.
+  const items = (pending.data ?? [])
+    .filter((p) => !subscriptionId || p.subscription_id === subscriptionId)
+    .sort((a, b) =>
+      comparePostedDesc(
+        {
+          checked_at: a.created_at,
+          candidate: { source_url: a.source_url, posted_at: candidateOf(a)?.posted_at },
+        },
+        {
+          checked_at: b.created_at,
+          candidate: { source_url: b.source_url, posted_at: candidateOf(b)?.posted_at },
+        },
+      ),
+    )
   if (items.length === 0) return null
 
   const nameOf = (id: string) => subscriptions.find((s) => s.id === id)?.name ?? id
@@ -52,11 +72,11 @@ export function PendingApprovals({
   const chosenIds = items.filter((p) => selected.has(p.id)).map((p) => p.id)
   // Always grouped, even with one subscription: the heading is where its select-all and its name
   // live, which is what lets the rows drop a subscription column of their own.
-  const groups = groupBySubscription(items, (p) => p.subscription_id)
-  // A pending work carries only its title; what the listing said about it (posted, uploader, rating,
-  // tags) is in the check that matched it, read from the same history the other tabs show.
-  const bySource = new Map((history.data ?? []).map((e) => [`${e.subscription_id}\u0000${e.candidate.source_url}`, e.candidate]))
-  const candidateOf = (p: PendingApproval) => bySource.get(`${p.subscription_id}\u0000${p.source_url}`)
+  const groups = groupBySubscription(
+    items,
+    (p) => p.subscription_id,
+    subscriptions.map((s) => s.id),
+  )
   /** A selection may span subscriptions; a group's own checkbox adds or removes just that group. */
   function toggle(id: string) {
     setSelected((prev) => {

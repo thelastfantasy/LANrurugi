@@ -2062,6 +2062,7 @@
   "subscriptions.historyBand.all": "Everything",
   "subscriptions.historyBand.match": "Taken",
   "subscriptions.colSubscription": "Subscription",
+  "subscriptions.colAdded": "Added to the library",
   "subscriptions.colWhen": "Checked",
   "subscriptions.operator.is_empty": "is absent",
   "subscriptions.operator.is_not_empty": "is present",

@@ -2119,6 +2119,7 @@
   "subscriptions.historyBand.all": "全部",
   "subscriptions.historyBand.match": "已接受",
   "subscriptions.colSubscription": "订阅",
+  "subscriptions.colAdded": "入库时间",
   "subscriptions.colWhen": "检查时间",
   "subscriptions.operator.is_empty": "不存在",
   "subscriptions.operator.is_not_empty": "存在",

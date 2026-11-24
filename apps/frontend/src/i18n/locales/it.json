@@ -461,6 +461,7 @@
   "subscriptions.historyBand.match": "Prese",
   "subscriptions.historyBand.excluded": "Scartate",
   "subscriptions.colSubscription": "Abbonamento",
+  "subscriptions.colAdded": "Aggiunta",
   "subscriptions.colWhen": "Controllata",
   "subscriptions.operator.is_empty": "è assente",
   "subscriptions.operator.is_not_empty": "è presente",
