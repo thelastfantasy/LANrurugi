@@ -203,6 +203,10 @@ COPY apps/frontend/package.json ./apps/frontend/package.json
 COPY apps/docs-site/package.json ./apps/docs-site/package.json
 RUN pnpm install --frozen-lockfile --filter lanrurugi-docs
 COPY apps/docs-site ./apps/docs-site
+# `astro.config.mjs` reads the workspace version out of this manifest (the header's version picker
+# shows it), so the stage needs the one file, not the workspace it describes. Without it the whole
+# image build died on `ENOENT: no such file or directory, open '/build/Cargo.toml'`.
+COPY Cargo.toml ./Cargo.toml
 # The API reference's tag names and translations live with the project docs, not the site.
 COPY docs/api ./docs/api
 COPY scripts/normalize-sdk-doc-json.mjs ./scripts/normalize-sdk-doc-json.mjs
