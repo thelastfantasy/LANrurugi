@@ -4646,6 +4646,20 @@ div.gt.gt-single > span {
   width: 140px;
 }
 
+/* The per-schedule retention editor sits inside the summary line, so it stays a compact
+ * inline triple: label, number, unit. */
+.stdinput.backup-control--keep {
+  width: 68px;
+  height: 32px;
+  text-align: center;
+}
+
+.backup-keep-editor {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* Seven fixed-width cron fields: second, minute, hour, day, month, weekday, year. */
 .backup-cron-fields {
   display: grid;

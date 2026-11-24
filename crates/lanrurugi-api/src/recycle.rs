@@ -1515,8 +1515,10 @@ pub struct SweepReport {
     pub leftovers: u64,
     pub bytes: u64,
     /// specs/028's share of the same hourly maintenance: deletion-journal entries past their
-    /// retention window, and automatic snapshots removed by the daily/weekly retention plan.
+    /// retention window.
     pub journal_purged: u64,
+    /// Always 0 since snapshot retention moved to backup-creation time; kept so the sweep's JSON
+    /// shape does not change under clients.
     pub snapshots_removed: u64,
 }
 
@@ -1544,12 +1546,14 @@ async fn purge_unit(state: &AppState, unit: &SweepUnit) -> Result<(), String> {
 }
 
 pub async fn sweep(state: &AppState) -> SweepReport {
-    // specs/028's half of the hourly maintenance runs first and unconditionally: both early
-    // returns below (a bin that cannot be listed) must not also stop journal expiry or snapshot
-    // retention. `purge_expired` snapshots before clearing anything; retention runs after it so
-    // that snapshot is itself subject to the plan.
+    // specs/028's journal expiry runs first and unconditionally: the early returns below (a bin
+    // that cannot be listed) must not also stop it.
     let journal_purged = crate::deletions::purge_expired(state).await;
-    let snapshots_removed = crate::snapshots::retention_sweep(state).await as u64;
+    // Snapshot retention deliberately does *not* run here. Lowering `snapshot_full_keep` must not
+    // delete anything on its own — the extras go when the next backup (manual or scheduled) is
+    // written, which is the moment the count actually exceeds the budget. `take_full_backup` /
+    // `take_export` call `retention_sweep` for exactly that reason.
+    let snapshots_removed = 0u64;
     let mut report = SweepReport {
         journal_purged,
         snapshots_removed,

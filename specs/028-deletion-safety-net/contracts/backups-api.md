@@ -21,6 +21,7 @@
   "success": 1,
   "daily_keep": 7,
   "week_keep": 4,
+  "full_keep": 3,
   "schedule": {
     "timezone": "Asia/Tokyo (+09:00)",
     "timezone_name": "Asia/Tokyo",
@@ -80,7 +81,8 @@
 - `usable=false` 表示文件存在但不像完整文件（导出：无法解析成备份文档；快照：没有 `REDIS` 魔数，即被截断）。前端应禁用「恢复」按钮。
 - `summary` 只有导出有：它是兄弟文件 `<name>.summary.json` 的内容，缺失或解析失败时为 `null`（字段始终存在）。**快照一律为 `null`**（绝不为了列表去解析 RDB）。
 - `pinned=true` 表示被 pin：不会被保留策略淘汰。
-- `daily_keep` / `week_keep` 是**导出类**的保留份数设置；快照类固定只留最近 3 份。既然计划只写 `scheduled` 快照，这两个设置现在只作用于旧版本留下的 `daily` / `weekly` 导出文件（新版本只写 `manual` 与 `pre-*`）。
+- `daily_keep` / `week_keep` 是**导出类**的保留份数设置，只作用于旧版本留下的 `daily` / `weekly` 导出文件（新版本只写 `manual` 与 `pre-*`）。
+- `full_keep` 是**每条计划**保留的全量快照份数（设置项 `snapshot_full_keep`，默认 3、范围 1–365）。它按 `schedule_id` 分桶，所以加第二条计划不会挤掉第一条的历史；`schedule_id` 为空的（手动、以及已删计划留下的）合成一桶。
 
 ## POST `/api/backups`（开始生成快照 = 全量 RDB）
 

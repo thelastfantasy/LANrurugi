@@ -152,6 +152,8 @@ export interface Settings {
    *  plans were never configured). Written whole by the backups page; `/api/backups` reports the
    *  same list with the instants computed from each plan's cron. */
   snapshot_schedules?: string
+  /** Full snapshot backups kept per schedule (1-365). */
+  snapshot_full_keep?: number
   /** Absolute refresh-token lifetime in seconds — an optional hard cap anchored to the original
    *  login; silent refreshes never extend it. `0` means no cap at all, so a session lives as long
    *  as it is used at least once per `refresh_token_idle_lifetime_secs`. */
@@ -1905,6 +1907,8 @@ export interface BackupsResponse {
   success: number
   daily_keep: number
   week_keep: number
+  /** Full backups kept per schedule (`snapshot_full_keep`); the snapshot list's own budget. */
+  full_keep?: number
   entries: BackupEntry[]
   /** Optional for the same reason as `BackupEntry.summary`: an older server simply omits it. */
   schedule?: BackupSchedule | null

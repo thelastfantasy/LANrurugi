@@ -65,6 +65,10 @@ pub(crate) const DEFAULT_DELETION_GUARD_MIN: i64 = 50;
 /// specs/028: automatic snapshot retention.
 pub(crate) const DEFAULT_SNAPSHOT_DAILY_KEEP: i64 = 7;
 pub(crate) const DEFAULT_SNAPSHOT_WEEK_KEEP: i64 = 4;
+/// Full Redis backups kept **per schedule**. Three is the shipped default: enough to cover "I broke
+/// it yesterday and noticed today", which is the case the safety net exists for. Each schedule gets
+/// its own budget, so adding a second plan does not evict the first one's history.
+pub(crate) const DEFAULT_SNAPSHOT_FULL_KEEP: i64 = 3;
 /// specs/028 follow-up: the automatic snapshot schedule. On by default (a deployment that never
 /// touches these fields keeps the behaviour the feature shipped with), fired by a crontab
 /// expression evaluated in the server's local timezone.
@@ -396,6 +400,11 @@ pub(crate) async fn read_snapshot_daily_keep(state: &AppState) -> i64 {
 
 pub(crate) async fn read_snapshot_week_keep(state: &AppState) -> i64 {
     read_number(state, "snapshot_week_keep", DEFAULT_SNAPSHOT_WEEK_KEEP).await
+}
+
+/// Full backups kept per schedule (`retention_plan`'s third budget).
+pub(crate) async fn read_snapshot_full_keep(state: &AppState) -> i64 {
+    read_number(state, "snapshot_full_keep", DEFAULT_SNAPSHOT_FULL_KEEP).await
 }
 
 /// specs/028 follow-up: the automatic snapshot schedule — the master switch, the crontab
@@ -802,6 +811,7 @@ const NUMBER_FIELDS: &[(&str, i64)] = &[
     ("deletion_guard_min", DEFAULT_DELETION_GUARD_MIN),
     ("snapshot_daily_keep", DEFAULT_SNAPSHOT_DAILY_KEEP),
     ("snapshot_week_keep", DEFAULT_SNAPSHOT_WEEK_KEEP),
+    ("snapshot_full_keep", DEFAULT_SNAPSHOT_FULL_KEEP),
     // Log rotation (`lanrurugi_server::telemetry`): a category file rolls when it passes this many
     // megabytes, and only this many files are kept per category (the active one included). Read
     // once at startup and on every rollover decision, so a saved change applies without a restart.
@@ -1081,6 +1091,7 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
             | "deletion_guard_min"
             | "snapshot_daily_keep"
             | "snapshot_week_keep"
+            | "snapshot_full_keep"
     ) {
         // data-model.md §4's ranges: a guard of 0% or a keep-count of 0 would disable the safety
         // net by accident, so both are rejected rather than silently meaningless.
@@ -2045,6 +2056,22 @@ mod validate_setting_field_tests {
             validate_setting_field("first_run_wizard_done", &json!(true)).unwrap(),
             "1"
         );
+    }
+
+    /// A keep-count of 0 would turn the snapshot safety net off by accident, so it is refused
+    /// rather than silently meaningless; the shipped default and the upper bound are accepted.
+    #[test]
+    fn snapshot_full_keep_rejects_zero() {
+        assert!(NUMBER_FIELDS
+            .iter()
+            .any(|(k, v)| *k == "snapshot_full_keep" && *v == 3));
+        assert!(validate_setting_field("snapshot_full_keep", &json!(3)).is_ok());
+        assert!(validate_setting_field("snapshot_full_keep", &json!(1)).is_ok());
+        assert!(validate_setting_field("snapshot_full_keep", &json!(365)).is_ok());
+        let zero =
+            validate_setting_field("snapshot_full_keep", &json!(0)).expect_err("0 must be refused");
+        assert!(zero.contains("between 1 and 365"), "{zero}");
+        assert!(validate_setting_field("snapshot_full_keep", &json!(366)).is_err());
     }
 
     /// specs/028 follow-up: the scheduled-snapshot array. Each entry is validated by position so

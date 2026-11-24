@@ -136,6 +136,10 @@ app 内的 `POST /api/backups/{name}/restore` 对 `.rdb` 返回 `409`（`reason=
 
 - 既然计划只写 `scheduled` 快照，`snapshot_daily_keep` / `snapshot_week_keep` 现在只作用于**旧版本留下的**
   `daily` / `weekly` 导出文件（新版本只写 `manual` 与 `pre-*` 导出）。旧文件照旧按本地日期 / ISO 周分组淘汰。
+- **保留只在写入新备份时执行**：`take_full_backup` / `take_export` 写完立刻跑一次 `retention_sweep`，
+  每小时的维护（`recycle::sweep`）只做到期台账清理，不再顺手删快照。这样把 `snapshot_full_keep` 从 3 改小
+  不会当场删文件——多余的那几份等到下一次手动或自动备份时才被淘汰（历史上 `snapshots_removed` 字段因
+  此恒为 0，保留它是为了不改变响应形状）。
 - 任何一档的上限都可以被 pin 打破（pin 的不淘汰、不占名额）。
 - **最新一份可用文件永不自动删除**（`DELETE /api/backups/{name}` 对它返回 409 `last_usable`）。
 - 写入是 `.tmp` + `rename`（导出同 `.summary.json.tmp`）；崩溃最多留下被忽略的 `.tmp`。

@@ -40,8 +40,8 @@ use crate::auth_context::AuthContext;
 use crate::common::{error, not_found};
 use crate::settings::{
     read_snapshot_cron, read_snapshot_cron_preset, read_snapshot_daily_keep,
-    read_snapshot_schedule_enabled, read_snapshot_schedules, read_snapshot_week_keep,
-    read_timezone,
+    read_snapshot_full_keep, read_snapshot_schedule_enabled, read_snapshot_schedules,
+    read_snapshot_week_keep, read_timezone,
 };
 use crate::AppState;
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
@@ -66,7 +66,9 @@ pub const MANUAL_KEEP: usize = 5;
 /// Full Redis backups are big and are taken deliberately, so only the newest few are kept. Not a
 /// setting: a knob nobody asked for, and one that could silently leave a library with no full
 /// backup at all. Pinning is the escape hatch for "keep this one forever".
-pub const FULL_BACKUP_KEEP: usize = 3;
+/// Default for the per-schedule full-backup budget; the live value comes from the
+/// `snapshot_full_keep` setting, so this is only the fallback and the tests' baseline.
+pub const FULL_BACKUP_KEEP: usize = crate::settings::DEFAULT_SNAPSHOT_FULL_KEEP as usize;
 const NAME_LEN: usize = 16; // yyyymmddThhmmssZ
 const USABLE_PROBE_BYTES: u64 = 4096;
 /// Every Redis RDB starts with this magic; checking it makes a truncated or foreign `.rdb` show up
@@ -885,6 +887,7 @@ pub fn retention_plan(
     entries: &[SnapshotEntry],
     daily_keep: usize,
     week_keep: usize,
+    full_keep: usize,
     pins: &BTreeSet<String>,
 ) -> Vec<String> {
     let mut sorted: Vec<&SnapshotEntry> = entries.iter().collect();
@@ -911,12 +914,12 @@ pub fn retention_plan(
         if pins.contains(&entry.name) {
             continue;
         }
-        // Full Redis backups keep `FULL_BACKUP_KEEP` each *per schedule*, so adding a second
-        // schedule does not evict the first one's history — and the manual ones (`None`) form one
-        // bucket of their own.
+        // Full Redis backups keep `full_keep` each *per schedule*, so adding a second schedule does
+        // not evict the first one's history — and the manual ones (`None`) form one bucket of their
+        // own.
         if entry.kind == SnapshotKind::Backup {
             let count = backup_seen.entry(entry.schedule_id.clone()).or_insert(0);
-            if *count < FULL_BACKUP_KEEP {
+            if *count < full_keep {
                 *count += 1;
             } else {
                 victims.push(entry.name.clone());
@@ -1406,13 +1409,16 @@ pub async fn retention_sweep(state: &AppState) -> usize {
     };
     let daily_keep = read_snapshot_daily_keep(state).await.max(0) as usize;
     let week_keep = read_snapshot_week_keep(state).await.max(0) as usize;
+    // Validation refuses 0, but a hand-edited Redis value must not turn into "delete every
+    // snapshot the library has" — one is the floor.
+    let full_keep = read_snapshot_full_keep(state).await.max(1) as usize;
     // A pin read that fails must not turn into "nothing is pinned" here: that would evict a
     // snapshot the user asked to keep. Skipping one sweep is the cheap, safe answer.
     let Some(pins) = read_pins(state).await else {
         tracing::warn!("could not read pinned snapshots; skipping this retention sweep");
         return 0;
     };
-    let victims = retention_plan(&entries, daily_keep, week_keep, &pins);
+    let victims = retention_plan(&entries, daily_keep, week_keep, full_keep, &pins);
     let mut removed = 0usize;
     for name in victims {
         // `retention_plan` only ever returns parsed names, but re-checking here keeps the removal
@@ -1576,6 +1582,7 @@ async fn list_backups(State(state): State<AppState>) -> Response {
                 "success": 1,
                 "daily_keep": read_snapshot_daily_keep(&state).await,
                 "week_keep": read_snapshot_week_keep(&state).await,
+                "full_keep": read_snapshot_full_keep(&state).await,
                 "schedule": schedule_json(&schedules, &last_fires, Utc::now().with_timezone(&tz), tz),
                 "entries": entries.iter().map(entry_json).collect::<Vec<_>>(),
             }))
@@ -2146,7 +2153,7 @@ mod tests {
                 true,
             ));
         }
-        let victims = retention_plan(&entries, 7, 4, &no_pins());
+        let victims = retention_plan(&entries, 7, 4, FULL_BACKUP_KEEP, &no_pins());
         let removed_daily = victims.iter().filter(|n| n.contains("-daily")).count();
         let removed_weekly = victims.iter().filter(|n| n.contains("-weekly")).count();
         let removed_pre = victims.iter().filter(|n| n.contains("-pre-")).count();
@@ -2163,7 +2170,7 @@ mod tests {
         let entries: Vec<SnapshotEntry> = (1..=8)
             .map(|d| entry(&format!("export-202611{d:02}T050000Z-manual.json"), true))
             .collect();
-        let victims = retention_plan(&entries, 7, 4, &no_pins());
+        let victims = retention_plan(&entries, 7, 4, FULL_BACKUP_KEEP, &no_pins());
         let removed_manual = victims.iter().filter(|n| n.contains("manual")).count();
         assert_eq!(removed_manual, 3, "8 manual -> 5 kept");
         assert!(!victims.contains(&"export-20261108T050000Z-manual.json".to_string()));
@@ -2184,7 +2191,7 @@ mod tests {
         // An export in the same directory must not be counted as a backup, nor vice versa.
         entries.push(entry("export-20261107T050000Z-manual.json", true));
 
-        let victims = retention_plan(&entries, 7, 4, &no_pins());
+        let victims = retention_plan(&entries, 7, 4, FULL_BACKUP_KEEP, &no_pins());
         assert_eq!(victims.len(), 3, "6 backups -> 3 kept");
         assert!(!victims.contains(&"snapshot-20261106T050000Z-manual.rdb".to_string()));
         assert!(victims.contains(&"snapshot-20261101T050000Z-daily.rdb".to_string()));
@@ -2193,7 +2200,7 @@ mod tests {
         // Pinned: exempt, and it does not consume one of the three slots either, so only the two
         // unpinned stragglers go.
         let pinned = pins(&["snapshot-20261101T050000Z-daily.rdb"]);
-        let victims = retention_plan(&entries, 7, 4, &pinned);
+        let victims = retention_plan(&entries, 7, 4, FULL_BACKUP_KEEP, &pinned);
         assert_eq!(victims.len(), 2);
         assert!(!victims.contains(&"snapshot-20261101T050000Z-daily.rdb".to_string()));
     }
@@ -2211,10 +2218,10 @@ mod tests {
             ));
         }
         let oldest = "export-20261101T050000Z-daily.json";
-        let victims = retention_plan(&entries, 7, 4, &no_pins());
+        let victims = retention_plan(&entries, 7, 4, FULL_BACKUP_KEEP, &no_pins());
         assert!(victims.contains(&oldest.to_string()));
 
-        let victims = retention_plan(&entries, 7, 4, &pins(&[oldest]));
+        let victims = retention_plan(&entries, 7, 4, FULL_BACKUP_KEEP, &pins(&[oldest]));
         assert_eq!(
             victims,
             vec!["export-20261102T050000Z-daily.json".to_string()]
@@ -2229,8 +2236,9 @@ mod tests {
             .map(|i| entry(&format!("export-2026110{}T060000Z-pre-clean.json", i), true))
             .collect();
         let oldest = "export-20261101T060000Z-pre-clean.json";
-        assert!(retention_plan(&entries, 7, 4, &no_pins()).contains(&oldest.to_string()));
-        let victims = retention_plan(&entries, 7, 4, &pins(&[oldest]));
+        assert!(retention_plan(&entries, 7, 4, FULL_BACKUP_KEEP, &no_pins())
+            .contains(&oldest.to_string()));
+        let victims = retention_plan(&entries, 7, 4, FULL_BACKUP_KEEP, &pins(&[oldest]));
         assert_eq!(victims.len(), 2, "8 pre -> 5 kept, minus the pinned one");
         assert!(!victims.contains(&oldest.to_string()));
     }
@@ -2248,7 +2256,7 @@ mod tests {
             })
             .collect();
         entries[7].usable = false; // newest is corrupt, so the protected one is the one before it
-        let victims = retention_plan(&entries, 7, 4, &no_pins());
+        let victims = retention_plan(&entries, 7, 4, FULL_BACKUP_KEEP, &no_pins());
         assert!(!victims.contains(&"export-20261107T050000Z-pre-clean.json".to_string()));
         assert!(victims.contains(&"export-20261101T050000Z-pre-clean.json".to_string()));
     }
@@ -2262,7 +2270,7 @@ mod tests {
             entry("export-20261123T013000Z-daily.json", true),
             entry("export-20261124T120000Z-daily.json", true),
         ];
-        let victims = retention_plan(&entries, 7, 4, &no_pins());
+        let victims = retention_plan(&entries, 7, 4, FULL_BACKUP_KEEP, &no_pins());
         assert_eq!(
             victims,
             vec!["export-20261123T003000Z-daily.json".to_string()]
@@ -3061,9 +3069,36 @@ mod tests {
             entry("snapshot-20261118T030000Z-manual.rdb", true),
         ];
         assert_eq!(
-            retention_plan(&entries, 7, 4, &no_pins()),
+            retention_plan(&entries, 7, 4, FULL_BACKUP_KEEP, &no_pins()),
             vec!["snapshot-20261120T030000Z-scheduled-a.rdb".to_string()],
             "only the fourth snapshot of schedule a goes; b and the manual one are their own buckets"
+        );
+    }
+
+    /// The per-schedule budget is a setting, not a constant: one keeps only the newest, and the
+    /// buckets stay independent at any budget.
+    #[test]
+    fn retention_honours_the_configured_per_schedule_budget() {
+        let entries = vec![
+            entry("snapshot-20261123T030000Z-scheduled-a.rdb", true),
+            entry("snapshot-20261122T030000Z-scheduled-a.rdb", true),
+            entry("snapshot-20261121T030000Z-scheduled-a.rdb", true),
+            entry("snapshot-20261120T030000Z-scheduled-b.rdb", true),
+            entry("snapshot-20261119T030000Z-scheduled-b.rdb", true),
+        ];
+        assert_eq!(
+            retention_plan(&entries, 7, 4, 1, &no_pins()),
+            vec![
+                "snapshot-20261122T030000Z-scheduled-a.rdb".to_string(),
+                "snapshot-20261121T030000Z-scheduled-a.rdb".to_string(),
+                "snapshot-20261119T030000Z-scheduled-b.rdb".to_string(),
+            ],
+            "budget 1 keeps each schedule's newest and evicts the rest of that schedule only"
+        );
+        assert_eq!(
+            retention_plan(&entries, 7, 4, 2, &no_pins()),
+            vec!["snapshot-20261121T030000Z-scheduled-a.rdb".to_string()],
+            "budget 2 covers schedule b's pair and schedule a's two newest"
         );
     }
 

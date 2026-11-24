@@ -41,8 +41,8 @@ import { LegacyImportPanel } from "./LegacyImportPanel"
 /** How many `pre-*` exports retention keeps (`PRE_KEEP` in `crates/lanrurugi-api/src/snapshots.rs`). */
 const PRE_KEEP = 5
 
-/** How many plain (unpinned) full snapshots retention keeps — the server's own default. */
-const SNAPSHOT_KEEP = 3
+/** Fallback for the per-schedule full-snapshot budget when an older server omits `full_keep`. */
+const SNAPSHOT_KEEP_FALLBACK = 3
 
 /** The server refuses more than this many plans; the Add button enforces it too. */
 const MAX_PLANS = 10
@@ -335,6 +335,26 @@ export function Backup() {
 
   // specs/028 deletion safety net — same query/mutation style as the import-snapshot list above.
   const backupsQuery = useBackups()
+  /** Full snapshots kept per schedule. The server owns the number; the page only edits it. */
+  const fullKeep = backupsQuery.data?.full_keep ?? SNAPSHOT_KEEP_FALLBACK
+  const [keepStatus, setKeepStatus] = useState("")
+  const saveFullKeep = async (raw: string, event?: { currentTarget: HTMLInputElement }) => {
+    const parsed = Number.parseInt(raw, 10)
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > 365) {
+      setKeepStatus(t("settings.snapshotKeepInvalid"))
+      // Put the field back on the saved value rather than leaving an unsaveable number on screen.
+      if (event) event.currentTarget.value = String(fullKeep)
+      return
+    }
+    setKeepStatus("")
+    if (parsed === fullKeep) return
+    try {
+      await updateSettings.mutateAsync({ snapshot_full_keep: parsed })
+      await queryClient.invalidateQueries({ queryKey: ["backups"] })
+    } catch (error) {
+      setKeepStatus(String(error))
+    }
+  }
   const createBackup = useCreateBackup()
   const createExport = useCreateExport()
   const restoreBackup = useRestoreBackup()
@@ -1187,7 +1207,7 @@ export function Backup() {
             <span>
               {t("settings.snapshotSummaryCount", { total: snapshots.length })}
               {" · "}
-              {t("settings.snapshotKeepRecent", { keep: SNAPSHOT_KEEP })}
+              {t("settings.snapshotKeepRecent", { keep: fullKeep })}
             </span>
             <span>
               {t("settings.snapshotSummaryLast", {
@@ -1203,6 +1223,29 @@ export function Backup() {
               )}
             </span>
             {pinnedSnapshotCount > 0 && <span>{t("settings.snapshotPinnedNote")}</span>}
+            <label className="backup-keep-editor">
+              <span>{t("settings.snapshotKeepLabel")}</span>
+              <input
+                className="stdinput backup-control--keep"
+                type="number"
+                min={1}
+                max={365}
+                step={1}
+                defaultValue={fullKeep}
+                key={fullKeep}
+                aria-label={t("settings.snapshotKeepLabel")}
+                onBlur={(event) => void saveFullKeep(event.currentTarget.value, event)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void saveFullKeep(event.currentTarget.value, event)
+                }}
+              />
+              <span>{t("settings.snapshotKeepUnit")}</span>
+            </label>
+            {keepStatus && (
+              <span className="backup-hint" role="status">
+                {keepStatus}
+              </span>
+            )}
           </div>
         )}
 
