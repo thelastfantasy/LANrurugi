@@ -58,7 +58,7 @@
 - [x] T030 文档：`docs/dev/` 增补一页说明台账/快照的位置、保留策略与恢复流程；`docs/comparison-with-lanraragi.md` 记一条「删除可撤销」。
 - [x] T031 按 `quickstart.md` 在**数据库副本实例**上跑完 S1–S5，记录实际输出。
 - [x] T032 回归：`mise run test-crate -- lanrurugi-api lanrurugi-storage lanrurugi-scanner`、`mise run clippy`、`mise run fmt-check`、前端 `tsc -b --force` + `eslint`。
-- [ ] T033 提交（一个 commit）→ push → PR（body 引用 #351 并把归因更正写进去）。
+- [x] T033 提交（一个 commit）→ push → PR（body 引用 #351 并把归因更正写进去）。PR #355，合并为 `f3a4b2c`。
 
 ## Phase 8: 可配置备份计划 + 快照摘要（追加，2026-11-23）
 
