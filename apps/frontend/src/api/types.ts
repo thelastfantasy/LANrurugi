@@ -40,7 +40,15 @@ export interface ArchiveMetadata {
    *  in a result set its own tags do not explain. */
   match_reason?: {
     kind: "members"
-    members: { arcid: string; name: string }[]
+    members: {
+      arcid: string
+      /** The volume's own title, so a chapter name never appears alone. */
+      title?: string
+      /** The name the tankoubon gives this volume, when it has one. */
+      chapter?: string | null
+      /** `chapter` when set, else `title` — kept for callers that only want one label. */
+      name: string
+    }[]
   }
 }
 

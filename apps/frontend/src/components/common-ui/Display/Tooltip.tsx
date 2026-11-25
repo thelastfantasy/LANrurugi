@@ -33,6 +33,7 @@ export function Tooltip({
   maxWidth = 320,
   zIndex = Z_OVERLAY_TOOLTIP,
   closeDelay = CLOSE_DELAY_MS,
+  openOnTap = false,
 }: {
   label: React.ReactNode
   children: React.ReactNode
@@ -49,6 +50,11 @@ export function Tooltip({
   /** How long the tooltip stays open after the pointer leaves the trigger, in ms. Set to 0 for
    * immediate close. */
   closeDelay?: number
+  /** Open on a plain tap (touch) instead of requiring a 500 ms hold. Only for triggers that are
+   *  purely decorative — an info icon, a caption with no action of its own. A trigger the user can
+   *  also tap to *do* something (a link, a button) must keep the long press, or the first tap would
+   *  pop a bubble over the thing they were trying to open. */
+  openOnTap?: boolean
 }) {
   const [visible, setVisible] = useState(false)
   const [style, setStyle] = useState<React.CSSProperties>(HIDDEN_STYLE)
@@ -134,6 +140,20 @@ export function Tooltip({
     swallowLeave.current = false
     cancelLongPress()
     if (pointerType.current === "mouse") return
+    if (openOnTap) {
+      // No hold needed: this trigger has no action of its own, so the tap is for the bubble. The
+      // click it ends with is still swallowed — the trigger may sit inside a link (a library card).
+      swallowClick.current = true
+      swallowLeave.current = true
+      if (touchOpened.current) {
+        hide()
+        if (activeTooltip === self.current) activeTooltip = null
+        return
+      }
+      touchOpened.current = true
+      open()
+      return
+    }
     pressOrigin.current = { x: e.clientX, y: e.clientY }
     longPressTimer.current = setTimeout(() => {
       longPressTimer.current = null

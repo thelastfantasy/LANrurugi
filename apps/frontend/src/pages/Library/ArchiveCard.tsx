@@ -14,6 +14,7 @@ import { coverUrl } from "@/lib/utils/coverUrl"
 import { highlightText } from "@/lib/utils/highlightText"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 
+import { type MatchReasonMember,memberLabel, memberParts } from "./matchReason"
 import { TagLine } from "./TagLine"
 import type { ContextMenuTrigger } from "./types"
 
@@ -67,25 +68,31 @@ function PageCountBadge({ archive }: { archive: ArchiveMetadata }) {
 /** Why a Tankoubon is in this result set: its own record did not match, these members did.
  *  Naming them beats a generic "matched via members" — the whole point is which volumes. */
 function matchReasonText(
-  members: { name: string }[],
+  members: MatchReasonMember[],
   t: TFunction,
 ): string {
-  const names = members.map((m) => m.name || "?").join("、")
+  const names = members.map(memberLabel).join("、")
   return t("library.tankMatchedThroughMembers", { members: names })
 }
 
 /** The same as a tooltip: the explanation, then one volume per line — a run-on list of long
  *  titles joined by 、 was unreadable. */
-function MatchReason({ members, t }: { members: { name: string }[]; t: TFunction }) {
+function MatchReason({ members, t }: { members: MatchReasonMember[]; t: TFunction }) {
   return (
     <div style={{ textAlign: "left" }}>
       <div>{t("library.tankMatchedThroughMembersHeading")}</div>
       <ul style={{ margin: "4px 0 0", paddingLeft: "1.2em" }}>
-        {members.map((m, i) => (
+        {members.map((m, i) => {
+          const parts = memberParts(m)
+          return (
           <li key={i} style={{ listStyle: "disc" }}>
-            {m.name || "?"}
+            {/* The archive's own name is bold — it is the one thing a reader is looking for;
+                the chapter name the tankoubon gave it follows in normal weight. */}
+            <strong>{parts.lead}</strong>
+            {parts.rest ? ` — ${parts.rest}` : null}
           </li>
-        ))}
+          )
+        })}
       </ul>
     </div>
   )
@@ -160,8 +167,9 @@ export function ArchiveCard({
           {highlightText(archive.title, highlightQuery)}
         </Link>
         <StatusIcons archive={archive} />
+        {/* `openOnTap`: the icon is decorative, so a tap can only mean "show me the reason". */}
         {archive.match_reason?.kind === "members" && (
-          <Tooltip label={<MatchReason members={archive.match_reason.members} t={t} />}>
+          <Tooltip openOnTap label={<MatchReason members={archive.match_reason.members} t={t} />}>
             <span
               className="match-reason-icon"
               // Focusable so the tooltip is reachable without a mouse; the icon itself is
