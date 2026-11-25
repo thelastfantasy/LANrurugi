@@ -9,10 +9,10 @@ curl -s -X POST localhost:3000/api/login -d 'password=kamimamita' -c /tmp/lrr-co
 ## 场景 1 — 一次性快照（US2 的最小验证）
 
 ```sh
-curl -s -b /tmp/lrr-cookies.txt localhost:3000/api/resources | jq '.snapshot | {at, server, cgroup, runtime, watch}'
+curl -s -b /tmp/lrr-cookies.txt localhost:3000/api/resources | jq '.snapshot | {at, build, server, cgroup, runtime, processes, models, redis, watch}'
 ```
 
-期望：`server.rss_bytes > 0`、`cgroup.anon_bytes < cgroup.memory_current_bytes`（证明拆开了）、`runtime.cpu_cores >= 1`、`watch.samples_taken == 0` 且 `watch.sampler_running == false`（一次性请求不应留下任务）。
+期望：`server.rss_bytes > 0`、`cgroup.anon_bytes < cgroup.memory_current_bytes`（证明拆开了）、`runtime.cpu_cores >= 1`、`build.profile == "debug"`（dev 容器；发布镜像里是 `release`）、`processes.tree` 里有 `depth: 0` 的本进程、`comm` 里能看到 `deno`（先随便调一次插件）与 `lanrurugi-book`（先打开一本电子书）、`redis.used_memory_rss_bytes > 0`、`models.usage` 至少有当前配了的 feature、`watch.samples_taken == 0` 且 `watch.sampler_running == false`（一次性请求不应留下任务）。
 
 ## 场景 2 — SSE 首帧与帧率（US2）
 
@@ -61,7 +61,7 @@ unzip -p /tmp/bundle.zip diagnostics.json | jq 'keys'      # 不应为空文件
 unzip -p /tmp/bundle.zip config.redacted.json | head -3
 ```
 
-期望：三个 JSON 都有内容；`manifest.json` 的 `files[]` 列出它们且字节数 > 2。
+期望：三个 JSON 都有内容；`manifest.json` 的 `files[]` 列出它们且字节数 > 2；`resources.json` 的 `build.profile` 是 `debug`，里面出现的进程名带 `(debug)`。
 
 ## 场景 6 — 不勾资源就不含（US1 边界）
 

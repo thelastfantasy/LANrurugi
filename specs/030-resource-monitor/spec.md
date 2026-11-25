@@ -140,7 +140,7 @@
 - **FR-002**: 最后一个观察者断开后，采样 MUST 在 2 秒内停止，且已采集的历史 MUST 被释放（不落 Redis、不落磁盘）。
 - **FR-003**: 每一个数值 MUST 携带采样时刻、窗口长度（如"过去 1 s"/"自本进程启动"）与来源（如"cgroup 内存文件"），页面与导出都保留这三项。
 - **FR-004**: cgroup 内存 MUST 拆分为 `anon` / `file` / `slab` 并单独给出峰值；`memory.current` 若展示 MUST 标注"含页缓存"。
-- **FR-005**: 快照 MUST 覆盖：CPU（用量与 PSI）、内存（三项拆分、峰值、`high`/`max`/`oom`/`oom_kill` 计数）、IO（读写字节与 PSI）、swap（用量与 PSI full）、磁盘空间与 inode（库盘、temp 盘分开）、fd/线程/进程数、运行时任务与队列深度、逐个插件进程（namespace、pid、RSS、CPU、空闲时长、调用与失败次数）、下载队列深度与阶段耗时（p50/p95）、Redis 摘要（内存、键数、持久化状态）、网络收发速率、缓存命中率、库规模（档案数与总字节，用于归一化）。
+- **FR-005**: 快照 MUST 覆盖：CPU（用量与 PSI）、内存（三项拆分、峰值、`high`/`max`/`oom`/`oom_kill` 计数）、IO（读写字节与 PSI）、swap（用量与 PSI full）、磁盘空间与 inode（库盘、temp 盘分开）、fd/线程/进程数、运行时任务与队列深度、逐个插件进程（namespace、pid、RSS、CPU、空闲时长、调用与失败次数）、下载队列深度与阶段耗时（p50/p95）、Redis 摘要（内存、键数、持久化状态）、网络收发速率、缓存命中率、库规模（档案数与总字节，用于归一化）、**进程树**（从主进程 pid 出发深度 ≤3 的子孙进程：插件 deno、模型 worker、book worker 及其外部工具）、**本地模型**（模型 worker 进程 + 今日按 feature 的调用数、失败数、累计耗时与 token）、**Redis 的进程级指标**（`used_memory_rss`、内存峰值、碎片率、键数、命中率、淘汰数、持久化状态）。
 - **FR-006**: GPU（显存已用/总量、利用率）与温度 MUST 作为可选项，由 `LANRURUGI_RESOURCE_GPU=1` 显式开启（默认关，因为查询要 spawn `nvidia-smi`）：开启后一次查询的结果 MUST 缓存 5 秒；查不到时 MUST 标 `unavailable` 并说明原因，且 MUST NOT 影响其它字段或让页面报错。
 - **FR-007**: 资源面板与资源接口 MUST 仅对管理员可用；访客模式下的任何请求 MUST 被拒绝且不泄露指标。
 - **FR-008**: 面板 MUST 支持「复制为文本」与「导出 CSV」，文本含版本、release、平台与采样窗口。
@@ -152,6 +152,8 @@
 - **FR-014**: 面板首帧 MUST 在 1 秒内出现；单次采样 MUST 在 50 ms 内完成；采样 MUST NOT 启动任何子进程（除可选的 GPU 查询，且该查询可关闭）。
 - **FR-015**: 面板 MUST 在浏览器标签隐藏时暂停采样，并在恢复可见时立即补一帧。
 - **FR-016**: 采样 MUST NOT 持有插件运行时的全局锁超过一次读取所需的时间（先取出 pid 列表再逐个读取进程信息）。
+- **FR-017**: 快照、SSE 帧与 `resources.json` MUST 带构建档位（`debug` / `release`）；面板与导出文本里出现的进程名 MUST 在该档位为 `debug` 时追加 `(debug)`（如 `lanrurugi-server (debug)`），以免 dev 容器里调试构建的内存与 CPU 数字被误读成发布构建的水位。
+- **FR-018**: 监控范围 MUST 覆盖整个应用而不只是主进程——主进程、它的子孙进程（插件 deno、本地模型 worker、book worker、它们再 spawn 的外部工具）、Redis 的进程级指标与键空间、本地模型的调用统计，且 MUST NOT 依赖外部 exporter/agent（node_exporter、cAdvisor 之类）。进程内加载的模型（ONNX）与主进程共用地址空间，其内存 MUST NOT 被拆成看似精确的独立数字，面板必须说明这一点。
 
 ### Key Entities
 
@@ -172,6 +174,8 @@
 - **SC-005**: 面对"下载变慢"，维护者能在一次快照内判断属于 CPU 压力、IO 压力、网络还是插件进程异常四类之一（清单里每个数字都能对应到一类）。
 - **SC-006**: `resources.json` 不超过 64 KB，且在同一实例上重复生成时字段集合稳定（便于比较）。
 - **SC-007**: 快照、导出与图表里不出现 access key、cookie、token 与含用户名的绝对路径（用真实样本核验）。
+- **SC-008**: dev 容器里面板与 `resources.json` 的每个进程名都带 `(debug)`，发布镜像里一个都不带（quickstart 场景 1 / 场景 5 对照）。
+- **SC-009**: dev 容器里一次快照能同时看到主进程、至少一个 deno worker、至少一个本地模型或 book worker（在该能力被用到时）、以及 Redis 的 `used_memory_rss`，每项与 `ps` / `redis-cli INFO` 的真值误差 < 10%。
 
 ## Assumptions
 

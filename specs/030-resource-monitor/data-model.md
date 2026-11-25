@@ -24,13 +24,25 @@ ResourceSnapshot
   watch              WatchSection          # observers / samples_taken / sampler_running
 ```
 
+`BuildSection`：`profile`（`"debug"` / `"release"`，来自编译期 `cfg!(debug_assertions)`）、`binary`（`lanrurugi-server`）。
+
 `ServerSection`：`pid`、`rss_bytes`、`peak_rss_bytes`、`swap_bytes`、`threads`、`fd_count`、`fd_limit`、`cpu_percent_1s`（首帧 `null`）、`cpu_seconds_total`、`read_bytes`、`write_bytes`。
 
 `CgroupSection`：`path`、`memory_current_bytes`（附 `includes_page_cache: true`）、`anon_bytes`、`file_bytes`、`slab_bytes`、`peak_bytes`、`swap_current_bytes`、`pids_current`、`cpu_usage_usec`、`events: {low, high, max, oom, oom_kill}`、`psi_memory: {some10, some60, full10, full60}`、`io_stat: [{device, read_bytes, write_bytes}]`。
 
 `RuntimeSection`：`cpu_cores`（`std::thread::available_parallelism()`）、`tracked_tasks`（本进程自己维护的任务计数：采样任务、后台任务、在飞插件调用各加一，结束减一）、`queue_depth`（`JobRegistry` 里排队中的任务数）。tokio 的 `RuntimeMetrics` 在 `cfg(tokio_unstable)` 后面，第一版不启用，因此没有 `alive_tasks`/`global_queue_depth` 这两个字段。
 
-`PluginSection`：`limit`（`worker_limit()`）、`transient_available`、`processes: [PluginProcess]`。
+`PluginSection`：`limit`（`worker_limit()`）、`transient_available`、`transient_in_flight`、`transient_spawned_total`、`processes: [PluginProcess]`。
+
+`ProcessSection`：`root_pid`、`tree: [ProcessEntry]`、`truncated`（超过 64 个进程或深度 3 时置 true）。
+
+`ProcessEntry`：`pid`、`ppid`、`depth`、`comm`（`/proc/<pid>/stat` 的第 2 字段，含 `deno`、`lanrurugi-book-worker` 这类名字）、`rss_bytes`、`cpu_percent`（相邻两次采样之差，首帧 `null`）、`started_at`。
+
+`ModelsSection`：`usage: [ModelUsage]`（当日 UTC，来自 `LANRURUGI_LLM_USAGE:<feature>:<date>` 这个 hash）、`in_process: [InProcessModel]`、`note`（进程内模型与主进程共用地址空间的说明）。
+
+`ModelUsage`：`feature`、`requests`、`failures`、`elapsed_ms_total`、`tokens_in`、`tokens_out`。
+
+`InProcessModel`：`name`（`embed`/`ocr`/`translate`/`inpaint`）、`loaded`（`true`/`false`/`unknown`）。
 
 ## E2 PluginProcess
 

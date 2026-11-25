@@ -75,3 +75,11 @@
 ## R10 运行时任务数不依赖 tokio 的不稳定接口
 
 `Handle::metrics()`（`alive_tasks`、`global_queue_depth`）在 `cfg(tokio_unstable)` 后面：启用要给整个 workspace——包括 Docker 与 CI 的构建——加 `RUSTFLAGS=--cfg tokio_unstable`，代价是一个面板不该付的。**决定**：`RuntimeSection` 只放能稳定拿到的三项——`cpu_cores`（`std::thread::available_parallelism()`）、`tracked_tasks`（自己在 `ResourceWatch` 与后台任务出入口维护的 AtomicUsize 计数）、`queue_depth`（`JobRegistry` 排队数）。想看任务堆积时以 `queue_depth` 与 `ServerSection.threads` 为准。
+
+## R11 构建档位是编译期事实，不是运行时开关
+
+`debug` 与 `release` 的差别（未优化代码、带调试信息、`debug_assertions` 打开）在编译那一刻就定了，用 `cfg!(debug_assertions)` 取，不读任何环境变量——dev 容器跑的就是 debug 二进制，如果面板里 `lanrurugi-server` 的 1.4 GB RSS 被当成发布构建的水位，排查会走向完全错误的方向。所以快照带 `build.profile`，人可读的进程名在 `debug` 下追加 `(debug)`；`deno` 插件进程不是本次构建的产物，不追加。
+
+## R12 全应用范围：进程树 + Redis INFO + usage 账本，不装 exporter
+
+「整个应用」在这套部署里横跨三处：主进程及其子孙进程（插件 `deno`、`lanrurugi-book-worker`、`lanrurugi-embed-worker`、`lanrurugi-gpu-worker`，以及 book worker 再 spawn 的 djvu 工具）、**另一个容器里的 Redis**、以及模型调用（进程内 ONNX 会话 + 远端 LLM）。**决定**：前两类用 `/proc` 的真实 `ppid` 关系重建进程树（深度 ≤3、条目 ≤64），Redis 用 `INFO memory/stats/persistence/keyspace`（它自己就给了 `used_memory_rss`、`mem_fragmentation_ratio`、命中率、淘汰数，跨容器也不需要读 `/proc`），模型调用用既有的 `LANRURUGI_LLM_USAGE:<feature>:<date>` 账本。**不引入** node_exporter / cAdvisor / OTel collector：那要多一个常驻进程和一个抓取端点，与「不在设置页打开时零占用」直接冲突。进程内加载的 ONNX 模型无法从主进程 RSS 里分离，`models.in_process` 只报「是否已加载」，`note` 里明说内存仍在 `server.rss_bytes` 内。

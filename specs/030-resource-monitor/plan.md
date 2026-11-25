@@ -52,7 +52,7 @@ specs/030-resource-monitor/
 
 ```text
 crates/lanrurugi-api/src/
-├── resources/{mod.rs, model.rs, procfs.rs, portable.rs, gpu.rs, watch.rs, alerts.rs, api.rs}
+├── resources/{mod.rs, model.rs, procfs.rs, portable.rs, gpu.rs, models.rs, watch.rs, alerts.rs, api.rs}
 └── diagnostics/{mod.rs (route + report hook), bundle.rs (resources 类目，修空 diagnostics.json), resources_file.rs}
 
 crates/lanrurugi-plugin/src/pool.rs         # worker_processes()：只读快照 pid 集合
@@ -105,6 +105,8 @@ error 事件
 2. `collect()` 只读文件与内存，不 spawn 子进程（`LANRURUGI_RESOURCE_GPU=1` 时的 GPU 探测除外；默认不走，且探测走可注入的替身，“没走”是可断言的）。
 3. 采样不持插件池的 `workers` 锁：`worker_processes()` 先 `try_lock` 复制 `(namespace, pid)` 再逐个读 `/proc`。
 4. 每个数值都有 `at` / `window` / `source` 三字段；缺失的字段是 `null` + `reason`。
+5. 构建档位来自编译期 `cfg!(debug_assertions)`（不读环境变量）；`debug` 时进程名一律渲染成 `name (debug)`。
+6. 进程树从 `root_pid` 出发走 `/proc` 的真实 `ppid` 关系，深度 ≤ 3、条目 ≤ 64，超出置 `truncated`；进程内模型的内存不单独计算（与主进程同地址空间）。
 
 ### 契约
 
