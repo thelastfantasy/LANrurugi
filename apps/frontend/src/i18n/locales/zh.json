@@ -30,6 +30,8 @@
   "3 months": "3 个月",
   "settings.7DaysAfterItWas": "添加后 7 天",
   "reader.aHrefUrlLogin": "<a href='${url}'>登录</a> 以启用书签功能。",
+  "reader.bookmarkAdded": "已添加书签 · 第 {{page}} 页",
+  "reader.bookmarkRemoved": "已移除书签 · 第 {{page}} 页",
   "settings.bnamespaceBRemoves": "<b>-namespace:*</b> : 删除此命名空间内的所有标签",
   "settings.btagTagB": "<b>-tag | tag</b> : 删除标签（类似于黑名单）",
   "settings.bNamespaceNewnamespace": "<b>namespace:* -> new-namespace:*</b> : 用新的命名空间替换旧的命名空间",

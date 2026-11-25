@@ -2623,7 +2623,7 @@ export function Reader() {
   const currentBookmark = (bookmarks.data ?? []).find((b) => b.page === currentPage);
   const isPageBookmarked = currentBookmark !== undefined;
 
-  async function toggleBookmark() {
+  async function toggleBookmark({ announce = false }: { announce?: boolean } = {}) {
     if (!loggedIn) {
       const template = t("reader.aHrefUrlLogin") ?? "";
       toast({
@@ -2635,10 +2635,24 @@ export function Reader() {
       return;
     }
     if (!archiveId) return;
-    if (isPageBookmarked) {
-      await removeBookmark.mutateAsync({ archiveId, page: currentPage });
-    } else {
-      await addBookmark.mutateAsync({ archiveId, page: currentPage });
+    try {
+      if (isPageBookmarked) {
+        await removeBookmark.mutateAsync({ archiveId, page: currentPage });
+        if (announce) {
+          toast({ heading: t("reader.bookmarkRemoved", { page: currentPage }) ?? undefined, icon: "info" })
+        }
+      } else {
+        await addBookmark.mutateAsync({ archiveId, page: currentPage });
+        if (announce) {
+          toast({ heading: t("reader.bookmarkAdded", { page: currentPage }) ?? undefined, icon: "success" })
+        }
+      }
+    } catch (err) {
+      // A failed write used to reject into nothing (`void toggleBookmark()`): in headless reading
+      // there is no toolbar icon to notice it either, so say it out loud when nothing else can.
+      if (announce) {
+        toast({ text: err instanceof Error ? err.message : String(err), icon: "error" })
+      }
     }
   }
 
@@ -2785,7 +2799,9 @@ export function Reader() {
           }
           return;
         case "b":
-          void toggleBookmark();
+          // Headless hides the toolbar, so the bookmark icon's own state change is the only
+          // feedback there would be — the toast is what makes the shortcut answer at all.
+          void toggleBookmark({ announce: headless });
           return;
         case "f":
           toggleFullScreen();

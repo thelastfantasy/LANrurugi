@@ -4,6 +4,8 @@
   "edit.separatedByHyphensIE": "(cách nhau bằng dấu phẩy, ví dụ: thẻ1, thẻ2)",
   "pluginOptions.ExampleCom": "*.example.com",
   "reader.aHrefUrlLogin": "<a href='${url}'>Đăng nhập</a> để bật/tắt tính năng đánh dấu trang.",
+  "reader.bookmarkAdded": "Đã thêm dấu trang · trang {{page}}",
+  "reader.bookmarkRemoved": "Đã xóa dấu trang · trang {{page}}",
   "settings.bnamespaceBRemoves": "<b>-namespace:*</b> : xóa tất cả các thẻ trong không gian tên này",
   "settings.btagTagB": "<b>-thẻ | thẻ</b> : xóa thẻ (giống như danh sách đen)",
   "settings.tagRuleReplace": "<b>thẻ -> thẻ-mới</b> : thay thế một thẻ bằng thẻ mới",

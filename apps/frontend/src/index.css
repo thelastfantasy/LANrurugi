@@ -3040,6 +3040,13 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   color: #c79121;
 }
 
+/* The icon is a filled disc, so at `1em` it reads heavier and taller than the figures beside it —
+   at the count's own size (0.7rem) the disc is what made the badge look bigger than the number. */
+.queue-tab-undecided svg {
+  width: 0.78em;
+  height: 0.78em;
+}
+
 /* Download rows on a phone: every extra item in this wrapping flex row costs a whole line, and the
    two flag checkboxes are non-actionable once an item leaves `queued` — they were drawing an empty
    box and a tick on a line of their own, which is most of the wasted height (reported 2026-11-04). */

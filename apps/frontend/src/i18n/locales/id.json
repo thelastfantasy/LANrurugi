@@ -5,6 +5,8 @@
   "edit.separatedByHyphensIE": "(dipisahkan dengan tanda hubung, contoh: tag1, tag2)",
   "pluginOptions.ExampleCom": "*.example.com",
   "reader.aHrefUrlLogin": "<a href='${url}'>Log masuk</a> untuk mengaktifkan fitur penanda.",
+  "reader.bookmarkAdded": "Markah ditambahkan · halaman {{page}}",
+  "reader.bookmarkRemoved": "Markah dihapus · halaman {{page}}",
   "settings.bnamespaceBRemoves": "<b>-ruangnama:*</b> : menghapus semua tag dalam ruang nama ini",
   "settings.btagTagB": "<b>-tag | tag</b> : menghapus tag (seperti daftar hitam)",
   "settings.tagRuleReplace": "<b>tag -> tag-baru</b> : mengganti suatu tag",

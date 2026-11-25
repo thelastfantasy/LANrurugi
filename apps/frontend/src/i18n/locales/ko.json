@@ -6,6 +6,8 @@
   "edit.separatedByHyphensIE": "(하이픈으로 구분, 예: tag1, tag2)",
   "pluginOptions.ExampleCom": "*.example.com",
   "reader.aHrefUrlLogin": "북마크 기능을 토글하려면 <a href='${url}'>로그인</a>하세요.",
+  "reader.bookmarkAdded": "북마크를 추가했습니다 · {{page}} 페이지",
+  "reader.bookmarkRemoved": "북마크를 제거했습니다 · {{page}} 페이지",
   "settings.bnamespaceBRemoves": "\"<b>-namespace:*</b> : 이 네임스페이스 내의 모든 태그 제거",
   "settings.btagTagB": "<b>-tag | tag</b> : 태그 제거 (블랙리스트 형식)",
   "settings.bNamespaceNewnamespace": "<b>namespace:* -> new-namespace:*</b> : 네임스페이스를 새로운 네임스페이스로 ",

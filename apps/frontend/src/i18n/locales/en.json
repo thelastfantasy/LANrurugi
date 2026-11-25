@@ -30,6 +30,8 @@
   "3 months": "3 months",
   "settings.7DaysAfterItWas": "7 days after it was added",
   "reader.aHrefUrlLogin": "<a href='${url}'>Login</a> to toggle bookmark feature.",
+  "reader.bookmarkAdded": "Bookmark added · page {{page}}",
+  "reader.bookmarkRemoved": "Bookmark removed · page {{page}}",
   "settings.bnamespaceBRemoves": "<b>-namespace:*</b> : removes all tags within this namespace",
   "settings.btagTagB": "<b>-tag | tag</b> : removes the tag (like a blacklist)",
   "settings.bNamespaceNewnamespace": "<b>namespace:* -> new-namespace:*</b> : replaces the namespace with the new one",

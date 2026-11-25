@@ -5,6 +5,8 @@
   "edit.separatedByHyphensIE": "(separert med komma, f.eks: tagg1, tagg2)",
   "pluginOptions.ExampleCom": "*.example.com",
   "reader.aHrefUrlLogin": "<a href='${url}'>Logg inn</a> for å aktivere bokmerke-funksjonen.",
+  "reader.bookmarkAdded": "Bokmerke lagt til · side {{page}}",
+  "reader.bookmarkRemoved": "Bokmerke fjernet · side {{page}}",
   "settings.bnamespaceBRemoves": "<b>-navnerom:*</b> : fjerner alle tagger innenfor dette navnerommet",
   "settings.btagTagB": "<b>-tagg | tagg</b> : fjerner taggen (som en svarteliste)",
   "settings.tagRuleReplace": "<b>tagg -> new-tagg</b> : erstatter en tagg",

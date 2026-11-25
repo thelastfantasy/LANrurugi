@@ -4,6 +4,8 @@
   "edit.separatedByHyphensIE": "(separados por hífens, ou seja: tag1, tag2)",
   "pluginOptions.ExampleCom": "*.example.com",
   "reader.aHrefUrlLogin": "<a href='${url}'>Acesso</a> para alternar o recurso de marcação.",
+  "reader.bookmarkAdded": "Marcador adicionado · página {{page}}",
+  "reader.bookmarkRemoved": "Marcador removido · página {{page}}",
   "settings.bnamespaceBRemoves": "<b>-namespace:*</b> : remove todas as tags dentro deste namespace",
   "settings.btagTagB": "<b>-tag | tag</b> : remover a tag (como uma lista negra)",
   "settings.tagRuleReplace": "<b>tag -> nova-tag</b> : substitui uma tag",

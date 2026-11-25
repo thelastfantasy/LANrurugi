@@ -3323,6 +3323,7 @@ pub(crate) async fn update_queue_item_state(
         match repo.get(item_id).await {
             Ok(Some(mut item)) => {
                 item.state = new_state;
+                crate::download_queue::settle_transferring(&mut item);
                 // Terminal states get an end stamp (and a fresh start drops any stale one, so a
                 // retried item reports its own run). The size is written by the completion paths
                 // themselves, which are the only places that know the job's final byte count.

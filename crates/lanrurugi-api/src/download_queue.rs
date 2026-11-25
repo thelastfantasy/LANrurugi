@@ -155,9 +155,28 @@ async fn fetch_queue_item_metadata(
     }
 }
 
+/// Clears `transferring` once an item has left `Downloading`.
+///
+/// The flag is raised at the first byte and lowered when the bytes are all in; a run that failed,
+/// was stopped or was cancelled mid-transfer never reached that point, so the item kept reporting a
+/// transfer in progress and the queue heading counted it (real report: "2 transferring" over two
+/// rows that had been dead for minutes).
+pub(crate) fn settle_transferring(item: &mut lanrurugi_storage::download_queue::DownloadQueueItem) {
+    if item.state != lanrurugi_storage::download_queue::DownloadQueueState::Downloading {
+        item.transferring = false;
+    }
+}
+
 async fn list_queue(State(state): State<AppState>) -> Response {
     match state.download_queue.list_all().await {
-        Ok(items) => axum::Json(json!({ "items": items })).into_response(),
+        Ok(mut items) => {
+            // Records written before the flag was settled on failure can still read `true` in a
+            // state where nothing is moving bytes; the list is where the header's count comes from.
+            for item in &mut items {
+                settle_transferring(item);
+            }
+            axum::Json(json!({ "items": items })).into_response()
+        }
         Err(e) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "list_download_queue",
@@ -1942,6 +1961,24 @@ mod tests {
     use lanrurugi_storage::download_queue::DownloadQueueItem;
 
     use super::*;
+
+    #[test]
+    fn a_row_that_left_downloading_is_not_still_transferring() {
+        let mut downloading = item("a", "https://e/a", DownloadQueueState::Downloading);
+        downloading.transferring = true;
+        settle_transferring(&mut downloading);
+        assert!(
+            downloading.transferring,
+            "a live transfer keeps its flag — this is what the heading counts"
+        );
+
+        for state in [DownloadQueueState::Error, DownloadQueueState::Cancelled] {
+            let mut dead = item("b", "https://e/b", state);
+            dead.transferring = true;
+            settle_transferring(&mut dead);
+            assert!(!dead.transferring, "{state:?} cannot be moving bytes");
+        }
+    }
 
     #[test]
     fn paused_is_resumable_but_not_in_flight() {
