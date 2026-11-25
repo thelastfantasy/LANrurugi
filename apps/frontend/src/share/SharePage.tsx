@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next"
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom"
 
 import { Button } from "@/components/common-ui/Form"
+import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { copyWithToast } from "@/lib/clipboard"
 
 import { formatShareCode, normalizeShareCode } from "./code"
@@ -71,6 +72,8 @@ export function SharePage() {
   const archiveHref = (entry: ArchiveEntry) => `${base}/a/${encodeURIComponent(entry.archive_id)}`
   const volumeHref = (id: string, n: number) => `${base}/t/${encodeURIComponent(id)}/${n}`
   const readVolume = (id: string, n: number) => navigate(volumeHref(id, n))
+  // The tab names the share, not the site alone: a recipient often keeps several open.
+  useDocumentTitle(view?.manifest.title || undefined)
 
   useEffect(() => {
     if (!code) return

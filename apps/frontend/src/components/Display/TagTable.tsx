@@ -39,6 +39,10 @@ export function TagTable({
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       {namespaces.map((namespace) => {
         const displayKey = namespace === BARE_TAG_NAMESPACE ? "other" : namespace
+        // A URL has no spaces to break at, so it gets the wrapping chip rather than the single-line
+        // one: `gt-single`'s ellipsis is sized from a max-width the flex row cannot resolve for an
+        // unbreakable string, which let a long `download:` value push its border out of the popover.
+        const isUrlTag = displayKey === "source" || displayKey === "download"
         return (
         <div key={namespace} style={{ display: "flex", gap: 6, alignItems: "flex-start", minWidth: 0 }}>
           <div
@@ -74,9 +78,9 @@ export function TagTable({
               byNamespace[namespace].map((value, i) => (
                 <div
                   key={i}
-                  // `gt-single` (index.css) keeps CJK and Latin chips the same height; a source URL
-                  // is left out so it can still wrap.
-                  className={displayKey === "source" ? "gt" : "gt gt-single"}
+                  // `gt-single` (index.css) keeps CJK and Latin chips the same height; URLs are left
+                  // out so they can still wrap.
+                  className={isUrlTag ? "gt" : "gt gt-single"}
                   style={{ maxWidth: "100%", whiteSpace: "normal", overflow: "visible", textOverflow: "clip" }}
                 >
                   {!links ? (
@@ -84,13 +88,11 @@ export function TagTable({
                     // span is visually identical to the anchor it replaces.
                     <span
                       style={{ wordBreak: "break-all" }}
-                      title={displayKey === "source" ? value : formatTagValue(displayKey, value, timezone)}
+                      title={isUrlTag ? value : formatTagValue(displayKey, value, timezone)}
                     >
-                      {displayKey === "source"
-                        ? value
-                        : formatTagValue(displayKey, value, timezone)}
+                      {isUrlTag ? value : formatTagValue(displayKey, value, timezone)}
                     </span>
-                  ) : displayKey === "source" ? (
+                  ) : isUrlTag ? (
                     <a
                       href={/^https?:\/\//i.test(value) ? value : `https://${value}`}
                       target="_blank"
