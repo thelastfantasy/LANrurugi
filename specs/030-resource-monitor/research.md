@@ -28,7 +28,7 @@
 | cgroup 压力 | `memory.pressure`、`cpu.stat`、`pids.current` | v2 才有 |
 | 全局压力 | `/proc/pressure/{cpu,memory,io}` 的 `some`/`full` | 本机实测可读（`some avg10=0.00`） |
 | 插件进程 | `PluginPool` 的 worker 表 + `/proc/<pid>/statm`、`/proc/<pid>/stat` | 只读自己起的子进程 |
-| Tokio | `Handle::metrics()`（`num_workers`/`num_alive_tasks`/`global_queue_depth`） | 免费 |
+| Tokio | `std::thread::available_parallelism()`（核数）+ 自己的任务计数器 | 免费；`Handle::metrics()` 需要 `tokio_unstable`，见 R10 |
 | Redis | `INFO`（`used_memory`、`db*`、`rdb_last_bgsave_status`、`aof_last_write_status`） | 一次 RTT |
 | 磁盘 | `statvfs`（库盘、temp 盘分开） | 含 inode |
 | 网络 | `/proc/net/dev` 累计收发 | 差值给速率 |
@@ -70,4 +70,8 @@
 
 ## R9 采样放在 `spawn_blocking` 里
 
-采集是十几次小文件读（每个插件进程 2 个 `open`），总计个位数毫秒；放在 reactor 上 1 Hz 也能接受，但一次 `/proc` 扫描在极端情况（几百个进程）会挡住同一 worker 上的其它任务。**决定**：整个 `collect()` 走 `tokio::task::spawn_blocking`，配合 `Handle::metrics()` 的读取在主线程完成后再合并。
+采集是十几次小文件读（每个插件进程 2 个 `open`），总计个位数毫秒；放在 reactor 上 1 Hz 也能接受，但一次 `/proc` 扫描在极端情况（几百个进程）会挡住同一 worker 上的其它任务。**决定**：整个 `collect()` 走 `tokio::task::spawn_blocking`，进程数与可用核数这类廉价读取在主线程完成后再合并。
+
+## R10 运行时任务数不依赖 tokio 的不稳定接口
+
+`Handle::metrics()`（`alive_tasks`、`global_queue_depth`）在 `cfg(tokio_unstable)` 后面：启用要给整个 workspace——包括 Docker 与 CI 的构建——加 `RUSTFLAGS=--cfg tokio_unstable`，代价是一个面板不该付的。**决定**：`RuntimeSection` 只放能稳定拿到的三项——`cpu_cores`（`std::thread::available_parallelism()`）、`tracked_tasks`（自己在 `ResourceWatch` 与后台任务出入口维护的 AtomicUsize 计数）、`queue_depth`（`JobRegistry` 排队数）。想看任务堆积时以 `queue_depth` 与 `ServerSection.threads` 为准。

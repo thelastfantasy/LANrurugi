@@ -28,7 +28,7 @@ ResourceSnapshot
 
 `CgroupSection`：`path`、`memory_current_bytes`（附 `includes_page_cache: true`）、`anon_bytes`、`file_bytes`、`slab_bytes`、`peak_bytes`、`swap_current_bytes`、`pids_current`、`cpu_usage_usec`、`events: {low, high, max, oom, oom_kill}`、`psi_memory: {some10, some60, full10, full60}`、`io_stat: [{device, read_bytes, write_bytes}]`。
 
-`RuntimeSection`：`tokio_workers`、`alive_tasks`、`global_queue_depth`。
+`RuntimeSection`：`cpu_cores`（`std::thread::available_parallelism()`）、`tracked_tasks`（本进程自己维护的任务计数：采样任务、后台任务、在飞插件调用各加一，结束减一）、`queue_depth`（`JobRegistry` 里排队中的任务数）。tokio 的 `RuntimeMetrics` 在 `cfg(tokio_unstable)` 后面，第一版不启用，因此没有 `alive_tasks`/`global_queue_depth` 这两个字段。
 
 `PluginSection`：`limit`（`worker_limit()`）、`transient_available`、`processes: [PluginProcess]`。
 
@@ -54,7 +54,7 @@ Sample
   at, monotonic_ms
   cpu_percent_1s, rss_bytes, anon_bytes, file_bytes, pids, fd_count
   psi_memory_full10, psi_io_some10, psi_cpu_some10
-  alive_tasks, queue_active, queue_queued, plugins_alive
+  tracked_tasks, queue_active, queue_queued, plugins_alive
 ```
 
 一帧约 160–220 B；30 分钟 × 1 Hz ≈ 1800 帧 ≈ 400 KB，只在采样任务内存里。

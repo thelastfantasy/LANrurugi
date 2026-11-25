@@ -38,7 +38,7 @@
     "psi_memory": { "some10": 0.0, "some60": 0.0, "full10": 0.0, "full60": 0.0 },
     "io_stat": [ { "device": "8:0", "read_bytes": 0, "write_bytes": 0 } ]
   },
-  "runtime": { "tokio_workers": 12, "alive_tasks": 176, "global_queue_depth": 0 },
+  "runtime": { "cpu_cores": 12, "tracked_tasks": 176, "queue_depth": 2 },
   "plugins": {
     "limit": 6,
     "transient_available": 6,

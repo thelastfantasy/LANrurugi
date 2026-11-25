@@ -12,7 +12,7 @@ curl -s -X POST localhost:3000/api/login -d 'password=kamimamita' -c /tmp/lrr-co
 curl -s -b /tmp/lrr-cookies.txt localhost:3000/api/resources | jq '.snapshot | {at, server, cgroup, runtime, watch}'
 ```
 
-期望：`server.rss_bytes > 0`、`cgroup.anon_bytes < cgroup.memory_current_bytes`（证明拆开了）、`runtime.tokio_workers >= 1`、`watch.samples_taken == 0` 且 `watch.sampler_running == false`（一次性请求不应留下任务）。
+期望：`server.rss_bytes > 0`、`cgroup.anon_bytes < cgroup.memory_current_bytes`（证明拆开了）、`runtime.cpu_cores >= 1`、`watch.samples_taken == 0` 且 `watch.sampler_running == false`（一次性请求不应留下任务）。
 
 ## 场景 2 — SSE 首帧与帧率（US2）
 
@@ -96,3 +96,15 @@ podman exec lrr-dev cat /sys/fs/cgroup/memory.events
 ## 场景 10 — 前端面板（US2/US3/US5）
 
 浏览器打开 `设置 → 资源`：表格在 1 s 内出现并每秒刷新；「复制为文本」的内容含 version/release/platform 三行；「导出 CSV」每行一个时间点。关闭面板后按场景 3 的方式确认服务端停止采样。
+
+## 场景 11 — 采样不拖慢下载（SC-004）
+
+同一批 3 个链接，分两次加入队列：第一次**不开**资源面板，第二次面板一直开着；两次都从 `POST /api/download_queue/start_all` 记到全部 `done`。
+
+```sh
+curl -s -b /tmp/lrr-cookies.txt 'localhost:3000/api/download_queue' | jq '[.items[] | {state, average_bytes_per_sec}]'
+```
+
+期望：两次的平均速率之比 ≥ 0.90，且开启采样期间 `GET /api/resources` 的 `server.cpu_percent_1s` 始终 < 100（不到一个核）。同时记录 `collect()` 的 p95（见 tasks.md T009）——超过 50 ms 即视为不达标。
+
+一次只跑一批，不要在两次之间改并发上限或换链接，否则数字不可比。

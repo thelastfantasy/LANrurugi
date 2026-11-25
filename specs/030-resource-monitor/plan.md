@@ -11,7 +11,7 @@
 ## Technical Context
 
 **Language/Version**: Rust 1.9x（workspace，edition 2021）+ TypeScript 5 / React 19
-**Primary Dependencies**: axum（SSE 已用于 `subscriptions/stream`、`snapshots/jobs`、`duplicates`）、tokio 1.52（`Handle::metrics()`）、`sysinfo 0.40`（workspace 已有，`recommend_precompute.rs:133` 在用）、`deadpool-redis`（`INFO`）、`zip`/`flate2`（反馈包）、`@sentry/react 11`（前端事件）
+**Primary Dependencies**: axum（SSE 已用于 `subscriptions/stream`、`snapshots/jobs`、`duplicates`）、tokio 1.52（只用自己的计数器统计任务数——`Handle::metrics()` 在 `tokio_unstable` 后面，不为一个面板给整个 workspace 加 `RUSTFLAGS`）、`sysinfo 0.40`（workspace 已有，`recommend_precompute.rs:133` 在用）、`deadpool-redis`（`INFO`）、`zip`/`flate2`（反馈包）、`@sentry/react 11`（前端事件）
 **Storage**: 无新存储。历史只在采样任务内存里；快照不落 Redis/磁盘
 **Testing**: `mise run test-one -- lanrurugi-api resources::` / `-- lanrurugi-api diagnostics::bundle` / `-- lanrurugi-plugin pool::tests`；前端 `npx vitest`；真实部署验收在 `dev` 容器
 **Target Platform**: Linux（cgroup v2 + PSI 全量）；macOS / FreeBSD 降级为进程级指标
@@ -52,7 +52,7 @@ specs/030-resource-monitor/
 
 ```text
 crates/lanrurugi-api/src/
-├── resources/{mod.rs, model.rs, procfs.rs, portable.rs, watch.rs, alerts.rs}
+├── resources/{mod.rs, model.rs, procfs.rs, portable.rs, gpu.rs, watch.rs, alerts.rs, api.rs}
 └── diagnostics/{mod.rs (route + report hook), bundle.rs (resources 类目，修空 diagnostics.json), resources_file.rs}
 
 crates/lanrurugi-plugin/src/pool.rs         # worker_processes()：只读快照 pid 集合
@@ -102,7 +102,7 @@ error 事件
 ### 关键不变量（都进测试）
 
 1. `observer_count == 0` 时 `sampler_running() == false`，且 `samples_taken` 不增长。
-2. `collect()` 只读文件与内存，不 spawn 子进程（GPU 可选路径除外，且默认关闭时完全不走）。
+2. `collect()` 只读文件与内存，不 spawn 子进程（`LANRURUGI_RESOURCE_GPU=1` 时的 GPU 探测除外；默认不走，且探测走可注入的替身，“没走”是可断言的）。
 3. 采样不持插件池的 `workers` 锁：`worker_processes()` 先 `try_lock` 复制 `(namespace, pid)` 再逐个读 `/proc`。
 4. 每个数值都有 `at` / `window` / `source` 三字段；缺失的字段是 `null` + `reason`。
 
@@ -123,4 +123,4 @@ error 事件
 
 ## Phase 2 — Tasks
 
-见 `tasks.md`（T001–T0xx，按 Phase 1 基础设施 → US1 反馈包 → US2 面板 → US3 历史 → US4 联动 → US5 导出 → 文档/门禁 排列）。
+见 `tasks.md`（T001–T030，按 Phase 1 基础设施 → US1 反馈包 → US2 面板 → US3 历史 → US4 联动 → US5 导出 → 文档/门禁 排列）。
