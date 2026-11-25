@@ -1,0 +1,83 @@
+# Contract: ResourceSnapshot 形状
+
+字段级契约。所有 `number` 单位为字节、毫秒、秒或百分比（字段名自带单位）。
+
+```jsonc
+{
+  "at": 1795590000000,
+  "monotonic_ms": 812345,
+  "window_ms": 1000,
+  "version": "1.0.0-beta.8",
+  "release": "f9e81ce",
+  "platform": "linux/x86_64",
+  "server": {
+    "pid": 42,
+    "rss_bytes": 1405091840,
+    "peak_rss_bytes": 1551892480,
+    "swap_bytes": 0,
+    "threads": 38,
+    "fd_count": 214,
+    "fd_limit": 1048576,
+    "cpu_percent_1s": 3.2,
+    "cpu_seconds_total": 812.44,
+    "read_bytes": 14502338560,
+    "write_bytes": 3398834176
+  },
+  "cgroup": {
+    "path": "/user.slice/user-1000.slice/user@1000.service/user.slice/libpod-abc.scope",
+    "memory_current_bytes": 2103447552,
+    "includes_page_cache": true,
+    "anon_bytes": 1400905728,
+    "file_bytes": 702103552,
+    "slab_bytes": 23429120,
+    "peak_bytes": 4293001216,
+    "swap_current_bytes": 0,
+    "pids_current": 218,
+    "cpu_usage_usec": 945612340,
+    "events": { "low": 0, "high": 42, "max": 0, "oom": 0, "oom_kill": 0 },
+    "psi_memory": { "some10": 0.0, "some60": 0.0, "full10": 0.0, "full60": 0.0 },
+    "io_stat": [ { "device": "8:0", "read_bytes": 0, "write_bytes": 0 } ]
+  },
+  "runtime": { "tokio_workers": 12, "alive_tasks": 176, "global_queue_depth": 0 },
+  "plugins": {
+    "limit": 6,
+    "transient_available": 6,
+    "processes": [
+      { "namespace": "download/ehentai", "pid": 3311, "busy": false, "rss_bytes": 44040192,
+        "cpu_percent_since": 0.1, "started_at": 1795589000000, "last_call_at": 1795589990000,
+        "calls": 42, "failures": 1, "persistent": true }
+    ]
+  },
+  "queues": {
+    "download_active": 1, "download_queued": 4, "download_error": 0,
+    "jobs_active": 2, "jobs_failed_total": 3,
+    "phase_p50_ms": { "negotiate": 3200, "transfer": 21100, "ingest": 1400 },
+    "phase_p95_ms": { "negotiate": 5500, "transfer": 71000, "ingest": 3200 },
+    "permit_wait_p50_ms": 900
+  },
+  "redis": {
+    "used_memory_bytes": 104857600, "connected_clients": 12, "ops_per_sec": 340,
+    "keys": { "0": 408, "2": 12763, "3": 12900 },
+    "persistence_ok": true
+  },
+  "network": { "rx_bytes": 8123456789, "tx_bytes": 1234567890, "rx_rate_bps": 4200000, "tx_rate_bps": 310000 },
+  "caches": { "descriptor_hits": 1840, "descriptor_misses": 21, "metadata_hits": 96, "metadata_misses": 8 },
+  "library": { "archives": 408, "total_bytes": 812345678901 },
+  "storage": {
+    "library": { "free_bytes": 812345678901, "total_bytes": 4000000000000, "free_inodes": 812345 },
+    "temp": { "free_bytes": 51234567890, "total_bytes": 100000000000, "free_inodes": 51234 }
+  },
+  "gpu": null,
+  "gpu_unavailable": "no NVIDIA tool and no AMD sysfs device",
+  "watch": { "observers": 1, "samples_taken": 137, "sampler_running": true },
+  "truncations": []
+}
+```
+
+## 规则
+
+1. 任何 `null` 都必须有一个同级或父级的 `*_unavailable` 字符串说明原因（`V1`）。整体不可用的分节直接省略并在 `unavailable` 里写原因（如 `gpu`）。
+2. `window_ms == 0` 时 `*_rate_*`、`*_percent_*` 为 `null`（`V2`）。
+3. `plugins.processes` 只含常驻 worker；一次性声明进程只体现在 `transient_available`。
+4. `cgroup.memory_current_bytes` 必须与 `includes_page_cache: true` 同时出现（`V4`）。
+5. 序列化 ≤ 64 KB，超限截断顺序与记录见 `data-model.md` V7。
