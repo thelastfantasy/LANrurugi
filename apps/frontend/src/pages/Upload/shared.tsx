@@ -83,8 +83,19 @@ export function TruncatedFilename({
     )
   }
   const { stem, ext } = splitFilenameStemAndExt(text)
+  // `alignItems: "baseline"` is load-bearing: with the flex default (`stretch`) the extension's
+  // 14px line box is stretched to the stem's 17px one and its text sits at the top of that box,
+  // so `.rar` visibly rides 3px above the filename it belongs to.
   return (
-    <span style={{ display: "inline-flex", minWidth: 0, maxWidth: "100%", ...style }}>
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "baseline",
+        minWidth: 0,
+        maxWidth: "100%",
+        ...style,
+      }}
+    >
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{stem}</span>
       {ext && <span style={{ flexShrink: 0 }}>.{ext}</span>}
     </span>
