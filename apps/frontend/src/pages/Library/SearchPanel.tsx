@@ -343,26 +343,30 @@ export function SearchPanel({
       >
         <SectionLabel>{t("library.searchPanelDateAdded")}</SectionLabel>
         <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 12px 8px" }}>
+        {/* `margin: 0` cancels `.stdinput`'s legacy `4px 1px 0` margin. Under `align-items:
+            center` it is the *margin box* that gets centred, so that 4px top margin pushed the
+            fields' visible box 2px below the button's — exactly the "button sits a little high"
+            look this row used to have. Zeroing both sides of the row aligns the boxes themselves. */}
         <DateTimeField
           mode="date"
           value={from}
           onChange={setFrom}
-          style={{ width: 116, minWidth: 0 }}
+          style={{ width: 116, minWidth: 0, margin: 0 }}
         />
         <span style={{ opacity: 0.6 }}>–</span>
         <DateTimeField
           mode="date"
           value={to}
           onChange={setTo}
-          style={{ width: 116, minWidth: 0 }}
+          style={{ width: 116, minWidth: 0, margin: 0 }}
         />
         <button
           type="button"
           className="stdbtn"
-          // Same fixed outer box as the date fields above (`.stdbtn` already *is* 21px tall with an
-          // 8pt font, so this only makes the box model explicit on both sides of the row).
-          // `.stdbtn` carries `margin: 4px 1px 0`; under the row's `align-items: center` that margin
-          // box is what gets centred, leaving the button 2px lower than the fields beside it.
+          // `.stdbtn` already *is* 21px tall with an 8pt font and carries `margin: 4px 1px 0`;
+          // both are normalised here so the box model matches the date fields on the left (which
+          // get the same treatment in their own `style`) instead of relying on margin boxes
+          // cancelling out under flex centring.
           style={{ height: 21, boxSizing: "border-box", margin: 0 }}
           disabled={buildDateRangeToken(from, to) === null}
           onClick={() => {
