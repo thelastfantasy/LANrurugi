@@ -70,11 +70,11 @@
 - [x] **T019** [P] `apps/frontend/src/pages/Settings/resources/format.ts`：`formatBytes`、`formatPercent`、`formatDuration`、`windowLabel(ms)`（"过去 1 s"/"自本进程启动"）、`toText(snapshot)`（复制用，含 version/release/platform 三行）、`toCsv(samples)`、`labelWithProfile(name, profile)`（`profile === "debug"` 时返回 `name (debug)`，否则原样返回；`deno` 进程不经过它）。
   验收：`apps/frontend/tests/unit/resources/format.test.ts` 覆盖 `window_ms == 0` → 百分比显示 `—`、CSV 表头与样本数一致、`labelWithProfile("lanrurugi-server", "debug") === "lanrurugi-server (debug)"` 且 release 时原样。
 
-- [x] **T020** `apps/frontend/src/pages/Settings/ResourcePanel.tsx`：分节表格（服务进程 / cgroup / 运行时 / 插件进程 / **进程树**（`depth` 缩进，`comm` + pid + RSS + CPU）/ **本地模型**（按 feature 的今日调用与失败，附 in-process 说明）/ 队列 / Redis / 网络与缓存 / 库与磁盘），每行带窗口与来源列；`null` 显示 `—` 并在 title 里给出 `unavailable` 原因；`cgroup.memory_current_bytes` 行标注"含页缓存"；`memory.events.oom_kill > 0` 行用 `.stdbtn-danger` 同一色（新增 `.resources-alert` 类，按 CLAUDE.md 的要求写进 5 个主题文件 `g.css`/`ex.css`/`modern.css`/`modern_red.css`/`modern_clear.css`，不内联色值）；「服务进程」那一行的进程名用 `labelWithProfile`（debug 构建显示 `lanrurugi-server (debug)`）；顶部两个按钮「复制为文本」「导出 CSV」。
+- [x] **T020** `apps/frontend/src/pages/Resources/ResourcesPage.tsx`（最初写成设置页里的 `Settings/ResourcePanel.tsx`，后改为独立页面）：分节卡片（服务进程 / cgroup / 运行时 / 插件进程 / **进程树**（`depth` 缩进，`comm` + pid + RSS + CPU）/ **本地模型**（按 feature 的今日调用与失败，附 in-process 说明）/ 队列 / Redis / 网络与缓存 / 库与磁盘），每行带窗口与来源列；`null` 显示 `—` 并在 title 里给出 `unavailable` 原因；`cgroup.memory_current_bytes` 行标注"含页缓存"；`memory.events.oom_kill > 0` 行用 `.stdbtn-danger` 同一色（新增 `.resources-alert` 类，按 CLAUDE.md 的要求写进 5 个主题文件 `g.css`/`ex.css`/`modern.css`/`modern_red.css`/`modern_clear.css`，不内联色值）；「服务进程」那一行的进程名用 `labelWithProfile`（debug 构建显示 `lanrurugi-server (debug)`）；顶部两个按钮「复制为文本」「导出 CSV」；整页用 `.ido` + `h1.ih` 的既有页面骨架，卡片网格 `repeat(auto-fit, minmax(330px, 1fr))`（宽屏 3 列、手机 1 列），布局 CSS 在 `apps/frontend/src/index.css`，颜色仍只来自主题文件的 `.resources-*` 规则。
   验收：`npx tsc -b` + `npx eslint` 干净；`apps/frontend/tests/unit/resources/resourcePanel.test.tsx` 断言「含页缓存」标注存在、`null` 渲染为 `—`、告警行带 `.resources-alert`、debug 档位下进程名带 `(debug)`、进程树里 `depth > 0` 的行有缩进 class；`grep -c "resources-alert" apps/frontend/public/legacy/themes/*.css` 每个文件 ≥ 1。
 
-- [x] **T021** 挂载入口：设置页左栏增加「资源」按钮（与「诊断与反馈」同处），打开后渲染 `ResourcePanel`（复用既有面板/弹窗外壳，不新造一层）；14 个 locale 加 `settings.resources.*` 一小组键（标题、复制、导出、各分节名、窗口标签）。
-  验收：浏览器打开设置页能看到入口并展开面板（quickstart 场景 10）；14 个 locale 都能 `json.load`。
+- [x] **T021** 挂载入口：新增 `/resources` 路由（`App.tsx` 的 `RequireAuth` 块内，与 `/jobs` 同级）与 `routes.resources()`；设置页保留一个「资源监视」折叠块，内容只有一句说明和一个「打开资源监视」按钮（`apps/frontend/src/pages/Settings/ResourcesSection.tsx`），采样不在这里发生；`settings.resources.*` 键写在 en/zh/ja 三个 locale（其余语言回落英文，与 `settings.llmUsage*` 的先例一致）。
+  验收：浏览器打开 `/resources` 能看到整页卡片（quickstart 场景 10）；三个 locale 都能 `json.load`。
 
 ## Phase 5 — 历史曲线（US3）
 
@@ -151,7 +151,7 @@ T011 必须在 T012 之前：路由要读 `AppState.resources`，而那个字段
 - **权限**：`crates/lanrurugi-api/policy/route_policy.csv` 六个 deny 行（`token_admin`/`token_guest`/`guest_visitor` × 裸路径与 `/*`），session-only。
 - **反馈包**：`Categories.resources`（默认 true）、`Plan.extra_files`、`resources.json`（`scrub::Profile::Strict`、≤64 KB），并顺带修掉 `diagnostics.json` 恒 0 字节与 `config.redacted.json` 从不写盘两个既有缺陷。
 - **Sentry**：后端 `SentryReporter::capture` 附 `resources` context（30 s 内最近一次采样，即 ~250 B 的 `Sample`）；前端 `setResourceContext` 与每 10 s 一条 `note("resource usage", …)` breadcrumb。阈值告警用固定 `fingerprint`，读数变化不会把同一阈值拆成多个 issue。
-- **前端**：设置页「资源监视」折叠区（关闭时整体卸载，采样任务随之消失）、1/2/5 秒档、RSS/CPU/PSI 三条 Sparkline、12 组明细表、复制文本与导出 CSV、5 个主题文件的角色 class（`.resources-alert`/`.resources-status-*`/`.resources-sparkline`）。
+- **前端**：独立的 `/resources` 页面（`apps/frontend/src/pages/Resources/`，`RequireAuth` 块内与 `/jobs` 同级），设置页只留一个「打开资源监视」的入口（`Settings/ResourcesSection.tsx`）；离开路由即卸载，采样任务随之消失。1/2/5 秒档、RSS/CPU/PSI 三条 Sparkline、13 张卡片（宽屏 3 列、手机 1 列）、复制文本与导出 CSV、5 个主题文件的角色 class（`.resources-alert`/`.resources-status-*`/`.resources-sparkline`）。
 - **文档**：`docs/api/sidecar/resources.yaml`、`docs/api/tag-names.json` 的 `resources` 条目、文档站中英两页与侧栏、`README{,.en,.ja}.md`、`docs/comparison-with-lanraragi.md`、`.env.example` 的 `LANRURUGI_RESOURCE_GPU`。
 
 ### 与 plan 的偏离
@@ -160,8 +160,13 @@ T011 必须在 T012 之前：路由要读 `AppState.resources`，而那个字段
 2. SSE 分帧加 500 ms slack：采样器 1 Hz、客户端也请求 1 Hz 时，`at` 的毫秒抖动让每隔一帧都被判成"还不到时间"，实测出来是 2 s 间隔；`due()` 加 slack 后恢复 1 Hz。
 3. `models.in_process` 的 `loaded` 报 `"unknown"`：没有便宜的"模型在不在"接口，宁可报 unknown 也不猜。
 4. 路由 deny 每个身份写两行（裸路径 + `/*`），因为 casbin `keyMatch2` 的 `/*` 匹配不到裸路径（`auth_flow` 用例先暴露了这点）。
-5. `settings.resources.*` 只补 en/zh/ja，其余语言回落到 en——与既有 `settings.*` 的覆盖范围一致。
+5. `settings.resources.*` 最终覆盖全部 14 个 locale（en/zh/ja 手写，其余由后续补齐并逐键校验键集与占位符）；服务端不再返回英文说明句，`*_unavailable` 改为机器码（`disabled`/`no_device`/`probe_failed`/`no_cgroup`/`unreadable`/`reader_failed`/`info_failed`），由前端翻译。
 6. `Sample` 只带 `psi_memory_full10`，不带 PSI 的 io/cpu（按契约）。
+7. 面板从设置页的折叠块改成独立的 `/resources` 页面（用户实测后要求）：一张卡片十几行塞进折叠块，手机宽度下标签会被压成三行；改页后设置页保留一个入口。采样时机不变，只是"卸载"的单位从折叠块变成路由。
+8. 前端在收到帧时补集合默认值（`pages/Resources/parse.ts`）：服务端 `serde` 会省略空集合，`Object.entries(undefined)` 曾让整块报「该区块加载失败」。
+9. `Sample` 增加了概览卡片要用的读数（`memory_current_bytes`、`memory_max_bytes`、`disk_free_bytes`、`disk_total_bytes`、`rx_bytes`/`tx_bytes`、`rx_rate_bps`/`tx_rate_bps`、`io_read_bytes`/`io_write_bytes`）：只发首帧 `snapshot` 时，顶部那几张卡片会停在打开页面那一刻不动。加上之后帧约 470 字节，前端 `applySample` 把每秒的样本折回快照，整页（含表格里的数字与「已采样帧数」）每秒刷新。
+10. 概览卡"是否超标"的判读放在前端 `pages/Resources/health.ts`：内存按 `memory.current / memory.max`（70/85）、CPU 按 `cpu_percent_1s / cpu_cores`（60/85）、磁盘（85/93）、PSI full10（5/10）；阈值写在前端是因为它们随呈现方式变，不该进 API 契约。
+11. rootless 容器里常常没有 io 控制器（本机 `0::/`、`/sys/fs/cgroup/io.stat` 不存在），所以磁盘 I/O 卡片以本进程 `/proc/<pid>/io` 的块计数为主，`cgroup.io_stat` 非空时才额外列每设备明细，为空时给一条说明而不是显示 0。
 
 ### 实测（dev 容器，debug 构建）
 

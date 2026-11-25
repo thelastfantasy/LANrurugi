@@ -105,6 +105,13 @@ pub struct CgroupSection {
     /// the mistake this field exists to prevent, so it is always present and always `true`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_current_bytes: Option<u64>,
+    /// The cgroup ceiling, so a caller can answer "how full is this" without guessing at the host's
+    /// total memory. `None` when the file says `max`, i.e. unlimited.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_max_bytes: Option<u64>,
+    /// `memory.high` — the soft limit where the kernel starts reclaiming in earnest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_high_bytes: Option<u64>,
     pub includes_page_cache: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anon_bytes: Option<u64>,
@@ -384,12 +391,33 @@ pub struct Sample {
     pub queue_active: u64,
     pub queue_queued: u64,
     pub plugins_alive: u64,
+    /// The readings the overview tiles show. They travel with the one-second sample so the tiles
+    /// tick instead of freezing on the snapshot the stream opened with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_current_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_max_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disk_free_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disk_total_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rx_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rx_rate_bps: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_rate_bps: Option<f64>,
+    pub io_read_bytes: u64,
+    pub io_write_bytes: u64,
 }
 
 impl ResourceSnapshot {
     /// The compact history point this snapshot also represents. Absent numbers become `0` here
-    /// rather than `None` because a sparkline is a shape, not a reading — the panel's numeric rows
-    /// read the snapshot itself.
+    /// rather than `None` because a sparkline is a shape, not a reading; the readings the overview
+    /// tiles need are carried alongside so a page open for a minute does not show the numbers it
+    /// opened with.
     pub fn sample(&self) -> Sample {
         Sample {
             at: self.at,
@@ -409,6 +437,16 @@ impl ResourceSnapshot {
             queue_active: self.queues.download_active,
             queue_queued: self.queues.download_queued,
             plugins_alive: self.plugins.processes.len() as u64,
+            memory_current_bytes: self.cgroup.as_ref().and_then(|c| c.memory_current_bytes),
+            memory_max_bytes: self.cgroup.as_ref().and_then(|c| c.memory_max_bytes),
+            disk_free_bytes: Some(self.storage.library.free_bytes),
+            disk_total_bytes: Some(self.storage.library.total_bytes),
+            rx_bytes: Some(self.network.rx_bytes),
+            tx_bytes: Some(self.network.tx_bytes),
+            rx_rate_bps: self.network.rx_rate_bps,
+            tx_rate_bps: self.network.tx_rate_bps,
+            io_read_bytes: self.server.read_bytes.unwrap_or(0),
+            io_write_bytes: self.server.write_bytes.unwrap_or(0),
         }
     }
 }

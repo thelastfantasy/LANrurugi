@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
+import { applySample, normaliseSample, normaliseSnapshot } from "./parse"
 import type { ResourceSample, ResourceSnapshot } from "./types"
 
 /** Upper bound on the in-memory series: 1800 samples at 1 Hz is thirty minutes, and the client is
@@ -47,7 +48,7 @@ export function useResourceStream(intervalMs: number): ResourceStream {
 
     source.addEventListener("snapshot", (event) => {
       try {
-        setSnapshot(JSON.parse((event as MessageEvent<string>).data) as ResourceSnapshot)
+        setSnapshot(normaliseSnapshot(JSON.parse((event as MessageEvent<string>).data) as ResourceSnapshot))
         setStatus("live")
       } catch {
         setError("the snapshot frame was not valid JSON.")
@@ -56,7 +57,8 @@ export function useResourceStream(intervalMs: number): ResourceStream {
 
     source.addEventListener("sample", (event) => {
       try {
-        const sample = JSON.parse((event as MessageEvent<string>).data) as ResourceSample
+        const sample = normaliseSample(JSON.parse((event as MessageEvent<string>).data) as ResourceSample)
+        setSnapshot((current) => (current ? applySample(current, sample) : current))
         setSamples((current) => {
           const next = current.length >= RESOURCE_HISTORY_LIMIT ? current.slice(1) : current.slice()
           next.push(sample)

@@ -161,7 +161,7 @@ impl Blocking {
                 ..Default::default()
             },
             cgroup: None,
-            cgroup_unavailable: Some("the snapshot's reader failed".to_string()),
+            cgroup_unavailable: Some("reader_failed".to_string()),
             processes: ProcessSection {
                 root_pid: pid,
                 ..Default::default()
@@ -209,15 +209,9 @@ fn read_blocking(
     let (cgroup, cgroup_unavailable) = match procfs::self_cgroup_path() {
         Some(relative) => match procfs::cgroup(&relative) {
             Some(section) => (Some(section), None),
-            None => (
-                None,
-                Some(format!("/sys/fs/cgroup{relative} is not readable")),
-            ),
+            None => (None, Some(format!("unreadable: /sys/fs/cgroup{relative}"))),
         },
-        None => (
-            None,
-            Some("no cgroup v2 hierarchy (not a Linux cgroup host)".to_string()),
-        ),
+        None => (None, Some("no_cgroup".to_string())),
     };
 
     let (tree, truncated) = procfs::process_tree(pid, 3, 64);
@@ -431,7 +425,7 @@ async fn redis_section(state: &AppState) -> (Option<RedisSection>, Option<String
 
     match fetched {
         Ok(text) => (Some(parse_redis_info(&text)), None),
-        Err(reason) => (None, Some(format!("Redis INFO unavailable: {reason}"))),
+        Err(reason) => (None, Some(format!("info_failed: {reason}"))),
     }
 }
 

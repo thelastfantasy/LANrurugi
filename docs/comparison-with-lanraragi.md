@@ -41,7 +41,7 @@
   服务当“用户反馈”（按账号每日限 20 条、10 分钟 5 条、同文 5 分钟内去重），失败与定时任务则分别以 `source=server` /
   `source=plugin` 和 cron 心跳的形式上报。前端栈按 release（git sha）
   对应的 source map 在服务端还原；map 只随镜像发布、不进静态目录、也不进用户的包，缺 map 时保留原始帧。
-- **资源监视**（`specs/030-resource-monitor/`）。设置页里的一块实时面板：服务进程与每个常驻插件进程的 CPU、内存、
+- **资源监视**（`specs/030-resource-monitor/`）。独立的 `/resources` 页面（设置页有入口）：服务进程与每个常驻插件进程的 CPU、内存、
   文件描述符，cgroup 的 `memory.current`（标注含页缓存）/ anon / file / slab / 峰值与内存 PSI，从服务进程出发的
   真实进程树，本地模型的当日调用量与失败数，下载队列各阶段 p50 与排队等待，Redis 的 used_memory / 碎片率 /
   命中率 / 淘汰数与落盘状态，库与临时盘的剩余空间和 inode。数据走 SSE（首帧完整快照、之后每秒一帧紧凑采样），

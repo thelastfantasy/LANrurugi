@@ -161,10 +161,7 @@ impl GpuReader {
     /// "off" from "tried and failed".
     pub fn read(&self) -> (Option<GpuSection>, Option<String>) {
         if !self.enabled {
-            return (
-                None,
-                Some("GPU monitoring is off (set LANRURUGI_RESOURCE_GPU=1 to enable)".to_string()),
-            );
+            return (None, Some("disabled".to_string()));
         }
         {
             let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
@@ -176,7 +173,7 @@ impl GpuReader {
         }
         let prober = match &self.detected {
             Ok(prober) => prober,
-            Err(reason) => return (None, Some(reason.clone())),
+            Err(_) => return (None, Some("no_device".to_string())),
         };
         match prober.probe() {
             Ok(section) => {
@@ -184,7 +181,7 @@ impl GpuReader {
                 *cache = Some((Instant::now(), section.clone()));
                 (Some(section), None)
             }
-            Err(reason) => (None, Some(reason)),
+            Err(_) => (None, Some("probe_failed".to_string())),
         }
     }
 }
@@ -225,9 +222,7 @@ mod tests {
         );
         let (section, unavailable) = reader.read();
         assert!(section.is_none());
-        assert!(unavailable
-            .expect("a reason is given")
-            .contains("LANRURUGI_RESOURCE_GPU"));
+        assert_eq!(unavailable.as_deref(), Some("disabled"));
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
@@ -255,7 +250,7 @@ mod tests {
         let reader = GpuReader::new(true, Err("no GPU counters on this host".to_string()));
         let (section, unavailable) = reader.read();
         assert!(section.is_none());
-        assert_eq!(unavailable.as_deref(), Some("no GPU counters on this host"));
+        assert_eq!(unavailable.as_deref(), Some("no_device"));
     }
 
     #[test]

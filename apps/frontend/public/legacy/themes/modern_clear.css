@@ -1837,3 +1837,17 @@ textarea {
 .resources-sparkline {
     color: #ed2553;
 }
+
+/* Resource monitor health colours: green = normal, yellow = getting high, red = over the limit. */
+.resources-ok {
+    color: #1f9d55;
+}
+
+.resources-warn {
+    color: #c98a00;
+}
+
+.resources-bad {
+    color: #ed2553;
+}
+

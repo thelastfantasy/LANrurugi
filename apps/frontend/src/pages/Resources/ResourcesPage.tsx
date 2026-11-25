@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
+import { FaCircleQuestion } from "react-icons/fa6"
 
-import { CollapsibleSection } from "@/components/Display"
+import { Tooltip } from "@/components/common-ui/Display/Tooltip"
 import { note, setResourceContext } from "@/diagnostics/sdk"
+import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { formatBytes } from "@/lib/formatBytes"
-import { FONT_SIZE_SM } from "@/theme"
+import { FONT_SIZE_SM, useApplyTheme } from "@/theme"
 import { toast } from "@/toast"
 
 import {
@@ -16,35 +18,40 @@ import {
   seriesPoints,
   toCsv,
   toText,
-} from "./resources/format"
-import { Sparkline } from "./resources/Sparkline"
+} from "./format"
+import {
+  cpuReading,
+  diskReading,
+  type Level,
+  levelFor,
+  memoryReading,
+  pressureReading,
+} from "./health"
+import { Sparkline } from "./Sparkline"
 import type {
   ResourceDisk,
   ResourcePluginProcess,
   ResourceProcessEntry,
   ResourceSnapshot,
-} from "./resources/types"
-import { useResourceStream } from "./resources/useResourceStream"
+} from "./types"
+import { useResourceStream } from "./useResourceStream"
 
-/** Settings → resources (`specs/030-resource-monitor/` US2).
+/** The resource monitor page (`specs/030-resource-monitor/` US2).
  *
- * The section owns the subscription, and the tables only exist while it is open: closing it drops the
- * last observer, and the server stops sampling. That is the whole "zero cost when nobody is looking"
- * claim, and it is enforced by unmounting rather than by a timer. */
-export function ResourcePanel() {
+ * The page owns the subscription, and its tables only exist while it is mounted: leaving the route
+ * drops the last observer and the server stops sampling. That is the whole "zero cost when nobody is
+ * looking" claim, and it is enforced by unmounting rather than by a timer. */
+export function Resources() {
   const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
+  useApplyTheme()
+  useDocumentTitle(t("settings.resources.title") ?? undefined)
 
   return (
-    <CollapsibleSection
-      id="resources"
-      icon="fa-gauge-high"
-      title={t("settings.resources.title")}
-      open={open}
-      onOpenChange={setOpen}
-    >
-      {open ? <ResourceBody /> : null}
-    </CollapsibleSection>
+    <div className="ido" style={{ paddingLeft: 12, paddingRight: 12 }}>
+      <h1 className="ih">{t("settings.resources.title")}</h1>
+      <p style={{ fontSize: FONT_SIZE_SM }}>{t("settings.resources.description")}</p>
+      <ResourceBody />
+    </div>
   )
 }
 
@@ -87,7 +94,6 @@ function ResourceBody() {
         <span className={`resources-status resources-status-${status}`}>
           {t(`settings.resources.status.${status}`)}
         </span>
-        <span>{t("settings.resources.description")}</span>
         <span className="resources-export">
           <button
             type="button"
@@ -167,9 +173,61 @@ function SnapshotTables({
       ? hitRatio(redis.keyspace_hits, redis.keyspace_misses)
       : null
   const oomKills = cgroup?.events.oom_kill ?? null
+  // Reasons come from the server as `code` or `code: detail`, so the sentence a user reads is
+  // translated here instead of shipped as English prose from the backend.
+  // `truncations` carries codes like `plugins.processes`; dots would read as an i18next path
+  // separator, so the key uses underscores and an unknown code falls back to itself.
+  const phaseLabel = (name: string): string => {
+    const key = `settings.resources.phase.${name}`
+    const translated = t(key)
+    return translated === key ? name : translated
+  }
+
+  // Feature ids like `artist_backfill` are the usage ledger's own keys; the panel shows a name.
+  const featureLabel = (feature: string): string => {
+    const key = `settings.resources.feature.${feature}`
+    const translated = t(key)
+    return translated === key ? feature : translated
+  }
+
+  const truncationLabel = (code: string): string => {
+    const key = `settings.resources.truncatedBy.${code.replace(/\./g, "_")}`
+    const translated = t(key)
+    return translated === key ? code : translated
+  }
+  const io = snapshot.cgroup?.io_stat ?? []
+  const ioRead = io.reduce((sum, entry) => sum + entry.read_bytes, 0)
+  const ioWrite = io.reduce((sum, entry) => sum + entry.write_bytes, 0)
+
+  // "off" and "tried and failed" read the same in the value cell; only "off" has a how-to.
+  const gpuOff = /^(disabled|GPU monitoring is off)/.test(snapshot.gpu_unavailable ?? "")
+
+  const reason = (raw: string | null | undefined): string => {
+    if (!raw) return missing
+    // Servers before 030 shipped these reasons as English prose; map the old wording so a page
+    // talking to an older backend still reads in the user's language.
+    const legacy: Array<[RegExp, string]> = [
+      [/^GPU monitoring is off/, "disabled"],
+      [/^no GPU counters on this host/, "no_device"],
+      [/^GPU probe failed/, "probe_failed"],
+      [/no cgroup v2 hierarchy/, "no_cgroup"],
+      [/is not readable$/, "unreadable"],
+      [/^the snapshot's reader failed/, "reader_failed"],
+      [/^Redis INFO unavailable/, "info_failed"],
+    ]
+    const mapped = legacy.find(([pattern]) => pattern.test(raw))
+    const [code, ...rest] = (mapped ? mapped[1] : raw).split(":")
+    const key = `settings.resources.unavailable.${code.trim()}`
+    const translated = t(key)
+    const label = translated === key ? code.trim() : translated
+    const detail = mapped ? "" : rest.join(":").trim()
+    return detail ? `${label} · ${detail}` : label
+  }
 
   return (
-    <>
+    <div className="resources-stack">
+      <Overview snapshot={snapshot} />
+      <div className="resources-grid">
       <Group title={t("settings.resources.server")}>
         <Row
           label={labelWithProfile("lanrurugi-server", snapshot.build.profile)}
@@ -178,15 +236,16 @@ function SnapshotTables({
         <Row
           label={t("settings.resources.rss")}
           value={bytes(server.rss_bytes)}
-          sparkline={rssSeries.length > 1 ? <Sparkline values={rssSeries} label={t("settings.resources.rss")} /> : null}
+          sparkline={rssSeries.length > 1 ? <Sparkline values={rssSeries} label={t("settings.resources.rss")} width={78} height={20} /> : null}
         />
         <Row label={t("settings.resources.peakRss")} value={bytes(server.peak_rss_bytes)} />
         <Row label={t("settings.resources.swap")} value={bytes(server.swap_bytes)} />
         <Row
           label={t("settings.resources.cpu")}
           value={percent(server.cpu_percent_1s) ?? missing}
+          hint={t("settings.resources.cpuHint")}
           sparkline={
-            cpuSeries.length > 1 ? <Sparkline values={cpuSeries} label={t("settings.resources.cpu")} /> : null
+            cpuSeries.length > 1 ? <Sparkline values={cpuSeries} label={t("settings.resources.cpu")} width={78} height={20} /> : null
           }
         />
         <Row label={t("settings.resources.threads")} value={count(server.threads)} />
@@ -197,7 +256,7 @@ function SnapshotTables({
               ? missing
               : `${server.fd_count} / ${server.fd_limit} · ${percent(fdRatio) ?? missing}`
           }
-          alert={fdRatio !== null && fdRatio > 80}
+          level={levelFor(fdRatio, 80, 95)}
         />
         <Row
           label={t("settings.resources.readWrite")}
@@ -207,27 +266,39 @@ function SnapshotTables({
 
       <Group title={t("settings.resources.cgroup")}>
         {!cgroup ? (
-          <Row label={t("settings.resources.cgroup")} value={snapshot.cgroup_unavailable ?? missing} />
+          <Row label={t("settings.resources.cgroup")} value={reason(snapshot.cgroup_unavailable)} />
         ) : (
           <>
             <Row
               label={t("settings.resources.memoryCurrent")}
               value={`${bytes(cgroup.memory_current_bytes)} · ${t("settings.resources.pageCacheNote")}`}
+              level={memoryReading(snapshot).level}
             />
             <Row label={t("settings.resources.memoryAnon")} value={bytes(cgroup.anon_bytes)} />
             <Row label={t("settings.resources.memoryFile")} value={bytes(cgroup.file_bytes)} />
             <Row label={t("settings.resources.memorySlab")} value={bytes(cgroup.slab_bytes)} />
             <Row label={t("settings.resources.memoryPeak")} value={bytes(cgroup.peak_bytes)} />
-            <Row label={t("settings.resources.memorySwap")} value={bytes(cgroup.swap_current_bytes)} />
+            <Row
+              label={t("settings.resources.memorySwap")}
+              value={bytes(cgroup.swap_current_bytes)}
+              level={
+                cgroup.swap_current_bytes === null
+                  ? "unknown"
+                  : cgroup.swap_current_bytes > 0
+                    ? "warn"
+                    : "ok"
+              }
+              hint={t("settings.resources.memorySwapHint")}
+            />
             <Row label={t("settings.resources.pids")} value={count(cgroup.pids_current)} />
             <Row
               label={t("settings.resources.psi")}
               value={percent(cgroup.psi_memory.full10) ?? missing}
               hint={t("settings.resources.psiHint")}
-              alert={(cgroup.psi_memory.full10 ?? 0) > 10}
+              level={levelFor(cgroup.psi_memory.full10, 5, 10)}
               sparkline={
                 psiSeries.length > 1 ? (
-                  <Sparkline values={psiSeries} label={t("settings.resources.psi")} />
+                  <Sparkline values={psiSeries} label={t("settings.resources.psi")} width={78} height={20} />
                 ) : null
               }
             />
@@ -236,7 +307,7 @@ function SnapshotTables({
               value={`high ${count(cgroup.events.high)} · max ${count(cgroup.events.max)} · oom ${count(
                 cgroup.events.oom,
               )} · oom_kill ${count(oomKills)}`}
-              alert={(oomKills ?? 0) > 0}
+              level={(oomKills ?? 0) > 0 ? "bad" : (cgroup.events.max ?? 0) > 0 ? "warn" : "ok"}
             />
           </>
         )}
@@ -251,7 +322,10 @@ function SnapshotTables({
       <Group title={t("settings.resources.plugins")}>
         <Row
           label={t("settings.resources.persistentWorkers")}
-          value={`${snapshot.plugins.processes.length} / ${snapshot.plugins.limit}`}
+          hint={t("settings.resources.persistentWorkersHint")}
+          value={t("settings.resources.persistentWorkerValue", {
+            count: snapshot.plugins.processes.length,
+          })}
         />
         <Row
           label={t("settings.resources.transientWorkers")}
@@ -283,7 +357,7 @@ function SnapshotTables({
           snapshot.models.usage.map((usage) => (
             <Row
               key={usage.feature}
-              label={usage.feature}
+              label={featureLabel(usage.feature)}
               value={t("settings.resources.modelUsage", {
                 requests: usage.requests,
                 failures: usage.failures,
@@ -292,7 +366,11 @@ function SnapshotTables({
             />
           ))
         )}
-        <Row label={t("settings.resources.inProcess")} value={snapshot.models.note} />
+        <Row
+          label={t("settings.resources.inProcess")}
+          value={t("settings.resources.inProcessHint")}
+          hint={t("settings.resources.inProcessNote")}
+        />
       </Group>
 
       <Group title={t("settings.resources.queues")}>
@@ -314,7 +392,7 @@ function SnapshotTables({
         <Row
           label={t("settings.resources.phases")}
           value={Object.entries(snapshot.queues.phase_p50_ms)
-            .map(([name, value]) => `${name} ${milliseconds(value) ?? missing}`)
+            .map(([name, value]) => `${phaseLabel(name)} ${milliseconds(value) ?? missing}`)
             .join(" · ") || missing}
           hint={t("settings.resources.phasesHint")}
         />
@@ -323,7 +401,7 @@ function SnapshotTables({
 
       <Group title={t("settings.resources.redis")}>
         {!redis ? (
-          <Row label={t("settings.resources.redis")} value={snapshot.redis_unavailable ?? missing} />
+          <Row label={t("settings.resources.redis")} value={reason(snapshot.redis_unavailable)} />
         ) : (
           <>
             <Row label={t("settings.resources.redisMemory")} value={`${bytes(redis.used_memory_bytes)} · RSS ${bytes(redis.used_memory_rss_bytes)}`} />
@@ -348,7 +426,7 @@ function SnapshotTables({
             <Row
               label={t("settings.resources.redisPersistence")}
               value={redis.persistence_ok === null ? missing : redis.persistence_ok ? t("settings.resources.ok") : t("settings.resources.failed")}
-              alert={redis.persistence_ok === false}
+              level={redis.persistence_ok === null ? "unknown" : redis.persistence_ok ? "ok" : "bad"}
             />
             <Row label={t("settings.resources.redisEvicted")} value={count(redis.evicted_keys)} />
           </>
@@ -357,11 +435,45 @@ function SnapshotTables({
 
       <Group title={t("settings.resources.network")}>
         <Row
-          label={t("settings.resources.network")}
-          value={`↓ ${bytes(snapshot.network.rx_bytes)} (${rate(snapshot.network.rx_rate_bps) ?? missing}) · ↑ ${bytes(
-            snapshot.network.tx_bytes,
-          )} (${rate(snapshot.network.tx_rate_bps) ?? missing})`}
+          label={t("settings.resources.networkDown")}
+          value={`${bytes(snapshot.network.rx_bytes)} · ${rate(snapshot.network.rx_rate_bps) ?? missing}`}
+          hint={t("settings.resources.networkHint")}
         />
+        <Row
+          label={t("settings.resources.networkUp")}
+          value={`${bytes(snapshot.network.tx_bytes)} · ${rate(snapshot.network.tx_rate_bps) ?? missing}`}
+          hint={t("settings.resources.networkHint")}
+        />
+      </Group>
+
+      <Group title={t("settings.resources.io")}>
+        <Row
+          label={t("settings.resources.ioProcess")}
+          value={`${t("settings.resources.ioRead")} ${bytes(snapshot.server.read_bytes)} · ${t(
+            "settings.resources.ioWrite",
+          )} ${bytes(snapshot.server.write_bytes)}`}
+          hint={t("settings.resources.ioProcessHint")}
+        />
+        {io.map((entry) => (
+          <Row
+            key={entry.device}
+            label={entry.device}
+            value={`${t("settings.resources.ioRead")} ${bytes(entry.read_bytes)} · ${t(
+              "settings.resources.ioWrite",
+            )} ${bytes(entry.write_bytes)}`}
+            hint={t("settings.resources.ioHint")}
+          />
+        ))}
+        {io.length > 0 ? (
+          <Row
+            label={t("settings.resources.ioTotal")}
+            value={`${t("settings.resources.ioRead")} ${bytes(ioRead)} · ${t("settings.resources.ioWrite")} ${bytes(
+              ioWrite,
+            )}`}
+          />
+        ) : (
+          <Note text={t("settings.resources.ioUnavailable")} />
+        )}
       </Group>
 
       <Group title={t("settings.resources.caches")}>
@@ -388,7 +500,10 @@ function SnapshotTables({
 
       <Group title={t("settings.resources.gpu")}>
         {!gpu ? (
-          <Row label={t("settings.resources.gpu")} value={snapshot.gpu_unavailable ?? missing} />
+          <>
+            <Row label={t("settings.resources.gpu")} value={reason(snapshot.gpu_unavailable)} />
+            {gpuOff ? <Note text={t("settings.resources.gpuEnableHint")} /> : null}
+          </>
         ) : (
           <>
             <Row label={t("settings.resources.gpuVendor")} value={gpu.vendor} />
@@ -414,10 +529,140 @@ function SnapshotTables({
         />
         <Row label={t("settings.resources.version")} value={`${snapshot.version} · ${snapshot.release} · ${snapshot.platform}`} />
         {snapshot.truncations.length > 0 ? (
-          <Row label={t("settings.resources.truncated")} value={snapshot.truncations.join(" · ")} />
+          <Row
+            label={t("settings.resources.truncated")}
+            value={snapshot.truncations.map((code) => truncationLabel(code)).join(" · ")}
+          />
         ) : null}
       </Group>
-    </>
+      </div>
+    </div>
+  )
+}
+
+/** The four readings a non-expert opens this page for, each answered as a colour and a word. */
+function Overview({ snapshot }: { snapshot: ResourceSnapshot }) {
+  const { t } = useTranslation()
+  const memory = memoryReading(snapshot)
+  const cpu = cpuReading(snapshot)
+  const disk = diskReading(snapshot.storage.library)
+  const pressure = pressureReading(snapshot)
+  const limit = snapshot.cgroup?.memory_max_bytes ?? null
+  const used = snapshot.cgroup?.memory_current_bytes ?? null
+
+  return (
+    <div className="resources-overview">
+      <div className="resources-tiles">
+        <Tile
+          label={t("settings.resources.tileMemory")}
+          level={memory.level}
+          share={memory.percent}
+          value={
+            limit
+              ? t("settings.resources.tileMemoryValue", {
+                  percent: percent(memory.percent) ?? missing,
+                  used: bytes(used),
+                  limit: bytes(limit),
+                })
+              : t("settings.resources.tileMemoryNoLimit", { used: bytes(used) })
+          }
+          hint={t("settings.resources.tileMemoryHint")}
+        />
+        <Tile
+          label={t("settings.resources.tileCpu")}
+          level={cpu.level}
+          share={cpu.percent}
+          value={t("settings.resources.tileCpuValue", {
+            percent: percent(cpu.percent) ?? missing,
+            cores: snapshot.runtime.cpu_cores,
+          })}
+          hint={t("settings.resources.tileCpuHint")}
+        />
+        <Tile
+          label={t("settings.resources.tileDisk")}
+          level={disk.level}
+          share={disk.percent}
+          value={t("settings.resources.tileDiskValue", {
+            percent: percent(disk.percent) ?? missing,
+            free: bytes(snapshot.storage.library?.free_bytes ?? null),
+          })}
+          hint={t("settings.resources.tileDiskHint")}
+        />
+        <Tile
+          label={t("settings.resources.tilePressure")}
+          level={pressure.level}
+          share={pressure.percent}
+          value={t("settings.resources.tilePressureValue", {
+            percent: percent(pressure.percent) ?? missing,
+          })}
+          hint={t("settings.resources.tilePressureHint")}
+        />
+        <Tile
+          label={t("settings.resources.tileIo")}
+          value={
+            <>
+              <span className="resources-tile-line">
+                {t("settings.resources.ioRead")} {bytes(snapshot.server.read_bytes)}
+              </span>
+              <span className="resources-tile-line">
+                {t("settings.resources.ioWrite")} {bytes(snapshot.server.write_bytes)}
+              </span>
+            </>
+          }
+          hint={t("settings.resources.tileIoHint")}
+        />
+        <Tile
+          label={t("settings.resources.tileNetwork")}
+          value={
+            <>
+              <span className="resources-tile-line">
+                {t("settings.resources.networkDown")} {rate(snapshot.network.rx_rate_bps) ?? missing}
+              </span>
+              <span className="resources-tile-line">
+                {t("settings.resources.networkUp")} {rate(snapshot.network.tx_rate_bps) ?? missing}
+              </span>
+            </>
+          }
+          hint={t("settings.resources.tileNetworkHint")}
+        />
+      </div>
+      <p className="resources-legend">{t("settings.resources.legend")}</p>
+    </div>
+  )
+}
+
+function Tile({
+  label,
+  level,
+  share,
+  value,
+  hint,
+}: {
+  label: string
+  /** Omitted when nothing in the snapshot can judge the reading (throughput, for instance). */
+  level?: Level
+  share?: number | null
+  value: React.ReactNode
+  hint: string
+}) {
+  const { t } = useTranslation()
+  // A reading with no limit behind it must not draw a bar at all; a NaN would otherwise widen the
+  // fill to the whole track and read as "100%" when the snapshot simply had no number yet.
+  const filled = share === null || share === undefined || !Number.isFinite(share) ? null : Math.max(0, Math.min(100, share))
+  return (
+    <section className={`resources-tile${level ? ` resources-${level}` : ""}`}>
+      <header className="resources-tile-head">
+        <span className="resources-tile-label">{label}</span>
+        {level ? <span className="resources-tile-level">{t(`settings.resources.level.${level}`)}</span> : null}
+      </header>
+      <div className="resources-tile-value">{value}</div>
+      {filled === null ? null : (
+        <span className="resources-meter" aria-hidden="true">
+          <span className="resources-meter-fill" style={{ width: `${filled}%` }} />
+        </span>
+      )}
+      <p className="resources-tile-hint">{hint}</p>
+    </section>
   )
 }
 
@@ -435,12 +680,12 @@ function count(value: number | null | undefined): string {
 
 function Group({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="resources-group">
-      <div className="resources-group-title">{title}</div>
+    <section className="resources-card">
+      <h2 className="resources-card-title">{title}</h2>
       <table className="resources-table">
         <tbody>{children}</tbody>
       </table>
-    </div>
+    </section>
   )
 }
 
@@ -448,23 +693,40 @@ function Row({
   label,
   value,
   hint,
-  alert,
+  level,
   sparkline,
 }: {
   label: string
   value: string | null
   hint?: string
-  alert?: boolean
+  /** A dot and a tinted value; omit when the row has no limit to be judged against. */
+  level?: Level
   sparkline?: React.ReactNode
 }) {
+  const tone = level && level !== "unknown" ? `resources-${level}` : ""
+  const emphasis = level === "warn" || level === "bad" ? tone : undefined
   return (
-    <tr className={alert ? "resources-alert" : undefined}>
-      <th scope="row" title={hint}>
+    <tr className={level === "bad" ? "resources-alert" : undefined}>
+      <th scope="row">
+        {level ? <span className={`resources-dot ${tone}`} aria-hidden="true" /> : null}
         {label}
-        {hint ? <span className="resources-hint"> ?</span> : null}
+        {hint ? (
+          <Tooltip label={hint} maxWidth={280} wrapperStyle={{ marginLeft: 4, verticalAlign: "middle" }}>
+            <FaCircleQuestion className="resources-hint-icon" aria-label={hint} />
+          </Tooltip>
+        ) : null}
       </th>
-      <td>{value === null ? missing : value}</td>
+      <td className={emphasis}>{value === null ? missing : value}</td>
       <td className="resources-spark">{sparkline ?? null}</td>
+    </tr>
+  )
+}
+
+/** A line that explains a row instead of being read as another value. */
+function Note({ text }: { text: string }) {
+  return (
+    <tr className="resources-note">
+      <td colSpan={3}>{text}</td>
     </tr>
   )
 }
@@ -480,7 +742,11 @@ function PluginRow({ process }: { process: ResourcePluginProcess }) {
         calls: process.calls,
         failures: process.failures,
       })}
-      alert={process.failures > 0 && process.calls > 0 && process.failures / process.calls > 0.2}
+      level={
+        process.calls > 0
+          ? levelFor((process.failures / process.calls) * 100, 10, 20)
+          : "ok"
+      }
     />
   )
 }
@@ -501,7 +767,7 @@ function DiskRow({ label, disk }: { label: string; disk: ResourceDisk }) {
     <Row
       label={label}
       value={`${bytes(used)} / ${bytes(disk.total_bytes)} · ${percent(ratio) ?? missing} · ${disk.free_inodes} inodes`}
-      alert={ratio !== null && ratio > 90}
+      level={diskReading(disk).level}
     />
   )
 }

@@ -17,6 +17,7 @@ export const routes = {
     tab === "snapshot" ? "/backup" : `/backup/${tab}`,
   logs: () => "/logs",
   jobs: () => "/jobs",
+  resources: () => "/resources",
   activity: () => "/activity",
   bookmarks: () => "/bookmarks",
   batch: () => "/batch",

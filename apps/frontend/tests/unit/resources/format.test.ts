@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
-import { toCsv, toText, windowLabel } from "@/pages/Settings/resources/format"
-import type { ResourceSample, ResourceSnapshot } from "@/pages/Settings/resources/types"
+import { toCsv, toText, windowLabel } from "@/pages/Resources/format"
+import type { ResourceSample, ResourceSnapshot } from "@/pages/Resources/types"
 
 /** The two exports are the panel's copy/paste path, so the "unknown is not zero" rule has to survive
  * serialisation too — that rule is the whole reason these numbers carry a window. */

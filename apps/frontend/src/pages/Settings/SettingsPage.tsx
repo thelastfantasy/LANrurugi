@@ -24,7 +24,7 @@ import { ArchiveFilesSection } from "./ArchiveFilesSection"
 import { GlobalSection } from "./GlobalSection"
 import { LlmUsageSection } from "./LlmUsageSection"
 import { RecycleBinSection } from "./RecycleBinSection"
-import { ResourcePanel } from "./ResourcePanel"
+import { ResourcesSection } from "./ResourcesSection"
 import { SecuritySection } from "./SecuritySection"
 import { SharingSection } from "./SharingSection"
 import { SubscriptionsSection } from "./SubscriptionsSection"
@@ -664,7 +664,7 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
           </SectionErrorBoundary>
 
           <SectionErrorBoundary as="li" section="resources">
-            <ResourcePanel />
+            <ResourcesSection />
           </SectionErrorBoundary>
 
           <SectionErrorBoundary as="li" section="background-workers">

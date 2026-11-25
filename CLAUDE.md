@@ -74,10 +74,11 @@ and bookkeeping churn moves them, so treat a specific figure as a hint, not a fa
   from plan.md and the benchmark numbers behind each mechanism.
 - **Code implemented, real-deployment verification outstanding**: `030-resource-monitor` (31/31 — every
   task ticked; the open items are the release-build timing, a GPU-enabled run and a real Sentry event,
-  listed in its `tasks.md` Implementation Record). A sampler that exists only while the Settings → “Resource monitor” section is
-  open (`crates/lanrurugi-api/src/resources/`): `GET /api/resources` for one snapshot and
+  listed in its `tasks.md` Implementation Record). A sampler that exists only while the `/resources` page
+  (`apps/frontend/src/pages/Resources/`, reachable from a Settings entry) is open
+  (`crates/lanrurugi-api/src/resources/`): `GET /api/resources` for one snapshot and
   `GET /api/resources/stream` for an SSE feed whose first frame is a snapshot and whose later frames are
-  a ~200-byte `Sample`. Both are **session-only** in `crates/lanrurugi-api/policy/route_policy.csv` —
+  a ~470-byte `Sample` (it carries the overview tiles' readings too, so an open page keeps ticking). Both are **session-only** in `crates/lanrurugi-api/policy/route_policy.csv` —
   an Admin API token and a guest visitor are refused, because the payload carries the process table and
   Redis’s internal counters. Absent readings are `null` with a `*_unavailable` reason, never 0;
   `memory.current` is always labelled as including page cache. Feedback bundles gained a `resources`

@@ -52,6 +52,7 @@ data: {"…Sample…"}
 - 之后每 `interval_ms`（默认 1000，允许 500–5000）一帧；客户端可用 `?interval_ms=` 覆盖。
 - 客户端断开 → 服务端在 ≤ 2 s 内注销观察者；归零则终止采样任务（`contract` 的可测点）。
 - 服务端每 15 s 发一次 `KeepAlive` 注释帧。
+- `Sample` 除了给曲线用的计数，还带**概览卡片要显示的那几个读数**（`memory_current_bytes`、`memory_max_bytes`、`disk_free_bytes`、`disk_total_bytes`、`rx_bytes`/`tx_bytes`、`rx_rate_bps`/`tx_rate_bps`、`io_read_bytes`/`io_write_bytes`）。没有它们，页面顶部那几张卡片会停在首帧的 `snapshot` 上不动；带上之后整页每秒刷新，帧仍只有约 400 B（1 Hz 下约 0.4 KB/s）。
 
 ## 不会发生的事
 

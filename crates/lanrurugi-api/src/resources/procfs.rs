@@ -390,6 +390,8 @@ pub fn cgroup(relative: &str) -> Option<CgroupSection> {
     Some(CgroupSection {
         path: relative.to_string(),
         memory_current_bytes: read_number(dir.join("memory.current")),
+        memory_max_bytes: read_number(dir.join("memory.max")),
+        memory_high_bytes: read_number(dir.join("memory.high")),
         includes_page_cache: true,
         anon_bytes: pick("anon"),
         file_bytes: pick("file"),
@@ -477,6 +479,21 @@ mod tests {
         assert_eq!(stat.total_ticks, 10);
         assert_eq!(stat.start_ticks, 900);
         assert_eq!(stat.rss_bytes, 4 * page_size());
+    }
+
+    #[test]
+    fn an_unlimited_cgroup_reports_no_maximum_rather_than_zero() {
+        // `memory.max` says "max" when unlimited; parsing it as 0 would read as a full cgroup.
+        let dir = std::env::temp_dir().join(format!("lrr-cgroup-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join("memory.max"), "max\n").expect("write max");
+        assert_eq!(read_number(dir.join("memory.max")), None);
+        std::fs::write(dir.join("memory.max"), "8589934592\n").expect("write limit");
+        assert_eq!(
+            read_number(dir.join("memory.max")),
+            Some(8 * 1024 * 1024 * 1024)
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

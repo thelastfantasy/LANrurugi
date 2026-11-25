@@ -47,6 +47,9 @@ export interface ResourceIoStat {
 export interface ResourceCgroup {
   path: string
   memory_current_bytes: number | null
+  /** The cgroup ceiling; `null` when unlimited, so percentages have no denominator. */
+  memory_max_bytes: number | null
+  memory_high_bytes: number | null
   /** True by definition: `memory.current` counts page cache. The panel must say so. */
   includes_page_cache: boolean
   anon_bytes: number | null
@@ -227,4 +230,15 @@ export interface ResourceSample {
   queue_active: number
   queue_queued: number
   plugins_alive: number
+  /** The overview tiles' readings travel with the sample, so they tick on a page left open. */
+  memory_current_bytes?: number | null
+  memory_max_bytes?: number | null
+  disk_free_bytes?: number | null
+  disk_total_bytes?: number | null
+  rx_bytes?: number | null
+  tx_bytes?: number | null
+  rx_rate_bps?: number | null
+  tx_rate_bps?: number | null
+  io_read_bytes?: number
+  io_write_bytes?: number
 }
