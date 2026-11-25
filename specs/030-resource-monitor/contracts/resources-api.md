@@ -13,6 +13,8 @@
 
 ```
 # 030: process/memory detail — a real admin login only, never an API token or a guest.
+# Session-only, like 018's /api/diagnostics/*: every credential subject is denied, so only a real
+# login session reaches them. A `token_admin` API token is deliberately not enough.
 p, token_admin, /api/resources/*, *, deny
 p, token_guest, /api/resources/*, *, deny
 p, guest_visitor, /api/resources/*, *, deny

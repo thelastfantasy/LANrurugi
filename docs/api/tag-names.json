@@ -256,5 +256,12 @@
     "en": "Diagnostics API",
     "description_zh": "本机错误事件、问题分组、反馈包与临时上报窗口。",
     "description_en": "Local error events, issue grouping, feedback bundles and the temporary forwarding window."
+  },
+  {
+    "key": "resources",
+    "zh": "资源监视",
+    "en": "Resource Monitor",
+    "description_zh": "进程与宿主的 CPU、内存、PSI、插件进程、模型用量与 Redis 计数（仅登录会话）。",
+    "description_en": "CPU, memory, PSI, plugin processes, model usage and Redis counters for the server and host (session only)."
   }
 ]

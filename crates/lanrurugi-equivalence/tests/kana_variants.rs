@@ -111,3 +111,23 @@ fn kana_script_variants() {
         assert_eq!(eq.fold(v), "すーぱー", "{v:?}");
     }
 }
+
+#[test]
+fn small_kana_collapses_to_full_size() {
+    let eq = jp();
+    // 同一个词的大/小假名两种写法：ロリババア 与 ロリババァ 只差末尾的 ァ。
+    assert_eq!(eq.fold("ロリババァ"), "ろりばばあ");
+    assert_eq!(eq.fold("ロリババア"), eq.fold("ロリババァ"));
+    // 促音、拗音、外来语小写元音同理。
+    assert_eq!(eq.fold("バッグ"), eq.fold("バツグ"));
+    assert_eq!(eq.fold("きゃ"), eq.fold("きや"));
+    assert_eq!(eq.fold("ティー"), eq.fold("テイー"));
+    // 计数用的小写 ヶ/ヵ 也归一（ヶ 是 small ke、ヵ 是 small ka，各自收成 け/か）。
+    assert_eq!(eq.fold("1ヶ月"), "1け月");
+    assert_eq!(eq.fold("1ヵ月"), "1か月");
+    assert_eq!(eq.fold("ヶ"), eq.fold("ケ"));
+    assert_eq!(eq.fold("ヵ"), eq.fold("カ"));
+    // 半角小字（ｧ 是 U+FF67）由管线里的 NFKC 步骤先展开成全角小字，再由这一步收成大字。
+    assert_eq!(eq.fold("ｧ"), "あ");
+    assert_eq!(eq.fold("ﾛﾘﾊﾞﾊﾞｧ"), eq.fold("ロリババア"));
+}

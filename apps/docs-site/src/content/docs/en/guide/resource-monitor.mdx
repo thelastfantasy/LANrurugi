@@ -1,0 +1,75 @@
+---
+title: Resource monitor
+description: The live resource panel in Settings — what it shows, how far each number can be trusted, how "closed means zero cost" works, and what a feedback bundle carries.
+---
+
+Settings → “Resource monitor” is a live panel for this machine’s processes, memory, CPU, PSI, plugin
+processes and Redis counters. The division of labour against a system monitor (`htop`,
+gnome-system-monitor) is that those look at the whole machine while this looks at **LANrurugi itself** —
+which plugin process holds the memory, what the queue is waiting for, how many keys Redis holds, what the
+last model call cost.
+
+## Sampling only while open
+
+The panel is not a resident monitor. A stream (`GET /api/resources/stream`) exists only while this
+section is expanded, and the server starts its sampler when the first observer arrives. Collapsing the
+section or hiding the tab closes the connection; the sampler stops and its history is released. So it
+costs no core and writes no time-series data while you are not looking.
+
+The section offers 1 s / 2 s / 5 s refresh. The sampler always runs at 1 Hz; a longer interval just takes
+every nth frame, so choosing 5 s does not make the server sample less work — it only makes the panel
+quieter.
+
+## Every number carries a window
+
+Rates need two observations. On the first frame after start they are `null` (shown as `—`), never 0 — “zero”
+and “not known yet” have to stay distinguishable. Likewise a section that cannot be read (no cgroup on
+non-Linux, no `nvidia-smi`) is `null` with the reason beside it.
+
+One detail worth knowing: the cgroup’s `memory.current` **includes page cache**. Page cache is reclaimable
+under pressure, so it climbing to several GB does not mean the process needs that much. The rows for
+`anon`, `file` and the server’s own RSS are listed side by side precisely so that comparison is possible.
+
+## What is on the panel
+
+| Group | Contents |
+|---|---|
+| Server process | RSS, peak, swap, CPU, threads, file descriptors, cumulative read/written bytes |
+| cgroup | `memory.current` (incl. page cache), anon, file, slab, peak, `pids.current`, memory PSI, `memory.events` |
+| Runtime | CPU cores, tracked background tasks, queued jobs |
+| Plugin processes | Each persistent worker (one process per plugin); transient declaration processes: available / in flight / spawned |
+| Process tree | Real parent/child links from the server process, up to 64 entries and 3 levels deep, marked `truncated` beyond that |
+| Local models | Today’s per-feature calls, failures and tokens; in-process model load state |
+| Queues | Downloads active / queued / failed, background jobs, per-phase p50 and queue-wait p50 |
+| Redis | `used_memory` / RSS / peak, fragmentation, clients, ops per second, keys per database, hit rate, last-save status, evictions |
+| Network / caches | Cumulative bytes and rates; plugin-declaration and metadata-preview cache hit rates |
+| Library / storage | Archive count and total bytes; used space, utilisation and inodes for the library and temp disks |
+| GPU | Off by default (`LANRURUGI_RESOURCE_GPU=1` to enable): utilisation, VRAM, temperature; `unavailable` when absent |
+| Observer | Attached connections, samples taken, whether the sampler is running, version and build type |
+
+## The build type is labelled
+
+A debug build is slower and larger for the same features, so the server process is rendered as
+`lanrurugi-server (debug)`. The label is decided at compile time; no flag changes it. `deno` processes are
+never labelled — that is a separate program, not a build of this project.
+
+## It also rides along in feedback bundles
+
+“Diagnostics and feedback” → “Bundle” has a “Resource usage” checkbox, on by default. The ZIP then contains
+`resources.json`, the same shape the panel reads, scrubbed: absolute library and temp paths become
+`<path>`, and URLs carrying `?key=` / `&token=` lose their query. If collection fails the file is still
+written with the reason, rather than failing the whole bundle.
+
+:::tip[When it pays off]
+“It gets stuck after a while” used to need follow-up questions. A bundle’s `resources.json` now carries the
+PSI, `memory.events` (was anything OOM-killed) and per-process RSS at that moment, which is usually enough
+to tell “genuinely out of memory” from “one plugin spinning”.
+:::
+
+## Reading it from the API
+
+`GET /api/resources` returns one full snapshot and registers no observer — the right call for a script.
+`GET /api/resources/stream?interval_ms=1000` is the stream the panel uses.
+
+Both need a **real login session**: an API token (even an Admin-role one) and a guest visitor are refused,
+because these responses contain the process table and Redis’s internal counters.

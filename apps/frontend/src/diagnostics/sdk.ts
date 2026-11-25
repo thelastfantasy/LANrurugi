@@ -285,6 +285,12 @@ export function reportWarning(message: string, data?: Record<string, unknown>): 
   Sentry.captureMessage(message, { level: "warning", extra: data })
 }
 
+/** The resource sample the panel is currently showing, so an error reported while it is open carries
+ * the machine's state at that moment (specs/030 FR-016). `null` clears it again on unmount. */
+export function setResourceContext(sample: Record<string, unknown> | null): void {
+  Sentry.getCurrentScope().setContext("resources", sample ?? {})
+}
+
 /** A breadcrumb for something worth knowing before an error, without an error of its own. */
 export function note(message: string, data?: Record<string, unknown>): void {
   Sentry.addBreadcrumb({ category: "app", level: "info", message, data })

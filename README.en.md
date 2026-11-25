@@ -43,6 +43,11 @@ differences), see [docs/comparison-with-lanraragi.md](./docs/comparison-with-lan
   lets you add a note and pin one against cleanup. Every batch delete records a ledger first, so a deleted
   archive's record — with its tags, categories, bookmarks and reading progress — can be restored from the
   backup page, and a cleanup touching more than a quarter of the library asks for confirmation first.
+- **Resource monitor**: a live panel in Settings that samples only while it is open and stops the
+  moment it closes — server and plugin-process CPU/memory, the cgroup's anon/file/slab and memory PSI,
+  the real process tree, local model usage, queue phase timings and Redis counters on one screen. Every
+  number carries its window and source, and an unreadable one shows `—` rather than 0. Feedback bundles can
+  carry the same snapshot (`resources.json`, scrubbed); debug builds label their processes `(debug)`.
 - **Native packages**: Linux (x86_64 / aarch64), macOS (Apple Silicon) and FreeBSD — unpack and run, no container.
 
 ## Quick start

@@ -142,7 +142,7 @@
 - **FR-004**: cgroup 内存 MUST 拆分为 `anon` / `file` / `slab` 并单独给出峰值；`memory.current` 若展示 MUST 标注"含页缓存"。
 - **FR-005**: 快照 MUST 覆盖：CPU（用量与 PSI）、内存（三项拆分、峰值、`high`/`max`/`oom`/`oom_kill` 计数）、IO（读写字节与 PSI）、swap（用量与 PSI full）、磁盘空间与 inode（库盘、temp 盘分开）、fd/线程/进程数、运行时任务与队列深度、逐个插件进程（namespace、pid、RSS、CPU、空闲时长、调用与失败次数）、下载队列深度与阶段耗时（p50/p95）、Redis 摘要（内存、键数、持久化状态）、网络收发速率、缓存命中率、库规模（档案数与总字节，用于归一化）、**进程树**（从主进程 pid 出发深度 ≤3 的子孙进程：插件 deno、模型 worker、book worker 及其外部工具）、**本地模型**（模型 worker 进程 + 今日按 feature 的调用数、失败数、累计耗时与 token）、**Redis 的进程级指标**（`used_memory_rss`、内存峰值、碎片率、键数、命中率、淘汰数、持久化状态）。
 - **FR-006**: GPU（显存已用/总量、利用率）与温度 MUST 作为可选项，由 `LANRURUGI_RESOURCE_GPU=1` 显式开启（默认关，因为查询要 spawn `nvidia-smi`）：开启后一次查询的结果 MUST 缓存 5 秒；查不到时 MUST 标 `unavailable` 并说明原因，且 MUST NOT 影响其它字段或让页面报错。
-- **FR-007**: 资源面板与资源接口 MUST 仅对管理员可用；访客模式下的任何请求 MUST 被拒绝且不泄露指标。
+- **FR-007**: 资源面板与资源接口 MUST 仅对**已登录的浏览器会话**开放——与 018 的诊断接口同一档：`token_admin` 的 API token 也不行。理由是响应里有进程表、Redis 内部计数这类只该给本机主人看的东西，而 API token 常常被发给脚本与第三方集成。访客模式下的任何请求 MUST 被拒绝且不泄露指标（连 403 的 body 都不带数字）。
 - **FR-008**: 面板 MUST 支持「复制为文本」与「导出 CSV」，文本含版本、release、平台与采样窗口。
 - **FR-009**: 反馈包 MUST 新增「资源占用」类目（默认勾选），生成 `resources.json`；同时 MUST 修复当前 `diagnostics.json` 被写成空文件的问题。
 - **FR-010**: 进入反馈包、诊断事件与追踪系统的资源字段 MUST 经过与日志同一套脱敏（无 access key、无 cookie/token、无含用户名的绝对路径）。

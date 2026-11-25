@@ -1541,5 +1541,6 @@
   "settings.snapshotRestoreWarnLose": "快照之後新增或修改的內容會遺失（磁碟上的檔案不會被刪除）。",
   "settings.snapshotRestoreWarnLogout": "還原時站點會短暫無法使用，可能需要重新登入。",
   "settings.snapshotRestoreWarnSafety": "還原前會先自動產生一份 pre-restore 快照，出問題可以再還原回目前狀態。",
-  "settings.snapshotRestoreConfirmWord": "還原"
+  "settings.snapshotRestoreConfirmWord": "還原",
+  "diagnostics.bundle.resources": "資源佔用"
 }

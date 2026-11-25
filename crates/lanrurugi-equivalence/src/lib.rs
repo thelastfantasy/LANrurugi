@@ -41,7 +41,9 @@ use unicode_normalization::UnicodeNormalization;
 /// 分类动态规则全部复用同一实例。`fold_with` / `fold_pattern_with` 允许单次覆盖
 /// 语言开关，但调用方必须保证索引也是用同一套开关建立的。
 /// 归一化规则 revision。只要规则/依赖行为对 canonical key 有影响，就 +1。
-pub const RULE_REVISION: u32 = 1;
+///
+/// 2：日文折叠新增小写假名归一（`ァ`→`ア`、`ッ`→`ツ` 等），旧索引需重建后才生效。
+pub const RULE_REVISION: u32 = 2;
 
 pub struct Equivalence {
     config: FoldConfig,

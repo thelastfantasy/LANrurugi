@@ -725,5 +725,6 @@
   "settings.snapshotRestoreWarnSafety": "A pre-restore snapshot is written automatically first, so the current state can be restored afterwards.",
   "settings.snapshotRestoreConfirmWord": "RESTORE",
   "reader.bookmarkAdded": "Segnalibro aggiunto · pagina {{page}}",
-  "reader.bookmarkRemoved": "Segnalibro rimosso · pagina {{page}}"
+  "reader.bookmarkRemoved": "Segnalibro rimosso · pagina {{page}}",
+  "diagnostics.bundle.resources": "Utilizzo delle risorse"
 }
