@@ -204,17 +204,26 @@ pub async fn run(
                 }
                 tracing::warn!(?path, error = %e, "failed to ingest file");
             }
-            Err(_) => {
-                if let Some(tx) = &new_archive_tx {
-                    let _ = tx.send(IngestEvent::Failed {
-                        path: Some(path.to_string_lossy().to_string()),
-                        reason: format!("ingestion timed out after {INGEST_TIMEOUT:?}"),
-                    });
-                }
-                tracing::warn!(?path, timeout = ?INGEST_TIMEOUT, "ingestion timed out");
-            }
+            Err(_) => report_ingest_timeout(&path, new_archive_tx.as_ref()),
         }
     }
+}
+
+/// Reports a timed-out ingest. Silence when another ingest of the same bytes holds the content
+/// lock — this host is queueing, not failing — and the usual warning plus `Failed` otherwise.
+fn report_ingest_timeout(path: &Path, new_archive_tx: Option<&mpsc::UnboundedSender<IngestEvent>>) {
+    let waiting_on_another_ingest = matches!(size_aware_id(path), Ok(id) if content_lock_held(&id));
+    if waiting_on_another_ingest {
+        tracing::debug!(?path, "another ingest owns this content, standing down");
+        return;
+    }
+    if let Some(tx) = new_archive_tx {
+        let _ = tx.send(IngestEvent::Failed {
+            path: Some(path.to_string_lossy().to_string()),
+            reason: format!("ingestion timed out after {INGEST_TIMEOUT:?}"),
+        });
+    }
+    tracing::warn!(?path, timeout = ?INGEST_TIMEOUT, "ingestion timed out");
 }
 
 pub async fn ingest_file(
@@ -835,25 +844,34 @@ pub(crate) fn book_outline_toc(path: &Path) -> Vec<lanrurugi_core::entities::Toc
 /// One mutex per content id, so two ingests of the same bytes serialize instead of racing for the
 /// same destination path. Entries are dropped once no one holds or waits on them.
 pub async fn content_lock(id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+    content_mutex(id).lock_owned().await
+}
+
+/// Whether some other task currently holds [`content_lock`] for `id`, without waiting for it.
+///
+/// A timeout with this true is a busy host (two ingests of the same bytes, one of which had to
+/// take its turn), not a failure: reporting it as one made a routine queue look like a broken
+/// scanner (029 FR-011).
+pub fn content_lock_held(id: &str) -> bool {
+    content_mutex(id).try_lock().is_err()
+}
+
+fn content_mutex(id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
     use std::sync::{Arc, LazyLock, Mutex, Weak};
 
     static LOCKS: LazyLock<Mutex<std::collections::HashMap<String, Weak<tokio::sync::Mutex<()>>>>> =
         LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
-    let lock: Arc<tokio::sync::Mutex<()>> = {
-        let mut locks = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
-        locks.retain(|_, weak| weak.strong_count() > 0);
-        let entry = locks.entry(id.to_string()).or_default();
-        match entry.upgrade() {
-            Some(lock) => lock,
-            None => {
-                let lock = Arc::new(tokio::sync::Mutex::new(()));
-                *entry = Arc::downgrade(&lock);
-                lock
-            }
+    let mut locks = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    locks.retain(|_, weak| weak.strong_count() > 0);
+    match locks.entry(id.to_string()).or_default().upgrade() {
+        Some(lock) => lock,
+        None => {
+            let lock = Arc::new(tokio::sync::Mutex::new(()));
+            locks.insert(id.to_string(), Arc::downgrade(&lock));
+            lock
         }
-    };
-    lock.lock_owned().await
+    }
 }
 
 #[cfg(test)]
@@ -1444,5 +1462,58 @@ mod tests {
             .hdel(FILEMAP_KEY, good.to_string_lossy().to_string())
             .await
             .unwrap();
+    }
+
+    /// A file with unique bytes, so its content id cannot collide with another test's.
+    async fn scratch_file(label: &str) -> std::path::PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("t029-{label}-{}-{stamp}.zip", std::process::id()));
+        tokio::fs::write(&path, label.as_bytes()).await.unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn a_timeout_while_another_ingest_holds_the_content_is_not_a_failure() {
+        // The watcher can see the bytes a download is about to catalogue; when it does, the second
+        // ingest waits on the content lock and can blow the timeout through no fault of its own.
+        let path = scratch_file("held").await;
+        let id = lanrurugi_storage::id::size_aware_id(&path).unwrap();
+        let guard = content_lock(&id).await;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        report_ingest_timeout(&path, Some(&tx));
+        drop(guard);
+        drop(tx);
+
+        assert!(
+            rx.recv().await.is_none(),
+            "waiting on another ingest must not be reported as a failed scan"
+        );
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    #[tokio::test]
+    async fn a_timeout_with_nobody_holding_the_content_is_still_a_failure() {
+        let path = scratch_file("stuck").await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        report_ingest_timeout(&path, Some(&tx));
+        drop(tx);
+
+        let event = rx.recv().await.expect("a genuine timeout must be reported");
+        match event {
+            IngestEvent::Failed {
+                path: reported,
+                reason,
+            } => {
+                assert_eq!(reported.as_deref(), Some(path.to_string_lossy().as_ref()));
+                assert!(reason.contains("timed out"), "reason was {reason}");
+            }
+            other => panic!("expected a Failed event, got {other:?}"),
+        }
+        let _ = tokio::fs::remove_file(&path).await;
     }
 }

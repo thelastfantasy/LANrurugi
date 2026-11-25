@@ -973,7 +973,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                         // happens inside this call itself (once, after every enabled plugin has
                         // run) — see its own doc comment.
                         lanrurugi_api::plugins::run_enabled_metadata_plugins_on_archive(
-                            &state, &id,
+                            &state, &id, None,
                         )
                         .await;
 

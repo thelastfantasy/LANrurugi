@@ -109,14 +109,8 @@ pub async fn llm_rerank(
             .collect::<Vec<_>>(),
     );
 
-    if let Some(picks) =
-        cached_picks(state, archive_id, limit, &candidate_fingerprint, &digest).await
-    {
-        let ranked = rank_picks(&picks, &by_id, shortlist, limit);
-        if !ranked.is_empty() {
-            return Some(ranked);
-        }
-        // Every remembered pick has since been deleted: fall through and ask again.
+    if let Some(ranked) = llm_rerank_cached(state, archive_id, anchor_state, ordered, limit).await {
+        return Some(ranked);
     }
 
     let candidate_list: Vec<String> = shortlist
@@ -194,6 +188,37 @@ pub async fn llm_rerank(
     )
     .await;
     Some(ranked)
+}
+
+/// The cache-only half of [`llm_rerank`]: a remembered pick list for this exact shortlist, or `None`
+/// when the model has never been asked about it.
+///
+/// Split out so the reader endpoint can hand back the embedding order the moment a panel opens
+/// instead of waiting 6–64 s for a call whose answer nobody is going to see in time — the full
+/// rerank then runs in the background and is cached for the next open.
+pub async fn llm_rerank_cached(
+    state: &AppState,
+    archive_id: &str,
+    anchor_state: ReadingState,
+    ordered: &[RankedCandidate],
+    limit: usize,
+) -> Option<Vec<Recommendation>> {
+    let shortlist = dedupe_by_work(ordered);
+    let shortlist = &shortlist[..shortlist.len().min(MAX_PROMPT_CANDIDATES)];
+    let by_id: std::collections::HashMap<&str, &ShortlistEntry> =
+        shortlist.iter().map(|e| (e.meta.id.as_str(), e)).collect();
+    let candidate_fingerprint = candidate_fingerprint(shortlist.iter().map(|e| e.meta.id.as_str()));
+    let digest = progress_digest(
+        anchor_state.bucket(),
+        &shortlist
+            .iter()
+            .map(|e| (e.meta.id.as_str(), e.bucket))
+            .collect::<Vec<_>>(),
+    );
+    let picks = cached_picks(state, archive_id, limit, &candidate_fingerprint, &digest).await?;
+    let ranked = rank_picks(&picks, &by_id, shortlist, limit);
+    // Every remembered pick has since been deleted: treat it as a miss and let the caller ask again.
+    (!ranked.is_empty()).then_some(ranked)
 }
 
 /// Ceiling for one rerank. The observed distribution is 6–64 s; 30 s keeps the answers that actually

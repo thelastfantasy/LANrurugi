@@ -12,6 +12,11 @@ const GAP = 8
  * without closing out from under a cursor still headed toward the bubble's own content. */
 const CLOSE_DELAY_MS = 150
 
+/** How long a touch has to be held before its tooltip opens. A tap must stay a tap: a bubble that
+ * opened on `mouseover` (which a tap synthesizes) covered the queue row it belonged to, so a
+ * finished download's title could not be opened on a phone (reported 2026-11-25). */
+const LONG_PRESS_MS = 500
+
 /** The hover tooltip currently showing, module-wide. Opening another one closes this one right
  * away instead of letting it sit next to the new bubble for the rest of its close delay. */
 let activeTooltip: { close: () => void } | null = null
@@ -59,9 +64,22 @@ export function Tooltip({
   function hide() {
     setVisible(false)
     setStyle(HIDDEN_STYLE)
+    touchOpened.current = false
   }
   const wrapperRef = useRef<HTMLSpanElement>(null)
   const bubbleRef = useRef<HTMLDivElement>(null)
+  /** The portaled bubble box, for "is this touch outside both?" comparisons. */
+  const bubbleBoxRef = useRef<HTMLDivElement>(null)
+  /** The kind of pointer the trigger last saw, so a tap's synthesized `mouseover` cannot open the
+   * bubble behind the user's finger. */
+  const pointerType = useRef("mouse")
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pressOrigin = useRef<{ x: number; y: number } | null>(null)
+  /** A long press opened the bubble: swallow the click it ends with, and the leave right after it. */
+  const swallowClick = useRef(false)
+  const swallowLeave = useRef(false)
+  /** Whether the open bubble came from a long press, which is dismissed by tapping outside. */
+  const touchOpened = useRef(false)
   const cursorPos = useRef<{ x: number; y: number } | null>(null)
 
   function cancelClose() {
@@ -93,6 +111,56 @@ export function Tooltip({
     }
     activeTooltip = self.current
     setVisible(true)
+  }
+
+  function cancelLongPress() {
+    if (longPressTimer.current !== null) {
+      clearTimeout(longPressTimer.current)
+      longPressTimer.current = null
+    }
+    pressOrigin.current = null
+  }
+
+  /** Only a mouse opens on hover; a finger opens the bubble by holding still instead. */
+  function openFromHover() {
+    if (pointerType.current !== "mouse") return
+    open()
+  }
+
+  function handlePointerDown(e: React.PointerEvent) {
+    pointerType.current = e.pointerType || "mouse"
+    // A press that never produced its click (the finger slid away) must not eat a later one.
+    swallowClick.current = false
+    swallowLeave.current = false
+    cancelLongPress()
+    if (pointerType.current === "mouse") return
+    pressOrigin.current = { x: e.clientX, y: e.clientY }
+    longPressTimer.current = setTimeout(() => {
+      longPressTimer.current = null
+      swallowClick.current = true
+      swallowLeave.current = true
+      touchOpened.current = true
+      open()
+    }, LONG_PRESS_MS)
+  }
+
+  function handlePointerMove(e: React.PointerEvent) {
+    pointerType.current = e.pointerType || pointerType.current
+    if (pressOrigin.current) {
+      const dx = e.clientX - pressOrigin.current.x
+      const dy = e.clientY - pressOrigin.current.y
+      // Scrolling or dragging the row is not a long press.
+      if (dx * dx + dy * dy > 100) cancelLongPress()
+    }
+    handleMouseMove(e)
+  }
+
+  function handleLeave() {
+    if (swallowLeave.current) {
+      swallowLeave.current = false
+      return
+    }
+    scheduleClose()
   }
 
   function handleMouseMove(e: React.MouseEvent) {
@@ -161,6 +229,20 @@ export function Tooltip({
     [],
   )
 
+  // A bubble opened by a long press has no pointer-leave to close it: the finger is already where
+  // it opened it. Tap anywhere outside — the row, the bubble's own text excepted — to dismiss.
+  useEffect(() => {
+    if (!visible || !touchOpened.current) return
+    function onOutside(event: PointerEvent) {
+      const target = event.target as Node
+      if (wrapperRef.current?.contains(target) || bubbleBoxRef.current?.contains(target)) return
+      hide()
+      if (activeTooltip === self.current) activeTooltip = null
+    }
+    document.addEventListener("pointerdown", onOutside, true)
+    return () => document.removeEventListener("pointerdown", onOutside, true)
+  }, [visible])
+
   useLayoutEffect(() => {
     if (!visible) return
     recompute()
@@ -181,15 +263,36 @@ export function Tooltip({
   return (
     <span
       ref={wrapperRef}
-      style={{ position: "relative", display: "inline-flex", ...wrapperStyle }}
-      onMouseEnter={open}
+      style={{
+        position: "relative",
+        display: "inline-flex",
+        // A long press on touch must reach this component, not iOS's link preview/magnifier.
+        WebkitTouchCallout: "none",
+        ...wrapperStyle,
+      }}
+      onPointerDown={handlePointerDown}
+      onPointerUp={cancelLongPress}
+      onPointerCancel={cancelLongPress}
+      onPointerMove={handlePointerMove}
+      onPointerLeave={handleLeave}
+      onMouseEnter={openFromHover}
       // Every move over the trigger (or the bubble, a React child through the portal) cancels a
       // pending close. `mouseenter` alone missed one path: the pointer falling from the bubble back
       // onto the trigger — e.g. when the bubble is repositioned out from under a resting pointer —
       // which React does not count as entering, so the bubble's own leave closed it.
-      onMouseOver={open}
-      onMouseMove={handleMouseMove}
-      onMouseLeave={scheduleClose}
+      onMouseOver={openFromHover}
+      onMouseLeave={handleLeave}
+      // A long press ends with the platform's own menu; the bubble replaces it on touch.
+      onContextMenu={(e) => {
+        if (pointerType.current !== "mouse") e.preventDefault()
+      }}
+      // The long press that opened the bubble must not also follow the link underneath it.
+      onClickCapture={(e) => {
+        if (!swallowClick.current) return
+        swallowClick.current = false
+        e.preventDefault()
+        e.stopPropagation()
+      }}
       // Keyboard focus only: focus handed back by a closing drawer or dialog after a tap or click
       // must not pop the bubble open on its own.
       onFocus={(e) => {
@@ -201,6 +304,7 @@ export function Tooltip({
       {visible &&
         createPortal(
           <div
+            ref={bubbleBoxRef}
             role="tooltip"
             onMouseEnter={cancelClose}
             onMouseLeave={(e) => {

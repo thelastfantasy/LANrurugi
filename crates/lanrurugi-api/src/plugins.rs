@@ -1280,25 +1280,58 @@ pub struct UsePluginParams {
 /// settings hash (which includes things like `session_secret`/`password` a plugin has no
 /// business reading).
 async fn get_plugin_relevant_settings(state: &AppState) -> Value {
-    let Ok(mut conn) = state.redis.config.get().await else {
-        return json!({});
-    };
-    let fields: std::collections::HashMap<String, String> =
-        conn.hgetall(CONFIG_KEY).await.unwrap_or_default();
+    match read_config_fields(state).await {
+        Some(fields) => relevant_settings(&fields),
+        None => json!({}),
+    }
+}
+
+fn relevant_settings(fields: &std::collections::HashMap<String, String>) -> Value {
     json!({
         "usedateadded": fields.get("usedateadded").map(|v| v != "0").unwrap_or(true),
         "usedatemodified": fields.get("usedatemodified").map(|v| v != "0").unwrap_or(false),
     })
 }
 
+/// The whole config hash, or `None` when Redis is unreachable — the callers below each turn that
+/// into their own "carry on without settings" answer, so the distinction has to survive this far.
+async fn read_config_fields(state: &AppState) -> Option<std::collections::HashMap<String, String>> {
+    let mut conn = state.redis.config.get().await.ok()?;
+    Some(conn.hgetall(CONFIG_KEY).await.unwrap_or_default())
+}
+
+/// Both `LRR_CONFIG` reads one metadata-plugin run needs, from a single round trip: the hash is the
+/// same for every plugin in the loop, so reading it per plugin only multiplied trip count.
+struct PluginRunConfig {
+    settings: Value,
+    tagrules: Option<String>,
+}
+
+impl PluginRunConfig {
+    async fn read(state: &AppState) -> Self {
+        match read_config_fields(state).await {
+            Some(fields) => Self {
+                settings: relevant_settings(&fields),
+                tagrules: tag_rules_text(&fields),
+            },
+            None => Self {
+                settings: json!({}),
+                tagrules: None,
+            },
+        }
+    }
+}
+
 /// The `tagrules` setting's raw text, but only when `tagruleson` is enabled (`Model/Plugins.pm`'s
 /// own `if (LANraragi::Model::Config->enable_tagrules)` gate) — `None` means "don't rewrite
 /// anything", collapsing both "the switch is off" and "Redis is unreachable" into the same safe
 /// no-op rather than a metadata-plugin run failing outright over an unrelated config read.
-async fn get_computed_tagrules(state: &AppState) -> Option<String> {
-    let mut conn = state.redis.config.get().await.ok()?;
-    let fields: std::collections::HashMap<String, String> =
-        conn.hgetall(CONFIG_KEY).await.unwrap_or_default();
+pub(crate) async fn get_computed_tagrules(state: &AppState) -> Option<String> {
+    let fields = read_config_fields(state).await?;
+    tag_rules_text(&fields)
+}
+
+fn tag_rules_text(fields: &std::collections::HashMap<String, String>) -> Option<String> {
     let enabled = fields.get("tagruleson").map(|v| v != "0").unwrap_or(true);
     if !enabled {
         return None;
@@ -1599,9 +1632,19 @@ pub struct AutoPluginSummary {
 /// selection/ordering and the tag/title merge-and-persist step `use_plugin_sync` deliberately
 /// leaves to its caller (its own callers include the interactive "Fetch Metadata" button, which
 /// must NOT auto-persist before the user reviews the result).
+/// Whether this plugin's own output is already on the queue row (spec 029 FR-005) — calling it
+/// again would be a second round trip for the answer the row has carried since start time.
+fn skip_metadata_plugin(namespace: &str, skip: Option<&str>) -> bool {
+    skip.is_some_and(|skipped| skipped == namespace)
+}
+
+/// `skip` names the one plugin that must not run: the metadata plugin whose output the queue item
+/// already carries from start time (spec 029 FR-005). Every other enabled plugin still runs —
+/// they cover different sites, and a different plugin may well describe this archive better.
 pub async fn run_enabled_metadata_plugins_on_archive(
     state: &AppState,
     archive_id: &str,
+    skip: Option<&str>,
 ) -> AutoPluginSummary {
     let mut summary = AutoPluginSummary {
         successes: 0,
@@ -1635,7 +1678,33 @@ pub async fn run_enabled_metadata_plugins_on_archive(
         namespaces.insert(0, regex_entry);
     }
 
+    // Both of these are properties of the archive, not of the plugin about to run: an earlier
+    // plugin in this loop can rewrite `title`/`tags`, but never the file's location or mtime, so
+    // re-stat'ing the same file once per plugin was pure repetition.
+    let file_modified_time = {
+        let archive = state
+            .repos
+            .archives
+            .get(&lanrurugi_core::ids::ArchiveId(archive_id.to_string()))
+            .await
+            .ok()
+            .flatten();
+        archive.as_ref().map(|a| a.file.clone()).and_then(|p| {
+            std::fs::metadata(p)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+        })
+    };
+    // Likewise one config read for the whole loop rather than two `HGETALL`s per plugin.
+    let config = PluginRunConfig::read(state).await;
+
     for (ns, info) in namespaces {
+        if skip_metadata_plugin(&ns, skip) {
+            tracing::debug!(%archive_id, plugin = %ns, "skipping the metadata plugin whose output the queue item already applied");
+            continue;
+        }
         // Fetched fresh on every plugin iteration (not hoisted above the loop) since an earlier
         // plugin in this same run may have just updated `title`/`tags` — the next plugin should
         // see that plugin's own output as its "existing" state, matching legacy's own sequential
@@ -1648,13 +1717,6 @@ pub async fn run_enabled_metadata_plugins_on_archive(
             .ok()
             .flatten();
         let file_path = archive.as_ref().map(|a| a.file.clone());
-        let file_modified_time = file_path.as_deref().and_then(|p| {
-            std::fs::metadata(p)
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-        });
         let customargs = get_plugin_customargs(state, &ns, &info.parameters).await;
         let args = json!({
             "archive_id": archive_id,
@@ -1663,7 +1725,7 @@ pub async fn run_enabled_metadata_plugins_on_archive(
             "customargs": customargs,
             "file_path": file_path,
             "file_modified_time": file_modified_time,
-            "settings": get_plugin_relevant_settings(state).await,
+            "settings": config.settings.clone(),
             "existing_tags": archive.as_ref().map(|a| a.tags.clone()).unwrap_or_default(),
             "archive_title": archive.as_ref().map(|a| a.title.clone()).unwrap_or_default(),
         });
@@ -1702,12 +1764,10 @@ pub async fn run_enabled_metadata_plugins_on_archive(
         // `Model/Plugins.pm:292-296` — tag rules run on the plugin's freshly returned tags only,
         // before they're merged into the record's, and only when `tagruleson` is set.
         let new_tags = match data.get("tags").and_then(Value::as_str) {
-            Some(tags) if !tags.trim().is_empty() => {
-                Some(match get_computed_tagrules(state).await {
-                    Some(rules_text) => tag_rules::apply_tag_rules(tags, &rules_text),
-                    None => tags.to_string(),
-                })
-            }
+            Some(tags) if !tags.trim().is_empty() => Some(match config.tagrules.as_deref() {
+                Some(rules_text) => tag_rules::apply_tag_rules(tags, rules_text),
+                None => tags.to_string(),
+            }),
             _ => None,
         };
         let new_title = data
@@ -2343,6 +2403,11 @@ pub(crate) async fn start_download(
     // captures a referenced variable by move regardless of whether it's only ever borrowed inside.
     let queue_item_id_for_task = queue_link.as_ref().map(|(_, id)| id.clone());
     let state_for_cleanup = state.clone();
+    // 029 US2/T015: the ingest half of this task runs through `download_manager`, which has no job
+    // id of its own — the clock is how its phase marks (T014) reach this job.
+    let clock_jobs = state.jobs.clone();
+    let clock_job_id = job_id.clone();
+    let clock_queue_item_id = queue_item_id_for_task.clone();
 
     tokio::spawn(async move {
         // The real task body is wrapped in its own async block (rather than being this whole
@@ -2354,8 +2419,24 @@ pub(crate) async fn start_download(
         // there's a real (harmless) possible race where both this cleanup and a fresh stop
         // request try to remove the same now-finished entry — `HashMap::remove` on a
         // no-longer-present key is simply a no-op either way.
-        (async move {
+        crate::ingest_clock::with_clock(
+            async move {
             jobs.mark_active(&job_id_for_task).await;
+            // 029 US4: one trace per task, finished by the guard however this body ends. Every
+            // boundary below advances it next to the job's own phase timeline.
+            let _trace_guard = crate::diagnostics::download_trace::begin(
+                &job_id_for_task,
+                queue_item_id_for_task.as_deref(),
+                &plugin_namespace_for_task,
+                &url,
+            );
+            // 029 US2: the job exists but its task has not run yet — that gap is real queue time
+            // the user waits through, and it used to be folded into whatever came next.
+            jobs.begin_phase(&job_id_for_task, lanrurugi_core::jobs::PHASE_QUEUED).await;
+            crate::diagnostics::download_trace::phase(
+                &job_id_for_task,
+                lanrurugi_core::jobs::PHASE_QUEUED,
+            );
             if let Some((repo, item_id)) = &queue_link {
                 // `Starting` covers the plugin's own `exec_download` call — resolving the real
                 // download URL(s), e.g. `ehentai.ts`'s own archiver.php round-trip, which can
@@ -2514,6 +2595,15 @@ pub(crate) async fn start_download(
                         return;
                     }
                 };
+                // Holding the plugin's own slot means the queuing is over: what follows is the
+                // plugin's negotiation with the source site, not a wait this host imposed.
+                jobs.end_phase(&job_id_for_task).await;
+                jobs.begin_phase(&job_id_for_task, lanrurugi_core::jobs::PHASE_NEGOTIATE)
+                    .await;
+                crate::diagnostics::download_trace::phase(
+                    &job_id_for_task,
+                    lanrurugi_core::jobs::PHASE_NEGOTIATE,
+                );
                 if negotiation_waits {
                     if let Some((repo, item_id)) = &queue_link {
                         update_queue_item_state(
@@ -2558,10 +2648,21 @@ pub(crate) async fn start_download(
                         )
                         .await;
                     }
+                    crate::diagnostics::download_trace::fail(&job_id_for_task, &e.to_string());
                     jobs.fail(&job_id_for_task, e.to_string()).await;
                     return;
                 }
             };
+
+            // The plugin has answered: any further wait is this host's own per-domain permit, not
+            // the source site's latency.
+            jobs.end_phase(&job_id_for_task).await;
+            jobs.begin_phase(&job_id_for_task, lanrurugi_core::jobs::PHASE_WAITING)
+                .await;
+            crate::diagnostics::download_trace::phase(
+                &job_id_for_task,
+                lanrurugi_core::jobs::PHASE_WAITING,
+            );
 
             let parsed: PluginDownloadResult = match serde_json::from_value(plugin_result) {
                 Ok(p) => p,
@@ -2605,6 +2706,7 @@ pub(crate) async fn start_download(
                     )
                     .await;
                 }
+                crate::diagnostics::download_trace::fail(&job_id_for_task, &err.error_code);
                 jobs.fail(&job_id_for_task, err.error_code).await;
                 return;
             }
@@ -2984,6 +3086,10 @@ const MAX_DOWNLOAD_RETRIES: u32 = 4;
                                     // completed row can still report how fast it ran after the
                                     // job is gone (a restart drops the whole registry).
                                     item.average_bytes_per_sec = job.average_bytes_per_sec;
+                                    // Same reason as the rate: the timeline is what lets a
+                                    // finished row say how much of its elapsed time was actually
+                                    // transfer instead of counting the plugin's own waiting.
+                                    item.phases = job.phases.clone();
                                     if let Err(e) = repo.update(&item).await {
                                         tracing::warn!(item_id, error = %e, "failed to persist completed download size");
                                     }
@@ -3051,6 +3157,10 @@ const MAX_DOWNLOAD_RETRIES: u32 = 4;
                             )
                             .await;
                         }
+                        crate::diagnostics::download_trace::fail(
+                            &job_id_for_task,
+                            &format!("{e:?}"),
+                        );
                         jobs.fail(&job_id_for_task, format!("{e:?}")).await
                     }
                 }
@@ -3103,7 +3213,11 @@ const MAX_DOWNLOAD_RETRIES: u32 = 4;
                 "plugin returned neither downloads, file_path, nor error",
             )
             .await;
-        })
+            },
+            &clock_jobs,
+            &clock_job_id,
+            clock_queue_item_id,
+        )
         .await;
 
         if let Some((_, item_id)) = &queue_link_for_cleanup {
@@ -3209,6 +3323,7 @@ pub(crate) async fn update_queue_item_state(
         match repo.get(item_id).await {
             Ok(Some(mut item)) => {
                 item.state = new_state;
+                crate::download_queue::settle_transferring(&mut item);
                 // Terminal states get an end stamp (and a fresh start drops any stale one, so a
                 // retried item reports its own run). The size is written by the completion paths
                 // themselves, which are the only places that know the job's final byte count.
@@ -3252,6 +3367,7 @@ pub(crate) async fn update_queue_item_state(
                                 "finished_at": &item.finished_at,
                                 "file_size": &item.file_size,
                                 "average_bytes_per_sec": &item.average_bytes_per_sec,
+                                "phases": &item.phases,
                                 // Included so a client's delta merge (a plain field spread) can
                                 // never keep showing a stale older-revision banner after the item
                                 // has moved on to some other state.
@@ -3712,6 +3828,9 @@ pub(crate) async fn ensure_metadata_cached(
 
     item.metadata_preview = Some(result.clone());
     item.metadata_preview_at = Some(now);
+    // Recorded only on success, and only here: cataloguing skips exactly this plugin, so a value
+    // written without a real plugin result behind it would skip a plugin nobody ran.
+    item.metadata_preview_namespace = Some(plugin_ns.clone());
     if let Some(ref t) = title {
         item.title = Some(t.clone());
     }
@@ -3730,6 +3849,7 @@ pub(crate) async fn ensure_metadata_cached(
         persisted = fresh;
         persisted.metadata_preview = item.metadata_preview.clone();
         persisted.metadata_preview_at = item.metadata_preview_at;
+        persisted.metadata_preview_namespace = item.metadata_preview_namespace.clone();
         if let Some(ref t) = title {
             persisted.title = Some(t.clone());
         }
@@ -4049,6 +4169,22 @@ async fn run_managed_downloads(
                 if downloading_state_set.swap(true, std::sync::atomic::Ordering::SeqCst) {
                     return;
                 }
+                // 029 US2: bytes are finally moving. Marked for every job, not just a queue-tracked
+                // one — the phase timeline belongs to the job, while the `Downloading` queue state
+                // below is the row's own concern.
+                let phase_state = state.clone();
+                let phase_job_id = job_id.clone();
+                tokio::spawn(async move {
+                    phase_state.jobs.end_phase(&phase_job_id).await;
+                    phase_state
+                        .jobs
+                        .begin_phase(&phase_job_id, lanrurugi_core::jobs::PHASE_TRANSFER)
+                        .await;
+                    crate::diagnostics::download_trace::phase(
+                        &phase_job_id,
+                        lanrurugi_core::jobs::PHASE_TRANSFER,
+                    );
+                });
                 let Some((repo, item_id)) = queue_link.clone() else {
                     return;
                 };
@@ -4142,6 +4278,14 @@ async fn run_managed_downloads(
     if let Some((repo, item_id)) = &queue_link {
         set_queue_item_transferring(repo, state.download_queue_tx.as_ref(), item_id, false).await;
     }
+    // 029 US2: every resource's bytes have landed; bundling and cataloguing from here on is the
+    // ingest phase (the metadata plugin chain's own call is marked `publish` inside it, T014).
+    state.jobs.end_phase(&job_id).await;
+    state
+        .jobs
+        .begin_phase(&job_id, lanrurugi_core::jobs::PHASE_INGEST)
+        .await;
+    crate::diagnostics::download_trace::phase(&job_id, lanrurugi_core::jobs::PHASE_INGEST);
 
     let mut archive_ids = Vec::new();
     if should_bundle {
@@ -4556,6 +4700,22 @@ pub(crate) mod tests {
             data: None,
         });
         assert!(!plugin_declined(&crashed));
+    }
+
+    #[test]
+    fn only_the_recorded_plugin_is_skipped_and_a_bare_preview_skips_nothing() {
+        // 029 FR-005: the row records *which* plugin answered; every other enabled plugin still
+        // runs (they cover different sites), and a preview with no recorded namespace — an older
+        // row, a failed fetch, auto-fetch off — must not skip anything at all.
+        assert!(skip_metadata_plugin(
+            "metadata/ehentai",
+            Some("metadata/ehentai")
+        ));
+        assert!(
+            !skip_metadata_plugin("metadata/chaika", Some("metadata/ehentai")),
+            "a different metadata plugin still has something to say about this archive"
+        );
+        assert!(!skip_metadata_plugin("metadata/ehentai", None));
     }
 
     #[test]

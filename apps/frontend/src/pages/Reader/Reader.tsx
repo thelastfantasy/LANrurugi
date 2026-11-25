@@ -298,6 +298,11 @@ interface WakeLockSentinelLike {
  * boundary panel opens with data already cached (LLM rerank takes seconds). */
 const RECS_QUERY_KEY = (id: string) => ["reader-recommendations", id] as const;
 
+/** Keep a prefetched shortlist for an hour. TanStack's default is 5 minutes of inactivity, which a
+ * single long read already exceeds — the prefetch would be collected mid-read and the boundary
+ * panel would re-ask the server (a model call when the cache digest has moved on). */
+const RECS_GC_MS = 60 * 60 * 1000;
+
 /** Fixed 16x16 square badge chip on recommendation-card thumbnails, neutral dark overlay chrome. */
 const badgeChipStyle: React.CSSProperties = {
   width: 16,
@@ -1993,6 +1998,7 @@ export function Reader() {
     void queryClient.prefetchQuery({
       queryKey: RECS_QUERY_KEY(archiveId),
       staleTime: 60_000,
+      gcTime: RECS_GC_MS,
       queryFn: () =>
         fetch(
           `/api/reader/recommendations/${encodeURIComponent(archiveId)}?limit=10`,
@@ -2028,6 +2034,7 @@ export function Reader() {
       .fetchQuery({
         queryKey: RECS_QUERY_KEY(archiveId),
         staleTime: 60_000,
+        gcTime: RECS_GC_MS,
         queryFn: () =>
           fetch(
             `/api/reader/recommendations/${encodeURIComponent(archiveId)}?limit=10`,
@@ -2623,7 +2630,7 @@ export function Reader() {
   const currentBookmark = (bookmarks.data ?? []).find((b) => b.page === currentPage);
   const isPageBookmarked = currentBookmark !== undefined;
 
-  async function toggleBookmark() {
+  async function toggleBookmark({ announce = false }: { announce?: boolean } = {}) {
     if (!loggedIn) {
       const template = t("reader.aHrefUrlLogin") ?? "";
       toast({
@@ -2635,10 +2642,24 @@ export function Reader() {
       return;
     }
     if (!archiveId) return;
-    if (isPageBookmarked) {
-      await removeBookmark.mutateAsync({ archiveId, page: currentPage });
-    } else {
-      await addBookmark.mutateAsync({ archiveId, page: currentPage });
+    try {
+      if (isPageBookmarked) {
+        await removeBookmark.mutateAsync({ archiveId, page: currentPage });
+        if (announce) {
+          toast({ heading: t("reader.bookmarkRemoved", { page: currentPage }) ?? undefined, icon: "info" })
+        }
+      } else {
+        await addBookmark.mutateAsync({ archiveId, page: currentPage });
+        if (announce) {
+          toast({ heading: t("reader.bookmarkAdded", { page: currentPage }) ?? undefined, icon: "success" })
+        }
+      }
+    } catch (err) {
+      // A failed write used to reject into nothing (`void toggleBookmark()`): in headless reading
+      // there is no toolbar icon to notice it either, so say it out loud when nothing else can.
+      if (announce) {
+        toast({ text: err instanceof Error ? err.message : String(err), icon: "error" })
+      }
     }
   }
 
@@ -2785,7 +2806,9 @@ export function Reader() {
           }
           return;
         case "b":
-          void toggleBookmark();
+          // Headless hides the toolbar, so the bookmark icon's own state change is the only
+          // feedback there would be — the toast is what makes the shortcut answer at all.
+          void toggleBookmark({ announce: headless });
           return;
         case "f":
           toggleFullScreen();

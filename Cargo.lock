@@ -4226,6 +4226,7 @@ dependencies = [
  "criterion",
  "image",
  "lanrurugi-core",
+ "lanrurugi-plugin",
  "lanrurugi-scanner",
  "lanrurugi-storage",
  "rand 0.10.4",

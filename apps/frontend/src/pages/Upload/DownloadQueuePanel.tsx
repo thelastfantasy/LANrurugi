@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { FaCircleExclamation, FaDownload, FaRss } from "react-icons/fa6"
+import { useSearchParams } from "react-router-dom"
 
 import { fetchJson, sendJson } from "@/api/client"
 import {
@@ -33,7 +34,19 @@ import {
 } from "./shared"
 
 /** Which half of a group's list a tab shows. */
-type QueueTab = "manual" | "subscription"
+export type QueueTab = "manual" | "subscription"
+
+/** The tab a URL asks one group to show.
+ *
+ *  Read from the address rather than `localStorage`: the reader's back button (a swipe on a phone)
+ *  returns to the URL the row was opened from, so the tab the user left is still there — and that
+ *  survives a refresh or a shared link without leaving a storage key behind. An untouched group
+ *  contributes nothing, so the page's own default never turns into a query parameter. */
+export function tabByGroupFromUrl(params: URLSearchParams): Record<string, QueueTab> {
+  const group = params.get("queue_group")
+  const tab = params.get("queue_tab")
+  return group && (tab === "manual" || tab === "subscription") ? { [group]: tab } : {}
+}
 
 /** Rows a group shows before its list starts scrolling instead of growing the page. */
 const QUEUE_SCROLL_AFTER = 25
@@ -95,7 +108,10 @@ export function DownloadQueuePanel({
   /** Which tab each group is showing. Absent = the default, `manual` — a person's own paste is what
    * they came to this page to watch, and a subscription's bulk arriving must not switch the view
    * under them. Kept per group so a choice made for one plugin doesn't follow them to another. */
-  const [tabByGroup, setTabByGroup] = useState<Record<string, QueueTab>>({})
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [tabByGroup, setTabByGroup] = useState<Record<string, QueueTab>>(() =>
+    tabByGroupFromUrl(searchParams),
+  )
   /** On a phone the two tab labels ("Manual" / "From subscriptions") eat the heading's whole width,
    *  squeezing the group name and the counts. The icon carries the same distinction there, with the
    *  count kept beside it and the label moved to a tooltip / `aria-label`. */
@@ -395,9 +411,20 @@ export function DownloadQueuePanel({
                         className="queue-group-tabs"
                         activeKey={tab}
                         onClick={(e) => e.stopPropagation()}
-                        onChange={(which) =>
+                        onChange={(which) => {
                           setTabByGroup((prev) => ({ ...prev, [namespace]: which as QueueTab }))
-                        }
+                          // Mirror it into the address with `replace`: switching tabs must not
+                          // push history entries, but the entry the reader returns to carries it.
+                          setSearchParams(
+                            (prev) => {
+                              const next = new URLSearchParams(prev)
+                              next.set("queue_group", namespace)
+                              next.set("queue_tab", which)
+                              return next
+                            },
+                            { replace: true },
+                          )
+                        }}
                         items={(["manual", "subscription"] as const).map((which) => {
                           const label = which === "manual" ? t("upload.tabManual") : t("upload.tabSubscription")
                           return {
@@ -417,17 +444,24 @@ export function DownloadQueuePanel({
                                 ) : (
                                   label
                                 )}
-                                <span className="queue-tab-count">
-                                  {which === "manual" ? manual.length : fromSubscriptions.length}
+                                {/* One row, not three: the narrow layout stacks a tab's icon
+                                    over its content, so a badge on its own line pushed the tab's
+                                    bottom edge out and crowded the count. */}
+                                <span className="queue-tab-count-row">
+                                  <span className="queue-tab-count">
+                                    {which === "manual" ? manual.length : fromSubscriptions.length}
+                                  </span>
+                                  {undecided[which] > 0 && (
+                                    <Tooltip
+                                      label={t("upload.tabUndecided", { count: undecided[which] }) ?? ""}
+                                    >
+                                      <span className="queue-tab-undecided">
+                                        <FaCircleExclamation aria-hidden="true" />
+                                        {undecided[which]}
+                                      </span>
+                                    </Tooltip>
+                                  )}
                                 </span>
-                                {undecided[which] > 0 && (
-                                  <Tooltip label={t("upload.tabUndecided", { count: undecided[which] }) ?? ""}>
-                                    <span style={{ color: "#c79121", marginLeft: 4 }}>
-                                      <FaCircleExclamation aria-hidden="true" />{" "}
-                                      {undecided[which]}
-                                    </span>
-                                  </Tooltip>
-                                )}
                               </>
                             ),
                           }

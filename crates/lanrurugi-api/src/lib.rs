@@ -66,6 +66,7 @@ pub mod snapshots;
 pub mod source_lookup;
 pub mod tank_members;
 pub use lanrurugi_share::attempts as share_attempts;
+pub mod ingest_clock;
 pub mod share_host;
 pub mod share_imports;
 pub mod share_net;

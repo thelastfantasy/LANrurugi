@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -39,6 +39,7 @@ import { routes } from "@/lib/routes";
 import { FONT_SIZE_SM, FONT_SIZE_XS, Z_OVERLAY_TOOLTIP } from "@/theme";
 import { toast } from "@/toast";
 
+import { foldPhases, ingestingNow } from "./queuePhases";
 import {
   ICON_BUTTON_STYLE,
   LOCAL_UPLOAD_NAMESPACE,
@@ -122,7 +123,18 @@ export function RowStats({
   // archive and writing it into the library, which for a 1.4 GB file is minutes of disk work with
   // no byte counter of its own. Only an explicit `false` counts — a server that predates the field
   // omits it, and must keep showing the plain reading.
-  const ingesting = item.state === "downloading" && item.transferring === false
+  // 029 US2: the phase timeline is the finer-grained signal — it can tell "still fetching bytes"
+  // (transfer) from "writing the archive into the library" (ingest) directly, where the flag could
+  // only ever say "not transferring". The flag stays as the fallback for a job with no timeline.
+  // The job's live timeline while it exists, else the one persisted on the item at completion: a
+  // finished row keeps saying how much of its elapsed time was really transfer.
+  const timeline = job?.phases?.length ? job.phases : item.phases
+  // Closed at the item's own end for a finished row: the timeline persisted at completion still has
+  // its last phase open, and reading that against the live clock would keep growing the ingest
+  // segment forever.
+  const breakdown = foldPhases(timeline, endedMs ?? now)
+  const ingesting =
+    item.state === "downloading" && ingestingNow(timeline, item.transferring)
   // Prefer the two *measured* rates: the job's transfer-window average while the job is still in
   // memory, then the value persisted onto the item when it completed. Deriving a rate here from
   // the whole job duration included every minute spent waiting for the server's first byte (a
@@ -198,8 +210,35 @@ export function RowStats({
         })
     : null
   const startedParts = [startedLabel].filter(Boolean) as string[]
-  const elapsedText =
-    durationMs != null ? t("upload.statElapsed", { duration: formatDuration(durationMs) }) : null
+  // Where the time went, when the server reports a timeline: the three phases a user can act on.
+  // A job without one keeps the single elapsed figure below rather than gaining three zeroed
+  // segments — an older server or a maintenance job must not look like a 0:00 download.
+  const phaseSegments = breakdown
+    ? [
+        {
+          key: "queued",
+          open: breakdown.currentPhase === "queued",
+          text: t("upload.phaseQueued", { duration: formatDuration(breakdown.queuedMs) }),
+        },
+        {
+          key: "transfer",
+          open: breakdown.currentPhase === "transfer",
+          text: t("upload.phaseTransfer", { duration: formatDuration(breakdown.transferMs) }),
+        },
+        {
+          key: "ingest",
+          open: breakdown.currentPhase === "ingest",
+          text: t("upload.phaseIngest", { duration: formatDuration(breakdown.ingestMs) }),
+        },
+      ]
+    : null
+  // The headline duration now says what it always measured — the whole job, queueing included;
+  // beside the breakdown, an unqualified "elapsed" would read as the transfer's own time.
+  const elapsedText = breakdown
+    ? t("upload.statElapsedIncludingQueue", { duration: formatDuration(breakdown.totalMs) })
+    : durationMs != null
+      ? t("upload.statElapsed", { duration: formatDuration(durationMs) })
+      : null
   // The size is kept out of the wrapped text: on a phone it sits on the right of the two-line
   // block, vertically centered, so the numbers stay readable instead of trailing a wrapped line.
   const averageText =
@@ -208,20 +247,44 @@ export function RowStats({
     !ingesting && remainingMs != null
       ? t("upload.statRemaining", { duration: formatDuration(remainingMs) })
       : null
-  const transferParts = [elapsedText, remainingText].filter(Boolean) as string[]
+  // The narrow line keeps the three phases and the remaining time, and drops the total: on a phone
+  // the two already add up to it, and width is the scarce thing there.
+  const transferParts = [
+    ...(phaseSegments ?? []).map((segment) => segment.text),
+    ...(phaseSegments ? [] : [elapsedText]),
+    ...(remainingText ? [remainingText] : []),
+  ].filter(Boolean) as string[]
   // The two figures on the right of the narrow layout: the rate keeps its /s suffix without the
   // "average" label, which the row's context already supplies.
   const speedText = average != null ? `${formatBytes(average)}/s` : null
   const sizeText = bytes != null ? formatBytes(bytes) : null
-  const parts = [
-    ...startedParts,
-    ...(elapsedText ? [elapsedText] : []),
-    ...(averageText ? [averageText] : []),
-    ...(remainingText ? [remainingText] : []),
-    ...(sizeText ? [sizeText] : []),
-  ]
+  const segments: { key: string; node: React.ReactNode }[] = []
+  if (startedParts.length > 0) segments.push({ key: "started", node: startedParts.join(" · ") })
+  for (const segment of phaseSegments ?? []) {
+    // The running phase keeps the row's own opacity while its neighbours step back: same text
+    // colour, no new class and therefore no per-theme colour to keep in sync.
+    segments.push({
+      key: `phase-${segment.key}`,
+      node: <span style={{ opacity: segment.open ? 1 : 0.6 }}>{segment.text}</span>,
+    })
+  }
+  if (elapsedText) segments.push({ key: "elapsed", node: elapsedText })
+  if (averageText) {
+    // The rate is measured over the transfer window alone — worth a qualifier once the row shows
+    // queueing and ingest as separate figures, or "4.2 MB/s avg" reads as covering all of them.
+    segments.push({
+      key: "average",
+      node: (
+        <Tooltip label={t("upload.statRateTransferOnly")} wrapperStyle={{ display: "inline" }}>
+          {averageText}
+        </Tooltip>
+      ),
+    })
+  }
+  if (remainingText) segments.push({ key: "remaining", node: remainingText })
+  if (sizeText) segments.push({ key: "size", node: sizeText })
 
-  if (parts.length === 0 && !item.subscription_id) return null
+  if (segments.length === 0 && !item.subscription_id) return null
 
   return (
     <div style={{ fontSize: FONT_SIZE_XS, opacity: 0.75, display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -322,7 +385,16 @@ export function RowStats({
           )}
         </span>
       ) : (
-        parts.length > 0 && <span>{parts.join(" · ")}</span>
+        segments.length > 0 && (
+          <span>
+            {segments.map((segment, index) => (
+              <Fragment key={segment.key}>
+                {index > 0 && " · "}
+                {segment.node}
+              </Fragment>
+            ))}
+          </span>
+        )
       )}
     </div>
   )
@@ -394,7 +466,9 @@ export function QueueItemRow({
   const navigate = useNavigate();
   // See `RowStats`: the transfer is over but the item stays `downloading` while the server writes
   // the archive into the library. Only an explicit `false` counts (older servers omit the field).
-  const ingesting = item.state === "downloading" && item.transferring === false;
+  const ingesting =
+    item.state === "downloading" &&
+    ingestingNow(job?.phases?.length ? job.phases : item.phases, item.transferring);
   const update = useUpdateQueueItem();
   const fetchMetadata = useFetchQueueItemMetadata();
   const start = useStartQueueItem();

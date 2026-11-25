@@ -496,6 +496,11 @@
   "reader.percentOfViewportHeight": "% de la hauteur de la fenêtre",
   "reader.pixels": "Pixels",
   "plugins.triggerScript": "Déclencher le script",
+  "upload.phaseQueued": "En file {{duration}}",
+  "upload.phaseTransfer": "Téléchargement {{duration}}",
+  "upload.phaseIngest": "Importation {{duration}}",
+  "upload.statElapsedIncludingQueue": "{{duration}} au total (file incluse)",
+  "upload.statRateTransferOnly": "Le débit moyen ne couvre que le transfert (sans la file ni l'importation)",
   "upload.typeInYourUrlsSeparated": "Type in your URLs (separated by a newline), and click the queue button.",
   "URL to search.": "URL to search.",
   "upload.urlSToDownload": "URL(s) à télécharger :",
@@ -1022,5 +1027,7 @@
   "settings.snapshotRestoreWarnLose": "Anything added or changed after the snapshot is lost (files on disk are not deleted).",
   "settings.snapshotRestoreWarnLogout": "The site is briefly unavailable during the restore, and you may have to sign in again.",
   "settings.snapshotRestoreWarnSafety": "A pre-restore snapshot is written automatically first, so the current state can be restored afterwards.",
-  "settings.snapshotRestoreConfirmWord": "RESTORE"
+  "settings.snapshotRestoreConfirmWord": "RESTORE",
+  "reader.bookmarkAdded": "Signet ajouté · page {{page}}",
+  "reader.bookmarkRemoved": "Signet supprimé · page {{page}}"
 }

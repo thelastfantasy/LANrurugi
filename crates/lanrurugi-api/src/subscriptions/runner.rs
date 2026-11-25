@@ -1545,7 +1545,8 @@ async fn apply_snapshot_diff(
             // truncates its tag list, so writing those tags onto the archive would delete real ones.
             // That path also keeps the existing merge-never-delete rule.
             let summary =
-                crate::plugins::run_enabled_metadata_plugins_on_archive(state, archive_id).await;
+                crate::plugins::run_enabled_metadata_plugins_on_archive(state, archive_id, None)
+                    .await;
             tracing::info!(
                 subscription_id = %subscription.id,
                 source = %change.source,
