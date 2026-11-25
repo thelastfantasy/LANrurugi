@@ -417,17 +417,24 @@ export function DownloadQueuePanel({
                                 ) : (
                                   label
                                 )}
-                                <span className="queue-tab-count">
-                                  {which === "manual" ? manual.length : fromSubscriptions.length}
+                                {/* One row, not three: the narrow layout stacks a tab's icon
+                                    over its content, so a badge on its own line pushed the tab's
+                                    bottom edge out and crowded the count. */}
+                                <span className="queue-tab-count-row">
+                                  <span className="queue-tab-count">
+                                    {which === "manual" ? manual.length : fromSubscriptions.length}
+                                  </span>
+                                  {undecided[which] > 0 && (
+                                    <Tooltip
+                                      label={t("upload.tabUndecided", { count: undecided[which] }) ?? ""}
+                                    >
+                                      <span className="queue-tab-undecided">
+                                        <FaCircleExclamation aria-hidden="true" />
+                                        {undecided[which]}
+                                      </span>
+                                    </Tooltip>
+                                  )}
                                 </span>
-                                {undecided[which] > 0 && (
-                                  <Tooltip label={t("upload.tabUndecided", { count: undecided[which] }) ?? ""}>
-                                    <span style={{ color: "#c79121", marginLeft: 4 }}>
-                                      <FaCircleExclamation aria-hidden="true" />{" "}
-                                      {undecided[which]}
-                                    </span>
-                                  </Tooltip>
-                                )}
                               </>
                             ),
                           }

@@ -3021,6 +3021,25 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   vertical-align: middle;
 }
 
+/* The count and the "needs an answer" badge travel as one row. The narrow layout turns a tab into
+   a column (icon over content), so leaving the badge outside this row dropped it onto a third line
+   and crowded the tab's bottom edge. */
+.queue-tab-count-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.queue-tab-undecided {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.7rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: #c79121;
+}
+
 /* Download rows on a phone: every extra item in this wrapping flex row costs a whole line, and the
    two flag checkboxes are non-actionable once an item leaves `queued` — they were drawing an empty
    box and a tick on a line of their own, which is most of the wasted height (reported 2026-11-04). */
@@ -3105,10 +3124,14 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
     white-space: nowrap;
   }
 
+  .queue-tab-count-row {
+    /* The column layout stacks icon over this row, so without the gap it sat directly on the
+       tab's bottom border. */
+    margin-top: 3px;
+  }
+
   .queue-tab-count {
-    /* The column layout stacks icon over count, so the count sat directly on the tab's bottom
-       border; the breathing room has to come from the tab's own padding. */
-    margin: 3px 0 0;
+    margin: 0;
   }
 
   /* Tighten the icon-to-count gap and give the count room underneath. Both live inside the fixed
