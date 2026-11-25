@@ -52,6 +52,7 @@ pub fn render(
             }
             CategoryLabel::Environment => ("环境与诊断".to_string(), "environment".to_string()),
             CategoryLabel::Config => ("配置(已脱敏)".to_string(), "redacted config".to_string()),
+            CategoryLabel::Resources => ("资源占用".to_string(), "resource usage".to_string()),
         })
         .collect::<Vec<_>>();
     let zh_categories = categories
@@ -172,6 +173,7 @@ pub enum CategoryLabel {
     FrontendEvents,
     Environment,
     Config,
+    Resources,
 }
 
 /// `2026-10-28 14:12` in UTC, which is what the logs themselves use.

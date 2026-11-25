@@ -72,6 +72,22 @@ and bookkeeping churn moves them, so treat a specific figure as a hint, not a fa
   Every unit test passes; the open tasks are the quickstart scenarios that need a real deployment
   (T011/T020/T026/T029/T032/T035). Its `tasks.md` Implementation Record lists the four departures
   from plan.md and the benchmark numbers behind each mechanism.
+- **Code implemented, real-deployment verification outstanding**: `030-resource-monitor` (31/31 — every
+  task ticked; the open items are the release-build timing, a GPU-enabled run and a real Sentry event,
+  listed in its `tasks.md` Implementation Record). A sampler that exists only while the `/resources` page
+  (`apps/frontend/src/pages/Resources/`, reachable from a Settings entry) is open
+  (`crates/lanrurugi-api/src/resources/`): `GET /api/resources` for one snapshot and
+  `GET /api/resources/stream` for an SSE feed whose first frame is a snapshot and whose later frames are
+  a ~470-byte `Sample` (it carries the overview tiles' readings too, so an open page keeps ticking). Both are **session-only** in `crates/lanrurugi-api/policy/route_policy.csv` —
+  an Admin API token and a guest visitor are refused, because the payload carries the process table and
+  Redis’s internal counters. Absent readings are `null` with a `*_unavailable` reason, never 0;
+  `memory.current` is always labelled as including page cache. Feedback bundles gained a `resources`
+  category, and `Plan.extra_files` now writes `diagnostics.json`, `config.redacted.json` and
+  `resources.json` — fixing two older defects where the first was always 0 bytes and the second was never
+  written at all. The stream paces frames with a 500 ms slack, because a 1 Hz request against a 1 Hz
+  sampler otherwise drops every other frame. GPU is opt-in (`LANRURUGI_RESOURCE_GPU=1`) because probing
+  may spawn a process, and a
+  debug build renders process names as `lanrurugi-server (debug)`.
 
 **Phase 1 — `001-lanrurugi-full-rewrite`** (build this first): plan at
 `specs/001-lanrurugi-full-rewrite/plan.md`. User Stories 1–8 — library continuity, non-merging

@@ -1770,3 +1770,41 @@ textarea {
   border: 0 none;
   color: #F1F1F1;
 }
+
+/* 030 resource monitor: an alerting row, the live/connecting status word and the sparkline stroke.
+   Each value is this theme's own: alerts reuse `.stdbtn-danger`'s red, the sparkline this theme's
+   accent hue, per the project's custom-color rule (a hardcoded color would only fit one theme). */
+.resources-alert {
+    color: #BE234B;
+}
+
+.resources-status-live {
+    color: #d83b66;
+}
+
+.resources-status-error {
+    color: #BE234B;
+}
+
+.resources-status-connecting,
+.resources-status-idle {
+    opacity: 0.65;
+}
+
+.resources-sparkline {
+    color: #d83b66;
+}
+
+/* Resource monitor health colours: green = normal, yellow = getting high, red = over the limit. */
+.resources-ok {
+    color: #2f9e63;
+}
+
+.resources-warn {
+    color: #c8871a;
+}
+
+.resources-bad {
+    color: #be234b;
+}
+

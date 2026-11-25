@@ -37,6 +37,14 @@ pub(crate) fn post_normalize(input: &str) -> Option<String> {
         owned = Some(decomposed);
     }
 
+    // 小写假名归一到常规大小（`ァ`→`ア`、`ヶ`→`ケ`）。必须放在脚本转换 *之前*：`wana_kana`
+    // 不转换 `ヶ`/`ヵ`，若先跑它、这里再把 `ヶ` 收成 `ケ`，就会留下片假名 `ケ`，与 `1か月`
+    // 折叠出的 `か` 仍不相等。先收大小、再交给 wana 统一转平假名，两套写法才落到同一串。
+    let current = owned.as_deref().unwrap_or(input);
+    if let Some(collapsed) = collapse_small_kana(current) {
+        owned = Some(collapsed);
+    }
+
     #[cfg(feature = "jp")]
     {
         let current = owned.as_deref().unwrap_or(input);
@@ -61,6 +69,54 @@ pub(crate) fn post_normalize(input: &str) -> Option<String> {
     }
 
     owned
+}
+
+/// 小写假名归一到同字的常规大小：`ァ`≡`ア`、`ッ`≡`ツ`、`ャ`≡`ヤ`。
+///
+/// 半角写法（ｧ、ｯ）不在这里处理：`fold_with` 的 NFKC 步骤在调用本函数前已把它们展开成全角
+/// 小字，到这里一律是 `ァ` 一类。关掉宽度折叠时半角也就不折叠，与 `ｱ`/`ア` 保持一致。
+///
+/// 同一个词常有大/小两种写法（ロリババア / ロリババァ、バッグ / バツグ、ティー / テイー），
+/// 而 NFKC 与 `wana_kana` 都只换脚本、不改大小，两者折叠后仍不相等。长音符号 `ー` 不参与；
+/// `ヶ`/`ヵ` 这类计数写法（1ヶ月）一并收成 `け`/`か`，代价是把「1か月」和「1ヶ月」也当成
+/// 同一串——在这个库里无歧义，换来的是一致性。
+fn collapse_small_kana(input: &str) -> Option<String> {
+    let mut out = String::with_capacity(input.len());
+    let mut changed = false;
+    for c in input.chars() {
+        let mapped = match c {
+            'ぁ' => 'あ',
+            'ぃ' => 'い',
+            'ぅ' => 'う',
+            'ぇ' => 'え',
+            'ぉ' => 'お',
+            'っ' => 'つ',
+            'ゃ' => 'や',
+            'ゅ' => 'ゆ',
+            'ょ' => 'よ',
+            'ゎ' => 'わ',
+            'ゕ' => 'か',
+            'ゖ' => 'け',
+            'ァ' => 'ア',
+            'ィ' => 'イ',
+            'ゥ' => 'ウ',
+            'ェ' => 'エ',
+            'ォ' => 'オ',
+            'ッ' => 'ツ',
+            'ャ' => 'ヤ',
+            'ュ' => 'ユ',
+            'ョ' => 'ヨ',
+            'ヮ' => 'ワ',
+            'ヵ' => 'カ',
+            'ヶ' => 'ケ',
+            _ => c,
+        };
+        if mapped != c {
+            changed = true;
+        }
+        out.push(mapped);
+    }
+    changed.then_some(out)
 }
 
 /// 废弃假名 -> 现代假名（按现代仮名遣い）。

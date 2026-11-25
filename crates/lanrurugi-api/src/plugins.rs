@@ -3760,6 +3760,7 @@ pub(crate) async fn ensure_metadata_cached(
     // Cache hit — still within the 10-min window.
     if let Some(at) = item.metadata_preview_at {
         if now - at < METADATA_CACHE_TTL_MS {
+            crate::resources::note_metadata_cache(true);
             // Still owes the archive its tags: this preview may have been fetched at start time,
             // before there was an archive, and the caller is the one that now supplies
             // `archive_ids`.
@@ -3781,6 +3782,7 @@ pub(crate) async fn ensure_metadata_cached(
     }
 
     // No cache or expired — find a metadata plugin and call it.
+    crate::resources::note_metadata_cache(false);
     let namespaces = discover_namespaces(&state.plugins_dir).await;
     let mut metadata_ns = Vec::new();
     for ns in &namespaces {

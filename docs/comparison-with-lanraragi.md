@@ -41,6 +41,14 @@
   服务当“用户反馈”（按账号每日限 20 条、10 分钟 5 条、同文 5 分钟内去重），失败与定时任务则分别以 `source=server` /
   `source=plugin` 和 cron 心跳的形式上报。前端栈按 release（git sha）
   对应的 source map 在服务端还原；map 只随镜像发布、不进静态目录、也不进用户的包，缺 map 时保留原始帧。
+- **资源监视**（`specs/030-resource-monitor/`）。独立的 `/resources` 页面（设置页有入口）：服务进程与每个常驻插件进程的 CPU、内存、
+  文件描述符，cgroup 的 `memory.current`（标注含页缓存）/ anon / file / slab / 峰值与内存 PSI，从服务进程出发的
+  真实进程树，本地模型的当日调用量与失败数，下载队列各阶段 p50 与排队等待，Redis 的 used_memory / 碎片率 /
+  命中率 / 淘汰数与落盘状态，库与临时盘的剩余空间和 inode。数据走 SSE（首帧完整快照、之后每秒一帧紧凑采样），
+  **打开面板才有采样任务**，关掉或切走标签页就停采、历史一并释放 —— 这一点和常驻的 node_exporter / cAdvisor
+  不同，不占一个后台进程。每个数字都带观测窗口与来源，首帧的速率是 `null` 而不是 0。两条接口只对真实登录会话
+  开放（管理员 API token 与访客都拒绝）。报障包可以勾选带上当时的 `resources.json`，路径与带 token 的 URL 已脱敏；
+  GPU 需要显式设 `LANRURUGI_RESOURCE_GPU=1` 才查。
 - **单行本整本下载。** 单行本可作为一个 zip 下载：成员按卷序以原文件存入（不重新压缩），边打包边传输，
   无需在服务端预先生成。
 - **电子书格式。** PDF、EPUB（固定版式与流式）、MOBI/AZW/AZW3（漫画与文字书）、DjVu、FB2、TXT 与压缩包一样

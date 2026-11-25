@@ -55,6 +55,7 @@ pub mod recommend_precompute;
 pub mod recycle;
 pub mod redownload_restore;
 pub mod repair;
+pub mod resources;
 pub(crate) mod revision_carryover;
 pub mod safety_password;
 pub mod scripts;
@@ -121,6 +122,7 @@ pub fn router() -> Router<AppState> {
         .merge(tankoubons::router())
         .merge(shares::router())
         .merge(diagnostics::router())
+        .merge(resources::api::router())
         .merge(share_recipient::router())
         .merge(share_imports::router())
         .merge(tankoubon_grouping::router())

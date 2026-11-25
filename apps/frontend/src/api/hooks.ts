@@ -2038,15 +2038,23 @@ export function useTidyTags() {
 
 /** 027: fills in the whole-file fingerprint of archives catalogued before it was recorded. */
 export function useBlake3Backfill() {
+  const queryClient = useQueryClient()
   return useMutation({
     mutationFn: () =>
       sendJson<{ job: string; already_running?: boolean }>("POST", "/database/blake3-backfill"),
+    // The settings page only offers Stop while the job shows up as running, so the row has to see
+    // the new job without waiting for the next poll.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
   })
 }
 
 export function useStopBlake3Backfill() {
+  const queryClient = useQueryClient()
   return useMutation({
     mutationFn: () => sendJson<{ stopped: boolean }>("DELETE", "/database/blake3-backfill"),
+    // Cancellation lands at the end of the current batch, so the job stays active a little longer
+    // and the row keeps its Stop control until it actually ends — which is what we want.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
   })
 }
 

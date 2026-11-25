@@ -24,6 +24,7 @@ import { ArchiveFilesSection } from "./ArchiveFilesSection"
 import { GlobalSection } from "./GlobalSection"
 import { LlmUsageSection } from "./LlmUsageSection"
 import { RecycleBinSection } from "./RecycleBinSection"
+import { ResourcesSection } from "./ResourcesSection"
 import { SecuritySection } from "./SecuritySection"
 import { SharingSection } from "./SharingSection"
 import { SubscriptionsSection } from "./SubscriptionsSection"
@@ -660,6 +661,10 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
 
           <SectionErrorBoundary as="li" section="llm-usage">
             <LlmUsageSection />
+          </SectionErrorBoundary>
+
+          <SectionErrorBoundary as="li" section="resources">
+            <ResourcesSection />
           </SectionErrorBoundary>
 
           <SectionErrorBoundary as="li" section="background-workers">

@@ -7,6 +7,7 @@ import {
   useBlake3Backfill,
   useCleanDatabase,
   useDropDatabase,
+  useJobs,
   useStopBlake3Backfill,
   useTidyTags,
 } from "@/api/hooks"
@@ -164,6 +165,12 @@ export function GlobalSection({
   const blake3Backfill = useBlake3Backfill()
   const stopBlake3Backfill = useStopBlake3Backfill()
   const dropDatabase = useDropDatabase()
+  const jobs = useJobs()
+  // 027 US5: the stop control exists only while a backfill is actually running — a permanent one
+  // would spend almost all of its life answering "nothing is running", which reads as broken.
+  const blake3BackfillRunning = (jobs.data ?? []).some(
+    (job) => job.name === "blake3_backfill" && (job.state === "queued" || job.state === "active"),
+  )
 
   return (
     <CollapsibleSection id="global" icon="fa-cubes" title={t("settings.globalSettings")}>
@@ -517,17 +524,24 @@ export function GlobalSection({
               )
             }}
           >
-            {t("settings.blake3BackfillDescription")}{" "}
-            <button
-              type="button"
-              className="stdbtn"
-              onClick={async () => {
-                const result = await stopBlake3Backfill.mutateAsync()
-                onStatus(t(result.stopped ? "settings.blake3BackfillStopped" : "settings.blake3BackfillIdle"))
-              }}
-            >
-              {t("settings.blake3BackfillStop")}
-            </button>
+            {t("settings.blake3BackfillDescription")}
+            {blake3BackfillRunning && (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  className="stdbtn"
+                  onClick={async () => {
+                    const result = await stopBlake3Backfill.mutateAsync()
+                    onStatus(
+                      t(result.stopped ? "settings.blake3BackfillStopped" : "settings.blake3BackfillIdle"),
+                    )
+                  }}
+                >
+                  {t("settings.blake3BackfillStop")}
+                </button>
+              </>
+            )}
           </ActionRow>
           <ActionRow
             id="clean-db"

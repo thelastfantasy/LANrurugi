@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -201,6 +202,14 @@ struct Worker {
     /// The plugin file's `mtime` when this worker last `import()`ed it — `execute` respawns if
     /// the file has since changed, since a running worker never reloads on its own.
     mtime: std::time::SystemTime,
+}
+
+impl Worker {
+    /// The OS process this worker is. Exposed so the resource monitor can attribute RSS and CPU to
+    /// a plugin namespace (030 FR-018) without reaching into the child handle.
+    fn pid(&self) -> Option<u32> {
+        self._child.id()
+    }
 }
 
 impl Worker {
@@ -412,6 +421,28 @@ struct WorkerSlot {
     worker: Option<Worker>,
 }
 
+/// Per-namespace call counters, kept outside the slot's lock so the resource monitor can read them
+/// while a call is in flight (030: a busy plugin must still report its history, not zeros).
+#[derive(Default)]
+struct CallCounters {
+    calls: AtomicU64,
+    failures: AtomicU64,
+    /// `0` means "never called" — the wire shape wants `null`, not epoch.
+    last_call_ms: AtomicI64,
+}
+
+/// One persistent worker as the resource monitor sees it (030 FR-018).
+#[derive(Debug, Clone)]
+pub struct WorkerProcess {
+    pub namespace: String,
+    /// `None` exactly when `busy` — see [`PluginPool::worker_processes`].
+    pub pid: Option<u32>,
+    pub busy: bool,
+    pub calls: u64,
+    pub failures: u64,
+    pub last_call_at: Option<i64>,
+}
+
 pub struct PluginPool {
     deno_binary: String,
     dispatcher_path: PathBuf,
@@ -433,6 +464,17 @@ pub struct PluginPool {
     /// Shared by every worker this pool spawns: one revalidation store and one coalescing map for
     /// the whole process, not one per plugin namespace.
     http: Arc<HostHttp>,
+
+    /// Per-namespace call counters for the resource monitor (030). Separate from `workers` so a
+    /// namespace keeps its history even while its slot is locked by an in-flight call.
+    counters: Mutex<HashMap<String, Arc<CallCounters>>>,
+    /// How many throwaway declaration processes have been started since boot, and how many slots
+    /// exist — the two numbers that show the 029 cap doing its job.
+    transient_limit: usize,
+    transient_spawned: AtomicU64,
+    /// Descriptor cache hit/miss counters (029 P6); read by the resource monitor's `caches` section.
+    info_hits: AtomicU64,
+    info_misses: AtomicU64,
 }
 
 impl PluginPool {
@@ -460,6 +502,11 @@ impl PluginPool {
             info_cache: Mutex::new(HashMap::new()),
             inflight: Mutex::new(HashMap::new()),
             http: Arc::new(HostHttp::new()),
+            counters: Mutex::new(HashMap::new()),
+            transient_limit: limit,
+            transient_spawned: AtomicU64::new(0),
+            info_hits: AtomicU64::new(0),
+            info_misses: AtomicU64::new(0),
         }
     }
 
@@ -478,6 +525,8 @@ impl PluginPool {
             let mut map = self.workers.lock().await;
             map.drain().map(|(_, slot)| slot).collect()
         };
+        // The counters describe calls into the processes being stopped, so they go with them.
+        self.counters.lock().await.clear();
         if drained.is_empty() {
             return;
         }
@@ -514,6 +563,78 @@ impl PluginPool {
         &self.deno_binary
     }
 
+    /// The automatic declaration-process cap and how much of it is in use right now (030 FR-018):
+    /// `available` is free slots, `in_flight` the ones a throwaway worker holds.
+    pub fn transient_counters(&self) -> (u64, u64, u64) {
+        let available = self.transient_slots.available_permits() as u64;
+        let in_flight = (self.transient_limit as u64).saturating_sub(available);
+        (
+            available,
+            in_flight,
+            self.transient_spawned.load(Ordering::Relaxed),
+        )
+    }
+
+    /// `(hits, misses)` of the descriptor cache since boot.
+    pub fn cache_counters(&self) -> (u64, u64) {
+        (
+            self.info_hits.load(Ordering::Relaxed),
+            self.info_misses.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Every persistent worker this pool holds, with its process id when that is readable without
+    /// waiting for an in-flight call.
+    ///
+    /// A locked slot is reported as `busy` with no pid rather than blocking the snapshot: the whole
+    /// point of this view is to be cheap enough to take every second, and a metadata fetch can take
+    /// several seconds. The call counters are kept outside the slot lock, so a busy plugin still
+    /// shows its history.
+    pub async fn worker_processes(&self) -> Vec<WorkerProcess> {
+        let slots: Vec<(String, Arc<tokio::sync::Mutex<WorkerSlot>>)> = {
+            let workers = self.workers.lock().await;
+            workers
+                .iter()
+                .map(|(namespace, slot)| (namespace.clone(), slot.clone()))
+                .collect()
+        };
+        let counters: HashMap<String, Arc<CallCounters>> = {
+            let map = self.counters.lock().await;
+            map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        };
+        let mut out: Vec<WorkerProcess> = slots
+            .into_iter()
+            .map(|(namespace, slot)| {
+                let (pid, busy) = match slot.try_lock() {
+                    Ok(guard) => (guard.worker.as_ref().and_then(Worker::pid), false),
+                    Err(_) => (None, true),
+                };
+                let counts = counters.get(&namespace).cloned().unwrap_or_default();
+                let last = counts.last_call_ms.load(Ordering::Relaxed);
+                WorkerProcess {
+                    namespace,
+                    pid,
+                    busy,
+                    calls: counts.calls.load(Ordering::Relaxed),
+                    failures: counts.failures.load(Ordering::Relaxed),
+                    last_call_at: (last > 0).then_some(last),
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| a.namespace.cmp(&b.namespace));
+        out
+    }
+
+    /// This namespace's call counters, created on first use.
+    async fn counters_for(&self, namespace: &str) -> Arc<CallCounters> {
+        self.counters
+            .lock()
+            .await
+            .entry(namespace.to_string())
+            .or_default()
+            .clone()
+    }
+
     /// Current [`PluginStamp`] of a plugin file — the cache key (V1). A missing file also drops any
     /// cached entry for it, so a deleted plugin cannot keep being listed (P2).
     async fn plugin_stamp(&self, namespace: &str, plugin_module: &Path) -> Result<PluginStamp> {
@@ -527,10 +648,18 @@ impl PluginPool {
     }
 
     async fn cache_lookup(&self, namespace: &str, stamp: PluginStamp) -> Option<CachedPluginInfo> {
-        match self.info_cache.lock().await.get(namespace) {
+        let hit = match self.info_cache.lock().await.get(namespace) {
             Some(entry) if entry.is_current(stamp) => Some(entry.clone()),
             _ => None,
+        };
+        // Both lookups in `cached_descriptor` go through here, so the counter counts the two
+        // places a caller asks, not one miss per declaration read.
+        if hit.is_some() {
+            self.info_hits.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.info_misses.fetch_add(1, Ordering::Relaxed);
         }
+        hit
     }
 
     /// The per-namespace single-flight gate: everyone asking about one plugin waits on the same
@@ -566,6 +695,7 @@ impl PluginPool {
             RelayAccess::none(self.http.clone()),
         )
         .await?;
+        self.transient_spawned.fetch_add(1, Ordering::Relaxed);
         Ok(TransientWorker {
             worker,
             _slot: slot,
@@ -794,6 +924,9 @@ impl PluginPool {
         if !is_safe_namespace(namespace) {
             return Err(PoolError::NotFound(namespace.to_string()));
         }
+        let counters = self.counters_for(namespace).await;
+        counters.calls.fetch_add(1, Ordering::Relaxed);
+        counters.last_call_ms.store(now_ms(), Ordering::Relaxed);
         let slot = self.worker_slot(namespace).await;
         let mut slot = slot.lock().await;
 
@@ -834,6 +967,7 @@ impl PluginPool {
         // fresh process, without touching any other plugin's worker or in-flight request.
         if result.is_err() {
             slot.worker = None;
+            counters.failures.fetch_add(1, Ordering::Relaxed);
         }
 
         response_to_result(result?)
@@ -862,6 +996,13 @@ fn response_to_result(response: Response) -> Result<serde_json::Value> {
         });
         Err(PoolError::PluginError(error))
     }
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

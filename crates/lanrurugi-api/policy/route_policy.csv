@@ -114,6 +114,16 @@ p, guest_visitor, /api/reader/recommendations/:id, GET, allow
 p, token_admin, /api/shares/settings, PUT, deny
 # 018: diagnostics carries logs, breadcrumbs and the tracker credential — a real login session.
 p, token_admin, /api/diagnostics/*, *, deny
+# 030: the resource snapshot lists every process, Redis internals and the plugin table. Same bar as
+# diagnostics: a real login session, not a `token_admin` API token — those are handed to scripts and
+# integrations. A denied caller gets a 403 with no numbers in the body.
+# `keyMatch2`'s trailing `/*` needs the slash, so the bare path needs its own rows.
+p, token_admin, /api/resources, *, deny
+p, token_admin, /api/resources/*, *, deny
+p, token_guest, /api/resources, *, deny
+p, token_guest, /api/resources/*, *, deny
+p, guest_visitor, /api/resources, *, deny
+p, guest_visitor, /api/resources/*, *, deny
 p, token_admin, /api/activity, DELETE, deny
 p, token_admin, /api/activity/:id, DELETE, deny
 p, token_admin, /api/activity/retention, PUT, deny

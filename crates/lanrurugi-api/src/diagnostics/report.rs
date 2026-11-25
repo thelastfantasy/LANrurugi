@@ -94,12 +94,25 @@ pub struct SentryReporter;
 
 impl Reporter for SentryReporter {
     fn capture(&self, level: Level, message: &str, attrs: Attrs) {
+        // A report that arrives while the resource panel is open carries what the machine looked like
+        // at that moment (specs/030 FR-015) — 30 s is the widest gap that still describes this event
+        // rather than an earlier one.
+        let resources = crate::resources::watch::ResourceWatch::global()
+            .last_within(std::time::Duration::from_secs(30))
+            .map(|snapshot| snapshot.sample())
+            .and_then(|sample| match serde_json::to_value(sample) {
+                Ok(serde_json::Value::Object(map)) => Some(map.into_iter().collect()),
+                _ => None,
+            });
         sentry::configure_scope(|scope| {
             for (key, value) in attrs.tags() {
                 scope.set_tag(key.as_str(), value.as_str());
             }
             for (key, value) in attrs.extras() {
                 scope.set_extra(key.as_str(), value.clone());
+            }
+            if let Some(map) = resources.clone() {
+                scope.set_context("resources", sentry::protocol::Context::Other(map));
             }
         });
         sentry::capture_message(message, sentry_level(level));

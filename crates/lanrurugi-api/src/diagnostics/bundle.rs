@@ -53,6 +53,10 @@ pub struct Categories {
     pub environment: bool,
     #[serde(default)]
     pub config: bool,
+    /// 030: the resource snapshot. On by default — a bundle that says "the app froze" without the
+    /// memory and PSI numbers is the report we then have to ask a follow-up question about.
+    #[serde(default = "default_true")]
+    pub resources: bool,
 }
 
 impl Default for Categories {
@@ -62,6 +66,7 @@ impl Default for Categories {
             frontend_events: true,
             environment: true,
             config: false,
+            resources: true,
         }
     }
 }
@@ -93,6 +98,10 @@ pub struct Plan {
     pub files: Vec<PlannedFile>,
     pub events: Vec<DiagnosticEvent>,
     pub log_slices: Vec<(String, String)>,
+    /// Files whose body is generated rather than sliced out of the store (`diagnostics.json`,
+    /// `config.redacted.json`, `resources.json`). Resolving them here rather than inside
+    /// `archive_to` is what keeps the preview's byte counts honest.
+    pub extra_files: Vec<(String, String)>,
     pub total_bytes: usize,
 }
 
@@ -194,6 +203,9 @@ pub async fn plan(state: &AppState, selection: &Selection) -> Result<Plan, Strin
     if selection.categories.config {
         categories.push(CategoryLabel::Config);
     }
+    if selection.categories.resources {
+        categories.push(CategoryLabel::Resources);
+    }
 
     let request_id = events
         .iter()
@@ -216,6 +228,20 @@ pub async fn plan(state: &AppState, selection: &Selection) -> Result<Plan, Strin
     };
     let config = if selection.categories.config {
         redacted_config(state).await
+    } else {
+        String::new()
+    };
+    // Same shape as `GET /api/resources`, scrubbed like every other text that leaves the process:
+    // the storage section carries absolute library and temp paths.
+    let resources = if selection.categories.resources {
+        let snapshot = crate::resources::collect(state).await;
+        match serde_json::to_string_pretty(&snapshot) {
+            Ok(text) => super::scrub::text(&text, super::scrub::Profile::Strict),
+            Err(error) => format!(
+                "{{\"at\": {}, \"unavailable\": \"resources unavailable: {error}\"}}",
+                super::now_ms()
+            ),
+        }
     } else {
         String::new()
     };
@@ -249,6 +275,13 @@ pub async fn plan(state: &AppState, selection: &Selection) -> Result<Plan, Strin
             entries: 1,
         });
     }
+    if !resources.is_empty() {
+        files.push(PlannedFile {
+            path: "resources.json".into(),
+            bytes: resources.len(),
+            entries: 1,
+        });
+    }
 
     let summary = SelectionSummary {
         from: selection.from,
@@ -259,12 +292,24 @@ pub async fn plan(state: &AppState, selection: &Selection) -> Result<Plan, Strin
         truncations,
         request_id,
     };
+    let mut extra_files: Vec<(String, String)> = Vec::new();
+    if !environment.is_empty() {
+        extra_files.push(("diagnostics.json".into(), environment));
+    }
+    if !config.is_empty() {
+        extra_files.push(("config.redacted.json".into(), config));
+    }
+    if !resources.is_empty() {
+        extra_files.push(("resources.json".into(), resources));
+    }
+
     let total_bytes: usize = files.iter().map(|file| file.bytes).sum();
     Ok(Plan {
         summary,
         files,
         events,
         log_slices,
+        extra_files,
         total_bytes,
     })
 }
@@ -398,8 +443,11 @@ pub fn archive_to<W: std::io::Write + std::io::Seek>(
             frontend_events_jsonl(&plan.events).into_bytes(),
         ));
     }
-    if selection.categories.environment {
-        entries.push(("diagnostics.json".into(), Vec::new()));
+    // 030 fixed a silent defect here: `diagnostics.json` used to be pushed as an empty body (its
+    // content went into the preview's byte count only), and `config.redacted.json` was never
+    // written at all. Both now come from `Plan::extra_files`, which is what the preview measures.
+    for (path, body) in &plan.extra_files {
+        entries.push((path.clone(), body.clone().into_bytes()));
     }
     let envelopes = envelope_records(&plan.events);
     entries.push(("envelopes.ndjson.gz".into(), gzip(&envelopes)));
@@ -425,6 +473,9 @@ fn readme(plan: &Plan, facts: &Facts) -> String {
     out.push_str("  server/<name>.log    the selected time range of each server log\n");
     out.push_str("  frontend/events.jsonl captured browser events in the range\n");
     out.push_str("  diagnostics.json     environment, versions, store usage\n");
+    out.push_str(
+        "  resources.json       CPU, memory, PSI, processes, plugins and Redis at capture time\n",
+    );
     out.push_str("  envelopes.ndjson.gz  the captured events as standard envelopes\n");
     out.push_str("                       (each record is a byte length followed by the raw\n");
     out.push_str("                       envelope, gzipped), so the\n");
@@ -609,6 +660,7 @@ mod tests {
             }],
             events: vec![event("e1")],
             log_slices: vec![("server/general.log".into(), "a line".into())],
+            extra_files: vec![("diagnostics.json".into(), "{\"version\":\"0.1.0\"}".into())],
             total_bytes: 42,
         }
     }
@@ -628,6 +680,7 @@ mod tests {
                 frontend_events: true,
                 environment: true,
                 config: false,
+                resources: true,
             },
             truncate: false,
             resolve_stacks: false,
@@ -658,6 +711,86 @@ mod tests {
         assert!(names.contains(&"envelopes.ndjson.gz".to_string()));
         assert!(names.contains(&"README.txt".to_string()));
         assert!(names.contains(&"feedback.zh.md".to_string()));
+    }
+
+    fn selection_with(categories: Categories) -> Selection {
+        Selection {
+            from: 1_000,
+            to: 2_000,
+            levels: vec![],
+            sources: vec![],
+            issues: vec![],
+            include_ids: vec![],
+            exclude_ids: vec![],
+            categories,
+            truncate: false,
+            resolve_stacks: false,
+        }
+    }
+
+    fn facts_for_test() -> Facts {
+        Facts {
+            version: "0.1.0".into(),
+            release: "abc".into(),
+            engine: "v3".into(),
+            platform: "linux/x86_64".into(),
+            bundle_name: "b.zip".into(),
+        }
+    }
+
+    fn empty_text() -> super::super::text::Bilingual {
+        let body = || super::super::text::FeedbackText {
+            title: "t".into(),
+            body: "b".into(),
+        };
+        super::super::text::Bilingual {
+            zh: body(),
+            en: body(),
+        }
+    }
+
+    /// The 030 regression: `diagnostics.json` used to reach the zip as a zero-byte file while the
+    /// preview counted its bytes, so what you downloaded was not what you were shown.
+    #[test]
+    fn every_planned_extra_file_is_written_with_the_bytes_the_preview_counted() {
+        let plan = plan();
+        let selection = selection_with(Categories {
+            server_logs: true,
+            frontend_events: true,
+            environment: true,
+            config: false,
+            resources: true,
+        });
+        let bytes = archive(
+            &plan,
+            &selection,
+            &facts_for_test(),
+            &empty_text(),
+            &serde_json::json!({}),
+        )
+        .unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut found = 0;
+        for (path, body) in &plan.extra_files {
+            let mut entry = zip.by_name(path).expect("extra file is in the zip");
+            let mut written = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut written).unwrap();
+            assert_eq!(&written, body.as_bytes(), "{path} body");
+            assert_eq!(written.len(), body.len());
+            found += 1;
+        }
+        assert_eq!(found, plan.extra_files.len());
+        assert!(found > 0, "the fixture carries at least diagnostics.json");
+    }
+
+    #[test]
+    fn the_resource_snapshot_is_opted_in_by_default() {
+        // A bundle that omits it is the one we have to ask a follow-up question about.
+        assert!(Categories::default().resources);
+        let parsed: Categories = serde_json::from_str("{}").unwrap();
+        assert!(parsed.resources);
+        let off: Categories = serde_json::from_str("{\"resources\":false}").unwrap();
+        assert!(!off.resources);
     }
 
     #[test]

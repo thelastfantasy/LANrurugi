@@ -34,6 +34,9 @@ const FirstRunWizard = lazy(() =>
   import("./pages/FirstRunWizard").then((m) => ({ default: m.FirstRunWizard })),
 )
 const Jobs = lazy(() => import("./pages/Jobs").then((m) => ({ default: m.Jobs })))
+const Resources = lazy(() =>
+  import("./pages/Resources").then((m) => ({ default: m.Resources })),
+)
 const Logs = lazy(() => import("./pages/Logs").then((m) => ({ default: m.Logs })))
 const Plugins = lazy(() => import("./pages/Plugins").then((m) => ({ default: m.Plugins })))
 const PluginWizard = lazy(() =>
@@ -126,6 +129,7 @@ export function App() {
             <Route path="/backup/*" element={<Navigate to="/backup" replace />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/jobs" element={<Jobs />} />
+            <Route path="/resources" element={<Resources />} />
             {/* Admin-only, like everything else in this block: it edits the admin password and the
                 instance's LLM key, so a guest must never reach it — not even on a guest-mode
                 deployment where `/` and the reader are open to anonymous visitors. `RequireAuth`

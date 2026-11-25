@@ -5380,3 +5380,252 @@ div.gt.gt-single > span {
     white-space: normal;
   }
 }
+
+/* Resource monitor page (`apps/frontend/src/pages/Resources/`). Layout only — every colour comes
+ * from the active theme file's `.resources-*` rules, and borders use `currentColor` so they follow
+ * the theme's text colour rather than pinning one. */
+.resources-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 4px 0 14px;
+}
+
+.resources-status {
+  font-weight: bold;
+}
+
+.resources-export,
+.resources-intervals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Wide screens get as many cards as fit; a phone gets one column, which is where the accordion's
+ * two-column squeeze used to break labels onto three lines. */
+.resources-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.resources-card {
+  min-width: 0;
+  padding: 8px 10px 10px;
+  border: 1px solid currentColor;
+}
+
+.resources-card-title {
+  margin: 0 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  font-size: 0.95rem;
+  font-weight: bold;
+  text-align: center;
+}
+
+.resources-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+/* The label column shrinks to its text and the value column takes the rest: a fixed 50/50 split
+ * wrapped "174 / 524288 · 0.0%" onto three lines while the label had room to spare. */
+.resources-table th {
+  width: 1%;
+  padding: 3px 10px 3px 0;
+  font-weight: normal;
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.resources-table td {
+  padding: 3px 0;
+  text-align: right;
+  vertical-align: top;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.resources-table td.resources-spark {
+  width: 84px;
+  padding-left: 6px;
+  text-align: right;
+  vertical-align: middle;
+}
+
+.resources-spark svg {
+  display: block;
+  margin-left: auto;
+}
+
+/* A card with no sparkline anywhere keeps that column for nothing but blank space; drop it so the
+ * numbers can use the width. `:has` on the card is enough — the column exists or it does not. */
+.resources-card:not(:has(.resources-spark:not(:empty))) .resources-table .resources-spark {
+  display: none;
+}
+
+.resources-hint {
+  opacity: 0.6;
+}
+
+/* An explanatory line under a table row is not another value: smaller, dimmed and left-aligned so
+ * the eye can skip it while scanning the numbers on the right. */
+.resources-note td {
+  padding: 2px 0 6px;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  opacity: 0.6;
+  text-align: left;
+}
+
+/* The explanation hangs off a small question-mark icon: it reads as a control, where a bare " ?"
+ * inside the label read as debris. */
+.resources-hint-icon {
+  opacity: 0.45;
+  font-size: 0.8em;
+  vertical-align: middle;
+  cursor: help;
+}
+
+.resources-tile-line {
+  display: block;
+}
+
+.resources-waiting {
+  padding: 24px 0;
+  opacity: 0.7;
+}
+
+@media (max-width: 560px) {
+  /* One line of status, one row of two export buttons, one row of three intervals — the wrapped
+   * flex left "5 秒" alone on a third line. */
+  .resources-head {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 8px;
+  }
+
+  .resources-status {
+    grid-column: 1 / -1;
+  }
+
+  .resources-export {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .resources-intervals {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  /* `.stdbtn` carries its own side padding, which made the third interval button wider than its
+   * 1fr track and pushed it past the page edge. */
+  .resources-head .stdbtn {
+    min-width: 0;
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+
+  .resources-table {
+    font-size: 0.8rem;
+  }
+
+  .resources-table td.resources-spark {
+    width: 64px;
+  }
+}
+
+/* The four readings a non-expert opens the page for. Colours come from the theme files'
+ * `.resources-ok/warn/bad` rules; this block only lays out the boxes and the meter. */
+.resources-overview {
+  margin: 10px 0 14px;
+}
+
+.resources-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.resources-tile {
+  border: 1px solid currentColor;
+  padding: 8px 10px 10px;
+}
+
+.resources-tile-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.resources-tile-label {
+  opacity: 0.85;
+}
+
+.resources-tile-level {
+  font-weight: bold;
+}
+
+.resources-tile-value {
+  margin: 4px 0 6px;
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.resources-meter {
+  display: block;
+  height: 6px;
+  background: color-mix(in srgb, currentColor 20%, transparent);
+}
+
+.resources-meter-fill {
+  display: block;
+  height: 100%;
+  background: currentColor;
+}
+
+.resources-tile-hint {
+  margin: 6px 0 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  opacity: 0.7;
+}
+
+.resources-legend {
+  margin: 8px 0 0;
+  font-size: 0.75rem;
+  opacity: 0.75;
+}
+
+.resources-dot {
+  display: inline-block;
+  width: 0.55em;
+  height: 0.55em;
+  margin-right: 0.4em;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: baseline;
+}
+
+@media (max-width: 560px) {
+  .resources-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .resources-tile-value {
+    font-size: 0.95rem;
+  }
+}

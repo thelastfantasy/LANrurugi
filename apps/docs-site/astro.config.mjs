@@ -124,6 +124,7 @@ export default defineConfig({
             { label: '配置项（环境变量）', translations: { en: 'Configuration' }, slug: 'guide/configuration' },
             { label: '快速开始', translations: { en: 'Quickstart' }, slug: 'guide/quickstart' },
             { label: '备份与还原', translations: { en: 'Backup and restore' }, slug: 'guide/backup-restore' },
+            { label: '资源监视', translations: { en: 'Resource monitor' }, slug: 'guide/resource-monitor' },
             { label: '支持的格式', translations: { en: 'Supported formats' }, slug: 'guide/formats' },
             { label: '分享与导入', translations: { en: 'Sharing and importing' }, slug: 'guide/sharing' },
             { label: '让分享走 VPN', translations: { en: 'Sharing over a VPN' }, slug: 'guide/sharing-vpn' },

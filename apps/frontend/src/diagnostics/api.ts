@@ -118,6 +118,8 @@ export interface BundleSelection {
     frontend_events: boolean
     environment: boolean
     config: boolean
+    /** 030: the resource snapshot; on by default server-side, so it is sent explicitly. */
+    resources: boolean
   }
   truncate: boolean
   resolve_stacks: boolean
