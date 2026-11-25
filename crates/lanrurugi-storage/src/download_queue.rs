@@ -189,6 +189,11 @@ pub struct DownloadQueueItem {
     /// before this field existed, and for non-download origins.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub average_bytes_per_sec: Option<u64>,
+    /// The job's own phase timeline, persisted when the item completes for the same reason as the
+    /// rate above: the registry is in-process only, and without this a finished row loses the
+    /// queue/transfer/ingest split (and reports an elapsed time that counts the waiting).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub phases: Vec<lanrurugi_core::jobs::JobPhase>,
     /// Whether the server actually serving this download honours `Range`/`If-Range`, learned from a
     /// real resume attempt and read back at the next start (`download_manager::resume_support`).
     /// `None` means no attempt has been observed yet; a pattern-wide record can answer it earlier.
@@ -402,6 +407,7 @@ impl DownloadQueueRepository {
             plugin_namespace: new_item.plugin_namespace,
             file_size: new_item.file_size,
             average_bytes_per_sec: None,
+            phases: Vec::new(),
             resume_support: None,
             category: new_item.category,
             metadata_tags: new_item.metadata_tags,
@@ -580,6 +586,7 @@ mod tests {
             plugin_namespace: "download/x".to_string(),
             file_size: None,
             average_bytes_per_sec: None,
+            phases: Vec::new(),
             resume_support: None,
             category: None,
             metadata_tags: Vec::new(),
@@ -635,6 +642,41 @@ mod tests {
             .is_empty(),
             "a failed row is a retry the user may still want"
         );
+    }
+
+    /// A completed row keeps the job's timeline on the item so the Upload page can still separate
+    /// transfer time from queueing once the in-process registry has dropped the job.
+    #[test]
+    fn a_persisted_timeline_survives_a_round_trip_and_is_omitted_when_empty() {
+        let mut item =
+            DownloadQueueRepository::new_item(new_download("https://e/x", "download/ehentai"));
+        item.phases = vec![
+            lanrurugi_core::jobs::JobPhase {
+                name: "queued".to_string(),
+                started_at: 10,
+                ended_at: Some(20),
+            },
+            lanrurugi_core::jobs::JobPhase {
+                name: "transfer".to_string(),
+                started_at: 20,
+                ended_at: Some(30),
+            },
+        ];
+
+        let encoded = serde_json::to_value(&item).unwrap();
+        assert_eq!(encoded["phases"][1]["name"], "transfer");
+        let decoded: DownloadQueueItem = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.phases, item.phases);
+
+        // Records written before this field existed (and items that never ran) must not gain a key.
+        let plain = serde_json::to_value(DownloadQueueRepository::new_item(new_download(
+            "https://e/y",
+            "download/ehentai",
+        )))
+        .unwrap();
+        assert!(plain.get("phases").is_none());
+        let older: DownloadQueueItem = serde_json::from_value(plain).unwrap();
+        assert!(older.phases.is_empty());
     }
 
     /// A `NewQueueItem` for a plain download, with only `url`/`plugin_namespace` varying by

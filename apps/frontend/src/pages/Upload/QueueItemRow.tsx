@@ -126,9 +126,15 @@ export function RowStats({
   // 029 US2: the phase timeline is the finer-grained signal — it can tell "still fetching bytes"
   // (transfer) from "writing the archive into the library" (ingest) directly, where the flag could
   // only ever say "not transferring". The flag stays as the fallback for a job with no timeline.
-  const breakdown = foldPhases(job?.phases, now)
+  // The job's live timeline while it exists, else the one persisted on the item at completion: a
+  // finished row keeps saying how much of its elapsed time was really transfer.
+  const timeline = job?.phases?.length ? job.phases : item.phases
+  // Closed at the item's own end for a finished row: the timeline persisted at completion still has
+  // its last phase open, and reading that against the live clock would keep growing the ingest
+  // segment forever.
+  const breakdown = foldPhases(timeline, endedMs ?? now)
   const ingesting =
-    item.state === "downloading" && ingestingNow(job?.phases, item.transferring)
+    item.state === "downloading" && ingestingNow(timeline, item.transferring)
   // Prefer the two *measured* rates: the job's transfer-window average while the job is still in
   // memory, then the value persisted onto the item when it completed. Deriving a rate here from
   // the whole job duration included every minute spent waiting for the server's first byte (a
@@ -461,7 +467,8 @@ export function QueueItemRow({
   // See `RowStats`: the transfer is over but the item stays `downloading` while the server writes
   // the archive into the library. Only an explicit `false` counts (older servers omit the field).
   const ingesting =
-    item.state === "downloading" && ingestingNow(job?.phases, item.transferring);
+    item.state === "downloading" &&
+    ingestingNow(job?.phases?.length ? job.phases : item.phases, item.transferring);
   const update = useUpdateQueueItem();
   const fetchMetadata = useFetchQueueItemMetadata();
   const start = useStartQueueItem();

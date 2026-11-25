@@ -208,6 +208,38 @@ describe("RowStats", () => {
     expect(line).toMatch(/17:36 total \(queue included\)/)
   })
 
+  it("keeps the breakdown for a finished row whose job record is gone", () => {
+    // The registry is in-process only: a restart drops the job, and the item's own copy of the
+    // timeline is then the only thing that can still separate transfer time from queueing.
+    const started = new Date(2026, 9, 7, 10, 0, 0).getTime()
+    vi.setSystemTime(started + 3_600_000)
+    renderStats(
+      item({
+        state: "done",
+        started_at: started,
+        finished_at: started + 16_500,
+        file_size: 29 * 1024 * 1024,
+        average_bytes_per_sec: 4_190_000,
+        phases: [
+          { name: "queued", started_at: started, ended_at: started + 900 },
+          { name: "negotiate", started_at: started + 900, ended_at: started + 4_400 },
+          { name: "waiting", started_at: started + 4_400, ended_at: started + 7_600 },
+          { name: "transfer", started_at: started + 7_600, ended_at: started + 16_300 },
+          { name: "ingest", started_at: started + 16_300, ended_at: started + 16_500 },
+        ],
+      }),
+      undefined,
+    )
+
+    const line = screen.getByText(/started today/).textContent ?? ""
+    expect(line).toMatch(/queued 0:07/)
+    expect(line).toMatch(/downloading 0:08/)
+    expect(line).toMatch(/ingesting 0:00/)
+    expect(line).toMatch(/0:16 total \(queue included\)/)
+    // The rate is the one persisted with the item, not a whole-span derivation.
+    expect(line).toContain("4.0 MB/s")
+  })
+
   it("keeps the plain elapsed figure when the server reports no timeline", () => {
     const started = new Date(2026, 9, 7, 10, 0, 0).getTime()
     vi.setSystemTime(started + 3_600_000)

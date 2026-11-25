@@ -3086,6 +3086,10 @@ const MAX_DOWNLOAD_RETRIES: u32 = 4;
                                     // completed row can still report how fast it ran after the
                                     // job is gone (a restart drops the whole registry).
                                     item.average_bytes_per_sec = job.average_bytes_per_sec;
+                                    // Same reason as the rate: the timeline is what lets a
+                                    // finished row say how much of its elapsed time was actually
+                                    // transfer instead of counting the plugin's own waiting.
+                                    item.phases = job.phases.clone();
                                     if let Err(e) = repo.update(&item).await {
                                         tracing::warn!(item_id, error = %e, "failed to persist completed download size");
                                     }
@@ -3362,6 +3366,7 @@ pub(crate) async fn update_queue_item_state(
                                 "finished_at": &item.finished_at,
                                 "file_size": &item.file_size,
                                 "average_bytes_per_sec": &item.average_bytes_per_sec,
+                                "phases": &item.phases,
                                 // Included so a client's delta merge (a plain field spread) can
                                 // never keep showing a stale older-revision banner after the item
                                 // has moved on to some other state.

@@ -1305,6 +1305,9 @@ async fn start_one_in(
         // Same lifetime as the preview itself (029 contract Q2): a retry re-fetches at start time,
         // and a stale namespace would tell cataloguing to skip a plugin whose output is gone.
         item.metadata_preview_namespace = None;
+        // A retry is a new attempt, so the row must not keep the failed run's timeline on top of
+        // the fresh one the job registry is about to build (`mark_active` clears its own copy).
+        item.phases.clear();
         // A retry after a filename-conflict `Error` must also drop the stale conflict record —
         // otherwise `QueueItemRow.tsx`'s right-side button rendering (`item.pending_filename_
         // conflict ? <ConflictMenu> : ...`) keeps showing the old resolve-conflict button through
@@ -1958,6 +1961,7 @@ mod tests {
             plugin_namespace: "download/ehentai".to_string(),
             file_size: None,
             average_bytes_per_sec: None,
+            phases: Vec::new(),
             resume_support: None,
             category: None,
             metadata_tags: Vec::new(),
