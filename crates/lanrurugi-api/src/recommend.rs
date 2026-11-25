@@ -403,18 +403,36 @@ impl RecommendService {
             .iter()
             .map(|&i| candidates[i].clone())
             .collect();
-        match crate::recommend_llm::llm_rerank(
+        let anchor_state = reading_state(current);
+        match crate::recommend_llm::llm_rerank_cached(
             state,
             archive_id,
-            &anchor,
-            reading_state(current),
+            anchor_state,
             &ordered,
             limit,
         )
         .await
         {
             Some(llm_ranked) => Some(llm_ranked),
-            None => Some(outcome.items.into_iter().take(limit).collect()),
+            // The model call behind this runs 6–64 s, and the panel is already on screen by then:
+            // answer with the reading-aware order now, and let the rerank land in the cache for
+            // the next open (usually the background prefetch the reader fires on mount).
+            None => {
+                let state = state.clone();
+                let archive_id = archive_id.to_string();
+                tokio::spawn(async move {
+                    crate::recommend_llm::llm_rerank(
+                        &state,
+                        &archive_id,
+                        &anchor,
+                        anchor_state,
+                        &ordered,
+                        limit,
+                    )
+                    .await;
+                });
+                Some(outcome.items.into_iter().take(limit).collect())
+            }
         }
     }
 }

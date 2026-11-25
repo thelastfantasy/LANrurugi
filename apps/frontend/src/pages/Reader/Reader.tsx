@@ -298,6 +298,11 @@ interface WakeLockSentinelLike {
  * boundary panel opens with data already cached (LLM rerank takes seconds). */
 const RECS_QUERY_KEY = (id: string) => ["reader-recommendations", id] as const;
 
+/** Keep a prefetched shortlist for an hour. TanStack's default is 5 minutes of inactivity, which a
+ * single long read already exceeds — the prefetch would be collected mid-read and the boundary
+ * panel would re-ask the server (a model call when the cache digest has moved on). */
+const RECS_GC_MS = 60 * 60 * 1000;
+
 /** Fixed 16x16 square badge chip on recommendation-card thumbnails, neutral dark overlay chrome. */
 const badgeChipStyle: React.CSSProperties = {
   width: 16,
@@ -1993,6 +1998,7 @@ export function Reader() {
     void queryClient.prefetchQuery({
       queryKey: RECS_QUERY_KEY(archiveId),
       staleTime: 60_000,
+      gcTime: RECS_GC_MS,
       queryFn: () =>
         fetch(
           `/api/reader/recommendations/${encodeURIComponent(archiveId)}?limit=10`,
@@ -2028,6 +2034,7 @@ export function Reader() {
       .fetchQuery({
         queryKey: RECS_QUERY_KEY(archiveId),
         staleTime: 60_000,
+        gcTime: RECS_GC_MS,
         queryFn: () =>
           fetch(
             `/api/reader/recommendations/${encodeURIComponent(archiveId)}?limit=10`,
