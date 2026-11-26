@@ -328,6 +328,11 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // rather than requiring every invocation of this binary to remember to pass an absolute path.
     let plugins_dir = std::fs::canonicalize(&args.plugins_dir)?;
 
+    // A plugin's write grant is scoped to `<library>/_byname` (see `lanrurugi_plugin::permissions`),
+    // so the library has to be known before the first worker spawns.
+    lanrurugi_plugin::set_library_dir(&args.library_path);
+    lanrurugi_plugin::set_scratch_dir(&args.temp_dir);
+
     let dispatcher_path = args.temp_dir.join("dispatcher.ts");
     std::fs::write(&dispatcher_path, lanrurugi_plugin::DISPATCHER_SCRIPT)?;
     std::fs::write(

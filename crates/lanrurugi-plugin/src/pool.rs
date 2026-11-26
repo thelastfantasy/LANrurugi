@@ -943,7 +943,8 @@ impl PluginPool {
 
         if slot.worker.is_none() {
             let info = self.plugin_info(namespace).await?;
-            let flags = build_flags(&info.declared_permissions);
+            // A `script` plugin returns what the host should write; it never needs the grant itself.
+            let flags = build_flags(&info.declared_permissions, info.kind != "script");
             let worker = Worker::spawn(
                 &self.deno_binary,
                 &self.dispatcher_path,

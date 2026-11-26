@@ -420,21 +420,19 @@ interface ScriptHostArgs {
    * something to pay for on every script call. */
   archives?: ScriptArchiveTags[];
   /** The library's real archive-directory root, absolute path — present only when the plugin
-   * names `"library_path"` in its own `PluginInfoResult.host_arguments`
-   * (`script/foldertocat` does), which (unlike every other plugin in this corpus) needs genuine,
-   * broad filesystem read access to walk the whole content tree itself via `Deno.readDir`
-   * (`declared_permissions.read: true`, an unrestricted `--allow-read` grant — see
-   * `lanrurugi_plugin::pool::Worker::spawn`), matching legacy's own `FolderToCat.pm::run_script`
-   * (`File::Find` over `LANraragi::Model::Config->get_userdir`) exactly rather than having the
-   * host pre-walk it and hand over a file list, which would make a since-requested Rust-vs-TS
-   * performance comparison meaningless (the I/O would happen only once, on the Rust side, either
-   * way). Absent for every other script plugin. */
+   * names `"library_path"` in its own `PluginInfoResult.host_arguments`. For a script plugin that
+   * needs to walk the content tree itself via `Deno.readDir` (with
+   * `declared_permissions.read: true`, an unrestricted `--allow-read` grant — see
+   * `lanrurugi_plugin::pool::Worker::spawn`) instead of having the host hand it a file list.
+   *
+   * Note what the tree looks like: `<library>/_byname/<user folder>/<file>.zip` is the by-name
+   * layout, but `<library>/<bb>/<id>.zip` buckets are storage, not structure — group by them and a
+   * plugin produces one category per bucket ("00"…"fe"). Absent unless declared. */
   library_path?: string;
   /** Maps each already-catalogued archive's on-disk path to its ID — present only when the plugin
-   * names `"archive_id_by_path"` in its own `PluginInfoResult.host_arguments`
-   * (`script/foldertocat` does), needed to resolve the files `Deno.readDir` finds back to real
-   * archive IDs before returning its computed category groupings (a plugin has no direct storage
-   * access to look this up itself). Absent for every other script plugin. */
+   * names `"archive_id_by_path"` in its own `PluginInfoResult.host_arguments`, needed to resolve
+   * files `Deno.readDir` finds back to real archive IDs before returning computed groupings (a
+   * plugin has no direct storage access to look this up itself). Absent unless declared. */
   archive_id_by_path?: Record<string, string>;
 }
 

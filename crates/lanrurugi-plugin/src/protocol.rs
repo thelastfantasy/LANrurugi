@@ -563,7 +563,7 @@ pub struct ScriptResult {
 }
 
 /// One static Category `runScript`'s result asks the host to create — mirrors `plugin-sdk.ts`'s
-/// `ScriptResult.categories_to_create` element shape field-for-field (`foldertocat`).
+/// `ScriptResult.categories_to_create` element shape field-for-field.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScriptCategoryToCreate {
     pub name: String,

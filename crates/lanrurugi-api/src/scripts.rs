@@ -8,6 +8,14 @@
 //! didn't need to stay native despite touching every archive's tags. Legacy's `SourceFinder.pm` has
 //! no replacement: the library search's `source:"<url>"` query answers the same question better.
 //!
+//! Both directory-walking endpoints group by **the user's own folders**, so they only see the
+//! by-name layout: `<library>/_byname/<series>/<volume>.zip`, plus whatever a legacy library still
+//! keeps in folders directly under the library root. The hash layout's buckets
+//! (`<library>/<bb>/<id>.zip`, 020) are storage, not structure — grouping by them would produce one
+//! category (or Tankoubon) per bucket, named "00"…"fe", so the walkers skip them outright
+//! (`lanrurugi_storage::paths::is_storage_dir`). Files sitting directly in `_byname` rank with files
+//! in the library root: not grouped, exactly like legacy's own FolderToCat.
+//!
 //! This module also hosts the new native **Subfolders to Tankoubons** maintenance endpoint, the
 //! direct “make a single-volume/Tankoubon from each directory” counterpart to FolderToCat.
 
@@ -89,8 +97,15 @@ pub struct SubfoldersToCategoriesParams {
     by_top_folder: bool,
 }
 
+/// Recursively walks the library and groups every archive file by the folder holding it.
+///
+/// `group_root` is the directory whose own files are "root level" (never grouped): the library root
+/// at the top, then `_byname` once the walk descends into it — that is where the by-name layout
+/// keeps the user's folders. Hash-layout buckets are storage, not structure, and are skipped whole;
+/// see this module's own docs for why.
 fn walk_subfolders(
     root: &Path,
+    group_root: &Path,
     current: &Path,
     by_top_folder: bool,
     out: &mut HashMap<String, Vec<PathBuf>>,
@@ -101,10 +116,19 @@ fn walk_subfolders(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            walk_subfolders(root, &path, by_top_folder, out);
+            if path == lanrurugi_storage::paths::byname_dir(root) {
+                // Files directly inside `_byname` are root-level; its subdirectories are the user's
+                // own folders, so keep walking with `_byname` as the new grouping root.
+                walk_subfolders(root, &path, &path, by_top_folder, out);
+                continue;
+            }
+            if lanrurugi_storage::paths::is_storage_dir(root, &path) {
+                continue;
+            }
+            walk_subfolders(root, group_root, &path, by_top_folder, out);
             continue;
         }
-        if current == root {
+        if current == group_root {
             continue; // direct children of the library root are excluded, matching legacy
         }
         if !lanrurugi_scanner::watcher::is_watched_archive_path(&path) {
@@ -112,7 +136,7 @@ fn walk_subfolders(
         }
         let folder_name = if by_top_folder {
             current
-                .strip_prefix(root)
+                .strip_prefix(group_root)
                 .ok()
                 .and_then(|rel| rel.components().next())
                 .map(|c| c.as_os_str().to_string_lossy().into_owned())
@@ -149,20 +173,39 @@ fn collect_archives_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
 /// are grouping units. For every such subdirectory, all archives under it — including those in
 /// deeper nested subdirectories — are collected into that one Tankoubon. Nested subdirectories do
 /// not become separate Tankoubons.
+///
+/// The by-name layout keeps those subdirectories inside `_byname`, so its own first-level
+/// subdirectories are enumerated as if `_byname` were the root (its direct files, like the library
+/// root's, are not grouped). Hash-layout buckets are skipped.
 fn walk_first_level_subfolders(root: &Path, out: &mut HashMap<String, Vec<PathBuf>>) {
-    let Ok(entries) = std::fs::read_dir(root) else {
+    walk_first_level_subfolders_under(root, root, out);
+}
+
+fn walk_first_level_subfolders_under(
+    root: &Path,
+    dir: &Path,
+    out: &mut HashMap<String, Vec<PathBuf>>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
-        let dir = entry.path();
-        if !dir.is_dir() {
+        let path = entry.path();
+        if !path.is_dir() {
             continue;
         }
-        let Some(folder_name) = dir.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+        if path == lanrurugi_storage::paths::byname_dir(root) {
+            walk_first_level_subfolders_under(root, &path, out);
+            continue;
+        }
+        if lanrurugi_storage::paths::is_storage_dir(root, &path) {
+            continue;
+        }
+        let Some(folder_name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
             continue;
         };
         let mut files = Vec::new();
-        collect_archives_recursive(&dir, &mut files);
+        collect_archives_recursive(&path, &mut files);
         if !files.is_empty() {
             out.entry(folder_name).or_default().extend(files);
         }
@@ -173,12 +216,11 @@ fn walk_first_level_subfolders(root: &Path, out: &mut HashMap<String, Vec<PathBu
 /// static Category per subfolder that directly contains archives (`FolderToCat.pm::run_script`).
 ///
 /// Reports its own wall-clock `elapsed_ms` in the response (directory walk through category
-/// creation, inclusive) so it can be directly compared against `plugins/script/foldertocat.ts` —
-/// a real `.ts` script plugin doing the identical directory walk + grouping logic itself (via
-/// `Deno.readDir`, not host-injected paths — the user wanted a genuine head-to-head, not a
-/// contrived one where the plugin is handed pre-walked data), used to gauge the real overhead of
-/// running this kind of I/O-heavy whole-library scan through the Deno-subprocess plugin sandbox
-/// versus native Rust.
+/// creation, inclusive), so a slow scan can be attributed to the walk rather than to Redis writes.
+///
+/// Scope: the user's own folders only — `<library>/_byname/<series>/…` for a by-name library, or
+/// folders directly under the library root for one that predates the hash layout. The hash layout's
+/// buckets are skipped, and so are files sitting directly in the library root or in `_byname`.
 async fn subfolders_to_categories(
     State(state): State<AppState>,
     Query(params): Query<SubfoldersToCategoriesParams>,
@@ -201,9 +243,11 @@ async fn subfolders_to_categories(
     }
 
     let mut subfolders = HashMap::new();
+    let library = &state.library.archive_dir;
     walk_subfolders(
-        &state.library.archive_dir,
-        &state.library.archive_dir,
+        library,
+        library,
+        library,
         params.by_top_folder,
         &mut subfolders,
     );
@@ -633,5 +677,140 @@ mod tests {
         let parsed: LlmTankBatch = serde_json::from_str(raw).unwrap();
         assert_eq!(parsed.suggestions[0].artists.len(), 2);
         assert_eq!(parsed.suggestions[0].circles.len(), 1);
+    }
+
+    /// A throwaway library tree; the walkers only read it, so any unique directory works.
+    fn library(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("lrr-scripts-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp library");
+        dir
+    }
+
+    fn touch(path: &Path) {
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("create dir");
+        std::fs::write(path, b"x").expect("write file");
+    }
+
+    const ID: &str = "f35fe0c9ec32fe3b24e7b718da7f9ad9290bf3d1";
+
+    fn groups(lib: &Path, by_top_folder: bool) -> HashMap<String, Vec<String>> {
+        let mut out = HashMap::new();
+        walk_subfolders(lib, lib, lib, by_top_folder, &mut out);
+        out.into_iter()
+            .map(|(folder, paths)| {
+                let mut names: Vec<String> = paths
+                    .iter()
+                    .map(|p| {
+                        p.strip_prefix(lib)
+                            .unwrap_or(p)
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                    .collect();
+                names.sort();
+                (folder, names)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn hash_layout_buckets_are_storage_not_folders() {
+        let lib = library("buckets");
+        touch(&lib.join("f3").join(format!("{ID}.zip")));
+        touch(&lib.join("f3").join(format!("{ID}.json")));
+        touch(
+            &lib.join("00")
+                .join(format!("00{}", &ID[2..]))
+                .join("..")
+                .join("x"),
+        );
+
+        assert!(groups(&lib, false).is_empty());
+        assert!(groups(&lib, true).is_empty());
+
+        let mut tanks = HashMap::new();
+        walk_first_level_subfolders(&lib, &mut tanks);
+        assert!(tanks.is_empty(), "buckets must not become Tankoubons");
+    }
+
+    #[test]
+    fn byname_folders_are_grouped_and_loose_files_are_not() {
+        let lib = library("byname");
+        touch(&lib.join("_byname").join("Series A").join("v1.zip"));
+        touch(&lib.join("_byname").join("Series A").join("v2.zip"));
+        touch(
+            &lib.join("_byname")
+                .join("Series A")
+                .join("nested")
+                .join("v3.zip"),
+        );
+        touch(&lib.join("_byname").join("Series B").join("v4.zip"));
+        touch(&lib.join("_byname").join("loose.zip"));
+
+        // Without `by_top_folder` each folder that holds archives is its own group — legacy's own
+        // FolderToCat behaviour — so the nested folder is reported separately, under its leaf name.
+        let by_leaf = groups(&lib, false);
+        assert_eq!(
+            by_leaf.get("Series A"),
+            Some(&vec![
+                "_byname/Series A/v1.zip".to_string(),
+                "_byname/Series A/v2.zip".to_string(),
+            ])
+        );
+        assert_eq!(
+            by_leaf.get("nested"),
+            Some(&vec!["_byname/Series A/nested/v3.zip".to_string()])
+        );
+        assert_eq!(
+            by_leaf.get("Series B"),
+            Some(&vec!["_byname/Series B/v4.zip".to_string()])
+        );
+        assert_eq!(by_leaf.len(), 3, "the loose file must not be grouped");
+
+        let by_top = groups(&lib, true);
+        assert_eq!(by_top.get("Series A").map(Vec::len), Some(3));
+        assert_eq!(by_top.get("Series B").map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn tankoubons_group_by_the_byname_folders() {
+        let lib = library("tanks");
+        touch(&lib.join("_byname").join("Series A").join("v1.zip"));
+        touch(
+            &lib.join("_byname")
+                .join("Series A")
+                .join("nested")
+                .join("v2.zip"),
+        );
+        touch(&lib.join("_byname").join("loose.zip"));
+        touch(&lib.join("f3").join(format!("{ID}.zip")));
+
+        let mut tanks = HashMap::new();
+        walk_first_level_subfolders(&lib, &mut tanks);
+
+        assert_eq!(tanks.len(), 1, "only the user's folder is a grouping unit");
+        assert_eq!(tanks.get("Series A").map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn a_legacy_library_keeps_grouping_by_its_own_folders() {
+        let lib = library("legacy");
+        touch(&lib.join("Old series").join("vol1.zip"));
+        touch(&lib.join("Old series").join("vol2.zip"));
+        touch(&lib.join("loose.zip"));
+
+        let by_leaf = groups(&lib, false);
+        assert_eq!(by_leaf.get("Old series").map(Vec::len), Some(2));
+        assert_eq!(by_leaf.len(), 1);
+    }
+
+    #[test]
+    fn a_user_folder_that_only_looks_like_a_bucket_is_kept() {
+        let lib = library("lookalike");
+        touch(&lib.join("ab").join("whatever.zip"));
+
+        let by_leaf = groups(&lib, false);
+        assert_eq!(by_leaf.get("ab").map(Vec::len), Some(1));
     }
 }

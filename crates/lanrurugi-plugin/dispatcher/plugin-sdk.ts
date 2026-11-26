@@ -101,6 +101,9 @@
  *   "does some archive already carry this URL as its `source:` tag", which the library search
  *   covers (`source:"<url>"` lists every match) without a library-wide tag scan on every call. A
  *   third-party script plugin that read those fields now sees `undefined`.
+ * - **2.2.0** — `declared_permissions.write` is now scoped to `<library>/_byname` (never the
+ *   filesystem, never a hash-layout bucket), and `"script"`-type plugins are granted no write access
+ *   at all. A plugin that only wrote inside the user's own folders keeps working unchanged.
  * - **1.2.0** — {@linkcode PluginSkipException}: a metadata plugin can say an archive is not from its
  *   site, which the host counts as declined rather than failed (no warning, no diagnostics event).
  * - **1.1.0** — {@linkcode MetadataResult.primary_source}: a metadata plugin can name the one source
@@ -112,7 +115,7 @@
 
 /** This SDK's version ({@link https://semver.org semver}): a minor step adds optional fields a plugin
  * may use, a major step changes what an existing plugin has to do. See the module docs' changelog. */
-export const SDK_VERSION = "2.1.0";
+export const SDK_VERSION = "2.2.0";
 
 /** The four plugin categories the host recognizes (`lanrurugi-api::plugins::PLUGIN_CATEGORIES`) —
  * also the fixed set of subdirectories under `plugins/` (`metadata/`, `login/`, `download/`,
@@ -161,7 +164,17 @@ export interface DeclaredPermissions {
    * against a real URL literal in the plugin's own source before shipping it; an empty array
    * means no network access at all. */
   net: string[];
+  /** Broad read access to the whole filesystem (`--allow-read`), for a plugin that has to walk
+   * files itself — see {@linkcode ScriptHostArgs.library_path}. Without it a plugin can only read
+   * its own `.ts` file. */
   read: boolean;
+  /** Write access, scoped to the **by-name tree** (`<library>/_byname/…`) — never the whole
+   * filesystem, and never a hash-layout bucket (`<library>/<bb>/<id>.zip`, where the id *is* the
+   * path: renaming or deleting one there leaves a catalogue record pointing at nothing). A
+   * `"script"`-type plugin gets no write grant at all — its job is to return
+   * {@linkcode ScriptResult.updates}/{@linkcode ScriptResult.categories_to_create} and let the host
+   * write them under its own locks. Declare this only for a plugin that genuinely writes files
+   * inside the user's own folders. */
   write: boolean;
 }
 
@@ -376,18 +389,14 @@ export interface ScriptResult {
    * directly (`nhsrcconv`). */
   updates?: ScriptArchiveTags[];
   /** One static Category to create per discovered subfolder — the host creates each one after
-   * `runScript` returns, same read-compute-return-write-to-host split as {@linkcode updates}
-   * (`foldertocat`). */
+   * `runScript` returns, same read-compute-return-write-to-host split as {@linkcode updates}. */
   categories_to_create?: { name: string; archive_ids: string[] }[];
   /** Whether to delete every existing static (non-dynamic) category before creating the new ones
-   * — echoes back this call's own `customargs[0]`, since the host applies the deletion itself
-   * (`foldertocat`). */
+   * — echoes back this call's own `customargs[0]`, since the host applies the deletion itself. */
   delete_old_categories?: boolean;
-  /** Wall-clock milliseconds `runScript` itself spent walking the directory tree and computing
-   * groupings — reported back for a direct comparison against the equivalent native Rust endpoint
-   * (`POST /database/scripts/subfolders-to-categories`'s own `elapsed_ms`), which does the
-   * identical job. Not a generic field every script plugin is expected to fill in (`foldertocat`
-   * only). */
+  /** Wall-clock milliseconds `runScript` itself spent on its own work — optional, for a plugin
+   * that wants to report where its time went. Not a generic field every script plugin is expected
+   * to fill in. */
   elapsed_ms?: number;
 }
 
