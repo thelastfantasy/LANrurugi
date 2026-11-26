@@ -17,6 +17,22 @@ const CLOSE_DELAY_MS = 150
  * finished download's title could not be opened on a phone (reported 2026-11-25). */
 const LONG_PRESS_MS = 500
 
+/** Elements a tap already does something with. */
+const ACTIONABLE =
+  "a[href], button, input, select, textarea, label, summary, [role='button'], [role='link'], [role='checkbox'], [role='tab'], [contenteditable='true']"
+
+/** Whether a tap on `target` already means something, checked from the pressed element up to the
+ * tooltip's own wrapper. A React `onClick` on a plain element is invisible to the DOM, so a
+ * `cursor: pointer` counts as one too; a trigger inside a link inherits that cursor and so keeps
+ * the long press as well. */
+function tapHasAction(target: EventTarget | null, wrapper: HTMLElement | null): boolean {
+  for (let el = target instanceof Element ? target : null; el; el = el.parentElement) {
+    if (el.matches(ACTIONABLE) || getComputedStyle(el).cursor === "pointer") return true
+    if (el === wrapper) break
+  }
+  return false
+}
+
 /** The hover tooltip currently showing, module-wide. Opening another one closes this one right
  * away instead of letting it sit next to the new bubble for the rest of its close delay. */
 let activeTooltip: { close: () => void } | null = null
@@ -33,7 +49,7 @@ export function Tooltip({
   maxWidth = 320,
   zIndex = Z_OVERLAY_TOOLTIP,
   closeDelay = CLOSE_DELAY_MS,
-  openOnTap = false,
+  openOnTap,
 }: {
   label: React.ReactNode
   children: React.ReactNode
@@ -50,10 +66,10 @@ export function Tooltip({
   /** How long the tooltip stays open after the pointer leaves the trigger, in ms. Set to 0 for
    * immediate close. */
   closeDelay?: number
-  /** Open on a plain tap (touch) instead of requiring a 500 ms hold. Only for triggers that are
-   *  purely decorative — an info icon, a caption with no action of its own. A trigger the user can
-   *  also tap to *do* something (a link, a button) must keep the long press, or the first tap would
-   *  pop a bubble over the thing they were trying to open. */
+  /** Whether a touch opens the bubble with a plain tap rather than a 500 ms hold. Left unset, it
+   *  is decided per press: a tap opens it unless the trigger itself does something when tapped (a
+   *  link, a button, a pointer cursor), where the first tap must stay theirs. Set it only to
+   *  override that guess — `true` for a decorative icon that sits inside a link. */
   openOnTap?: boolean
 }) {
   const [visible, setVisible] = useState(false)
@@ -140,7 +156,7 @@ export function Tooltip({
     swallowLeave.current = false
     cancelLongPress()
     if (pointerType.current === "mouse") return
-    if (openOnTap) {
+    if (openOnTap ?? !tapHasAction(e.target, wrapperRef.current)) {
       // No hold needed: this trigger has no action of its own, so the tap is for the bubble. The
       // click it ends with is still swallowed — the trigger may sit inside a link (a library card).
       swallowClick.current = true

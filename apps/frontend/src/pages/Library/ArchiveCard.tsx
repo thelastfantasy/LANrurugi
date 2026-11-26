@@ -167,7 +167,8 @@ export function ArchiveCard({
           {highlightText(archive.title, highlightQuery)}
         </Link>
         <StatusIcons archive={archive} />
-        {/* `openOnTap`: the icon is decorative, so a tap can only mean "show me the reason". */}
+        {/* `openOnTap`: the icon sits inside the card link, whose pointer cursor it inherits, but is
+            decorative itself — a tap can only mean "show me the reason". */}
         {archive.match_reason?.kind === "members" && (
           <Tooltip openOnTap label={<MatchReason members={archive.match_reason.members} t={t} />}>
             <span

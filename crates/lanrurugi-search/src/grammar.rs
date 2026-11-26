@@ -232,6 +232,9 @@ fn ascii_quotes(filter: &str) -> String {
 /// while additionally recognizing the boolean structure.
 fn lex(filter: &str) -> Vec<Piece> {
     let mut pieces = Vec::new();
+    // A backslash ending the query is a slip of the key beside Enter, not something to search for
+    // (it would otherwise become a literal `\` in the last term, which matches nothing).
+    let filter = filter.trim_end().trim_end_matches('\\');
     let quoted = ascii_quotes(filter);
     let mut chars = quoted.chars().peekable();
     // `title:`/`work:` scope the *remaining words of their comma-separated segment*: real titles
@@ -869,6 +872,13 @@ mod tests {
                 tok("zero", false)
             ])
         );
+    }
+
+    #[test]
+    fn a_trailing_backslash_is_ignored() {
+        assert_eq!(parse_query("fate\\"), parse_query("fate"));
+        assert_eq!(parse_query("fate zero \\\\ "), parse_query("fate zero"));
+        assert_eq!(parse_query("\\"), Expr::And(Vec::new()));
     }
 
     #[test]

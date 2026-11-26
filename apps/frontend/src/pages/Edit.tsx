@@ -13,7 +13,6 @@ import {
 } from "@/api/hooks"
 import type { ArchiveMetadata } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
-import { CollapsibleSection } from "@/components/Display"
 import { TagInput } from "@/components/Form"
 import { confirmDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
@@ -81,6 +80,7 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
   const [selectedPlugin, setSelectedPlugin] = useState("")
   const [pluginArg, setPluginArg] = useState("")
   const [pluginRunning, setPluginRunning] = useState(false)
+  const [manualOpen, setManualOpen] = useState(false)
 
   const tagSuggestions = (stats.data ?? []).map((s) => (s.namespace ? `${s.namespace}:${s.text}` : s.text))
 
@@ -294,13 +294,16 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
               <span>
                 {t("common.tags")} <span style={{ fontSize: "6pt" }}>{t("edit.separatedByHyphensIE")}</span> :
               </span>
-              <input
-                className="stdbtn"
+              <button
                 type="button"
+                className="stdbtn"
                 title={t("edit.clearTagsHint")}
-                value={t("edit.clearTags")}
+                aria-label={t("edit.clearTags")}
                 onClick={clearTags}
-              />
+                style={{ width: "auto", minWidth: 0, padding: "2px 8px" }}
+              >
+                <i className="fas fa-eraser" aria-hidden="true"></i>
+              </button>
             </div>
             <TagInput value={tags} onChange={setTags} suggestions={tagSuggestions} formatTag={formatSourceTag} />
           </div>
@@ -329,12 +332,22 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
                 >
                   <i className="fas fa-question-circle" style={{ fontSize: 20, cursor: "help" }} aria-hidden="true"></i>
                 </Tooltip>
+
+                {/* Picking one plugin by hand stays available for the ones no URL can select —
+                    filename parsing, copying another archive's tags. */}
+                <button
+                  type="button"
+                  aria-expanded={manualOpen}
+                  onClick={() => setManualOpen((open) => !open)}
+                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "inherit", font: "inherit", textDecoration: "underline" }}
+                >
+                  <i className={`fas ${manualOpen ? "fa-caret-down" : "fa-caret-right"}`} aria-hidden="true"></i>{" "}
+                  {t("edit.choosePluginManually")}
+                </button>
               </div>
 
-              {/* Picking one plugin by hand stays available for the ones no URL can select —
-                  filename parsing, copying another archive's tags. */}
-              <CollapsibleSection as="div" icon="fa-sliders-h" title={t("edit.choosePluginManually")}>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: 6 }}>
+              {manualOpen && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                     <select
                       className="favtag-btn"
@@ -373,7 +386,7 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
                     </div>
                   )}
                 </div>
-              </CollapsibleSection>
+              )}
 
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <i className="fa fa-2x fa-exclamation-circle"></i>
