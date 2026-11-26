@@ -92,6 +92,10 @@
  *
  * ## Versions
  *
+ * - **2.1.0** — {@linkcode PluginInfoResult.host_arguments}, `.host_results` and `.run_order`: a
+ *   plugin now declares which host-computed arguments it needs, which host-side effects apply to
+ *   its result, and where it runs in an auto-run chain, instead of the host matching a handful of
+ *   namespaces in Rust. Purely additive — a plugin that declares none behaves exactly as before.
  * - **2.0.0** — `ScriptHostArgs.existing_archive_id` and `ScriptResult.total`/`id` are gone with
  *   the Source Finder script plugin: it only answered
  *   "does some archive already carry this URL as its `source:` tag", which the library search
@@ -108,7 +112,7 @@
 
 /** This SDK's version ({@link https://semver.org semver}): a minor step adds optional fields a plugin
  * may use, a major step changes what an existing plugin has to do. See the module docs' changelog. */
-export const SDK_VERSION = "2.0.0";
+export const SDK_VERSION = "2.1.0";
 
 /** The four plugin categories the host recognizes (`lanrurugi-api::plugins::PLUGIN_CATEGORIES`) —
  * also the fixed set of subdirectories under `plugins/` (`metadata/`, `login/`, `download/`,
@@ -230,6 +234,30 @@ export interface PluginInfoResult {
    * `refreshSources(args)`, which takes the discovery criteria plus `sources: string[]` and returns a
    * {@linkcode DiscoveryResult} for just those works, read without paging a listing. */
   capabilities?: string[];
+  /** Host-computed arguments this plugin's calls need, by name. A plugin runs without storage
+   * access, so anything it needs from the library has to be handed to it — but naming it here is
+   * what makes the host pay for it, since some of these are whole-library reads:
+   * `"other_archive_tags"` is another archive's stored tags (resolved from the ID in this call's
+   * `arg`), `"archives"` is every archive's `id`/`tags`, `"library_path"` is the library's own
+   * archive-directory root (for a plugin that walks the real filesystem itself), and
+   * `"archive_id_by_path"` is a `path → id` map. The host adds each under the same key in
+   * `hostArgs`, before this call. Omit if this plugin needs none; an unknown name is logged and
+   * skipped, never fatal. */
+  host_arguments?: string[];
+  /** Host-side effects applied to this plugin's own `execute` result, by name — the write half of
+   * a read-compute-return-write split, since the plugin itself cannot write storage.
+   * `"tag_updates"` writes the `updates: {id, tags}[]` this plugin returns back onto those
+   * archives; `"category_changes"` applies returned `categories_to_create` (and
+   * `delete_old_categories: true`) as static categories. Omit if this plugin's result is only read,
+   * not acted on. */
+  host_results?: string[];
+  /** Position in an auto-run chain among plugins of the same `type`, highest first, `0` when
+   * omitted. Only meaningful where the host runs several plugins on its own: the auto-run metadata
+   * chain, which legacy always began with its filename parser because everything downstream reads
+   * the title and tags it derives. Not the user-configurable `priority` the Plugins page drags
+   * into order (that one is stored server-side, per plugin). The sort is stable, so equal values
+   * keep discovery order. */
+  run_order?: number;
 }
 
 /** A plugin-authored error — `error_code` doubles as an i18n lookup key (the frontend's

@@ -357,10 +357,11 @@ interface MetadataHostArgs {
    * hash (constitution Principle IV: no broader access than a plugin actually needs). */
   settings?: { usedateadded: boolean; usedatemodified: boolean };
   /** Another archive's stored `tags` string, resolved host-side by extracting a 40-character
-   * archive ID out of this call's own {@linkcode arg} — currently only computed (and only
-   * non-null) for `plugins/metadata/copyarchivetags.ts`, which has no other way to read a
-   * *different* archive's metadata from inside the Deno sandbox (no direct storage access).
-   * `null` when `arg` contains no valid ID, or that ID doesn't resolve to a real archive. */
+   * archive ID out of this call's own {@linkcode arg} — computed only when this plugin names it in
+   * its own `PluginInfoResult.host_arguments` (`plugins/metadata/copyarchivetags.ts` does), since
+   * a plugin has no direct storage access to read a *different* archive's metadata otherwise.
+   * Absent when the argument was not declared, when `arg` carries no valid ID, or when that ID
+   * doesn't resolve to a real archive. */
   other_archive_tags?: string | null;
   /** Content of every file listed in this plugin's own `PluginInfoResult.sidecar_files`
    * (`plugin-sdk.ts`), keyed by that same filename — present (possibly empty) only when
@@ -413,28 +414,27 @@ interface ScriptHostArgs {
   /** This plugin's own persisted per-parameter values — same meaning as {@linkcode
    * MetadataHostArgs.customargs}. */
   customargs: CustomArgValue[];
-  /** Every archive's `id`/`tags`, host-fetched once before the call — present (possibly empty)
-   * only for a script plugin whose namespace the host recognizes as needing it (currently just
-   * `script/nhentaisourceconverter`); `undefined` for every other script plugin, including a
-   * third-party one uploaded via `POST /plugins/upload` (no way to know it needs this without a
-   * declarative opt-in this SDK doesn't have yet — such a plugin can still request a narrower,
-   * per-archive equivalent through the same mechanism {@linkcode MetadataHostArgs.other_archive_tags}
-   * uses, if a future need arises). */
+  /** Every archive's `id`/`tags`, host-fetched once before the call — present only when the plugin
+   * names `"archives"` in its own `PluginInfoResult.host_arguments`
+   * (`script/nhentaisourceconverter` does); otherwise absent, because a whole-library read is not
+   * something to pay for on every script call. */
   archives?: ScriptArchiveTags[];
-  /** The library's real archive-directory root, absolute path — present only for
-   * `script/foldertocat`, which (unlike every other plugin in this corpus) needs genuine, broad
-   * filesystem read access to walk the whole content tree itself via `Deno.readDir`
+  /** The library's real archive-directory root, absolute path — present only when the plugin
+   * names `"library_path"` in its own `PluginInfoResult.host_arguments`
+   * (`script/foldertocat` does), which (unlike every other plugin in this corpus) needs genuine,
+   * broad filesystem read access to walk the whole content tree itself via `Deno.readDir`
    * (`declared_permissions.read: true`, an unrestricted `--allow-read` grant — see
    * `lanrurugi_plugin::pool::Worker::spawn`), matching legacy's own `FolderToCat.pm::run_script`
    * (`File::Find` over `LANraragi::Model::Config->get_userdir`) exactly rather than having the
    * host pre-walk it and hand over a file list, which would make a since-requested Rust-vs-TS
    * performance comparison meaningless (the I/O would happen only once, on the Rust side, either
-   * way). `undefined` for every other script plugin. */
+   * way). Absent for every other script plugin. */
   library_path?: string;
-  /** Maps each already-catalogued archive's on-disk path to its ID — present only for
-   * `script/foldertocat`, needed to resolve the files `Deno.readDir` finds back to real archive
-   * IDs before returning its computed category groupings (a plugin has no direct storage access
-   * to look this up itself). `undefined` for every other script plugin. */
+  /** Maps each already-catalogued archive's on-disk path to its ID — present only when the plugin
+   * names `"archive_id_by_path"` in its own `PluginInfoResult.host_arguments`
+   * (`script/foldertocat` does), needed to resolve the files `Deno.readDir` finds back to real
+   * archive IDs before returning its computed category groupings (a plugin has no direct storage
+   * access to look this up itself). Absent for every other script plugin. */
   archive_id_by_path?: Record<string, string>;
 }
 

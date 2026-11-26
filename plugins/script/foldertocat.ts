@@ -36,6 +36,11 @@ export function pluginInfo() {
     author: "Difegue (ported)",
     description: "Scan your Content Folder and automatically create Static Categories for each subfolder. This Script will create a category for each subfolder with archives as direct children.<br>This is a real Deno-subprocess script plugin, kept alongside the native Rust endpoint the Plugins page actually uses, purely to benchmark the two against each other.",
     version: "0.1",
+    // The library root (to walk it) and a `path -> archive id` map (to resolve what the walk found),
+    // both resolved by the host and handed over under these names.
+    host_arguments: ["library_path", "archive_id_by_path"],
+    // The plugin returns the category list it computed; the host performs the writes.
+    host_results: ["category_changes"],
   };
 }
 

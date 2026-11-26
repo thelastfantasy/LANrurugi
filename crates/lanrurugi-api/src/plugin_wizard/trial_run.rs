@@ -807,6 +807,9 @@ mod tests {
             domain_match: vec![],
             generated_by_wizard: false,
             sidecar_files: vec![],
+            host_arguments: vec![],
+            host_results: vec![],
+            run_order: 0,
             data_version: 1,
             capabilities: vec![],
         };
