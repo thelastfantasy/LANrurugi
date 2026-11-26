@@ -1151,5 +1151,7 @@
   "settings.resources.cpuHint": "Trung bình giữa hai lần thu thập gần nhất; khi mở trang là một giây.",
   "settings.resources.ioProcess": "Đọc/ghi của tiến trình",
   "settings.resources.ioProcessHint": "I/O khối do tiến trình này thực hiện, từ /proc/<pid>/io.",
-  "settings.resources.ioUnavailable": "Container này không có bộ điều khiển I/O nên không có chi tiết theo thiết bị."
+  "settings.resources.ioUnavailable": "Container này không có bộ điều khiển I/O nên không có chi tiết theo thiết bị.",
+  "upload.dropFilesHere": "Thả tệp để thêm",
+  "upload.dropFilesHereHint": "Các tệp được tải lên lần lượt."
 }

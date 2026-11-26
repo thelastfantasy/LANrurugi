@@ -3742,5 +3742,7 @@
   "settings.resources.cpuHint": "Average between the last two collections; with a panel open that is one second.",
   "settings.resources.ioProcess": "Process read / write",
   "settings.resources.ioProcessHint": "Block I/O this process has done, from /proc/<pid>/io.",
-  "settings.resources.ioUnavailable": "This container has no I/O controller, so there is no per-device breakdown."
+  "settings.resources.ioUnavailable": "This container has no I/O controller, so there is no per-device breakdown.",
+  "upload.dropFilesHere": "Drop files to add them",
+  "upload.dropFilesHereHint": "They upload one after another."
 }

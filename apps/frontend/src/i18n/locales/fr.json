@@ -1196,5 +1196,7 @@
   "settings.resources.cpuHint": "Moyenne entre les deux dernières collectes ; page ouverte, cela fait une seconde.",
   "settings.resources.ioProcess": "Lecture/écriture du processus",
   "settings.resources.ioProcessHint": "E/S bloc effectuées par ce processus, d'après /proc/<pid>/io.",
-  "settings.resources.ioUnavailable": "Ce conteneur n'a pas de contrôleur d'E/S, donc pas de détail par périphérique."
+  "settings.resources.ioUnavailable": "Ce conteneur n'a pas de contrôleur d'E/S, donc pas de détail par périphérique.",
+  "upload.dropFilesHere": "Déposez les fichiers pour les ajouter",
+  "upload.dropFilesHereHint": "Ils sont envoyés l'un après l'autre."
 }

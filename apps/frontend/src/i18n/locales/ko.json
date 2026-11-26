@@ -1281,5 +1281,7 @@
   "settings.resources.cpuHint": "마지막 두 번의 수집 사이 평균입니다. 페이지가 열려 있으면 1초입니다.",
   "settings.resources.ioProcess": "이 프로세스 읽기/쓰기",
   "settings.resources.ioProcessHint": "이 프로세스가 수행한 블록 I/O 입니다(/proc/<pid>/io).",
-  "settings.resources.ioUnavailable": "이 컨테이너에는 I/O 컨트롤러가 없어 장치별 내역이 없습니다."
+  "settings.resources.ioUnavailable": "이 컨테이너에는 I/O 컨트롤러가 없어 장치별 내역이 없습니다.",
+  "upload.dropFilesHere": "파일을 놓아 추가",
+  "upload.dropFilesHereHint": "파일은 차례로 업로드됩니다."
 }

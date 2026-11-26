@@ -3742,5 +3742,7 @@
   "settings.resources.cpuHint": "直近 2 回のサンプリング間の平均です。ページを開いている間は 1 秒です。",
   "settings.resources.ioProcess": "このプロセスの読み書き",
   "settings.resources.ioProcessHint": "このプロセスが行ったブロック I/O です（/proc/<pid>/io）。",
-  "settings.resources.ioUnavailable": "このコンテナには I/O コントローラがないため、デバイス別の内訳はありません。"
+  "settings.resources.ioUnavailable": "このコンテナには I/O コントローラがないため、デバイス別の内訳はありません。",
+  "upload.dropFilesHere": "ドロップしてファイルを追加",
+  "upload.dropFilesHereHint": "複数ファイルは順番にアップロードします。"
 }

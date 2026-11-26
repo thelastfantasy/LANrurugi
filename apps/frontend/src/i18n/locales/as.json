@@ -712,5 +712,7 @@
   "settings.resources.cpuHint": "শেষ দুটা সংগ্ৰহৰ মাজৰ গড়; পৃষ্ঠা খোলা থাকিলে এয়া এক ছেকেণ্ড।",
   "settings.resources.ioProcess": "প্ৰচেছৰ পঢ়া/লিখা",
   "settings.resources.ioProcessHint": "এই প্ৰচেছে কৰা ব্লক I/O, /proc/<pid>/io ৰ পৰা।",
-  "settings.resources.ioUnavailable": "এই কণ্টেইনাত I/O নিয়ন্ত্ৰক নাই, সেয়ে ডিভাইচ অনুসৰি বিৱৰণ নাই।"
+  "settings.resources.ioUnavailable": "এই কণ্টেইনাত I/O নিয়ন্ত্ৰক নাই, সেয়ে ডিভাইচ অনুসৰি বিৱৰণ নাই।",
+  "upload.dropFilesHere": "ফাইল এৰি যোগ কৰক",
+  "upload.dropFilesHereHint": "পৰৱৰ্তীভাৱে আপল'ড হব।"
 }

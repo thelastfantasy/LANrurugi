@@ -22,6 +22,7 @@ import { toast } from "@/toast"
 import { DownloadQueuePanel } from "./DownloadQueuePanel"
 import { findMatchingPlugin, findPluginByDomain } from "./shared"
 import { SubscriptionStatus } from "./SubscriptionStatus"
+import { useFileDrop } from "./useFileDrop"
 
 /** Splits pasted text into one URL per line (comma- or whitespace-separated if it has no newlines)
  * and ends it with a newline, so the next paste starts on its own line. */
@@ -134,6 +135,14 @@ export function Upload() {
       if (fileInputRef.current) fileInputRef.current.value = ""
     }
   }
+
+  /** Files dropped anywhere on the page: uploaded one at a time, in the order they were dropped —
+   *  the transfer reports through a single progress bar, so running them together would interleave
+   *  two files' byte counts. */
+  async function uploadDropped(files: File[]) {
+    for (const file of files) await handleUpload(file)
+  }
+  const dragging = useFileDrop((files) => void uploadDropped(files))
 
   const addToQueue = useAddToQueue()
 
@@ -388,6 +397,17 @@ export function Upload() {
 
   return (
     <div className="ido" style={{ textAlign: "center", fontSize: FONT_SIZE_XS }}>
+      {/* Purely an indicator: `pointer-events: none` keeps the overlay from swallowing the drop it
+          is announcing, which window's own `drop` handler then reads. */}
+      {dragging && (
+        <div className="drop-overlay" aria-hidden="true">
+          <div className="drop-overlay-box">
+            <i className="fas fa-file-arrow-up" aria-hidden="true" />
+            <div>{t("upload.dropFilesHere")}</div>
+            <div className="drop-overlay-hint">{t("upload.dropFilesHereHint")}</div>
+          </div>
+        </div>
+      )}
       <h1 className="ih" style={{ textAlign: "center" }}>
         {t("upload.addingArchivesToTheLibrary")}
       </h1>

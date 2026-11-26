@@ -1201,5 +1201,7 @@
   "settings.resources.cpuHint": "Rata-rata antara dua pengambilan terakhir; saat halaman terbuka, itu satu detik.",
   "settings.resources.ioProcess": "Baca/tulis proses",
   "settings.resources.ioProcessHint": "I/O blok yang dilakukan proses ini, dari /proc/<pid>/io.",
-  "settings.resources.ioUnavailable": "Kontainer ini tidak punya pengendali I/O, jadi tidak ada rincian per perangkat."
+  "settings.resources.ioUnavailable": "Kontainer ini tidak punya pengendali I/O, jadi tidak ada rincian per perangkat.",
+  "upload.dropFilesHere": "Lepaskan berkas untuk menambahkannya",
+  "upload.dropFilesHereHint": "Berkas diunggah satu per satu."
 }

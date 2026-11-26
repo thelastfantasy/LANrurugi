@@ -1144,5 +1144,7 @@
   "settings.resources.cpuHint": "Gjennomsnitt mellom de to siste innsamlingene; med siden åpen er det ett sekund.",
   "settings.resources.ioProcess": "Lesing/skriving for prosessen",
   "settings.resources.ioProcessHint": "Blokk-I/O utført av denne prosessen, fra /proc/<pid>/io.",
-  "settings.resources.ioUnavailable": "Denne containeren har ingen I/O-kontroller, derfor ingen fordeling per enhet."
+  "settings.resources.ioUnavailable": "Denne containeren har ingen I/O-kontroller, derfor ingen fordeling per enhet.",
+  "upload.dropFilesHere": "Slipp filer for å legge dem til",
+  "upload.dropFilesHereHint": "De lastes opp én etter én."
 }

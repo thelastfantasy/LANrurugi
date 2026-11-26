@@ -1708,5 +1708,7 @@
   "settings.resources.cpuHint": "最近兩次取樣之間的平均值；頁面打開時就是 1 秒。",
   "settings.resources.ioProcess": "本行程讀寫",
   "settings.resources.ioProcessHint": "本行程累計的區塊裝置讀寫，來自 /proc/<pid>/io。",
-  "settings.resources.ioUnavailable": "此容器沒有 I/O 控制器，因此沒有依裝置拆分的明細。"
+  "settings.resources.ioUnavailable": "此容器沒有 I/O 控制器，因此沒有依裝置拆分的明細。",
+  "upload.dropFilesHere": "放開即可加入檔案",
+  "upload.dropFilesHereHint": "多個檔案會依序上傳。"
 }

@@ -1133,5 +1133,7 @@
   "settings.resources.cpuHint": "Promedio entre las dos últimas capturas; con la página abierta es un segundo.",
   "settings.resources.ioProcess": "Lectura/escritura del proceso",
   "settings.resources.ioProcessHint": "E/S de bloque de este proceso, desde /proc/<pid>/io.",
-  "settings.resources.ioUnavailable": "Este contenedor no tiene controlador de E/S, así que no hay desglose por dispositivo."
+  "settings.resources.ioUnavailable": "Este contenedor no tiene controlador de E/S, así que no hay desglose por dispositivo.",
+  "upload.dropFilesHere": "Suelta los archivos para añadirlos",
+  "upload.dropFilesHereHint": "Se suben uno tras otro."
 }

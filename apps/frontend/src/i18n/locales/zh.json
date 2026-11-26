@@ -3742,5 +3742,7 @@
   "settings.resources.cpuHint": "最近两次采样之间的平均值；页面打开时就是 1 秒。",
   "settings.resources.ioProcess": "本进程读写",
   "settings.resources.ioProcessHint": "本进程累计的块设备读写，来自 /proc/<pid>/io。",
-  "settings.resources.ioUnavailable": "此容器没有 I/O 控制器，所以没有按设备拆分的明细。"
+  "settings.resources.ioUnavailable": "此容器没有 I/O 控制器，所以没有按设备拆分的明细。",
+  "upload.dropFilesHere": "松开即可添加文件",
+  "upload.dropFilesHereHint": "多个文件会依次上传。"
 }

@@ -1186,5 +1186,7 @@
   "settings.resources.cpuHint": "Mittelwert zwischen den letzten beiden Erfassungen; bei geöffneter Seite ist das eine Sekunde.",
   "settings.resources.ioProcess": "Lesen/Schreiben dieses Prozesses",
   "settings.resources.ioProcessHint": "Block-I/O dieses Prozesses aus /proc/<pid>/io.",
-  "settings.resources.ioUnavailable": "Dieser Container hat keinen I/O-Controller, daher keine Aufschlüsselung pro Gerät."
+  "settings.resources.ioUnavailable": "Dieser Container hat keinen I/O-Controller, daher keine Aufschlüsselung pro Gerät.",
+  "upload.dropFilesHere": "Dateien zum Hinzufügen ablegen",
+  "upload.dropFilesHereHint": "Sie werden nacheinander hochgeladen."
 }

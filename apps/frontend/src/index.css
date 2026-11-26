@@ -5629,3 +5629,46 @@ div.gt.gt-single > span {
     font-size: 0.95rem;
   }
 }
+
+/* The upload page's drop target. Same visual language as `.shortcut-sheet-shade` above — a dark
+ * scrim with a light panel — rather than a per-theme colour: the sheet is already theme-independent,
+ * and a wash mixed from `currentColor` let the queue rows behind it show through the label. */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 8999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* An indicator only: the drop must reach the window handler underneath. */
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.55);
+  /* The whole viewport is the target, so the frame sits at the screen edge, not around the panel. */
+  outline: 3px dashed rgba(255, 255, 255, 0.7);
+  outline-offset: -8px;
+}
+
+.drop-overlay-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 22px 32px;
+  border: 3px dashed rgba(255, 255, 255, 0.7);
+  border-radius: 12px;
+  background: rgba(28, 28, 28, 0.92);
+  color: #f2f2f2;
+  font-size: 1.1rem;
+  font-weight: bold;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+}
+
+.drop-overlay-box i {
+  font-size: 2.5rem;
+}
+
+.drop-overlay-hint {
+  font-size: 0.85rem;
+  font-weight: normal;
+  opacity: 0.75;
+}

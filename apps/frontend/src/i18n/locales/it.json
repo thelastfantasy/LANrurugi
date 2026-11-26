@@ -892,5 +892,7 @@
   "settings.resources.cpuHint": "Media tra le ultime due letture; con la pagina aperta è un secondo.",
   "settings.resources.ioProcess": "Lettura/scrittura del processo",
   "settings.resources.ioProcessHint": "I/O a blocchi di questo processo, da /proc/<pid>/io.",
-  "settings.resources.ioUnavailable": "Questo container non ha un controller I/O, quindi nessun dettaglio per dispositivo."
+  "settings.resources.ioUnavailable": "Questo container non ha un controller I/O, quindi nessun dettaglio per dispositivo.",
+  "upload.dropFilesHere": "Rilascia i file per aggiungerli",
+  "upload.dropFilesHereHint": "Vengono caricati uno dopo l'altro."
 }
