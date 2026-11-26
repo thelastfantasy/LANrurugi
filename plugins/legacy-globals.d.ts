@@ -405,14 +405,10 @@ interface ScriptArchiveTags {
  * archives} rather than reaching for storage itself; a script that needs to *write* tags returns
  * its intended changes in `ScriptResult.updates` (`plugin-sdk.ts`) instead of writing them
  * directly — the host applies them after the call returns (same shape both ways, so a plugin's
- * own transform logic is the only real content). `urlfinder`'s one host-computed lookup
- * (`Model::Stats::is_url_recorded`, a `LRR_URLMAP` hash read this repo doesn't maintain — resolved
- * host-side as a full tag-scan instead, mirroring `GET /database/stats`'s own same simplification)
- * is exposed as {@linkcode existing_archive_id}. */
+ * own transform logic is the only real content). */
 interface ScriptHostArgs {
   /** The single free-text "run once" value — same meaning as {@linkcode MetadataHostArgs.arg},
-   * named to match legacy's own `$lrr_info->{oneshot_param}` field exactly (`SourceFinder.pm`'s
-   * only real input). */
+   * named to match legacy's own `$lrr_info->{oneshot_param}` field exactly. */
   oneshot_param?: string;
   /** This plugin's own persisted per-parameter values — same meaning as {@linkcode
    * MetadataHostArgs.customargs}. */
@@ -425,10 +421,6 @@ interface ScriptHostArgs {
    * per-archive equivalent through the same mechanism {@linkcode MetadataHostArgs.other_archive_tags}
    * uses, if a future need arises). */
   archives?: ScriptArchiveTags[];
-  /** Host-resolved archive ID whose `source:` tag matches {@linkcode oneshot_param} (after
-   * trimming and the E-Hentai/ExHentai domain-alias special case) — present (possibly `null`) only
-   * for `script/urlfinder`, `undefined` for every other script plugin. */
-  existing_archive_id?: string | null;
   /** The library's real archive-directory root, absolute path — present only for
    * `script/foldertocat`, which (unlike every other plugin in this corpus) needs genuine, broad
    * filesystem read access to walk the whole content tree itself via `Deno.readDir`

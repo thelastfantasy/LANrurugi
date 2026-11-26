@@ -367,7 +367,6 @@
   "Sleeping for \\${x} seconds.": "Dormindo por ${x} segundos.",
   "library.sortOrder": "Ordem de Ordenação",
   "library.sortBy": "Ordenar por:",
-  "Source Finder": "Source Finder",
   "settings.splitRulesWithLinebreaks": "Dividir as regras com a quebras de linha.",
   "Start All": "Start All",
   "Start Selected ({{n}})": "Start Selected ({{n}})",

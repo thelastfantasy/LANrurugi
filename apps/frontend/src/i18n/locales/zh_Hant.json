@@ -534,7 +534,6 @@
   "Some external services may temporarily ban your machine for excessive loads if you call a plugin too many times!": "如果頻繁呼叫外掛，部分外部服務可能會因負載過高暫時封鎖您的裝置！",
   "library.sortOrder": "排序順序",
   "library.sortBy": "排序方式：",
-  "Source Finder": "來源查找器",
   "settings.splitRulesWithLinebreaks": "用換行符號分隔多條規則。",
   "Start All": "Start All",
   "Start Selected ({{n}})": "Start Selected ({{n}})",

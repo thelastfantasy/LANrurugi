@@ -376,7 +376,6 @@
   "Sleeping for \\${x} seconds.": "Esperando por ${x} segundos.",
   "library.sortOrder": "Orden de clasificación",
   "library.sortBy": "Ordenar por:",
-  "Source Finder": "Source Finder",
   "settings.splitRulesWithLinebreaks": "Separa las reglas con saltos de línea.",
   "Start All": "Start All",
   "Start Selected ({{n}})": "Start Selected ({{n}})",

@@ -387,7 +387,6 @@
   "Sleeping for \\${x} seconds.": "Ngủ trong ${x} giây.",
   "library.sortOrder": "Thứ tự sắp xếp",
   "library.sortBy": "Sắp xếp theo:",
-  "Source Finder": "Source Finder",
   "settings.splitRulesWithLinebreaks": "Tách các quy tắc bằng dòng mới.",
   "Start All": "Start All",
   "Start Selected ({{n}})": "Start Selected ({{n}})",

@@ -2,11 +2,11 @@
 //! `Plugin/Scripts/FolderToCat.pm` ("Subfolders to Categories") stays a native endpoint here: it
 //! walks the entire archive directory tree (`std::fs::read_dir` recursion), which is I/O-heavy
 //! enough to be worth keeping in Rust rather than round-tripping every path through a Deno
-//! subprocess. `SourceFinder.pm`/`nHentaiSourceConverter.pm` are real `script`-type plugins now
-//! (`plugins/script/{sourcefinder,nhentaisourceconverter}.ts`, run through the same `/plugins/use`
-//! machinery every other plugin uses) — see `lanrurugi-api::plugins`'s own `existing_archive_id`/
-//! `archives` host-side injection for why those two didn't need to stay native despite also
-//! touching every archive's tags.
+//! subprocess. `nHentaiSourceConverter.pm` is a real `script`-type plugin now
+//! (`plugins/script/nhentaisourceconverter.ts`, run through the same `/plugins/use` machinery every
+//! other plugin uses) — see `lanrurugi-api::plugins`'s own `archives` host-side injection for why it
+//! didn't need to stay native despite touching every archive's tags. Legacy's `SourceFinder.pm` has
+//! no replacement: the library search's `source:"<url>"` query answers the same question better.
 //!
 //! This module also hosts the new native **Subfolders to Tankoubons** maintenance endpoint, the
 //! direct “make a single-volume/Tankoubon from each directory” counterpart to FolderToCat.

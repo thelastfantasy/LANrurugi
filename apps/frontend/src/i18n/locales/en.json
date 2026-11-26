@@ -988,7 +988,6 @@
   "Some external services may temporarily ban your machine for excessive loads if you call a plugin too many times!": "Some external services may temporarily ban your machine for excessive loads if you call a plugin too many times!",
   "library.sortOrder": "Sort Order",
   "library.sortBy": "Sort by:",
-  "Source Finder": "Source Finder",
   "upload.sourceArchivePageNWhere": "Source archive page {{n}}: {{where}}",
   "Source page {{n}} → {{where}}": "Source page {{n}} → {{where}}",
   "upload.sourcePagesDashedExtra": "Source pages (dashed = extra, drag onto the row below)",

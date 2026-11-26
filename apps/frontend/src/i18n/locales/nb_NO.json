@@ -382,7 +382,6 @@
   "Sleeping for \\${x} seconds.": "Sover i ${x} sekunder.",
   "library.sortOrder": "Sorter Rekkefølge",
   "library.sortBy": "Sorter etter:",
-  "Source Finder": "Source Finder",
   "settings.splitRulesWithLinebreaks": "Del reglene med linjeskift.",
   "Start All": "Start All",
   "Start Selected ({{n}})": "Start Selected ({{n}})",

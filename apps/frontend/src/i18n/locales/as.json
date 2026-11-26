@@ -42,7 +42,6 @@
   "plugins.scanYourContentFolderAnd": "Scan your Content Folder and automatically create Static Categories for each subfolder.",
   "plugins.scanYourContentFolderToTankoubons": "Scan your Content Folder and automatically create a Tankoubon for each first-level subfolder, including archive files in deeper nested subfolders.",
   "plugins.subfoldersToTankoubons": "Subfolders to Tankoubons",
-  "Source Finder": "Source Finder",
   "Start All": "Start All",
   "Start Selected ({{n}})": "Start Selected ({{n}})",
   "upload.starting": "Starting…",

@@ -1379,10 +1379,9 @@ async fn get_other_archive_tags(state: &AppState, plugin: &str, arg: Option<&str
     }
 }
 
-/// Normalizes a URL the same way both `plugins/script/sourcefinder.ts` (via
-/// `get_existing_archive_id_for_url` below) and legacy's `SourceFinder.pm::run_script` do before
-/// comparing it against a stored `source:` tag — strips scheme, `www.`, any query string, and a
-/// trailing slash.
+/// Normalizes a URL before comparing it against a stored `source:` tag — strips scheme, `www.`,
+/// any query string, and a trailing slash. Also the fallback when a plugin has no
+/// `canonicalizeSource` export of its own.
 pub(crate) fn trim_url(url: &str) -> String {
     let url = url.trim();
     let without_scheme = url
@@ -1394,74 +1393,6 @@ pub(crate) fn trim_url(url: &str) -> String {
         .unwrap_or(without_scheme);
     let without_query = without_www.split('?').next().unwrap_or(without_www);
     without_query.trim_end_matches('/').to_string()
-}
-
-/// `plugins/script/sourcefinder.ts`'s one real need: the ID of whichever archive (if any) has a
-/// `source:` tag matching `url` — resolved host-side the same way `get_other_archive_tags` resolves
-/// `copyarchivetags`' need, since a Deno-sandboxed plugin has no direct storage access. Legacy
-/// maintains a dedicated `LRR_URLMAP` index for this; this scans every archive's tags on demand
-/// instead (same simplification already used by `GET /database/stats` — correct, just not
-/// index-accelerated, acceptable at personal-library scale).
-///
-/// Domain aliases (E-Hentai/ExHentai and friends) come from whichever installed plugin claims this
-/// URL, via its own `canonicalizeSource` — issue #107 replaced the hardcoded two-branch alias
-/// special case that used to live here. `sourcefinder` itself is a script plugin with no such
-/// export; the knowledge belongs to the plugin that owns the domain, not to this call site.
-async fn get_existing_archive_id_for_url(
-    state: &AppState,
-    plugin: &str,
-    url: Option<&str>,
-) -> Value {
-    if plugin != "script/sourcefinder" {
-        return Value::Null;
-    }
-    let Some(url) = url else {
-        return Value::Null;
-    };
-    if trim_url(url).is_empty() {
-        return Value::Null;
-    }
-
-    let Ok(archives) = state.repos.archives.list_all().await else {
-        return Value::Null;
-    };
-
-    // Whichever plugin claims this URL supplies the domain-alias knowledge; absent one, the
-    // generic trim applies to both sides, which is what a site without aliases needs anyway.
-    let owning_plugin = {
-        let namespaces = discover_namespaces(&state.plugins_dir).await;
-        find_matching_plugin(state, &namespaces, url)
-            .await
-            .map(|(ns, _)| ns)
-    };
-
-    // One batch: this URL first, then every stored `source:` tag, so a plugin round-trip happens
-    // once rather than once per archive.
-    let mut raw = vec![url.to_string()];
-    let mut owners: Vec<&lanrurugi_core::ids::ArchiveId> = Vec::new();
-    for archive in &archives {
-        for tag in archive.tags.split(',') {
-            if let Some(source) = tag.trim().strip_prefix("source:") {
-                raw.push(source.to_string());
-                owners.push(&archive.id);
-            }
-        }
-    }
-
-    let canonical = match &owning_plugin {
-        Some(ns) => canonicalize_sources_for(state, ns, raw).await,
-        None => raw.iter().map(|u| trim_url(u)).collect(),
-    };
-    let mut canonical = canonical.into_iter();
-    let Some(needle) = canonical.next() else {
-        return Value::Null;
-    };
-    for (archive_id, source) in owners.into_iter().zip(canonical) {
-        if source == needle {
-            return json!(archive_id);
-        }
-    }
-    Value::Null
 }
 
 /// `plugins/script/nhentaisourceconverter.ts`'s one real need: every archive's `id`/`tags`, so it
@@ -1955,8 +1886,6 @@ async fn use_plugin_sync(
 
     let customargs = get_plugin_customargs(&state, &plugin, &info.parameters).await;
     let other_archive_tags = get_other_archive_tags(&state, &plugin, params.arg.as_deref()).await;
-    let existing_archive_id =
-        get_existing_archive_id_for_url(&state, &plugin, params.arg.as_deref()).await;
     let archives_for_script = get_all_archive_tags_for_script(&state, &plugin).await;
     let (library_path, archive_id_by_path) = get_foldertocat_args(&state, &plugin).await;
     let args = json!({
@@ -1968,7 +1897,6 @@ async fn use_plugin_sync(
         "file_modified_time": file_modified_time,
         "settings": get_plugin_relevant_settings(&state).await,
         "other_archive_tags": other_archive_tags,
-        "existing_archive_id": existing_archive_id,
         "archives": archives_for_script,
         "library_path": library_path,
         "archive_id_by_path": archive_id_by_path,
@@ -2094,8 +2022,6 @@ async fn use_plugin_async(
         };
         let method = plugin_method(&info.kind);
         let customargs = get_plugin_customargs(&state_for_task, &plugin, &info.parameters).await;
-        let existing_archive_id =
-            get_existing_archive_id_for_url(&state_for_task, &plugin, arg.as_deref()).await;
         let archives_for_script = get_all_archive_tags_for_script(&state_for_task, &plugin).await;
         let (library_path, archive_id_by_path) =
             get_foldertocat_args(&state_for_task, &plugin).await;
@@ -2105,7 +2031,6 @@ async fn use_plugin_async(
             "oneshot_param": arg,
             "customargs": customargs,
             "file_path": file_path,
-            "existing_archive_id": existing_archive_id,
             "archives": archives_for_script,
             "library_path": library_path,
             "archive_id_by_path": archive_id_by_path,

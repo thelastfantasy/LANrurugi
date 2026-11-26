@@ -1039,7 +1039,6 @@
   "Some external services may temporarily ban your machine for excessive loads if you call a plugin too many times!": "如果您多次调用插件，一些外部服务可能会因过载而暂时禁止您的机器！",
   "library.sortOrder": "排序顺序",
   "library.sortBy": "排序方式：",
-  "Source Finder": "来源查找器",
   "upload.sourceArchivePageNWhere": "源档案第 {{n}} 页：{{where}}",
   "Source page {{n}} → {{where}}": "源页面第 {{n}} 页 → {{where}}",
   "upload.sourcePagesDashedExtra": "源页面（虚线边框 = 多出的页面，拖到下方一行）",

@@ -546,7 +546,6 @@
   "Sleeping for \\${x} seconds.": "${x} 秒待機します。",
   "library.sortOrder": "並び順",
   "library.sortBy": "並び替え :",
-  "Source Finder": "ソースファインダー",
   "settings.splitRulesWithLinebreaks": "ルールは改行で区切ってください。",
   "Stamp name": "スタンプ名",
   "Start All": "すべて開始",

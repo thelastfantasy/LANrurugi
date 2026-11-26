@@ -191,8 +191,7 @@ impl ArchiveRepository {
     /// The subscription history asks this to answer "did this work arrive?" for rows the download
     /// queue can no longer speak for — its finished rows are swept after
     /// `download_queue_retention_days`, and a deleted row leaves nothing behind at all. There is no
-    /// source index (legacy's `LRR_URLMAP` has no equivalent here), so this is a scan, the same
-    /// trade-off `plugins::get_existing_archive_id_for_url` already makes.
+    /// source index (legacy's `LRR_URLMAP` has no equivalent here), so this is a scan.
     ///
     /// Each entry also carries the archive's own `date_added:`, read from the same `tags` string the
     /// scan already has in hand: it is when the work entered the library, which is the time a

@@ -485,7 +485,6 @@
   "Some external services may temporarily ban your machine for excessive loads if you call a plugin too many times!": "너무 많은 플러그인을 호출하면 외부 서비스가 임시적으로 당신의 요청을 차단할 ",
   "library.sortOrder": "정렬 순서",
   "library.sortBy": "정렬 기준:",
-  "Source Finder": "Source Finder",
   "settings.splitRulesWithLinebreaks": "줄바꿈으로 규칙을 분리합니다.",
   "Stamp name": "스탬프 이름",
   "Start All": "Start All",

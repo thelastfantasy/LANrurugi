@@ -92,6 +92,11 @@
  *
  * ## Versions
  *
+ * - **2.0.0** — `ScriptHostArgs.existing_archive_id` and `ScriptResult.total`/`id` are gone with
+ *   the Source Finder script plugin: it only answered
+ *   "does some archive already carry this URL as its `source:` tag", which the library search
+ *   covers (`source:"<url>"` lists every match) without a library-wide tag scan on every call. A
+ *   third-party script plugin that read those fields now sees `undefined`.
  * - **1.2.0** — {@linkcode PluginSkipException}: a metadata plugin can say an archive is not from its
  *   site, which the host counts as declined rather than failed (no warning, no diagnostics event).
  * - **1.1.0** — {@linkcode MetadataResult.primary_source}: a metadata plugin can name the one source
@@ -103,7 +108,7 @@
 
 /** This SDK's version ({@link https://semver.org semver}): a minor step adds optional fields a plugin
  * may use, a major step changes what an existing plugin has to do. See the module docs' changelog. */
-export const SDK_VERSION = "1.2.0";
+export const SDK_VERSION = "2.0.0";
 
 /** The four plugin categories the host recognizes (`lanrurugi-api::plugins::PLUGIN_CATEGORIES`) —
  * also the fixed set of subdirectories under `plugins/` (`metadata/`, `login/`, `download/`,
@@ -332,15 +337,9 @@ export interface LoginResult {
 }
 
 /** `runScript`'s return shape — deliberately a loose bag of fields (mirrors legacy's own
- * `run_script` subs, each of which returns a different ad-hoc hash with no shared shape across the
- * three real Scripts plugins) rather than one rigid interface every script must conform to.
- * `total`/`id`/`error` are `SourceFinder.pm`'s own fields; `modified`/`updates` are
- * `nHentaiSourceConverter.pm`'s. */
+ * `run_script` subs, each of which returns a different ad-hoc hash with no shared shape between
+ * them) rather than one rigid interface every script must conform to. */
 export interface ScriptResult {
-  /** `1` if a match was found, `0` otherwise (`urlfinder`). */
-  total?: number;
-  /** The matching archive's ID, when {@linkcode total} is `1` (`urlfinder`). */
-  id?: string;
   error?: PluginError;
   /** Count of archives this call changed (`nhsrcconv`). */
   modified?: number;
@@ -699,8 +698,7 @@ export const DEFAULT_RELATIVE_OLDER_POLICY: RelativeOlderPolicy = "warn_then_con
  * canonical form the host should use for matching against stored `source:` tags — e.g. e-hentai
  * folding `exhentai.org`/`g.e-hentai.org`/`forums.e-hentai.org` all down to a single
  * `e-hentai.org/g/{gid}/{token}` form. The host calls this before every `source:` tag comparison
- * (both for {@linkcode DownloadResult.version_history} matching and for
- * `plugins/script/sourcefinder.ts`'s existing lookup) instead of maintaining its own per-site
+ * (for {@linkcode DownloadResult.version_history} matching) instead of maintaining its own per-site
  * domain-alias table, so this plugin's own domain-alias knowledge lives in the one place that
  * actually has it.
  *
