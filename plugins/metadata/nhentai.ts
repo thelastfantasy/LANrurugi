@@ -17,7 +17,9 @@ export function pluginInfo() {
   return {
     namespace: "nhplugin",
     type: "metadata" as const,
-    url_pattern: "nhentai\\.net",
+    // Anchored to the host: a bare `nhentai\.net` also matches a link that merely mentions
+    // the site (`https://example.com/?u=nhentai.net`) or a look-alike domain.
+    url_pattern: "^https?://(?:[\\w-]+\\.)*nhentai\\.net(?:/|$)",
     domain_match: ["nhentai.net"],
     parameters: [
       { name: "param1", description: "Fetch date uploaded and set timestamp tag", required: false, type: "bool" },
@@ -68,13 +70,25 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   if ((match = (lrr_info["arg"] ?? "").match(/.*\/g\/([0-9]+).*/))) {
     galleryID = match[1];
     logger.debug(`Skipping search and using gallery ${galleryID} from oneshot args`);
-  } else if ((match = lrr_info["existing_tags"].match(/.*source:\s*(?:https?:\/\/)?nhentai\.net\/g\/([0-9]*).*/gi))) {
+  } else if (
+    // No `/g` here: with the global flag `.match()` returns whole-match strings and `match[1]` is
+    // `undefined`, so the source tag was found and then silently dropped — the archive was told
+    // "No matching nHentai Gallery Found!" while its own tags named the gallery.
+    (match = (lrr_info["existing_tags"] ?? "").match(
+      /source:\s*(?:https?:\/\/)?nhentai\.net\/g\/([0-9]+)/i,
+    ))
+  ) {
     galleryID = match[1];
     logger.debug(`Skipping search and using gallery ${galleryID} from source tag`);
   } else {
-    logger.debug("Searching gallery by title (filename)");
-    let file_path = legacyCompat.redis_decode(lrr_info["file_path"]);
-    galleryID = await get_gallery_id_from_title(file_path, ua);
+    // No oneshot argument and no source tag: search on the archive's own name. The stored title
+    // comes first because a hash-layout library keeps the readable name in the record, not in the
+    // file name — `/content/ab/<id>.zip` parses to nothing searchable.
+    for (let candidate of search_candidates(lrr_info)) {
+      logger.debug(`Searching gallery by title: ${candidate}`);
+      galleryID = await search_gallery_id(candidate, ua);
+      if (galleryID) break;
+    }
   }
   if (! galleryID) {
     let message = "No matching nHentai Gallery Found!";
@@ -102,15 +116,30 @@ async function get_search_json(...args: any[]) {
   return res.json;
 }
 
-async function get_gallery_id_from_title(...args: any[]) {
-  let match: RegExpMatchArray | null;
-  let [file, ua] = args.slice(0);
-  let [title, filepath, suffix] = legacyCompat.fileparse(file);
-  let logger = legacyCompat.getLogger("nHentai", "plugins");
-  if ((match = title.match(/\{(\d*)\}.*$/gm))) {
-    logger.debug(`Got ${1} from file.`);
-    return match[1];
-  }
+/// Every name worth searching on, most trustworthy first: the archive's stored title, then what
+/// the file name says, then the title with its `[artist (circle)]` prefix removed (nhentai's search
+/// treats the bracketed prefix as noise, so a full name sometimes finds nothing while the bare one
+/// lands).
+function search_candidates(info: Record<string, any>): string[] {
+  let out: string[] = [];
+  let push = (value: unknown) => {
+    let text = typeof value === "string" ? value.trim() : "";
+    // A hash-shaped name (the library's fallback title) matches nothing; searching it wastes a call.
+    if (text === "" || /^[0-9a-f]{40}$/i.test(text)) return;
+    if (!out.includes(text)) out.push(text);
+  };
+  push(info["archive_title"]);
+  let [stem] = legacyCompat.fileparse(legacyCompat.redis_decode(info["file_path"] ?? ""));
+  let fromStem = (stem ?? "").match(/\{(\d*)\}.*$/m);
+  if (fromStem) push(fromStem[1]);
+  push(stem);
+  let bare = (info["archive_title"] ?? "").replace(/^\s*\[[^\]]*\]\s*/, "");
+  push(bare);
+  return out;
+}
+
+async function search_gallery_id(...args: any[]) {
+  let [title, ua] = args.slice(0);
   let json = await get_search_json(title, ua);
   let results = json["result"];
   if (results.length > 0) {
@@ -153,7 +182,9 @@ function get_title_from_json(...args: any[]) {
   let [json, prefer_japanese] = args.slice(0);
   let title = json["title"];
   if (prefer_japanese && title["japanese"]) return title["japanese"];
-  return title["pretty"];
+  // `pretty` is the API's display-normalised title, which drops the `[artist (circle)]` prefix —
+  // nhentai's own gallery page shows `english`, so using `pretty` here lost that whole prefix.
+  return title["english"] ?? title["pretty"];
 }
 
 function get_upload_from_json(...args: any[]) {
