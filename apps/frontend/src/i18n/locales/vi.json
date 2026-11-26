@@ -1160,5 +1160,6 @@
   "reader.splitStage.ingesting": "Đang thêm vào thư viện",
   "reader.splitStage.finished": "Xong",
   "reader.splitCreatedVolumes": "Đã tạo {{count}} tập",
-  "reader.splitPartialFailure": "Chỉ tạo được {{done}}/{{total}} tập — tệp gốc vẫn được giữ lại."
+  "reader.splitPartialFailure": "Chỉ tạo được {{done}}/{{total}} tập — tệp gốc vẫn được giữ lại.",
+  "reader.tocStart": "Bắt đầu chương này trong mục lục"
 }

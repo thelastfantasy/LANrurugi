@@ -697,6 +697,9 @@ export function useAddTocEntry(id: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["archive", id] })
       queryClient.invalidateQueries({ queryKey: ["archives"] })
+      // A chapter set while reading a tankoubon belongs to the member archive, but the open tank
+      // view renders its merged ToC from /tankoubons/{id}/full.
+      queryClient.invalidateQueries({ queryKey: ["tankoubon-full"] })
     },
   })
 }
@@ -708,6 +711,7 @@ export function useRemoveTocEntry(id: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["archive", id] })
       queryClient.invalidateQueries({ queryKey: ["archives"] })
+      queryClient.invalidateQueries({ queryKey: ["tankoubon-full"] })
     },
   })
 }
@@ -721,6 +725,7 @@ export function useAddTocEntryForId() {
     onSuccess: (_data, { id }) => {
       queryClient.invalidateQueries({ queryKey: ["archive", id] })
       queryClient.invalidateQueries({ queryKey: ["archives"] })
+      queryClient.invalidateQueries({ queryKey: ["tankoubon-full"] })
     },
   })
 }
@@ -733,6 +738,7 @@ export function useRemoveTocEntryForId() {
     onSuccess: (_data, { id }) => {
       queryClient.invalidateQueries({ queryKey: ["archive", id] })
       queryClient.invalidateQueries({ queryKey: ["archives"] })
+      queryClient.invalidateQueries({ queryKey: ["tankoubon-full"] })
     },
   })
 }

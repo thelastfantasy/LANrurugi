@@ -721,5 +721,6 @@
   "reader.splitStage.ingesting": "লাইব্ৰেৰীত যোগ কৰি আছে",
   "reader.splitStage.finished": "সম্পূৰ্ণ",
   "reader.splitCreatedVolumes": "{{count}} খণ্ড সৃষ্টি হ’ল",
-  "reader.splitPartialFailure": "মাত্ৰ {{done}} / {{total}} খণ্ডহে সৃষ্টি হ’ল — মূল আৰ্কাইভ ৰখা হৈছে।"
+  "reader.splitPartialFailure": "মাত্ৰ {{done}} / {{total}} খণ্ডহে সৃষ্টি হ’ল — মূল আৰ্কাইভ ৰখা হৈছে।",
+  "reader.tocStart": "সূচীত এই অধ্যায়ৰ আৰম্ভণি"
 }

@@ -3761,5 +3761,6 @@
   "reader.splitStage.ingesting": "ライブラリに追加中",
   "reader.splitStage.finished": "完了",
   "reader.splitCreatedVolumes": "{{count}} 巻を作成しました",
-  "reader.splitPartialFailure": "{{total}} 巻のうち {{done}} 巻しか作成できませんでした。元のアーカイブは残しています。"
+  "reader.splitPartialFailure": "{{total}} 巻のうち {{done}} 巻しか作成できませんでした。元のアーカイブは残しています。",
+  "reader.tocStart": "目次でこの章の最初のページ"
 }

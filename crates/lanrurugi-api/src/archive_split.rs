@@ -22,6 +22,7 @@ use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
+use lanrurugi_core::entities::TocEntry;
 use lanrurugi_core::ids::ArchiveId;
 use lanrurugi_llm::LlmClient;
 use lanrurugi_scanner::archive_format::{
@@ -883,7 +884,7 @@ async fn emit_progress(
     stage: &str,
     done: Option<usize>,
     total: Option<usize>,
-    memory_kb: Option<u64>,
+    volume: Option<&str>,
 ) {
     if let Some(tx) = state
         .split_progress_tx
@@ -897,8 +898,55 @@ async fn emit_progress(
             "stage": stage,
             "done": done,
             "total": total,
-            "memory_kb": memory_kb,
+            // Which volume the fields above describe — the panel prints it next to the stage so a
+            // five-volume split shows which one is in flight instead of one anonymous percentage.
+            "volume": volume,
+            "memory_kb": current_memory_kb(),
         }));
+    }
+}
+
+/// Drives the bar from work that actually happened, and never lets it walk backwards.
+///
+/// The count it reports is pages written (out of every page the suggestion claims) while the
+/// volumes are being built, then volumes ingested (out of the groups asked for). Reading a group
+/// back out of the source archive is reported under `reading` but keeps the page count, because
+/// that is still the same unit of work in flight.
+struct SplitProgress<'a> {
+    state: &'a AppState,
+    archive_id: &'a ArchiveId,
+    shown: f32,
+}
+
+impl<'a> SplitProgress<'a> {
+    fn new(state: &'a AppState, archive_id: &'a ArchiveId) -> Self {
+        Self {
+            state,
+            archive_id,
+            shown: 0.0,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn emit(
+        &mut self,
+        progress: f32,
+        stage: &str,
+        done: Option<usize>,
+        total: Option<usize>,
+        volume: Option<&str>,
+    ) {
+        self.shown = self.shown.max(progress.clamp(0.0, 1.0));
+        emit_progress(
+            self.state,
+            self.archive_id,
+            self.shown,
+            stage,
+            done,
+            total,
+            volume,
+        )
+        .await;
     }
 }
 
@@ -1014,6 +1062,52 @@ fn stamped_tags(tags: &str, index: usize) -> String {
     out.join(",")
 }
 
+/// The chapters of `toc` that fall inside one volume, renumbered to that volume's own pages.
+fn localise_toc(toc: &[TocEntry], original_to_local: &HashMap<u32, u32>) -> Vec<TocEntry> {
+    let mut entries: Vec<TocEntry> = toc
+        .iter()
+        .filter_map(|entry| {
+            original_to_local.get(&entry.page).map(|local| TocEntry {
+                page: *local,
+                name: entry.name.clone(),
+            })
+        })
+        .collect();
+    entries.sort_by_key(|entry| entry.page);
+    entries
+}
+
+/// Puts a split volume's own name on its record when the pipeline left the id there instead.
+///
+/// `ingest_file_with_policy` applies `title_filename` only when it actually catalogues the file; a
+/// scan that won the race leaves the record with the hash as its title, and `Unchanged` means the
+/// split never gets a second chance. Only a title that is still the record's own id is replaced.
+async fn ensure_readable_title(state: &AppState, id: &ArchiveId, zip_name: &str) {
+    let Some(stem) = Path::new(zip_name)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+    else {
+        return;
+    };
+    let Ok(Some(record)) = state.repos.archives.get(id).await else {
+        return;
+    };
+    if record.title != id.as_str() {
+        return;
+    }
+    let updated = state
+        .repos
+        .archives
+        .update(id, |archive| {
+            archive.title = stem.clone();
+            archive.name = stem.clone();
+        })
+        .await;
+    if let Ok(Some(archive)) = updated {
+        crate::archives::reindex_title_and_tags(state, record, archive).await;
+    }
+}
+
 async fn inherit_metadata_to_split_archives(
     state: &AppState,
     original: &lanrurugi_core::entities::Archive,
@@ -1086,6 +1180,25 @@ async fn inherit_metadata_to_split_archives(
         }
     }
 
+    // Table of contents: a chapter's page belongs to exactly one volume, so it is mapped the same
+    // way as a bookmark. Without this the source's chapters vanished with the source — the volumes
+    // only ever carried their own page ranges, never the names the user gave them.
+    for (new_id, page_map) in page_maps {
+        let mut original_to_local = HashMap::new();
+        for (local, original_page) in page_map {
+            original_to_local.insert(*original_page, *local);
+        }
+        let entries = localise_toc(&original.toc, &original_to_local);
+        if entries.is_empty() {
+            continue;
+        }
+        let _ = state
+            .repos
+            .archives
+            .update(new_id, |archive| archive.toc = entries.clone())
+            .await;
+    }
+
     // Stamps: same mapping.
     let now_millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1140,16 +1253,8 @@ async fn run_split_job(
         .ok()
         .flatten()
         .ok_or_else(|| "Archive not found.".to_string())?;
-    emit_progress(
-        state,
-        archive_id,
-        0.05,
-        "started",
-        None,
-        None,
-        current_memory_kb(),
-    )
-    .await;
+    let mut progress = SplitProgress::new(state, archive_id);
+    progress.emit(0.02, "started", None, None, None).await;
     let original_file_path = PathBuf::from(&archive.file);
     let original_path = resolve_multivolume_path(&original_file_path, &state.library.temp_dir)
         .unwrap_or_else(|| original_file_path.clone());
@@ -1166,18 +1271,8 @@ async fn run_split_job(
         .map(|e| e.name.clone())
         .collect();
     let total_groups = suggestion.split_groups.len().max(1);
-    let mut created_groups = 0usize;
     let mut max_memory_kb = current_memory_kb().unwrap_or(0);
-    emit_progress(
-        state,
-        archive_id,
-        0.3,
-        "reading",
-        None,
-        None,
-        current_memory_kb(),
-    )
-    .await;
+    progress.emit(0.05, "reading", None, None, None).await;
 
     let temp_root = state.library.temp_dir.join(format!(
         "archive-split-{}",
@@ -1207,9 +1302,38 @@ async fn run_split_job(
     // bytes and leaves the first group's placement with nothing to move: reported live
     // 2026-11-26 on a 5-volume RAR (第02巻 and 第05巻 vanished, and the source had already been
     // deleted because nothing counted them as lost).
+    // Resolve every group's name and file set up front. Two things need the complete plan: the
+    // duplicate-name check (a name has to be reserved before the first ZIP is written) and the
+    // progress denominator — the bar counts pages written, so `total_pages` must be known before
+    // the first page, not discovered group by group.
     let mut used_names: HashSet<String> = HashSet::new();
-    for group in &suggestion.split_groups {
-        let zip_name = unique_zip_name(&group.zip_name, &mut used_names);
+    let plan: Vec<(String, Vec<String>)> = suggestion
+        .split_groups
+        .iter()
+        .map(|group| {
+            let zip_name = unique_zip_name(&group.zip_name, &mut used_names);
+            let files: Vec<String> = all_files
+                .iter()
+                .filter(|path| {
+                    group
+                        .source_dirs
+                        .iter()
+                        .any(|d| path.starts_with(&format!("{d}/")) || *path == d)
+                        || group.source_files.iter().any(|f| f == *path)
+                })
+                .cloned()
+                .collect();
+            (zip_name, files)
+        })
+        .collect();
+    let total_pages: usize = plan.iter().map(|(_, files)| files.len()).sum();
+    let mut written_pages = 0usize;
+    // One event per percent of the work, not one per page: 922 events over a local SSE stream is
+    // noise the UI would coalesce anyway, and each one costs a JSON frame.
+    let page_step = (total_pages / 100).max(1);
+
+    for (zip_name, group_files) in &plan {
+        let zip_name = zip_name.clone();
         let target = output_dir.join(&zip_name);
         staged_names.insert(target.clone(), zip_name.clone());
         let mut target_sources: HashMap<String, String> = HashMap::new();
@@ -1219,38 +1343,26 @@ async fn run_split_job(
         let mut writer = zip::ZipWriter::new(std::io::BufWriter::with_capacity(1 << 20, file));
         let mut seen = HashSet::new();
 
-        let group_files: Vec<String> = all_files
-            .iter()
-            .filter(|path| {
-                group
-                    .source_dirs
-                    .iter()
-                    .any(|d| path.starts_with(&format!("{d}/")) || *path == d)
-                    || group.source_files.iter().any(|f| f == *path)
-            })
-            .cloned()
-            .collect();
         if group_files.is_empty() {
             writer.finish().map_err(|e| e.to_string())?;
             created_files.push(target.clone());
-            created_groups += 1;
-            let progress = 0.3 + 0.55 * (created_groups as f32 / total_groups as f32);
-            emit_progress(
-                state,
-                archive_id,
-                progress,
-                "generating",
-                Some(created_groups),
-                Some(total_groups),
-                current_memory_kb(),
-            )
-            .await;
             continue;
         }
 
         // Read one output group's files in a single libarchive pass (5 opens for a 5-volume
-        // archive instead of 922), but keep only that group's bytes in memory at a time.
-        let group_bytes = read_entries(&original_path, &group_files).map_err(|e| e.to_string())?;
+        // archive instead of 922), but keep only that group's bytes in memory at a time. That pass
+        // is the slow part of a volume — report it as its own stage, with the page count unchanged
+        // so the bar holds still instead of jumping ahead while nothing has been written yet.
+        progress
+            .emit(
+                0.08 + 0.72 * written_pages as f32 / total_pages.max(1) as f32,
+                "reading",
+                Some(written_pages),
+                Some(total_pages),
+                Some(&zip_name),
+            )
+            .await;
+        let group_bytes = read_entries(&original_path, group_files).map_err(|e| e.to_string())?;
         let mut bytes_by_path: HashMap<String, Vec<u8>> = HashMap::new();
         for (path, bytes) in group_files.iter().cloned().zip(group_bytes) {
             if let Some(bytes) = bytes {
@@ -1258,7 +1370,7 @@ async fn run_split_job(
             }
         }
 
-        for path in &group_files {
+        for path in group_files {
             let Some(bytes) = bytes_by_path.get(path) else {
                 continue;
             };
@@ -1298,6 +1410,18 @@ async fn run_split_job(
             if let Some(mem_kb) = current_memory_kb() {
                 max_memory_kb = max_memory_kb.max(mem_kb);
             }
+            written_pages += 1;
+            if written_pages.is_multiple_of(page_step) || written_pages == total_pages {
+                progress
+                    .emit(
+                        0.08 + 0.72 * written_pages as f32 / total_pages.max(1) as f32,
+                        "generating",
+                        Some(written_pages),
+                        Some(total_pages),
+                        Some(&zip_name),
+                    )
+                    .await;
+            }
         }
         // Drop the group's byte map before opening the next ZIP writer.
         // `group_bytes` was already consumed into `bytes_by_path`; dropping the map is enough.
@@ -1305,19 +1429,16 @@ async fn run_split_job(
         writer.finish().map_err(|e| e.to_string())?;
         source_by_output.insert(target.clone(), target_sources);
         created_files.push(target.clone());
-        created_groups += 1;
-        let progress = 0.3 + 0.55 * (created_groups as f32 / total_groups as f32);
-        emit_progress(
-            state,
-            archive_id,
-            progress,
+    }
+    progress
+        .emit(
+            0.82,
             "generating",
-            Some(created_groups),
-            Some(total_groups),
-            current_memory_kb(),
+            Some(total_pages),
+            Some(total_pages),
+            None,
         )
         .await;
-    }
     let mut page_maps: HashMap<PathBuf, HashMap<u32, u32>> = HashMap::new();
     for target in &created_files {
         let Ok(pages) = list_pages(target) else {
@@ -1334,16 +1455,9 @@ async fn run_split_job(
         }
         page_maps.insert(target.clone(), map);
     }
-    emit_progress(
-        state,
-        archive_id,
-        0.85,
-        "ingesting",
-        None,
-        Some(total_groups),
-        current_memory_kb(),
-    )
-    .await;
+    progress
+        .emit(0.84, "ingesting", Some(0), Some(total_groups), None)
+        .await;
 
     // Ingest every generated archive so they enter the library. Each ZIP was staged under
     // `temp_root`; here its own bytes decide the id, the bytes move to that id's hash path — the
@@ -1357,8 +1471,19 @@ async fn run_split_job(
     // Every generated volume that never reached the library, with why. The source archive is only
     // deleted when this stays empty: it is the only copy of those pages left otherwise.
     let mut failed_groups: Vec<serde_json::Value> = Vec::new();
-    for path in &created_files {
+    for (index, path) in created_files.iter().enumerate() {
         let zip_name = staged_names.get(path).cloned().unwrap_or_default();
+        // One event per volume: each is a real, discrete step (hash, move, catalogue), and the
+        // previous volume's outcome wording is what makes the wait readable.
+        progress
+            .emit(
+                0.84 + 0.15 * index as f32 / total_groups as f32,
+                "ingesting",
+                Some(index),
+                Some(total_groups),
+                Some(&zip_name),
+            )
+            .await;
         if !path.exists() {
             tracing::warn!(
                 ?path,
@@ -1508,6 +1633,15 @@ async fn run_split_job(
         }
         if dest.exists() && !placed_files.contains(&dest) {
             placed_files.push(dest.clone());
+        }
+        // A concurrent library scan can catalogue the file the moment it lands in the bucket, and
+        // the pipeline then answers `Unchanged` — the record exists, so the split's own title never
+        // reaches it and the reader sees a hash as the volume's name. Only the fallback title (the
+        // record's own id) is replaced, so a real name is never trodden on.
+        if let Some(id) = new_id_by_path.get(path) {
+            if !zip_name.is_empty() {
+                ensure_readable_title(state, id, &zip_name).await;
+            }
         }
     }
 
@@ -1800,6 +1934,50 @@ mod tests {
     /// volume folders it repeats). Staging both into one path truncated the first group's ZIP with
     /// the second's bytes, and the first group's placement then found nothing to move — 2 of 5
     /// volumes vanished that way on a real archive.
+    #[test]
+    fn a_chapter_lands_only_in_the_volume_that_holds_its_page() {
+        let toc = vec![
+            TocEntry {
+                page: 1,
+                name: "c1".to_string(),
+            },
+            TocEntry {
+                page: 400,
+                name: "c2".to_string(),
+            },
+            TocEntry {
+                page: 513,
+                name: "c19".to_string(),
+            },
+        ];
+        // Volume two starts at original page 368; page 513 is its 146th.
+        let mut second_volume = HashMap::new();
+        for page in 368..548 {
+            second_volume.insert(page, page - 368 + 1);
+        }
+        let entries = localise_toc(&toc, &second_volume);
+        // Page 400 is the volume's 33rd page; page 513 its 146th; page 1 is not in this volume.
+        assert_eq!(
+            entries,
+            vec![
+                TocEntry {
+                    page: 33,
+                    name: "c2".to_string()
+                },
+                TocEntry {
+                    page: 146,
+                    name: "c19".to_string()
+                },
+            ]
+        );
+        // The first volume keeps page 1 and nothing else.
+        let mut first_volume = HashMap::new();
+        for page in 1..368 {
+            first_volume.insert(page, page);
+        }
+        assert_eq!(localise_toc(&toc, &first_volume), vec![toc[0].clone()]);
+    }
+
     #[test]
     fn a_repeated_output_name_is_renamed_instead_of_overwritten() {
         let mut used: HashSet<String> = HashSet::new();

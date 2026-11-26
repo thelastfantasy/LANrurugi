@@ -1153,5 +1153,6 @@
   "reader.splitStage.ingesting": "Legger til i biblioteket",
   "reader.splitStage.finished": "Ferdig",
   "reader.splitCreatedVolumes": "{{count}} bind opprettet",
-  "reader.splitPartialFailure": "Bare {{done}} av {{total}} bind ble opprettet — kildeaktivet er beholdt."
+  "reader.splitPartialFailure": "Bare {{done}} av {{total}} bind ble opprettet — kildeaktivet er beholdt.",
+  "reader.tocStart": "Start på dette kapittelet i innholdsfortegnelsen"
 }

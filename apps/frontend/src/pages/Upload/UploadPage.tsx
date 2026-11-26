@@ -8,6 +8,7 @@ import { useAddToQueue, useCategories, useCreateCategory, useDownloadQueue, useP
 import type { PluginInfo } from "@/api/types"
 import { uploadResumable } from "@/api/uploadSession"
 import { Drawer, Tooltip } from "@/components/common-ui/Display"
+import { Select } from "@/components/common-ui/Form"
 import { formatBytes, STATE_COLOR } from "@/components/Display"
 import { reportWarning } from "@/diagnostics/sdk"
 import { newCategoryDialog } from "@/dialog"
@@ -242,32 +243,33 @@ export function Upload() {
 
   const leftColumn = (
     <div className="left-column">
-      {t("upload.addUploadedFilesToCategory")}
-      <select id="category" className="favtag-btn" value={category} onChange={(e) => setCategory(e.target.value)}>
-        <option value="">{t("common.NoCategory")}</option>
-        {sortCategories(categories.data ?? []).map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.name}
-          </option>
-        ))}
-      </select>
-      <Tooltip
-        label={t("common.newCategory") ?? undefined}
-        // Middle of the select's row, not its text baseline, and above the drawer it may sit in.
-        wrapperStyle={{ verticalAlign: "middle" }}
-        zIndex={narrow ? Z_OVERLAY_ABOVE_DRAWER : undefined}
-      >
-        <a
-          href="#"
-          style={{ marginLeft: 6 }}
-          onClick={(e) => {
-            e.preventDefault()
-            void handleNewCategory()
-          }}
+      <div className="upload-category-row">
+        <span>{t("upload.addUploadedFilesToCategory")}</span>
+        <Select
+          value={category}
+          onValueChange={setCategory}
+          items={[
+            { value: "", label: t("common.NoCategory") },
+            ...sortCategories(categories.data ?? []).map((c) => ({ value: c.id, label: c.name })),
+          ]}
+          ariaLabel={t("upload.addUploadedFilesToCategory")}
+          align="start"
+        />
+        <Tooltip
+          label={t("common.newCategory") ?? undefined}
+          zIndex={narrow ? Z_OVERLAY_ABOVE_DRAWER : undefined}
         >
-          <i className="fas fa-plus" />
-        </a>
-      </Tooltip>
+          <a
+            href="#"
+            onClick={(e) => {
+              e.preventDefault()
+              void handleNewCategory()
+            }}
+          >
+            <i className="fas fa-plus" />
+          </a>
+        </Tooltip>
+      </div>
       <br />
       <br />
 

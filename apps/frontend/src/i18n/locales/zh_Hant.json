@@ -1717,5 +1717,6 @@
   "reader.splitStage.ingesting": "入庫中",
   "reader.splitStage.finished": "完成",
   "reader.splitCreatedVolumes": "已建立 {{count}} 卷",
-  "reader.splitPartialFailure": "只成功建立了 {{done}} / {{total}} 卷，來源檔已保留。"
+  "reader.splitPartialFailure": "只成功建立了 {{done}} / {{total}} 卷，來源檔已保留。",
+  "reader.tocStart": "目錄裡本章的起點"
 }

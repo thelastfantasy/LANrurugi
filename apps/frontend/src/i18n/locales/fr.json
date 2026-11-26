@@ -1205,5 +1205,6 @@
   "reader.splitStage.ingesting": "Ajout à la bibliothèque",
   "reader.splitStage.finished": "Terminé",
   "reader.splitCreatedVolumes": "{{count}} volume(s) créé(s)",
-  "reader.splitPartialFailure": "Seuls {{done}} volumes sur {{total}} ont été créés — l'archive source est conservée."
+  "reader.splitPartialFailure": "Seuls {{done}} volumes sur {{total}} ont été créés — l'archive source est conservée.",
+  "reader.tocStart": "Début de ce chapitre dans la table des matières"
 }

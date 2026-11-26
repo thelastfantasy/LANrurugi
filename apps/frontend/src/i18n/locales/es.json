@@ -1142,5 +1142,6 @@
   "reader.splitStage.ingesting": "Añadiendo a la biblioteca",
   "reader.splitStage.finished": "Hecho",
   "reader.splitCreatedVolumes": "{{count}} volumen(es) creado(s)",
-  "reader.splitPartialFailure": "Solo se crearon {{done}} de {{total}} volúmenes — el archivo original se conservó."
+  "reader.splitPartialFailure": "Solo se crearon {{done}} de {{total}} volúmenes — el archivo original se conservó.",
+  "reader.tocStart": "Inicio de este capítulo en el índice"
 }

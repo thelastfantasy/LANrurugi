@@ -3761,5 +3761,6 @@
   "reader.splitStage.ingesting": "Adding them to the library",
   "reader.splitStage.finished": "Done",
   "reader.splitCreatedVolumes": "{{count}} volume(s) created",
-  "reader.splitPartialFailure": "Only {{done}} of {{total}} volumes were created — the source archive was kept."
+  "reader.splitPartialFailure": "Only {{done}} of {{total}} volumes were created — the source archive was kept.",
+  "reader.tocStart": "Start of this chapter in the table of contents"
 }

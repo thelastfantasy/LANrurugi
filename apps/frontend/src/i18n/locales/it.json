@@ -901,5 +901,6 @@
   "reader.splitStage.ingesting": "Aggiunta alla libreria",
   "reader.splitStage.finished": "Fatto",
   "reader.splitCreatedVolumes": "{{count}} volume/i creato/i",
-  "reader.splitPartialFailure": "Sono stati creati solo {{done}} volumi su {{total}} — l'archivio di origine è stato conservato."
+  "reader.splitPartialFailure": "Sono stati creati solo {{done}} volumi su {{total}} — l'archivio di origine è stato conservato.",
+  "reader.tocStart": "Inizio di questo capitolo nell'indice"
 }

@@ -1056,12 +1056,59 @@ input[type="checkbox"].lrr-checkbox-bare::after {
   min-width: 0;
 }
 
-.reader-headless-chapter {
+/* Only when the volume and the chapter inside it both show: the counter then spans both lines as
+   its own column, rather than sharing the first line with the volume name. */
+.reader-headless-line.is-two-line {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 10px;
+}
+
+.reader-headless-page-count {
   display: inline-flex;
+  align-items: baseline;
+  gap: 0.3em;
+  white-space: nowrap;
+}
+
+/* Two-line caption: the counter fills the same two rows rather than sitting as one small line with
+   empty space above and below it. Drawn as a stacked fraction — page over total across a hairline —
+   which reads as one object at this size and lines up with the two text rows beside it.
+   `tabular-nums` keeps the two numbers the same width so the bar doesn't shift between pages. */
+.reader-headless-line.is-two-line .reader-headless-page-count {
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.reader-headless-line.is-two-line .reader-headless-page-of {
+  display: none;
+}
+
+/* Numerator and denominator are the same size and the same ink: only the hairline says "fraction".
+   Different sizes read as emphasis on the current page, which is not what the glyph means. */
+.reader-headless-line.is-two-line .reader-headless-page-total {
+  align-self: stretch;
+  border-top: 1px solid currentColor;
+  padding-top: 1px;
+  text-align: center;
+}
+
+.reader-headless-chapter {
+  display: flex;
   align-items: center;
   gap: 5px;
   min-width: 0;
-  max-width: 100%;
+}
+
+/* The volume on the first line, the chapter inside it on the second. */
+.reader-headless-chapter-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 /* Icons keep their own width; only the name gives way when the row is narrow. */
@@ -1069,15 +1116,44 @@ input[type="checkbox"].lrr-checkbox-bare::after {
   flex: none;
 }
 
-.reader-headless-chapter-title {
+/* One row per line, so the chapter-start flag sits on the line that names the chapter it marks
+   instead of floating between the volume and its ToC. */
+.reader-headless-chapter-title-line,
+.reader-headless-chapter-toc-line {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+}
+
+.reader-headless-chapter-title,
+.reader-headless-chapter-toc {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.reader-headless-chapter-start {
+.reader-headless-chapter-toc {
+  opacity: 0.8;
+}
+
+/* react-icons render an `<svg>` at 1em; kept off the baseline so the glyph sits centred against the
+   text it marks rather than hanging from its descender. */
+.reader-headless-chapter-icon,
+.reader-headless-chapter-start,
+.reader-headless-chapter-toc-start {
+  flex: none;
+  align-self: center;
+  width: 0.85em;
+  height: 0.85em;
   opacity: 0.9;
+}
+
+/* The ToC marker is the quieter of the two: it recurs more often than a volume start. */
+.reader-headless-chapter-toc-start {
+  opacity: 0.7;
 }
 
 /* Headless leaves nothing but the page, so it is centred in the viewport at every width instead of
@@ -5726,4 +5802,21 @@ div.gt.gt-single > span {
   margin-top: 6px;
   text-align: center;
   font-weight: 600;
+}
+
+/* The category row on the upload page: the trigger is a `<button>`, whose baseline is not the
+ * text's, so inline layout left it sitting a few pixels below the label and the "+" beside it.
+ * A flex row with `align-items: center` lines all three up. */
+.upload-category-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* `.favtag-btn` carries a 4px top margin for inline layout's baseline nudge; in this flex row it
+   only pushes the trigger below the centred line. */
+.upload-category-row > .favtag-btn {
+  margin-top: 0;
 }

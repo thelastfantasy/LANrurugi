@@ -1210,5 +1210,6 @@
   "reader.splitStage.ingesting": "Menambahkan ke pustaka",
   "reader.splitStage.finished": "Selesai",
   "reader.splitCreatedVolumes": "{{count}} volume dibuat",
-  "reader.splitPartialFailure": "Hanya {{done}} dari {{total}} volume yang dibuat — arsip sumber dipertahankan."
+  "reader.splitPartialFailure": "Hanya {{done}} dari {{total}} volume yang dibuat — arsip sumber dipertahankan.",
+  "reader.tocStart": "Awal bab ini di daftar isi"
 }

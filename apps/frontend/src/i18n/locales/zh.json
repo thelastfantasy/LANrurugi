@@ -3761,5 +3761,6 @@
   "reader.splitStage.ingesting": "入库中",
   "reader.splitStage.finished": "完成",
   "reader.splitCreatedVolumes": "已创建 {{count}} 卷",
-  "reader.splitPartialFailure": "只成功创建了 {{done}} / {{total}} 卷，源档已保留。"
+  "reader.splitPartialFailure": "只成功创建了 {{done}} / {{total}} 卷，源档已保留。",
+  "reader.tocStart": "目录里本章的起点"
 }

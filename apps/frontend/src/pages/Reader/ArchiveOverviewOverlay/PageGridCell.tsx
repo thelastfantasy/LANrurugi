@@ -87,6 +87,21 @@ function PageNumberLabel({ children, hovered }: { children: ReactNode; hovered: 
 }
 
 /** One of the two hover-revealed action buttons in a page-grid cell. */
+/** A thumbnail can be ~100px wide, so a long chapter name runs out of room at 13px long before the
+ *  two-line clamp is reached. Dropping a step per ~10 display columns keeps the whole name readable
+ *  instead of ellipsising it, and never goes below 10px (below that it stops being legible). */
+function chapterBadgeFontSize(name: string): number {
+  let columns = 0;
+  for (const character of name) {
+    // East Asian wide characters occupy roughly two Latin columns.
+    columns += /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe6f\uff00-\uff60]/.test(character) ? 2 : 1;
+  }
+  if (columns > 30) return 10;
+  if (columns > 24) return 11;
+  if (columns > 18) return 12;
+  return 13;
+}
+
 function PageGridActionIcon({
   icon,
   corner,
@@ -149,7 +164,7 @@ export function PageGridCell({
   onOpenLightbox,
   isTank,
   isPatch = false,
-  chapterName,
+  chapterNames,
   toc = [],
   cornerButtons = true,
 }: {
@@ -172,7 +187,7 @@ export function PageGridCell({
   isPatch?: boolean
   /** Set only when this page starts a chapter — painted top-left, always visible (unlike the
    * hover-only page-number label and action icons, a chapter start is worth seeing at a glance). */
-  chapterName?: string
+  chapterNames?: string[]
   /** The archive's whole ToC, so the phone sheet's quick-add buttons can say where an entry each
    * button would add already sits. Pages are whatever the grid shows (global in Tankoubon mode). */
   toc?: { page: number; name: string }[]
@@ -234,30 +249,55 @@ export function PageGridCell({
         onMouseLeave={() => setHovered(false)}
       >
         <PageNumberLabel hovered={hovered}>{t("common.pageN", { n: page })}</PageNumberLabel>
-        {chapterName && (
+        {chapterNames && chapterNames.length > 0 && (
           <span
-            title={chapterName}
+            title={chapterNames.join(" · ")}
             style={{
               position: "absolute",
               top: 0,
               left: 0,
-              maxWidth: "100%",
+              // The top-right corner holds the "use this page as the thumbnail" action (44px square,
+              // drawn over the chip while the cell is hovered). `maxWidth` bounds the content box, so
+              // the 12px of horizontal padding has to be subtracted too, or the chip still ran
+              // underneath the icon.
+              // Reserved unconditionally: the icon is only drawn while the cell is hovered, and
+              // whether this device reports hover at all is not something the chip should depend on
+              // (it was reported overlapping on a phone). `maxWidth` only caps the width, so a short
+              // name still gets a chip sized to its own text.
+              maxWidth: "calc(100% - 56px)",
+              textAlign: "left",
               padding: "2px 6px",
-              fontSize: 13,
+              // One size for the whole chip: the volume line and the chapter line would look ragged
+              // shrinking independently.
+              fontSize: Math.min(...chapterNames.map(chapterBadgeFontSize)),
               lineHeight: 1.4,
               // Same treatment as the page-number label and patch badge: a dark chip over the
               // thumbnail, so it stays legible on every theme without its own theme rule.
               backgroundColor: "rgba(0,0,0,0.6)",
               color: "lightskyblue",
               borderRadius: "0 0 4px 0",
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
+              display: "block",
               pointerEvents: "none",
               zIndex: 2,
             }}
           >
-            {chapterName}
+            {chapterNames.map((name) => (
+              <span
+                key={name}
+                style={{
+                  // One line per name — the Tankoubon's volume on the first, its chapter on the
+                  // second — rather than both crammed into one ellipsised line.
+                  display: "-webkit-box",
+                  WebkitBoxOrient: "vertical",
+                  WebkitLineClamp: 2,
+                  whiteSpace: "normal",
+                  overflowWrap: "anywhere",
+                  overflow: "hidden",
+                }}
+              >
+                {name}
+              </span>
+            ))}
           </span>
         )}
         <OverviewThumbnail src={thumbnailSrc} alt={t("common.pageN", { n: page }) ?? undefined} cropLong={!cornerButtons} />

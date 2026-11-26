@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { FaBookmark, FaFlag, FaListUl } from "react-icons/fa6";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { unreadableArchiveCode } from "@/api/apiError";
@@ -533,14 +534,35 @@ export function Reader() {
   // page row. Chapters have two sources and both count: a Tankoubon's member archives, and a plain
   // archive's own ToC.
   const chapterForPage = useCallback(
-    (page: number) => {
+    (page: number): {
+      title: string;
+      startPage: number;
+      tocTitle?: string;
+      /** Global page the innermost ToC entry itself begins on — its own "this is a chapter start"
+       *  marker, which can differ from the volume's start page. */
+      tocPage?: number;
+    } | null => {
       if (isTank) {
         const chapter = tankReading.chapters.find(
           (c) => page >= c.startPage && page <= c.endPage,
         );
-        return chapter
-          ? { title: displayTocName(chapter.title, t), startPage: chapter.startPage }
-          : null;
+        if (!chapter) return null;
+        // A tankoubon's members are its top level, but each member may have ToC entries of its
+        // own — the merged ToC (member chapters + their ToC, already globalised) is what the
+        // overview's chapter selector lists, so it is also the innermost name for a page. Without
+        // this the headless line named only the volume and dropped every real chapter name.
+        let inner: TocEntry | undefined;
+        for (const candidate of metadata.data?.toc ?? []) {
+          if (candidate.page > page || candidate.page < chapter.startPage) continue;
+          if (candidate.synthetic) continue;
+          if (!inner || candidate.page > inner.page) inner = candidate;
+        }
+        return {
+          title: displayTocName(chapter.title, t),
+          startPage: chapter.startPage,
+          tocTitle: inner ? displayTocName(inner.name, t) : undefined,
+          tocPage: inner?.page,
+        };
       }
       // The last ToC entry at or before the page — the same "which chapter am I in" question the
       // overview's chapter selector answers. First entry wins on a shared page.
@@ -554,6 +576,16 @@ export function Reader() {
     [isTank, tankReading.chapters, metadata.data?.toc, t],
   );
   const currentChapter = useMemo(() => chapterForPage(currentPage), [chapterForPage, currentPage]);
+  // Two different starts, two different markers: the volume (chapter) begins, and the ToC entry
+  // inside it begins. They often fall on different pages, and a page can be both.
+  const isChapterStart = !!currentChapter && currentPage === currentChapter.startPage;
+  const isTocStart = !!currentChapter?.tocPage && currentPage === currentChapter.tocPage;
+  const chapterStartFlag = isChapterStart ? (
+    <FaFlag className="reader-headless-chapter-start" title={t("reader.chapterStart")} />
+  ) : null;
+  const tocStartFlag = isTocStart ? (
+    <FaListUl className="reader-headless-chapter-toc-start" title={t("reader.tocStart")} />
+  ) : null;
   // Chapters for the headless jump OSD (`t`). A Tankoubon's members are the top level and each
   // member's own ToC entries hang under it; a plain archive's ToC is a flat list.
   const chapterGroups = useMemo(() => {
@@ -4535,23 +4567,41 @@ export function Reader() {
             }
           >
             <div className="reader-headless-title">{metadata.data?.title}</div>
-            <div className="reader-headless-line">
-              <span>
-                {currentPage} / {totalPages}
+            <div
+              className={
+                "reader-headless-line" + (currentChapter?.tocTitle ? " is-two-line" : "")
+              }
+            >
+              {/* Two lines only when there is a chapter inside the volume to show; otherwise this is
+                  the plain one-row caption it has always been. With two lines the counter becomes
+                  its own grid cell, vertically centred beside them. */}
+              <span className="reader-headless-page-count">
+                <span className="reader-headless-page-current">{currentPage}</span>
+                <span className="reader-headless-page-total">
+                  <span className="reader-headless-page-of">/ </span>
+                  {totalPages}
+                </span>
               </span>
               {currentChapter && (
                 <span className="reader-headless-chapter">
-                  <i className="fas fa-bookmark" aria-hidden="true" />
-                  {/* The title truncates on its own: clipping the whole row (the obvious fix) used
-                      to push the chapter-start flag off the end, so the marker vanished exactly when
-                      a long chapter name needed it. */}
-                  <span className="reader-headless-chapter-title">{currentChapter.title}</span>
-                  {currentPage === currentChapter.startPage && (
-                    <i
-                      className="fas fa-flag reader-headless-chapter-start"
-                      title={t("reader.chapterStart")}
-                    />
-                  )}
+                  <FaBookmark className="reader-headless-chapter-icon" aria-hidden="true" />
+                  <span className="reader-headless-chapter-text">
+                    {/* Each line truncates on its own: clipping the whole row (the obvious fix) used
+                        to push the chapter-start flag off the end, so the marker vanished exactly
+                        when a long chapter name needed it. */}
+                    <span className="reader-headless-chapter-title-line">
+                      <span className="reader-headless-chapter-title">{currentChapter.title}</span>
+                      {chapterStartFlag}
+                    </span>
+                    {currentChapter.tocTitle && (
+                      <span className="reader-headless-chapter-toc-line">
+                        <span className="reader-headless-chapter-toc">
+                          {currentChapter.tocTitle}
+                        </span>
+                        {tocStartFlag}
+                      </span>
+                    )}
+                  </span>
                 </span>
               )}
             </div>

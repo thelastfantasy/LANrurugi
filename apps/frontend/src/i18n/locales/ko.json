@@ -1290,5 +1290,6 @@
   "reader.splitStage.ingesting": "라이브러리에 추가 중",
   "reader.splitStage.finished": "완료",
   "reader.splitCreatedVolumes": "{{count}}권 생성됨",
-  "reader.splitPartialFailure": "{{total}}권 중 {{done}}권만 생성되었습니다. 원본 아카이브는 보존됩니다."
+  "reader.splitPartialFailure": "{{total}}권 중 {{done}}권만 생성되었습니다. 원본 아카이브는 보존됩니다.",
+  "reader.tocStart": "목차에서 이 장의 시작"
 }
