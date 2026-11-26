@@ -20,6 +20,7 @@ import { WindowedList } from "@/components/Display"
 import { confirmDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { useIsNarrowViewport } from "@/hooks/useIsNarrowViewport"
+import { postDataChange } from "@/lib/crossTabData"
 import { routes } from "@/lib/routes"
 import { MSM_SELECTION_KEY } from "@/lib/storageKeys"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
@@ -155,6 +156,7 @@ export function Batch() {
         if (pluginTimeout > 0 && processed < selected.size) await sleep(pluginTimeout * 1000)
       }
       await refresh()
+      postDataChange({ changed: [...selected.keys()] })
     } finally {
       setBusy(false)
     }
@@ -170,6 +172,7 @@ export function Batch() {
       }
       setStatus(formatProgress(t, selected.size, selected.size))
       await refresh()
+      postDataChange({ changed: [...selected.keys()] })
     } finally {
       setBusy(false)
     }
@@ -190,6 +193,7 @@ export function Batch() {
       setStatus(formatProgress(t, selected.size, selected.size))
       setTagToAdd("")
       await refresh()
+      postDataChange({ changed: [...selected.keys()] })
     } finally {
       setBusy(false)
     }
@@ -205,6 +209,7 @@ export function Batch() {
       }
       setStatus(formatProgress(t, selected.size, selected.size))
       await refresh()
+      postDataChange({ changed: [...selected.keys()] })
     } finally {
       setBusy(false)
     }
@@ -218,7 +223,8 @@ export function Batch() {
     setStatus(null)
     try {
       const titles = new Map(selected)
-      const response = await batchDeleteArchives.mutateAsync([...selected.keys()])
+      const ids = [...selected.keys()]
+      const response = await batchDeleteArchives.mutateAsync(ids)
       setSelected(new Map())
       if (response.deleted === response.total) {
         setStatus(formatProgress(t, response.deleted, response.total))
@@ -235,6 +241,8 @@ export function Batch() {
         // Still "warning", not "error" — the request itself succeeded with a real result list.
         toast({ heading: message ?? undefined, text: failedLines.join("\n"), icon: "warning" })
       }
+      // Whatever really went away: the ids the server reports as deleted, not the ones asked for.
+      postDataChange({ removed: response.results.filter((r) => r.success).map((r) => r.id) })
       await refresh()
     } catch (err) {
       toast({

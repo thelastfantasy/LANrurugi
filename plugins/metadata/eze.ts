@@ -18,7 +18,7 @@ export function pluginInfo() {
       { name: "param1", description: "Save the original title when available instead of the English or romanised title", required: false, type: "bool" },
       { name: "param2", description: "Fetch additional timestamp (time posted) and uploader metadata", required: false, type: "bool" },
     ],
-    declared_permissions: { net: [], read: false, write: true },
+    declared_permissions: { net: [], read: false, write: false },
     name: "eze",
     author: "thelastfantasy",
     description: "Collects metadata from eze-style info.json files ({'gallery_info': {xxx} } syntax), either embedded in your archive or in the same folder with the same name. ({archive_name}.json)",

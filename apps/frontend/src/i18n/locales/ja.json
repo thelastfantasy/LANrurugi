@@ -3743,5 +3743,13 @@
   "settings.resources.ioProcessHint": "このプロセスが行ったブロック I/O です（/proc/<pid>/io）。",
   "settings.resources.ioUnavailable": "このコンテナには I/O コントローラがないため、デバイス別の内訳はありません。",
   "upload.dropFilesHere": "ドロップしてファイルを追加",
-  "upload.dropFilesHereHint": "複数ファイルは順番にアップロードします。"
+  "upload.dropFilesHereHint": "複数ファイルは順番にアップロードします。",
+  "reader.splitCreateTankoubonCheckbox": "分割後に各巻を新しい単行本に入れる",
+  "reader.splitStage.started": "開始",
+  "reader.splitStage.reading": "アーカイブを読み込み中",
+  "reader.splitStage.generating": "各巻を書き出し中",
+  "reader.splitStage.ingesting": "ライブラリに追加中",
+  "reader.splitStage.finished": "完了",
+  "reader.splitCreatedVolumes": "{{count}} 巻を作成しました",
+  "reader.splitPartialFailure": "{{total}} 巻のうち {{done}} 巻しか作成できませんでした。元のアーカイブは残しています。"
 }

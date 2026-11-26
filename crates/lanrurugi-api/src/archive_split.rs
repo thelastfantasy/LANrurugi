@@ -54,6 +54,9 @@ struct LlmSplitGroup {
 struct ExecuteSplitParams {
     #[serde(default)]
     delete_original: Option<bool>,
+    /// Put every generated volume into one new tankoubon, in the order the split produced them.
+    #[serde(default)]
+    create_tankoubon: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -770,6 +773,7 @@ async fn execute_split(
             suggestion,
             auth.map(|e| e.0),
             q.delete_original,
+            q.create_tankoubon.unwrap_or(false),
         )
         .await;
         let _ = state.split_progress_tx.lock().await.remove(&id.0);
@@ -870,11 +874,15 @@ fn rusage_peak_kb() -> Option<u64> {
     })
 }
 
+/// Stages the panel renders for itself — the server sends the code, never a sentence, so a split
+/// reads the same in every language.
 async fn emit_progress(
     state: &AppState,
     archive_id: &ArchiveId,
     progress: f32,
-    message: &str,
+    stage: &str,
+    done: Option<usize>,
+    total: Option<usize>,
     memory_kb: Option<u64>,
 ) {
     if let Some(tx) = state
@@ -886,8 +894,39 @@ async fn emit_progress(
     {
         let _ = tx.send(json!({
             "progress": progress,
-            "message": message,
+            "stage": stage,
+            "done": done,
+            "total": total,
             "memory_kb": memory_kb,
+        }));
+    }
+}
+
+/// The one frame the client acts on: how many volumes were created, and whether the source is
+/// really gone (the reader page is only closed when it is).
+async fn emit_finished(
+    state: &AppState,
+    archive_id: &ArchiveId,
+    progress: f32,
+    created: usize,
+    total: usize,
+    source_deleted: bool,
+    memory_kb: Option<u64>,
+) {
+    if let Some(tx) = state
+        .split_progress_tx
+        .lock()
+        .await
+        .get(&archive_id.0)
+        .cloned()
+    {
+        let _ = tx.send(json!({
+            "progress": progress,
+            "stage": "finished",
+            "done": created,
+            "total": total,
+            "memory_kb": memory_kb,
+            "source_deleted": source_deleted,
         }));
     }
 }
@@ -920,10 +959,59 @@ fn write_zip_entry<W: std::io::Write + std::io::Seek>(
     Ok(out_name)
 }
 
+/// A staging file name no earlier group took: `第02巻.zip`, `第02巻 (2).zip`, …
+fn unique_zip_name(requested: &str, used: &mut HashSet<String>) -> String {
+    if used.insert(requested.to_string()) {
+        return requested.to_string();
+    }
+    let path = Path::new(requested);
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| requested.to_string());
+    let extension = path.extension().map(|e| e.to_string_lossy().to_string());
+    for suffix in 2..u32::MAX {
+        let candidate = match &extension {
+            Some(ext) => format!("{stem} ({suffix}).{ext}"),
+            None => format!("{stem} ({suffix})"),
+        };
+        if used.insert(candidate.clone()) {
+            tracing::warn!(
+                requested,
+                renamed = %candidate,
+                "archive_split: two groups were named the same; the second one was renamed"
+            );
+            return candidate;
+        }
+    }
+    unreachable!("u32 worth of suffixes is not going to be exhausted")
+}
+
 fn stamp_page_from_id(stamp_id: &str) -> Option<u32> {
     let rest = stamp_id.strip_prefix("STAMPS_")?;
     let (page, _) = rest.split_once('_')?;
     page.parse().ok()
+}
+
+/// The source archive's tags with `date_added:`/`timestamp:` moved forward `index` seconds.
+/// Tags without either namespace are returned untouched — those archives sort last either way.
+fn stamped_tags(tags: &str, index: usize) -> String {
+    if index == 0 || tags.is_empty() {
+        return tags.to_string();
+    }
+    let shift = i64::try_from(index).unwrap_or(0);
+    let mut out: Vec<String> = Vec::new();
+    for part in tags.split(',') {
+        let trimmed = part.trim();
+        let bumped = ["date_added:", "timestamp:"].iter().find_map(|prefix| {
+            trimmed
+                .strip_prefix(prefix)
+                .and_then(|v| v.parse::<i64>().ok())
+                .map(|v| format!("{prefix}{}", v.saturating_add(shift)))
+        });
+        out.push(bumped.unwrap_or_else(|| trimmed.to_string()));
+    }
+    out.join(",")
 }
 
 async fn inherit_metadata_to_split_archives(
@@ -936,14 +1024,18 @@ async fn inherit_metadata_to_split_archives(
         return;
     }
 
-    // Tags
-    for new_id in new_ids {
+    // Tags — with `date_added`/`timestamp` nudged forward one second per volume, so the split's
+    // outputs keep their volume order under any date sort. Inheriting the source's own second for
+    // all of them left their order to Redis's set iteration, so the same five volumes came back
+    // in a different order on every refresh (reported 2026-11-26).
+    for (index, new_id) in new_ids.iter().enumerate() {
+        let tags = stamped_tags(&original.tags, index);
         let _ = state
             .repos
             .archives
             .update_then(
                 new_id,
-                |a| a.tags = original.tags.clone(),
+                |a| a.tags = tags.clone(),
                 |old, new| crate::archives::reindex_title_and_tags(state, old, new),
             )
             .await;
@@ -1038,6 +1130,7 @@ async fn run_split_job(
     suggestion: ArchiveSplitSuggestion,
     auth: Option<AuthContext>,
     delete_original_override: Option<bool>,
+    create_tankoubon: bool,
 ) -> Result<serde_json::Value, String> {
     let archive = state
         .repos
@@ -1047,7 +1140,16 @@ async fn run_split_job(
         .ok()
         .flatten()
         .ok_or_else(|| "Archive not found.".to_string())?;
-    emit_progress(state, archive_id, 0.05, "started", current_memory_kb()).await;
+    emit_progress(
+        state,
+        archive_id,
+        0.05,
+        "started",
+        None,
+        None,
+        current_memory_kb(),
+    )
+    .await;
     let original_file_path = PathBuf::from(&archive.file);
     let original_path = resolve_multivolume_path(&original_file_path, &state.library.temp_dir)
         .unwrap_or_else(|| original_file_path.clone());
@@ -1066,7 +1168,16 @@ async fn run_split_job(
     let total_groups = suggestion.split_groups.len().max(1);
     let mut created_groups = 0usize;
     let mut max_memory_kb = current_memory_kb().unwrap_or(0);
-    emit_progress(state, archive_id, 0.3, "reading files", current_memory_kb()).await;
+    emit_progress(
+        state,
+        archive_id,
+        0.3,
+        "reading",
+        None,
+        None,
+        current_memory_kb(),
+    )
+    .await;
 
     let temp_root = state.library.temp_dir.join(format!(
         "archive-split-{}",
@@ -1077,30 +1188,30 @@ async fn run_split_job(
     ));
     std::fs::create_dir_all(&temp_root).map_err(|e| e.to_string())?;
 
-    let output_dir = original_file_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| state.library.archive_dir.clone());
+    // Every ZIP is written under `temp_root` and only moves into the library once its content id
+    // is known (below), so a half-written output is never visible to the watcher or the pipeline.
+    let output_dir = temp_root.clone();
 
     // Stream entries into each output ZIP one file at a time. We must NOT load every page's
     // bytes into a HashMap at once: a 500MB+ RAR would OOM the browser/dev machine. `read_entry`
     // reopens the archive per file, which is slower but keeps memory bounded.
     let mut created_files = Vec::new();
+    // The readable name each staged ZIP carries into the library: it becomes the new archive's
+    // title and its sidecar's `original_filename`, which is the only place a split's pretty name
+    // survives once the bytes are hash-named.
+    let mut staged_names: HashMap<PathBuf, String> = HashMap::new();
     let mut source_by_output: HashMap<PathBuf, HashMap<String, String>> = HashMap::new();
+    // Two groups can be named identically — a "vol 01-05" summary folder sitting beside the volume
+    // folders it repeats produces exactly that, and the analyser names a group after its own
+    // directory. Staging both into one path truncates the first group's ZIP with the second's
+    // bytes and leaves the first group's placement with nothing to move: reported live
+    // 2026-11-26 on a 5-volume RAR (第02巻 and 第05巻 vanished, and the source had already been
+    // deleted because nothing counted them as lost).
+    let mut used_names: HashSet<String> = HashSet::new();
     for group in &suggestion.split_groups {
-        let mut target = output_dir.join(&group.zip_name);
-        if target.exists() {
-            let crc = crc32fast::hash(group.zip_name.as_bytes());
-            let stem = Path::new(&group.zip_name)
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let ext = Path::new(&group.zip_name)
-                .extension()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| "zip".to_string());
-            target = output_dir.join(format!("{stem}_{crc:08x}.{ext}"));
-        }
+        let zip_name = unique_zip_name(&group.zip_name, &mut used_names);
+        let target = output_dir.join(&zip_name);
+        staged_names.insert(target.clone(), zip_name.clone());
         let mut target_sources: HashMap<String, String> = HashMap::new();
         let file = std::fs::File::create(&target).map_err(|e| e.to_string())?;
         // ZipWriter emits a header per member; against a bare `File` each one is its own syscall.
@@ -1124,8 +1235,16 @@ async fn run_split_job(
             created_files.push(target.clone());
             created_groups += 1;
             let progress = 0.3 + 0.55 * (created_groups as f32 / total_groups as f32);
-            let message = format!("生成压缩包 {created_groups} / {total_groups}");
-            emit_progress(state, archive_id, progress, &message, current_memory_kb()).await;
+            emit_progress(
+                state,
+                archive_id,
+                progress,
+                "generating",
+                Some(created_groups),
+                Some(total_groups),
+                current_memory_kb(),
+            )
+            .await;
             continue;
         }
 
@@ -1188,8 +1307,16 @@ async fn run_split_job(
         created_files.push(target.clone());
         created_groups += 1;
         let progress = 0.3 + 0.55 * (created_groups as f32 / total_groups as f32);
-        let message = format!("生成压缩包 {created_groups} / {total_groups}");
-        emit_progress(state, archive_id, progress, &message, current_memory_kb()).await;
+        emit_progress(
+            state,
+            archive_id,
+            progress,
+            "generating",
+            Some(created_groups),
+            Some(total_groups),
+            current_memory_kb(),
+        )
+        .await;
     }
     let mut page_maps: HashMap<PathBuf, HashMap<u32, u32>> = HashMap::new();
     for target in &created_files {
@@ -1207,27 +1334,110 @@ async fn run_split_job(
         }
         page_maps.insert(target.clone(), map);
     }
-    let _ = std::fs::remove_dir_all(&temp_root);
     emit_progress(
         state,
         archive_id,
         0.85,
-        "ingesting generated archives",
+        "ingesting",
+        None,
+        Some(total_groups),
         current_memory_kb(),
     )
     .await;
 
-    // Ingest every generated archive so they enter the library.
+    // Ingest every generated archive so they enter the library. Each ZIP was staged under
+    // `temp_root`; here its own bytes decide the id, the bytes move to that id's hash path — the
+    // layout every other ingest path uses since 020 — and only then is the record written, with
+    // the readable split name kept as the title and in the sidecar (`original_filename`).
     let mut new_ids = Vec::new();
     let mut new_id_by_path: HashMap<PathBuf, ArchiveId> = HashMap::new();
+    // What the caller is told was created is the library-side path, not the staging path: the
+    // staging copy is gone (moved or dropped as a duplicate) by the time this function returns.
+    let mut placed_files: Vec<PathBuf> = Vec::new();
+    // Every generated volume that never reached the library, with why. The source archive is only
+    // deleted when this stays empty: it is the only copy of those pages left otherwise.
+    let mut failed_groups: Vec<serde_json::Value> = Vec::new();
     for path in &created_files {
-        match lanrurugi_scanner::pipeline::ingest_file(
+        let zip_name = staged_names.get(path).cloned().unwrap_or_default();
+        if !path.exists() {
+            tracing::warn!(
+                ?path,
+                "archive_split: a staged archive disappeared before it could be placed"
+            );
+            failed_groups.push(json!({
+                "name": zip_name,
+                "reason": "the staged archive was gone before it could be moved into the library",
+            }));
+            continue;
+        }
+        let id = match lanrurugi_storage::id::size_aware_id(path) {
+            Ok(id) => ArchiveId(id),
+            Err(e) => {
+                tracing::warn!(?path, error = %e, "archive_split: could not hash a generated archive");
+                failed_groups.push(json!({ "name": zip_name, "reason": e.to_string() }));
+                continue;
+            }
+        };
+        let dest = lanrurugi_storage::paths::hash_layout_path(
+            &state.library.archive_dir,
+            id.as_str(),
+            "zip",
+        );
+        // One ingest per content id at a time; `locked: true` below tells the pipeline that this
+        // task already holds it (taking it again would deadlock).
+        let _ingest_guard = lanrurugi_scanner::pipeline::content_lock(id.as_str()).await;
+        if dest.exists() {
+            // These exact bytes are already on disk (a record may or may not exist): the staged
+            // copy is redundant, and the pipeline below resolves the existing archive.
+            let _ = tokio::fs::remove_file(path).await;
+        } else {
+            let copy_options = lanrurugi_core::io::CopyOptions {
+                strict_verify: crate::settings::read_ingest_strict_verify(state).await,
+            };
+            // `content/<bucket>/` exists only once something has landed in it, so a library that
+            // never used part of the id space leaves most of the 256 buckets missing. A move into
+            // a missing directory fails with `NotFound`, which used to look exactly like the
+            // staged ZIP having vanished: that quietly lost 2–3 of every 5 split volumes
+            // (2026-11-26). `in_dir` creates the bucket first and survives a prune racing it.
+            let placed = lanrurugi_storage::fsutil::in_dir(&dest, || {
+                let (from, to) = (path.clone(), dest.clone());
+                let opts = copy_options;
+                async move {
+                    crate::download_manager::place_into_library(&from, &to, false, &opts)
+                        .await
+                        .map_err(|e| match e {
+                            lanrurugi_core::io::CopyError::Io(inner) => inner,
+                            other => std::io::Error::other(other.to_string()),
+                        })
+                }
+            })
+            .await;
+            if let Err(e) = placed {
+                tracing::warn!(?path, error = ?e, "archive_split: could not place a generated archive into the library");
+                failed_groups.push(json!({ "name": zip_name, "reason": e.to_string() }));
+                continue;
+            }
+        }
+        let options = lanrurugi_scanner::pipeline::IngestOptions {
+            // Identical bytes elsewhere in the library mean these pages are already catalogued;
+            // the split reuses that archive rather than overwriting it.
+            duplicate_policy: lanrurugi_scanner::pipeline::DuplicatePolicy::Reject,
+            // The file name on disk is the id now, so the filename-collision rule has nothing to
+            // compare; the split's own name reaches the record and the sidecar through `title_filename`.
+            intended_filename: None,
+            title_filename: (!zip_name.is_empty()).then_some(zip_name.as_str()),
+            defer_file_path: false,
+            locked: true,
+            blake3: None,
+        };
+        match lanrurugi_scanner::pipeline::ingest_file_with_policy(
             state.repos.archives.as_ref(),
             &state.redis.config,
             &state.redis.search,
             &state.equivalence,
             &state.library.thumb_dir,
-            path,
+            &dest,
+            options,
         )
         .await
         {
@@ -1271,6 +1481,14 @@ async fn run_split_job(
                 .await;
             }
             Ok(lanrurugi_scanner::pipeline::IngestOutcome::Rejected { existing_id, .. }) => {
+                // A record that lives by name (under `_byname/`) keeps its own path; the copy this
+                // loop just moved into the hash layout is then a redundant duplicate and would
+                // linger forever (nothing sweeps bucket files without a record).
+                if let Ok(Some(existing)) = state.repos.archives.get(&existing_id).await {
+                    if Path::new(&existing.file) != dest.as_path() {
+                        let _ = tokio::fs::remove_file(&dest).await;
+                    }
+                }
                 if !new_ids.contains(&existing_id) {
                     new_ids.push(existing_id.clone());
                 }
@@ -1285,9 +1503,18 @@ async fn run_split_job(
             }
             Err(e) => {
                 tracing::warn!(?path, error = %e, "archive_split: failed to ingest generated archive");
+                failed_groups.push(json!({ "name": zip_name, "reason": e.to_string() }));
             }
         }
+        if dest.exists() && !placed_files.contains(&dest) {
+            placed_files.push(dest.clone());
+        }
     }
+
+    // Every staged ZIP has either moved into the library or been dropped as a duplicate; the
+    // staging directory itself is now empty. The `finished` frame is sent at the very end (after
+    // the source is gone and every record is written), because the reader navigates away on it.
+    let _ = std::fs::remove_dir_all(&temp_root);
 
     // Build per-new-archive page maps (new local page -> original archive page) so bookmarks
     // and stamps can be transferred to the correct positions.
@@ -1342,67 +1569,49 @@ async fn run_split_job(
         }
     }
 
-    let delete_original = match delete_original_override {
+    let wants_delete_original = match delete_original_override {
         Some(v) => v,
         None => crate::settings::read_archive_split_delete_original_enabled(state).await,
     };
+    // A partial split must keep the source: the volumes that failed exist nowhere else.
+    let delete_original = wants_delete_original && failed_groups.is_empty();
+    if wants_delete_original && !delete_original {
+        tracing::warn!(
+            failed = failed_groups.len(),
+            "archive_split: keeping the source archive because not every volume was created"
+        );
+    }
 
     // Optionally delete the original.
     if delete_original {
-        if let Ok(tanks) = state.repos.groupings.for_archive(archive_id).await {
-            let others: Vec<lanrurugi_core::entities::Grouping> =
-                state.repos.groupings.list_all().await.unwrap_or_default();
-            let other_tanks: Vec<String> = others
-                .iter()
-                .filter(|g| !tanks.iter().any(|t| t.tankid == g.tankid))
-                .flat_map(|g| g.archives.iter().map(|a| a.0.clone()))
-                .collect();
-            let left: Vec<String> = if other_tanks.contains(&archive_id.0) {
-                vec![]
-            } else {
-                vec![archive_id.0.clone()]
-            };
-            if !left.is_empty() {
-                let _ = lanrurugi_search::indexer::sync_tank_membership(
-                    &state.redis.search,
-                    &[],
-                    &left,
-                )
-                .await;
+        // `purge_one_archive` is the one function every other delete goes through: the deletion
+        // journal (028), the record, Tankoubon membership, patch provenance, activity, the search
+        // index, categories, bookmarks, stamps, the download queue, and then the bytes, the
+        // sidecar and the thumbnails. This branch used to duplicate a hand-picked subset of that
+        // and silently skipped the rest — the source archive's sidecar in particular outlived it.
+        let outcome = crate::archives::purge_one_archive(
+            state,
+            archive_id,
+            auth.as_ref(),
+            crate::archives::PurgeOptions {
+                journal_source: "split",
+                ..crate::archives::PurgeOptions::SINGLE
+            },
+        )
+        .await;
+        match outcome {
+            crate::archives::DeleteOneOutcome::Error(e) => {
+                tracing::warn!(%archive_id, error = %e, "archive_split: could not delete the source archive");
             }
-        }
-        // specs/028: this branch deletes the record directly (not through `purge_one_archive`), so
-        // it journals explicitly — otherwise "split, then keep only the parts" would be the one
-        // permanent delete with no way back.
-        crate::deletions::journal_put_best_effort(state, &archive, "split").await;
-        let _ = state.repos.archives.delete(archive_id).await;
-        // The archive id no longer names anything, so its thumbnail failure memory has to go with
-        // it — an id is only `SHA-1(first 512 KB)`, and a later import can land on the same id with
-        // different bytes that this entry would wrongly blacklist.
-        crate::thumbnail_failures::clear_archive(state, archive_id.as_str()).await;
-        // The original archive is gone; drop its id from every category it belonged to. New split
-        // archives were already added above by `inherit_metadata_to_split_archives`.
-        if let Ok(categories) = state.repos.categories.list_all().await {
-            for category in categories {
-                if category.archives.iter().any(|a| a == archive_id) {
-                    let _ = state
-                        .repos
-                        .categories
-                        .update(&category.catid, |c| c.archives.retain(|a| a != archive_id))
-                        .await;
+            _ => {
+                // A multivolume source's record points at one volume; the rest are this job's
+                // own leftovers, and nothing else knows they belong together.
+                if original_path != original_file_path {
+                    let _ = std::fs::remove_file(&original_path);
                 }
             }
         }
         let _ = split_repo(state).delete(&archive_id.0).await;
-        let _ = std::fs::remove_file(&original_path);
-        let _ = lanrurugi_search::indexer::remove_archive_index(
-            &state.redis.search,
-            &state.equivalence,
-            &archive_id.0,
-            &archive.title,
-            &archive.tags,
-        )
-        .await;
     }
 
     // Activity: one record for the split operation, plus one record per generated ZIP archive.
@@ -1420,8 +1629,9 @@ async fn run_split_job(
             lanrurugi_storage::activity::Outcome::Success,
             None,
             Some(json!({
-                "created_files": created_files.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+                "created_files": placed_files.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
                 "new_archive_ids": new_ids.iter().map(|n| n.0.clone()).collect::<Vec<_>>(),
+                "failed_groups": failed_groups.clone(),
                 "deleted_original": delete_original,
             })),
         )
@@ -1447,6 +1657,56 @@ async fn run_split_job(
         }
     }
 
+    // One tankoubon holding every volume, in split order — the common follow-up to splitting a
+    // multi-volume archive, and the reason the panel offers the checkbox at all.
+    let tankoubon_id = if create_tankoubon && !new_ids.is_empty() {
+        let mut seen_ids: HashSet<&str> = HashSet::new();
+        let ordered: Vec<ArchiveId> = new_ids
+            .iter()
+            .filter(|id| seen_ids.insert(id.as_str()))
+            .cloned()
+            .collect();
+        match crate::tankoubons::create_tankoubon_with(
+            state,
+            &archive.title,
+            "",
+            &archive.tags,
+            ordered,
+        )
+        .await
+        {
+            Ok(tankid) => Some(tankid.0),
+            Err(e) => {
+                tracing::warn!(%archive_id, error = %e, "archive_split: could not create the tankoubon");
+                failed_groups.push(json!({
+                    "name": "tankoubon",
+                    "reason": format!("the volumes were created but the tankoubon failed: {e}"),
+                }));
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Last frame: everything the reader needs to finish up. `source_deleted` is the authoritative
+    // answer to "is this reader page still valid" — the client must not guess it from the counts,
+    // because two groups can dedup into one record while the source is still deleted.
+    emit_finished(
+        state,
+        archive_id,
+        if total_groups == 0 {
+            1.0
+        } else {
+            (new_ids.len() as f32 / total_groups as f32).min(1.0)
+        },
+        new_ids.len(),
+        total_groups,
+        delete_original,
+        current_memory_kb(),
+    )
+    .await;
+
     Ok(json!({
         "success": true,
         "memory_kb": {
@@ -1454,9 +1714,12 @@ async fn run_split_job(
             "hwm_kb": peak_memory_kb().unwrap_or(0),
             "final_kb": current_memory_kb().unwrap_or(0),
         },
-        "created_files": created_files.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+        "created_files": placed_files.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
         "new_archive_ids": new_ids.iter().map(|n| n.0.clone()).collect::<Vec<_>>(),
+        "failed_groups": failed_groups,
         "deleted_original": delete_original,
+        "original_kept_for": new_ids.iter().map(|n| n.0.clone()).collect::<Vec<_>>(),
+        "tankoubon_id": tankoubon_id,
     }))
 }
 
@@ -1500,6 +1763,54 @@ pub async fn maybe_auto_analyze(state: AppState, archive_id: String) {
 
 #[cfg(test)]
 mod tests {
+    /// The executor writes each output under `temp_root` and then places it with
+    /// `hash_layout_path(..., "zip")`. The pipeline only writes a sidecar when
+    /// `is_hash_layout_path` accepts the final path — so the two must agree on the exact shape,
+    /// or a split's readable name would survive nowhere but the Redis record.
+    #[test]
+    fn a_split_output_path_is_where_the_pipeline_writes_a_sidecar() {
+        let library = std::path::Path::new("/srv/library");
+        let id = "0123456789abcdef0123456789abcdef01234567";
+        let dest = lanrurugi_storage::paths::hash_layout_path(library, id, "zip");
+        assert!(lanrurugi_storage::paths::is_hash_layout_path(
+            library, &dest, id
+        ));
+        assert_eq!(
+            lanrurugi_storage::paths::sidecar_path(library, id),
+            dest.with_extension("json")
+        );
+    }
+
+    /// Every volume used to inherit the source's own `date_added` second, which left their order
+    /// to Redis's set iteration — the same five volumes came back in a different order on every
+    /// refresh. Each one now sits one second after the previous.
+    #[test]
+    fn split_outputs_are_one_second_apart_so_a_date_sort_is_stable() {
+        let tags = "date_added:1700000000,artist:X,timestamp:1699999999";
+        assert_eq!(stamped_tags(tags, 0), tags);
+        assert_eq!(
+            stamped_tags(tags, 3),
+            "date_added:1700000003,artist:X,timestamp:1700000002"
+        );
+        // No date namespace at all: leave it alone rather than inventing one.
+        assert_eq!(stamped_tags("artist:X", 2), "artist:X");
+    }
+
+    /// Two split groups can ask for the same output name (a "vol 01-05" summary folder beside the
+    /// volume folders it repeats). Staging both into one path truncated the first group's ZIP with
+    /// the second's bytes, and the first group's placement then found nothing to move — 2 of 5
+    /// volumes vanished that way on a real archive.
+    #[test]
+    fn a_repeated_output_name_is_renamed_instead_of_overwritten() {
+        let mut used: HashSet<String> = HashSet::new();
+        assert_eq!(unique_zip_name("第02巻.zip", &mut used), "第02巻.zip");
+        assert_eq!(unique_zip_name("第02巻.zip", &mut used), "第02巻 (2).zip");
+        assert_eq!(unique_zip_name("第02巻.zip", &mut used), "第02巻 (3).zip");
+        assert_eq!(unique_zip_name("第05巻", &mut used), "第05巻");
+        assert_eq!(unique_zip_name("第05巻", &mut used), "第05巻 (2)");
+        assert_eq!(used.len(), 5);
+    }
+
     #[test]
     fn portable_memory_readings_agree_with_proc() {
         let rss = super::sysinfo_rss_kb().expect("rss via sysinfo");

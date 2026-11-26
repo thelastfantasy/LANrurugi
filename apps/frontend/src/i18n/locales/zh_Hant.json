@@ -1709,5 +1709,13 @@
   "settings.resources.ioProcessHint": "本行程累計的區塊裝置讀寫，來自 /proc/<pid>/io。",
   "settings.resources.ioUnavailable": "此容器沒有 I/O 控制器，因此沒有依裝置拆分的明細。",
   "upload.dropFilesHere": "放開即可加入檔案",
-  "upload.dropFilesHereHint": "多個檔案會依序上傳。"
+  "upload.dropFilesHereHint": "多個檔案會依序上傳。",
+  "reader.splitCreateTankoubonCheckbox": "拆包後把各卷放進一個新單行本",
+  "reader.splitStage.started": "開始",
+  "reader.splitStage.reading": "讀取檔案",
+  "reader.splitStage.generating": "產生各卷壓縮檔",
+  "reader.splitStage.ingesting": "入庫中",
+  "reader.splitStage.finished": "完成",
+  "reader.splitCreatedVolumes": "已建立 {{count}} 卷",
+  "reader.splitPartialFailure": "只成功建立了 {{done}} / {{total}} 卷，來源檔已保留。"
 }

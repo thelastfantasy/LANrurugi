@@ -1152,5 +1152,13 @@
   "settings.resources.ioProcessHint": "I/O khối do tiến trình này thực hiện, từ /proc/<pid>/io.",
   "settings.resources.ioUnavailable": "Container này không có bộ điều khiển I/O nên không có chi tiết theo thiết bị.",
   "upload.dropFilesHere": "Thả tệp để thêm",
-  "upload.dropFilesHereHint": "Các tệp được tải lên lần lượt."
+  "upload.dropFilesHereHint": "Các tệp được tải lên lần lượt.",
+  "reader.splitCreateTankoubonCheckbox": "Đưa các tập vào một tankoubon mới",
+  "reader.splitStage.started": "Bắt đầu",
+  "reader.splitStage.reading": "Đang đọc tệp lưu trữ",
+  "reader.splitStage.generating": "Đang ghi các tập",
+  "reader.splitStage.ingesting": "Đang thêm vào thư viện",
+  "reader.splitStage.finished": "Xong",
+  "reader.splitCreatedVolumes": "Đã tạo {{count}} tập",
+  "reader.splitPartialFailure": "Chỉ tạo được {{done}}/{{total}} tập — tệp gốc vẫn được giữ lại."
 }

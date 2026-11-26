@@ -349,6 +349,13 @@ export function ArchiveOverviewOverlay({
     settings.data?.archive_split_delete_original_enabled ?? false,
   )
   const [splitStatus, setSplitStatus] = useState<string | null>(null)
+  const [splitCreateTankoubon, setSplitCreateTankoubon] = useState(false)
+  // Live SSE progress: the panel owns the numbers, the server only sends a stage code.
+  const [splitProgress, setSplitProgress] = useState<number | null>(null)
+  const [splitStage, setSplitStage] = useState<string | null>(null)
+  const [splitDone, setSplitDone] = useState<number | null>(null)
+  const [splitTotal, setSplitTotal] = useState<number | null>(null)
+  const [splitCreated, setSplitCreated] = useState<number | null>(null)
   const updateTankoubon = useUpdateTankoubon(archive.arcid)
 
   const [thumbnailVersion, setThumbnailVersion] = useState(0)
@@ -814,6 +821,14 @@ export function ArchiveOverviewOverlay({
                         <label style={{ marginTop: 12, display: "block", textAlign: "center", cursor: "pointer" }}>
                           <input
                             type="checkbox"
+                            checked={splitCreateTankoubon}
+                            onChange={(e) => setSplitCreateTankoubon(e.target.checked)}
+                          />{" "}
+                          {t("reader.splitCreateTankoubonCheckbox")}
+                        </label>
+                        <label style={{ marginTop: 6, display: "block", textAlign: "center", cursor: "pointer" }}>
+                          <input
+                            type="checkbox"
                             checked={splitDeleteOriginal}
                             onChange={(e) => setSplitDeleteOriginal(e.target.checked)}
                           />{" "}
@@ -832,40 +847,93 @@ export function ArchiveOverviewOverlay({
                             value={(executeSplit.isPending ? t("reader.running") : t("reader.executeSplit")) ?? undefined}
                             disabled={executeSplit.isPending}
                             onClick={() => {
+                              // Show the bar on the click, not on the first event: the POST
+                              // answers with a job id only after the run has started, and by the
+                              // time the stream connects the early stages are already gone — that
+                              // left the bar appearing at whatever the last event said.
+                              const groups = splitSuggestion.data?.suggestion?.split_groups.length ?? null
+                              setSplitProgress(0)
+                              setSplitStage("started")
+                              setSplitDone(groups === null ? null : 0)
+                              setSplitTotal(groups)
+                              setSplitCreated(null)
                               void executeSplit
-                                .mutateAsync({ id: archive.arcid, deleteOriginal: splitDeleteOriginal })
+                                .mutateAsync({
+                                  id: archive.arcid,
+                                  deleteOriginal: splitDeleteOriginal,
+                                  createTankoubon: splitCreateTankoubon,
+                                })
                                 .then((r) => {
-                                setSplitStatus(`${t("reader.splitJobStarted")}: ${r.job_id}`)
-                                const source = new EventSource(`/api/archives/${archive.arcid}/split/stream`)
-                                source.onmessage = (e) => {
-                                  try {
-                                    const data = JSON.parse(e.data) as { progress?: number; message?: string }
-                                    setSplitStatus(`${data.message ?? ""} ${Math.round((data.progress ?? 0) * 100)}%`)
-                                    if ((data.progress ?? 0) >= 1) {
-                                    source.close()
-                                    if (splitDeleteOriginal) {
-                                      navigate(routes.library())
-                                      toast({
-                                        heading: t("reader.splitCompleteWithDelete") ?? undefined,
-                                        text: t("reader.splitCompleteWithDeleteDescription", {
-                                          count: splitSuggestion.data?.suggestion.split_groups.length ?? 0,
-                                        }) ?? undefined,
-                                        icon: "success",
-                                      })
+                                  setSplitStatus(`${t("reader.splitJobStarted")}: ${r.job_id}`)
+                                  const source = new EventSource(`/api/archives/${archive.arcid}/split/stream`)
+                                  source.onmessage = (e) => {
+                                    try {
+                                      const data = JSON.parse(e.data) as {
+                                        progress?: number
+                                        stage?: string
+                                        done?: number | null
+                                        total?: number | null
+                                        source_deleted?: boolean
+                                      }
+                                      setSplitProgress(data.progress ?? 0)
+                                      setSplitStage(data.stage ?? null)
+                                      setSplitDone(data.done ?? null)
+                                      setSplitTotal(data.total ?? null)
+                                      if (data.stage === "finished") {
+                                        source.close()
+                                        setSplitCreated(data.done ?? null)
+                                        setSplitStatus(null)
+                                        queryClient.invalidateQueries({ queryKey: ["archives"] })
+                                        queryClient.invalidateQueries({ queryKey: ["archive"] })
+                                        queryClient.invalidateQueries({ queryKey: ["archive-split-suggestion"] })
+                                        // The server only deletes the source when every volume was
+                                        // created and the user asked for it, and it says so in
+                                        // this frame: a page whose archive is gone has nothing
+                                        // left to show, so go back to the library. Anything else
+                                        // (a partial run, the source kept) stays put.
+                                        if (data.source_deleted === true) {
+                                          navigate("/")
+                                        }
+                                      }
+                                    } catch {
+                                      setSplitStatus(e.data)
                                     }
                                   }
-                                  } catch {
-                                    setSplitStatus(e.data)
+                                  // The server drops the channel when the job ends, which the
+                                  // browser reports as an error even on a clean finish.
+                                  source.onerror = () => {
+                                    source.close()
+                                    setSplitStatus((current) => current ?? t("reader.splitFinishedOrNotFound") ?? null)
                                   }
-                                }
-                                source.onerror = () => {
-                                  source.close()
-                                  setSplitStatus(t("reader.splitFinishedOrNotFound") ?? "")
-                                }
-                              })
+                                })
                             }}
                           />
                         </div>
+                        {splitProgress !== null && (
+                          <div style={{ marginTop: 12 }} className="split-progress">
+                            <div className="split-progress-track">
+                              <div
+                                className="split-progress-fill"
+                                style={{ width: `${Math.max(0, Math.min(100, Math.round(splitProgress * 100)))}%` }}
+                              />
+                            </div>
+                            <div className="split-progress-label">
+                              {t(`reader.splitStage.${splitStage ?? "started"}`)}
+                              {splitDone !== null && splitTotal !== null ? ` ${splitDone} / ${splitTotal}` : ""}
+                              {` · ${Math.round(splitProgress * 100)}%`}
+                            </div>
+                          </div>
+                        )}
+                        {splitCreated !== null && (
+                          <div style={{ marginTop: 8, textAlign: "center", fontWeight: 600 }}>
+                            {t("reader.splitCreatedVolumes", { count: splitCreated })}
+                          </div>
+                        )}
+                        {splitCreated !== null && splitTotal !== null && splitCreated < splitTotal && (
+                          <div className="split-progress-warning">
+                            {t("reader.splitPartialFailure", { done: splitCreated, total: splitTotal })}
+                          </div>
+                        )}
                         {splitStatus && <div style={{ marginTop: 8, textAlign: "center" }}>{splitStatus}</div>}
                       </>
                     ) : (

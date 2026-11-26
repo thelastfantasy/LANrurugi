@@ -17,6 +17,7 @@ import { useArchiveMetadata } from "@/api/hooks"
 import { type DragHandleProps, Drawer, DrawerFooter, SortableList } from "@/components/common-ui/Display"
 import { IconButton } from "@/components/common-ui/Form"
 import { useNearViewport } from "@/hooks/useNearViewport"
+import { useDataChange } from "@/lib/crossTabData"
 import { SELECTION_VIEW_KEY } from "@/lib/storageKeys"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 
@@ -87,6 +88,13 @@ export function SelectionDrawer({
   // one. The button stays visible (disabled) so the rule is discoverable instead of the action
   // just vanishing once a second Tankoubon lands in the selection.
   const mergeBlockedByTank = tankCount > 1
+  // Another tab (`/batch`) may delete what is still listed here. Drop those rows on the spot: a
+  // stale selection would fail every operation the user launches from it.
+  useDataChange((change) => {
+    for (const id of change.removed ?? []) {
+      if (selectedIds.includes(id)) onRemove(id)
+    }
+  })
   const [view, setView] = useState<SelectionView>(readView)
   const toggleView = () => {
     const next = view === "list" ? "grid" : "list"

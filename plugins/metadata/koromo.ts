@@ -8,7 +8,7 @@ export function pluginInfo() {
     type: "metadata" as const,
     parameters: [
     ],
-    declared_permissions: { net: [], read: false, write: true },
+    declared_permissions: { net: [], read: false, write: false },
     name: "koromo",
     author: "thelastfantasy",
     description: "Collects metadata embedded into your archives as Koromo-style Info.json files. ( {'Tags': [xxx] } syntax)",

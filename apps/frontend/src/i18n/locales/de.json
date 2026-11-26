@@ -1187,5 +1187,13 @@
   "settings.resources.ioProcessHint": "Block-I/O dieses Prozesses aus /proc/<pid>/io.",
   "settings.resources.ioUnavailable": "Dieser Container hat keinen I/O-Controller, daher keine Aufschlüsselung pro Gerät.",
   "upload.dropFilesHere": "Dateien zum Hinzufügen ablegen",
-  "upload.dropFilesHereHint": "Sie werden nacheinander hochgeladen."
+  "upload.dropFilesHereHint": "Sie werden nacheinander hochgeladen.",
+  "reader.splitCreateTankoubonCheckbox": "Die Bände in einen neuen Tankoubon legen",
+  "reader.splitStage.started": "Start",
+  "reader.splitStage.reading": "Archiv wird gelesen",
+  "reader.splitStage.generating": "Bände werden geschrieben",
+  "reader.splitStage.ingesting": "Wird zur Bibliothek hinzugefügt",
+  "reader.splitStage.finished": "Fertig",
+  "reader.splitCreatedVolumes": "{{count}} Band/Bände erstellt",
+  "reader.splitPartialFailure": "Nur {{done}} von {{total}} Bänden wurden erstellt — das Quellarchiv bleibt erhalten."
 }

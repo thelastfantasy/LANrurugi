@@ -3743,5 +3743,13 @@
   "settings.resources.ioProcessHint": "本进程累计的块设备读写，来自 /proc/<pid>/io。",
   "settings.resources.ioUnavailable": "此容器没有 I/O 控制器，所以没有按设备拆分的明细。",
   "upload.dropFilesHere": "松开即可添加文件",
-  "upload.dropFilesHereHint": "多个文件会依次上传。"
+  "upload.dropFilesHereHint": "多个文件会依次上传。",
+  "reader.splitCreateTankoubonCheckbox": "拆包后把各卷放进一个新单行本",
+  "reader.splitStage.started": "开始",
+  "reader.splitStage.reading": "读取档案",
+  "reader.splitStage.generating": "生成各卷压缩包",
+  "reader.splitStage.ingesting": "入库中",
+  "reader.splitStage.finished": "完成",
+  "reader.splitCreatedVolumes": "已创建 {{count}} 卷",
+  "reader.splitPartialFailure": "只成功创建了 {{done}} / {{total}} 卷，源档已保留。"
 }

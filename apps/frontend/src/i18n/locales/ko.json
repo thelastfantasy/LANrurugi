@@ -1282,5 +1282,13 @@
   "settings.resources.ioProcessHint": "이 프로세스가 수행한 블록 I/O 입니다(/proc/<pid>/io).",
   "settings.resources.ioUnavailable": "이 컨테이너에는 I/O 컨트롤러가 없어 장치별 내역이 없습니다.",
   "upload.dropFilesHere": "파일을 놓아 추가",
-  "upload.dropFilesHereHint": "파일은 차례로 업로드됩니다."
+  "upload.dropFilesHereHint": "파일은 차례로 업로드됩니다.",
+  "reader.splitCreateTankoubonCheckbox": "분할 후 각 권을 새 단행본에 넣기",
+  "reader.splitStage.started": "시작",
+  "reader.splitStage.reading": "아카이브 읽는 중",
+  "reader.splitStage.generating": "각 권 쓰는 중",
+  "reader.splitStage.ingesting": "라이브러리에 추가 중",
+  "reader.splitStage.finished": "완료",
+  "reader.splitCreatedVolumes": "{{count}}권 생성됨",
+  "reader.splitPartialFailure": "{{total}}권 중 {{done}}권만 생성되었습니다. 원본 아카이브는 보존됩니다."
 }

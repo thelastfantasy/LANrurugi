@@ -651,11 +651,24 @@ export function useAnalyzeArchiveSplit() {
 export function useExecuteArchiveSplit() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, deleteOriginal }: { id: string; deleteOriginal?: boolean }) =>
-      sendJson<{ job_id: string; success: number }>(
+    mutationFn: ({
+      id,
+      deleteOriginal,
+      createTankoubon,
+    }: {
+      id: string
+      deleteOriginal?: boolean
+      createTankoubon?: boolean
+    }) => {
+      const params = new URLSearchParams()
+      if (deleteOriginal !== undefined) params.set("delete_original", String(deleteOriginal))
+      if (createTankoubon !== undefined) params.set("create_tankoubon", String(createTankoubon))
+      const query = params.toString()
+      return sendJson<{ job_id: string; success: number }>(
         "POST",
-        `/archives/${id}/split/execute${deleteOriginal !== undefined ? `?delete_original=${deleteOriginal}` : ""}`,
-      ),
+        `/archives/${id}/split/execute${query ? `?${query}` : ""}`,
+      )
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["archives"] })
       queryClient.invalidateQueries({ queryKey: ["tankoubon-full"] })

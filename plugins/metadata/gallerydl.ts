@@ -12,7 +12,7 @@ export function pluginInfo() {
     type: "metadata" as const,
     parameters: [
     ],
-    declared_permissions: { net: [], read: false, write: true },
+    declared_permissions: { net: [], read: false, write: false },
     name: "GalleryDL",
     author: "thelastfantasy",
     description: "Collects metadata from gallery-dl-created info.json files, either embedded in your archive or in the same folder with the same name. ({archive_name}.json)",

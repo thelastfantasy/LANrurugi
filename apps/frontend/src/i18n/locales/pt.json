@@ -1128,5 +1128,13 @@
   "settings.resources.ioProcessHint": "E/S de bloco deste processo, de /proc/<pid>/io.",
   "settings.resources.ioUnavailable": "Este contêiner não tem controlador de E/S, então não há detalhamento por dispositivo.",
   "upload.dropFilesHere": "Solte os arquivos para adicioná-los",
-  "upload.dropFilesHereHint": "Eles são enviados um após o outro."
+  "upload.dropFilesHereHint": "Eles são enviados um após o outro.",
+  "reader.splitCreateTankoubonCheckbox": "Colocar os volumes num novo tankoubon",
+  "reader.splitStage.started": "Iniciando",
+  "reader.splitStage.reading": "Lendo o arquivo",
+  "reader.splitStage.generating": "Gravando os volumes",
+  "reader.splitStage.ingesting": "Adicionando à biblioteca",
+  "reader.splitStage.finished": "Concluído",
+  "reader.splitCreatedVolumes": "{{count}} volume(s) criado(s)",
+  "reader.splitPartialFailure": "Apenas {{done}} de {{total}} volumes foram criados — o arquivo de origem foi mantido."
 }

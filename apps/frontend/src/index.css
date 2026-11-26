@@ -5696,3 +5696,34 @@ div.gt.gt-single > span {
   font-weight: normal;
   opacity: 0.75;
 }
+
+.split-progress {
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+.split-progress-track {
+  height: 10px;
+  border: 1px solid currentColor;
+  overflow: hidden;
+}
+
+.split-progress-fill {
+  height: 100%;
+  background: currentColor;
+  transition: width 0.25s linear;
+}
+
+.split-progress-label {
+  margin-top: 4px;
+  text-align: center;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+.split-progress-warning {
+  margin-top: 6px;
+  text-align: center;
+  font-weight: 600;
+}

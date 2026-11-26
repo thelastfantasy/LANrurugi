@@ -11,7 +11,7 @@ export function pluginInfo() {
     type: "metadata" as const,
     parameters: [
     ],
-    declared_permissions: { net: [], read: false, write: true },
+    declared_permissions: { net: [], read: false, write: false },
     name: "ComicInfo",
     author: "thelastfantasy",
     description: "Parses metadata from ComicInfo.xml embedded in the archive",

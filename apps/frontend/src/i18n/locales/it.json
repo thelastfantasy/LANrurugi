@@ -893,5 +893,13 @@
   "settings.resources.ioProcessHint": "I/O a blocchi di questo processo, da /proc/<pid>/io.",
   "settings.resources.ioUnavailable": "Questo container non ha un controller I/O, quindi nessun dettaglio per dispositivo.",
   "upload.dropFilesHere": "Rilascia i file per aggiungerli",
-  "upload.dropFilesHereHint": "Vengono caricati uno dopo l'altro."
+  "upload.dropFilesHereHint": "Vengono caricati uno dopo l'altro.",
+  "reader.splitCreateTankoubonCheckbox": "Mettere i volumi in un nuovo tankoubon",
+  "reader.splitStage.started": "Avvio",
+  "reader.splitStage.reading": "Lettura dell'archivio",
+  "reader.splitStage.generating": "Scrittura dei volumi",
+  "reader.splitStage.ingesting": "Aggiunta alla libreria",
+  "reader.splitStage.finished": "Fatto",
+  "reader.splitCreatedVolumes": "{{count}} volume/i creato/i",
+  "reader.splitPartialFailure": "Sono stati creati solo {{done}} volumi su {{total}} — l'archivio di origine è stato conservato."
 }

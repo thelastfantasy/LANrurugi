@@ -6,6 +6,7 @@ import { AndroidToastTransition } from "@/toast"
 
 import { AuthBridgeGate } from "./AuthBridgeGate"
 import { NotFoundPage } from "./components/Display/NotFoundPage"
+import { CrossTabSync } from "./CrossTabSync"
 import { DialogHost } from "./dialog"
 import { FirstRunWizardGate } from "./FirstRunWizardGate"
 import { Layout } from "./Layout"
@@ -64,6 +65,7 @@ export function App() {
   return (
     <BrowserRouter>
       <AuthBridgeGate />
+      <CrossTabSync />
       <FirstRunWizardGate />
       {/* Toasts dismiss on a horizontal swipe. The library's own default asks for 80% of the
           toast's width, which on a phone is nearly a full-screen drag — reported as "swipe does

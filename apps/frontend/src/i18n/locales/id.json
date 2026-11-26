@@ -1202,5 +1202,13 @@
   "settings.resources.ioProcessHint": "I/O blok yang dilakukan proses ini, dari /proc/<pid>/io.",
   "settings.resources.ioUnavailable": "Kontainer ini tidak punya pengendali I/O, jadi tidak ada rincian per perangkat.",
   "upload.dropFilesHere": "Lepaskan berkas untuk menambahkannya",
-  "upload.dropFilesHereHint": "Berkas diunggah satu per satu."
+  "upload.dropFilesHereHint": "Berkas diunggah satu per satu.",
+  "reader.splitCreateTankoubonCheckbox": "Masukkan volume ke tankoubon baru",
+  "reader.splitStage.started": "Memulai",
+  "reader.splitStage.reading": "Membaca arsip",
+  "reader.splitStage.generating": "Menulis volume",
+  "reader.splitStage.ingesting": "Menambahkan ke pustaka",
+  "reader.splitStage.finished": "Selesai",
+  "reader.splitCreatedVolumes": "{{count}} volume dibuat",
+  "reader.splitPartialFailure": "Hanya {{done}} dari {{total}} volume yang dibuat — arsip sumber dipertahankan."
 }

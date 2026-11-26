@@ -1145,5 +1145,13 @@
   "settings.resources.ioProcessHint": "Blokk-I/O utført av denne prosessen, fra /proc/<pid>/io.",
   "settings.resources.ioUnavailable": "Denne containeren har ingen I/O-kontroller, derfor ingen fordeling per enhet.",
   "upload.dropFilesHere": "Slipp filer for å legge dem til",
-  "upload.dropFilesHereHint": "De lastes opp én etter én."
+  "upload.dropFilesHereHint": "De lastes opp én etter én.",
+  "reader.splitCreateTankoubonCheckbox": "Legg bindene i en ny tankoubon",
+  "reader.splitStage.started": "Starter",
+  "reader.splitStage.reading": "Leser arkivet",
+  "reader.splitStage.generating": "Skriver bindene",
+  "reader.splitStage.ingesting": "Legger til i biblioteket",
+  "reader.splitStage.finished": "Ferdig",
+  "reader.splitCreatedVolumes": "{{count}} bind opprettet",
+  "reader.splitPartialFailure": "Bare {{done}} av {{total}} bind ble opprettet — kildeaktivet er beholdt."
 }

@@ -713,5 +713,13 @@
   "settings.resources.ioProcessHint": "এই প্ৰচেছে কৰা ব্লক I/O, /proc/<pid>/io ৰ পৰা।",
   "settings.resources.ioUnavailable": "এই কণ্টেইনাত I/O নিয়ন্ত্ৰক নাই, সেয়ে ডিভাইচ অনুসৰি বিৱৰণ নাই।",
   "upload.dropFilesHere": "ফাইল এৰি যোগ কৰক",
-  "upload.dropFilesHereHint": "পৰৱৰ্তীভাৱে আপল'ড হব।"
+  "upload.dropFilesHereHint": "পৰৱৰ্তীভাৱে আপল'ড হব।",
+  "reader.splitCreateTankoubonCheckbox": "Splitৰ পিছত আটাইবোৰ খণ্ড এটা নতুন tankoubonত ৰাখক",
+  "reader.splitStage.started": "আৰম্ভ",
+  "reader.splitStage.reading": "আৰ্কাইভ পঢ়ি আছে",
+  "reader.splitStage.generating": "খণ্ডবোৰ লিখি আছে",
+  "reader.splitStage.ingesting": "লাইব্ৰেৰীত যোগ কৰি আছে",
+  "reader.splitStage.finished": "সম্পূৰ্ণ",
+  "reader.splitCreatedVolumes": "{{count}} খণ্ড সৃষ্টি হ’ল",
+  "reader.splitPartialFailure": "মাত্ৰ {{done}} / {{total}} খণ্ডহে সৃষ্টি হ’ল — মূল আৰ্কাইভ ৰখা হৈছে।"
 }
