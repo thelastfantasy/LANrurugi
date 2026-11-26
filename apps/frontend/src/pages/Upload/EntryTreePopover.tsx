@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { FaCaretDown, FaCaretRight, FaFolder, FaImage, FaRegFile, FaSitemap } from "react-icons/fa6";
 
 import type { ArchiveEntryInfo } from "@/api/types";
 import { PopupMenu, Tooltip } from "@/components/common-ui/Display"
@@ -85,21 +86,33 @@ function EntryTreeRow({
         cursor: child.isDirectory ? "pointer" : "default",
       }}
     >
-      {child.isDirectory && (
-        <i
-          className={`fa ${isCollapsed ? "fa-caret-right" : "fa-caret-down"}`}
-          aria-hidden="true"
-          style={{ opacity: 0.6, width: 10, textAlign: "center" }}
-        ></i>
+      {child.isDirectory &&
+        (isCollapsed ? (
+          // `flex: 0 0 auto` matters: flex items shrink by default, so a row whose name overflows
+          // squeezed its caret and icon narrower than a shorter row's, and the same depth then
+          // started at a different x — which read as a stray indent.
+          <FaCaretRight aria-hidden="true" size={10} style={{ opacity: 0.6, flex: "0 0 auto" }} />
+        ) : (
+          <FaCaretDown aria-hidden="true" size={10} style={{ opacity: 0.6, flex: "0 0 auto" }} />
+        ))}
+      {child.isDirectory ? (
+        <FaFolder aria-hidden="true" size={14} style={{ opacity: 0.7, flex: "0 0 auto" }} />
+      ) : child.isPage ? (
+        <FaImage aria-hidden="true" size={14} style={{ opacity: 0.7, flex: "0 0 auto" }} />
+      ) : (
+        <FaRegFile aria-hidden="true" size={14} style={{ opacity: 0.7, flex: "0 0 auto" }} />
       )}
-      <i
-        className={
-          child.isDirectory ? "fa fa-folder" : child.isPage ? "fa fa-image" : "far fa-file"
-        }
-        aria-hidden="true"
-        style={{ opacity: 0.7, width: 14, textAlign: "center" }}
-      ></i>
-      <span style={{ opacity: child.isDirectory ? 0.85 : 1 }}>{child.name}</span>
+      <span
+        title={child.name}
+        style={{
+          opacity: child.isDirectory ? 0.85 : 1,
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {child.name}
+      </span>
     </div>
   );
 }
@@ -167,8 +180,9 @@ export function EntryTreePopover({ entries }: { entries: ArchiveEntryInfo[] }) {
   const toggle = () => {
     if (!open && buttonRef.current) {
       const rect = buttonRef.current.getBoundingClientRect();
-      // Width capped to the viewport to avoid overflow on narrow/mobile screens.
-      const width = Math.min(320, window.innerWidth - 16);
+      // Width capped to the viewport to avoid overflow on narrow/mobile screens. Wide enough for a
+      // two-segment volume path at depth 1, which is where these trees usually bottom out.
+      const width = Math.min(420, window.innerWidth - 16);
       const maxLeft = window.innerWidth - width - 8;
       setPos({
         top: Math.min(rect.bottom + 4, window.innerHeight - 8),
@@ -227,7 +241,7 @@ export function EntryTreePopover({ entries }: { entries: ArchiveEntryInfo[] }) {
             verticalAlign: "middle",
           }}
         >
-          <i className="fa fa-sitemap" aria-hidden="true"></i>
+          <FaSitemap aria-hidden="true" size={12} />
           {t("upload.filesFiles", { pages: pageCount, files: fileCount })}
         </button>
       </Tooltip>

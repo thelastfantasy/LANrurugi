@@ -3991,31 +3991,55 @@ body div.ido {
   white-space: nowrap;
 }
 
-/* One maintenance script under the Plugins page's "维护脚本" section: an explanation and its single
- * "运行" button.
+/* One maintenance script under the Plugins page's "维护脚本" section: its name, its explanation, and
+ * the single "运行" button that runs it.
+ *
+ * A two-column grid rather than a flex row: the section body is centred like the rest of the page,
+ * which left each explanation centred while its button sat at the far edge — three competing
+ * alignments in one block. `text-align: left` keeps the reading column straight.
  *
  * The button must not shrink. `body input.stdbtn { min-width: 0 }` in the phone-width clamp above
- * exists so legacy's fixed-width buttons fit a 400px column, but inside a flex row it also lets the
- * button be squeezed below its own label — an `<input>` clips its text, so "运行" came out cut in
- * half (reported on a phone, 2026-11-03). The explanation wraps instead; below the phone breakpoint
- * the button drops to its own line rather than competing for the same one. */
+ * exists so legacy's fixed-width buttons fit a 400px column, but inside a shrinking column it also
+ * lets the button be squeezed below its own label — an `<input>` clips its text, so "运行" came out
+ * cut in half (reported on a phone, 2026-11-03). The `auto` track plus `justify-self: end` sizes it
+ * to its label instead. */
 .plugin-script-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 4px 0;
+  gap: 4px 16px;
+  padding: 10px 2px;
+  text-align: left;
+  border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.plugin-script-row > span {
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+/* The name is a caption for the paragraph under it, not the first words of it. */
+.plugin-script-row > span > b {
+  display: block;
+  margin-bottom: 2px;
 }
 
 .plugin-script-row > .stdbtn {
-  flex: 0 0 auto;
-  /* Right edge on its own line too, matching the desktop layout where it is pushed to the far side. */
-  margin-left: auto;
+  justify-self: end;
+}
+
+/* The repair script's review step: same left-aligned reading column as the row above it, so the
+ * "before → after" list does not sit centred under a centred heading. */
+.plugin-script-pending {
+  padding: 8px 2px 12px;
+  text-align: left;
+  font-size: 0.9rem;
+  line-height: 1.45;
 }
 
 @media (max-width: 640px) {
   .plugin-script-row {
-    flex-wrap: wrap;
+    gap: 6px 10px;
   }
 
   /* The phone clamp above zeroes `.stdbtn`'s own `min-width`, which leaves the button at its label's
