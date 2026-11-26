@@ -474,6 +474,15 @@ async fn eval_expr(
 ///
 /// Callers must exclude Tankoubon ids (`TANK_…`): those are zsets, and `HMGET` on one is a
 /// `WRONGTYPE` error that fails the whole pipeline.
+/// The tie-break key for two rows whose primary sort value is identical: the title, folded so
+/// case does not decide the order, or the id when the archive has no title yet.
+fn title_sort_key(title: Option<&str>, id: &str) -> String {
+    match title.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => t.to_lowercase(),
+        None => id.to_string(),
+    }
+}
+
 async fn hmget_many(
     conn: &mut deadpool_redis::Connection,
     ids: &[&str],
@@ -1549,6 +1558,7 @@ async fn collect_tag_index(
     conn: &mut deadpool_redis::Connection,
     folded: &str,
     isexact: bool,
+    excluded: &[String],
     ids: &mut HashSet<String>,
 ) -> Result<()> {
     let exact_key = format!("INDEX_{folded}");
@@ -1561,7 +1571,7 @@ async fn collect_tag_index(
         } else {
             format!("INDEX_*{folded}*")
         };
-        collect_index_keys(conn, &pattern, None, ids).await?;
+        collect_index_keys(conn, &pattern, None, excluded, ids).await?;
     }
     Ok(())
 }
@@ -1578,6 +1588,7 @@ async fn collect_tag_variants(
     conn: &mut deadpool_redis::Connection,
     variants: &[String],
     isexact: bool,
+    excluded: &[String],
     ids: &mut HashSet<String>,
 ) -> Result<()> {
     if variants.is_empty() {
@@ -1610,18 +1621,67 @@ async fn collect_tag_variants(
         if !literals.is_empty() {
             let prefixes: Vec<String> = literals.iter().map(|v| format!("INDEX_{v}")).collect();
             let pattern = format!("INDEX_{namespace}:*");
-            collect_index_keys(conn, &pattern, Some(&prefixes), ids).await?;
+            collect_index_keys(conn, &pattern, Some(&prefixes), excluded, ids).await?;
         }
         for variant in globs {
-            collect_tag_index(conn, variant, isexact, ids).await?;
+            collect_tag_index(conn, variant, isexact, excluded, ids).await?;
         }
         return Ok(());
     }
 
     for variant in variants {
-        collect_tag_index(conn, variant, isexact, ids).await?;
+        collect_tag_index(conn, variant, isexact, excluded, ids).await?;
     }
     Ok(())
+}
+
+/// The namespaces `work:` searches: the ones that say *who made this*, next to the title. Anything
+/// else (`parody:`, `series:`, `language:`, …) is classification noise to a reader asking "this
+/// artist's stuff".
+const WORK_NAMESPACES: &[&str] = &["artist", "circle", "group", "cosplayer"];
+
+/// Unions the archives whose `artist`/`circle`/`group`/`cosplayer` tag contains `needle`.
+///
+/// One `SCAN` for all four namespaces rather than one each: every key is `INDEX_<ns>:…`, so a
+/// single `INDEX_*<needle>*` walk plus a `starts_with` filter is equivalent for a quarter of the
+/// key walks. A quoted value keeps `collect_tag_index`'s own rule — an existing literal
+/// `INDEX_<ns>:<needle>` key wins — and falls back to that same substring walk when it does not, so
+/// `work:"zeta"` still finds `artist:zeta` and `artist:zeta extra` alike.
+async fn collect_work_matches(
+    conn: &mut deadpool_redis::Connection,
+    needle: &str,
+    isexact: bool,
+    ids: &mut HashSet<String>,
+) -> Result<()> {
+    if needle.is_empty() {
+        return Ok(());
+    }
+    if isexact {
+        let mut hit = false;
+        for ns in WORK_NAMESPACES {
+            let key = format!("INDEX_{ns}:{needle}");
+            if conn.exists(&key).await.unwrap_or(false) {
+                let members: Vec<String> = conn.smembers(&key).await.unwrap_or_default();
+                ids.extend(members);
+                hit = true;
+            }
+        }
+        if hit {
+            return Ok(());
+        }
+    }
+    let prefixes: Vec<String> = WORK_NAMESPACES
+        .iter()
+        .map(|ns| format!("INDEX_{ns}:"))
+        .collect();
+    collect_index_keys(
+        conn,
+        &format!("INDEX_*{needle}*"),
+        Some(&prefixes),
+        &[],
+        ids,
+    )
+    .await
 }
 
 /// The namespace part shared by every variant (`"source"` for `source:…`), or `None` when they
@@ -1693,24 +1753,28 @@ async fn token_matches(
         }
         return Ok(ids);
     }
-    if let Some((start, end)) = parse_date_range(&token.tag, timezone) {
+    if let Some(filter) = parse_date_filter(&token.tag, timezone) {
         let mut ids = HashSet::new();
         for id in scope {
             if id.starts_with("TANK") {
                 continue;
             }
-            // `date_added` lives inside the archive's comma-separated `tags` string as
-            // `date_added:<unix_seconds>`, not as its own Redis hash field — so unlike
+            // `date_added`/`timestamp` live inside the archive's comma-separated `tags` string as
+            // `date_added:<unix_seconds>`, not as their own Redis hash fields — so unlike
             // `pages:`/`read:` (which read a dedicated `pagecount`/`progress` field) this has to
             // scan the tags string for the matching namespace. Tolerates a malformed/missing
             // numeric value (treated as not matching) rather than erroring, matching the rest of
-            // this function's own `unwrap_or_default()` resilience.
+            // this function's own `unwrap_or_default()` resilience. `time:` matches when *either*
+            // namespace lands in the range (see `date_filter_tags`).
             let tags: String = archive_conn.hget(id, "tags").await.unwrap_or_default();
             let matches = tags.split(',').any(|t| {
-                t.trim()
-                    .strip_prefix("date_added:")
-                    .and_then(|v| v.trim().parse::<u64>().ok())
-                    .is_some_and(|ts| ts >= start && ts < end)
+                let t = t.trim();
+                filter.tags.iter().any(|ns| {
+                    t.strip_prefix(*ns)
+                        .and_then(|rest| rest.strip_prefix(':'))
+                        .and_then(|v| v.trim().parse::<u64>().ok())
+                        .is_some_and(|ts| ts >= filter.start && ts < filter.end)
+                })
             });
             if matches {
                 ids.insert(id.clone());
@@ -1772,19 +1836,16 @@ async fn token_matches(
         return Ok(ids);
     }
 
-    // `date_added` (once its `_`/`%` glob-escaping is undone — see `parse_date_range`'s own docs)
-    // only ever supports the `YYYY-MM-DD` day-range form above; a bare-timestamp write like
-    // `date_added:1784871857` deliberately returns *empty*, not "whatever the generic tag-index/
-    // title-fuzzy-match fallback below happens to find". `date_added` was never tag-indexed to
-    // begin with (it's in `indexer::BASIC_NAMESPACES`, the same "too noisy to index" list as
-    // `source`/`artist`/etc. — see that constant's own docs), so falling through here already
-    // returned empty in practice, but only as an *accidental* consequence of that separate
-    // indexing decision — a future change to what gets indexed could silently resurrect
-    // second-precision timestamp search as an unintended side effect. This makes "date_added only
-    // supports day-range search" a real, explicit guarantee instead of a coincidence two unrelated
-    // pieces of code happen to agree on today.
-    if token.tag.replace('?', "_").starts_with("date_added:") {
-        return Ok(HashSet::new());
+    // The date namespaces only support the `YYYY-MM-DD` forms above. Any other value — a raw epoch
+    // (`date_added:1784871857`, `timestamp:1670000012`) or a bare year (`timestamp:2020`) — returns
+    // *empty* rather than falling through to the tag-index/title lookup, which would otherwise
+    // prefix-scan `INDEX_timestamp:2020*` and match every posting time in that decade. These tags
+    // *are* indexed (`indexer::write_tag_indexes` writes every tag; `BASIC_NAMESPACES` only decides
+    // what counts as "untagged"), so this reservation is a real guarantee, not a coincidence.
+    if let Some((namespace, _)) = token.tag.split_once(':') {
+        if date_filter_tags(&namespace.replace('?', "_")).is_some() {
+            return Ok(HashSet::new());
+        }
     }
 
     let mut ids = HashSet::new();
@@ -1794,6 +1855,19 @@ async fn token_matches(
     // intact and OpenCC phrase mappings never cross a wildcard.
     let folded = eq.fold_pattern(&token.tag);
 
+    // A bare number must not match a date. Legacy's bare term is "substring of any indexed tag", so
+    // `12` used to hit every `INDEX_date_added:1700000012`/`INDEX_timestamp:...` whose digits
+    // contained it — unrelated archives for a query like `生活 12`. Dates stay reachable through
+    // their own namespaces (`date_added:`/`timestamp:`/`time:`), which never scan the tag index.
+    let excluded_date_prefixes: Vec<String> = if is_numeric_bare_token(token) {
+        ["date_added", "timestamp"]
+            .iter()
+            .map(|ns| format!("INDEX_{}", eq.fold(&format!("{ns}:"))))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     // `title:`/`filename:` skip the tag index entirely — that field scoping is the one thing
     // legacy's syntax had no way to express, since a bare token always searched tags *and* the
     // title. `folded` is still needed by the title half below.
@@ -1802,7 +1876,20 @@ async fn token_matches(
             .iter()
             .map(|variant| eq.fold_pattern(variant).into_owned())
             .collect();
-        collect_tag_variants(search_conn, &variants, token.isexact, &mut ids).await?;
+        collect_tag_variants(
+            search_conn,
+            &variants,
+            token.isexact,
+            &excluded_date_prefixes,
+            &mut ids,
+        )
+        .await?;
+    }
+
+    // `work:` scopes the tag half to the creator namespaces; the title half below still runs, which
+    // is what makes it "title *or* who made it" in one operator.
+    if token.field == Field::Work {
+        collect_work_matches(search_conn, &folded, token.isexact, &mut ids).await?;
     }
 
     // Title match: LRR_TITLES_FOLDED members are "<folded title>\0id". `isexact` deliberately does
@@ -1823,7 +1910,19 @@ async fn token_matches(
     if legacy_fallback {
         if token.field == Field::Any {
             let variants = tag_index_variants(&token.tag, ctx.source_equivalences);
-            collect_tag_variants(search_conn, &variants, token.isexact, &mut ids).await?;
+            collect_tag_variants(
+                search_conn,
+                &variants,
+                token.isexact,
+                &excluded_date_prefixes,
+                &mut ids,
+            )
+            .await?;
+        }
+
+        // `work:` against the pre-fold indexes, whose tag text was never folded.
+        if token.field == Field::Work {
+            collect_work_matches(search_conn, &token.tag, token.isexact, &mut ids).await?;
         }
 
         // Same title semantics as the canonical branch above (phrase anywhere in the title), and
@@ -1855,6 +1954,7 @@ async fn collect_index_keys(
     conn: &mut deadpool_redis::Connection,
     pattern: &str,
     prefixes: Option<&[String]>,
+    excluded: &[String],
     ids: &mut HashSet<String>,
 ) -> Result<()> {
     let mut cursor = String::from("0");
@@ -1879,6 +1979,15 @@ async fn collect_index_keys(
     if let Some(prefixes) = prefixes {
         keys.retain(|key| {
             prefixes
+                .iter()
+                .any(|prefix| key.starts_with(prefix.as_str()))
+        });
+    }
+    // Date namespaces are skipped for a bare number (see `is_numeric_bare_token`): `12` would
+    // otherwise substring-match every `INDEX_date_added:...`/`INDEX_timestamp:...` containing it.
+    if !excluded.is_empty() {
+        keys.retain(|key| {
+            !excluded
                 .iter()
                 .any(|prefix| key.starts_with(prefix.as_str()))
         });
@@ -1948,18 +2057,44 @@ async fn collect_title_matches(
     }
 }
 
-/// Parses an additive `date_added:YYYY-MM-DD` token into the half-open Unix-timestamp range
-/// `[start, end)` covering that calendar day in the given IANA timezone — returns `None` for any
-/// tag that isn't exactly that shape (other namespaces, partial dates, comparison operators, or
-/// the bare timestamp form `date_added:1784871857` all fall through to the existing numeric/tag
-/// paths). The day boundaries (00:00:00 inclusive, 00:00:00 next day exclusive) are computed in
-/// `timezone`, then converted back to absolute UTC seconds — which is what `date_added` tags
-/// actually store — so two viewers in different timezones searching the same string resolve to
-/// the same set of archives, by design (see `SearchParams::timezone`'s own docs for the why).
+/// The archive tags a date filter reads. `time:` is deliberately the union of the other two: an
+/// archive matches when *either* tag falls in the range, so one query covers both archives whose
+/// only known date is the source's posting time and archives that carry both.
+fn date_filter_tags(namespace: &str) -> Option<&'static [&'static str]> {
+    match namespace {
+        "date_added" => Some(&["date_added"]),
+        "timestamp" => Some(&["timestamp"]),
+        "time" => Some(&["date_added", "timestamp"]),
+        _ => None,
+    }
+}
+
+/// A parsed date filter: the tags it reads and the half-open `[start, end)` it accepts.
+struct DateFilter {
+    tags: &'static [&'static str],
+    start: u64,
+    end: u64,
+}
+
+/// Whether a token is a bare run of digits — no namespace, no wildcard. Those are the queries where
+/// "substring of any indexed tag" turns every timestamp into a false hit.
+fn is_numeric_bare_token(token: &Token) -> bool {
+    token.field == Field::Any
+        && !token.tag.is_empty()
+        && token.tag.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Parses an additive `date_added:` / `timestamp:` / `time:` token into the half-open
+/// Unix-timestamp range `[start, end)` — `YYYY-MM-DD` for that calendar day, `YYYY-MM-DDTHH:MM`
+/// for one minute, `YYYY-MM-DDTHH:MM:SS` for one second — and returns `None` for anything else (a
+/// bare epoch such as `date_added:1784871857`, a year without month/day, an unknown namespace).
+/// The window is computed in `timezone` and converted back to absolute UTC seconds — what the
+/// `date_added`/`timestamp` tags actually store — so two viewers in different timezones searching
+/// the same string resolve to the same archives, by design (see `SearchParams::timezone`).
 ///
 /// Legacy LANraragi has no equivalent — its `date_added:` is a plain Unix-timestamp tag with no
 /// calendar-day search at all; this is a purely additive improvement, not a port.
-fn parse_date_range(tag: &str, timezone: &str) -> Option<(u64, u64)> {
+fn parse_date_filter(tag: &str, timezone: &str) -> Option<DateFilter> {
     let (ns, rest) = tag.split_once(':')?;
     // Comparison forms (`date_added:>=2026-01-01`) come first: a bare date means "that whole
     // calendar day" (the original, still-supported spelling), while the operators express
@@ -1980,34 +2115,50 @@ fn parse_date_range(tag: &str, timezone: &str) -> Option<(u64, u64)> {
     // `date?added:`. Reverse that rewrite on the namespace half only before comparing, so the
     // literal `date_added` namespace is recognized without disturbing the `?` wildcard semantics
     // the rest of the search engine depends on for actual wildcard queries.
-    let ns = ns.replace('?', "_");
-    if ns != "date_added" {
-        return None;
-    }
-    let date = chrono::NaiveDate::parse_from_str(rest, "%Y-%m-%d").ok()?;
+    let tags = date_filter_tags(&ns.replace('?', "_"))?;
     let tz: chrono_tz::Tz = timezone.parse().ok().unwrap_or(chrono_tz::UTC);
-    let day_start = date
-        .and_hms_opt(0, 0, 0)?
-        .and_local_timezone(tz)
-        .single()?
-        .timestamp() as u64;
-    let day_end = date
-        .succ_opt()?
-        .and_hms_opt(0, 0, 0)?
-        .and_local_timezone(tz)
-        .single()?
-        .timestamp() as u64;
+    // Three resolutions, widest first: a bare date means the whole calendar day (legacy's only
+    // spelling), `T`-separated minute or second narrows that to one minute / one second. `T` and
+    // not a space because the grammar splits on spaces — the space spelling could never arrive here
+    // as one token.
+    // `grammar::normalize` lowercases every token before it reaches the engine, so the `T` that
+    // separates date from time arrives as `t`; upcase a copy for the parse rather than teaching
+    // the whole pipeline to preserve case.
+    let upper = rest.to_ascii_uppercase();
+    let (window_start, window_end) =
+        if let Ok(at) = chrono::NaiveDateTime::parse_from_str(&upper, "%Y-%m-%dT%H:%M:%S") {
+            let start = at.and_local_timezone(tz).single()?.timestamp() as u64;
+            (start, start + 1)
+        } else if let Ok(at) = chrono::NaiveDateTime::parse_from_str(&upper, "%Y-%m-%dT%H:%M") {
+            let start = at.and_local_timezone(tz).single()?.timestamp() as u64;
+            (start, start + 60)
+        } else {
+            let date = chrono::NaiveDate::parse_from_str(rest, "%Y-%m-%d").ok()?;
+            let start = date
+                .and_hms_opt(0, 0, 0)?
+                .and_local_timezone(tz)
+                .single()?
+                .timestamp() as u64;
+            let end = date
+                .succ_opt()?
+                .and_hms_opt(0, 0, 0)?
+                .and_local_timezone(tz)
+                .single()?
+                .timestamp() as u64;
+            (start, end)
+        };
     // Half-open `[start, end)` in every case, using the timestamp bounds the caller already
     // compares against: `u64::MAX` is "no upper bound" and `0` is "no lower bound" (the epoch is
     // the earliest `date_added` that can exist).
-    Some(match op {
-        "=" => (day_start, day_end),
-        ">=" => (day_start, u64::MAX),
-        ">" => (day_end, u64::MAX),
-        "<=" => (0, day_end),
-        "<" => (0, day_start),
+    let (start, end) = match op {
+        "=" => (window_start, window_end),
+        ">=" => (window_start, u64::MAX),
+        ">" => (window_end, u64::MAX),
+        "<=" => (0, window_end),
+        "<" => (0, window_start),
         _ => return None,
-    })
+    };
+    Some(DateFilter { tags, start, end })
 }
 
 fn parse_numeric_filter(tag: &str) -> Option<(&'static str, &'static str, u32)> {
@@ -2136,7 +2287,9 @@ async fn sort_ids(
                 if !needle.is_empty() && folded_title.contains(needle.as_str()) {
                     score += 3;
                 }
-                if *field == Field::Any
+                // A `title:` token can only ever score against the title; both the unscoped and the
+                // `work:` form do read tags, so they score there too.
+                if *field != Field::Title
                     && !needle.is_empty()
                     && folded_tags.contains(needle.as_str())
                 {
@@ -2265,11 +2418,19 @@ async fn sort_ids(
         .filter(|id| !id.starts_with("TANK"))
         .map(String::as_str)
         .collect();
-    let rows = hmget_many(archive_conn, &ids, &["tags"]).await?;
+    let rows = hmget_many(archive_conn, &ids, &["tags", "title"]).await?;
     let mut tags_by_id: HashMap<&str, String> = HashMap::with_capacity(ids.len());
+    // Only needed to break ties: archives added in the same second (a split's outputs, a batch
+    // import) otherwise came back in whatever order the candidate set happened to hold.
+    let mut titles_by_id: HashMap<&str, String> = HashMap::with_capacity(ids.len());
     for (id, row) in ids.iter().zip(rows) {
-        tags_by_id.insert(*id, row.into_iter().next().flatten().unwrap_or_default());
+        let mut fields = row.into_iter();
+        tags_by_id.insert(*id, fields.next().flatten().unwrap_or_default());
+        titles_by_id.insert(*id, fields.next().flatten().unwrap_or_default());
     }
+    // Equal sort values fall back to the title, and to the id when there is no title at all — a
+    // stable order either way.
+    let title_key = |id: &str| title_sort_key(titles_by_id.get(id).map(String::as_str), id);
     let mut unkeyed: Vec<String> = Vec::new();
     if is_date_sort {
         let mut keyed: Vec<(String, u64)> = Vec::new();
@@ -2292,7 +2453,13 @@ async fn sort_ids(
                 None => unkeyed.push(id.clone()),
             }
         }
-        keyed.sort_by_key(|(_, v)| *v);
+        // Ties (archives that share one `date_added` second — a split's own outputs, a batch
+        // import) break on the title, so the order is both stable and meaningful. `order_desc`
+        // reverses the whole keyed run, so the title's direction follows the date's.
+        keyed.sort_by(|a, b| {
+            a.1.cmp(&b.1)
+                .then_with(|| title_key(&a.0).cmp(&title_key(&b.0)))
+        });
         if order_desc {
             keyed.reverse();
         }
@@ -2316,9 +2483,10 @@ async fn sort_ids(
             None => unkeyed.push(id.clone()),
         }
     }
-    keyed.sort_by(|a, b| a.1.cmp(&b.1));
     if order_desc {
-        keyed.reverse();
+        keyed.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    } else {
+        keyed.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
     }
     let mut result: Vec<String> = keyed.into_iter().map(|(id, _)| id).collect();
     result.extend(unkeyed);
@@ -2437,6 +2605,19 @@ async fn tank_date_sort_value(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two archives with the same `date_added` second (a split's outputs, a batch import) must
+    /// still come back in a defined order — by title, folded, falling back to the id.
+    #[test]
+    fn a_tie_on_the_sort_value_breaks_on_the_title() {
+        assert_eq!(title_sort_key(Some("  Volume B "), "aaaa"), "volume b");
+        assert_eq!(title_sort_key(None, "f35fe0c9"), "f35fe0c9");
+        assert_eq!(title_sort_key(Some("   "), "f35fe0c9"), "f35fe0c9");
+        // Case must not decide the order.
+        let mut pair = vec!["b", "A"];
+        pair.sort_by_key(|t| title_sort_key(Some(t), ""));
+        assert_eq!(pair, vec!["A", "b"]);
+    }
 
     /// The three things every test here needs: the archive DB, the search DB, and a bookmark
     /// repository bound to the **config** DB — the same split production uses, so a test can no
@@ -3880,6 +4061,300 @@ mod tests {
         assert!(mentions_split_suggestion(r#""has:split-suggestion""#));
         // A tag that merely contains the characters is a different token entirely.
         assert!(!mentions_split_suggestion("artist:has:split-suggestion"));
+    }
+
+    #[test]
+    fn parse_date_filter_widens_from_second_to_minute_to_day() {
+        let day = parse_date_filter("timestamp:2026-08-20", "UTC").unwrap();
+        assert_eq!(day.end - day.start, 86_400);
+        let minute = parse_date_filter("timestamp:2026-08-20T14:30", "UTC").unwrap();
+        assert_eq!(minute.start, day.start + 14 * 3600 + 30 * 60);
+        assert_eq!(minute.end - minute.start, 60);
+        // The engine receives `t`, not `T` (`grammar::normalize` lowercases the token).
+        let lower = parse_date_filter("timestamp:2026-08-20t14:30", "UTC").unwrap();
+        assert_eq!(lower.start, minute.start);
+        let second = parse_date_filter("timestamp:2026-08-20T14:30:05", "UTC").unwrap();
+        assert_eq!(second.start, minute.start + 5);
+        assert_eq!(second.end - second.start, 1);
+    }
+
+    #[test]
+    fn parse_date_filter_clamps_comparisons_to_the_parsed_window() {
+        // `>` / `<` mean "after / before the window", not "after / before its first second" —
+        // otherwise `>2026-08-20T14:30` would still match 14:30:00 itself.
+        let from = parse_date_filter("time:>=2026-08-20T14:30", "UTC").unwrap();
+        let after = parse_date_filter("time:>2026-08-20T14:30", "UTC").unwrap();
+        let until = parse_date_filter("time:<=2026-08-20T14:30", "UTC").unwrap();
+        let before = parse_date_filter("time:<2026-08-20T14:30", "UTC").unwrap();
+        assert_eq!((from.start, from.end), (1_787_236_200, u64::MAX));
+        assert_eq!((after.start, after.end), (from.start + 60, u64::MAX));
+        assert_eq!((until.start, until.end), (0, from.start + 60));
+        assert_eq!((before.start, before.end), (0, from.start));
+    }
+
+    #[test]
+    fn parse_date_filter_resolves_a_wall_clock_time_in_the_callers_timezone() {
+        let tokyo = parse_date_filter("date_added:2026-08-20T00:00", "Asia/Tokyo").unwrap();
+        let utc_day = parse_date_filter("date_added:2026-08-19", "UTC").unwrap();
+        assert_eq!(tokyo.start, utc_day.start + 15 * 3600);
+        // An unparseable zone falls back to UTC instead of silently dropping the filter.
+        let bogus = parse_date_filter("date_added:2026-08-20T00:00", "Not/AZone").unwrap();
+        assert_eq!(bogus.start, utc_day.start + 24 * 3600);
+    }
+
+    #[test]
+    fn parse_date_filter_rejects_shapes_it_never_supported() {
+        assert!(parse_date_filter("timestamp:1784871857", "UTC").is_none());
+        assert!(parse_date_filter("timestamp:2026-08", "UTC").is_none());
+        assert!(parse_date_filter("timestamp:2026-08-20T25:00", "UTC").is_none());
+        assert!(parse_date_filter("artist:2026-08-20", "UTC").is_none());
+    }
+
+    // Bare numbers must not reach the date namespaces, while `date_added:` / `timestamp:` /
+    // `time:` stay the way to ask about a calendar day — with `time:` matching *either* tag.
+    #[tokio::test]
+    async fn bare_numbers_skip_date_tags_and_time_unions_both() {
+        let Some((archive_pool, search_pool, bookmarks)) = test_pools().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+
+        let eq = test_eq();
+        // 1122334455 = 2005-07-25 UTC, 1700000012 = 2023-11-14 UTC. Both digit strings contain
+        // `12`, and the pair also shares the span `2233` — so a bare number used to match both
+        // archives through their `date_added:`/`timestamp:` tags alone.
+        let id_a = "7a".repeat(20);
+        let id_b = "7b".repeat(20);
+
+        let mut aconn = archive_pool.get().await.unwrap();
+        for (id, title, tags) in [
+            (
+                &id_a,
+                "Volume 12 Special",
+                "artist:zeta,date_added:1122334455,timestamp:1700000012",
+            ),
+            (
+                &id_b,
+                "Quiet Shelf",
+                "artist:eta,date_added:1700000012,timestamp:1122334455",
+            ),
+        ] {
+            let _: () = aconn
+                .hset_multiple(id, &[("title", title), ("tags", tags), ("pagecount", "1")])
+                .await
+                .unwrap();
+            crate::indexer::index_new_archive(&search_pool, &eq, id, title)
+                .await
+                .unwrap();
+            crate::indexer::update_tag_indexes(&search_pool, &eq, id, "", tags)
+                .await
+                .unwrap();
+        }
+
+        let search_ids = |filter: &'static str| {
+            let (archive_pool, search_pool, bookmarks) =
+                (archive_pool.clone(), search_pool.clone(), bookmarks.clone());
+            let (id_a, id_b) = (id_a.clone(), id_b.clone());
+            async move {
+                let params = SearchParams {
+                    filter: filter.to_string(),
+                    ..Default::default()
+                };
+                let mut ids = search(&archive_pool, &search_pool, &test_eq(), &bookmarks, &params)
+                    .await
+                    .unwrap()
+                    .ids;
+                // The test Redis is shared and outlives this binary, so unrelated archives sit in
+                // the same indexes (a stale `source:` URL containing `12` is a *correct* match for a
+                // bare `12`); trim to this test's own fixtures before asserting exact sets.
+                ids.retain(|id| id == &id_a || id == &id_b);
+                ids.sort();
+                ids
+            }
+        };
+
+        // Bare digits no longer hit the date tags: `12` reaches `id_a` through its *title* only
+        // (`id_b`'s tags contain `12` twice over, and neither title mentions `2233`).
+        assert_eq!(search_ids("12").await, vec![id_a.clone()]);
+        assert!(search_ids("2233").await.is_empty());
+        assert!(search_ids("1700000012").await.is_empty());
+
+        // Explicit namespaces read the one tag they name.
+        assert_eq!(
+            search_ids("date_added:2005-07-25").await,
+            vec![id_a.clone()]
+        );
+        assert_eq!(
+            search_ids("date_added:2023-11-14").await,
+            vec![id_b.clone()]
+        );
+        assert_eq!(search_ids("timestamp:2005-07-25").await, vec![id_b.clone()]);
+        assert_eq!(search_ids("timestamp:2023-11-14").await, vec![id_a.clone()]);
+
+        // `time:` is the union of the two, so a day that is `date_added` for one archive and
+        // `timestamp` for the other returns both.
+        let mut both = vec![id_a.clone(), id_b.clone()];
+        both.sort();
+        assert_eq!(search_ids("time:2023-11-14").await, both);
+        assert_eq!(search_ids("time:2005-07-25").await, both);
+
+        // Comparison forms, including the exclusive one that drops the archive added *on* the day.
+        assert_eq!(search_ids("time:>=2000-01-01").await, both);
+        assert!(search_ids("time:<2000-01-01").await.is_empty());
+        assert_eq!(
+            search_ids("date_added:>2005-07-25").await,
+            vec![id_b.clone()]
+        );
+
+        // Minute and second windows, spelled with a `T` the grammar lowercases to `t` on the way in.
+        assert_eq!(
+            search_ids("date_added:2023-11-14T22:13").await,
+            vec![id_b.clone()]
+        );
+        assert!(search_ids("date_added:2023-11-14T22:14").await.is_empty());
+        assert_eq!(
+            search_ids("date_added:2023-11-14T22:13:32").await,
+            vec![id_b.clone()]
+        );
+        assert!(search_ids("date_added:2023-11-14T22:13:33")
+            .await
+            .is_empty());
+        assert_eq!(
+            search_ids("date_added:2005-07-25T23:34").await,
+            vec![id_a.clone()]
+        );
+        // The same minute read through the *other* namespace is b's, not a's: the two fixtures
+        // swap which tag holds the 2005 stamp, so this is what proves the namespace is honoured.
+        assert_eq!(
+            search_ids("timestamp:2005-07-25T23:34").await,
+            vec![id_b.clone()]
+        );
+
+        // Any other value is no longer a prefix search into the tag index.
+        assert!(search_ids("timestamp:1122334455").await.is_empty());
+        assert!(search_ids("date_added:2023").await.is_empty());
+
+        // Leave nothing behind: a later test in this file searches the same Redis, and a leftover
+        // `artist:zeta` would answer for another fixture's `work:` query.
+        for (id, title, tags) in [
+            (
+                &id_a,
+                "Volume 12 Special",
+                "artist:zeta,date_added:1122334455,timestamp:1700000012",
+            ),
+            (
+                &id_b,
+                "Quiet Shelf",
+                "artist:eta,date_added:1700000012,timestamp:1122334455",
+            ),
+        ] {
+            let _: () = aconn.del(id).await.unwrap();
+            let _ = crate::indexer::remove_archive_index(&search_pool, &eq, id, title, tags).await;
+        }
+    }
+
+    // `work:` is "the archive as a work": title plus the namespaces that say who made it, and
+    // nothing else. `title:` stays the title-only scope it always was.
+    #[tokio::test]
+    async fn work_field_covers_title_and_creators_only() {
+        let Some((archive_pool, search_pool, bookmarks)) = test_pools().await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+
+        let eq = test_eq();
+        let id_a = "6a".repeat(20);
+        let id_b = "6b".repeat(20);
+        let id_c = "6c".repeat(20);
+        let id_d = "6d".repeat(20);
+
+        let mut aconn = archive_pool.get().await.unwrap();
+        for (id, title, tags) in [
+            (&id_a, "Sword Maiden", "artist:zeta,parody:common"),
+            (&id_b, "Goblin Slayer", "circle:zeta,series:common"),
+            (&id_c, "Quiet Shelf", "group:zeta,language:japanese"),
+            // d has `zeta` *only* in a creator namespace too, but also carries the classification
+            // tags `common` lives in — that mix is what makes the scope assertions below real.
+            (
+                &id_d,
+                "Fourth Thing",
+                "cosplayer:zeta,parody:common,series:common",
+            ),
+        ] {
+            let _: () = aconn
+                .hset_multiple(id, &[("title", title), ("tags", tags), ("pagecount", "1")])
+                .await
+                .unwrap();
+            crate::indexer::index_new_archive(&search_pool, &eq, id, title)
+                .await
+                .unwrap();
+            crate::indexer::update_tag_indexes(&search_pool, &eq, id, "", tags)
+                .await
+                .unwrap();
+        }
+
+        let search_ids = |filter: &'static str| {
+            let (archive_pool, search_pool, bookmarks) =
+                (archive_pool.clone(), search_pool.clone(), bookmarks.clone());
+            let fixtures = [id_a.clone(), id_b.clone(), id_c.clone(), id_d.clone()];
+            async move {
+                let params = SearchParams {
+                    filter: filter.to_string(),
+                    ..Default::default()
+                };
+                let mut ids = search(&archive_pool, &search_pool, &test_eq(), &bookmarks, &params)
+                    .await
+                    .unwrap()
+                    .ids;
+                // Same shared-Redis caveat as the date test: only our four fixtures are the subject.
+                ids.retain(|id| fixtures.contains(id));
+                ids.sort();
+                ids
+            }
+        };
+
+        // All four "who made it" namespaces are in scope…
+        let all = vec![id_a.clone(), id_b.clone(), id_c.clone(), id_d.clone()];
+        assert_eq!(search_ids("work:zeta").await, all);
+        assert_eq!(search_ids(r#"work:"zeta""#).await, all);
+        // …including through a wildcard, which must not escape the namespace filter.
+        assert_eq!(search_ids("work:z*ta").await, all);
+        // A value that only exists in classification tags matches *nothing* under `work:`.
+        assert!(search_ids("work:common").await.is_empty());
+        // The title half is still in scope.
+        assert_eq!(search_ids("work:sword").await, vec![id_a.clone()]);
+        assert_eq!(search_ids("work:goblin").await, vec![id_b.clone()]);
+
+        // Words after the prefix keep the scope, so `common` is looked for *in the work fields*
+        // and finds only a's `parody:common`… nothing: classification tags are out of scope.
+        assert!(search_ids("work:maiden common").await.is_empty());
+        // A comma ends the scope: now `common` is an ordinary token again, and a has it.
+        assert_eq!(search_ids("work:maiden, common").await, vec![id_a.clone()]);
+
+        // `title:` is strictly the title — no creator tags, and the same carry-across-spaces rule.
+        assert!(search_ids("title:zeta").await.is_empty());
+        assert_eq!(search_ids("title:sword").await, vec![id_a.clone()]);
+        assert_eq!(search_ids("title:sword maiden").await, vec![id_a.clone()]);
+        assert!(search_ids("title:sword zeta").await.is_empty());
+
+        // Unscoped search still sees every tag, so the deviation is only inside `work:`/`title:`.
+        let mut with_common = vec![id_a.clone(), id_b.clone(), id_d.clone()];
+        with_common.sort();
+        assert_eq!(search_ids("common").await, with_common);
+
+        for (id, title, tags) in [
+            (&id_a, "Sword Maiden", "artist:zeta,parody:common"),
+            (&id_b, "Goblin Slayer", "circle:zeta,series:common"),
+            (&id_c, "Quiet Shelf", "group:zeta,language:japanese"),
+            (
+                &id_d,
+                "Fourth Thing",
+                "cosplayer:zeta,parody:common,series:common",
+            ),
+        ] {
+            let _: () = aconn.del(id).await.unwrap();
+            let _ = crate::indexer::remove_archive_index(&search_pool, &eq, id, title, tags).await;
+        }
     }
 
     // End-to-end coverage for the expression tree and the first batch of attribute/field

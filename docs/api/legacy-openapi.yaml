@@ -2755,6 +2755,23 @@ paths:
             displaying all elements that start with the term. Only matches tags
             regardless of search parameters and can be used as an exclusion to
             ignore misc tags in the search query.
+
+
+            **Additions in this server**
+
+            `|` is OR, `(…)`/`{…}` group, and `-` still negates. `title:` (or
+            `filename:`) searches the title only; `work:` searches the title plus
+            the `artist`/`circle`/`group`/`cosplayer` tags; with either prefix a
+            space-separated word keeps that scope until the next comma, and quotes
+            there do not make a phrase (their spaces still separate words — quote
+            without a prefix for a phrase). `date_added:`,
+            `timestamp:` and `time:` take a `YYYY-MM-DD` day, `YYYY-MM-DDTHH:MM`
+            (one minute) or `YYYY-MM-DDTHH:MM:SS` (one second), plus a
+            `>=`/`<=`/`>`/`<` bound; `time:` matches either date. A bare number
+            never matches those date tags. `pages:`, `read:`/`progress:` and `rating:` take
+            comparisons; `is:`, `has:`, `in:`, `size:`, `category:`, `bookmark:`,
+            `phrase:` and the `sortby=relevance` ordering are documented under
+            "Search syntax" in the guide.
           schema:
             type: string
         - name: start

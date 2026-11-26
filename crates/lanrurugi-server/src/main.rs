@@ -1175,6 +1175,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let new_archive_tx = new_archive_tx.clone();
         let equivalence = state.equivalence.clone();
         let restore_gate = state.restore_gate.clone();
+        let state = state.clone();
         tokio::spawn(async move {
             jobs.mark_active(&job_id).await;
             let scan_summary = lanrurugi_scanner::full_scan::full_scan(
@@ -1208,6 +1209,49 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             // Same pools as the scan above — this is background work, not a request.
             let heal_summary =
                 lanrurugi_scanner::full_scan::heal_pagecounts(&redis.scanner.archives()).await;
+            // An upgrade can change how a value folds — 1.0.0-beta.8 collapsed small kana, which
+            // bumped `RULE_REVISION` — and a stale fingerprint leaves the engine in its
+            // legacy-fallback double-read indefinitely: results stay correct, but every query still
+            // pays for the old indexes and the new equivalence never reaches existing archives. The
+            // rebuild runs here rather than on the HTTP path because it is the whole library, and
+            // after the scan above so archives it just catalogued are included.
+            let fingerprint_stale = !lanrurugi_search::indexer::fold_fingerprint_matches(
+                &state.redis.search,
+                &state.equivalence,
+            )
+            .await
+            .unwrap_or(false);
+            let search_index_rebuild = if fingerprint_stale {
+                match lanrurugi_search::indexer::rebuild_folded_indexes(
+                    &state.repos.archives,
+                    &state.repos.groupings,
+                    &state.redis.search,
+                    &state.equivalence,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        if let Err(e) = lanrurugi_search::indexer::set_fold_fingerprint(
+                            &state.redis.search,
+                            &state.equivalence.fingerprint(),
+                        )
+                        .await
+                        {
+                            tracing::warn!(error = %e, "failed to record fold fingerprint after the automatic rebuild");
+                        }
+                        tracing::info!(
+                            "stale search-index fingerprint: rebuilt the folded indexes"
+                        );
+                        serde_json::json!({ "rebuilt": true })
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "automatic search-index rebuild failed");
+                        serde_json::json!({ "rebuilt": false, "error": e.to_string() })
+                    }
+                }
+            } else {
+                serde_json::json!({ "rebuilt": false, "reason": "fingerprint current" })
+            };
             jobs.finish(
                 &job_id,
                 serde_json::json!({
@@ -1221,6 +1265,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     "library_source": scan_summary.library_source,
                     "library_source_known": scan_summary.library_source_known,
                     "diagnostics": diagnostics,
+                    "search_index_rebuild": search_index_rebuild,
                     "pagecount_heal": {
                         "checked": heal_summary.checked,
                         "healed": heal_summary.healed,
