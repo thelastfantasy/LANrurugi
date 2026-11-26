@@ -42,13 +42,16 @@ impl RestoreGate {
         Self::default()
     }
 
+    // `closed` and `in_flight` are two atomics read crosswise by the gate (register, then read
+    // `closed`) and the restore (close, then read `in_flight`); only `SeqCst` rules out both sides
+    // reading the other's old value.
     pub fn closed(&self) -> bool {
-        self.inner.closed.load(Ordering::Acquire)
+        self.inner.closed.load(Ordering::SeqCst)
     }
 
     /// Shuts the gate. Already-admitted writes keep running; see [`Self::wait_for_writes`].
     pub fn close(&self) {
-        self.inner.closed.store(true, Ordering::Release);
+        self.inner.closed.store(true, Ordering::SeqCst);
     }
 
     pub fn open(&self) {
@@ -57,12 +60,12 @@ impl RestoreGate {
     }
 
     pub fn in_flight(&self) -> usize {
-        self.inner.in_flight.load(Ordering::Acquire)
+        self.inner.in_flight.load(Ordering::SeqCst)
     }
 
     /// Registers one in-flight write. The caller must call [`Self::leave_write`] exactly once.
     pub fn enter_write(&self) {
-        self.inner.in_flight.fetch_add(1, Ordering::AcqRel);
+        self.inner.in_flight.fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn leave_write(&self) {

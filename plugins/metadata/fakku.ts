@@ -74,7 +74,7 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   const logger = legacyCompat.getLogger("FAKKU", "plugins");
 
   if (!fakku_cookie_exists(ua)) {
-    throw new PluginErrorException("Not logged in to FAKKU! Set your FAKKU SID in the plugin settings page!");
+    throw new PluginErrorException("Not logged in to FAKKU! Set your FAKKU SID in the plugin settings page!", undefined, "login");
   }
 
   // If the user specified a oneshot argument, use it as-is (we could stand to pre-check it to see

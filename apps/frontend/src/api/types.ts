@@ -362,6 +362,9 @@ export interface PluginInfo {
   version: string
   icon: string | null
   oneshot_arg: string | null
+  /** The plugin's own `pluginInfo().namespace` — what a `login_from` refers to it by. `namespace`
+   * above is its file path (`login/ehentai`), which is what every endpoint takes. */
+  declared_namespace: string
   login_from: string | null
   /** Regex matched against a candidate URL to trigger a download/metadata fetch. Not for
    * domain-ownership lookups — see `domain_match`. */
@@ -1007,7 +1010,14 @@ export type PluginErrorValue = string | number
 /** Every structured download-queue failure the backend can produce, tagged by `kind` so
  * `QueueErrorText` can map it to a translated, interpolated string. */
 export type QueueError =
-  | { kind: "plugin_reported"; plugin: string; error_code: string; data: Record<string, PluginErrorValue> }
+  | {
+      kind: "plugin_reported"
+      plugin: string
+      error_code: string
+      data: Record<string, PluginErrorValue>
+      /** The plugin says this is fixed in settings: its own (`self`) or its login plugin's. */
+      settings?: "self" | "login"
+    }
   | { kind: "plugin_execution_failed"; plugin: string }
   | { kind: "malformed_plugin_response"; plugin: string }
   | { kind: "empty_plugin_result"; plugin: string }

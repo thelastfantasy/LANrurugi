@@ -1571,39 +1571,21 @@ async fn run_split_job(
                     new_ids.push(id.clone());
                 }
                 new_id_by_path.insert(path.clone(), id.clone());
-                let _ = lanrurugi_search::indexer::index_new_archive(
-                    &state.redis.search,
-                    &state.equivalence,
-                    id.as_str(),
-                    &archive.title,
-                )
-                .await;
+                index_volume(state, &id).await;
             }
             Ok(lanrurugi_scanner::pipeline::IngestOutcome::Unchanged { id }) => {
                 if !new_ids.contains(&id) {
                     new_ids.push(id.clone());
                 }
                 new_id_by_path.insert(path.clone(), id.clone());
-                let _ = lanrurugi_search::indexer::index_new_archive(
-                    &state.redis.search,
-                    &state.equivalence,
-                    id.as_str(),
-                    &archive.title,
-                )
-                .await;
+                index_volume(state, &id).await;
             }
             Ok(lanrurugi_scanner::pipeline::IngestOutcome::Rekeyed { new_id, .. }) => {
                 if !new_ids.contains(&new_id) {
                     new_ids.push(new_id.clone());
                 }
                 new_id_by_path.insert(path.clone(), new_id.clone());
-                let _ = lanrurugi_search::indexer::index_new_archive(
-                    &state.redis.search,
-                    &state.equivalence,
-                    new_id.as_str(),
-                    &archive.title,
-                )
-                .await;
+                index_volume(state, &new_id).await;
             }
             Ok(lanrurugi_scanner::pipeline::IngestOutcome::Rejected { existing_id, .. }) => {
                 // A record that lives by name (under `_byname/`) keeps its own path; the copy this
@@ -1618,13 +1600,7 @@ async fn run_split_job(
                     new_ids.push(existing_id.clone());
                 }
                 new_id_by_path.insert(path.clone(), existing_id.clone());
-                let _ = lanrurugi_search::indexer::index_new_archive(
-                    &state.redis.search,
-                    &state.equivalence,
-                    existing_id.as_str(),
-                    &archive.title,
-                )
-                .await;
+                index_volume(state, &existing_id).await;
             }
             Err(e) => {
                 tracing::warn!(?path, error = %e, "archive_split: failed to ingest generated archive");
@@ -1716,7 +1692,8 @@ async fn run_split_job(
         );
     }
 
-    // Optionally delete the original.
+    // Optionally delete the original. `source_deleted` is what actually happened, not the request.
+    let mut source_deleted = false;
     if delete_original {
         // `purge_one_archive` is the one function every other delete goes through: the deletion
         // journal (028), the record, Tankoubon membership, patch provenance, activity, the search
@@ -1738,14 +1715,15 @@ async fn run_split_job(
                 tracing::warn!(%archive_id, error = %e, "archive_split: could not delete the source archive");
             }
             _ => {
+                source_deleted = true;
                 // A multivolume source's record points at one volume; the rest are this job's
                 // own leftovers, and nothing else knows they belong together.
                 if original_path != original_file_path {
                     let _ = std::fs::remove_file(&original_path);
                 }
+                let _ = split_repo(state).delete(&archive_id.0).await;
             }
         }
-        let _ = split_repo(state).delete(&archive_id.0).await;
     }
 
     // Activity: one record for the split operation, plus one record per generated ZIP archive.
@@ -1766,7 +1744,7 @@ async fn run_split_job(
                 "created_files": placed_files.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
                 "new_archive_ids": new_ids.iter().map(|n| n.0.clone()).collect::<Vec<_>>(),
                 "failed_groups": failed_groups.clone(),
-                "deleted_original": delete_original,
+                "deleted_original": source_deleted,
             })),
         )
         .await;
@@ -1836,7 +1814,7 @@ async fn run_split_job(
         },
         new_ids.len(),
         total_groups,
-        delete_original,
+        source_deleted,
         current_memory_kb(),
     )
     .await;
@@ -1851,10 +1829,25 @@ async fn run_split_job(
         "created_files": placed_files.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
         "new_archive_ids": new_ids.iter().map(|n| n.0.clone()).collect::<Vec<_>>(),
         "failed_groups": failed_groups,
-        "deleted_original": delete_original,
+        "deleted_original": source_deleted,
         "original_kept_for": new_ids.iter().map(|n| n.0.clone()).collect::<Vec<_>>(),
         "tankoubon_id": tankoubon_id,
     }))
+}
+
+/// Indexes a volume under its own record's title, never the source archive's: a title member the
+/// record does not carry is one that a later retitle or delete never removes.
+async fn index_volume(state: &AppState, id: &lanrurugi_core::ids::ArchiveId) {
+    let Ok(Some(record)) = state.repos.archives.get(id).await else {
+        return;
+    };
+    let _ = lanrurugi_search::indexer::index_new_archive(
+        &state.redis.search,
+        &state.equivalence,
+        id.as_str(),
+        &record.title,
+    )
+    .await;
 }
 
 /// Called from the server's `new_archive_tx` consumer after metadata plugins run. Cheap local

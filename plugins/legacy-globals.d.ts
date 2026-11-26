@@ -264,9 +264,14 @@ declare var legacyCompat: {
  * shape). */
 // deno-lint-ignore no-var
 declare var PluginErrorException: {
-  new (error_code: string, data?: Record<string, string | number>): Error & {
+  new (
+    error_code: string,
+    data?: Record<string, string | number>,
+    settings?: "self" | "login",
+  ): Error & {
     error_code: string;
     data?: Record<string, string | number>;
+    settings?: "self" | "login";
   };
 };
 
@@ -465,6 +470,8 @@ interface DownloadHostArgs {
 interface PluginErrorResult {
   error_code: string;
   data?: Record<string, string | number>;
+  /** See `PluginError.settings` in `plugin-sdk.ts`. */
+  settings?: "self" | "login";
 }
 
 /** One resource for the host to fetch — mirrors `plugin-sdk.ts`'s `DownloadRequest`. */

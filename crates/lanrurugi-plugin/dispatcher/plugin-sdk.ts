@@ -92,6 +92,12 @@
  *
  * ## Versions
  *
+ * - **2.3.0** — {@linkcode PluginError.settings}: an error can say it is fixed in plugin settings
+ *   (this plugin's own, or its login plugin's), and the download queue links the failed row there.
+ *   {@linkcode CanonicalizeSource} is now also asked by the tag editor, for metadata plugins too.
+ * - **2.2.0** — `declared_permissions.write` is now scoped to `<library>/_byname` (never the
+ *   filesystem, never a hash-layout bucket), and `"script"`-type plugins are granted no write access
+ *   at all. A plugin that only wrote inside the user's own folders keeps working unchanged.
  * - **2.1.0** — {@linkcode PluginInfoResult.host_arguments}, `.host_results` and `.run_order`: a
  *   plugin now declares which host-computed arguments it needs, which host-side effects apply to
  *   its result, and where it runs in an auto-run chain, instead of the host matching a handful of
@@ -101,9 +107,6 @@
  *   "does some archive already carry this URL as its `source:` tag", which the library search
  *   covers (`source:"<url>"` lists every match) without a library-wide tag scan on every call. A
  *   third-party script plugin that read those fields now sees `undefined`.
- * - **2.2.0** — `declared_permissions.write` is now scoped to `<library>/_byname` (never the
- *   filesystem, never a hash-layout bucket), and `"script"`-type plugins are granted no write access
- *   at all. A plugin that only wrote inside the user's own folders keeps working unchanged.
  * - **1.2.0** — {@linkcode PluginSkipException}: a metadata plugin can say an archive is not from its
  *   site, which the host counts as declined rather than failed (no warning, no diagnostics event).
  * - **1.1.0** — {@linkcode MetadataResult.primary_source}: a metadata plugin can name the one source
@@ -115,7 +118,7 @@
 
 /** This SDK's version ({@link https://semver.org semver}): a minor step adds optional fields a plugin
  * may use, a major step changes what an existing plugin has to do. See the module docs' changelog. */
-export const SDK_VERSION = "2.2.0";
+export const SDK_VERSION = "2.3.0";
 
 /** The four plugin categories the host recognizes (`lanrurugi-api::plugins::PLUGIN_CATEGORIES`) —
  * also the fixed set of subdirectories under `plugins/` (`metadata/`, `login/`, `download/`,
@@ -288,6 +291,12 @@ export interface PluginError {
    * other messages, page counts, HTTP status codes: everything this SDK's real plugin corpus
    * actually needs to interpolate), never a richer/nested value. */
   data?: Record<string, string | number>;
+  /** Set when this error is fixed in plugin settings — a missing API key, a missing or expired
+   * cookie, a parameter left empty. `"self"` points at this plugin's own parameters, `"login"` at
+   * the login plugin its `login_from` names. The download queue then links the failed row
+   * straight to that plugin's settings. Leave it out for anything else (a network failure, a
+   * gallery that no longer exists), where a settings link would only mislead. */
+  settings?: "self" | "login";
 }
 
 /** Throw this (instead of a plain `throw new Error(...)`) to report a {@linkcode PluginError}
@@ -302,6 +311,8 @@ export class PluginErrorException extends Error {
   constructor(
     public error_code: string,
     public data?: Record<string, string | number>,
+    /** See {@linkcode PluginError.settings}. */
+    public settings?: "self" | "login",
   ) {
     super(error_code);
   }
@@ -738,6 +749,10 @@ export const DEFAULT_RELATIVE_OLDER_POLICY: RelativeOlderPolicy = "warn_then_con
  * (for {@linkcode DownloadResult.version_history} matching) instead of maintaining its own per-site
  * domain-alias table, so this plugin's own domain-alias knowledge lives in the one place that
  * actually has it.
+ *
+ * The archive editor also rewrites a `source:` tag the user types through it: the first plugin whose
+ * `url_pattern` matches the URL and that exports this function decides, download plugins before
+ * metadata plugins. A metadata plugin whose site has no download plugin can export it too.
  *
  * CONTRACT (required, not just a suggestion): this function MUST be idempotent and MUST produce
  * byte-identical output for every URL form that refers to the same underlying resource — including

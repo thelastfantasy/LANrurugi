@@ -80,6 +80,10 @@ export async function execMetadata(hostArgs: Record<string, unknown>) {
   ) {
     galleryID = match[1];
     logger.debug(`Skipping search and using gallery ${galleryID} from source tag`);
+  } else if ((match = gallery_id_from_name(lrr_info))) {
+    // `{177013} Title.zip` / `{177013} Title`: the gallery id itself, not a search term.
+    galleryID = match[1];
+    logger.debug(`Skipping search and using gallery ${galleryID} from the archive's name`);
   } else {
     // No oneshot argument and no source tag: search on the archive's own name. The stored title
     // comes first because a hash-layout library keeps the readable name in the record, not in the
@@ -130,12 +134,20 @@ function search_candidates(info: Record<string, any>): string[] {
   };
   push(info["archive_title"]);
   let [stem] = legacyCompat.fileparse(legacyCompat.redis_decode(info["file_path"] ?? ""));
-  let fromStem = (stem ?? "").match(/\{(\d*)\}.*$/m);
-  if (fromStem) push(fromStem[1]);
   push(stem);
   let bare = (info["archive_title"] ?? "").replace(/^\s*\[[^\]]*\]\s*/, "");
   push(bare);
   return out;
+}
+
+/// A `{digits}` gallery id in the file name or the stored title.
+function gallery_id_from_name(info: Record<string, any>): RegExpMatchArray | null {
+  let [stem] = legacyCompat.fileparse(legacyCompat.redis_decode(info["file_path"] ?? ""));
+  for (let name of [stem ?? "", info["archive_title"] ?? ""]) {
+    let found = String(name).match(/\{(\d+)\}/);
+    if (found) return found;
+  }
+  return null;
 }
 
 async function search_gallery_id(...args: any[]) {

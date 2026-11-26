@@ -301,7 +301,12 @@ fn lex(filter: &str) -> Vec<Piece> {
 
         let (raw, isexact) = read_term(&mut chars);
         let (field, raw) = split_field_prefix(&raw);
-        let field = if field == Field::Any {
+        // A term with its own `namespace:` (`artist:x`, `pages:>20`, `date:…`) ends the scope
+        // instead of being searched for as title text.
+        let field = if field == Field::Any && raw.contains(':') {
+            carried = None;
+            Field::Any
+        } else if field == Field::Any {
             carried.unwrap_or(Field::Any)
         } else {
             carried = Some(field);
@@ -854,6 +859,15 @@ mod tests {
         assert_eq!(
             parse_query("work:a|b"),
             Expr::Or(vec![work("a", false), work("b", false)])
+        );
+        // A namespaced term keeps its own meaning and ends the scope.
+        assert_eq!(
+            parse_query("title:fate artist:takeuchi zero"),
+            and(vec![
+                title("fate", false),
+                tok("artist:takeuchi", false),
+                tok("zero", false)
+            ])
         );
     }
 

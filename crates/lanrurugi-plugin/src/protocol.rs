@@ -1,6 +1,7 @@
 //! Newline-delimited JSON request/response protocol client, per
 //! `contracts/plugin-protocol.md` (constitution Principle IV).
 
+use lanrurugi_core::queue_error::PluginSettingsTarget;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -75,6 +76,22 @@ pub struct ResponseError {
     #[serde(default)]
     pub data:
         Option<std::collections::HashMap<String, lanrurugi_core::queue_error::PluginErrorValue>>,
+    /// Same as [`PluginError::settings`], from a thrown `PluginErrorException`.
+    /// Where the plugin says this error is fixed (`plugin-sdk.ts`'s `PluginError.settings`).
+    #[serde(default, deserialize_with = "lenient_settings_target")]
+    pub settings: Option<PluginSettingsTarget>,
+}
+
+/// A plugin's `settings` hint; any value other than `"self"`/`"login"` reads as no hint, so a
+/// typo in a plugin never turns its error into an unparseable response.
+fn lenient_settings_target<'de, D>(
+    deserializer: D,
+) -> Result<Option<PluginSettingsTarget>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Option<String> = Deserialize::deserialize(deserializer)?;
+    Ok(value.as_deref().and_then(PluginSettingsTarget::parse))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -489,6 +506,8 @@ pub struct PluginError {
     #[serde(default)]
     pub data:
         Option<std::collections::HashMap<String, lanrurugi_core::queue_error::PluginErrorValue>>,
+    #[serde(default, deserialize_with = "lenient_settings_target")]
+    pub settings: Option<PluginSettingsTarget>,
 }
 
 /// A single cookie exactly as `plugin-sdk.ts`'s `LegacyCookie`/`plugins/legacy-globals.d.ts`

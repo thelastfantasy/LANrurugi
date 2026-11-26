@@ -430,6 +430,8 @@ pub fn router() -> Router<AppState> {
             get(get_plugin_settings).put(put_plugin_settings),
         )
         .route("/plugins/priority", post(put_plugin_priority))
+        .route("/plugins/canonicalize-source", post(canonicalize_source))
+        .route("/plugins/auto", post(run_auto_plugins))
         .route("/download_url", post(download_url))
         .route("/plugins/upload", post(upload_plugin))
         .route("/plugins/export", get(export_plugin))
@@ -665,6 +667,136 @@ async fn canonicalize_sources_for(
             );
             urls.iter().map(|u| trim_url(u)).collect()
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AutoPluginsQuery {
+    id: String,
+}
+
+/// `POST /plugins/auto?id=` — the archive editor's "auto scrape" for an archive no `source:` tag
+/// ties to one plugin: the same enabled-plugin chain ingest runs. Answers with the archive's
+/// title, tags and summary as they now are, so the open form can take them over.
+async fn run_auto_plugins(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
+    Query(query): Query<AutoPluginsQuery>,
+) -> Response {
+    let id = lanrurugi_core::ids::ArchiveId(query.id.clone());
+    let label = match state.repos.archives.get(&id).await {
+        Ok(Some(archive)) => archive.title,
+        Ok(None) => return error(StatusCode::NOT_FOUND, "auto_plugins", "No such archive."),
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "auto_plugins",
+                e.to_string(),
+            )
+        }
+    };
+    let summary = run_enabled_metadata_plugins_on_archive(&state, &query.id, None).await;
+    crate::activity::record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        lanrurugi_storage::activity::action_types::METADATA_PLUGIN_AUTORUN,
+        lanrurugi_storage::activity::ActivityTarget {
+            id: Some(query.id.clone()),
+            label: Some(label),
+            kind: Some("archive".to_string()),
+        },
+        lanrurugi_storage::activity::Outcome::Success,
+        None,
+        Some(json!({
+            "successes": summary.successes,
+            "failures": summary.failures,
+            "added_tags": summary.added_tags,
+        })),
+    )
+    .await;
+    match state.repos.archives.get(&id).await {
+        Ok(Some(archive)) => axum::Json(json!({
+            "operation": "auto_plugins",
+            "success": 1,
+            "successes": summary.successes,
+            "failures": summary.failures,
+            "declined": summary.declined,
+            "added_tags": summary.added_tags,
+            "title": archive.title,
+            "tags": archive.tags,
+            "summary": archive.summary,
+        }))
+        .into_response(),
+        Ok(None) => error(StatusCode::NOT_FOUND, "auto_plugins", "No such archive."),
+        Err(e) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "auto_plugins",
+            e.to_string(),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CanonicalizeSourceBody {
+    url: String,
+}
+
+/// `POST /plugins/canonicalize-source` — the stored `source:` form of a URL typed into a tag
+/// editor. The first plugin whose `url_pattern` matches and that exports `canonicalizeSource`
+/// decides it, download plugins before metadata ones (each in priority order): download plugins
+/// write the `source:` tags that revision and duplicate checks later compare against. Nothing
+/// matching falls back to [`trim_typed_source`], which keeps the query string.
+async fn canonicalize_source(
+    State(state): State<AppState>,
+    axum::Json(body): axum::Json<CanonicalizeSourceBody>,
+) -> Response {
+    let url = body.url.trim().to_string();
+    for kind in ["download", "metadata"] {
+        let namespaces = namespaces_of_kind(&state, kind).await;
+        for ns in sort_namespaces_by_priority(&state, &namespaces).await {
+            let Ok(info) = state.plugins.plugin_info(&ns).await else {
+                continue;
+            };
+            let matches = info
+                .url_pattern
+                .as_deref()
+                .and_then(|p| regex::Regex::new(p).ok())
+                .is_some_and(|re| re.is_match(&url));
+            if !matches {
+                continue;
+            }
+            match state
+                .plugins
+                .canonicalize_sources(&ns, std::slice::from_ref(&url))
+                .await
+            {
+                Ok(Some(mut canonical)) if canonical.len() == 1 => {
+                    return axum::Json(json!({ "source": canonical.remove(0), "plugin": ns }))
+                        .into_response();
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(
+                    plugin = %ns,
+                    error = %e,
+                    "canonicalizeSource failed; trying the next matching plugin"
+                ),
+            }
+        }
+    }
+    axum::Json(json!({ "source": trim_typed_source(&url), "plugin": null })).into_response()
+}
+
+/// [`trim_url`] without dropping the query: for a site no plugin knows, the query may be the only
+/// part naming the work (`view.php?id=5512`). The fragment still goes.
+fn trim_typed_source(url: &str) -> String {
+    let url = url.trim();
+    let url = url.split('#').next().unwrap_or(url);
+    let (path, query) = url.split_once('?').unwrap_or((url, ""));
+    let path = trim_url(path);
+    if query.is_empty() {
+        path
+    } else {
+        format!("{path}?{query}")
     }
 }
 
@@ -1220,6 +1352,8 @@ async fn list_plugins(State(state): State<AppState>, Path(kind): Path<String>) -
                     // always identical there), this rewrite's category subfolders/`custom/` tree
                     // make them genuinely different strings.
                     "namespace": ns,
+                    // What another plugin's `login_from` names this one by.
+                    "declared_namespace": info.namespace,
                     "type": info.kind,
                     "name": info.name,
                     "author": info.author,
@@ -3224,6 +3358,7 @@ fn queue_error_from_pool_error(
                 plugin: plugin.to_string(),
                 error_code: error_code.clone(),
                 data: err.data.clone().unwrap_or_default(),
+                settings: err.settings,
             };
         }
     }
@@ -3243,6 +3378,7 @@ fn queue_error_from_plugin_error(
         plugin: plugin.to_string(),
         error_code: err.error_code.clone(),
         data: err.data.clone().unwrap_or_default(),
+        settings: err.settings,
     }
 }
 
@@ -3592,10 +3728,15 @@ pub(crate) async fn pick_redownload_source(
 }
 
 async fn download_namespaces(state: &AppState) -> Vec<String> {
+    namespaces_of_kind(state, "download").await
+}
+
+/// Every installed namespace declaring `type: kind`, in `discover_namespaces` order.
+async fn namespaces_of_kind(state: &AppState, kind: &str) -> Vec<String> {
     let mut out = Vec::new();
     for ns in discover_namespaces(&state.plugins_dir).await {
         if let Ok(info) = state.plugins.plugin_info(&ns).await {
-            if info.kind == "download" {
+            if info.kind == kind {
                 out.push(ns);
             }
         }
@@ -4635,28 +4776,31 @@ pub(crate) mod tests {
         use lanrurugi_plugin::pool::PoolError;
         use lanrurugi_plugin::protocol::ResponseError;
 
-        let declined = PoolError::PluginError(ResponseError {
+        let declined = PoolError::PluginError(Box::new(ResponseError {
             message: "Skipping archive without connecting to EH".to_string(),
             kind: "plugin_error".to_string(),
             error_code: Some(PLUGIN_SKIP_CODE.to_string()),
             data: None,
-        });
+            settings: None,
+        }));
         assert!(plugin_declined(&declined));
 
         // Everything else stays a failure: a plugin's own real error, and a crash.
-        let failed = PoolError::PluginError(ResponseError {
+        let failed = PoolError::PluginError(Box::new(ResponseError {
             message: "Search gallery by title failed".to_string(),
             kind: "plugin_error".to_string(),
             error_code: Some("Search gallery by title failed".to_string()),
             data: None,
-        });
+            settings: None,
+        }));
         assert!(!plugin_declined(&failed));
-        let crashed = PoolError::PluginError(ResponseError {
+        let crashed = PoolError::PluginError(Box::new(ResponseError {
             message: "boom".to_string(),
             kind: "internal".to_string(),
             error_code: None,
             data: None,
-        });
+            settings: None,
+        }));
         assert!(!plugin_declined(&crashed));
     }
 
@@ -4832,6 +4976,18 @@ pub(crate) mod tests {
             entry.outcome,
             lanrurugi_storage::activity::Outcome::Success
         ));
+    }
+
+    #[test]
+    fn trim_typed_source_keeps_the_query() {
+        assert_eq!(
+            trim_typed_source("https://www.example.org/view.php?id=5512#top"),
+            "example.org/view.php?id=5512"
+        );
+        assert_eq!(
+            trim_typed_source("https://e-hentai.org/g/2074808/1df3b73b2b/"),
+            "e-hentai.org/g/2074808/1df3b73b2b"
+        );
     }
 
     #[test]

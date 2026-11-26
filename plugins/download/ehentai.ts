@@ -270,7 +270,7 @@ export async function execDownload(
     return { error: { error_code: "Invalid archiver key", data: { archiverurl } } };
   }
   if (archiverHtml.indexOf("This page requires you to log on.") != -1) {
-    return { error: { error_code: "Invalid E*Hentai login credentials. Please make sure the login plugin has proper settings set." } };
+    return { error: { error_code: "Invalid E*Hentai login credentials. Please make sure the login plugin has proper settings set.", settings: "login" } };
   }
   let dltype = undefined;
   let dlcheck = undefined;

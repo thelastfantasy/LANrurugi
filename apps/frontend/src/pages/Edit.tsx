@@ -13,11 +13,23 @@ import {
 } from "@/api/hooks"
 import type { ArchiveMetadata } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
+import { CollapsibleSection } from "@/components/Display"
 import { TagInput } from "@/components/Form"
 import { confirmDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
+import { clearTagsExcept, PROTECTED_TAG_NAMESPACES, sourceTagValues } from "@/lib/tagFormat"
+import { findMatchingPlugin } from "@/pages/Upload/shared"
 import { toast } from "@/toast"
+
+/** A `source:` tag's URL rewritten into the form the plugin owning that site stores. */
+async function formatSourceTag(tag: string): Promise<string> {
+  if (!tag.startsWith("source:")) return tag
+  const result = await sendJson<{ source: string }>("POST", "/plugins/canonicalize-source", {
+    url: tag.slice("source:".length),
+  })
+  return result.source ? `source:${result.source}` : tag
+}
 
 export function Edit() {
   const { t } = useTranslation()
@@ -103,15 +115,73 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
     })
   }
 
+  function clearTags() {
+    const kept = clearTagsExcept(tags, PROTECTED_TAG_NAMESPACES)
+    if (kept === tags) return
+    const previous = tags
+    setTags(kept)
+    toast({
+      heading: t("edit.tagsCleared"),
+      icon: "info",
+      action: { label: t("recycleBin.undo"), onClick: () => setTags(previous) },
+    })
+  }
+
+  /** Runs the metadata plugin a `source:` tag belongs to, or else the enabled chain ingest runs. */
+  async function autoScrape() {
+    const source = sourceTagValues(tags)
+      .map((value) => (/^https?:\/\//i.test(value) ? value : `https://${value}`))
+      .map((url) => ({ url, plugin: findMatchingPlugin(plugins.data, url) }))
+      .find((match) => match.plugin)
+    if (source?.plugin) {
+      await runPlugin(source.plugin.namespace, source.plugin.oneshot_arg ? source.url : "")
+      return
+    }
+    setPluginRunning(true)
+    try {
+      await updateMetadata.mutateAsync({ title, summary, tags })
+      const result = await sendJson<{
+        successes: number
+        failures: number
+        declined: number
+        added_tags: number
+        title: string
+        tags: string
+        summary: string
+      }>("POST", `/plugins/auto?id=${encodeURIComponent(archiveId)}`)
+      setTitle(result.title)
+      setSummary(result.summary)
+      setTags(result.tags)
+      if (result.successes === 0 && result.failures === 0 && result.declined === 0) {
+        toast({ heading: t("edit.autoScrapeNoPlugin"), icon: "info" })
+      } else if (result.successes === 0 && result.failures === 0) {
+        toast({ heading: t("edit.autoScrapeAllDeclined"), icon: "info" })
+      } else {
+        toast({
+          heading: t("edit.autoScrapeDone", {
+            successes: result.successes,
+            failures: result.failures,
+            added: result.added_tags,
+          }),
+          icon: result.failures > 0 ? "warning" : "success",
+        })
+      }
+    } catch (e) {
+      toast({ text: String(e), icon: "error" })
+    } finally {
+      setPluginRunning(false)
+    }
+  }
+
   /** Saves current form state first, then fetches+merges plugin tags — not a preview, it
    * unconditionally persists whatever's in the fields right now. */
-  async function runPlugin() {
-    if (!selectedPlugin) return
+  async function runPlugin(plugin: string, arg: string) {
+    if (!plugin) return
     setPluginRunning(true)
     try {
       await updateMetadata.mutateAsync({ title, summary, tags })
       const response = await fetch(
-        `/api/plugins/use?plugin=${encodeURIComponent(selectedPlugin)}&id=${encodeURIComponent(archiveId)}&arg=${encodeURIComponent(pluginArg)}`,
+        `/api/plugins/use?plugin=${encodeURIComponent(plugin)}&id=${encodeURIComponent(archiveId)}&arg=${encodeURIComponent(arg)}`,
         { method: "POST" },
       )
       const data = (await response.json()) as {
@@ -220,37 +290,32 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "start", gap: 6 }}>
-            <span>
-              {t("common.tags")} <span style={{ fontSize: "6pt" }}>{t("edit.separatedByHyphensIE")}</span> :
-            </span>
-            <TagInput value={tags} onChange={setTags} suggestions={tagSuggestions} />
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
+              <span>
+                {t("common.tags")} <span style={{ fontSize: "6pt" }}>{t("edit.separatedByHyphensIE")}</span> :
+              </span>
+              <input
+                className="stdbtn"
+                type="button"
+                title={t("edit.clearTagsHint")}
+                value={t("edit.clearTags")}
+                onClick={clearTags}
+              />
+            </div>
+            <TagInput value={tags} onChange={setTags} suggestions={tagSuggestions} formatTag={formatSourceTag} />
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", alignItems: "start", gap: 6 }}>
             <span>{t("edit.importTagsFromPlugin")}</span>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start", textAlign: "left" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "stretch", textAlign: "left" }}>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <select
-                  className="favtag-btn"
-                  style={{ height: 25, boxSizing: "border-box" }}
-                  value={selectedPlugin}
-                  onChange={(e) => setSelectedPlugin(e.target.value)}
-                >
-                  <option value="">{t("edit.choosePlugin")}</option>
-                  {plugins.data?.map((p) => (
-                    <option key={p.namespace} value={p.namespace}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-
                 <input
                   className="stdbtn"
                   type="button"
                   style={{ minWidth: 90, height: 25, boxSizing: "border-box" }}
-                  disabled={!selectedPlugin || pluginRunning}
-                  onClick={() => void runPlugin()}
-                  value={t("edit.go") ?? undefined}
+                  disabled={pluginRunning}
+                  onClick={() => void autoScrape()}
+                  value={t("edit.autoScrape")}
                 />
 
                 <Tooltip
@@ -258,13 +323,7 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
                     <>
                       <strong>{t("edit.aboutPlugins")}</strong>
                       <br />
-                      <span
-                        dangerouslySetInnerHTML={{
-                          __html: t(
-                            "edit.youCanUsePluginsTo",
-                          ),
-                        }}
-                      />
+                      {t("edit.autoScrapeHelp")}
                     </>
                   }
                 >
@@ -272,18 +331,49 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
                 </Tooltip>
               </div>
 
-              {selectedPluginData?.oneshot_arg && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
-                  <span>{selectedPluginData.oneshot_arg} :</span>
-                  <input
-                    className="stdinput"
-                    type="text"
-                    style={{ width: "100%", boxSizing: "border-box" }}
-                    value={pluginArg}
-                    onChange={(e) => setPluginArg(e.target.value)}
-                  />
+              {/* Picking one plugin by hand stays available for the ones no URL can select —
+                  filename parsing, copying another archive's tags. */}
+              <CollapsibleSection as="div" icon="fa-sliders-h" title={t("edit.choosePluginManually")}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: 6 }}>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <select
+                      className="favtag-btn"
+                      style={{ height: 25, boxSizing: "border-box" }}
+                      value={selectedPlugin}
+                      onChange={(e) => setSelectedPlugin(e.target.value)}
+                    >
+                      <option value="">{t("edit.choosePlugin")}</option>
+                      {plugins.data?.map((p) => (
+                        <option key={p.namespace} value={p.namespace}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+
+                    <input
+                      className="stdbtn"
+                      type="button"
+                      style={{ minWidth: 90, height: 25, boxSizing: "border-box" }}
+                      disabled={!selectedPlugin || pluginRunning}
+                      onClick={() => void runPlugin(selectedPlugin, pluginArg)}
+                      value={t("edit.go") ?? undefined}
+                    />
+                  </div>
+
+                  {selectedPluginData?.oneshot_arg && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
+                      <span>{selectedPluginData.oneshot_arg} :</span>
+                      <input
+                        className="stdinput"
+                        type="text"
+                        style={{ width: "100%", boxSizing: "border-box" }}
+                        value={pluginArg}
+                        onChange={(e) => setPluginArg(e.target.value)}
+                      />
+                    </div>
+                  )}
                 </div>
-              )}
+              </CollapsibleSection>
 
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <i className="fa fa-2x fa-exclamation-circle"></i>

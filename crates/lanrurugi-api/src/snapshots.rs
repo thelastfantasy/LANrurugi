@@ -539,6 +539,11 @@ where
 /// One scheduler tick. `lanrurugi-server` calls this every 5 seconds, and an interval's first tick
 /// is immediate — which is also the first firing a fresh install takes.
 pub async fn schedule_tick(state: &AppState) {
+    // A full restore installs its RDB and then reloads it; a BGSAVE in between would write the
+    // old dataset over the file being restored.
+    if state.restore_gate.closed() {
+        return;
+    }
     let state_for_task = state.clone();
     // Wall-clock now in the operator's zone; the cron expression is evaluated there.
     let tz = read_timezone(state).await;
@@ -549,6 +554,9 @@ pub async fn schedule_tick(state: &AppState) {
             let reason = schedule.reason();
             let state_for_task = state_for_task.clone();
             Box::pin(async move {
+                if state_for_task.restore_gate.closed() {
+                    return Err("skipped: a database restore is in progress".to_string());
+                }
                 let entry =
                     take_full_backup(&state_for_task, &reason, Arc::new(NoProgress)).await?;
                 // A fresh snapshot can immediately push the oldest one past `FULL_BACKUP_KEEP`.
