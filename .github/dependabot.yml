@@ -53,15 +53,17 @@ updates:
       - dependency-name: bincode
         versions:
           - ">=3.0.0"
-      # `vendor/iroh-relay` (and `vendor/netwatch`) are patched forks of the 1.4 line (022: binding
-      # share traffic to an interface). A newer iroh resolves the stock crate instead and the build
-      # fails on the missing `set_bind_device`; move the forks first, then drop these.
+      # `vendor/iroh-relay` (and `vendor/netwatch`) are patched forks of iroh-relay 1.4.1 (022:
+      # binding share traffic to an interface). Every newer iroh, patch releases included, requires
+      # the matching iroh-relay, so cargo drops the fork for the stock crate and the build fails on
+      # the missing `set_bind_device` (#368 with 1.5.0, #371 with 1.4.2). Move the forks first,
+      # then drop these.
       - dependency-name: iroh
         versions:
-          - ">=1.5.0"
+          - ">1.4.1"
       - dependency-name: iroh-relay
         versions:
-          - ">=1.5.0"
+          - ">1.4.1"
 
   # Whole pnpm workspace — one entry, not one per package.
   #
