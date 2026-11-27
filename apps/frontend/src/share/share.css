@@ -1208,6 +1208,9 @@ div.ido.share-closed p:last-child {
 .share-ratio-presets {
   display: inline-flex;
   gap: 4px;
+  /* The number field beside it is a `.stdinput`, whose 4px `margin-top` sits inside its wrapper;
+     without the same offset the presets centre 2px above the field's visible box. */
+  margin-top: 4px;
 }
 
 .share-ratio-presets .stdbtn {

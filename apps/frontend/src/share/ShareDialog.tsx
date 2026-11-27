@@ -182,7 +182,11 @@ function NewShareTab({
         <CheckboxField checked={shortCode && shortCodeAllowed} disabled={!shortCodeAllowed} onCheckedChange={setShortCode}>
           {t("share.dialog.shortCode")}
         </CheckboxField>
-        {!shortCodeAllowed && <div className="share-result-note">{t("share.dialog.shortCodeHint")}</div>}
+        {/* Kept in the layout when hidden: the dialog is centred, so a line appearing as the expiry
+            crosses 7 days moved every field under the pointer mid-click. */}
+        <div className="share-result-note" style={shortCodeAllowed ? { visibility: "hidden" } : undefined}>
+          {t("share.dialog.shortCodeHint")}
+        </div>
       </div>
       <p className="share-disclaimer">{t("share.disclaimer.share")}</p>
       <div style={{ textAlign: "right", marginTop: 8 }}>

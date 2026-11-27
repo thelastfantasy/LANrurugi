@@ -35,7 +35,6 @@ import {
   MenuSeparator,
   SheetGrid,
   SheetTile,
-  Tooltip,
 } from "@/components/common-ui/Display";
 import { Badge } from "@/components/common-ui/Display"
 import { Keycap as Key } from "@/components/common-ui/Display/Keycap";
@@ -49,7 +48,7 @@ import {
   StatusIcon,
 } from "@/components/Display";
 import { Footer } from "@/components/Layout";
-import { confirmDialog, promptDialog } from "@/dialog";
+import { confirmDialog } from "@/dialog";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useHasPhysicalKeyboard } from "@/hooks/useHasPhysicalKeyboard";
 import { useIsNarrowViewport } from "@/hooks/useIsNarrowViewport";
@@ -111,6 +110,7 @@ import {
   storeFitAction,
 } from "./FitMenuButton";
 import { MarkerLayer } from "./MarkerLayer";
+import { ReaderMagnifier } from "./ReaderMagnifier";
 import { SettingsOverlay } from "./SettingsOverlay";
 import { TankoubonSplitModal } from "./TankoubonSplitModal";
 import { UnreadableArchivePage } from "./UnreadableArchivePage";
@@ -288,7 +288,7 @@ function wipeDuration(renderedHeight: number): number {
   return Math.min(WIPE_MAX_MS, Math.max(WIPE_MIN_MS, Math.round(renderedHeight / WIPE_SPEED_PX_PER_MS)));
 }
 
-type OverlayKind = "archive" | "settings" | "help" | "chapters" | null;
+type OverlayKind = "archive" | "settings" | "help" | "chapters" | "goto" | null;
 
 interface WakeLockSentinelLike {
   release(): Promise<void>;
@@ -397,6 +397,10 @@ function TapSidesDemo() {
     </svg>
   );
 }
+
+/** The magnifier's switch, outside the component: moving to the next archive remounts the reader
+ * (`App.tsx` keys it by id) and must not turn it off; a page reload still does. */
+const magnifierSession = { on: false };
 
 export function Reader() {
   const { t } = useTranslation();
@@ -775,6 +779,12 @@ export function Reader() {
   // it stays at 10% and only comes back when the pointer reaches the corner it lives in (or when
   // it is hovered/focused — CSS covers those two).
   const [headlessControlsRevealed, setHeadlessControlsRevealed] = useState(false);
+  const [magnifierOn, setMagnifierOnState] = useState(() => magnifierSession.on);
+  const setMagnifierOn = (on: boolean) => {
+    magnifierSession.on = on;
+    setMagnifierOnState(on);
+  };
+  if (!headless && magnifierOn) setMagnifierOn(false);
   useEffect(() => {
     if (!headless || !supportsHover) return;
     function onMove(e: MouseEvent) {
@@ -2808,6 +2818,13 @@ export function Reader() {
           }
           return;
         case " ":
+          // Headless fits the page to the screen, so there is nothing to scroll: Space toggles the
+          // magnifier there instead.
+          if (headless) {
+            e.preventDefault();
+            setMagnifierOn(!magnifierOn);
+            return;
+          }
           window.scrollBy({
             top: window.innerHeight * 0.8,
             behavior: "smooth",
@@ -2845,14 +2862,11 @@ export function Reader() {
         case "f":
           toggleFullScreen();
           return;
-        case "g": {
-          void (async () => {
-            const value = await promptDialog(t("reader.goToPage") ?? "");
-            const page = value ? parseInt(value, 10) : NaN;
-            if (!Number.isNaN(page)) selectPage(page);
-          })();
+        case "g":
+          // `preventDefault` so the "g" itself is not typed into the field that opens with focus.
+          e.preventDefault();
+          setOverlay("goto");
           return;
-        }
         case "h":
           toggleHeadless();
           return;
@@ -2947,6 +2961,7 @@ export function Reader() {
     markerPlacementMode,
     archiveTransition,
     headless,
+    magnifierOn,
     toggleHeadless,
     overlay,
     chapterGroups,
@@ -3552,6 +3567,13 @@ export function Reader() {
     ? { ...imageStyle, zIndex: 22, cursor: "cell", touchAction: "none" }
     : imageStyle;
 
+  /** The G panel's jump: clamped to the book, and closing the panel either way. */
+  const jumpToTypedPage = (typed: string) => {
+    const page = parseInt(typed, 10);
+    setOverlay(null);
+    if (!Number.isNaN(page)) selectPage(Math.min(totalPages, Math.max(1, page)));
+  };
+
   const helpContent = (
     <div className="reader-help-body">
       <div className="reader-help-sections">
@@ -3654,6 +3676,19 @@ export function Reader() {
                 <Key>H</Key>
               </span>
               <span>{t("reader.hToggleHeadless")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Space</Key>
+              </span>
+              <span>{t("reader.helpMagnifierToggle")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>+</Key>
+                <Key>-</Key>
+              </span>
+              <span>{t("reader.helpMagnifierZoom")}</span>
             </li>
             {loggedIn && (
               <li>
@@ -3865,15 +3900,15 @@ export function Reader() {
           />
         )}
         {hasPhysicalKeyboard ? (
-          <Tooltip label={helpContent} maxWidth={420}>
-            <IconButton
-              variant="ghost-btn"
-              icon="fas fa-question-circle fa-2x"
-              title={t("reader.help") ?? undefined}
-              size={32}
-              style={{ marginRight: 13, borderRadius: "50%" }}
-            />
-          </Tooltip>
+          // Opens the same help panel as `?`; a hover popover of the whole list covered the page.
+          <IconButton
+            variant="ghost-btn"
+            icon="fas fa-question-circle fa-2x"
+            title={t("reader.help") ?? undefined}
+            size={32}
+            style={{ marginRight: 13, borderRadius: "50%" }}
+            onClick={() => setOverlay(overlay === "help" ? null : "help")}
+          />
         ) : null}
       </div>
       <div className="absolute-options absolute-right">
@@ -4230,15 +4265,15 @@ export function Reader() {
           />
         )}
         {hasPhysicalKeyboard ? (
-          <Tooltip label={helpContent} maxWidth={420}>
-            <IconButton
-              variant="ghost-btn"
-              icon="fas fa-question-circle fa-2x"
-              title={t("reader.help") ?? undefined}
-              size={32}
-              style={{ borderRadius: "50%" }}
-            />
-          </Tooltip>
+          // Opens the same help panel as `?`; a hover popover of the whole list covered the page.
+          <IconButton
+            variant="ghost-btn"
+            icon="fas fa-question-circle fa-2x"
+            title={t("reader.help") ?? undefined}
+            size={32}
+            style={{ borderRadius: "50%" }}
+            onClick={() => setOverlay(overlay === "help" ? null : "help")}
+          />
         ) : null}
         {/* Moved out of the overflow menu, not duplicated: this is the same action that entry
             performed (the archive currently being shown — a tank's member when reading one), so the
@@ -4514,6 +4549,12 @@ export function Reader() {
 
   return (
     <>
+      {/* Paused, not switched off, while one of the reader's own layers is open. */}
+      <ReaderMagnifier
+        active={
+          magnifierOn && overlay === null && !showTankSplit && shareItem === null && !moreSheetOpen
+        }
+      />
       <div
         id="i1"
         className={headless ? "sni reader-headless" : "sni"}
@@ -5066,6 +5107,65 @@ export function Reader() {
             >
               <div className="navigation-help-toast">{helpContent}</div>
             </div>
+          </>
+        )}
+
+        {overlay === "goto" && (
+          <>
+            <div
+              id="overlay-shade"
+              style={{ display: "block", opacity: 0.6 }}
+              onClick={() => setOverlay(null)}
+            />
+            <form
+              id="reader-goto-osd"
+              role="dialog"
+              aria-modal="true"
+              aria-label={t("reader.goToPageTitle")}
+              onSubmit={(e) => {
+                e.preventDefault();
+                const field = e.currentTarget.elements.namedItem("page") as HTMLInputElement;
+                jumpToTypedPage(field.value);
+              }}
+            >
+              <div className="reader-goto-osd-title">{t("reader.goToPageTitle")}</div>
+              <div className="reader-goto-osd-row">
+                <input
+                  name="page"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  maxLength={String(totalPages).length}
+                  defaultValue={currentPage}
+                  autoFocus
+                  onFocus={(e) => e.currentTarget.select()}
+                  onKeyDown={(e) => {
+                    // The reader's own key handler ignores inputs, so these keys are handled here.
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      setOverlay(null);
+                      return;
+                    }
+                    if (e.ctrlKey || e.metaKey || e.altKey) return;
+                    // Any other typed character that is not a digit ends the number, like Enter.
+                    if (e.key === "Tab" || (e.key.length === 1 && !/[0-9]/.test(e.key))) {
+                      e.preventDefault();
+                      jumpToTypedPage(e.currentTarget.value);
+                    }
+                  }}
+                  onChange={(e) => {
+                    const digits = e.currentTarget.value.replace(/\D/g, "");
+                    e.currentTarget.value = digits;
+                    // Jump as soon as another digit could only overshoot the last page.
+                    const page = Number(digits);
+                    if (digits && page > 0 && page * 10 > totalPages) jumpToTypedPage(digits);
+                  }}
+                  aria-label={t("reader.goToPageTitle")}
+                />
+                <span className="reader-goto-osd-total">/ {totalPages}</span>
+              </div>
+              <div className="reader-goto-osd-hint">{t("reader.goToPageHint")}</div>
+            </form>
           </>
         )}
 
