@@ -167,6 +167,11 @@ jobs:
       - name: release image binary parity
         run: scripts/check-image-binaries.sh
 
+      # 022: vendor/iroh-relay and vendor/netwatch are generated (crates.io release + vendor/patches/);
+      # a hand edit there would be lost on the next upgrade, so it fails here instead.
+      - name: vendored forks match their patches
+        run: scripts/vendor-forks.sh --check
+
       # 023: the sharing engine talks to the application only through `ShareHost`. Comment lines
       # may name what is kept out; code and manifest may not.
       - name: sharing engine boundary

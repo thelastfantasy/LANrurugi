@@ -1,0 +1,120 @@
+name: Vendored iroh forks
+
+# Dependabot cannot update iroh here: vendor/iroh-relay and vendor/netwatch are patched forks (022),
+# and every iroh release requires the matching iroh-relay, so a plain bump drops the fork and fails
+# to build. This job does what a person would: move the forks to the new release by reapplying
+# vendor/patches/, update the lockfile, build the sharing crate, and open a PR.
+#
+# A PR opened with GITHUB_TOKEN does not start other workflows, so CI does not run on it by itself;
+# the PR body says how to start it. When a patch no longer applies this job fails instead, and its
+# log names the rejected hunks.
+
+on:
+  schedule:
+    - cron: "17 3 * * 1" # Mondays, after Dependabot's weekly run
+  workflow_dispatch:
+    inputs:
+      iroh:
+        description: "iroh version (empty: newest release)"
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: vendor-forks
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev
+
+      - name: Move the forks to the newest iroh
+        id: bump
+        env:
+          IROH_VERSION: ${{ inputs.iroh }}
+        run: |
+          out="$(scripts/vendor-forks-bump.sh "$IROH_VERSION")"
+          echo "$out"
+          if [ "$out" = unchanged ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "summary=$(tail -1 <<< "$out")" >> "$GITHUB_OUTPUT"
+            echo "iroh=$(sed -n 's/^iroh = { version = "\([^"]*\)".*/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip if a PR for this version is already open
+        id: existing
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch="chore/iroh-${{ steps.bump.outputs.iroh }}"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          if [ -n "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
+            echo "open=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: jdx/mise-action@v5
+        if: steps.bump.outputs.changed == 'true' && steps.existing.outputs.open != 'true'
+        with:
+          install: true
+          cache: true
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.bump.outputs.changed == 'true' && steps.existing.outputs.open != 'true'
+        with:
+          shared-key: vendor-forks
+
+      - name: Install libarchive build dependencies
+        if: steps.bump.outputs.changed == 'true' && steps.existing.outputs.open != 'true'
+        run: |
+          scripts/ci-apt-update.sh
+          sudo apt-get install -y --no-install-recommends \
+            zlib1g-dev libbz2-dev liblzma-dev libzstd-dev liblz4-dev libxml2-dev libacl1-dev \
+            nasm libopenjp2-7-dev
+
+      - name: Update the lockfile and build the sharing crate
+        if: steps.bump.outputs.changed == 'true' && steps.existing.outputs.open != 'true'
+        run: |
+          cargo update -p iroh -p iroh-relay -p netwatch -p iroh-base
+          # A second, unpatched netwatch or iroh-relay in the graph means some crate still asks for
+          # the old line: the interface pin would then be set on a copy iroh does not use.
+          for crate in netwatch iroh-relay; do
+            count="$(grep -c "^name = \"$crate\"$" Cargo.lock)"
+            if [ "$count" != 1 ]; then
+              echo "Cargo.lock has $count copies of $crate; every one must be the vendored fork" >&2
+              exit 1
+            fi
+          done
+          cargo check --locked -p lanrurugi-share -p lanrurugi-api --all-targets
+
+      - name: Open a PR
+        if: steps.bump.outputs.changed == 'true' && steps.existing.outputs.open != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch="${{ steps.existing.outputs.branch }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add -A Cargo.toml Cargo.lock crates/*/Cargo.toml vendor
+          git commit -m "chore(deps): ${{ steps.bump.outputs.summary }}"
+          git push -f origin "$branch"
+          gh pr create --base dev --head "$branch" \
+            --label "type: improvement" --label "area: backend" \
+            --title "chore(deps): ${{ steps.bump.outputs.summary }}" \
+            --body "$(cat <<'EOF'
+          由 `.github/workflows/vendor-forks.yml` 自动生成：把 iroh 升到新版本，并按 `vendor/patches/` 把两个补丁版（022：分享流量绑定网卡）重新套到它要求的 iroh-relay / netwatch 上。
+
+          - 补丁都已套上，`lanrurugi-share`、`lanrurugi-api` 编译通过；依赖图里 netwatch、iroh-relay 都只有补丁版这一份。
+          - 这个 PR 由工作流用 GITHUB_TOKEN 创建，GitHub 不会因此自动跑 CI：关闭再重新打开本 PR，或推一个空提交，即可触发。
+          - 合并前请看上游变更日志里是否动了中继连接或 UDP 套接字的创建方式；分享的网络矩阵（`scripts/share-network-matrix.sh`）在发布前跑一次。
+          EOF
+          )"

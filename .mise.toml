@@ -167,6 +167,10 @@ for c in "$@"; do args+=(-p "$c"); done
 scripts/cargo-container-run.sh cargo update "${args[@]}"
 """
 
+[tasks.vendor-forks]
+description = "Regenerate vendor/iroh-relay and vendor/netwatch from their crates.io release plus vendor/patches/ (after changing a VERSION there). `-- --check` only verifies. See scripts/vendor-forks.sh"
+run = "scripts/vendor-forks.sh"
+
 [tasks.doc-crate]
 description = "cargo doc --no-deps -p <crate> inside the dev container with rustdoc warnings denied — the documentation gate for a crate's public surface. Usage: mise run doc-crate -- <crate-name> [<crate-name> ...]"
 run = """

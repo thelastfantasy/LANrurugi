@@ -205,9 +205,9 @@ serde-saphyr = "2.0"
 # Sharing (specs/017-archive-sharing). Versions are the latest stable releases checked on crates.io
 # on 2026-10-24. iroh's own `ed25519-dalek` 3 and `blake3` 1.8 are reused so keys and hashes are one
 # type across the transport and the protocol crate.
-iroh = { version = "1.4.1", features = ["portmapper", "platform-verifier"] }
+iroh = { version = "1.5.0", features = ["portmapper", "platform-verifier"] }
 iroh-mdns-address-lookup = "0.6.1"
-iroh-relay = { version = "1.4.1", features = ["server"] }
+iroh-relay = { version = "1.5.0", features = ["server"] }
 # Signed packets only: publishing goes to pkarr relays over this project's own HTTP client, never
 # through pkarr's DHT client (research §15).
 pkarr = { version = "9.0.0", default-features = false, features = ["signed_packet"] }
