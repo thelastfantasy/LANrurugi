@@ -720,7 +720,7 @@
   "Override Plugin Global Arguments": "Override Plugin Global Arguments",
   "upload.overwriteDuplicate": "Overwrite Duplicate",
   "reader.pToggleDoublePageMode": "toggle double page mode",
-  "reader.shiftMCyclesFitMode": "Cycle the fit mode: container → fit width → fit height (headless only, not in endless scroll)",
+  "reader.shiftMCyclesFitMode": "Cycle the fit mode: container → fit width → fit height (headless only)",
   "reader.tankChaptersUnreadable": "{{count}} chapter(s) could not be read and were skipped: {{names}}",
   "reader.patchUnreadable": "This archive's patch cannot be read, so its {{count}} page(s) were skipped (from: {{sources}}). Reading progress and chapters were adjusted.",
   "reader.patchUnreadablePending": "This archive's patch cannot be read, so its {{count}} page(s) were skipped (from: {{sources}}). Reading progress and chapters will be adjusted the next time it opens.",

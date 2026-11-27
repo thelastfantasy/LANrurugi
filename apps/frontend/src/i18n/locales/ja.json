@@ -3127,7 +3127,7 @@
   "reader.helpSectionPanels": "パネルと終了",
   "reader.helpSectionTouch": "スマートフォン／タブレット",
   "reader.ctrlPReaderOptions": "閲覧オプションを開く",
-  "reader.shiftMCyclesFitMode": "表示モードを切り替え：コンテナに合わせる → 幅に合わせる → 高さに合わせる（ヘッドレスモードのみ。無限スクロール時は使用不可）",
+  "reader.shiftMCyclesFitMode": "表示モードを切り替え：コンテナに合わせる → 幅に合わせる → 高さに合わせる（ヘッドレスモードのみ）",
   "reader.tankChaptersUnreadable": "{{count}} 件のチャプターを読み込めなかったため、スキップしました：{{names}}",
   "reader.patchUnreadable": "このアーカイブのパッチを読み取れないため、パッチ由来の {{count}} ページをスキップしました（提供元: {{sources}}）。読書位置と目次は自動で調整されます。",
   "reader.patchUnreadablePending": "このアーカイブのパッチを読み取れないため、パッチ由来の {{count}} ページをスキップしました（提供元: {{sources}}）。読書位置と目次は次に開いたときに調整されます。",

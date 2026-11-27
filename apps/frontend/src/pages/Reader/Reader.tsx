@@ -2192,7 +2192,9 @@ export function Reader() {
     } else if (!supportsHover) {
       onInfiniteScrollTap(clientY);
     } else {
-      goToInfiniteScrollPage(currentPage, target);
+      // A vertical strip of pages turns by the screen's lower/upper half, exactly as J/K do;
+      // left/right halves beside a column of pages read as two unrelated controls.
+      pressStepKey(clientY >= window.innerHeight / 2 ? "next" : "prev");
     }
   }
   const turnFromOutsideRef = useRef(turnFromOutside);
@@ -2883,9 +2885,9 @@ export function Reader() {
             updateReaderSettings({ mangaMode: !readerSettings.mangaMode });
             return;
           }
-          // Headless only (deliberate: the fit modes belong to the no-chrome reading view), and a
-          // no-op in endless scroll where the page column already sizes itself.
-          if (!headless || readerSettings.infiniteScroll) return;
+          // Headless only (deliberate: the fit modes belong to the no-chrome reading view). Endless
+          // scroll applies them too, as its fit menu shows.
+          if (!headless) return;
           e.preventDefault();
           const cycle = [FIT_MODE.CONTAINER, FIT_MODE.FIT_WIDTH, FIT_MODE.FIT_HEIGHT] as const;
           const next = cycle[(cycle.indexOf(readerSettings.fitMode) + 1) % cycle.length];
@@ -3464,8 +3466,10 @@ export function Reader() {
   if (readerSettings.fitMode === FIT_MODE.FIT_HEIGHT) {
     const heightVh =
       readerSettings.hideHeader || headless || readerSettings.infiniteScroll ? 98 : 90;
+    // The measured height is the space around one page in the paged view; in endless scroll the
+    // image area is the whole column, scrolled far above the viewport, so it measured as huge.
     imageStyle.maxHeight =
-      fitHeightPx !== null ? `${fitHeightPx}px` : `${heightVh}vh`;
+      fitHeightPx !== null && !readerSettings.infiniteScroll ? `${fitHeightPx}px` : `${heightVh}vh`;
     // On desktop the container hugs the page (legacy's shape), but not tighter than the toolbar
     // needs: its two side icon groups are absolutely positioned (198px and 214px) and the paginator
     // between them is ~224px — plus another 120px when the adjacent-archive arrows are shown, which
@@ -3489,6 +3493,13 @@ export function Reader() {
   } else {
     outerStyle.maxWidth = "1200px";
   }
+
+  // A `width: 100%` page (fit-width, a custom container width) inside the shrink-to-fit page frame
+  // resolved against its own natural width, so a page narrower than the column was never scaled up
+  // (legacy fills the column). The frame takes the full width in those modes. A spread already
+  // fills it, and widening its frame let the left page take the room from the right one.
+  const pageFrameFill: React.CSSProperties =
+    imageStyle.width === "100%" && !isSpreadShowing ? { width: "100%" } : {};
 
   // Infinite scroll: the ratio reserved for pages nobody has measured yet, and the pages whose
   // images may request bytes (see `infiniteLoadView`). Loaded pages keep their `src` regardless.
@@ -4735,17 +4746,15 @@ export function Reader() {
                     onLoad={(e) => onImageLoad(i + 1, e)}
                     onError={onImageError}
                     onClick={(e) => {
-                      // Headless also listens on the document; this tap is already handled.
+                      // Headless also listens on the document; this click is settled here.
                       e.preventDefault();
-                      if (!supportsHover) {
-                        onInfiniteScrollTap(e.clientY, i + 1);
+                      // With a mouse the whole reading area — page and margin alike — is J (lower half)
+                      // or K (upper half), the same as a click beside the page.
+                      if (supportsHover) {
+                        pressStepKey(e.clientY >= window.innerHeight / 2 ? "next" : "prev");
                         return;
                       }
-                      const isLeftHalf = e.clientX < window.innerWidth / 2;
-                      goToInfiniteScrollPage(
-                        i + 1,
-                        isLeftHalf ? "prev" : "next",
-                      );
+                      onInfiniteScrollTap(e.clientY, i + 1);
                     }}
                   />
                 );
@@ -4768,11 +4777,11 @@ export function Reader() {
                   stepOrTurn(isLeftHalf ? "prev" : "next", "click");
                 }}
                 className="reader-page-frame"
-                style={{ position: "relative", display: "inline-flex" }}
+                style={{ position: "relative", display: "inline-flex", ...pageFrameFill }}
               >
                 <span
                   className="reader-page-frame-inner"
-                  style={{ position: "relative", display: "inline-flex" }}
+                  style={{ position: "relative", display: "inline-flex", ...pageFrameFill }}
                 >
                   {pageTinyBlobs[spread.left] ? (
                     <img

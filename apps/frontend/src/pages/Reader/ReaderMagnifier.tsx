@@ -8,8 +8,26 @@ const MIN_ZOOM = 1.5;
 const MAX_ZOOM = 6;
 const ZOOM_STEP = 0.5;
 
-/** Survives the reader remounting for the next archive, like the switch itself; a reload resets it. */
-let sessionZoom = 2.5;
+const DEFAULT_ZOOM = 2.5;
+const ZOOM_KEY = "readerMagnifierZoom";
+
+/** The last zoom picked in this browser. Unlike the on/off switch, it survives a reload. */
+function storedZoom(): number {
+  try {
+    const value = Number(localStorage.getItem(ZOOM_KEY));
+    return value >= MIN_ZOOM && value <= MAX_ZOOM ? value : DEFAULT_ZOOM;
+  } catch {
+    return DEFAULT_ZOOM;
+  }
+}
+
+function storeZoom(zoom: number) {
+  try {
+    localStorage.setItem(ZOOM_KEY, String(zoom));
+  } catch {
+    // Storage blocked (private window): the zoom just resets on reload.
+  }
+}
 
 /** `+`/`-` on the main row (`=`/`-` keys, with or without Shift) and on the numpad. */
 function zoomDirection(e: KeyboardEvent): 1 | -1 | 0 {
@@ -47,7 +65,7 @@ function pageImageAt(x: number, y: number): HTMLImageElement | null {
  * Space; `+`/`-` change the zoom). It samples the `<img>` already on screen, so it costs no extra request. */
 export function ReaderMagnifier({ active }: { active: boolean }) {
   const [lens, setLens] = useState<Lens | null>(null);
-  const [zoom, setZoom] = useState(sessionZoom);
+  const [zoom, setZoom] = useState(storedZoom);
   const shownRef = useRef(false);
   // Tracked even while off, so switching on can place the lens before the mouse moves.
   const pointerRef = useRef<{ x: number; y: number } | null>(null);
@@ -75,7 +93,7 @@ export function ReaderMagnifier({ active }: { active: boolean }) {
       e.preventDefault();
       setZoom((z) => {
         const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z + direction * ZOOM_STEP));
-        sessionZoom = next;
+        storeZoom(next);
         return next;
       });
     };

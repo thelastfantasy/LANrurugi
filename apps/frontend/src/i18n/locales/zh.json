@@ -753,7 +753,7 @@
   "Override Plugin Global Arguments": "覆盖插件全局参数",
   "upload.overwriteDuplicate": "覆盖重名文件",
   "reader.pToggleDoublePageMode": "切换为双页模式",
-  "reader.shiftMCyclesFitMode": "轮换显示模式：适应容器 → 适应宽度 → 适应高度（仅无界面模式；无极滚动时不可用）",
+  "reader.shiftMCyclesFitMode": "轮换显示模式：适应容器 → 适应宽度 → 适应高度（仅无界面模式）",
   "reader.tankChaptersUnreadable": "有 {{count}} 个章节无法读取，已跳过：{{names}}",
   "reader.patchUnreadable": "这个档案的补丁无法读取，已跳过其中的 {{count}} 页（来源：{{sources}}）。阅读进度和目录已自动调整。",
   "reader.patchUnreadablePending": "这个档案的补丁无法读取，已跳过其中的 {{count}} 页（来源：{{sources}}）。阅读进度和目录会在下次打开时调整。",
