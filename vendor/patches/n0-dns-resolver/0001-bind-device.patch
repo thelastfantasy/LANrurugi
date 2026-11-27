@@ -1,0 +1,138 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 19940ac..bf8adab 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -57,5 +57,5 @@ pub use self::{
+         CaaRecordData, HttpsRecordData, MxRecordData, Record, RecordKind, SrvRecordData,
+         SvcbRecordData, TxtRecordData,
+     },
+-    resolver::{DnsResolver, TransportError},
++    resolver::{DnsResolver, TransportError, set_bind_device},
+ };
+diff --git a/src/resolver/transport.rs b/src/resolver/transport.rs
+index bf325fd..354320c 100644
+--- a/src/resolver/transport.rs
++++ b/src/resolver/transport.rs
+@@ -10,6 +10,56 @@ use tracing::debug;
+ 
+ use super::{pool::ConnPool, query};
+ 
++/// LANrurugi fork (022): the interface DNS queries leave through, if any. Set by the sharing engine
++/// next to netwatch's and iroh-relay's, so name lookups for a pinned endpoint stay on the tunnel too.
++/// A nameserver on loopback (a local stub such as systemd-resolved) is never pinned: the query does
++/// not leave the host, and binding it to another interface would only make it fail.
++static BIND_DEVICE: std::sync::RwLock<Option<std::ffi::CString>> = std::sync::RwLock::new(None);
++
++/// Pins the sockets this crate creates to `device`. An embedded NUL is ignored, since an interface
++/// name cannot contain one.
++pub fn set_bind_device(device: Option<&str>) {
++    let next = device
++        .filter(|s| !s.is_empty())
++        .and_then(|s| std::ffi::CString::new(s).ok());
++    *BIND_DEVICE.write().unwrap_or_else(|e| e.into_inner()) = next;
++}
++
++fn bind_device() -> Option<std::ffi::CString> {
++    BIND_DEVICE.read().unwrap_or_else(|e| e.into_inner()).clone()
++}
++
++fn bind_device_for(addr: SocketAddr) -> Option<std::ffi::CString> {
++    if addr.ip().is_loopback() {
++        return None;
++    }
++    bind_device()
++}
++
++#[cfg(target_os = "linux")]
++fn pin_socket(socket: socket2::SockRef<'_>, device: &std::ffi::CStr) -> io::Result<()> {
++    socket.bind_device(Some(device.to_bytes()))
++}
++
++#[cfg(not(target_os = "linux"))]
++fn pin_socket(_socket: socket2::SockRef<'_>, _device: &std::ffi::CStr) -> io::Result<()> {
++    Ok(())
++}
++
++/// `TcpStream::connect`, with the socket pinned first when an interface is set.
++async fn tcp_connect(addr: SocketAddr) -> io::Result<tokio::net::TcpStream> {
++    let Some(device) = bind_device_for(addr) else {
++        return tokio::net::TcpStream::connect(addr).await;
++    };
++    let socket = if addr.is_ipv6() {
++        tokio::net::TcpSocket::new_v6()?
++    } else {
++        tokio::net::TcpSocket::new_v4()?
++    };
++    pin_socket(socket2::SockRef::from(&socket), &device)?;
++    socket.connect(addr).await
++}
++
+ /// A network or transport-level failure while querying a single nameserver.
+ ///
+ /// The source of [`crate::Error::Transport`]; match on it for the specific cause.
+@@ -105,7 +155,20 @@ pub(super) async fn udp_query(
+         std::net::Ipv4Addr::UNSPECIFIED.into()
+     };
+     let bind_addr = SocketAddr::new(unspecified, 0);
+-    let socket = tokio::net::UdpSocket::bind(bind_addr).await?;
++    let socket = match bind_device_for(addr) {
++        None => tokio::net::UdpSocket::bind(bind_addr).await?,
++        Some(device) => {
++            let socket = socket2::Socket::new(
++                socket2::Domain::for_address(bind_addr),
++                socket2::Type::DGRAM,
++                Some(socket2::Protocol::UDP),
++            )?;
++            pin_socket(socket2::SockRef::from(&socket), &device)?;
++            socket.set_nonblocking(true)?;
++            socket.bind(&bind_addr.into())?;
++            tokio::net::UdpSocket::from_std(socket.into())?
++        }
++    };
+     socket.send_to(query, addr).await?;
+ 
+     let mut buf = vec![0u8; UDP_RECV_BUFFER];
+@@ -177,7 +240,7 @@ pub(super) async fn tcp_query(
+         pool.checkin_tcp(addr, stream);
+         return Ok(resp);
+     }
+-    let mut stream = tokio::net::TcpStream::connect(addr).await?;
++    let mut stream = tcp_connect(addr).await?;
+     let resp = framed_query(&mut stream, query).await?;
+     pool.checkin_tcp(addr, stream);
+     Ok(resp)
+@@ -210,7 +273,7 @@ pub(super) async fn tls_query(
+     }
+ 
+     let connector = tokio_rustls::TlsConnector::from(tls_config.clone());
+-    let tcp_stream = tokio::net::TcpStream::connect(addr).await?;
++    let tcp_stream = tcp_connect(addr).await?;
+     // Use the explicit server name for SNI and validation if given, otherwise
+     // validate against the IP the connection was made to.
+     let sni = match server_name {
+@@ -245,6 +308,12 @@ pub(super) fn build_https_client(
+     for (host, addr) in resolves {
+         builder = builder.resolve(host, *addr);
+     }
++    #[cfg(target_os = "linux")]
++    if let Some(device) = bind_device()
++        && let Ok(name) = device.to_str()
++    {
++        builder = builder.interface(name);
++    }
+     builder
+         .build()
+         .map_err(|source| e!(TransportError::BuildClient { source }))
+diff --git a/src/resolver.rs b/src/resolver.rs
+index fc96d02..bd11397 100644
+--- a/src/resolver.rs
++++ b/src/resolver.rs
+@@ -36,7 +36,7 @@ mod query;
+ mod rtt_map;
+ mod transport;
+ 
+-pub use self::transport::TransportError;
++pub use self::transport::{TransportError, set_bind_device};
+ use self::{
+     cache::{CachedResult, DnsCache, NEGATIVE_TTL_MAX_SECS, NEGATIVE_TTL_SECS},
+     pool::ConnPool,

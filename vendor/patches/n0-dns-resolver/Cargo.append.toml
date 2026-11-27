@@ -1,0 +1,4 @@
+# Appended to the release's Cargo.toml by scripts/vendor-forks.sh: the fork's own dependencies.
+[dependencies.socket2]
+version = "0.6"
+features = ["all"]

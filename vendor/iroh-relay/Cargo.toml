@@ -13,7 +13,7 @@
 edition = "2024"
 rust-version = "1.91"
 name = "iroh-relay"
-version = "1.4.1"
+version = "1.5.0"
 authors = ["n0 team"]
 build = "build.rs"
 autolib = false
@@ -132,8 +132,9 @@ path = "tests/relay_hyper.rs"
 name = "runtime_auth"
 path = "tests/runtime_auth.rs"
 
-[dependencies.socket2]
-version = "0.6"
+[[test]]
+name = "timeouts"
+path = "tests/timeouts.rs"
 
 [dependencies.blake3]
 version = "1.8.2"
@@ -181,7 +182,7 @@ features = [
 version = "0.1.1"
 
 [dependencies.iroh-base]
-version = "1.4.1"
+version = "1.5.0"
 features = [
     "key",
     "relay",
@@ -189,14 +190,14 @@ features = [
 default-features = false
 
 [dependencies.iroh-dns]
-version = "1.4.1"
+version = "1.5.0"
 
 [dependencies.iroh-metrics]
 version = "1.0.2"
 default-features = false
 
 [dependencies.lru]
-version = "0.18.3"
+version = "0.19.0"
 
 [dependencies.n0-error]
 version = "1.0.0"
@@ -205,12 +206,12 @@ version = "1.0.0"
 version = "0.3"
 
 [dependencies.noq]
-version = "1.4.0"
+version = "1.5.0"
 features = ["rustls"]
 default-features = false
 
 [dependencies.noq-proto]
-version = "1.4.0"
+version = "1.5.0"
 default-features = false
 
 [dependencies.num_enum]
@@ -308,7 +309,7 @@ features = ["logging"]
 default-features = false
 
 [dependencies.tokio-rustls-acme]
-version = "0.9"
+version = "0.10"
 optional = true
 
 [dependencies.tokio-util]
@@ -441,3 +442,7 @@ check-cfg = [
     "cfg(iroh_loom)",
     "cfg(skip_patchbay)",
 ]
+
+# Appended to the release's Cargo.toml by scripts/vendor-forks.sh: the fork's own dependencies.
+[dependencies.socket2]
+version = "0.6"

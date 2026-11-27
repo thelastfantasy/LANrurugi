@@ -9,4 +9,4 @@ mod udp;
 
 pub use self::ip_family::IpFamily;
 #[cfg(not(wasm_browser))]
-pub use self::udp::{UdpSender, UdpSocket, set_bind_device};
+pub use self::udp::{BindOptions, SocketRef, UdpSender, UdpSocket, set_bind_device};
