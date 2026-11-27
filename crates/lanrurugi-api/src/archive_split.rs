@@ -237,9 +237,11 @@ fn resolve_multivolume_path(path: &Path, temp_dir: &Path) -> Option<PathBuf> {
     }
     let cache_dir = temp_dir.join("archive-split-cache");
     let _ = std::fs::create_dir_all(&cache_dir);
+    // 128 bits of BLAKE3: a shorter hash could map two cache keys with the same base name to one
+    // file, and the `exists()` check below would then hand back the wrong extraction.
     let temp_target = cache_dir.join(format!(
         "{}-{}",
-        crc32fast::hash(cache_key.as_bytes()),
+        &blake3::hash(cache_key.as_bytes()).to_hex()[..32],
         base_name_str
     ));
     if temp_target.exists() {
@@ -465,7 +467,7 @@ fn collect_split_tree_entries(
                 if let Ok(bytes) =
                     lanrurugi_scanner::archive_format::read_entry(archive_path, &e.name)
                 {
-                    let safe = format!("split-tree-{}-{}", depth, crc32fast::hash(name.as_bytes()));
+                    let safe = format!("split-tree-{}-{}", depth, short_hash(&name));
                     let ext = Path::new(&e.name)
                         .extension()
                         .and_then(|s| s.to_str())
@@ -985,6 +987,11 @@ async fn emit_finished(
     }
 }
 
+/// Eight hex characters of `text`'s BLAKE3 — a short, stable tag for generated file names.
+fn short_hash(text: &str) -> String {
+    blake3::hash(text.as_bytes()).to_hex()[..8].to_string()
+}
+
 fn write_zip_entry<W: std::io::Write + std::io::Seek>(
     writer: &mut zip::ZipWriter<W>,
     name: &str,
@@ -993,7 +1000,6 @@ fn write_zip_entry<W: std::io::Write + std::io::Seek>(
 ) -> Result<String, String> {
     let mut out_name = name.to_string();
     if seen.contains(&out_name) {
-        let crc = crc32fast::hash(name.as_bytes());
         let stem = Path::new(name)
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
@@ -1002,7 +1008,15 @@ fn write_zip_entry<W: std::io::Write + std::io::Seek>(
             .extension()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "bin".to_string());
-        out_name = format!("{stem}_{crc:08x}.{ext}");
+        // The suffix is derived from the name, so a third copy of it would get the second copy's
+        // name too; a counter after it keeps every copy distinct.
+        let tag = short_hash(name);
+        out_name = format!("{stem}_{tag}.{ext}");
+        let mut n = 2;
+        while seen.contains(&out_name) {
+            out_name = format!("{stem}_{tag}_{n}.{ext}");
+            n += 1;
+        }
     }
     seen.insert(out_name.clone());
     let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();

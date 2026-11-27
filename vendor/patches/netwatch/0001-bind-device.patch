@@ -1,0 +1,81 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 2986643..b54a75e 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -9,4 +9,4 @@ mod udp;
+ 
+ pub use self::ip_family::IpFamily;
+ #[cfg(not(wasm_browser))]
+-pub use self::udp::{BindOptions, SocketRef, UdpSender, UdpSocket};
++pub use self::udp::{BindOptions, SocketRef, UdpSender, UdpSocket, set_bind_device};
+diff --git a/src/udp.rs b/src/udp.rs
+index 737b9dd..4694701 100644
+--- a/src/udp.rs
++++ b/src/udp.rs
+@@ -19,6 +19,57 @@ use tracing::{debug, trace, warn};
+ 
+ use super::IpFamily;
+ 
++/// LANrurugi fork (020/022): pin the socket to an interface with `SO_BINDTODEVICE`, not just to an
++/// address. Binding an address fails to hold when the tunnel's address changes, and it does not stop
++/// the kernel picking the physical link for a route that no longer matches. The interface is set
++/// process-wide by the sharing engine only while one is pinned.
++#[cfg(target_os = "linux")]
++fn bind_to_device(socket: &socket2::Socket) -> std::io::Result<()> {
++    use std::os::fd::AsRawFd;
++    let Some(name) = bind_device() else {
++        return Ok(());
++    };
++    let ret = unsafe {
++        libc::setsockopt(
++            socket.as_raw_fd(),
++            libc::SOL_SOCKET,
++            libc::SO_BINDTODEVICE,
++            name.as_ptr().cast(),
++            name.as_bytes_with_nul().len() as libc::socklen_t,
++        )
++    };
++    if ret != 0 {
++        return Err(std::io::Error::last_os_error());
++    }
++    Ok(())
++}
++
++#[cfg(not(target_os = "linux"))]
++fn bind_to_device(_socket: &socket2::Socket) -> std::io::Result<()> {
++    Ok(())
++}
++
++/// The interface every socket this crate creates is pinned to, if any. LANrurugi sets this once
++/// per endpoint bind; `None` leaves sockets on the kernel's own routing.
++static BIND_DEVICE: std::sync::RwLock<Option<std::ffi::CString>> = std::sync::RwLock::new(None);
++
++/// Pins the sockets this crate creates to `device` (`SO_BINDTODEVICE` on Linux). An unparsable name
++/// (an embedded NUL) is ignored, since an interface name can never contain one.
++pub fn set_bind_device(device: Option<&str>) {
++    let next = device
++        .filter(|s| !s.is_empty())
++        .and_then(|s| std::ffi::CString::new(s).ok());
++    *BIND_DEVICE.write().unwrap_or_else(|e| e.into_inner()) = next;
++}
++
++pub(crate) fn bind_device() -> Option<std::ffi::CString> {
++    BIND_DEVICE
++        .read()
++        .unwrap_or_else(|e| e.into_inner())
++        .clone()
++}
++
++
+ /// Wrapper around a tokio UDP socket.
+ #[derive(Debug)]
+ pub struct UdpSocket {
+@@ -918,6 +969,8 @@ impl SocketState {
+             debug!("failed to set SO_RECV_ANYIF: {:?}", err);
+         }
+ 
++        bind_to_device(&socket)?;
++
+         // Let the caller configure the socket before it is bound. An error here
+         // fails the bind: a socket that silently missed its configuration would
+         // send traffic where the caller did not want it.

@@ -204,9 +204,9 @@ serde-saphyr = "2.0"
 # Sharing (specs/017-archive-sharing). Versions are the latest stable releases checked on crates.io
 # on 2026-10-24. iroh's own `ed25519-dalek` 3 and `blake3` 1.8 are reused so keys and hashes are one
 # type across the transport and the protocol crate.
-iroh = { version = "1.4.1", features = ["portmapper", "platform-verifier"] }
+iroh = { version = "1.5.0", features = ["portmapper", "platform-verifier"] }
 iroh-mdns-address-lookup = "0.6.1"
-iroh-relay = { version = "1.4.1", features = ["server"] }
+iroh-relay = { version = "1.5.0", features = ["server"] }
 # Signed packets only: publishing goes to pkarr relays over this project's own HTTP client, never
 # through pkarr's DHT client (research §15).
 pkarr = { version = "9.0.0", default-features = false, features = ["signed_packet"] }
@@ -250,9 +250,11 @@ codegen-units = 16
 [profile.dev.package."*"]
 opt-level = 2
 
-# LANrurugi forks pinned to the exact upstream versions this build already uses (022): both carry a
-# single added `SO_BINDTODEVICE` call so a pinned sharing node cannot fall back to the physical link.
-# The diff against the published crates stays one hunk each; `vendor/*/FORK.md` records it.
+# LANrurugi forks (022): each adds `SO_BINDTODEVICE` to the sockets the crate opens, so a pinned
+# sharing node cannot fall back to the physical link. `vendor/<crate>/` is generated from the
+# crates.io release named in `vendor/patches/<crate>/VERSION` plus the patches there
+# (scripts/vendor-forks.sh); `vendor/patches/<crate>/FORK.md` says what changed and why.
 [patch.crates-io]
 netwatch = { path = "vendor/netwatch" }
 iroh-relay = { path = "vendor/iroh-relay" }
+n0-dns-resolver = { path = "vendor/n0-dns-resolver" }

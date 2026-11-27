@@ -426,7 +426,7 @@ async fn list_issues(
             {
                 return false;
             }
-            !(!needle.is_empty() && !issue.title.to_lowercase().contains(&needle))
+            needle.is_empty() || issue.title.to_lowercase().contains(&needle)
         })
         .collect();
     if query.sort.as_deref() == Some("frequent") {

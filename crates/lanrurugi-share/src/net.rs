@@ -154,6 +154,17 @@ pub struct Bound {
     pub lan_peers: Arc<Mutex<std::collections::HashSet<EndpointId>>>,
 }
 
+/// The interface the current endpoint is pinned to, for the sharing engine's own HTTP clients.
+static PINNED_DEVICE: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+/// The interface sharing is pinned to, if any.
+pub fn pinned_device() -> Option<String> {
+    PINNED_DEVICE
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
 /// Builds and binds the endpoint. The caller attaches the protocol handler and turns this into a
 /// `ShareNet`, because the handler is the part that still lives with the application.
 pub async fn bind(options: BindOptions) -> Result<Bound, String> {
@@ -172,6 +183,8 @@ pub async fn bind(options: BindOptions) -> Result<Bound, String> {
     let device = (!device.is_empty()).then_some(device);
     netwatch::set_bind_device(device);
     iroh_relay::client::set_bind_device(device);
+    n0_dns_resolver::set_bind_device(device);
+    *PINNED_DEVICE.write().unwrap_or_else(|e| e.into_inner()) = device.map(str::to_string);
     let mut bound_addrs: Vec<std::net::IpAddr> = Vec::new();
     if !pinned.trim().is_empty() {
         // The builder starts with a wildcard IPv4 and IPv6 transport. Binding the tunnel's own
@@ -223,7 +236,16 @@ pub async fn bind(options: BindOptions) -> Result<Bound, String> {
         proxy::Choice::None => {}
     }
     builder = builder.ca_tls_config(relay_tls());
-    if !options.portmap {
+    // Pinned, three things would still leave through the physical link, because none of them goes
+    // through the two patched sockets: iroh's HTTPS latency probes and captive-portal check (its own
+    // HTTP client, on every network change), port mapping on the physical router, and mDNS
+    // announcing this endpoint on the physical LAN. QUIC address discovery still runs, on the
+    // pinned UDP socket.
+    let pinned_on = !pinned.trim().is_empty();
+    if pinned_on {
+        builder = builder.net_report_config(iroh::endpoint::NetReportConfig::minimal());
+    }
+    if !options.portmap || pinned_on {
         builder = builder.portmapper_config(iroh::endpoint::PortmapperConfig::Disabled);
     }
     let endpoint = builder.bind().await.map_err(|e| e.to_string())?;
@@ -231,16 +253,26 @@ pub async fn bind(options: BindOptions) -> Result<Bound, String> {
         endpoint.add_external_addr(addr).await;
     }
     let lan_peers = Arc::new(Mutex::new(std::collections::HashSet::new()));
-    match iroh_mdns_address_lookup::MdnsAddressLookup::builder()
-        .service_name(MDNS_SERVICE)
-        .build(endpoint.id())
-    {
-        Ok(mdns) => {
+    let mdns = if pinned_on {
+        None
+    } else {
+        Some(
+            iroh_mdns_address_lookup::MdnsAddressLookup::builder()
+                .service_name(MDNS_SERVICE)
+                .build(endpoint.id()),
+        )
+    };
+    match mdns {
+        None => {}
+        Some(Ok(mdns)) => {
             if let Ok(lookup) = endpoint.address_lookup() {
                 lookup.add(mdns.clone());
             }
             let peers = lan_peers.clone();
-            tokio::spawn(async move {
+            // Ends with the endpoint: the task owns the mDNS service, and outliving a rebind kept the
+            // old endpoint announced on the LAN for good — on the physical link even after the new
+            // one was pinned to a tunnel.
+            tokio::spawn(endpoint.closed().run_until(async move {
                 use futures_util::StreamExt;
                 let mut events = mdns.subscribe().await;
                 while let Some(event) = events.next().await {
@@ -258,9 +290,9 @@ pub async fn bind(options: BindOptions) -> Result<Bound, String> {
                         _ => {}
                     }
                 }
-            });
+            }));
         }
-        Err(e) => tracing::warn!(error = %e, "mDNS discovery unavailable"),
+        Some(Err(e)) => tracing::warn!(error = %e, "mDNS discovery unavailable"),
     }
     let shared = Arc::new(Shared {
         ratios: Mutex::new(HashMap::new()),

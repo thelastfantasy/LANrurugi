@@ -47,21 +47,6 @@ pub enum IngestDownloadError {
         existing_id: String,
         reason: DuplicateReason,
     },
-    /// A `Filename` collision (see [`DuplicateReason::Filename`]) that was staged to `temp_dir`
-    /// instead of being immediately rejected — deliberately not folded into `Duplicate`, since a
-    /// caller needs to persist the extra staging info (`temp_path`/`crc32`) onto the queue item,
-    /// not just render a generic error. See `PendingFilenameConflict`'s own docs for why this
-    /// exists at all (unlike a `ContentHash` collision, this one has a real, safe resolution the
-    /// user can pick).
-    #[error("filename collides with an existing archive, staged for user resolution: {0:?}")]
-    PendingRename(PendingFilenameConflict),
-    /// A `Filename` collision whose source archive's pages were already extracted and patched into
-    /// the colliding target — no conflict menu to offer; the staged file can be discarded.
-    #[error("source archive already patched into {existing_id}")]
-    AlreadyPatched {
-        existing_id: String,
-        filename: String,
-    },
     /// What arrived is not an archive with pages — typically a web page the server answered with
     /// (a "still being prepared" notice) under a 200. Refused before cataloguing (#300); the bytes
     /// are dropped, so a retry downloads again.
@@ -148,9 +133,8 @@ pub(crate) fn html_excerpt(bytes: &[u8]) -> Option<String> {
 
 /// Converts to the structured, translatable `QueueError` the frontend actually renders — logs
 /// the original `Display` text via `tracing::warn!` here (the one place it's available before
-/// being discarded) rather than serializing it anywhere user-facing. `Duplicate`/`PendingRename`
-/// need no log: their fields are already fully structured and user-actionable (unlike the other
-/// two, genuine internal faults).
+/// being discarded) rather than serializing it anywhere user-facing. `Duplicate` needs no log: its
+/// fields are already fully structured and user-actionable (unlike the internal faults).
 impl From<&IngestDownloadError> for lanrurugi_core::queue_error::QueueError {
     fn from(e: &IngestDownloadError) -> Self {
         use lanrurugi_core::queue_error::QueueError;
@@ -226,19 +210,8 @@ impl From<&IngestDownloadError> for lanrurugi_core::queue_error::QueueError {
                     page_excerpt: page_excerpt.clone(),
                 }
             }
-            IngestDownloadError::PendingRename(conflict) => QueueError::DuplicateFilename {
-                existing_id: conflict.existing_id.clone(),
-                filename: conflict.original_filename.clone(),
-            },
             IngestDownloadError::RestoreInProgress(message) => QueueError::IngestFailed {
                 reason: message.clone(),
-            },
-            IngestDownloadError::AlreadyPatched {
-                existing_id,
-                filename,
-            } => QueueError::AlreadyPatched {
-                existing_id: existing_id.clone(),
-                filename: filename.clone(),
             },
         }
     }
@@ -308,10 +281,7 @@ pub async fn adopt_pending_conflict(
 /// shared by the download pipeline (`plugins::run_managed_downloads`) and the web UI's user upload
 /// (`upload.rs::upload_archive`), both of which funnel through `ingest_downloaded_file` but carry
 /// different actors/context. `source` is `"download"` or `"upload"`; `extra` carries that source's
-/// own fields (plugin/url/queue item, or the upload's category/origin). `PendingRename` is
-/// deliberately not recorded as a failure — the bytes are safely staged awaiting the user's own
-/// overwrite/rename decision, the same "not a genuine failure" distinction `upload.rs` already
-/// draws for its own `archive.upload` record.
+/// own fields (plugin/url/queue item, or the upload's category/origin).
 pub(crate) async fn record_ingest_result(
     state: &AppState,
     auth: Option<&AuthContext>,
@@ -344,7 +314,6 @@ pub(crate) async fn record_ingest_result(
             )
             .await;
         }
-        Err(IngestDownloadError::PendingRename(_)) => {}
         Err(e) => {
             crate::activity::record_archive_ingest(
                 state,
@@ -497,9 +466,8 @@ async fn apply_preview_metadata(state: &AppState, archive_id: &str, preview: &se
 /// `duplicate_policy`, then (on a successful `Catalogued`/`Rekeyed`/`Unchanged`) finishes
 /// cataloguing exactly like this module's own original single-path logic always did — move into
 /// `archive_dir`, stamp the `source:` tag, fix up `LRR_FILEMAP`, run auto-plugins. Shared between
-/// the original download-ingest path and both filename-conflict resolution paths
-/// (`resolve_overwrite`/`resolve_rename` in `download_queue.rs`), which only differ in what
-/// `intended_filename`/`duplicate_policy` they pass in.
+/// the download-ingest path and [`adopt_pending_conflict`], the startup repair that catalogues a
+/// file a pre-020 filename conflict left staged.
 ///
 /// `keep_bytes_on_failure` keeps the copy when cataloguing fails and no record was written: a
 /// download can be fetched again, but a file adopted at startup is the user's only copy.
@@ -1023,56 +991,6 @@ async fn list_resize_cache_entries(cache_dir: &Path) -> Option<Vec<ResizeCacheEn
         }
     }
     Some(out)
-}
-
-/// Resolves a `PendingFilenameConflict` by deleting the colliding archive and cataloguing the
-/// staged file under its originally-intended filename — `download_queue.rs::overwrite_queue_item`'s
-/// own implementation, kept here alongside `catalogue_staged_file` since it's the only other
-/// caller of that helper.
-pub async fn resolve_overwrite(
-    state: &AppState,
-    conflict: &PendingFilenameConflict,
-    source_url: Option<&str>,
-) -> Result<IngestedDownload, IngestDownloadError> {
-    catalogue_staged_file(
-        state,
-        Path::new(&conflict.temp_path),
-        &conflict.original_filename,
-        None,
-        source_url,
-        DuplicatePolicy::Overwrite,
-        false,
-        false,
-        false,
-    )
-    .await
-}
-
-/// Resolves a `PendingFilenameConflict` by cataloguing the staged file under a new, user-supplied
-/// filename instead — the existing archive is left untouched. If `new_filename` *also* collides
-/// (rare — the user picked a name that happens to already be taken by some other archive), this
-/// returns another `IngestDownloadError::PendingRename` for the same staged content under the new
-/// name, so the user can simply try again with yet another name rather than losing the staged
-/// bytes.
-pub async fn resolve_rename(
-    state: &AppState,
-    conflict: &PendingFilenameConflict,
-    new_filename: &str,
-    source_url: Option<&str>,
-    _queue_item_id: Option<&str>,
-) -> Result<IngestedDownload, IngestDownloadError> {
-    catalogue_staged_file(
-        state,
-        Path::new(&conflict.temp_path),
-        new_filename,
-        None,
-        source_url,
-        DuplicatePolicy::Reject,
-        false,
-        false,
-        false,
-    )
-    .await
 }
 
 /// Removes the bits this call produced, or — when the caller kept a queue row pointing at

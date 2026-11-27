@@ -126,6 +126,7 @@ mise run test-frontend-e2e    # Playwright——真实后端 + Redis，Chromium 
 
 - [修改已存储的记录](docs/dev/data-writes.md)：修改已有记录一律用仓库的 `update` / `update_then`，`create_or_replace` 只用于新建和整体替换（#302）。
 - [Issue / PR 标签](docs/dev/labels.md)：每个 issue 和 PR 打一个 `type:` 标签，以及至少一个 `area:` 标签。
+- `vendor/iroh-relay`、`vendor/netwatch`、`vendor/n0-dns-resolver` 是打了补丁的上游库（022：分享流量绑定网卡），不要直接改：它们由 `scripts/vendor-forks.sh` 从 crates.io 原版加 `vendor/patches/<库>/` 下的补丁生成，CI 会检查两者一致。iroh 升级由 `.github/workflows/vendor-forks.yml` 每周自动尝试并开 PR（Dependabot 不碰这几个库）；本地手动升级用 `scripts/vendor-forks-bump.sh`，再 `mise run cargo-update -- iroh iroh-relay netwatch n0-dns-resolver iroh-base iroh-dns`。
 
 ## 设计文档（`specs/`）
 
