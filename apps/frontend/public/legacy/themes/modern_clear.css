@@ -1851,3 +1851,8 @@ textarea {
     color: #ed2553;
 }
 
+
+/* Reader magnifier lens rim (LANrurugi addition): the red of .tankoubon-member-row */
+.reader-magnifier {
+    border-color: rgb(237, 37, 83);
+}

@@ -54,6 +54,11 @@ pub enum Field {
     /// Title only (`title:` / `filename:` prefixes) — the one thing legacy's syntax had no way to
     /// express at all, since a bare token always searched both.
     Title,
+    /// The archive as a *work*: its title plus the namespaces that say who made it
+    /// (`artist`/`circle`/`group`/`cosplayer`). `work:` exists because "this artist's stuff" and
+    /// "this title" are the same lookup to a reader, while `parody:`/`series:`/`language:` are the
+    /// classification noise it deliberately skips.
+    Work,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -227,13 +232,27 @@ fn ascii_quotes(filter: &str) -> String {
 /// while additionally recognizing the boolean structure.
 fn lex(filter: &str) -> Vec<Piece> {
     let mut pieces = Vec::new();
+    // A backslash ending the query is a slip of the key beside Enter, not something to search for
+    // (it would otherwise become a literal `\` in the last term, which matches nothing).
+    let filter = filter.trim_end().trim_end_matches('\\');
     let quoted = ascii_quotes(filter);
     let mut chars = quoted.chars().peekable();
+    // `title:`/`work:` scope the *remaining words of their comma-separated segment*: real titles
+    // contain spaces, and `work:fate zero` has to mean "both words in the work fields" rather than
+    // "fate in the work fields, zero anywhere". A comma is the explicit reset — it is the one
+    // delimiter a user writes deliberately, where a space is just how titles are spelled.
+    let mut carried: Option<Field> = None;
 
     loop {
-        // Delimiters are separators, not pieces: juxtaposition is the AND.
+        // Delimiters are separators, not pieces: juxtaposition is the AND. A comma *ends* a field
+        // scope, a space does not — see `carried` below.
+        let mut comma = false;
         while matches!(chars.peek(), Some(',') | Some(' ')) {
+            comma |= chars.peek() == Some(&',');
             chars.next();
+        }
+        if comma {
+            carried = None;
         }
         let Some(&first) = chars.peek() else { break };
 
@@ -285,6 +304,47 @@ fn lex(filter: &str) -> Vec<Piece> {
 
         let (raw, isexact) = read_term(&mut chars);
         let (field, raw) = split_field_prefix(&raw);
+        // A term with its own `namespace:` (`artist:x`, `pages:>20`, `date:…`) ends the scope
+        // instead of being searched for as title text.
+        let field = if field == Field::Any && raw.contains(':') {
+            carried = None;
+            Field::Any
+        } else if field == Field::Any {
+            carried.unwrap_or(Field::Any)
+        } else {
+            carried = Some(field);
+            field
+        };
+        // `work:"fate zero"` / `title:"fate zero"` are not phrases: these fields are looked up as
+        // title/creator substrings, and a real title almost never contains the words a user types
+        // with the same spacing. The quotes there are just how people spell a value with spaces, so
+        // the words stay separate and all of them keep the field scope — same result as the
+        // unquoted form. A phrase is still available without a prefix (`"fate zero"` searches both
+        // the titles and the tags). A negated multi-word quote becomes `-(a b)` so the whole
+        // conjunction is negated, not just the first word.
+        if matches!(field, Field::Work | Field::Title) && isexact {
+            let words: Vec<&str> = raw.split_whitespace().collect();
+            if words.len() > 1 {
+                if negated {
+                    pieces.push(Piece::Minus);
+                    pieces.push(Piece::Open);
+                }
+                for word in words {
+                    let tag = normalize(word);
+                    if !tag.is_empty() {
+                        pieces.push(Piece::Term(Token {
+                            tag,
+                            isexact: false,
+                            field,
+                        }));
+                    }
+                }
+                if negated {
+                    pieces.push(Piece::Close);
+                }
+                continue;
+            }
+        }
         let tag = normalize(raw);
         if !tag.is_empty() {
             if negated {
@@ -368,6 +428,9 @@ fn split_field_prefix(raw: &str) -> (Field, &str) {
         if lower.starts_with(prefix) {
             return (Field::Title, &raw[prefix.len()..]);
         }
+    }
+    if lower.starts_with("work:") {
+        return (Field::Work, &raw["work:".len()..]);
     }
     (Field::Any, raw)
 }
@@ -698,11 +761,124 @@ mod tests {
     fn title_prefix_scopes_a_token_to_the_title_half() {
         assert_eq!(parse_query("title:tari"), title("tari", false));
         assert_eq!(parse_query("filename:tari$"), title("tari", true));
-        assert_eq!(parse_query("title:\"tari tari\""), title("tari tari", true));
+        // Spaces inside a `title:"…"` are word separators, not a phrase — see
+        // `quoted_field_values_split_on_spaces` for why quoting a title is not "an exact title".
+        assert_eq!(
+            parse_query("title:\"tari tari\""),
+            and(vec![title("tari", false), title("tari", false)])
+        );
         // Only the title half, and negation composes with it like any other atom.
         assert_eq!(parse_query("-title:tari"), not(title("tari", false)));
         // A namespace that merely *starts* with those letters is untouched.
         assert_eq!(parse_query("titles:tari"), tok("titles:tari", false));
+    }
+
+    fn work(tag: &str, isexact: bool) -> Expr {
+        Expr::Term(Token {
+            tag: tag.to_string(),
+            isexact,
+            field: Field::Work,
+        })
+    }
+
+    #[test]
+    fn work_and_title_prefixes_scope_the_field() {
+        assert_eq!(parse_query("work:tari"), work("tari", false));
+        // Quoting a field value does not make it a phrase: the words stay separate and scoped.
+        assert_eq!(
+            parse_query(r#"work:"fate zero""#),
+            and(vec![work("fate", false), work("zero", false)])
+        );
+        // `title:` keeps its own narrower meaning.
+        assert_eq!(parse_query("title:tari"), title("tari", false));
+        // Not a prefix we know: left alone, so a real `works:` tag namespace still searches.
+        assert_eq!(parse_query("works:tari"), tok("works:tari", false));
+    }
+
+    #[test]
+    fn quoted_field_values_split_on_spaces() {
+        // `title:"…"` and `work:"…"` exist for values with spaces; treating the quotes as a phrase
+        // operator made `work:"生活 12"` miss every title spelled `生活12` without a space.
+        assert_eq!(
+            parse_query(r#"work:"生活 12""#),
+            and(vec![work("生活", false), work("12", false)])
+        );
+        assert_eq!(
+            parse_query(r#"title:"fate zero""#),
+            and(vec![title("fate", false), title("zero", false)])
+        );
+        // A single word keeps the exact-tag reading, so `work:"hatahata factory"`-style single
+        // names still work through the literal key lookup.
+        assert_eq!(parse_query(r#"work:"zeta""#), work("zeta", true));
+        // Negation covers the whole conjunction, not just the first word.
+        assert_eq!(
+            parse_query(r#"-work:"fate zero""#),
+            not(and(vec![work("fate", false), work("zero", false)]))
+        );
+        // Without a prefix, quotes keep their phrase meaning (title and tag halves alike).
+        assert_eq!(parse_query(r#""fate zero""#), tok("fate zero", true));
+        // The scope still ends at a comma.
+        assert_eq!(
+            parse_query(r#"work:"fate zero", kana"#),
+            and(vec![
+                work("fate", false),
+                work("zero", false),
+                tok("kana", false)
+            ])
+        );
+    }
+
+    #[test]
+    fn a_date_range_token_survives_lexing_intact() {
+        // The engine re-parses `date_added:`/`timestamp:`/`time:` values itself, so the whole
+        // `T`-carrying value must arrive as one token, lowercased but otherwise untouched.
+        match parse_query("date_added:>=2026-11-23T05:00:18") {
+            Expr::Term(token) => {
+                assert_eq!(token.tag, "date?added:>=2026-11-23t05:00:18");
+                assert_eq!(token.field, Field::Any);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_field_prefix_carries_across_spaces_but_stops_at_a_comma() {
+        // Real titles contain spaces — `work:fate zero` must scope *both* words, or the second one
+        // silently widens the search back to every tag in the library.
+        assert_eq!(
+            parse_query("work:fate zero"),
+            and(vec![work("fate", false), work("zero", false)])
+        );
+        assert_eq!(
+            parse_query("title:a b"),
+            and(vec![title("a", false), title("b", false)])
+        );
+        // A comma is the explicit end of the scope: the caller wants `zero` unrestricted.
+        assert_eq!(
+            parse_query("work:fate, zero"),
+            and(vec![work("fate", false), tok("zero", false)])
+        );
+        // `|` is still AND's separator inside the scope, and the scope spans both branches.
+        assert_eq!(
+            parse_query("work:a|b"),
+            Expr::Or(vec![work("a", false), work("b", false)])
+        );
+        // A namespaced term keeps its own meaning and ends the scope.
+        assert_eq!(
+            parse_query("title:fate artist:takeuchi zero"),
+            and(vec![
+                title("fate", false),
+                tok("artist:takeuchi", false),
+                tok("zero", false)
+            ])
+        );
+    }
+
+    #[test]
+    fn a_trailing_backslash_is_ignored() {
+        assert_eq!(parse_query("fate\\"), parse_query("fate"));
+        assert_eq!(parse_query("fate zero \\\\ "), parse_query("fate zero"));
+        assert_eq!(parse_query("\\"), Expr::And(Vec::new()));
     }
 
     #[test]

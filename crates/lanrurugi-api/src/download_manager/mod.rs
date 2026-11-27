@@ -390,7 +390,25 @@ pub(crate) async fn place_into_library(
             return Ok(Placed::Moved);
         }
     }
-    copy_file(from, to, opts).await.map(Placed::Copied)
+    // Copy beside the destination, then rename within that same directory: the copy path is the
+    // one the watcher can see mid-write. A multi-gigabyte volume takes long enough to be scanned
+    // half-written, and the hash of a truncated file is a perfectly valid-looking id — reported
+    // live 2026-11-26, when a split's 196-page volume gained a second record whose `file` pointed
+    // at the same bytes and whose title was that file's hash. `.part` is not an extension the
+    // watcher accepts, so nothing looks at it until the rename makes it whole.
+    let staged = match to.file_name() {
+        Some(name) => to.with_file_name(format!(".{}.part", name.to_string_lossy())),
+        None => return copy_file(from, to, opts).await.map(Placed::Copied),
+    };
+    let outcome = copy_file(from, &staged, opts).await?;
+    if let Err(e) = tokio::fs::rename(&staged, to).await {
+        let _ = tokio::fs::remove_file(&staged).await;
+        return Err(CopyError::Io(e));
+    }
+    if let Some(parent) = to.parent() {
+        sync_dir(parent).await.map_err(CopyError::Durability)?;
+    }
+    Ok(Placed::Copied(outcome))
 }
 
 #[cfg(test)]

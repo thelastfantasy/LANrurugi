@@ -11,7 +11,6 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { clearDiagnosticsDevice } from "@/diagnostics/device"
 import { startDiagnostics } from "@/diagnostics/sdk"
 import { buildChanged, type BuildIdentity,readSeenBuild, sinceIdentity, writeSeenBuild } from "@/lib/seenBuild"
-import { MSM_SELECTION_KEY } from "@/lib/storageKeys"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 import { clearSearchNavigationState } from "@/pages/Reader/crossArchiveNav"
 import { SESSION_QUERY_KEY } from "@/session/queryKey"
@@ -651,11 +650,24 @@ export function useAnalyzeArchiveSplit() {
 export function useExecuteArchiveSplit() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, deleteOriginal }: { id: string; deleteOriginal?: boolean }) =>
-      sendJson<{ job_id: string; success: number }>(
+    mutationFn: ({
+      id,
+      deleteOriginal,
+      createTankoubon,
+    }: {
+      id: string
+      deleteOriginal?: boolean
+      createTankoubon?: boolean
+    }) => {
+      const params = new URLSearchParams()
+      if (deleteOriginal !== undefined) params.set("delete_original", String(deleteOriginal))
+      if (createTankoubon !== undefined) params.set("create_tankoubon", String(createTankoubon))
+      const query = params.toString()
+      return sendJson<{ job_id: string; success: number }>(
         "POST",
-        `/archives/${id}/split/execute${deleteOriginal !== undefined ? `?delete_original=${deleteOriginal}` : ""}`,
-      ),
+        `/archives/${id}/split/execute${query ? `?${query}` : ""}`,
+      )
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["archives"] })
       queryClient.invalidateQueries({ queryKey: ["tankoubon-full"] })
@@ -684,6 +696,9 @@ export function useAddTocEntry(id: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["archive", id] })
       queryClient.invalidateQueries({ queryKey: ["archives"] })
+      // A chapter set while reading a tankoubon belongs to the member archive, but the open tank
+      // view renders its merged ToC from /tankoubons/{id}/full.
+      queryClient.invalidateQueries({ queryKey: ["tankoubon-full"] })
     },
   })
 }
@@ -695,6 +710,7 @@ export function useRemoveTocEntry(id: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["archive", id] })
       queryClient.invalidateQueries({ queryKey: ["archives"] })
+      queryClient.invalidateQueries({ queryKey: ["tankoubon-full"] })
     },
   })
 }
@@ -708,6 +724,7 @@ export function useAddTocEntryForId() {
     onSuccess: (_data, { id }) => {
       queryClient.invalidateQueries({ queryKey: ["archive", id] })
       queryClient.invalidateQueries({ queryKey: ["archives"] })
+      queryClient.invalidateQueries({ queryKey: ["tankoubon-full"] })
     },
   })
 }
@@ -720,6 +737,7 @@ export function useRemoveTocEntryForId() {
     onSuccess: (_data, { id }) => {
       queryClient.invalidateQueries({ queryKey: ["archive", id] })
       queryClient.invalidateQueries({ queryKey: ["archives"] })
+      queryClient.invalidateQueries({ queryKey: ["tankoubon-full"] })
     },
   })
 }
@@ -1272,7 +1290,7 @@ export function useLogin() {
  * in-memory query cache (otherwise a page that doesn't remount — client-side `navigate`, not a
  * reload — keeps serving the outgoing session's cached `["settings"]`/etc. responses until each
  * query happens to refetch on its own), content-derived browsing state (last search, cross-archive
- * navigation), and the unconsumed Library→Batch multi-select handoff. Deliberately leaves every
+ * navigation). Deliberately leaves every
  * pure display-preference key alone (theme, sort order, reader layout, ...) — those aren't a
  * privacy or correctness concern, and wiping them would just make the next login worse for no
  * benefit. */
@@ -1295,7 +1313,6 @@ export function useLogout() {
       await queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY })
       clearSearchNavigationState()
       clearLastRefreshTimestamp()
-      localStorage.removeItem(MSM_SELECTION_KEY)
       // The diagnostics device id is per login session, not per browser forever: a shared machine
       // must not hand the next admin the previous one's id.
       clearDiagnosticsDevice()

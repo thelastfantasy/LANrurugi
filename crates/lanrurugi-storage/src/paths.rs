@@ -71,6 +71,45 @@ pub fn is_in_byname(library: &Path, path: &Path) -> bool {
     path.starts_with(byname_dir(library))
 }
 
+/// Whether `dir` is storage rather than the user's own folder structure: a hash-layout bucket
+/// (`<library>/<bb>/`, directly under the library) or `_byname` itself.
+///
+/// A whole-library walker that groups by directory — the two subfolder maintenance scripts — must
+/// skip buckets: their name is an id prefix, so grouping by it produces one category per bucket
+/// ("00"…"fe") instead of anything a user asked for. `_byname` is different: it *is* where the
+/// by-name layout lives, so the walker should descend into it and treat its subdirectories as the
+/// user's own structure, while files sitting directly in it rank with files in the library root.
+///
+/// A directory is only called a bucket when it holds at least one `<id>.<ext>`-shaped entry, so a
+/// library that keeps a user folder named e.g. `ab` keeps working.
+pub fn is_storage_dir(library: &Path, dir: &Path) -> bool {
+    if dir == library {
+        return false;
+    }
+    if dir == byname_dir(library) {
+        return true;
+    }
+    if dir.parent() != Some(library) {
+        return false;
+    }
+    let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if name.len() != 2 {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let path = entry.path();
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            return false;
+        };
+        is_hash_layout_path(library, &path, stem)
+    })
+}
+
 /// The path relative to `_byname/`, if `path` is under it — what a manual `mv` back to the library
 /// root has to preserve. `None` for anything outside `_byname/`.
 pub fn byname_relative_path<'a>(library: &Path, path: &'a Path) -> Option<&'a Path> {

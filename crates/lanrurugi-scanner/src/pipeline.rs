@@ -334,32 +334,46 @@ pub async fn ingest_file_with_policy(
 
     if let Some(previous_id) = previous_id.map(ArchiveId) {
         if previous_id == id {
-            return Ok(IngestOutcome::Unchanged { id });
+            // The filemap entry can outlive the record it points at — nothing prunes the map when a
+            // record is deleted. Trusting it blindly would return before a record is ever written:
+            // the file then sits on disk with nothing pointing at it, so its reader URL 404s and
+            // every later scan reaches this same branch and does nothing (seen live: a split deleted
+            // its source, then the user re-uploaded the identical file to the identical path).
+            if archives.get(&id).await?.is_some() {
+                return Ok(IngestOutcome::Unchanged { id });
+            }
+            tracing::warn!(
+                %id,
+                path = %path_str,
+                "filemap entry pointed at an id with no record; cataloguing the file again"
+            );
         }
 
-        // Content changed: re-key the existing record (non-destructive — metadata carries over),
-        // exactly matching legacy's `change_archive_id` semantics for a rewritten file.
-        match archives.rename_id(&previous_id, &id).await {
-            Ok(()) => {
-                // New bytes under the old record: the carried-over fingerprint is stale (027).
-                let fingerprint = fingerprint(path, blake3).await?;
-                archives.set_blake3(&id, &fingerprint).await?;
-                let _: () = config_conn
-                    .hset(FILEMAP_KEY, &path_str, id.as_str())
-                    .await?;
-                return Ok(IngestOutcome::Rekeyed {
-                    old_id: previous_id,
-                    new_id: id,
-                });
+        if previous_id != id {
+            // Content changed: re-key the existing record (non-destructive — metadata carries over),
+            // exactly matching legacy's `change_archive_id` semantics for a rewritten file.
+            match archives.rename_id(&previous_id, &id).await {
+                Ok(()) => {
+                    // New bytes under the old record: the carried-over fingerprint is stale (027).
+                    let fingerprint = fingerprint(path, blake3).await?;
+                    archives.set_blake3(&id, &fingerprint).await?;
+                    let _: () = config_conn
+                        .hset(FILEMAP_KEY, &path_str, id.as_str())
+                        .await?;
+                    return Ok(IngestOutcome::Rekeyed {
+                        old_id: previous_id,
+                        new_id: id,
+                    });
+                }
+                Err(e) if e.to_string().contains("no such key") => {
+                    // The filemap pointed at an ID that no longer exists — most likely
+                    // `lanrurugi_storage::rebuild::rekey_all` already re-keyed this exact archive by
+                    // its own (equivalent) path without going through this filemap entry. Fall
+                    // through to the "no recorded previous ID" path below: refresh the filemap and
+                    // treat `id` on its own merits (already tracked vs. genuinely new).
+                }
+                Err(e) => return Err(e.into()),
             }
-            Err(e) if e.to_string().contains("no such key") => {
-                // The filemap pointed at an ID that no longer exists — most likely
-                // `lanrurugi_storage::rebuild::rekey_all` already re-keyed this exact archive by
-                // its own (equivalent) path without going through this filemap entry. Fall
-                // through to the "no recorded previous ID" path below: refresh the filemap and
-                // treat `id` on its own merits (already tracked vs. genuinely new).
-            }
-            Err(e) => return Err(e.into()),
         }
     }
 
@@ -958,6 +972,69 @@ mod tests {
 
         archives.delete(&id).await.unwrap();
         let mut conn = config_pool.get().await.unwrap();
+        let _: () = conn
+            .hdel(FILEMAP_KEY, path.to_string_lossy().to_string())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_stale_filemap_entry_does_not_skip_cataloguing() {
+        // Regression test for a real, shipped bug: the filemap entry survives a record's deletion
+        // (nothing pruned it), so re-uploading the identical bytes to the identical path hit the
+        // "path already tracked under this id" branch, returned `Unchanged` and never wrote a
+        // record — the file sat on disk with nothing pointing at it and its reader URL 404'd.
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(27).await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let archives = ArchiveRepository::new(archive_pool);
+        let dir = tempfile::tempdir().unwrap();
+        let thumb_dir = tempfile::tempdir().unwrap();
+        let path = make_zip_with_pages(dir.path(), "book.zip", 2);
+
+        let first = ingest_file(
+            &archives,
+            &config_pool,
+            &search_pool,
+            &Equivalence::default(),
+            thumb_dir.path(),
+            &path,
+        )
+        .await
+        .unwrap();
+        let IngestOutcome::Catalogued { id } = first else {
+            panic!("expected Catalogued, got {first:?}");
+        };
+
+        // Delete the record but leave the filemap entry behind, exactly what a purge that forgot
+        // to prune the map used to leave.
+        archives.delete(&id).await.unwrap();
+        let mut conn = config_pool.get().await.unwrap();
+        let mapped: Option<String> = conn
+            .hget(FILEMAP_KEY, path.to_string_lossy().to_string())
+            .await
+            .unwrap();
+        assert_eq!(mapped.as_deref(), Some(id.as_str()));
+
+        let second = ingest_file(
+            &archives,
+            &config_pool,
+            &search_pool,
+            &Equivalence::default(),
+            thumb_dir.path(),
+            &path,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            second,
+            IngestOutcome::Catalogued { id: id.clone() },
+            "a filemap entry pointing at a deleted record must not short-circuit the catalogue"
+        );
+        assert!(archives.get(&id).await.unwrap().is_some());
+
+        archives.delete(&id).await.unwrap();
         let _: () = conn
             .hdel(FILEMAP_KEY, path.to_string_lossy().to_string())
             .await

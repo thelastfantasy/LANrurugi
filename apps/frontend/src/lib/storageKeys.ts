@@ -1,10 +1,6 @@
 // `localStorage` keys shared across more than one page/component — kept in one place so the two
 // (or more) files reading/writing the same key can't drift apart on the string itself.
 
-/** Multi-select batch-operation "handshake" — legacy's own `localStorage` key name. Library writes
- * the set here before navigating to Batch, which reads+clears it once on mount (a one-shot handoff). */
-export const MSM_SELECTION_KEY = "msmSelection"
-
 /** NOT the thumbnail grid's own layout (a plain CSS `flex-wrap`, no configurable column count) —
  * controls how many custom namespace columns the compact table view renders beyond Title. */
 export const COLUMN_COUNT_KEY = "columnCount"

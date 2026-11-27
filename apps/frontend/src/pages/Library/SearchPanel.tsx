@@ -8,6 +8,7 @@ import { DateTimeField } from "@/components/common-ui/Form/DateTimeField"
 import { useMenuPalette } from "@/hooks/useMenuPalette"
 import {
   buildDateRangeToken,
+  type DateRangeNamespace,
   QUICK_FILTERS,
   type QuickFilter,
   quickFilterActive,
@@ -129,6 +130,10 @@ export function SearchPanel({
 
   const [from, setFrom] = useState("")
   const [to, setTo] = useState("")
+  // Which date the range means. The two dates are genuinely different facts — when *this library*
+  // got the file versus when the *source* posted the work — and only one of them exists for
+  // archives that predate the download pipeline.
+  const [dateNamespace, setDateNamespace] = useState<DateRangeNamespace>("date_added")
 
   const byKind = (kind: SearchSuggestion["kind"]) =>
     suggestions.filter((suggestion) => suggestion.kind === kind)
@@ -341,8 +346,43 @@ export function SearchPanel({
           paddingBottom: 2,
         }}
       >
-        <SectionLabel>{t("library.searchPanelDateAdded")}</SectionLabel>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 12px 8px" }}>
+        <SectionLabel>{t("library.searchPanelDateRange")}</SectionLabel>
+        {/* `flexWrap` is the phone fallback: the four controls need roughly 350px, and below that
+            the button drops to a second line rather than squeezing the date fields until
+            `YYYY-MM-DD` is ellipsised into `2026-…`. */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: 4,
+            padding: "2px 12px 8px",
+          }}
+        >
+        {/* Which date the two fields below refer to. It lives on the row rather than as three
+            separate chips because the range still needs exactly two dates; the select only names
+            the field they belong to. */}
+        <select
+          className="stdinput"
+          aria-label={t("library.searchPanelDateRange")}
+          value={dateNamespace}
+          onChange={(event) => setDateNamespace(event.target.value as DateRangeNamespace)}
+          style={{
+            // Wide enough for the longest label ("加入日期") and no wider — the row's width belongs
+            // to the two date fields.
+            flex: "0 0 auto",
+            width: 74,
+            height: 21,
+            minWidth: 0,
+            margin: 0,
+            padding: "0 1px",
+            boxSizing: "border-box",
+          }}
+        >
+          <option value="date_added">{t("library.searchPanelDateFieldAdded")}</option>
+          <option value="timestamp">{t("library.searchPanelDateFieldPosted")}</option>
+          <option value="time">{t("library.searchPanelDateFieldEither")}</option>
+        </select>
         {/* `margin: 0` cancels `.stdinput`'s legacy `4px 1px 0` margin. Under `align-items:
             center` it is the *margin box* that gets centred, so that 4px top margin pushed the
             fields' visible box 2px below the button's — exactly the "button sits a little high"
@@ -351,14 +391,14 @@ export function SearchPanel({
           mode="date"
           value={from}
           onChange={setFrom}
-          style={{ width: 116, minWidth: 0, margin: 0 }}
+          style={{ flex: "1 1 96px", width: "auto", minWidth: 96, margin: 0 }}
         />
         <span style={{ opacity: 0.6 }}>–</span>
         <DateTimeField
           mode="date"
           value={to}
           onChange={setTo}
-          style={{ width: 116, minWidth: 0, margin: 0 }}
+          style={{ flex: "1 1 96px", width: "auto", minWidth: 96, margin: 0 }}
         />
         <button
           type="button"
@@ -367,10 +407,22 @@ export function SearchPanel({
           // both are normalised here so the box model matches the date fields on the left (which
           // get the same treatment in their own `style`) instead of relying on margin boxes
           // cancelling out under flex centring.
-          style={{ height: 21, boxSizing: "border-box", margin: 0 }}
-          disabled={buildDateRangeToken(from, to) === null}
+          // `.stdbtn` carries `width: 100%` and `min-width: 150px`; both are dropped here so the
+          // button hugs text, where it is the widest thing in the row on a phone (`width: 100%`
+          // alone would still fight the date fields for the remaining space).
+          style={{
+            flex: "0 0 auto",
+            width: "auto",
+            minWidth: 0,
+            padding: "0 8px",
+            whiteSpace: "nowrap",
+            height: 21,
+            boxSizing: "border-box",
+            margin: 0,
+          }}
+          disabled={buildDateRangeToken(from, to, dateNamespace) === null}
           onClick={() => {
-            const token = buildDateRangeToken(from, to)
+            const token = buildDateRangeToken(from, to, dateNamespace)
             if (token) onInsertToken(token)
           }}
         >

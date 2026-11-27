@@ -308,7 +308,7 @@ async fn create_import(
     }
     let wanted = |id: &str| chosen.as_ref().is_none_or(|c| c.contains(id));
     // Refused before anything is queued, with the reason (FR-021).
-    let (claim_id, manifest, _ticket) = match import::claim(&opened).await {
+    let (claim_id, manifest, _ticket, extras) = match import::claim(&opened).await {
         Ok(c) => c,
         Err(e) => return net_error(e),
     };
@@ -361,6 +361,10 @@ async fn create_import(
             .filter(|a| wanted(&a.sharer_archive_id))
             .collect(),
         manifest: serde_json::to_value(&manifest).unwrap_or(Value::Null),
+        extras: extras
+            .into_iter()
+            .map(|extra| (extra.archive_id, extra.fields))
+            .collect(),
         category: body.category,
         queue_item_id: item.id.clone(),
         concurrency: settings.number("share_import_concurrency").unwrap_or(3) as u32,

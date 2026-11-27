@@ -621,13 +621,18 @@ async fn search_archives_with_mode(
                     let mut by_tank: std::collections::HashMap<String, Vec<serde_json::Value>> =
                         std::collections::HashMap::new();
                     for (tank, member) in &wanted {
-                        let name = chapter_names
+                        // Both halves are reported: a volume whose tankoubon renamed it ("巻の拾")
+                        // is unrecognisable on its own, so the card shows "title — 巻の拾".
+                        let title = titles.get(member.as_str()).cloned().unwrap_or_default();
+                        let chapter = chapter_names
                             .get(&(tank.clone(), member.clone()))
                             .cloned()
-                            .or_else(|| titles.get(member.as_str()).cloned())
-                            .unwrap_or_default();
+                            .filter(|name| !name.trim().is_empty());
+                        let name = chapter.clone().unwrap_or_else(|| title.clone());
                         by_tank.entry(tank.clone()).or_default().push(json!({
                             "arcid": member,
+                            "title": title,
+                            "chapter": chapter,
                             "name": name,
                         }));
                     }

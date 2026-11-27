@@ -1750,3 +1750,8 @@ textarea {
     color: #c0392b;
 }
 
+
+/* Reader magnifier lens rim (LANrurugi addition): the button colour this theme uses everywhere */
+.reader-magnifier {
+    border-color: #5C0D11;
+}

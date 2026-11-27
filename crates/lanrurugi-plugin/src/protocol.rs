@@ -1,6 +1,7 @@
 //! Newline-delimited JSON request/response protocol client, per
 //! `contracts/plugin-protocol.md` (constitution Principle IV).
 
+use lanrurugi_core::queue_error::PluginSettingsTarget;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -75,6 +76,22 @@ pub struct ResponseError {
     #[serde(default)]
     pub data:
         Option<std::collections::HashMap<String, lanrurugi_core::queue_error::PluginErrorValue>>,
+    /// Same as [`PluginError::settings`], from a thrown `PluginErrorException`.
+    /// Where the plugin says this error is fixed (`plugin-sdk.ts`'s `PluginError.settings`).
+    #[serde(default, deserialize_with = "lenient_settings_target")]
+    pub settings: Option<PluginSettingsTarget>,
+}
+
+/// A plugin's `settings` hint; any value other than `"self"`/`"login"` reads as no hint, so a
+/// typo in a plugin never turns its error into an unparseable response.
+fn lenient_settings_target<'de, D>(
+    deserializer: D,
+) -> Result<Option<PluginSettingsTarget>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Option<String> = Deserialize::deserialize(deserializer)?;
+    Ok(value.as_deref().and_then(PluginSettingsTarget::parse))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -164,6 +181,27 @@ pub struct PluginInfo {
     /// host-mediated file contents).
     #[serde(default)]
     pub sidecar_files: Vec<String>,
+    /// Host-computed arguments this plugin's calls need, by name — `"other_archive_tags"`,
+    /// `"archives"`, `"library_path"`, `"archive_id_by_path"`. Declaring one is what makes the
+    /// host compute it (a whole-library tag scan is not free, and only a plugin that rewrites
+    /// tags across the library needs one); the host resolves each into `hostArgs` under the same
+    /// name before the call. An unknown name is warned about and skipped, never fatal.
+    #[serde(default)]
+    pub host_arguments: Vec<String>,
+    /// Effects the host applies to this plugin's own `execute` result, by name —
+    /// `"tag_updates"`, `"category_changes"`. The write half of a read-compute-return-write
+    /// split: the plugin returns what it wants written and the host performs the writes.
+    #[serde(default)]
+    pub host_results: Vec<String>,
+    /// Position in an auto-run chain, highest first. `0` when undeclared.
+    ///
+    /// Deliberately not the same thing as the user-configurable `priority` the Plugins page stores
+    /// in Redis (`lanrurugi-api::plugins::get_plugin_priority`) — that one is a display/reorder
+    /// index the user drags, while this one is the plugin pinning itself ahead of the rest because
+    /// everything after it reads what it produced. Only meaningful where the host runs several
+    /// plugins on its own: legacy always ran its filename-parsing plugin before the rest.
+    #[serde(default)]
+    pub run_order: i64,
     /// Version of the shape of what a discovery plugin reports per candidate. A plugin bumps it when
     /// a field's source changes (e.g. tags from an API instead of a listing row), so the host does
     /// not read the first check after an upgrade as every work having changed. `1` when undeclared.
@@ -468,6 +506,8 @@ pub struct PluginError {
     #[serde(default)]
     pub data:
         Option<std::collections::HashMap<String, lanrurugi_core::queue_error::PluginErrorValue>>,
+    #[serde(default, deserialize_with = "lenient_settings_target")]
+    pub settings: Option<PluginSettingsTarget>,
 }
 
 /// A single cookie exactly as `plugin-sdk.ts`'s `LegacyCookie`/`plugins/legacy-globals.d.ts`
@@ -542,7 +582,7 @@ pub struct ScriptResult {
 }
 
 /// One static Category `runScript`'s result asks the host to create — mirrors `plugin-sdk.ts`'s
-/// `ScriptResult.categories_to_create` element shape field-for-field (`foldertocat`).
+/// `ScriptResult.categories_to_create` element shape field-for-field.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScriptCategoryToCreate {
     pub name: String,

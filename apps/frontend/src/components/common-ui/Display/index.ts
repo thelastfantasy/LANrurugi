@@ -20,6 +20,8 @@ export * from "./Popover"
 
 export * from "./PopupMenu"
 
+export * from "./ProgressBar"
+
 export * from "./SortableList"
 
 export * from "./StaticTooltip"

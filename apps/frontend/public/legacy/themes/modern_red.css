@@ -1808,3 +1808,8 @@ textarea {
     color: #be234b;
 }
 
+
+/* Reader magnifier lens rim (LANrurugi addition): the rose of .tankoubon-member-row */
+.reader-magnifier {
+    border-color: rgb(216, 59, 102);
+}

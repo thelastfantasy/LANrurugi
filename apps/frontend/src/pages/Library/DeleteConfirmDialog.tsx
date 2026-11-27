@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { fetchJson } from "@/api/client"
+import { CheckboxField, RadioGroup, RadioItem } from "@/components/common-ui/Form"
 import { Confirm } from "@/components/Display"
 
 /** Remembers the last answer, so deleting several subscription-fetched archives in a row does not ask
@@ -89,46 +90,32 @@ export function DeleteConfirmDialog({
             t("common.thisWillDeleteBothMetadata")
           )}
           {isTank && (
-            <span style={{ display: "block", textAlign: "left", fontWeight: "normal", fontSize: "0.95em" }}>
-              <label style={{ display: "flex", gap: 6, alignItems: "flex-start", marginBottom: 6 }}>
-                <input
-                  type="radio"
-                  name="tank-delete-mode"
-                  checked={tankMode === "recycle"}
-                  onChange={() => setTankMode("recycle")}
-                />
-                <span>{t("library.recycleWholeTankoubon")}</span>
-              </label>
-              <label style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
-                <input
-                  type="radio"
-                  name="tank-delete-mode"
-                  checked={tankMode === "dissolve"}
-                  onChange={() => setTankMode("dissolve")}
-                />
-                <span>{t("library.dissolveTankoubonOnly")}</span>
-              </label>
-            </span>
+            <RadioGroup
+              value={tankMode}
+              onValueChange={setTankMode}
+              className="flex flex-col items-start gap-[6px] text-left"
+              style={{ fontWeight: "normal", fontSize: "0.95em" }}
+            >
+              <RadioItem value="recycle">{t("library.recycleWholeTankoubon")}</RadioItem>
+              <RadioItem value="dissolve">{t("library.dissolveTankoubonOnly")}</RadioItem>
+            </RadioGroup>
           )}
           {/* Offered only for an archive a subscription actually brought in. For a hand-uploaded
               file the option would have no effect, which is worse than not offering it. */}
           {tracking.length > 0 && (
-            <label
-              style={{ display: "block", marginTop: 10, fontWeight: "normal", fontSize: "0.9em" }}
-            >
-              <input
-                type="checkbox"
-                className="fa"
+            <span style={{ display: "block", marginTop: 10, fontWeight: "normal", fontSize: "0.9em", textAlign: "left" }}>
+              <CheckboxField
                 checked={block}
-                onChange={(e) => {
-                  setBlock(e.target.checked)
-                  remember(e.target.checked)
+                onCheckedChange={(checked) => {
+                  setBlock(checked)
+                  remember(checked)
                 }}
-              />{" "}
-              {t("library.blockResubscribe", {
-                names: tracking.map((s) => s.name).join(", "),
-              })}
-            </label>
+              >
+                {t("library.blockResubscribe", {
+                  names: tracking.map((s) => s.name).join(", "),
+                })}
+              </CheckboxField>
+            </span>
           )}
         </>
       }

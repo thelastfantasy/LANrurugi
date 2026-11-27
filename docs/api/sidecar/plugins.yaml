@@ -1,0 +1,68 @@
+# Plugin endpoints LANrurugi adds beyond the upstream contract.
+"/api/plugins/canonicalize-source":
+  post:
+    summary: Normalize a URL into its stored `source:` form
+    description: |
+      The form a `source:` tag stores for this URL. The first installed plugin whose `url_pattern`
+      matches and that exports `canonicalizeSource` decides it, download plugins before metadata
+      plugins, each in the Plugins page's priority order. With no such plugin the generic form is
+      used: no scheme, no leading `www.`, no fragment, no trailing slash on the path; the query
+      string is kept, since for an unknown site it may be what names the work.
+    tags: [plugins]
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [url]
+            properties:
+              url: { type: string, example: "https://e-hentai.org/g/2074808/1df3b73b2b/" }
+    responses:
+      "200":
+        description: The stored form, and which plugin produced it.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                source: { type: string, example: "e-hentai.org/g/2074808/1df3b73b2b" }
+                plugin:
+                  type: [string, "null"]
+                  description: The namespace that normalized it, or `null` for the generic form.
+
+"/api/plugins/auto":
+  post:
+    summary: Run the enabled metadata plugins on one archive
+    description: |
+      Runs every metadata plugin whose "run automatically" switch is on, in the same order and with
+      the same tag merge as ingest, and saves the result to the archive. Answers with the archive's
+      title, tags and summary as they are afterwards.
+    tags: [plugins]
+    parameters:
+      - name: id
+        in: query
+        required: true
+        schema: { type: string }
+        description: The archive id.
+    responses:
+      "200":
+        description: The run's counts and the archive's fields after it.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                operation: { type: string }
+                success: { type: integer }
+                successes: { type: integer }
+                failures: { type: integer }
+                declined:
+                  type: integer
+                  description: Plugins that said the archive is not from their site.
+                added_tags: { type: integer }
+                title: { type: string }
+                tags: { type: string }
+                summary: { type: string }
+      "404":
+        description: No archive with this id.

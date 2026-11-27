@@ -4456,6 +4456,7 @@ name = "lanrurugi-plugin"
 version = "1.0.0-beta.8"
 dependencies = [
  "lanrurugi-core",
+ "lanrurugi-storage",
  "reqwest",
  "serde",
  "serde_json",

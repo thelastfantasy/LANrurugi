@@ -1441,9 +1441,25 @@ fn has_running_duplicate(
     item: &lanrurugi_storage::download_queue::DownloadQueueItem,
     all_items: &[lanrurugi_storage::download_queue::DownloadQueueItem],
 ) -> bool {
-    all_items
-        .iter()
-        .any(|other| other.id != item.id && other.url == item.url && is_in_flight(other.state))
+    all_items.iter().any(|other| {
+        other.id != item.id && same_source(&other.url, &item.url) && is_in_flight(other.state)
+    })
+}
+
+/// The same source URL written two ways (`https://www.` vs `https://`, a trailing `/`). The
+/// query is kept: on some sites it is what tells two works apart.
+fn same_source(a: &str, b: &str) -> bool {
+    fn key(url: &str) -> &str {
+        let url = url.trim();
+        let url = url
+            .strip_prefix("https://")
+            .or_else(|| url.strip_prefix("http://"))
+            .unwrap_or(url);
+        url.strip_prefix("www.")
+            .unwrap_or(url)
+            .trim_end_matches('/')
+    }
+    a == b || key(a) == key(b)
 }
 
 /// `POST /download_queue/{id}/stop` — cancels an in-flight (`Starting`/`Downloading`) item's
@@ -1961,6 +1977,31 @@ mod tests {
     use lanrurugi_storage::download_queue::DownloadQueueItem;
 
     use super::*;
+
+    #[test]
+    fn the_same_source_written_another_way_is_still_a_running_duplicate() {
+        let running = item(
+            "a",
+            "https://www.nhentai.net/g/1/",
+            DownloadQueueState::Downloading,
+        );
+        let added = item("b", "https://nhentai.net/g/1", DownloadQueueState::Queued);
+        assert!(has_running_duplicate(
+            &added,
+            &[running.clone(), added.clone()]
+        ));
+        let other = item("c", "https://nhentai.net/g/12", DownloadQueueState::Queued);
+        assert!(!has_running_duplicate(
+            &other,
+            &[running.clone(), other.clone()]
+        ));
+        let query = item(
+            "d",
+            "https://nhentai.net/g/1/?p=2",
+            DownloadQueueState::Queued,
+        );
+        assert!(!has_running_duplicate(&query, &[running, query.clone()]));
+    }
 
     #[test]
     fn a_row_that_left_downloading_is_not_still_transferring() {

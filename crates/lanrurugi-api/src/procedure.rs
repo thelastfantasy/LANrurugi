@@ -214,12 +214,15 @@ pub async fn restore_write_gate(
     if path == "/api/login" || path == "/api/logout" {
         return next.run(request).await;
     }
+    // Registered before the check, not after: otherwise a restore could close the gate and see
+    // nothing in flight between this request's check and its registration, then swap the dataset
+    // under it. A request that registers and then finds the gate closed backs out unserved.
+    let guard = lanrurugi_core::restore_gate::WriteGuard::new(&gate);
     if !gate.closed() {
-        // Counted only while open: a request that raced the close is still waited for by
-        // `wait_for_writes`, but a paused one never reaches a handler at all.
-        let _guard = lanrurugi_core::restore_gate::WriteGuard::new(&gate);
+        let _guard = guard;
         return next.run(request).await;
     }
+    drop(guard);
     // The reason is the same for both refusals; only the status differs — a second restore is a
     // conflict with the one already running, everything else is "try again when it is done".
     let is_restore = path.starts_with("/api/backups/") && path.ends_with("/restore");

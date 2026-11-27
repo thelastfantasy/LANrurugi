@@ -6,6 +6,7 @@ import { AndroidToastTransition } from "@/toast"
 
 import { AuthBridgeGate } from "./AuthBridgeGate"
 import { NotFoundPage } from "./components/Display/NotFoundPage"
+import { CrossTabSync } from "./CrossTabSync"
 import { DialogHost } from "./dialog"
 import { FirstRunWizardGate } from "./FirstRunWizardGate"
 import { Layout } from "./Layout"
@@ -23,7 +24,6 @@ import { AllowGuest, RequireAuth, RequireGuest } from "./RouteGuards"
  * had to download and parse.
  */
 const ActivityPage = lazy(() => import("./pages/Activity").then((m) => ({ default: m.ActivityPage })))
-const Batch = lazy(() => import("./pages/Batch").then((m) => ({ default: m.Batch })))
 const BookmarksPage = lazy(() =>
   import("./pages/Bookmarks").then((m) => ({ default: m.BookmarksPage })),
 )
@@ -64,6 +64,7 @@ export function App() {
   return (
     <BrowserRouter>
       <AuthBridgeGate />
+      <CrossTabSync />
       <FirstRunWizardGate />
       {/* Toasts dismiss on a horizontal swipe. The library's own default asks for 80% of the
           toast's width, which on a phone is nearly a full-screen drag — reported as "swipe does
@@ -116,7 +117,8 @@ export function App() {
             <Route path="/tankoubon/:tankId/edit" element={<TankoubonEdit />} />
             <Route path="/config/categories" element={<Categories />} />
             <Route path="/config/categories/:categoryId" element={<Categories />} />
-            <Route path="/batch" element={<Batch />} />
+            {/* Batch operations live in the Library's selection drawer now; old links land there. */}
+            <Route path="/batch" element={<Navigate to="/" replace />} />
             <Route path="/upload" element={<Upload />} />
             <Route path="/config/plugins" element={<Plugins />} />
             <Route path="/config/plugins/wizard" element={<PluginWizard />} />

@@ -133,7 +133,7 @@ jobs:
       # same compilation twice.
 
       # License gate (issue #108). The Chinese/Japanese text-normalization ecosystem contains
-      # crates that would be legally incompatible with this MIT-licensed project — `zhconv`
+      # crates that would be legally incompatible with this MIT/Apache-2.0 project — `zhconv`
       # (GPL-2.0-or-later) and `jp_utils` (AGPL-3.0) were both concrete near-misses during the
       # search-equivalence evaluation. `deny.toml` allowlists permissive licenses only, so any
       # GPL/LGPL/AGPL dependency fails this step. `--all-features` (cargo-deny-action's default

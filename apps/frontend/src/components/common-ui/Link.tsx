@@ -1,4 +1,4 @@
-import { type AnchorHTMLAttributes, type MouseEvent, type ReactNode } from "react"
+import { type AnchorHTMLAttributes, type MouseEvent, type ReactNode, type Ref } from "react"
 import { useNavigate } from "react-router-dom"
 
 export interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> {
@@ -7,6 +7,7 @@ export interface LinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>,
   /** Replace the history entry instead of pushing one, e.g. for redirects. */
   replace?: boolean
   children: ReactNode
+  ref?: Ref<HTMLAnchorElement>
 }
 
 /** True for same-origin absolute paths, which `BrowserRouter` can take over. Anything else

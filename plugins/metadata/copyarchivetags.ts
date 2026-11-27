@@ -4,9 +4,9 @@
 //
 // Hand-fixed since regeneration:
 //   - `LANraragi::Utils::Database::get_tags` (another archive's stored tags, looked up by ID) has
-//     no JS equivalent from inside the Deno sandbox — the host now resolves it and passes it
-//     through as `hostArgs.other_archive_tags` (`crates/lanrurugi-api/src/plugins.rs::
-//     get_other_archive_tags`), the same pattern already used for `file_path`/`settings`.
+//     no JS equivalent from inside the Deno sandbox — this plugin names `other_archive_tags` in
+//     its own `pluginInfo().host_arguments` and the host resolves it into `hostArgs`, the same
+//     pattern already used for `file_path`/`settings`.
 //   - `split_tags_to_array`/`join_tags_to_string` (`LANraragi::Utils::Tags`) are trivial
 //     string<->array helpers — reimplemented directly below rather than needing host support.
 //   - legacy's `$params->{oneshot}` reflects a `to_named_params`-specific host convention this SDK
@@ -33,6 +33,9 @@ export function pluginInfo() {
     description: "Copy tags from another LRR archive given either the URI or the ID.",
     version: "0.1",
     oneshot_arg: "LRR Gallery URL or ID:",
+    // The host resolves another archive's stored tags only because this plugin asks for them by
+    // name — nothing is computed for plugins that don't.
+    host_arguments: ["other_archive_tags"],
   };
 }
 

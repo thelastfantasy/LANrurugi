@@ -76,6 +76,12 @@ export function LibraryShortcutsOverlay({ onClose }: { onClose: () => void }) {
                 </span>
                 <span>{t("library.shortcutsCloseMenus")}</span>
               </li>
+              <li>
+                <span className="reader-help-keys">
+                  <Key>Esc</Key>
+                </span>
+                <span>{t("library.shortcutsExitSelection")}</span>
+              </li>
               <li className="reader-help-plain">
                 {t("library.shortcutsContextMenuHint")}
               </li>

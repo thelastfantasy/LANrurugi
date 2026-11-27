@@ -430,6 +430,8 @@ pub fn router() -> Router<AppState> {
             get(get_plugin_settings).put(put_plugin_settings),
         )
         .route("/plugins/priority", post(put_plugin_priority))
+        .route("/plugins/canonicalize-source", post(canonicalize_source))
+        .route("/plugins/auto", post(run_auto_plugins))
         .route("/download_url", post(download_url))
         .route("/plugins/upload", post(upload_plugin))
         .route("/plugins/export", get(export_plugin))
@@ -665,6 +667,136 @@ async fn canonicalize_sources_for(
             );
             urls.iter().map(|u| trim_url(u)).collect()
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AutoPluginsQuery {
+    id: String,
+}
+
+/// `POST /plugins/auto?id=` — the archive editor's "auto scrape" for an archive no `source:` tag
+/// ties to one plugin: the same enabled-plugin chain ingest runs. Answers with the archive's
+/// title, tags and summary as they now are, so the open form can take them over.
+async fn run_auto_plugins(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
+    Query(query): Query<AutoPluginsQuery>,
+) -> Response {
+    let id = lanrurugi_core::ids::ArchiveId(query.id.clone());
+    let label = match state.repos.archives.get(&id).await {
+        Ok(Some(archive)) => archive.title,
+        Ok(None) => return error(StatusCode::NOT_FOUND, "auto_plugins", "No such archive."),
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "auto_plugins",
+                e.to_string(),
+            )
+        }
+    };
+    let summary = run_enabled_metadata_plugins_on_archive(&state, &query.id, None).await;
+    crate::activity::record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        lanrurugi_storage::activity::action_types::METADATA_PLUGIN_AUTORUN,
+        lanrurugi_storage::activity::ActivityTarget {
+            id: Some(query.id.clone()),
+            label: Some(label),
+            kind: Some("archive".to_string()),
+        },
+        lanrurugi_storage::activity::Outcome::Success,
+        None,
+        Some(json!({
+            "successes": summary.successes,
+            "failures": summary.failures,
+            "added_tags": summary.added_tags,
+        })),
+    )
+    .await;
+    match state.repos.archives.get(&id).await {
+        Ok(Some(archive)) => axum::Json(json!({
+            "operation": "auto_plugins",
+            "success": 1,
+            "successes": summary.successes,
+            "failures": summary.failures,
+            "declined": summary.declined,
+            "added_tags": summary.added_tags,
+            "title": archive.title,
+            "tags": archive.tags,
+            "summary": archive.summary,
+        }))
+        .into_response(),
+        Ok(None) => error(StatusCode::NOT_FOUND, "auto_plugins", "No such archive."),
+        Err(e) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "auto_plugins",
+            e.to_string(),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CanonicalizeSourceBody {
+    url: String,
+}
+
+/// `POST /plugins/canonicalize-source` — the stored `source:` form of a URL typed into a tag
+/// editor. The first plugin whose `url_pattern` matches and that exports `canonicalizeSource`
+/// decides it, download plugins before metadata ones (each in priority order): download plugins
+/// write the `source:` tags that revision and duplicate checks later compare against. Nothing
+/// matching falls back to [`trim_typed_source`], which keeps the query string.
+async fn canonicalize_source(
+    State(state): State<AppState>,
+    axum::Json(body): axum::Json<CanonicalizeSourceBody>,
+) -> Response {
+    let url = body.url.trim().to_string();
+    for kind in ["download", "metadata"] {
+        let namespaces = namespaces_of_kind(&state, kind).await;
+        for ns in sort_namespaces_by_priority(&state, &namespaces).await {
+            let Ok(info) = state.plugins.plugin_info(&ns).await else {
+                continue;
+            };
+            let matches = info
+                .url_pattern
+                .as_deref()
+                .and_then(|p| regex::Regex::new(p).ok())
+                .is_some_and(|re| re.is_match(&url));
+            if !matches {
+                continue;
+            }
+            match state
+                .plugins
+                .canonicalize_sources(&ns, std::slice::from_ref(&url))
+                .await
+            {
+                Ok(Some(mut canonical)) if canonical.len() == 1 => {
+                    return axum::Json(json!({ "source": canonical.remove(0), "plugin": ns }))
+                        .into_response();
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(
+                    plugin = %ns,
+                    error = %e,
+                    "canonicalizeSource failed; trying the next matching plugin"
+                ),
+            }
+        }
+    }
+    axum::Json(json!({ "source": trim_typed_source(&url), "plugin": null })).into_response()
+}
+
+/// [`trim_url`] without dropping the query: for a site no plugin knows, the query may be the only
+/// part naming the work (`view.php?id=5512`). The fragment still goes.
+fn trim_typed_source(url: &str) -> String {
+    let url = url.trim();
+    let url = url.split('#').next().unwrap_or(url);
+    let (path, query) = url.split_once('?').unwrap_or((url, ""));
+    let path = trim_url(path);
+    if query.is_empty() {
+        path
+    } else {
+        format!("{path}?{query}")
     }
 }
 
@@ -1220,6 +1352,8 @@ async fn list_plugins(State(state): State<AppState>, Path(kind): Path<String>) -
                     // always identical there), this rewrite's category subfolders/`custom/` tree
                     // make them genuinely different strings.
                     "namespace": ns,
+                    // What another plugin's `login_from` names this one by.
+                    "declared_namespace": info.namespace,
                     "type": info.kind,
                     "name": info.name,
                     "author": info.author,
@@ -1357,32 +1491,82 @@ fn extract_archive_id(oneshot: &str) -> Option<String> {
     (hex_run.len() == ARCHIVE_ID_LEN).then_some(hex_run)
 }
 
-/// `plugins/metadata/copyarchivetags.ts`'s one real need: another archive's stored `tags` string,
-/// looked up by an ID this plugin extracts from its own oneshot `arg` (not `params.id`, which is
-/// the *current* archive) — resolved host-side since a Deno-sandboxed plugin has no direct storage
-/// access (mirrors `LANraragi::Utils::Database::get_tags`, a plain by-ID field read).
-async fn get_other_archive_tags(state: &AppState, plugin: &str, arg: Option<&str>) -> Value {
-    if plugin != "metadata/copyarchivetags" {
-        return Value::Null;
-    }
-    let Some(other_id) = arg.and_then(extract_archive_id) else {
-        return Value::Null;
-    };
-    match state
-        .repos
-        .archives
-        .get(&lanrurugi_core::ids::ArchiveId(other_id))
-        .await
-    {
-        Ok(Some(archive)) => json!(archive.tags),
-        _ => Value::Null,
+/// Resolves one host-computed argument, by the name a plugin declared in its own
+/// `pluginInfo().host_arguments`.
+///
+/// A Deno-sandboxed plugin has no storage access, so anything it needs from the library has to be
+/// handed to it — but naming it in the manifest is what makes the host pay for it, because some of
+/// these are whole-library reads. An unrecognised name is a plugin bug: warn and pass nothing, so a
+/// typo costs one argument instead of the whole call.
+async fn host_argument(state: &AppState, name: &str, arg: Option<&str>) -> Option<Value> {
+    match name {
+        // Another archive's stored `tags`, by an ID the plugin extracts from its own oneshot `arg`
+        // (not `params.id`, which is the *current* archive) — mirrors
+        // `LANraragi::Utils::Database::get_tags`, a plain by-ID field read.
+        "other_archive_tags" => {
+            let other_id = arg.and_then(extract_archive_id)?;
+            match state
+                .repos
+                .archives
+                .get(&lanrurugi_core::ids::ArchiveId(other_id))
+                .await
+            {
+                Ok(Some(archive)) => Some(json!(archive.tags)),
+                _ => None,
+            }
+        }
+        // Every archive's `id`/`tags`, deliberately whole-library: a tag rewrite computed in JS
+        // needs to see every record, not just the one being processed (mirrors
+        // `nHentaiSourceConverter.pm::run_script`).
+        "archives" => match state.repos.archives.list_all().await {
+            Ok(archives) => Some(json!(archives
+                .into_iter()
+                .map(|a| json!({ "id": a.id, "tags": a.tags }))
+                .collect::<Vec<_>>())),
+            Err(_) => None,
+        },
+        // The library's own archive-directory root, so a plugin can walk the real filesystem
+        // itself via `Deno.readDir`.
+        "library_path" => Some(json!(state.library.archive_dir.display().to_string())),
+        // `path -> archive id`, so the files a plugin found can be resolved back to real IDs.
+        "archive_id_by_path" => match state.repos.archives.list_all().await {
+            Ok(archives) => Some(Value::Object(
+                archives
+                    .into_iter()
+                    .map(|a| (a.file, json!(a.id)))
+                    .collect(),
+            )),
+            Err(_) => None,
+        },
+        other => {
+            tracing::warn!(
+                argument = %other,
+                "plugin declared a host argument the host does not know"
+            );
+            None
+        }
     }
 }
 
-/// Normalizes a URL the same way both `plugins/script/sourcefinder.ts` (via
-/// `get_existing_archive_id_for_url` below) and legacy's `SourceFinder.pm::run_script` do before
-/// comparing it against a stored `source:` tag — strips scheme, `www.`, any query string, and a
-/// trailing slash.
+/// Adds every host argument `info` declared to a plugin call's args, keyed by the declared name.
+async fn with_host_arguments(
+    state: &AppState,
+    info: &PluginInfo,
+    arg: Option<&str>,
+    args: serde_json::Map<String, Value>,
+) -> Value {
+    let mut args = args;
+    for name in &info.host_arguments {
+        if let Some(value) = host_argument(state, name, arg).await {
+            args.insert(name.clone(), value);
+        }
+    }
+    Value::Object(args)
+}
+
+/// Normalizes a URL before comparing it against a stored `source:` tag — strips scheme, `www.`,
+/// any query string, and a trailing slash. Also the fallback when a plugin has no
+/// `canonicalizeSource` export of its own.
 pub(crate) fn trim_url(url: &str) -> String {
     let url = url.trim();
     let without_scheme = url
@@ -1396,100 +1580,27 @@ pub(crate) fn trim_url(url: &str) -> String {
     without_query.trim_end_matches('/').to_string()
 }
 
-/// `plugins/script/sourcefinder.ts`'s one real need: the ID of whichever archive (if any) has a
-/// `source:` tag matching `url` — resolved host-side the same way `get_other_archive_tags` resolves
-/// `copyarchivetags`' need, since a Deno-sandboxed plugin has no direct storage access. Legacy
-/// maintains a dedicated `LRR_URLMAP` index for this; this scans every archive's tags on demand
-/// instead (same simplification already used by `GET /database/stats` — correct, just not
-/// index-accelerated, acceptable at personal-library scale).
-///
-/// Domain aliases (E-Hentai/ExHentai and friends) come from whichever installed plugin claims this
-/// URL, via its own `canonicalizeSource` — issue #107 replaced the hardcoded two-branch alias
-/// special case that used to live here. `sourcefinder` itself is a script plugin with no such
-/// export; the knowledge belongs to the plugin that owns the domain, not to this call site.
-async fn get_existing_archive_id_for_url(
-    state: &AppState,
-    plugin: &str,
-    url: Option<&str>,
-) -> Value {
-    if plugin != "script/sourcefinder" {
-        return Value::Null;
-    }
-    let Some(url) = url else {
-        return Value::Null;
-    };
-    if trim_url(url).is_empty() {
-        return Value::Null;
-    }
-
-    let Ok(archives) = state.repos.archives.list_all().await else {
-        return Value::Null;
-    };
-
-    // Whichever plugin claims this URL supplies the domain-alias knowledge; absent one, the
-    // generic trim applies to both sides, which is what a site without aliases needs anyway.
-    let owning_plugin = {
-        let namespaces = discover_namespaces(&state.plugins_dir).await;
-        find_matching_plugin(state, &namespaces, url)
-            .await
-            .map(|(ns, _)| ns)
-    };
-
-    // One batch: this URL first, then every stored `source:` tag, so a plugin round-trip happens
-    // once rather than once per archive.
-    let mut raw = vec![url.to_string()];
-    let mut owners: Vec<&lanrurugi_core::ids::ArchiveId> = Vec::new();
-    for archive in &archives {
-        for tag in archive.tags.split(',') {
-            if let Some(source) = tag.trim().strip_prefix("source:") {
-                raw.push(source.to_string());
-                owners.push(&archive.id);
+/// Applies the host-side half of a script plugin's read-compute-return-write split, for each
+/// effect the plugin declared in its own `pluginInfo().host_results`. The plugin never writes
+/// storage; it returns what it wants written and the host performs it here.
+async fn apply_host_results(state: &AppState, info: &PluginInfo, data: &Value) {
+    for name in &info.host_results {
+        match name.as_str() {
+            "tag_updates" => script_tag_updates(state, data).await,
+            "category_changes" => foldertocat_categories(state, data).await,
+            other => {
+                tracing::warn!(
+                    effect = %other,
+                    "plugin declared a host result the host does not know"
+                );
             }
         }
     }
-
-    let canonical = match &owning_plugin {
-        Some(ns) => canonicalize_sources_for(state, ns, raw).await,
-        None => raw.iter().map(|u| trim_url(u)).collect(),
-    };
-    let mut canonical = canonical.into_iter();
-    let Some(needle) = canonical.next() else {
-        return Value::Null;
-    };
-    for (archive_id, source) in owners.into_iter().zip(canonical) {
-        if source == needle {
-            return json!(archive_id);
-        }
-    }
-    Value::Null
 }
 
-/// `plugins/script/nhentaisourceconverter.ts`'s one real need: every archive's `id`/`tags`, so it
-/// can compute its own tag rewrite purely in JS and hand the result back rather than touching
-/// storage directly — resolved host-side the same way the other two `script/*`-specific helpers
-/// above are. Deliberately whole-library (not scoped to one archive, unlike every `metadata`-type
-/// helper), matching what `nHentaiSourceConverter.pm::run_script` itself operates over.
-async fn get_all_archive_tags_for_script(state: &AppState, plugin: &str) -> Value {
-    if plugin != "script/nhentaisourceconverter" {
-        return Value::Null;
-    }
-    match state.repos.archives.list_all().await {
-        Ok(archives) => json!(archives
-            .into_iter()
-            .map(|a| json!({ "id": a.id, "tags": a.tags }))
-            .collect::<Vec<_>>()),
-        Err(_) => Value::Null,
-    }
-}
-
-/// Applies `plugins/script/nhentaisourceconverter.ts`'s returned `updates` (see `ScriptResult` in
-/// `plugin-sdk.ts`) back onto real archive records — the host's half of the read-compute-write
-/// split described in that same SDK doc comment, since the plugin itself only ever returns its
-/// *intended* rewrites, never writes storage directly.
-async fn apply_script_tag_updates(state: &AppState, plugin: &str, data: &Value) {
-    if plugin != "script/nhentaisourceconverter" {
-        return;
-    }
+/// Applies the returned `updates` (see `ScriptResult` in `plugin-sdk.ts`) back onto real archive
+/// records.
+async fn script_tag_updates(state: &AppState, data: &Value) {
     let Some(updates) = data.get("updates").and_then(Value::as_array) else {
         return;
     };
@@ -1510,39 +1621,12 @@ async fn apply_script_tag_updates(state: &AppState, plugin: &str, data: &Value) 
     }
 }
 
-/// `plugins/script/foldertocat.ts`'s two real needs, resolved host-side since a Deno-sandboxed
-/// plugin has no direct storage access: the library's own archive-directory root (so it can walk
-/// the real filesystem itself via `Deno.readDir` — see that file's own docs for why the host
-/// doesn't pre-walk it instead), and a `path -> archive id` map (so the plugin can resolve the
-/// files it finds back to real archive IDs before returning its computed category groupings).
-async fn get_foldertocat_args(state: &AppState, plugin: &str) -> (Value, Value) {
-    if plugin != "script/foldertocat" {
-        return (Value::Null, Value::Null);
-    }
-    let library_path = json!(state.library.archive_dir.display().to_string());
-    let archive_id_by_path = match state.repos.archives.list_all().await {
-        Ok(archives) => {
-            let map: serde_json::Map<String, Value> = archives
-                .into_iter()
-                .map(|a| (a.file, json!(a.id)))
-                .collect();
-            Value::Object(map)
-        }
-        Err(_) => Value::Null,
-    };
-    (library_path, archive_id_by_path)
-}
-
-/// Applies `plugins/script/foldertocat.ts`'s returned `categories_to_create`/
-/// `delete_old_categories` (see `ScriptResult` in `plugin-sdk.ts`) — the host's half of the
-/// read-compute-return-write-to-host split, mirroring
-/// `lanrurugi-api::scripts::subfolders_to_categories`'s own category-creation logic exactly (same
-/// `SET_<unix-seconds>` catid generation) so the two implementations produce identical results,
-/// differing only in how the directory walk itself was performed.
-async fn apply_foldertocat_categories(state: &AppState, plugin: &str, data: &Value) {
-    if plugin != "script/foldertocat" {
-        return;
-    }
+/// Applies the returned `categories_to_create`/`delete_old_categories` (see `ScriptResult` in
+/// `plugin-sdk.ts`), mirroring `lanrurugi-api::scripts::subfolders_to_categories`'s own
+/// category-creation logic exactly (same `SET_<unix-seconds>` catid generation) so the two
+/// implementations produce identical results, differing only in how the directory walk itself was
+/// performed.
+async fn foldertocat_categories(state: &AppState, data: &Value) {
     if data.get("delete_old_categories").and_then(Value::as_bool) == Some(true) {
         if let Ok(categories) = state.repos.categories.list_all().await {
             for category in categories.iter().filter(|c| c.search.is_none()) {
@@ -1615,12 +1699,21 @@ pub struct AutoPluginSummary {
     pub new_title: Option<String>,
 }
 
+/// Sorts plugins by the chain position they asked for (`pluginInfo().run_order`, highest first).
+///
+/// Legacy always ran its filename-parsing plugin ahead of the rest because everything downstream
+/// reads the title and tags it derives; that plugin now states the value itself instead of the
+/// host matching a namespace. Stable, so otherwise-equal plugins keep their discovery order.
+fn order_by_run_order(namespaces: &mut [(String, PluginInfo)]) {
+    namespaces.sort_by_key(|(_, info)| std::cmp::Reverse(info.run_order));
+}
+
 /// Legacy's real, load-bearing "自动运行"/"Run Automatically" mechanism (`Model::Plugins::
 /// exec_enabled_plugins_on_file`, called by `Model::Upload.pm` right after every new upload/
 /// download is cataloged, and by the watcher after every scanned file) — runs every metadata
-/// plugin with `enabled: true` against a freshly-cataloged archive, in priority order, with the
-/// filename-parsing plugin (`regexplugin`) always bumped to run first when present (legacy's own
-/// `TODO: Make plugin exec order configurable` comment, preserved verbatim — it still isn't).
+/// plugin with `enabled: true` against a freshly-cataloged archive, highest `pluginInfo().priority`
+/// first (legacy's own `TODO: Make plugin exec order configurable` comment, preserved verbatim —
+/// it still isn't; the plugin now states the order it needs instead of the host hardcoding one).
 /// This closes a real Phase 1 gap: nothing in this port called anything like this at all, so
 /// every enabled metadata plugin's "auto-run" checkbox was silently inert on every ingestion path
 /// (confirmed live: two fully-downloaded E-Hentai archives never got a `source:` tag or any other
@@ -1667,16 +1760,7 @@ pub async fn run_enabled_metadata_plugins_on_archive(
         }
         namespaces.push((ns, info));
     }
-    // `regexplugin` (declared namespace, not necessarily `metadata/regexparse` — a custom-
-    // installed clone could sit at a different file path) always runs first when enabled, exactly
-    // matching legacy's own reordering.
-    if let Some(regex_pos) = namespaces
-        .iter()
-        .position(|(_, info)| info.namespace == "regexplugin")
-    {
-        let regex_entry = namespaces.remove(regex_pos);
-        namespaces.insert(0, regex_entry);
-    }
+    order_by_run_order(&mut namespaces);
 
     // Both of these are properties of the archive, not of the plugin about to run: an earlier
     // plugin in this loop can rewrite `title`/`tags`, but never the file's location or mtime, so
@@ -1718,17 +1802,29 @@ pub async fn run_enabled_metadata_plugins_on_archive(
             .flatten();
         let file_path = archive.as_ref().map(|a| a.file.clone());
         let customargs = get_plugin_customargs(state, &ns, &info.parameters).await;
-        let args = json!({
-            "archive_id": archive_id,
-            "arg": null,
-            "oneshot_param": null,
-            "customargs": customargs,
-            "file_path": file_path,
-            "file_modified_time": file_modified_time,
-            "settings": config.settings.clone(),
-            "existing_tags": archive.as_ref().map(|a| a.tags.clone()).unwrap_or_default(),
-            "archive_title": archive.as_ref().map(|a| a.title.clone()).unwrap_or_default(),
-        });
+        let mut args = serde_json::Map::new();
+        args.insert("archive_id".to_string(), json!(archive_id));
+        args.insert("arg".to_string(), Value::Null);
+        args.insert("oneshot_param".to_string(), Value::Null);
+        args.insert("customargs".to_string(), json!(customargs));
+        args.insert("file_path".to_string(), json!(file_path));
+        args.insert("file_modified_time".to_string(), json!(file_modified_time));
+        args.insert("settings".to_string(), config.settings.clone());
+        args.insert(
+            "existing_tags".to_string(),
+            json!(archive.as_ref().map(|a| a.tags.clone()).unwrap_or_default()),
+        );
+        args.insert(
+            "archive_title".to_string(),
+            json!(archive
+                .as_ref()
+                .map(|a| a.title.clone())
+                .unwrap_or_default()),
+        );
+        // A plugin that declared host arguments gets them here too: auto-run has no oneshot `arg`
+        // to resolve `other_archive_tags` from, but `library_path`-style arguments are just as
+        // valid on this path as on a manual call.
+        let args = with_host_arguments(state, &info, None, args).await;
         let args = with_sidecar_files(&info, args, file_path.as_deref());
         let args = with_login_cookies(state, &info, args).await;
 
@@ -1954,35 +2050,39 @@ async fn use_plugin_sync(
     });
 
     let customargs = get_plugin_customargs(&state, &plugin, &info.parameters).await;
-    let other_archive_tags = get_other_archive_tags(&state, &plugin, params.arg.as_deref()).await;
-    let existing_archive_id =
-        get_existing_archive_id_for_url(&state, &plugin, params.arg.as_deref()).await;
-    let archives_for_script = get_all_archive_tags_for_script(&state, &plugin).await;
-    let (library_path, archive_id_by_path) = get_foldertocat_args(&state, &plugin).await;
-    let args = json!({
-        "archive_id": params.id,
-        "arg": params.arg,
-        "oneshot_param": params.arg,
-        "customargs": customargs,
-        "file_path": file_path,
-        "file_modified_time": file_modified_time,
-        "settings": get_plugin_relevant_settings(&state).await,
-        "other_archive_tags": other_archive_tags,
-        "existing_archive_id": existing_archive_id,
-        "archives": archives_for_script,
-        "library_path": library_path,
-        "archive_id_by_path": archive_id_by_path,
-        "existing_tags": queried_archive.as_ref().map(|a| a.tags.clone()).unwrap_or_default(),
-        "archive_title": queried_archive.as_ref().map(|a| a.title.clone()).unwrap_or_default(),
-    });
+    let mut args = serde_json::Map::new();
+    args.insert("archive_id".to_string(), json!(params.id));
+    args.insert("arg".to_string(), json!(params.arg));
+    args.insert("oneshot_param".to_string(), json!(params.arg));
+    args.insert("customargs".to_string(), json!(customargs));
+    args.insert("file_path".to_string(), json!(file_path));
+    args.insert("file_modified_time".to_string(), json!(file_modified_time));
+    args.insert(
+        "settings".to_string(),
+        get_plugin_relevant_settings(&state).await,
+    );
+    args.insert(
+        "existing_tags".to_string(),
+        json!(queried_archive
+            .as_ref()
+            .map(|a| a.tags.clone())
+            .unwrap_or_default()),
+    );
+    args.insert(
+        "archive_title".to_string(),
+        json!(queried_archive
+            .as_ref()
+            .map(|a| a.title.clone())
+            .unwrap_or_default()),
+    );
+    let args = with_host_arguments(&state, &info, params.arg.as_deref(), args).await;
     let args = with_sidecar_files(&info, args, file_path.as_deref());
     let args = with_login_cookies(&state, &info, args).await;
     let method = plugin_method(&info.kind);
 
     match state.plugins.execute(&plugin, method, args).await {
         Ok(data) => {
-            apply_script_tag_updates(&state, &plugin, &data).await;
-            apply_foldertocat_categories(&state, &plugin, &data).await;
+            apply_host_results(&state, &info, &data).await;
             crate::activity::record_manual(
                 &state,
                 auth.as_ref().map(|e| &e.0),
@@ -2094,28 +2194,18 @@ async fn use_plugin_async(
         };
         let method = plugin_method(&info.kind);
         let customargs = get_plugin_customargs(&state_for_task, &plugin, &info.parameters).await;
-        let existing_archive_id =
-            get_existing_archive_id_for_url(&state_for_task, &plugin, arg.as_deref()).await;
-        let archives_for_script = get_all_archive_tags_for_script(&state_for_task, &plugin).await;
-        let (library_path, archive_id_by_path) =
-            get_foldertocat_args(&state_for_task, &plugin).await;
-        let args = json!({
-            "archive_id": archive_id,
-            "arg": arg,
-            "oneshot_param": arg,
-            "customargs": customargs,
-            "file_path": file_path,
-            "existing_archive_id": existing_archive_id,
-            "archives": archives_for_script,
-            "library_path": library_path,
-            "archive_id_by_path": archive_id_by_path,
-        });
+        let mut args = serde_json::Map::new();
+        args.insert("archive_id".to_string(), json!(archive_id));
+        args.insert("arg".to_string(), json!(arg));
+        args.insert("oneshot_param".to_string(), json!(arg));
+        args.insert("customargs".to_string(), json!(customargs));
+        args.insert("file_path".to_string(), json!(file_path));
+        let args = with_host_arguments(&state_for_task, &info, arg.as_deref(), args).await;
         let args = with_sidecar_files(&info, args, file_path.as_deref());
         let args = with_login_cookies(&state_for_task, &info, args).await;
         match plugins.execute(&plugin, method, args).await {
             Ok(data) => {
-                apply_script_tag_updates(&state_for_task, &plugin, &data).await;
-                apply_foldertocat_categories(&state_for_task, &plugin, &data).await;
+                apply_host_results(&state_for_task, &info, &data).await;
                 jobs.finish(&job_id_for_task, data).await
             }
             Err(e) => jobs.fail(&job_id_for_task, e.to_string()).await,
@@ -3268,6 +3358,7 @@ fn queue_error_from_pool_error(
                 plugin: plugin.to_string(),
                 error_code: error_code.clone(),
                 data: err.data.clone().unwrap_or_default(),
+                settings: err.settings,
             };
         }
     }
@@ -3287,6 +3378,7 @@ fn queue_error_from_plugin_error(
         plugin: plugin.to_string(),
         error_code: err.error_code.clone(),
         data: err.data.clone().unwrap_or_default(),
+        settings: err.settings,
     }
 }
 
@@ -3636,10 +3728,15 @@ pub(crate) async fn pick_redownload_source(
 }
 
 async fn download_namespaces(state: &AppState) -> Vec<String> {
+    namespaces_of_kind(state, "download").await
+}
+
+/// Every installed namespace declaring `type: kind`, in `discover_namespaces` order.
+async fn namespaces_of_kind(state: &AppState, kind: &str) -> Vec<String> {
     let mut out = Vec::new();
     for ns in discover_namespaces(&state.plugins_dir).await {
         if let Ok(info) = state.plugins.plugin_info(&ns).await {
-            if info.kind == "download" {
+            if info.kind == kind {
                 out.push(ns);
             }
         }
@@ -4679,28 +4776,31 @@ pub(crate) mod tests {
         use lanrurugi_plugin::pool::PoolError;
         use lanrurugi_plugin::protocol::ResponseError;
 
-        let declined = PoolError::PluginError(ResponseError {
+        let declined = PoolError::PluginError(Box::new(ResponseError {
             message: "Skipping archive without connecting to EH".to_string(),
             kind: "plugin_error".to_string(),
             error_code: Some(PLUGIN_SKIP_CODE.to_string()),
             data: None,
-        });
+            settings: None,
+        }));
         assert!(plugin_declined(&declined));
 
         // Everything else stays a failure: a plugin's own real error, and a crash.
-        let failed = PoolError::PluginError(ResponseError {
+        let failed = PoolError::PluginError(Box::new(ResponseError {
             message: "Search gallery by title failed".to_string(),
             kind: "plugin_error".to_string(),
             error_code: Some("Search gallery by title failed".to_string()),
             data: None,
-        });
+            settings: None,
+        }));
         assert!(!plugin_declined(&failed));
-        let crashed = PoolError::PluginError(ResponseError {
+        let crashed = PoolError::PluginError(Box::new(ResponseError {
             message: "boom".to_string(),
             kind: "internal".to_string(),
             error_code: None,
             data: None,
-        });
+            settings: None,
+        }));
         assert!(!plugin_declined(&crashed));
     }
 
@@ -4734,6 +4834,27 @@ pub(crate) mod tests {
         assert!(source_urls("artist:x").is_empty());
     }
 
+    #[test]
+    fn auto_run_order_follows_the_declared_chain_position_and_keeps_discovery_order() {
+        let mut plugins = vec![
+            ("metadata/a".to_string(), plugin_info_with_run_order(0)),
+            (
+                "metadata/regexparse".to_string(),
+                plugin_info_with_run_order(100),
+            ),
+            ("metadata/b".to_string(), plugin_info_with_run_order(0)),
+        ];
+        order_by_run_order(&mut plugins);
+        let order: Vec<&str> = plugins.iter().map(|(ns, _)| ns.as_str()).collect();
+        assert_eq!(order, ["metadata/regexparse", "metadata/a", "metadata/b"]);
+    }
+
+    fn plugin_info_with_run_order(run_order: i64) -> PluginInfo {
+        let mut info = plugin_info_with_parameters(Vec::new());
+        info.run_order = run_order;
+        info
+    }
+
     fn plugin_info_with_parameters(parameters: Vec<PluginParameter>) -> PluginInfo {
         PluginInfo {
             namespace: "download/ehentai".to_string(),
@@ -4755,6 +4876,9 @@ pub(crate) mod tests {
             domain_match: Vec::new(),
             generated_by_wizard: false,
             sidecar_files: Vec::new(),
+            host_arguments: Vec::new(),
+            host_results: Vec::new(),
+            run_order: 0,
             data_version: 1,
             capabilities: Vec::new(),
         }
@@ -4852,6 +4976,18 @@ pub(crate) mod tests {
             entry.outcome,
             lanrurugi_storage::activity::Outcome::Success
         ));
+    }
+
+    #[test]
+    fn trim_typed_source_keeps_the_query() {
+        assert_eq!(
+            trim_typed_source("https://www.example.org/view.php?id=5512#top"),
+            "example.org/view.php?id=5512"
+        );
+        assert_eq!(
+            trim_typed_source("https://e-hentai.org/g/2074808/1df3b73b2b/"),
+            "e-hentai.org/g/2074808/1df3b73b2b"
+        );
     }
 
     #[test]

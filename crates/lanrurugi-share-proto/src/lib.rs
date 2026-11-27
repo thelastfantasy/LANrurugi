@@ -5,6 +5,7 @@
 
 pub mod code;
 pub mod derive;
+pub mod extras;
 pub mod framing;
 pub mod hint;
 pub mod messages;

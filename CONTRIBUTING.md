@@ -147,4 +147,4 @@ mise run test-frontend-e2e    # Playwright——真实后端 + Redis，Chromium 
 
 ## 许可证
 
-MIT —— 见 [LICENSE](./LICENSE)。提交即表示你同意以同一许可证授权你的贡献。
+MIT 或 Apache 2.0，二选一 —— 见 [LICENSE-MIT](./LICENSE-MIT) 与 [LICENSE-APACHE](./LICENSE-APACHE)。提交即表示你同意以这两种许可证同时授权你的贡献。

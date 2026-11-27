@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest"
 
-import { buildSearchToken, getTagSearchURL, normalizeTag } from "@/lib/tagFormat"
+import {
+  buildSearchToken,
+  clearTagsExcept,
+  getTagSearchURL,
+  normalizeTag,
+  PROTECTED_TAG_NAMESPACES,
+  sourceTagValues,
+} from "@/lib/tagFormat"
 
 describe("buildSearchToken", () => {
   it("leaves a single-word namespaced value unquoted, with the exact-match suffix when requested", () => {
@@ -71,5 +78,32 @@ describe("normalizeTag", () => {
   it("returns nothing for an empty token", () => {
     expect(normalizeTag('female:""')).toBe("")
     expect(normalizeTag("   ")).toBe("")
+  })
+})
+
+describe("clearTagsExcept", () => {
+  it("keeps only the protected namespaces", () => {
+    const tags = "artist:foo, female:milf, source:e-hentai.org/g/1/a, date_added:1700000000, timestamp:1600000000, bare"
+    expect(clearTagsExcept(tags, PROTECTED_TAG_NAMESPACES)).toBe(
+      "source:e-hentai.org/g/1/a, date_added:1700000000, timestamp:1600000000",
+    )
+  })
+
+  it("returns the same string when nothing would go", () => {
+    const tags = "source:x, date_added:1"
+    expect(clearTagsExcept(tags, PROTECTED_TAG_NAMESPACES)).toBe(tags)
+  })
+
+  it("does not keep a bare tag that merely starts with a protected word", () => {
+    expect(clearTagsExcept("sourcecode, source:x", ["source"])).toBe("source:x")
+  })
+})
+
+describe("sourceTagValues", () => {
+  it("lists every source tag's value", () => {
+    expect(sourceTagValues("artist:a, source:nhentai.net/g/1, source: e-hentai.org/g/2/b,source:")).toEqual([
+      "nhentai.net/g/1",
+      "e-hentai.org/g/2/b",
+    ])
   })
 })

@@ -309,14 +309,7 @@ export function ArchiveContextMenu({
             style={{ width: 48, height: 68 }}
           />
           <div className="min-w-0 flex-1">
-            {/* Tap selects the whole title, like the id below, for copying into a search. */}
-            <div
-              className="line-clamp-2 break-words select-all"
-              style={{ fontSize: 15, fontWeight: 600, cursor: "text" }}
-              onClick={(e) => window.getSelection()?.selectAllChildren(e.currentTarget)}
-            >
-              {archive.title}
-            </div>
+            <SheetTitle title={archive.title} />
             {/* The id on one line, small: it is what logs, the API and a bug report name an archive
                 by, and a phone has no hover tooltip or address bar to read it from. A tap selects
                 all of it for copying; the translucent grey chip reads on every theme. */}
@@ -530,3 +523,47 @@ export function ArchiveContextMenu({
   );
 }
 
+/** The sheet's title, two lines at most. A tap selects all of it for copying into a search, like
+ *  the id below; when two lines cut it off, the same tap also lays the whole title over what is
+ *  below it — out of flow, so the sheet keeps its height — until focus moves elsewhere. */
+function SheetTitle({ title }: { title: string }) {
+  const palette = useMenuPalette();
+  const [expanded, setExpanded] = useState(false);
+  const textStyle = { fontSize: 15, fontWeight: 600, cursor: "text" } as const;
+  return (
+    <div className="relative">
+      <div
+        className="line-clamp-2 break-words select-all"
+        style={{ ...textStyle, visibility: expanded ? "hidden" : undefined }}
+        onClick={(e) => {
+          const el = e.currentTarget;
+          if (el.scrollHeight > el.clientHeight + 1) setExpanded(true);
+          else window.getSelection()?.selectAllChildren(el);
+        }}
+      >
+        {title}
+      </div>
+      {expanded && (
+        <div
+          ref={(el) => {
+            if (!el || el.contains(document.activeElement)) return;
+            el.focus({ preventScroll: true });
+            window.getSelection()?.selectAllChildren(el);
+          }}
+          tabIndex={-1}
+          className="absolute inset-x-0 top-0 break-words select-all outline-none"
+          style={{
+            ...textStyle,
+            zIndex: 1,
+            background: palette.bg,
+            paddingBottom: 6,
+          }}
+          onBlur={() => setExpanded(false)}
+          onClick={(e) => window.getSelection()?.selectAllChildren(e.currentTarget)}
+        >
+          {title}
+        </div>
+      )}
+    </div>
+  );
+}

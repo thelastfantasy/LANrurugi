@@ -647,6 +647,21 @@ pub(crate) async fn purge_one_archive(
             // still left the file sitting on disk indefinitely), silently accumulating orphaned
             // files on every delete. Best-effort (logged, not propagated) for the same reason as
             // the search-index cleanup above — the DB record is already gone either way.
+            // `LRR_FILEMAP` maps this path to this id. Left behind after the record is gone, a
+            // re-upload of the identical bytes to the identical path ingests as "Unchanged" — the
+            // pipeline returns before writing a record, leaving the file on disk with nothing
+            // pointing at it and every reader URL for it 404ing. Best-effort, like the rest of this
+            // cleanup: the record is already gone either way.
+            match state.redis.config.get().await {
+                Ok(mut conn) => {
+                    let _: Result<(), _> = conn
+                        .hdel(lanrurugi_storage::keys::FILEMAP_KEY, &archive.file)
+                        .await;
+                }
+                Err(e) => {
+                    tracing::warn!(%id, error = %e, "could not drop the deleted archive's filemap entry")
+                }
+            }
             if options.remove_archive_file {
                 if let Err(e) = tokio::fs::remove_file(&archive.file).await {
                     if e.kind() != std::io::ErrorKind::NotFound {

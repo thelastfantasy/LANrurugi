@@ -523,6 +523,7 @@ async fn helpers_serve_verified_ranges_and_follow_the_share() {
         claim_id: String::new(),
         title: "helped".into(),
         manifest: serde_json::Value::Null,
+        extras: Default::default(),
         category: None,
         queue_item_id: String::new(),
         archives: vec![ImportArchive {

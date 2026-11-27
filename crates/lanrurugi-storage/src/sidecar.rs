@@ -9,6 +9,7 @@
 //! Files under `_byname/` have no sidecar: they are addressed by filename, so their name already
 //! carries everything a sidecar would.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -68,6 +69,10 @@ pub struct Sidecar {
     /// The same for the pages of the archive's `.patch.zip`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub patch_page_dimensions: Option<FileDimensions>,
+    /// Metadata fields a newer LANrurugi sent with a shared archive but this build has no field for.
+    /// Kept verbatim so an upgrade can use them, and so a rewrite does not silently drop them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extras: BTreeMap<String, String>,
 }
 
 /// Natural sizes of a container's pages by entry name, read from the file while it had this size
@@ -146,6 +151,7 @@ impl Sidecar {
             primary_source: None,
             page_dimensions: None,
             patch_page_dimensions: None,
+            extras: BTreeMap::new(),
         })
     }
 
@@ -318,6 +324,36 @@ pub fn read(library: &Path, id: &str) -> Option<Sidecar> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn an_amend_keeps_metadata_fields_this_build_has_no_field_for() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library = tmp.path();
+        let id = "b".repeat(40);
+        let bucket = library.join("bb");
+        std::fs::create_dir_all(&bucket).unwrap();
+        let archive = bucket.join(format!("{id}.zip"));
+        std::fs::write(&archive, b"not really a zip").unwrap();
+
+        let mut sidecar = Sidecar::for_archive(&id, &archive, "Book.zip", "Book").unwrap();
+        sidecar
+            .extras
+            .insert("something_newer".into(), "kept".into());
+        write(library, &sidecar).await.unwrap();
+
+        amend(library, &id, |s| {
+            s.primary_source = Some("nhentai.net/g/1".into())
+        })
+        .await
+        .unwrap();
+
+        let read = read(library, &id).expect("the sidecar is there");
+        assert_eq!(read.primary_source.as_deref(), Some("nhentai.net/g/1"));
+        assert_eq!(
+            read.extras.get("something_newer").map(String::as_str),
+            Some("kept")
+        );
+    }
 
     #[tokio::test]
     async fn a_write_recreates_a_bucket_directory_that_a_conversion_just_pruned() {

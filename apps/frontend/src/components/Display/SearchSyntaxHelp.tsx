@@ -61,6 +61,13 @@ export function SearchSyntaxHelp() {
           {t("library.searchSyntaxTitleField")} <SyntaxExample>title:tari</SyntaxExample>
         </li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxWorkField")} <SyntaxExample>work:maiden</SyntaxExample>
+        </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxFieldScope")} <SyntaxExample>work:fate zero</SyntaxExample>,{" "}
+          <SyntaxExample>work:&quot;fate zero&quot;</SyntaxExample>
+        </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
           {t("library.searchSyntaxAttributes")} <SyntaxExample>is:new</SyntaxExample>,{" "}
           <SyntaxExample>is:reading</SyntaxExample>, <SyntaxExample>is:completed</SyntaxExample>,{" "}
           <SyntaxExample>has:patch</SyntaxExample>, <SyntaxExample>in:tank</SyntaxExample>
@@ -88,6 +95,14 @@ export function SearchSyntaxHelp() {
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>{t("library.searchSyntaxWildcard")}</li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
           {t("library.searchSyntaxDateAdded")} <SyntaxExample>date_added:2026-08-20</SyntaxExample>
+        </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxDateNamespaces")} <SyntaxExample>timestamp:2026-08-20</SyntaxExample>,{" "}
+          <SyntaxExample>time:&gt;=2026-08-01</SyntaxExample>
+        </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxDateTime")} <SyntaxExample>timestamp:2026-08-20T14:30</SyntaxExample>,{" "}
+          <SyntaxExample>time:&gt;=2026-08-20T14:30:05</SyntaxExample>
         </li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
           {/* One example per operator: `>` `>=` `<` `<=` and `=` all work for `pages:` and `read:`. */}
