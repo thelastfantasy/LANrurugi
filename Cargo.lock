@@ -4438,7 +4438,6 @@ dependencies = [
  "ndarray",
  "oar-ocr",
  "ort",
- "palette",
  "rayon",
  "serde",
  "serde_json",

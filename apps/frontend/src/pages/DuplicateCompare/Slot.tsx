@@ -1,6 +1,6 @@
 import { CollisionPriority } from "@dnd-kit/abstract"
 import { useDroppable } from "@dnd-kit/react"
-import React from "react"
+import type React from "react"
 
 export function Slot({ id, children }: { id: string; children: React.ReactNode }) {
   const { ref } = useDroppable({ id, type: "column", accept: ["item"], collisionPriority: CollisionPriority.Low })
