@@ -1243,7 +1243,10 @@ export function Reader() {
   const placeholderDims =
     pageTinyDims[spread.left] ?? pageDimensions[spread.left] ?? lastDimsRef.current ?? UNKNOWN_PAGE_DIMS;
   /** Sizing for that placeholder, in the fit mode currently selected. */
-  const placeholderStyle: React.CSSProperties | null = mainReady[spread.left]
+  // Paged mode only: infinite scroll never loads the paged image, so the row would stay up for
+  // good, spanning the margins and swallowing their clicks.
+  const placeholderStyle: React.CSSProperties | null =
+    readerSettings.infiniteScroll || mainReady[spread.left]
     ? null
       : readerSettings.fitMode === FIT_MODE.FIT_HEIGHT
         ? {
@@ -2757,6 +2760,16 @@ export function Reader() {
         if (e.key === "Escape") {
           setArchiveTransition(null);
         }
+        return;
+      }
+
+      // Over an open panel the page is not being read: only Escape and the panel's own toggle key
+      // act, so Home/End, arrows, M, N and the rest go to the panel instead of the page behind it.
+      if (overlay !== null) {
+        const toggleKey = { archive: "q", settings: "o", help: "?", goto: "g" }[overlay];
+        if (e.key !== "Escape" && e.key !== toggleKey) return;
+      } else if (document.querySelector('[role="dialog"], [role="alertdialog"]')) {
+        // Any other modal (a confirm, the split panel) owns the keyboard, Escape included.
         return;
       }
 
