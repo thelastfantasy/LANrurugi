@@ -245,6 +245,9 @@ fn main() -> anyhow::Result<()> {
     let from_install_prefix = lanrurugi_server::install_layout::apply();
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        // The default 2 MiB overflowed in a debug build while a finished download was catalogued
+        // (start_download → ingest → catalogue_new_archive); unused stack is only reserved, not used.
+        .thread_stack_size(8 * 1024 * 1024)
         .build()?
         .block_on(run(from_install_prefix))
 }

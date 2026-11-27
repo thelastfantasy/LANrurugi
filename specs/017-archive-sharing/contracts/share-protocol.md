@@ -26,8 +26,17 @@ Helpers supply only `Range` data.
   not a generic failure. Version 2 added `ArchiveEntry.toc` (each archive's chapters,
   `{ page (1-based), name }`) and version 3 added `Opened.allow_helpers`; postcard cannot skip
   either, so older peers are refused rather than misread.
-- **Compatibility policy**: exactly one engine version is served at a time, and any additive change to
-  a postcard message bumps `protocol`. An iroh upgrade that changes the wire bumps `transport` (and
+- **Additive metadata goes in the trailer, not in a field.** Metadata a message schema does not
+  name — starting with `primary_source` — is appended after the message inside the same frame body
+  as a `Vec<ArchiveExtras>` (`crates/lanrurugi-share-proto/src/extras.rs`). `postcard::from_bytes`
+  decodes the message and never looks at what follows (it does not call `finalize`), so a peer that
+  predates the trailer decodes exactly the message it always did and imports normally — the trailer
+  is why an additive field no longer costs a `SHARE_ENGINE_VERSION` bump. A newer peer reads the
+  remainder and applies the names it knows; a name it does not know is kept verbatim in the
+  sidecar's `extras` map, so an upgrade can start using it without re-importing.
+- **Compatibility policy**: exactly one engine version is served at a time, and any change to a
+  postcard message's *shape* bumps `protocol` (an added field, removed field or new variant).
+  Metadata that is merely additive rides the trailer instead and does not bump it. An iroh upgrade that changes the wire bumps `transport` (and
   `protocol` with it); `crates/lanrurugi-share-proto/tests/version.rs` fails if the constant drifts
   from the pinned `iroh`. Browsing, covers and reading do **not** use this protocol (they are
   plain HTTP JSON, which tolerates new fields in both directions), so a version gap only ever

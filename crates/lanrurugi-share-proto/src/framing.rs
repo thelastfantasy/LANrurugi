@@ -7,6 +7,7 @@
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
+use crate::extras::ArchiveExtras;
 use crate::messages::ShareEngine;
 
 /// Bytes of the engine-length prefix that follows the body length.
@@ -28,10 +29,35 @@ pub fn encode<T: Serialize>(message: &T) -> Result<Vec<u8>, FrameError> {
     encode_from(&ShareEngine::current(), message)
 }
 
+/// `encode`, plus the metadata fields the message schemas do not name, appended after the message
+/// inside the same body. `postcard::from_bytes` never looks past the message, so a peer that knows
+/// nothing about extras decodes the same frame it always did — that is what keeps this additive
+/// instead of a `SHARE_ENGINE_VERSION` bump.
+pub fn encode_with_extras<T: Serialize>(
+    message: &T,
+    extras: &[ArchiveExtras],
+) -> Result<Vec<u8>, FrameError> {
+    if extras.is_empty() {
+        return encode(message);
+    }
+    encode_parts(&ShareEngine::current(), message, Some(extras))
+}
+
 /// `encode` with an explicit engine, for tests and for answering with the engine that was asked for.
 pub fn encode_from<T: Serialize>(engine: &ShareEngine, message: &T) -> Result<Vec<u8>, FrameError> {
+    encode_parts(engine, message, None)
+}
+
+fn encode_parts<T: Serialize>(
+    engine: &ShareEngine,
+    message: &T,
+    extras: Option<&[ArchiveExtras]>,
+) -> Result<Vec<u8>, FrameError> {
     let engine = postcard::to_allocvec(engine)?;
-    let payload = postcard::to_allocvec(message)?;
+    let mut payload = postcard::to_allocvec(message)?;
+    if let Some(extras) = extras {
+        payload.extend_from_slice(&postcard::to_allocvec(extras)?);
+    }
     let body = ENGINE_LEN_BYTES + engine.len() + payload.len();
     if body > MAX_FRAME_LEN {
         return Err(FrameError::TooLarge(body));
@@ -79,6 +105,19 @@ pub fn decode_payload<T: DeserializeOwned>(payload: &[u8]) -> Result<T, FrameErr
     Ok(postcard::from_bytes(payload)?)
 }
 
+/// Decodes the message and, when the sender appended any, the extras that follow it. A sender that
+/// knows nothing about extras leaves nothing behind, which reads as "no extras".
+pub fn decode_payload_with_extras<T: DeserializeOwned>(
+    payload: &[u8],
+) -> Result<(T, Vec<ArchiveExtras>), FrameError> {
+    let (message, rest) = postcard::take_from_bytes::<T>(payload)?;
+    if rest.is_empty() {
+        return Ok((message, Vec::new()));
+    }
+    let (extras, _) = postcard::take_from_bytes::<Vec<ArchiveExtras>>(rest)?;
+    Ok((message, extras))
+}
+
 /// The sender's engine and the message it carries.
 pub fn decode<T: DeserializeOwned>(body: &[u8]) -> Result<(ShareEngine, T), FrameError> {
     let (engine, payload) = split(body)?;
@@ -124,6 +163,46 @@ mod tests {
         .unwrap();
         let (engine, _) = split(&frame[4..]).unwrap();
         assert_eq!(postcard::from_bytes::<ShareEngine>(engine).unwrap(), older);
+    }
+
+    #[test]
+    fn an_older_peer_decodes_a_frame_that_carries_extras() {
+        // The compatibility claim itself: `from_bytes` stops after the message, so a build that
+        // has never heard of extras reads the identical message out of the same frame.
+        let message = Request::Renew {
+            claim_id: "c".into(),
+            verified_bytes: 0,
+            finished: false,
+        };
+        let extras = vec![crate::extras::ArchiveExtras {
+            archive_id: "a".into(),
+            fields: vec![(
+                crate::extras::EXTRA_PRIMARY_SOURCE.into(),
+                "site/g/1".into(),
+            )],
+        }];
+        let frame = encode_with_extras(&message, &extras).unwrap();
+        let (_, payload) = split(&frame[4..]).unwrap();
+        assert_eq!(decode_payload::<Request>(payload).unwrap(), message);
+        assert_eq!(
+            decode_payload_with_extras::<Request>(payload).unwrap(),
+            (message.clone(), extras)
+        );
+    }
+
+    #[test]
+    fn a_frame_without_extras_reads_as_no_extras() {
+        let message = Request::Renew {
+            claim_id: "c".into(),
+            verified_bytes: 0,
+            finished: false,
+        };
+        let frame = encode(&message).unwrap();
+        let (_, payload) = split(&frame[4..]).unwrap();
+        assert_eq!(
+            decode_payload_with_extras::<Request>(payload).unwrap(),
+            (message, Vec::new())
+        );
     }
 
     #[test]

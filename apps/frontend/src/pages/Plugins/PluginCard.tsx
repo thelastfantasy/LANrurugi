@@ -33,6 +33,9 @@ export function PluginCard({
   const [searchParams] = useSearchParams()
   const focused = searchParams.get("focus") === plugin.namespace
   const didFocusRef = useRef(false)
+  // The group title is a toggle: StrictMode runs the effect twice before the first click re-renders,
+  // so a second click would close the group again.
+  const groupOpenedRef = useRef(false)
   const cardRef = useRef<HTMLDivElement>(null)
 
   const options = usePluginOptions(plugin.type === "download" ? plugin.namespace : "")
@@ -50,7 +53,8 @@ export function PluginCard({
     if (!focused || !optionsSettled || !card || didFocusRef.current) return
     didFocusRef.current = true
     const groupTitle = card.parentElement?.closest("[data-section-id]")?.querySelector<HTMLElement>(":scope > .collapsible-title")
-    if (groupTitle && !groupTitle.classList.contains("active")) groupTitle.click()
+    if (groupTitle && !groupOpenedRef.current && !groupTitle.classList.contains("active")) groupTitle.click()
+    groupOpenedRef.current = true
     let flashTimer = 0
     let scrolled = false
     // One frame for the group to stop being `display: none`, or there is nothing to scroll to.

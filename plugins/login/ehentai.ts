@@ -132,7 +132,7 @@ function get_user_agent(...args: any[]) {
   let logger = legacyCompat.getLogger("E-Hentai Login", "plugins");
   let ua = legacyCompat.userAgent();
   if (ipb_member_id !== "" && ipb_pass_hash !== "") {
-    logger.info(`Cookies provided (${ipb_member_id} ${ipb_pass_hash} ${star} ${igneous})!`);
+    logger.info("Cookies provided");
     ua.cookie_jar.add({name: 'ipb_member_id', value: ipb_member_id, domain: 'exhentai.org', path: '/'});
     ua.cookie_jar.add({name: 'ipb_member_id', value: ipb_member_id, domain: 'e-hentai.org', path: '/'});
     ua.cookie_jar.add({name: 'ipb_pass_hash', value: ipb_pass_hash, domain: 'exhentai.org', path: '/'});

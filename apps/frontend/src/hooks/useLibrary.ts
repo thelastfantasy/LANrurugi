@@ -75,6 +75,12 @@ import { useDocumentTitle } from "./useDocumentTitle";
 let defaultPasswordToastShownThisPageLoad = false;
 let storageWarningToastShownThisPageLoad = false;
 
+/** A trailing `\` escapes nothing (usually a slip next to Enter), so it is dropped from the URL,
+ *  the input and the history alike, as the server's lexer already ignores it. */
+function cleanFilter(filter: string): string {
+  return filter.replace(/[\s\\]+$/, "");
+}
+
 export function useLibrary() {
   /** Keep in step with the server's `HISTORY_CAP`: stored is 100, shown is this many. */
 const RECENT_SEARCHES_VISIBLE = 7;
@@ -106,7 +112,7 @@ const { t } = useTranslation();
   const [filterInputOverride, setFilterInputOverride] = useState<string | null>(
     null,
   );
-  const appliedFilter = urlParams.get("q") ?? "";
+  const appliedFilter = cleanFilter(urlParams.get("q") ?? "");
   const filterInput = filterInputOverride ?? appliedFilter;
   useDocumentTitle(appliedFilter || undefined);
 
@@ -232,7 +238,11 @@ const { t } = useTranslation();
     }
     // Only a genuinely *applied* filter is history-worthy — paging, sorting and category clicks
     // all route through here without carrying an `appliedFilter`.
-    if (overrides.appliedFilter !== undefined) rememberSearch(overrides.appliedFilter);
+    if (overrides.appliedFilter !== undefined) {
+      const appliedFilter = cleanFilter(overrides.appliedFilter);
+      overrides = { ...overrides, appliedFilter };
+      rememberSearch(appliedFilter);
+    }
     // `nextOrder` has to be handed to `buildSearch` explicitly: it re-derives the direction from
     // `overrides.order ?? order`, so leaving it out made a field switch fall back to the *previous*
     // field's direction — relevance's forced `asc` turned "Date" into oldest-first.

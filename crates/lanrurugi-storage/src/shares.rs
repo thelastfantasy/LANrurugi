@@ -1022,6 +1022,10 @@ pub struct ShareImport {
     pub title: String,
     /// The manifest as fetched at confirmation (`ShareManifest`, claim form).
     pub manifest: serde_json::Value,
+    /// Metadata the sharer sent beside the manifest that the message schemas do not name, keyed by
+    /// its archive ids. Kept on the record so a resumed import applies it too.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub extras: std::collections::HashMap<String, Vec<(String, String)>>,
     #[serde(default)]
     pub category: Option<String>,
     /// Put each archive into categories named like the sharer's, creating missing ones.
