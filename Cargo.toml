@@ -251,9 +251,11 @@ codegen-units = 16
 [profile.dev.package."*"]
 opt-level = 2
 
-# LANrurugi forks pinned to the exact upstream versions this build already uses (022): both carry a
-# single added `SO_BINDTODEVICE` call so a pinned sharing node cannot fall back to the physical link.
-# The diff against the published crates stays one hunk each; `vendor/*/FORK.md` records it.
+# LANrurugi forks (022): each adds `SO_BINDTODEVICE` to the sockets the crate opens, so a pinned
+# sharing node cannot fall back to the physical link. `vendor/<crate>/` is generated from the
+# crates.io release named in `vendor/patches/<crate>/VERSION` plus the patches there
+# (scripts/vendor-forks.sh); `vendor/patches/<crate>/FORK.md` says what changed and why.
 [patch.crates-io]
 netwatch = { path = "vendor/netwatch" }
 iroh-relay = { path = "vendor/iroh-relay" }
+n0-dns-resolver = { path = "vendor/n0-dns-resolver" }

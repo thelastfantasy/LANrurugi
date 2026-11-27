@@ -1,6 +1,7 @@
 name: Vendored iroh forks
 
-# Dependabot cannot update iroh here: vendor/iroh-relay and vendor/netwatch are patched forks (022),
+# Dependabot cannot update iroh here: vendor/iroh-relay, vendor/netwatch and vendor/n0-dns-resolver
+# are patched forks (022),
 # and every iroh release requires the matching iroh-relay, so a plain bump drops the fork and fails
 # to build. This job does what a person would: move the forks to the new release by reapplying
 # vendor/patches/, update the lockfile, build the sharing crate, and open a PR.
@@ -83,10 +84,10 @@ jobs:
       - name: Update the lockfile and build the sharing crate
         if: steps.bump.outputs.changed == 'true' && steps.existing.outputs.open != 'true'
         run: |
-          cargo update -p iroh -p iroh-relay -p netwatch -p iroh-base
+          cargo update -p iroh -p iroh-relay -p netwatch -p n0-dns-resolver -p iroh-base -p iroh-dns
           # A second, unpatched netwatch or iroh-relay in the graph means some crate still asks for
           # the old line: the interface pin would then be set on a copy iroh does not use.
-          for crate in netwatch iroh-relay; do
+          for crate in netwatch iroh-relay n0-dns-resolver; do
             count="$(grep -c "^name = \"$crate\"$" Cargo.lock)"
             if [ "$count" != 1 ]; then
               echo "Cargo.lock has $count copies of $crate; every one must be the vendored fork" >&2
@@ -111,9 +112,9 @@ jobs:
             --label "type: improvement" --label "area: backend" \
             --title "chore(deps): ${{ steps.bump.outputs.summary }}" \
             --body "$(cat <<'EOF'
-          由 `.github/workflows/vendor-forks.yml` 自动生成：把 iroh 升到新版本，并按 `vendor/patches/` 把两个补丁版（022：分享流量绑定网卡）重新套到它要求的 iroh-relay / netwatch 上。
+          由 `.github/workflows/vendor-forks.yml` 自动生成：把 iroh 升到新版本，并按 `vendor/patches/` 把两个补丁版（022：分享流量绑定网卡）重新套到它要求的 iroh-relay / netwatch / n0-dns-resolver 上。
 
-          - 补丁都已套上，`lanrurugi-share`、`lanrurugi-api` 编译通过；依赖图里 netwatch、iroh-relay 都只有补丁版这一份。
+          - 补丁都已套上，`lanrurugi-share`、`lanrurugi-api` 编译通过；依赖图里 netwatch、iroh-relay、n0-dns-resolver 都只有补丁版这一份。
           - 这个 PR 由工作流用 GITHUB_TOKEN 创建，GitHub 不会因此自动跑 CI：关闭再重新打开本 PR，或推一个空提交，即可触发。
           - 合并前请看上游变更日志里是否动了中继连接或 UDP 套接字的创建方式；分享的网络矩阵（`scripts/share-network-matrix.sh`）在发布前跑一次。
           EOF

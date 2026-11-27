@@ -10,6 +10,7 @@ bytes.workspace = true
 ed25519-dalek.workspace = true
 libc.workspace = true
 netwatch = "0.20.2"
+n0-dns-resolver = "0.1.1"
 iroh-mdns-address-lookup.workspace = true
 lanrurugi-core.workspace = true
 lanrurugi-share-proto.workspace = true

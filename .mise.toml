@@ -168,7 +168,7 @@ scripts/cargo-container-run.sh cargo update "${args[@]}"
 """
 
 [tasks.vendor-forks]
-description = "Regenerate vendor/iroh-relay and vendor/netwatch from their crates.io release plus vendor/patches/ (after changing a VERSION there). `-- --check` only verifies. See scripts/vendor-forks.sh"
+description = "Regenerate the patched forks under vendor/ from their crates.io release plus vendor/patches/ (after changing a VERSION there). `-- --check` only verifies. See scripts/vendor-forks.sh"
 run = "scripts/vendor-forks.sh"
 
 [tasks.doc-crate]
