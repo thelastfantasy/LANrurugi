@@ -425,10 +425,7 @@ async fn list_issues(
                     return false;
                 }
             }
-            if !needle.is_empty() && !issue.title.to_lowercase().contains(&needle) {
-                return false;
-            }
-            true
+            needle.is_empty() || issue.title.to_lowercase().contains(&needle)
         })
         .collect();
     if query.sort.as_deref() == Some("frequent") {

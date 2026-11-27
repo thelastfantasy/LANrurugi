@@ -36,7 +36,6 @@ thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 sha1.workspace = true
-crc32fast.workspace = true
 deadpool-redis.workspace = true
 rand.workspace = true
 reqwest.workspace = true
