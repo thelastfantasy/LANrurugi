@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@/api/client";
+import { useArchiveMetadata } from "@/api/hooks";
 import { Link } from "@/components/common-ui/Link";
 import { useLibrary } from "@/hooks/useLibrary";
 import { sourceTagFrom } from "@/lib/deleteArchive";
@@ -37,6 +38,14 @@ function sourceOf(
 export function Library() {
   const lib = useLibrary();
   const deleteTarget = lib.deleteTarget;
+  // A selection outlives the page it was picked on, so the archive being deleted may not be among
+  // the cards on screen; its own metadata then supplies the source the dialog checks subscriptions for.
+  const shownSource = deleteTarget ? sourceOf(lib.shown, deleteTarget.id) : undefined;
+  const deleteTargetMetadata = useArchiveMetadata(
+    deleteTarget?.id ?? null,
+    Boolean(deleteTarget) && !deleteTarget?.isTank && !lib.shown.some((a) => a.arcid === deleteTarget?.id),
+  );
+  const deleteTargetSource = shownSource ?? sourceTagFrom(deleteTargetMetadata.data?.tags);
   const [aiTankoubonDrawerOpen, setAiTankoubonDrawerOpen] = useState(false);
   const [shareIds, setShareIds] = useState<string[] | null>(null);
   // Selection mode starts minimized, so the grid is free for picking.
@@ -69,11 +78,22 @@ export function Library() {
       }
       if (e.key === "Escape" && shortcutsOpen) {
         setShortcutsOpen(false);
+        return;
+      }
+      // Escape leaves selection mode whether or not the drawer is open (the drawer alone would only
+      // minimize). A dialog or menu above it closes first: its own Escape is the one meant.
+      if (e.key === "Escape" && lib.multiSelect && !lib.contextMenu && !lib.autocompleteOpen) {
+        const dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"]').length;
+        if (dialogs > (selectionDrawerOpen ? 1 : 0)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setSelectionDrawerOpen(false);
+        void lib.handleToggleMultiSelect();
       }
     }
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [lib, shortcutsOpen]);
+  }, [lib, shortcutsOpen, selectionDrawerOpen]);
 
   if (lib.search.isError) {
     // 401 means the session just expired mid-view; RequireAuth is already navigating to /login.
@@ -333,7 +353,7 @@ export function Library() {
       {deleteTarget && (
         <DeleteConfirmDialog
           isTank={deleteTarget.isTank}
-          source={sourceOf(lib.shown, deleteTarget.id)}
+          source={deleteTargetSource}
           onCancel={() => lib.setDeleteTarget(null)}
           onConfirm={(blockResubscribe, tankMode) => {
             void lib.deleteArchive(
@@ -341,6 +361,7 @@ export function Library() {
               deleteTarget.isTank,
               blockResubscribe,
               tankMode,
+              deleteTargetSource,
             );
             lib.setDeleteTarget(null);
           }}
@@ -362,13 +383,20 @@ export function Library() {
             onReorder={lib.setSelectedIds}
             onRemove={lib.toggleSelected}
             onSelectPage={() => lib.selectAllOnPage()}
-            onSelectResults={() => void lib.selectAllResults()}
+            onSelectResults={lib.selectAllResults}
             selectingResults={lib.selectingAllResults}
             onSortSelection={(mode) => void lib.sortSelection(mode)}
             sortingSelection={lib.sortingSelection}
             onClear={lib.clearSelection}
-            onRunBatch={lib.runBatchOnSelection}
-            onRunBatchOnFilter={() => void lib.runBatchOnFilter()}
+            onBatchRemoved={(ids) => {
+              const gone = new Set(ids);
+              lib.setSelectedIds((prev) => prev.filter((id) => !gone.has(id)));
+            }}
+            onDeleteOne={(id) => lib.setDeleteTarget({ id, isTank: isTankoubonId(id) })}
+            onShare={(ids) => {
+              setSelectionDrawerOpen(false);
+              setShareIds(ids);
+            }}
             onMerge={() => void lib.mergeSelectionIntoTankoubon()}
           />
           {!selectionDrawerOpen && (

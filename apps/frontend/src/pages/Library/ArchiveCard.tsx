@@ -1,6 +1,6 @@
 import type { TFunction } from "i18next"
 import type { MouseEvent } from "react"
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import type { ArchiveMetadata } from "@/api/types"
@@ -14,6 +14,7 @@ import { coverUrl } from "@/lib/utils/coverUrl"
 import { highlightText } from "@/lib/utils/highlightText"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 
+import { type MatchReasonMember,memberLabel, memberParts } from "./matchReason"
 import { TagLine } from "./TagLine"
 import type { ContextMenuTrigger } from "./types"
 
@@ -67,25 +68,31 @@ function PageCountBadge({ archive }: { archive: ArchiveMetadata }) {
 /** Why a Tankoubon is in this result set: its own record did not match, these members did.
  *  Naming them beats a generic "matched via members" — the whole point is which volumes. */
 function matchReasonText(
-  members: { name: string }[],
+  members: MatchReasonMember[],
   t: TFunction,
 ): string {
-  const names = members.map((m) => m.name || "?").join("、")
+  const names = members.map(memberLabel).join("、")
   return t("library.tankMatchedThroughMembers", { members: names })
 }
 
 /** The same as a tooltip: the explanation, then one volume per line — a run-on list of long
  *  titles joined by 、 was unreadable. */
-function MatchReason({ members, t }: { members: { name: string }[]; t: TFunction }) {
+function MatchReason({ members, t }: { members: MatchReasonMember[]; t: TFunction }) {
   return (
     <div style={{ textAlign: "left" }}>
       <div>{t("library.tankMatchedThroughMembersHeading")}</div>
       <ul style={{ margin: "4px 0 0", paddingLeft: "1.2em" }}>
-        {members.map((m, i) => (
+        {members.map((m, i) => {
+          const parts = memberParts(m)
+          return (
           <li key={i} style={{ listStyle: "disc" }}>
-            {m.name || "?"}
+            {/* The archive's own name is bold — it is the one thing a reader is looking for;
+                the chapter name the tankoubon gave it follows in normal weight. */}
+            <strong>{parts.lead}</strong>
+            {parts.rest ? ` — ${parts.rest}` : null}
           </li>
-        ))}
+          )
+        })}
       </ul>
     </div>
   )
@@ -128,6 +135,28 @@ export function ArchiveCard({
   // Touch opens the menu on our own long-press timing; right-click stays on `onContextMenu`.
   const [cardEl, setCardEl] = useState<HTMLDivElement | null>(null)
   useLongPress(cardEl, (_, e) => onContextMenu(e, archive), { blockContextMenu: () => true })
+  // A title cut off at two lines is shown whole, laid over the cover, while the card is hovered
+  // (mouse) or pressed (touch) anywhere but its tag line. `null` = folded; else the card's own
+  // background, so the overlay matches every theme and the selected-card highlight. It takes the
+  // title's own box (not the whole row, which also holds the status icons) so the lines wrap and
+  // centre exactly where the folded title's did.
+  const titleRef = useRef<HTMLAnchorElement | null>(null)
+  const [fullTitle, setFullTitle] = useState<{ bg: string; left: number; width: number } | null>(null)
+  function showFullTitle(e: React.PointerEvent) {
+    const title = titleRef.current
+    if (!cardEl || !title || (e.target as Element).closest(".id4")) {
+      setFullTitle(null)
+      return
+    }
+    if (fullTitle === null && title.scrollHeight > title.clientHeight + 1) {
+      setFullTitle({
+        bg: getComputedStyle(cardEl).backgroundColor,
+        left: title.offsetLeft,
+        width: title.getBoundingClientRect().width,
+      })
+    }
+  }
+  const hideFullTitle = () => setFullTitle(null)
 
   function handleOpen(e: MouseEvent) {
     // Let the browser keep its own link gestures — Ctrl/Cmd/Shift for a new tab/window, Alt for
@@ -149,9 +178,39 @@ export function ArchiveCard({
       className={`id1${selected ? " msm-selected" : ""}`}
       id={id}
       onContextMenu={(e) => onContextMenu(e, archive)}
+      onPointerMove={(e) => e.pointerType === "mouse" && showFullTitle(e)}
+      onPointerLeave={(e) => e.pointerType === "mouse" && hideFullTitle()}
+      onPointerDown={(e) => e.pointerType !== "mouse" && showFullTitle(e)}
+      onPointerUp={(e) => e.pointerType !== "mouse" && hideFullTitle()}
+      onPointerCancel={hideFullTitle}
     >
-      <div className="id2" style={{ display: "flex", alignItems: "baseline", justifyContent: "center", gap: 2 }}>
+      <div
+        className="id2"
+        style={{ display: "flex", alignItems: "baseline", justifyContent: "center", gap: 2, position: "relative" }}
+      >
+        {fullTitle !== null && (
+          // An `a` so the theme's `div.id2 a` colour and weight apply; the clamp is undone inline.
+          <a
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              top: 0,
+              left: fullTitle.left,
+              width: fullTitle.width,
+              boxSizing: "border-box",
+              zIndex: 2,
+              display: "block",
+              overflow: "visible",
+              WebkitLineClamp: "unset",
+              background: fullTitle.bg,
+              pointerEvents: "none",
+            }}
+          >
+            {highlightText(archive.title, highlightQuery)}
+          </a>
+        )}
         <Link
+          ref={titleRef}
           to={routes.reader(id)}
           title={archive.title}
           onClick={handleOpen}
@@ -160,8 +219,10 @@ export function ArchiveCard({
           {highlightText(archive.title, highlightQuery)}
         </Link>
         <StatusIcons archive={archive} />
+        {/* `openOnTap`: the icon sits inside the card link, whose pointer cursor it inherits, but is
+            decorative itself — a tap can only mean "show me the reason". */}
         {archive.match_reason?.kind === "members" && (
-          <Tooltip label={<MatchReason members={archive.match_reason.members} t={t} />}>
+          <Tooltip openOnTap label={<MatchReason members={archive.match_reason.members} t={t} />}>
             <span
               className="match-reason-icon"
               // Focusable so the tooltip is reachable without a mouse; the icon itself is

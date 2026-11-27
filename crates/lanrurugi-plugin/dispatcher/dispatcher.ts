@@ -1156,10 +1156,11 @@ async function handleRequest(req: PluginRequest) {
         : e instanceof Error && typeof withCode.data === "object"
           ? (withCode.data as Record<string, string | number> | undefined)
           : undefined;
+    const settings = e instanceof PluginErrorException ? e.settings : undefined;
     writeLine({
       request_id: req.request_id,
       ok: false,
-      error: { message, kind: "plugin_error", error_code, data },
+      error: { message, kind: "plugin_error", error_code, data, settings },
     });
   }
 }

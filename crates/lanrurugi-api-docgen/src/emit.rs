@@ -22,9 +22,12 @@ const DOCUMENT_DESCRIPTION: &str = "\
 The complete HTTP API of a LANrurugi instance.
 
 This document is generated from the server's own route registrations, so every endpoint listed \
-here is one the server actually serves, and every endpoint the server serves is listed. Endpoints \
-that also exist in LANraragi carry that project's field-level documentation; the rest are listed \
-with the handler's own notes and a pointer into the source.
+here is one the server actually serves. Endpoints that also exist in LANraragi carry that project's \
+field-level documentation; the rest are listed with the handler's own notes and a pointer into the \
+source. The server's own internal endpoints — the diagnostics and resource monitors its UI calls — \
+are marked internal in `docs/api/sidecar` and are deliberately absent: their only consumer is this \
+repository's own frontend, and `crates/lanrurugi-api/policy/route_policy.csv` refuses API tokens on \
+them outright, so an entry here would describe a contract no API consumer can use.
 
 To try a request, set the server address to your own instance (the default is the local port) and \
 supply an API token from your instance's settings. Requests go from your browser straight to your \
@@ -41,6 +44,9 @@ const AUTHENTICATED_PREFIX: &str = "/api";
 pub fn assemble(merged: &Merged, policy: &Policy, notes: &AccessNotes, version: &str) -> Value {
     let mut paths: Map<String, Value> = Map::new();
     for ((path, method), operation) in &merged.operations {
+        if merged.hidden.contains(&(path.clone(), *method)) {
+            continue;
+        }
         let mut value = operation.value.clone();
         if let Some(object) = value.as_object_mut() {
             attach_security(object, path, *method, policy);
@@ -54,10 +60,23 @@ pub fn assemble(merged: &Merged, policy: &Policy, notes: &AccessNotes, version: 
         }
     }
 
-    let tags: Vec<Value> = merged
-        .tags
+    // Counted from the operations that are actually published, not from every operation merged:
+    // a hidden endpoint must not leave an empty group in the reference.
+    let mut published_tags: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for ((path, method), operation) in &merged.operations {
+        if merged.hidden.contains(&(path.clone(), *method)) {
+            continue;
+        }
+        if let Some(tags) = operation.value.get("tags").and_then(Value::as_array) {
+            for tag in tags.iter().filter_map(Value::as_str) {
+                published_tags.insert(tag);
+            }
+        }
+    }
+
+    let tags: Vec<Value> = published_tags
         .iter()
-        .map(|name| match merged.tag_descriptions.get(name) {
+        .map(|name| match merged.tag_descriptions.get(*name) {
             Some(description) => json!({ "name": name, "description": description }),
             None => json!({ "name": name }),
         })
@@ -97,7 +116,7 @@ pub fn assemble(merged: &Merged, policy: &Policy, notes: &AccessNotes, version: 
         "info": {
             "title": "LANrurugi API",
             "version": version,
-            "license": { "name": "MIT", "identifier": "MIT" },
+            "license": { "name": "MIT OR Apache-2.0", "identifier": "MIT OR Apache-2.0" },
             "description": DOCUMENT_DESCRIPTION,
         },
         "servers": [

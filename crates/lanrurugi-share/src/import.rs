@@ -144,6 +144,8 @@ pub struct Opened {
     pub manifest: ShareManifest,
     pub public_url: Option<String>,
     pub allow_helpers: bool,
+    /// The sharer's unnamed fields, keyed by its archive ids.
+    pub extras: Vec<lanrurugi_share_proto::extras::ArchiveExtras>,
 }
 
 /// Resolves a code, dials the sharer and opens a session.
@@ -151,7 +153,7 @@ pub async fn open(host: &Host, net: &ShareNet, code: &str) -> Result<Opened, Sha
     let reference =
         ShareRef::parse(code).map_err(|_| ShareNetError::Refused(RefusalReason::NotFound))?;
     let (_, conn) = publish::dial(host, net, &reference).await?;
-    let (response, _) = call(
+    let (response, extras, _) = crate::runtime::call_with_extras(
         &conn,
         Request::Open {
             access_hash: access_hash(&reference.code),
@@ -170,6 +172,7 @@ pub async fn open(host: &Host, net: &ShareNet, code: &str) -> Result<Opened, Sha
             manifest,
             public_url,
             allow_helpers,
+            extras,
         }),
         _ => Err(ShareNetError::Protocol("unexpected answer to Open".into())),
     }
@@ -202,8 +205,16 @@ pub async fn thumbnail(
 /// The claim: counts one download, and returns the manifest with fingerprints plus a ticket.
 pub async fn claim(
     opened: &Opened,
-) -> Result<(String, ShareManifest, SignedTicket), ShareNetError> {
-    let (response, _) = call(
+) -> Result<
+    (
+        String,
+        ShareManifest,
+        SignedTicket,
+        Vec<lanrurugi_share_proto::extras::ArchiveExtras>,
+    ),
+    ShareNetError,
+> {
+    let (response, extras, _) = crate::runtime::call_with_extras(
         &opened.conn,
         Request::Claim {
             session: opened.session.clone(),
@@ -217,7 +228,7 @@ pub async fn claim(
             manifest,
             ticket,
             ..
-        } => Ok((claim_id, manifest, ticket)),
+        } => Ok((claim_id, manifest, ticket, extras)),
         _ => Err(ShareNetError::Protocol("unexpected answer to Claim".into())),
     }
 }
@@ -1013,6 +1024,17 @@ pub fn terminal_import_error(error: &ShareNetError) -> bool {
     )
 }
 
+/// Records the sharer's unnamed fields so every archive's import can find its own. A later session's
+/// answer wins: it is the twin of the manifest the record now holds.
+fn keep_extras(
+    record: &mut lanrurugi_storage::shares::ShareImport,
+    extras: Vec<lanrurugi_share_proto::extras::ArchiveExtras>,
+) {
+    for extra in extras {
+        record.extras.insert(extra.archive_id, extra.fields);
+    }
+}
+
 /// Catalogues a completed archive and applies the shared title, tags and summary.
 async fn ingest(run: &Run, sharer_archive_id: &str, part: &Path, root: [u8; 32]) -> ArchiveOutcome {
     let manifest: ShareManifest = {
@@ -1095,6 +1117,22 @@ async fn ingest(run: &Run, sharer_archive_id: &str, part: &Path, root: [u8; 32])
             }
         }
     };
+    // The sharer's unnamed fields for this archive, as they arrived beside the manifest (and on
+    // a resumed import, as the record kept them).
+    let extras = {
+        let fields = run
+            .record
+            .lock()
+            .await
+            .extras
+            .get(sharer_archive_id)
+            .cloned()
+            .unwrap_or_default();
+        lanrurugi_share_proto::extras::ArchiveExtras {
+            archive_id: sharer_archive_id.to_string(),
+            fields,
+        }
+    };
     run.host
         .imports()
         .apply_shared_metadata(
@@ -1104,6 +1142,8 @@ async fn ingest(run: &Run, sharer_archive_id: &str, part: &Path, root: [u8; 32])
                 tags: shared_tags(&entry.tags),
                 summary: entry.summary.clone(),
                 toc: entry.toc.clone(),
+                primary_source: extras.primary_source().map(str::to_string),
+                unknown_extras: extras.unknown(),
             },
         )
         .await;
@@ -1402,6 +1442,7 @@ async fn run_import(
         .clone()
         .ok_or("the import has no code left to reconnect with")?;
     let opened = reconnect(host, &code, &cancel).await?;
+    keep_extras(&mut record, opened.extras.clone());
 
     // A claim lives 24 h after its last use; an import resumed later claims again.
     // Resuming a claim made in an earlier run: the verified total lives on the claim itself, so
@@ -1419,10 +1460,11 @@ async fn run_import(
         Ok((Response::Renewed { ticket, .. }, _)) => ticket,
         Ok(_) => return Err("unexpected answer to Renew".into()),
         Err(ShareNetError::Refused(RefusalReason::NotFound)) => {
-            let (claim_id, manifest, ticket) =
+            let (claim_id, manifest, ticket, extras) =
                 claim(&opened).await.map_err(|e| e.code().to_string())?;
             record.claim_id = claim_id;
             record.manifest = serde_json::to_value(&manifest).map_err(|e| e.to_string())?;
+            keep_extras(&mut record, extras);
             ticket
         }
         Err(e) => return Err(e.code().to_string()),

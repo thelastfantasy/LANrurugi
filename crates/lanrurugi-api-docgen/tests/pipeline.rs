@@ -915,3 +915,98 @@ fn access_notes_also_reach_the_description_as_prose() {
         "the block must carry the blank lines that make it parse as markdown: {description:?}"
     );
 }
+
+// ── Internal endpoints ───────────────────────────────────────────────────────────────────────────
+
+/// `x-internal: true` hides an operation from the document without hiding it from the gates.
+///
+/// Both halves matter: an endpoint the app's own frontend calls still has a route policy that must
+/// be checked (a forgotten deny is the failure mode the policy gate exists for), and it must still
+/// count as described, or the completeness gate would report the route as missing.
+#[test]
+fn an_internal_operation_is_gated_but_not_published() {
+    use lanrurugi_api_docgen::access_notes::AccessNotes;
+    use lanrurugi_api_docgen::policy::Policy;
+
+    let mut sidecar = SidecarLayer::default();
+    sidecar.operations.insert(
+        ("/api/panel".to_string(), HttpMethod::Get),
+        json!({
+            "summary": "The app's own panel",
+            "tags": ["panel"],
+            "x-internal": true,
+            "responses": { "200": { "description": "ok" } },
+        }),
+    );
+
+    let routes = vec![
+        route("/api/panel", HttpMethod::Get, "panel"),
+        route("/api/thing", HttpMethod::Get, "list_things"),
+    ];
+    let fns = no_fns();
+    let merged = merge::merge(
+        &routes,
+        LegacyLayer::default(),
+        sidecar,
+        &FnLookup::new(&fns),
+    )
+    .expect("merge");
+
+    assert!(merged
+        .hidden
+        .contains(&("/api/panel".to_string(), HttpMethod::Get)));
+    assert_eq!(merged.coverage.routes_hidden, 1);
+    assert_eq!(
+        merged.coverage.routes_described, merged.coverage.routes_registered,
+        "a hidden route is still described, so the completeness gate must still balance"
+    );
+
+    let kept = merged
+        .operations
+        .get(&("/api/panel".to_string(), HttpMethod::Get))
+        .expect("kept for the gates");
+    assert!(
+        kept.value.get("x-internal").is_none(),
+        "the marker must not survive into the document: {}",
+        kept.value
+    );
+
+    let policy = Policy::parse("p, session, /api/*, *, allow\n").expect("policy");
+    let document =
+        lanrurugi_api_docgen::emit::assemble(&merged, &policy, &AccessNotes::default(), "0.0.0");
+
+    assert!(document["paths"].get("/api/panel").is_none());
+    assert!(document["paths"]["/api/thing"].is_object());
+    let tags = document["tags"].as_array().expect("tags");
+    assert!(
+        !tags.iter().any(|tag| tag["name"] == "panel"),
+        "a hidden operation must not leave an empty tag group: {tags:?}"
+    );
+    assert!(tags.iter().any(|tag| tag["name"] == "thing"));
+
+    lanrurugi_api_docgen::validate::run(&merged, &policy).expect("gates pass");
+}
+
+#[test]
+fn an_internal_marker_that_is_not_a_boolean_fails() {
+    let mut sidecar = SidecarLayer::default();
+    sidecar.operations.insert(
+        ("/api/panel".to_string(), HttpMethod::Get),
+        json!({
+            "summary": "The app's own panel",
+            "x-internal": "yes",
+            "responses": { "200": { "description": "ok" } },
+        }),
+    );
+
+    let routes = vec![route("/api/panel", HttpMethod::Get, "panel")];
+    let fns = no_fns();
+    let error = merge::merge(
+        &routes,
+        LegacyLayer::default(),
+        sidecar,
+        &FnLookup::new(&fns),
+    )
+    .expect_err("a typo must not silently publish an internal endpoint");
+    assert!(format!("{error:#}").contains("x-internal"));
+}

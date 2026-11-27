@@ -45,8 +45,9 @@ pub enum PoolError {
     Spawn(#[from] std::io::Error),
     #[error("plugin worker did not respond within {0:?} (timeout)")]
     Timeout(Duration),
+    /// Boxed: `ResponseError` would make every `Result` in this crate as large as itself.
     #[error("plugin returned an error: {}", .0.message)]
-    PluginError(crate::protocol::ResponseError),
+    PluginError(Box<crate::protocol::ResponseError>),
     #[error("plugin worker exited unexpectedly")]
     WorkerGone,
     #[error("malformed response from plugin worker: {0}")]
@@ -100,11 +101,12 @@ impl RelayAccess {
     }
 }
 
-/// A plugin `.ts` file's current `mtime` — used both to stamp a freshly spawned [`Worker`] and,
-/// on every later [`PluginPool::execute`] call, to detect whether the file has changed since that
-/// worker's own `import()` last read it.
-fn plugin_mtime(plugin_module: &Path) -> Result<SystemTime> {
-    Ok(std::fs::metadata(plugin_module)?.modified()?)
+/// A plugin `.ts` file's current [`PluginStamp`] — used both to stamp a freshly spawned [`Worker`]
+/// and, on every later [`PluginPool::execute`] call, to detect whether the file has changed since
+/// that worker's own `import()` last read it. The same identity the descriptor cache keys on, so
+/// a replacement that cache notices also respawns the worker.
+fn plugin_file_stamp(plugin_module: &Path) -> Result<PluginStamp> {
+    Ok(PluginStamp::of(&std::fs::metadata(plugin_module)?)?)
 }
 
 /// How long a descriptor entry may be reused even when the file still carries the same stamp.
@@ -199,9 +201,9 @@ struct Worker {
     stdin: Arc<Mutex<ChildStdin>>,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<Response>>>>,
     _child: Child,
-    /// The plugin file's `mtime` when this worker last `import()`ed it — `execute` respawns if
-    /// the file has since changed, since a running worker never reloads on its own.
-    mtime: std::time::SystemTime,
+    /// The plugin file's stamp when this worker last `import()`ed it — `execute` respawns if the
+    /// file has since changed, since a running worker never reloads on its own.
+    stamp: PluginStamp,
 }
 
 impl Worker {
@@ -231,7 +233,7 @@ impl Worker {
         }
         let plugin_module = plugins_dir.join(format!("{namespace}.ts"));
         // Read before spawning: worst case is one extra harmless respawn later, never a missed edit.
-        let mtime = plugin_mtime(&plugin_module)?;
+        let stamp = plugin_file_stamp(&plugin_module)?;
         // `plugin-sdk.ts` is written out as `dispatcher_path`'s own sibling (every
         // `lanrurugi_plugin::DISPATCHER_SCRIPT` write site has a matching
         // `lanrurugi_plugin::PLUGIN_SDK_SCRIPT` write right next to it — see those sites' own
@@ -367,7 +369,7 @@ impl Worker {
             stdin,
             pending,
             _child: child,
-            mtime,
+            stamp,
         })
     }
 
@@ -855,16 +857,19 @@ impl PluginPool {
         // that follows, which is exactly the failure mode `canonicalizeSource`'s contract warns is
         // harder to diagnose than an exception — so refuse it here instead.
         if parsed.canonical.len() != urls.len() {
-            return Err(PoolError::PluginError(crate::protocol::ResponseError {
-                message: format!(
-                    "canonicalizeSource returned {} results for {} inputs",
-                    parsed.canonical.len(),
-                    urls.len()
-                ),
-                kind: "plugin_error".to_string(),
-                error_code: None,
-                data: None,
-            }));
+            return Err(PoolError::PluginError(Box::new(
+                crate::protocol::ResponseError {
+                    message: format!(
+                        "canonicalizeSource returned {} results for {} inputs",
+                        parsed.canonical.len(),
+                        urls.len()
+                    ),
+                    kind: "plugin_error".to_string(),
+                    error_code: None,
+                    data: None,
+                    settings: None,
+                },
+            )));
         }
         Ok(Some(parsed.canonical))
     }
@@ -909,8 +914,8 @@ impl PluginPool {
     }
 
     /// Executes `method` against `namespace`'s persistent worker, starting it (with exactly its
-    /// declared permissions) on first use, and respawning it if the plugin file's `mtime` has
-    /// advanced since (a running worker never reloads its module on its own).
+    /// declared permissions) on first use, and respawning it if the plugin file's [`PluginStamp`]
+    /// has changed since (a running worker never reloads its module on its own).
     ///
     /// Only this namespace's slot is locked for the call's duration, so a slow plugin cannot delay
     /// any other plugin's calls — callers into the *same* plugin queue in arrival order, which is
@@ -932,9 +937,9 @@ impl PluginPool {
 
         // A stat failure here just means the freshness check is skipped this time — the real
         // request below will surface whatever's actually wrong.
-        let current_mtime = plugin_mtime(&self.plugins_dir.join(format!("{namespace}.ts"))).ok();
-        let stale = match (slot.worker.as_ref(), current_mtime) {
-            (Some(worker), Some(current)) => current > worker.mtime,
+        let current = plugin_file_stamp(&self.plugins_dir.join(format!("{namespace}.ts"))).ok();
+        let stale = match (slot.worker.as_ref(), current) {
+            (Some(worker), Some(current)) => current != worker.stamp,
             _ => false,
         };
         if stale {
@@ -943,7 +948,8 @@ impl PluginPool {
 
         if slot.worker.is_none() {
             let info = self.plugin_info(namespace).await?;
-            let flags = build_flags(&info.declared_permissions);
+            // A `script` plugin returns what the host should write; it never needs the grant itself.
+            let flags = build_flags(&info.declared_permissions, info.kind != "script");
             let worker = Worker::spawn(
                 &self.deno_binary,
                 &self.dispatcher_path,
@@ -993,8 +999,9 @@ fn response_to_result(response: Response) -> Result<serde_json::Value> {
             kind: "plugin_error".to_string(),
             error_code: None,
             data: None,
+            settings: None,
         });
-        Err(PoolError::PluginError(error))
+        Err(PoolError::PluginError(Box::new(error)))
     }
 }
 

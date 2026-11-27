@@ -30,7 +30,7 @@ import type {
   ArchivePage,
   CategoryMetadata,
 } from "@/api/types"
-import { Modal, Tooltip } from "@/components/common-ui/Display"
+import { Modal, ProgressBar, Tooltip } from "@/components/common-ui/Display"
 import { Button, IconButton, RatingWidget, Select } from "@/components/common-ui/Form"
 import { confirmDialog, newCategoryDialog, promptDialog } from "@/dialog"
 import { usePaginatedOverview } from "@/hooks/usePaginatedOverview"
@@ -318,17 +318,35 @@ export function ArchiveOverviewOverlay({
 
   const chapters = archive.toc.length > 0 ? archive.toc : null
 
+  /** Select options. The value carries the entry's index as well as its page: a Tankoubon's member
+   * can legitimately have a chapter starting on the very page the member itself starts, and two
+   * options with the same value are indistinguishable to the list (same React key, and picking
+   * either one would be ambiguous). */
+  const chapterSelectItems = (chapters ?? []).map((c, index) => ({
+    value: `${c.page}:${index}`,
+    page: c.page,
+    label: displayTocName(c.name, t),
+    itemStyle:
+      !c.synthetic && (chapters ?? []).some((x) => x.synthetic) ? { paddingLeft: 34 } : undefined,
+  }))
+
   const currentChapter = chapters
     ? [...chapters].filter((c) => c.page <= currentPage).sort((a, b) => b.page - a.page)[0]
     : undefined
 
-  /** Chapter name per start page, for the badge `PageGridCell` paints on that page's thumbnail.
-   * Built over the whole ToC, not just the loaded slice: `pageMeta` decides what renders. Two
-   * chapters sharing a start page keep the first one, matching the selector's own ordering. */
-  const chapterNameByPage = new Map<number, string>()
+  /** Chapter names per start page, for the badge `PageGridCell` paints on that page's thumbnail.
+   * Built over the whole ToC, not just the loaded slice: `pageMeta` decides what renders. A page
+   * can legitimately carry two names — a Tankoubon's member volume starts there and that same
+   * member may have a ToC entry on its first page — so both are kept and drawn on separate
+   * lines; the old first-name-wins map silently dropped whichever came second. */
+  const chapterNamesByPage = new Map<number, string[]>()
   for (const entry of chapters ?? []) {
-    if (!chapterNameByPage.has(entry.page)) chapterNameByPage.set(entry.page, displayTocName(entry.name, t))
+    const name = displayTocName(entry.name, t)
+    const names = chapterNamesByPage.get(entry.page)
+    if (!names) chapterNamesByPage.set(entry.page, [name])
+    else if (!names.includes(name)) names.push(name)
   }
+  const chapterNameByPage = chapterNamesByPage
 
   const setThumbnail = useSetArchiveThumbnail(isTank ? "" : archive.arcid)
   const setTankoubonThumbnail = useSetTankoubonThumbnail(archive.arcid)
@@ -349,6 +367,18 @@ export function ArchiveOverviewOverlay({
     settings.data?.archive_split_delete_original_enabled ?? false,
   )
   const [splitStatus, setSplitStatus] = useState<string | null>(null)
+  const [splitCreateTankoubon, setSplitCreateTankoubon] = useState(false)
+  // Live SSE progress: the panel owns the numbers, the server only sends a stage code.
+  const [splitProgress, setSplitProgress] = useState<number | null>(null)
+  const [splitStage, setSplitStage] = useState<string | null>(null)
+  // The mutation settles as soon as the job is accepted, so it cannot say whether the split is
+  // still running — the stream does. Without this the button was enabled again a second later and
+  // a second click queued another run against the same source.
+  const [splitRunning, setSplitRunning] = useState(false)
+  const [splitDone, setSplitDone] = useState<number | null>(null)
+  const [splitVolume, setSplitVolume] = useState<string | null>(null)
+  const [splitTotal, setSplitTotal] = useState<number | null>(null)
+  const [splitCreated, setSplitCreated] = useState<number | null>(null)
   const updateTankoubon = useUpdateTankoubon(archive.arcid)
 
   const [thumbnailVersion, setThumbnailVersion] = useState(0)
@@ -757,7 +787,8 @@ export function ArchiveOverviewOverlay({
                       >
                         <Button
                           variant="stdbtn"
-                          style={{ minWidth: 0, width: "2em", padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                          className="admin-icon-btn"
+                          style={{ minWidth: 0, width: "auto", padding: "0 0.6em", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
                           onClick={() => setShowSplitPanel(true)}
                           aria-label={t("reader.archiveSplit") ?? undefined}
                         >
@@ -767,7 +798,8 @@ export function ArchiveOverviewOverlay({
                     ) : (
                       <Button
                         variant="stdbtn"
-                        style={{ minWidth: 0, width: "2em", padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                        className="admin-icon-btn"
+                        style={{ minWidth: 0, width: "auto", padding: "0 0.6em", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
                         onClick={() => setShowSplitPanel(true)}
                         aria-label={t("reader.archiveSplit") ?? undefined}
                       >
@@ -811,14 +843,37 @@ export function ArchiveOverviewOverlay({
                             ))}
                           </tbody>
                         </table>
-                        <label style={{ marginTop: 12, display: "block", textAlign: "center", cursor: "pointer" }}>
-                          <input
-                            type="checkbox"
-                            checked={splitDeleteOriginal}
-                            onChange={(e) => setSplitDeleteOriginal(e.target.checked)}
-                          />{" "}
-                          {t("reader.splitDeleteOriginalCheckbox")}
-                        </label>
+                        {/* One row, both labels starting at the same left edge: stacked and
+                            centred, the two checkbox squares sat at different x positions and the
+                            pair read as two unrelated switches. */}
+                        <div
+                          style={{
+                            marginTop: 12,
+                            display: "flex",
+                            flexWrap: "wrap",
+                            alignItems: "center",
+                            justifyContent: "flex-start",
+                            columnGap: 20,
+                            rowGap: 6,
+                          }}
+                        >
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                            <input
+                              type="checkbox"
+                              checked={splitCreateTankoubon}
+                              onChange={(e) => setSplitCreateTankoubon(e.target.checked)}
+                            />
+                            <span>{t("reader.splitCreateTankoubonCheckbox")}</span>
+                          </label>
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                            <input
+                              type="checkbox"
+                              checked={splitDeleteOriginal}
+                              onChange={(e) => setSplitDeleteOriginal(e.target.checked)}
+                            />
+                            <span>{t("reader.splitDeleteOriginalCheckbox")}</span>
+                          </label>
+                        </div>
                         {splitDeleteOriginal && (
                           <div style={{ marginTop: 4, textAlign: "center", color: "red", fontWeight: 600 }}>
                             {t("reader.splitDeleteWarning")}
@@ -829,43 +884,110 @@ export function ArchiveOverviewOverlay({
                             className="stdbtn"
                             type="button"
                             style={{ width: "auto", minWidth: 110 }}
-                            value={(executeSplit.isPending ? t("reader.running") : t("reader.executeSplit")) ?? undefined}
-                            disabled={executeSplit.isPending}
+                            value={(splitRunning ? t("reader.running") : t("reader.executeSplit")) ?? undefined}
+                            disabled={splitRunning || executeSplit.isPending}
                             onClick={() => {
+                              // Show the bar on the click, not on the first event: the POST
+                              // answers with a job id only after the run has started, and by the
+                              // time the stream connects the early stages are already gone — that
+                              // left the bar appearing at whatever the last event said.
+                              setSplitProgress(0)
+                              setSplitStage("started")
+                              // No counts yet: the first event names the real unit (pages), and a
+                              // placeholder "0 / 5 volumes" would contradict it a moment later.
+                              setSplitDone(null)
+                              setSplitTotal(null)
+                              setSplitVolume(null)
+                              setSplitCreated(null)
+                              setSplitRunning(true)
                               void executeSplit
-                                .mutateAsync({ id: archive.arcid, deleteOriginal: splitDeleteOriginal })
+                                .mutateAsync({
+                                  id: archive.arcid,
+                                  deleteOriginal: splitDeleteOriginal,
+                                  createTankoubon: splitCreateTankoubon,
+                                })
                                 .then((r) => {
-                                setSplitStatus(`${t("reader.splitJobStarted")}: ${r.job_id}`)
-                                const source = new EventSource(`/api/archives/${archive.arcid}/split/stream`)
-                                source.onmessage = (e) => {
-                                  try {
-                                    const data = JSON.parse(e.data) as { progress?: number; message?: string }
-                                    setSplitStatus(`${data.message ?? ""} ${Math.round((data.progress ?? 0) * 100)}%`)
-                                    if ((data.progress ?? 0) >= 1) {
-                                    source.close()
-                                    if (splitDeleteOriginal) {
-                                      navigate(routes.library())
-                                      toast({
-                                        heading: t("reader.splitCompleteWithDelete") ?? undefined,
-                                        text: t("reader.splitCompleteWithDeleteDescription", {
-                                          count: splitSuggestion.data?.suggestion.split_groups.length ?? 0,
-                                        }) ?? undefined,
-                                        icon: "success",
-                                      })
+                                  if (!r) return
+                                  setSplitStatus(`${t("reader.splitJobStarted")}: ${r.job_id}`)
+                                  const source = new EventSource(`/api/archives/${archive.arcid}/split/stream`)
+                                  source.onmessage = (e) => {
+                                    try {
+                                      const data = JSON.parse(e.data) as {
+                                        progress?: number
+                                        stage?: string
+                                        done?: number | null
+                                        total?: number | null
+                                        volume?: string | null
+                                        source_deleted?: boolean
+                                      }
+                                      setSplitProgress(data.progress ?? 0)
+                                      setSplitStage(data.stage ?? null)
+                                      setSplitDone(data.done ?? null)
+                                      setSplitTotal(data.total ?? null)
+                                      setSplitVolume(data.volume ?? null)
+                                      if (data.stage === "finished") {
+                                        source.close()
+                                        setSplitRunning(false)
+                                        setSplitCreated(data.done ?? null)
+                                        setSplitStatus(null)
+                                        queryClient.invalidateQueries({ queryKey: ["archives"] })
+                                        queryClient.invalidateQueries({ queryKey: ["archive"] })
+                                        queryClient.invalidateQueries({ queryKey: ["archive-split-suggestion"] })
+                                        // The server only deletes the source when every volume was
+                                        // created and the user asked for it, and it says so in
+                                        // this frame: a page whose archive is gone has nothing
+                                        // left to show, so go back to the library. Anything else
+                                        // (a partial run, the source kept) stays put.
+                                        if (data.source_deleted === true) {
+                                          navigate("/")
+                                        }
+                                      }
+                                    } catch {
+                                      setSplitStatus(e.data)
                                     }
                                   }
-                                  } catch {
-                                    setSplitStatus(e.data)
+                                  // The server drops the channel when the job ends, which the
+                                  // browser reports as an error even on a clean finish.
+                                  source.onerror = () => {
+                                    source.close()
+                                    setSplitRunning(false)
+                                    setSplitStatus((current) => current ?? t("reader.splitFinishedOrNotFound") ?? null)
                                   }
-                                }
-                                source.onerror = () => {
-                                  source.close()
-                                  setSplitStatus(t("reader.splitFinishedOrNotFound") ?? "")
-                                }
-                              })
+                                })
+                                .catch((error: unknown) => {
+                                  // Nothing started — a 404 (the archive is gone) or a refused
+                                  // request must not leave the button disabled forever.
+                                  setSplitRunning(false)
+                                  setSplitProgress(null)
+                                  setSplitStatus(error instanceof Error ? error.message : String(error))
+                                })
                             }}
                           />
                         </div>
+                        {splitProgress !== null && (
+                          <div style={{ marginTop: 12 }} className="split-progress">
+                            <ProgressBar
+                              ratio={Math.max(0, Math.min(1, splitProgress))}
+                              label={
+                                t(`reader.splitStage.${splitStage ?? "started"}`) +
+                                (splitVolume ? ` ${splitVolume}` : "") +
+                                (splitDone !== null && splitTotal !== null ? ` · ${splitDone} / ${splitTotal}` : "") +
+                                ` · ${Math.round(splitProgress * 100)}%`
+                              }
+                              flowing={splitRunning}
+                            />
+                          </div>
+                        )}
+                        {splitCreated !== null && (
+                          <div style={{ marginTop: 8, textAlign: "center", fontWeight: 600 }}>
+                            {t("reader.splitCreatedVolumes", { count: splitCreated })}
+                          </div>
+                        )}
+                        {splitCreated !== null && splitTotal !== null && splitCreated < splitTotal && (
+                          <div className="split-progress-warning">
+                            {t("reader.splitPartialFailure", { done: splitCreated, total: splitTotal })}
+                          </div>
+                        )}
                         {splitStatus && <div style={{ marginTop: 8, textAlign: "center" }}>{splitStatus}</div>}
                       </>
                     ) : (
@@ -1029,21 +1151,23 @@ export function ArchiveOverviewOverlay({
           <h2 className="ih">{chapters ? t("reader.chapters") : t("reader.pages")}</h2>
           <div className="chapter-selector" style={{ paddingRight: 0 }}>
             {chapters && (
-              <select
-                id="chapter-select"
-                className="favtag-btn"
-                style={{ width: 200 }}
-                onChange={(e) => {
-                  const page = Number(e.target.value)
+              // The site's own `Select`, not a native `<select>`: a native popup cannot be styled
+              // per row, so a Tankoubon's volume/chapter nesting could only be faked with leading
+              // whitespace in the option text.
+              <Select
+                value={
+                  chapterSelectItems.find((item) => item.page === currentChapter?.page)?.value ??
+                  chapterSelectItems[0].value
+                }
+                onValueChange={(value) => {
+                  const page = Number(value.split(":")[0])
                   if (page > 0) onSelectPage(page)
                 }}
-              >
-                {chapters.map((c) => (
-                  <option key={c.page} value={c.page}>
-                    {displayTocName(c.name, t)}
-                  </option>
-                ))}
-              </select>
+                items={chapterSelectItems}
+                ariaLabel={t("reader.chapters")}
+                align="start"
+                style={{ width: 200 }}
+              />
             )}
             {loggedIn && chapters && currentChapter && !currentChapter.synthetic && (
               <>
@@ -1125,7 +1249,7 @@ export function ArchiveOverviewOverlay({
                   onOpenLightbox={setLightboxPage}
                   isTank={isTank}
                   isPatch={patchPageSet?.has(page) ?? false}
-                  chapterName={chapterNameByPage.get(page)}
+                  chapterNames={chapterNameByPage.get(page)}
                   toc={archive.toc}
                   cornerButtons={supportsHover}
                 />

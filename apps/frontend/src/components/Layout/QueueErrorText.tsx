@@ -1,10 +1,31 @@
 import { useTranslation } from "react-i18next"
 import { useNavigate } from "react-router-dom"
 
+import { usePlugins } from "@/api/hooks"
 import type { QueueError } from "@/api/types"
 import { Link } from "@/components/common-ui/Link"
 import { formatBytes } from "@/lib/formatBytes"
 import { routes } from "@/lib/routes"
+
+/** Link to the plugin whose settings fix this error. For `login` that is the plugin its
+ * `login_from` declares, matched by declared name (the list is priority-ordered, so the first
+ * match is the one the host would run). */
+function PluginSettingsLink({ plugin, target }: { plugin: string; target: "self" | "login" }) {
+  const { t } = useTranslation()
+  const plugins = usePlugins()
+  const loginFrom = plugins.data?.find((p) => p.namespace === plugin)?.login_from
+  const namespace =
+    target === "login"
+      ? plugins.data?.find((p) => p.type === "login" && p.declared_namespace === loginFrom)?.namespace
+      : plugin
+  if (!namespace) return null
+  return (
+    <>
+      {" "}
+      <Link to={routes.pluginSettings(namespace)}>{t("components.layout.openPluginSettings")}</Link>
+    </>
+  )
+}
 
 /** Renders a structured `QueueError` as translated text, mapping `.kind` to an i18n key. A
  * `plugin_reported` error's `error_code` is itself the i18n key (see `plugin-sdk.ts`'s `PluginError`). */
@@ -14,7 +35,12 @@ export function QueueErrorText({ error }: { error: QueueError }) {
 
   switch (error.kind) {
     case "plugin_reported":
-      return <span>{t(error.error_code, error.data)}</span>
+      return (
+        <span>
+          {t(error.error_code, error.data)}
+          {error.settings && <PluginSettingsLink plugin={error.plugin} target={error.settings} />}
+        </span>
+      )
     case "plugin_execution_failed":
       return <span>{t("components.layout.pluginPluginFailedToRun", { plugin: error.plugin })}</span>
     case "malformed_plugin_response":

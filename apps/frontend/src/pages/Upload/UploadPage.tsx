@@ -8,6 +8,7 @@ import { useAddToQueue, useCategories, useCreateCategory, useDownloadQueue, useP
 import type { PluginInfo } from "@/api/types"
 import { uploadResumable } from "@/api/uploadSession"
 import { Drawer, Tooltip } from "@/components/common-ui/Display"
+import { Select } from "@/components/common-ui/Form"
 import { formatBytes, STATE_COLOR } from "@/components/Display"
 import { reportWarning } from "@/diagnostics/sdk"
 import { newCategoryDialog } from "@/dialog"
@@ -22,6 +23,7 @@ import { toast } from "@/toast"
 import { DownloadQueuePanel } from "./DownloadQueuePanel"
 import { findMatchingPlugin, findPluginByDomain } from "./shared"
 import { SubscriptionStatus } from "./SubscriptionStatus"
+import { useFileDrop } from "./useFileDrop"
 
 /** Splits pasted text into one URL per line (comma- or whitespace-separated if it has no newlines)
  * and ends it with a newline, so the next paste starts on its own line. */
@@ -135,6 +137,14 @@ export function Upload() {
     }
   }
 
+  /** Files dropped anywhere on the page: uploaded one at a time, in the order they were dropped —
+   *  the transfer reports through a single progress bar, so running them together would interleave
+   *  two files' byte counts. */
+  async function uploadDropped(files: File[]) {
+    for (const file of files) await handleUpload(file)
+  }
+  const dragging = useFileDrop((files) => void uploadDropped(files))
+
   const addToQueue = useAddToQueue()
 
   function hostnameOfUrl(url: string): string {
@@ -233,32 +243,33 @@ export function Upload() {
 
   const leftColumn = (
     <div className="left-column">
-      {t("upload.addUploadedFilesToCategory")}
-      <select id="category" className="favtag-btn" value={category} onChange={(e) => setCategory(e.target.value)}>
-        <option value="">{t("common.NoCategory")}</option>
-        {sortCategories(categories.data ?? []).map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.name}
-          </option>
-        ))}
-      </select>
-      <Tooltip
-        label={t("common.newCategory") ?? undefined}
-        // Middle of the select's row, not its text baseline, and above the drawer it may sit in.
-        wrapperStyle={{ verticalAlign: "middle" }}
-        zIndex={narrow ? Z_OVERLAY_ABOVE_DRAWER : undefined}
-      >
-        <a
-          href="#"
-          style={{ marginLeft: 6 }}
-          onClick={(e) => {
-            e.preventDefault()
-            void handleNewCategory()
-          }}
+      <div className="upload-category-row">
+        <span>{t("upload.addUploadedFilesToCategory")}</span>
+        <Select
+          value={category}
+          onValueChange={setCategory}
+          items={[
+            { value: "", label: t("common.NoCategory") },
+            ...sortCategories(categories.data ?? []).map((c) => ({ value: c.id, label: c.name })),
+          ]}
+          ariaLabel={t("upload.addUploadedFilesToCategory")}
+          align="start"
+        />
+        <Tooltip
+          label={t("common.newCategory") ?? undefined}
+          zIndex={narrow ? Z_OVERLAY_ABOVE_DRAWER : undefined}
         >
-          <i className="fas fa-plus" />
-        </a>
-      </Tooltip>
+          <a
+            href="#"
+            onClick={(e) => {
+              e.preventDefault()
+              void handleNewCategory()
+            }}
+          >
+            <i className="fas fa-plus" />
+          </a>
+        </Tooltip>
+      </div>
       <br />
       <br />
 
@@ -388,6 +399,17 @@ export function Upload() {
 
   return (
     <div className="ido" style={{ textAlign: "center", fontSize: FONT_SIZE_XS }}>
+      {/* Purely an indicator: `pointer-events: none` keeps the overlay from swallowing the drop it
+          is announcing, which window's own `drop` handler then reads. */}
+      {dragging && (
+        <div className="drop-overlay" aria-hidden="true">
+          <div className="drop-overlay-box">
+            <i className="fas fa-file-arrow-up" aria-hidden="true" />
+            <div>{t("upload.dropFilesHere")}</div>
+            <div className="drop-overlay-hint">{t("upload.dropFilesHereHint")}</div>
+          </div>
+        </div>
+      )}
       <h1 className="ih" style={{ textAlign: "center" }}>
         {t("upload.addingArchivesToTheLibrary")}
       </h1>

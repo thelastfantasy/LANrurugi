@@ -271,9 +271,14 @@ export function DownloadQueuePanel({
 
   /** Start the whole checkbox selection (the split button's left half). */
   async function startSelection() {
-    // Display order, not click order: the server starts them in the order given.
-    const selectedIds = visibleItems.filter((i) => effectiveSelected.has(i.id)).map((i) => i.id)
-    await startSelected.mutateAsync(selectedIds)
+    // One request per group, all fired together. The server starts a request's ids in the order
+    // it receives them, so a single request meant every later group waited behind the earlier
+    // ones' plugin round-trips — with a full queue that reads as "group A starts, then group B".
+    // Per-group requests keep each group's own order (the server's turn queue) while letting all
+    // groups begin at once.
+    const groups = startableByGroup.map((g) => g.ids)
+    if (groups.length === 0) return
+    await Promise.all(groups.map((ids) => startSelected.mutateAsync(ids)))
     setSelected(new Set())
   }
 

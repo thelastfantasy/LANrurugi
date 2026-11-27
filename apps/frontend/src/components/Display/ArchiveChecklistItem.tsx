@@ -22,7 +22,7 @@ export function ArchiveChecklistItem({
       // Only flips to a flex row when `trailing` is actually present — the default (no prop)
       // stays plain block flow so `.checklist li`'s own `white-space: nowrap`/`text-overflow:
       // ellipsis` (public/legacy/lrr.css) keeps truncating a long title the way it always has for
-      // `Batch.tsx`/`Categories.tsx`'s own calls, neither of which pass `trailing`.
+      // `Categories.tsx`'s own calls, which do not pass `trailing`.
       style={trailing ? { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } : undefined}
     >
       <span style={trailing ? { minWidth: 0, flex: 1 } : undefined}>

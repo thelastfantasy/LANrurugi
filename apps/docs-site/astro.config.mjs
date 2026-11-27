@@ -67,7 +67,7 @@ const llmsTxt = site && starlightLlmsTxt({
   optionalLinks: [
     { label: 'OpenAPI document', url: `${docsRoot}openapi.json`, description: 'the complete HTTP API as OpenAPI 3.1 JSON' },
     { label: 'Plugin SDK reference (JSON)', url: `${sdkUrl.replace(/\/?$/, '/')}plugin-sdk.json`, description: 'every plugin-facing type, from deno doc' },
-    { label: 'Source code', url: 'https://github.com/thelastfantasy/LANrurugi', description: 'MIT licensed' },
+    { label: 'Source code', url: 'https://github.com/thelastfantasy/LANrurugi', description: 'MIT or Apache-2.0 licensed' },
   ],
   // The abridged set leaves out the API pages: openapi.json describes the same endpoints exactly.
   exclude: ['api/**', 'en/api/**'],

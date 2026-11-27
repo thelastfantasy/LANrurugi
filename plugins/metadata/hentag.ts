@@ -8,7 +8,7 @@ export function pluginInfo() {
     type: "metadata" as const,
     parameters: [
     ],
-    declared_permissions: { net: [], read: false, write: true },
+    declared_permissions: { net: [], read: false, write: false },
     name: "Hentag",
     author: "thelastfantasy",
     description: "Parses Hentag info.json files embedded in archives. Achtung, no API calls!",

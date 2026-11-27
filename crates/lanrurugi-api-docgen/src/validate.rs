@@ -180,6 +180,10 @@ pub fn report(
     println!("API reference coverage");
     println!("  routes registered:     {}", c.routes_registered);
     println!("  routes described:      {}", c.routes_described);
+    println!(
+        "  routes internal:       {} (described and gated, deliberately not published)",
+        c.routes_hidden
+    );
     for source in ["legacy", "sidecar", "none"] {
         let count = c.by_source.get(source).copied().unwrap_or(0);
         let label = match source {
@@ -219,6 +223,9 @@ pub fn report(
     // questions, and the document now answers both.
     let mut admin_token_only = 0;
     for (path, method) in merged.operations.keys() {
+        if merged.hidden.contains(&(path.clone(), *method)) {
+            continue;
+        }
         if !path.starts_with(AUTHENTICATED_PREFIX) {
             outside += 1;
             continue;
@@ -246,17 +253,20 @@ pub fn report(
     println!("      administrator token only {admin_token_only:>5}");
     println!("  sidecar fragments read: {sidecar_files}");
     println!("  routes with access notes: {access_note_routes}");
+    // The published counts, not the merged ones: a hidden operation is real and gated, but a reader
+    // comparing this report against the document would find it missing.
     println!(
         "  document: {} path(s), {} operation(s)",
-        distinct_paths(merged),
-        merged.operations.len()
+        distinct_published_paths(merged),
+        merged.operations.len() - merged.hidden.len()
     );
 }
 
-fn distinct_paths(merged: &Merged) -> usize {
+fn distinct_published_paths(merged: &Merged) -> usize {
     merged
         .operations
         .keys()
+        .filter(|(path, method)| !merged.hidden.contains(&(path.clone(), *method)))
         .map(|(path, _)| path.as_str())
         .collect::<BTreeSet<_>>()
         .len()

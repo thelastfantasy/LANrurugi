@@ -3,7 +3,7 @@ export const COPY = {
   zh: {
     "doc.description": "LANrurugi：以漫画为主、也能读 PDF / EPUB 等电子书的自托管阅读器与书库，以 LANraragi 为起点用 Rust + React 大幅改造与强化。AI 页面内翻译、AI 插件生成、智能推荐与单行本整理，现有 LANraragi 书库直接可用。",
     "hero.lead": "以漫画为主、同时支持 PDF、EPUB 等电子书的自托管书库。以 LANraragi 为起点，用 Rust + React 大幅改造与强化，现有的 LANraragi 书库可以直接使用。内置漫画页面翻译、相似作品推荐和 AI 插件生成。",
-    "footer.license": "MIT 许可",
+    "footer.license": "MIT 或 Apache 2.0 许可",
     "footer.credit1": "插图：",
     "footer.credit2": "的鲸鱼娘形象，",
     "footer.credit3": "；图片取自 ",
@@ -200,7 +200,7 @@ export const COPY = {
   en: {
     "doc.description": "LANrurugi: a self-hosted reader and library for manga first, and for e-books such as PDF and EPUB too, built on LANraragi and extensively reworked and extended in Rust + React — AI in-page translation, AI plugin generation, smart recommendations and tankoubon curation, with your existing LANraragi library working as-is.",
     "hero.lead": "A self-hosted library for manga first, and for e-books such as PDF and EPUB too. Built on LANraragi and extensively reworked and extended in Rust + React; your existing LANraragi library works as-is. It includes in-page manga translation, recommendations for similar works and AI plugin generation.",
-    "footer.license": "MIT License",
+    "footer.license": "MIT or Apache-2.0 License",
     "footer.credit1": "Illustration: whale girl by ",
     "footer.credit2": ", ",
     "footer.credit3": "; image from ",
@@ -397,7 +397,7 @@ export const COPY = {
   ja: {
     "doc.description": "LANrurugi：マンガを中心に、PDF や EPUB などの電子書籍も読めるセルフホスト型のビューア兼ライブラリ。LANraragi を出発点に Rust + React で大幅に改造・強化。AI ページ内翻訳、AI プラグイン生成、スマート推薦、単行本整理。既存の LANraragi ライブラリをそのまま使えます。",
     "hero.lead": "マンガを中心に、PDF や EPUB などの電子書籍も読めるセルフホスト型のライブラリです。LANraragi を出発点に Rust + React で大幅に改造・強化しており、既存の LANraragi ライブラリをそのまま使えます。マンガのページ内翻訳、似た作品の推薦、AI によるプラグイン生成を備えています。",
-    "footer.license": "MIT ライセンス",
+    "footer.license": "MIT または Apache 2.0 ライセンス",
     "footer.credit1": "イラスト：",
     "footer.credit2": "のクジラ娘、",
     "footer.credit3": "／画像：",

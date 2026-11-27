@@ -168,7 +168,6 @@ export function Plugins() {
               <div className="plugin-script-row">
                 <span>
                   <b>{t("plugins.subfoldersToCategories")}</b>
-                  <br />
                   {t("plugins.scanYourContentFolderAnd")}
                 </span>
                 <input
@@ -183,7 +182,6 @@ export function Plugins() {
               <div className="plugin-script-row">
                 <span>
                   <b>{t("plugins.subfoldersToTankoubons")}</b>
-                  <br />
                   {t("plugins.scanYourContentFolderToTankoubons")}
                 </span>
                 <input
@@ -198,7 +196,6 @@ export function Plugins() {
               <div className="plugin-script-row">
                 <span>
                   <b>{t("plugins.repairMojibakeNames")}</b>
-                  <br />
                   {t("plugins.repairMojibakeNamesDescription")}
                 </span>
                 <input
@@ -210,7 +207,7 @@ export function Plugins() {
                 />
               </div>
               {pendingRepair && (
-                <div style={{ padding: "4px 0" }}>
+                <div className="plugin-script-pending">
                   <div>{t("plugins.repairMojibakeFound", { count: pendingRepair.length })}</div>
                   {/* Examples, not the whole list: the log panel below already prints the complete
                       report, and this is only here so the confirmation isn't blind. */}

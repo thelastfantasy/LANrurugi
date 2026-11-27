@@ -25,8 +25,8 @@ use crate::host::{Host, ShareHost};
 use crate::manifest::browse_manifest;
 use crate::runtime::RatioState;
 use crate::runtime::{
-    blobs, direct_address, read_frame, wait_for_direct_address, write_frame, Session, Shared,
-    DIRECT_PATH_WAIT,
+    blobs, direct_address, read_frame, wait_for_direct_address, write_frame,
+    write_frame_with_extras, Session, Shared, DIRECT_PATH_WAIT,
 };
 use crate::shares::repo;
 use crate::util::{hex, now_secs};
@@ -146,7 +146,18 @@ impl ShareProtocol {
             Ok(answer) => answer,
             Err(reason) => (Response::Refused(reason), None),
         };
-        if write_frame(&mut send, &header).await.is_ok() {
+        // Metadata the message schemas do not name rides after it, where a build that has never
+        // heard of it will never look: an older peer imports exactly as it always did.
+        let extras = match &header {
+            Response::Opened { manifest, .. } | Response::Claimed { manifest, .. } => {
+                crate::manifest::manifest_extras(&self.host, manifest).await
+            }
+            _ => Vec::new(),
+        };
+        if write_frame_with_extras(&mut send, &header, &extras)
+            .await
+            .is_ok()
+        {
             if let Some(body) = body {
                 // Held while the bytes are on the wire, not just while they are encoded: a port
                 // rotation that tore the connection down here would cut a live transfer.

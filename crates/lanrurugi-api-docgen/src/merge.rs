@@ -52,6 +52,9 @@ pub struct Merged {
     /// byte-identical, or comparing a published artefact against a locally generated one is
     /// meaningless.
     pub operations: BTreeMap<(String, HttpMethod), MergedOperation>,
+    /// Operations a fragment marked `x-internal: true`: kept here (so the coverage and policy gates
+    /// still see them) but left out of the emitted document.
+    pub hidden: BTreeSet<(String, HttpMethod)>,
     pub schemas: Map<String, Value>,
     /// Only the tags an operation actually carries. Upstream declares tags for paths this server
     /// does not serve, and emitting those would render empty groups in the reference.
@@ -65,6 +68,9 @@ pub struct Merged {
 pub struct Coverage {
     pub routes_registered: usize,
     pub routes_described: usize,
+    /// Described, but deliberately not published. Not a backlog: these are the server's own
+    /// endpoints, whose callers are in this repository rather than in the API's audience.
+    pub routes_hidden: usize,
     pub by_source: BTreeMap<&'static str, usize>,
     /// Upstream paths this server does not register at all.
     pub upstream_only_paths: Vec<String>,
@@ -118,6 +124,9 @@ pub fn merge(
         };
 
         strip_upstream_key_marker(&mut operation);
+        if take_internal_marker(&mut operation)? {
+            merged.hidden.insert(key.clone());
+        }
         finish_operation(&mut operation, route, source, &mut merged.tags);
         assign_operation_id(&mut operation, route, &mut taken_operation_ids);
 
@@ -133,6 +142,7 @@ pub fn merge(
     let coverage = Coverage {
         routes_registered: routes.len(),
         routes_described: merged.operations.len(),
+        routes_hidden: merged.hidden.len(),
         by_source: {
             let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
             for op in merged.operations.values() {
@@ -169,6 +179,25 @@ fn default_tag(module: &str) -> String {
 ///
 /// Nothing here invents a schema. An endpoint whose request/response shapes are unknown says so,
 /// which is far more useful than a plausible guess.
+/// Read and remove a fragment's `x-internal: true`.
+///
+/// The marker is consumed rather than left on the operation so it cannot reach the document through
+/// some other path: `emit` consults `Merged::hidden`, and an operation that is published must not
+/// carry a field claiming it is not.
+fn take_internal_marker(operation: &mut Value) -> Result<bool> {
+    const MARKER: &str = "x-internal";
+    let Some(object) = operation.as_object_mut() else {
+        return Ok(false);
+    };
+    match object.remove(MARKER) {
+        Some(Value::Bool(true)) => Ok(true),
+        Some(Value::Bool(false)) | None => Ok(false),
+        // A typo here would silently publish an endpoint the author meant to keep internal, so it
+        // fails instead of guessing.
+        Some(other) => bail!("`{MARKER}` must be `true` or `false`, found `{other}`."),
+    }
+}
+
 /// Remove the upstream document's `🔑` marker from an operation's summary.
 ///
 /// The vendored LANraragi document prefixes "requires an API key" with a key emoji, because it had

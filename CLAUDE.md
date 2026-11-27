@@ -489,6 +489,28 @@ flow, a new API contract — still warrant the agent's own functional verificati
 endpoint or checking Redis state; this rule is specifically about *visual* polish, where "does this
 look right" is a judgment only the user watching their own screen can actually make.)
 
+## Never name a plugin in Rust — the plugin declares what it needs
+
+`crates/` must not branch on a plugin's namespace or name (`if plugin == "script/foldertocat"`,
+`info.namespace == "regexplugin"`). A plugin's identity lives in `plugins/`, not in the host: a
+hardcoded name means a third-party plugin cannot have the same capability and a renamed or
+reimplementation of that plugin silently loses it. Where the host has to do work *for* a plugin —
+compute an argument it cannot reach from the sandbox, apply a result it cannot write itself, run it
+ahead of its siblings — the plugin asks for that in `pluginInfo()`:
+
+| field | meaning |
+|---|---|
+| `host_arguments` | names of host-computed arguments to put in `args` (`other_archive_tags`, `archives`, `library_path`, `archive_id_by_path`) |
+| `host_results` | parts of its result the host writes back (`tag_updates`, `category_changes`) |
+| `run_order` | position in an auto-run chain, highest first — **not** the user-draggable `priority` the Plugins page stores in Redis |
+
+Anything undeclared costs nothing (a whole-library tag scan is not free, so it only happens when
+asked for). An unknown name in either list is `warn`-logged and skipped, never fatal. Adding a new
+host argument or effect means extending `host_argument`/`apply_host_results` in
+`crates/lanrurugi-api/src/plugins.rs` **and** the SDK's JSDoc, then bumping `SDK_VERSION` in
+`crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts` (minor for an optional addition) and running
+`mise run docs-sdk`.
+
 ## Custom colors must be theme-aware, never a hardcoded value
 
 Any new UI element that needs its own color (a highlight, a status background, an accent —

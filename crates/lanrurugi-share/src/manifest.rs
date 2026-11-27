@@ -30,6 +30,39 @@ pub fn archive_entry(a: &ShareArchive) -> ArchiveEntry {
     }
 }
 
+/// The unnamed fields of every archive in `manifest`, the trailer a frame carries beside it.
+pub async fn manifest_extras(
+    host: &dyn ShareHost,
+    manifest: &ShareManifest,
+) -> Vec<lanrurugi_share_proto::extras::ArchiveExtras> {
+    let mut extras = Vec::new();
+    for entry in manifest.archives() {
+        let Some(archive) = host
+            .archive(&lanrurugi_core::ids::ArchiveId(entry.archive_id.clone()))
+            .await
+        else {
+            continue;
+        };
+        let fields: Vec<(String, String)> = archive
+            .primary_source
+            .filter(|source| !source.trim().is_empty())
+            .map(|source| {
+                vec![(
+                    lanrurugi_share_proto::extras::EXTRA_PRIMARY_SOURCE.to_string(),
+                    source,
+                )]
+            })
+            .unwrap_or_default();
+        if !fields.is_empty() {
+            extras.push(lanrurugi_share_proto::extras::ArchiveExtras {
+                archive_id: entry.archive_id.clone(),
+                fields,
+            });
+        }
+    }
+    extras
+}
+
 /// The share's items as they are now in the library (browse form: no fingerprints). Tankoubons
 /// list their current members in order; deleted items become `Unavailable` (US2-4).
 pub async fn browse_manifest(host: &dyn ShareHost, share: &Share) -> ShareManifest {
@@ -201,6 +234,7 @@ mod tests {
             pagecount: 24,
             arcsize: 1234,
             toc: vec![],
+            primary_source: None,
         }
     }
 
@@ -242,6 +276,32 @@ mod tests {
             created_at: 1,
             created_by: "tester".to_string(),
         }
+    }
+
+    /// The trailer that rides beside the manifest: one entry per archive that has an unnamed field,
+    /// keyed by the sharer's archive id.
+    #[tokio::test]
+    async fn the_trailer_carries_each_archives_primary_source() {
+        let mut with_source = archive("A", "Alpha", "Alpha", "/library/5f/A.cbz");
+        with_source.primary_source = Some("nhentai.net/g/1".to_string());
+        let host = StubHost {
+            archives: vec![with_source, archive("B", "  ", "Beta", "/library/9c/B.zip")],
+            tankoubon: None,
+            inner: EmptyHost,
+        };
+
+        let manifest = browse_manifest(&host, &share()).await;
+        let extras = manifest_extras(&host, &manifest).await;
+        assert_eq!(
+            extras,
+            vec![lanrurugi_share_proto::extras::ArchiveExtras {
+                archive_id: "A".to_string(),
+                fields: vec![(
+                    lanrurugi_share_proto::extras::EXTRA_PRIMARY_SOURCE.to_string(),
+                    "nhentai.net/g/1".to_string(),
+                )],
+            }]
+        );
     }
 
     /// Snapshot of the browse manifest: titles, tags, sizes, the filename, and how a tankoubon's

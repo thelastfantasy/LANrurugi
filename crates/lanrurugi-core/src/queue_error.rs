@@ -30,6 +30,27 @@ pub enum PluginErrorValue {
     Number(f64),
 }
 
+/// Where a plugin says its reported error is fixed (`plugin-sdk.ts`'s `PluginError.settings`):
+/// its own parameters, or those of the login plugin its `login_from` names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginSettingsTarget {
+    #[serde(rename = "self")]
+    Own,
+    Login,
+}
+
+impl PluginSettingsTarget {
+    /// The wire value, or `None` for anything else so an unknown hint never fails the error itself.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "self" => Some(Self::Own),
+            "login" => Some(Self::Login),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DuplicateReasonKind {
@@ -48,6 +69,9 @@ pub enum QueueError {
         plugin: String,
         error_code: String,
         data: HashMap<String, PluginErrorValue>,
+        /// The plugin's own hint that this failure is fixed in plugin settings, and whose.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        settings: Option<PluginSettingsTarget>,
     },
     /// The plugin process/IPC call itself failed (crash, timeout, malformed request on this
     /// host's side) rather than the plugin reporting its own error.
@@ -320,6 +344,7 @@ mod tests {
                 plugin: "x".into(),
                 error_code: "y".into(),
                 data: HashMap::new(),
+                settings: None,
             }
             .code(),
             1000

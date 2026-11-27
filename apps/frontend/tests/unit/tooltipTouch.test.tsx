@@ -70,4 +70,27 @@ describe("Tooltip on a touch screen", () => {
     fireEvent.mouseOver(link)
     expect(screen.getByText("preview tags")).toBeInTheDocument()
   })
+
+  it("opens on a plain tap when the trigger has no action of its own", () => {
+    render(
+      <Tooltip label={<span>help text</span>}>
+        <i data-testid="help-icon" style={{ cursor: "help" }} />
+      </Tooltip>,
+    )
+    const icon = screen.getByTestId("help-icon")
+
+    touchPointer(icon, "pointerDown")
+    expect(screen.getByText("help text")).toBeInTheDocument()
+  })
+
+  it("keeps the long press for a trigger that only shows a pointer cursor", () => {
+    render(
+      <Tooltip label={<span>row details</span>}>
+        <span data-testid="clickable" style={{ cursor: "pointer" }} onClick={vi.fn()} />
+      </Tooltip>,
+    )
+
+    touchPointer(screen.getByTestId("clickable"), "pointerDown")
+    expect(screen.queryByText("row details")).not.toBeInTheDocument()
+  })
 })

@@ -35,7 +35,7 @@ export async function execLogin(hostArgs: { customargs: string[] }) {
     logger.info("No API Key provided");
     return {};
   }
-  logger.info(`API Key provided (${key})!`);
+  logger.info("API Key provided");
   // Header-based auth — a returned `ua` object's `on("start", ...)` closure doesn't survive
   // JSON.stringify, so this must go through LoginResult.headers instead.
   return { headers: { Authorization: `Key ${key}` } };

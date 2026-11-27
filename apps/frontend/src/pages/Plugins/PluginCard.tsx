@@ -27,38 +27,56 @@ export function PluginCard({
   const [scriptArg, setScriptArg] = useState("")
   const [scriptRunning, setScriptRunning] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  // Deep-link target from /config/plugins?focus=<namespace> (upload queue's rate-limit tooltip) —
-  // when this card is focused and its rate-limit section has rendered, scroll + flash it.
+  // Deep-link target from /config/plugins?focus=<namespace> (the upload queue's rate-limit tooltip,
+  // a failed row's "open plugin settings" link): open this card's plugin-type group and its
+  // settings panel, then scroll to the download options if it has them, else to the card.
   const [searchParams] = useSearchParams()
-  const focusNamespace = searchParams.get("focus")
+  const focused = searchParams.get("focus") === plugin.namespace
   const didFocusRef = useRef(false)
+  // The group title is a toggle: StrictMode runs the effect twice before the first click re-renders,
+  // so a second click would close the group again.
+  const groupOpenedRef = useRef(false)
+  const cardRef = useRef<HTMLDivElement>(null)
 
   const options = usePluginOptions(plugin.type === "download" ? plugin.namespace : "")
   const hasDownloadOptions = plugin.type === "download" && Boolean(options.data)
   const hasParameters = plugin.parameters.length > 0
-
-  // The deep-link target now lives inside the collapsed settings panel, so open it before trying
-  // to scroll — otherwise the element doesn't exist and the flash silently no-ops.
-  useEffect(() => {
-    if (focusNamespace === plugin.namespace && hasDownloadOptions && !didFocusRef.current) {
-      setSettingsOpen(true)
-    }
-  }, [focusNamespace, plugin.namespace, hasDownloadOptions])
+  // A download plugin's options arrive separately; scrolling before they do would land on the card.
+  const optionsSettled = plugin.type !== "download" || !options.isPending
 
   useEffect(() => {
-    if (!focusNamespace || focusNamespace !== plugin.namespace || !hasDownloadOptions || didFocusRef.current) return
-    const el = document.querySelector(`[data-download-settings-namespace="${CSS.escape(plugin.namespace)}"]`)
-    if (!el) return
+    if (focused && (hasDownloadOptions || hasParameters) && !didFocusRef.current) setSettingsOpen(true)
+  }, [focused, hasDownloadOptions, hasParameters])
+
+  useEffect(() => {
+    const card = cardRef.current
+    if (!focused || !optionsSettled || !card || didFocusRef.current) return
     didFocusRef.current = true
-    el.scrollIntoView({ block: "center", behavior: "smooth" })
-    const htmlEl = el as HTMLElement
-    htmlEl.style.backgroundColor = "rgba(230, 126, 34, 0.18)"
-    const timer = window.setTimeout(() => {
-      htmlEl.style.backgroundColor = ""
-    }, 2500)
-    return () => window.clearTimeout(timer)
-    // `settingsOpen` is a real dependency: the target only exists once the panel above has opened.
-  }, [focusNamespace, plugin.namespace, hasDownloadOptions, settingsOpen])
+    const groupTitle = card.parentElement?.closest("[data-section-id]")?.querySelector<HTMLElement>(":scope > .collapsible-title")
+    if (groupTitle && !groupOpenedRef.current && !groupTitle.classList.contains("active")) groupTitle.click()
+    groupOpenedRef.current = true
+    let flashTimer = 0
+    let scrolled = false
+    // One frame for the group to stop being `display: none`, or there is nothing to scroll to.
+    const frame = window.requestAnimationFrame(() => {
+      scrolled = true
+      const el =
+        card.querySelector<HTMLElement>(`[data-download-settings-namespace="${CSS.escape(plugin.namespace)}"]`) ?? card
+      el.scrollIntoView({ block: "center", behavior: "smooth" })
+      el.style.backgroundColor = "rgba(230, 126, 34, 0.18)"
+      flashTimer = window.setTimeout(() => {
+        el.style.backgroundColor = ""
+      }, 2500)
+    })
+    return () => {
+      // Torn down before the frame ran (StrictMode's double effect): let the next run try again.
+      if (!scrolled) {
+        window.cancelAnimationFrame(frame)
+        didFocusRef.current = false
+      }
+      window.clearTimeout(flashTimer)
+    }
+  }, [focused, optionsSettled, plugin.namespace])
 
   const settings = usePluginSettings(plugin.type === "metadata" ? plugin.namespace : "")
   const updateSettings = useUpdatePluginSettings(plugin.namespace)
@@ -78,6 +96,7 @@ export function PluginCard({
 
   return (
     <div
+      ref={cardRef}
       style={{
         display: "flex",
         alignItems: "stretch",

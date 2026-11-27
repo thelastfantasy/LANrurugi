@@ -2240,6 +2240,7 @@ mod tests {
             error: Some(lanrurugi_plugin::protocol::PluginError {
                 error_code: "source unreachable".into(),
                 data: None,
+                settings: None,
             }),
             ..Default::default()
         };

@@ -203,7 +203,9 @@ export function ChapterActionMenu({
 }: {
   mode: "edit" | "delete"
   anchor: DOMRect
-  chapters: { page: number; name: string }[]
+  /** `synthetic` marks a Tankoubon member's first page, i.e. the top level; everything else is a
+   *  real ToC entry inside one of them and is drawn indented under it. */
+  chapters: { page: number; name: string; synthetic?: boolean }[]
   zIndexBase?: number
   onPick: (entry: { page: number; name: string }) => void
   onClose: () => void
@@ -245,17 +247,22 @@ export function ChapterActionMenu({
         style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: zIndexBase + 1, maxHeight: 260, overflowY: "auto" }}
         mainLabel={{ icon, text: label }}
       >
-        {chapters.map((entry) => {
+        {chapters.map((entry, index) => {
           const isPreset = mode === "edit" && isReservedTocIdentifier(entry.name)
+          // A Tankoubon's list is volumes (synthetic starts) plus the chapters inside each volume;
+          // indenting the latter is what makes the nesting visible. A plain archive has no synthetic
+          // entries at all, and there is nothing to nest under, so it stays flush.
+          const nested = !entry.synthetic && chapters.some((c) => c.synthetic)
           return (
             <PopupMenuItem
-              key={entry.page}
+              key={`${entry.page}-${index}`}
               disabled={isPreset}
               onClick={(e) => {
                 e.stopPropagation()
                 onPick(entry)
                 onClose()
               }}
+              style={nested ? { paddingLeft: 34 } : undefined}
             >
               <i className={`fas ${icon}`} style={{ width: 18 }}></i> {displayTocName(entry.name, t)}
             </PopupMenuItem>

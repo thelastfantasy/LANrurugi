@@ -644,6 +644,11 @@ wasm is bundled rather than fetched from a CDN).
 - The engine travels in its own length-prefixed part of every frame, before the message, so a peer
   whose message shapes this build cannot decode still gets a clean `unsupported_version` refusal
   instead of a broken stream. The importer checks the responder's engine on every answer as well.
+- Additive metadata rides a **trailer** after the message (`lanrurugi_share_proto::extras`):
+  `primary_source` travels there, and `postcard::from_bytes` ignores trailing bytes, so a build that
+  predates the trailer imports exactly as it always did. No `protocol` bump, which is why an older
+  peer is not refused. A name this build does not know is written into the sidecar's `extras` map
+  rather than dropped, so an upgrade starts using it without re-importing.
 - The refusal's `detail` names both engines ("the other side's sharing engine is v2 (iroh 1.4.0);
   this instance is v3 (iroh 1.4.1)"); the settings page shows this instance's engine, and
   `crates/lanrurugi-share-proto/tests/version.rs` fails if the transport string drifts from the

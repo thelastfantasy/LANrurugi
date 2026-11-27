@@ -4,6 +4,34 @@ pub mod permissions;
 pub mod pool;
 pub mod protocol;
 
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+/// Where the library lives, set once at startup (`lanrurugi-server`'s serve path) so a plugin's
+/// write grant can be scoped to the by-name tree instead of the whole filesystem. Absent in tools
+/// and tests that never spawn a plugin: a plugin then simply gets no write grant.
+static LIBRARY_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_library_dir(dir: impl Into<PathBuf>) {
+    let _ = LIBRARY_DIR.set(dir.into());
+}
+
+pub fn library_dir() -> Option<&'static Path> {
+    LIBRARY_DIR.get().map(PathBuf::as_path)
+}
+
+/// The instance's temp directory, registered alongside the library: a converted plugin that writes
+/// a scratch file (a downloaded page on its way into a zip) belongs there, not in the library.
+static SCRATCH_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_scratch_dir(dir: impl Into<PathBuf>) {
+    let _ = SCRATCH_DIR.set(dir.into());
+}
+
+pub fn scratch_dir() -> Option<&'static Path> {
+    SCRATCH_DIR.get().map(PathBuf::as_path)
+}
+
 /// Embedded at compile time so the dispatcher script travels with the binary (no separate file to
 /// ship/locate at runtime) — written out to a real file on disk at startup since Deno needs an
 /// actual path to `run`, not stdin (stdin is reserved for the request/response protocol itself).
