@@ -7,8 +7,9 @@ license.workspace = true
 [dependencies]
 lanrurugi-storage = { workspace = true }
 lanrurugi-core = { workspace = true }
-lanrurugi-scanner = { workspace = true }
-lanrurugi-plugin = { workspace = true }
+# Only the criterion benches (`--features bench`) use these two.
+lanrurugi-scanner = { workspace = true, optional = true }
+lanrurugi-plugin = { workspace = true, optional = true }
 rayon = { workspace = true }
 image = { workspace = true }
 zip = { workspace = true }
@@ -36,7 +37,7 @@ time = { version = "0.3", features = ["formatting"] }
 criterion = { workspace = true, features = ["async_tokio"], optional = true }
 
 [features]
-bench = ["dep:criterion"]
+bench = ["dep:criterion", "dep:lanrurugi-scanner", "dep:lanrurugi-plugin"]
 
 [dev-dependencies]
 tempfile = "3"

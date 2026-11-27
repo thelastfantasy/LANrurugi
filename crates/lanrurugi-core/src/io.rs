@@ -355,10 +355,10 @@ mod readback {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     pub fn open(path: &Path) -> Result<Box<dyn ReadBack>, &'static str> {
         use std::os::unix::fs::OpenOptionsExt;
-        if let Some(dir) = path.parent() {
-            if is_zfs(dir) {
-                return Err("ZFS cannot bypass the ARC");
-            }
+        if let Some(dir) = path.parent()
+            && is_zfs(dir)
+        {
+            return Err("ZFS cannot bypass the ARC");
         }
         let file = std::fs::OpenOptions::new()
             .read(true)

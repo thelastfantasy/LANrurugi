@@ -50,10 +50,10 @@ pub fn load_from_memory(bytes: &[u8]) -> image::ImageResult<DynamicImage> {
 /// thumbnail then holds ~1.3 MB of pixels instead of the ~86 MB a full decode does (#330). Any
 /// other format, a CMYK JPEG, or a JPEG this decoder refuses takes the full-size path.
 pub fn load_for_height(bytes: &[u8], min_height: u32) -> image::ImageResult<DynamicImage> {
-    if is_jpeg(bytes) {
-        if let Some(image) = decode_jpeg_scaled(bytes, min_height) {
-            return Ok(image);
-        }
+    if is_jpeg(bytes)
+        && let Some(image) = decode_jpeg_scaled(bytes, min_height)
+    {
+        return Ok(image);
     }
     load_from_memory(bytes)
 }
@@ -66,10 +66,11 @@ pub fn load_for_height(bytes: &[u8], min_height: u32) -> image::ImageResult<Dyna
 /// [`load_for_height`] already applies to thumbnails, applied to the page path. Any other format,
 /// a CMYK JPEG, or one this decoder refuses takes the full-size path.
 pub fn load_for_min_edge(bytes: &[u8], min_edge: u32) -> image::ImageResult<DynamicImage> {
-    if is_jpeg(bytes) && min_edge > 0 {
-        if let Some(image) = decode_jpeg_covering(bytes, min_edge) {
-            return Ok(image);
-        }
+    if is_jpeg(bytes)
+        && min_edge > 0
+        && let Some(image) = decode_jpeg_covering(bytes, min_edge)
+    {
+        return Ok(image);
     }
     load_from_memory(bytes)
 }

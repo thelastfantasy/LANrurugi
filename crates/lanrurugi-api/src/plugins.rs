@@ -126,11 +126,11 @@ pub(crate) async fn get_plugin_customargs(
         .hget(plugin_settings_key(namespace), "customargs")
         .await
         .unwrap_or_default();
-    if let Some(raw) = raw {
-        if let Ok(saved) = serde_json::from_str::<Vec<Value>>(&raw) {
-            for ((slot, param), value) in args.iter_mut().zip(parameters).zip(saved) {
-                *slot = coerce_customarg(param.param_type.as_deref(), value);
-            }
+    if let Some(raw) = raw
+        && let Ok(saved) = serde_json::from_str::<Vec<Value>>(&raw)
+    {
+        for ((slot, param), value) in args.iter_mut().zip(parameters).zip(saved) {
+            *slot = coerce_customarg(param.param_type.as_deref(), value);
         }
     }
     args
@@ -347,14 +347,13 @@ fn login_cache_put(key: String, value: Value) {
         // Bounded: entries are keyed by one login plugin's configured values, and a stale entry is
         // dropped the moment it is looked up again, so growth needs a plugin whose configuration
         // keeps changing mid-run — at which point dropping the oldest is the right answer anyway.
-        if cache.len() > 64 {
-            if let Some(oldest) = cache
+        if cache.len() > 64
+            && let Some(oldest) = cache
                 .iter()
                 .min_by_key(|(_, (at, _))| *at)
                 .map(|(k, _)| k.clone())
-            {
-                cache.remove(&oldest);
-            }
+        {
+            cache.remove(&oldest);
         }
         cache.insert(key, (std::time::Instant::now(), value));
     }
@@ -998,14 +997,14 @@ async fn put_plugin_options(
         );
     };
 
-    if let Some(rules) = &body.domain_rules {
-        if let Err((message, field)) = validate_domain_rules(rules) {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                axum::Json(json!({ "error": message, "field": field })),
-            )
-                .into_response();
-        }
+    if let Some(rules) = &body.domain_rules
+        && let Err((message, field)) = validate_domain_rules(rules)
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            axum::Json(json!({ "error": message, "field": field })),
+        )
+            .into_response();
     }
 
     // Partial update (contract: "a field omitted from the request body is left at its current
@@ -1106,10 +1105,10 @@ pub(crate) async fn resolve_declared_namespace(
     let all = discover_namespaces(&state.plugins_dir).await;
     let ordered = sort_namespaces_by_priority(state, &all).await;
     for ns in &ordered {
-        if let Ok(info) = state.plugins.plugin_info(ns).await {
-            if info.namespace == declared_namespace {
-                return Some((ns.clone(), info));
-            }
+        if let Ok(info) = state.plugins.plugin_info(ns).await
+            && info.namespace == declared_namespace
+        {
+            return Some((ns.clone(), info));
         }
     }
     None
@@ -1330,53 +1329,53 @@ async fn list_plugins(State(state): State<AppState>, Path(kind): Path<String>) -
 
     let mut plugins = Vec::new();
     for ns in namespaces {
-        if let Ok(info) = state.plugins.plugin_info(&ns).await {
-            if kind == "all" || info.kind == kind {
-                let counter = per_type_counter.entry(info.kind.clone()).or_insert(0);
-                discovery_index.insert(ns.clone(), *counter);
-                *counter += 1;
+        if let Ok(info) = state.plugins.plugin_info(&ns).await
+            && (kind == "all" || info.kind == kind)
+        {
+            let counter = per_type_counter.entry(info.kind.clone()).or_insert(0);
+            discovery_index.insert(ns.clone(), *counter);
+            *counter += 1;
 
-                let priority = get_plugin_priority(&state, &ns).await;
-                plugins.push(json!({
-                    // The file-discovery-path namespace (`ns`, e.g. `download/pixiv`) — not the
-                    // plugin's own self-declared `info.namespace` (e.g. `pixivdl`, legacy's
-                    // `plugin_info()` `namespace` field). Every other endpoint that takes a
-                    // `namespace`/`plugin` parameter (`/plugins/use`, `/plugins/options`,
-                    // `/plugins/settings`) resolves it straight through `discover_namespaces`'s
-                    // own path-based scheme (`PluginPool::plugin_info`/`execute` join it onto
-                    // `plugins_dir` as `{namespace}.ts`), so returning the *declared* value here
-                    // instead would silently 404 every one of those calls — a real, previously
-                    // shipped bug this fixes, not a hypothetical one (confirmed via a live
-                    // container: `POST /plugins/use?plugin=pixivdl` 404s, `plugin=download/pixiv`
-                    // works). Unlike legacy (one flat plugin directory, so the two values were
-                    // always identical there), this rewrite's category subfolders/`custom/` tree
-                    // make them genuinely different strings.
-                    "namespace": ns,
-                    // What another plugin's `login_from` names this one by.
-                    "declared_namespace": info.namespace,
-                    "type": info.kind,
-                    "name": info.name,
-                    "author": info.author,
-                    "description": info.description,
-                    "version": info.version,
-                    "icon": info.icon,
-                    "oneshot_arg": info.oneshot_arg,
-                    // The plugin's own self-declared login_from value (e.g. "ehlogin") — display
-                    // only here (legacy's "This plugin depends on the login plugin ..." note,
-                    // `plugins.html.tt2` line 143-145); the real call-time resolution to a
-                    // file-path namespace happens in `resolve_declared_namespace`, not here.
-                    "login_from": info.login_from,
-                    "url_pattern": info.url_pattern,
-                    "domain_match": info.domain_match,
-                    "generated_by_wizard": info.generated_by_wizard,
-                    "priority": priority,
-                    "parameters": info.parameters.iter().map(|p| json!({
-                        "name": p.name,
-                        "desc": p.description,
-                        "type": p.param_type,
-                    })).collect::<Vec<_>>(),
-                }));
-            }
+            let priority = get_plugin_priority(&state, &ns).await;
+            plugins.push(json!({
+                // The file-discovery-path namespace (`ns`, e.g. `download/pixiv`) — not the
+                // plugin's own self-declared `info.namespace` (e.g. `pixivdl`, legacy's
+                // `plugin_info()` `namespace` field). Every other endpoint that takes a
+                // `namespace`/`plugin` parameter (`/plugins/use`, `/plugins/options`,
+                // `/plugins/settings`) resolves it straight through `discover_namespaces`'s
+                // own path-based scheme (`PluginPool::plugin_info`/`execute` join it onto
+                // `plugins_dir` as `{namespace}.ts`), so returning the *declared* value here
+                // instead would silently 404 every one of those calls — a real, previously
+                // shipped bug this fixes, not a hypothetical one (confirmed via a live
+                // container: `POST /plugins/use?plugin=pixivdl` 404s, `plugin=download/pixiv`
+                // works). Unlike legacy (one flat plugin directory, so the two values were
+                // always identical there), this rewrite's category subfolders/`custom/` tree
+                // make them genuinely different strings.
+                "namespace": ns,
+                // What another plugin's `login_from` names this one by.
+                "declared_namespace": info.namespace,
+                "type": info.kind,
+                "name": info.name,
+                "author": info.author,
+                "description": info.description,
+                "version": info.version,
+                "icon": info.icon,
+                "oneshot_arg": info.oneshot_arg,
+                // The plugin's own self-declared login_from value (e.g. "ehlogin") — display
+                // only here (legacy's "This plugin depends on the login plugin ..." note,
+                // `plugins.html.tt2` line 143-145); the real call-time resolution to a
+                // file-path namespace happens in `resolve_declared_namespace`, not here.
+                "login_from": info.login_from,
+                "url_pattern": info.url_pattern,
+                "domain_match": info.domain_match,
+                "generated_by_wizard": info.generated_by_wizard,
+                "priority": priority,
+                "parameters": info.parameters.iter().map(|p| json!({
+                    "name": p.name,
+                    "desc": p.description,
+                    "type": p.param_type,
+                })).collect::<Vec<_>>(),
+            }));
         }
     }
 
@@ -1627,11 +1626,11 @@ async fn script_tag_updates(state: &AppState, data: &Value) {
 /// implementations produce identical results, differing only in how the directory walk itself was
 /// performed.
 async fn foldertocat_categories(state: &AppState, data: &Value) {
-    if data.get("delete_old_categories").and_then(Value::as_bool) == Some(true) {
-        if let Ok(categories) = state.repos.categories.list_all().await {
-            for category in categories.iter().filter(|c| c.search.is_none()) {
-                let _ = state.repos.categories.delete(&category.catid).await;
-            }
+    if data.get("delete_old_categories").and_then(Value::as_bool) == Some(true)
+        && let Ok(categories) = state.repos.categories.list_all().await
+    {
+        for category in categories.iter().filter(|c| c.search.is_none()) {
+            let _ = state.repos.categories.delete(&category.catid).await;
         }
     }
 
@@ -2322,11 +2321,11 @@ async fn download_url(
     let namespaces = discover_namespaces(&state.plugins_dir).await;
     let mut download_plugin = None;
     for ns in namespaces {
-        if let Ok(info) = state.plugins.plugin_info(&ns).await {
-            if info.kind == "download" {
-                download_plugin = Some((ns, info));
-                break;
-            }
+        if let Ok(info) = state.plugins.plugin_info(&ns).await
+            && info.kind == "download"
+        {
+            download_plugin = Some((ns, info));
+            break;
         }
     }
 
@@ -2633,8 +2632,8 @@ pub(crate) async fn start_download(
             // it unconditionally would flicker every download through `Waiting` for no reason (most
             // plugins declare no rule at all, and an uncontended one has a free slot).
             let negotiation_waits = negotiation_manager.is_job_saturated(job_capacity).await;
-            if negotiation_waits {
-                if let Some((repo, item_id)) = &queue_link {
+            if negotiation_waits
+                && let Some((repo, item_id)) = &queue_link {
                     update_queue_item_state(
                         repo,
                         state_for_task.download_queue_tx.as_ref(),
@@ -2646,7 +2645,6 @@ pub(crate) async fn start_download(
                     )
                     .await;
                 }
-            }
             let args = json!({ "url": url, "category": category, "customargs": customargs });
             let args = with_login_cookies(&state_for_task, &info, args).await;
             // Diagnostic only: this call covers the whole `Starting` phase (the plugin's own
@@ -2694,8 +2692,8 @@ pub(crate) async fn start_download(
                     &job_id_for_task,
                     lanrurugi_core::jobs::PHASE_NEGOTIATE,
                 );
-                if negotiation_waits {
-                    if let Some((repo, item_id)) = &queue_link {
+                if negotiation_waits
+                    && let Some((repo, item_id)) = &queue_link {
                         update_queue_item_state(
                             repo,
                             state_for_task.download_queue_tx.as_ref(),
@@ -2707,7 +2705,6 @@ pub(crate) async fn start_download(
                         )
                         .await;
                     }
-                }
                 plugins
                     .execute(&plugin_namespace_for_task, "exec_download", args)
                     .await
@@ -2818,8 +2815,8 @@ pub(crate) async fn start_download(
                 // Recorded on the queue item before anything else uses it: whichever path ends up
                 // cataloguing this download (here, or a filename-conflict resolution minutes later)
                 // then stores the chain onto the archive without re-asking the site for it.
-                if let Some((repo, item_id)) = &queue_link {
-                    if let Ok(Some(mut item)) = repo.get(item_id).await {
+                if let Some((repo, item_id)) = &queue_link
+                    && let Ok(Some(mut item)) = repo.get(item_id).await {
                         item.version_history = Some(
                             history
                                 .iter()
@@ -2830,7 +2827,6 @@ pub(crate) async fn start_download(
                             tracing::warn!(item_id, error = %e, "could not record the revision chain on the queue item");
                         }
                     }
-                }
                 use crate::download_manager::version_history::RevisionRelation;
                 let relation = classify_revision(
                     &state_for_task,
@@ -3352,15 +3348,15 @@ fn queue_error_from_pool_error(
 ) -> lanrurugi_core::queue_error::QueueError {
     use lanrurugi_core::queue_error::QueueError;
     tracing::warn!(plugin, error = %e, "plugin execution failed");
-    if let lanrurugi_plugin::pool::PoolError::PluginError(err) = e {
-        if let Some(error_code) = &err.error_code {
-            return QueueError::PluginReported {
-                plugin: plugin.to_string(),
-                error_code: error_code.clone(),
-                data: err.data.clone().unwrap_or_default(),
-                settings: err.settings,
-            };
-        }
+    if let lanrurugi_plugin::pool::PoolError::PluginError(err) = e
+        && let Some(error_code) = &err.error_code
+    {
+        return QueueError::PluginReported {
+            plugin: plugin.to_string(),
+            error_code: error_code.clone(),
+            data: err.data.clone().unwrap_or_default(),
+            settings: err.settings,
+        };
     }
     QueueError::PluginExecutionFailed {
         plugin: plugin.to_string(),
@@ -3628,14 +3624,12 @@ pub(crate) async fn find_matching_plugin(
 ) -> Option<(String, lanrurugi_plugin::protocol::PluginInfo)> {
     let ordered = sort_namespaces_by_priority(state, namespaces).await;
     for ns in &ordered {
-        if let Ok(info) = state.plugins.plugin_info(ns).await {
-            if let Some(ref pattern) = info.url_pattern {
-                if let Ok(re) = regex::Regex::new(pattern) {
-                    if re.is_match(url) {
-                        return Some((ns.clone(), info));
-                    }
-                }
-            }
+        if let Ok(info) = state.plugins.plugin_info(ns).await
+            && let Some(ref pattern) = info.url_pattern
+            && let Ok(re) = regex::Regex::new(pattern)
+            && re.is_match(url)
+        {
+            return Some((ns.clone(), info));
         }
     }
     None
@@ -3704,10 +3698,10 @@ pub(crate) async fn pick_redownload_source(
         .primary_source
         .as_deref()
         .and_then(|p| sources.iter().find(|u| trim_url(u) == p));
-    if let Some(url) = primary {
-        if let Some((ns, _)) = find_matching_plugin(state, &namespaces, url).await {
-            return Some((url.clone(), ns));
-        }
+    if let Some(url) = primary
+        && let Some((ns, _)) = find_matching_plugin(state, &namespaces, url).await
+    {
+        return Some((url.clone(), ns));
     }
     for ns in namespaces {
         let Ok(info) = state.plugins.plugin_info(&ns).await else {
@@ -3735,10 +3729,10 @@ async fn download_namespaces(state: &AppState) -> Vec<String> {
 async fn namespaces_of_kind(state: &AppState, kind: &str) -> Vec<String> {
     let mut out = Vec::new();
     for ns in discover_namespaces(&state.plugins_dir).await {
-        if let Ok(info) = state.plugins.plugin_info(&ns).await {
-            if info.kind == kind {
-                out.push(ns);
-            }
+        if let Ok(info) = state.plugins.plugin_info(&ns).await
+            && info.kind == kind
+        {
+            out.push(ns);
         }
     }
     out
@@ -3820,10 +3814,10 @@ pub(crate) async fn find_plugin_by_domain(
 ) -> Option<(String, lanrurugi_plugin::protocol::PluginInfo)> {
     let ordered = sort_namespaces_by_priority(state, namespaces).await;
     for ns in &ordered {
-        if let Ok(info) = state.plugins.plugin_info(ns).await {
-            if domain_covers(&info, domain) {
-                return Some((ns.clone(), info));
-            }
+        if let Ok(info) = state.plugins.plugin_info(ns).await
+            && domain_covers(&info, domain)
+        {
+            return Some((ns.clone(), info));
         }
     }
     None
@@ -3855,27 +3849,27 @@ pub(crate) async fn ensure_metadata_cached(
         .unwrap_or(0);
 
     // Cache hit — still within the 10-min window.
-    if let Some(at) = item.metadata_preview_at {
-        if now - at < METADATA_CACHE_TTL_MS {
-            crate::resources::note_metadata_cache(true);
-            // Still owes the archive its tags: this preview may have been fetched at start time,
-            // before there was an archive, and the caller is the one that now supplies
-            // `archive_ids`.
-            if item.auto_fetch_metadata {
-                if let (Some(tags), Some(archive_ids)) = (
-                    item.metadata_preview
-                        .as_ref()
-                        .and_then(|p| p.get("tags"))
-                        .and_then(|v| v.as_str()),
-                    item.archive_ids.as_ref(),
-                ) {
-                    for aid in archive_ids {
-                        apply_metadata_tags(state, aid, tags).await;
-                    }
-                }
+    if let Some(at) = item.metadata_preview_at
+        && now - at < METADATA_CACHE_TTL_MS
+    {
+        crate::resources::note_metadata_cache(true);
+        // Still owes the archive its tags: this preview may have been fetched at start time,
+        // before there was an archive, and the caller is the one that now supplies
+        // `archive_ids`.
+        if item.auto_fetch_metadata
+            && let (Some(tags), Some(archive_ids)) = (
+                item.metadata_preview
+                    .as_ref()
+                    .and_then(|p| p.get("tags"))
+                    .and_then(|v| v.as_str()),
+                item.archive_ids.as_ref(),
+            )
+        {
+            for aid in archive_ids {
+                apply_metadata_tags(state, aid, tags).await;
             }
-            return item.metadata_preview.clone();
         }
+        return item.metadata_preview.clone();
     }
 
     // No cache or expired — find a metadata plugin and call it.
@@ -3883,10 +3877,10 @@ pub(crate) async fn ensure_metadata_cached(
     let namespaces = discover_namespaces(&state.plugins_dir).await;
     let mut metadata_ns = Vec::new();
     for ns in &namespaces {
-        if let Ok(info) = state.plugins.plugin_info(ns).await {
-            if info.kind == "metadata" {
-                metadata_ns.push(ns.clone());
-            }
+        if let Ok(info) = state.plugins.plugin_info(ns).await
+            && info.kind == "metadata"
+        {
+            metadata_ns.push(ns.clone());
         }
     }
 
@@ -3971,13 +3965,12 @@ pub(crate) async fn ensure_metadata_cached(
     }
 
     // Apply tags to already-catalogued archive(s) when auto_fetch_metadata is on.
-    if item.auto_fetch_metadata {
-        if let Some(ref tags) = tags {
-            if let Some(ref archive_ids) = item.archive_ids {
-                for aid in archive_ids {
-                    apply_metadata_tags(state, aid, tags).await;
-                }
-            }
+    if item.auto_fetch_metadata
+        && let Some(ref tags) = tags
+        && let Some(ref archive_ids) = item.archive_ids
+    {
+        for aid in archive_ids {
+            apply_metadata_tags(state, aid, tags).await;
         }
     }
 
@@ -4083,56 +4076,52 @@ async fn run_managed_downloads(
     // When an exact rule omits the rate limit and a wildcard supplies it, the two can name
     // different rules — an acceptable display-only approximation; fixing it would touch the
     // rate-limiter map's grouping key, out of scope here.
-    if let Some(first) = downloads.first() {
-        if let Ok(parsed) = url::Url::parse(&first.url) {
-            let first_hostname = parsed.host_str().unwrap_or("");
-            let resolved = crate::download_manager::domain_rules::resolve(&rules, first_hostname);
-            let matched =
-                crate::download_manager::domain_rules::resolved_key(&rules, first_hostname);
-            state
-                .jobs
-                .set_rate_limit(
-                    &job_id,
-                    resolved.max_bytes_per_sec,
-                    // Only record the pattern when a real hostname was matched, so a malformed
-                    // (host-less) URL doesn't write a misleading catch-all "*".
-                    if first_hostname.is_empty() {
-                        None
-                    } else {
-                        Some(matched)
-                    },
-                )
-                .await;
-        }
+    if let Some(first) = downloads.first()
+        && let Ok(parsed) = url::Url::parse(&first.url)
+    {
+        let first_hostname = parsed.host_str().unwrap_or("");
+        let resolved = crate::download_manager::domain_rules::resolve(&rules, first_hostname);
+        let matched = crate::download_manager::domain_rules::resolved_key(&rules, first_hostname);
+        state
+            .jobs
+            .set_rate_limit(
+                &job_id,
+                resolved.max_bytes_per_sec,
+                // Only record the pattern when a real hostname was matched, so a malformed
+                // (host-less) URL doesn't write a misleading catch-all "*".
+                if first_hostname.is_empty() {
+                    None
+                } else {
+                    Some(matched)
+                },
+            )
+            .await;
     }
 
     // Learn before any bytes move: if this domain-rule pattern has ever refused a resume, the row
     // can warn before the user pauses instead of only after it happens. The first resource is the
     // representative, the same one the rate-limit snapshot above uses.
-    if let (Some((repo, item_id)), Some(first)) = (&queue_link, downloads.first()) {
-        if let Ok(parsed) = url::Url::parse(&first.url) {
-            let host = parsed.host_str().unwrap_or("");
-            if !host.is_empty() {
-                let pattern = crate::download_manager::resume_support::pattern_for(&rules, host);
-                if let Some(supported) =
-                    crate::download_manager::resume_support::get(&state.redis.config, &pattern)
-                        .await
-                {
-                    if let Ok(Some(mut item)) = repo.get(item_id).await {
-                        if item.resume_support != Some(supported) {
-                            item.resume_support = Some(supported);
-                            if let Err(e) = repo.update(&item).await {
-                                tracing::warn!(item_id, error = %e, "could not record known resume support");
-                            }
-                            if let Some(tx) = &state.download_queue_tx {
-                                let _ = tx.send(serde_json::json!({
-                                    "kind": "update",
-                                    "id": item_id,
-                                    "resume_support": supported,
-                                }));
-                            }
-                        }
-                    }
+    if let (Some((repo, item_id)), Some(first)) = (&queue_link, downloads.first())
+        && let Ok(parsed) = url::Url::parse(&first.url)
+    {
+        let host = parsed.host_str().unwrap_or("");
+        if !host.is_empty() {
+            let pattern = crate::download_manager::resume_support::pattern_for(&rules, host);
+            if let Some(supported) =
+                crate::download_manager::resume_support::get(&state.redis.config, &pattern).await
+                && let Ok(Some(mut item)) = repo.get(item_id).await
+                && item.resume_support != Some(supported)
+            {
+                item.resume_support = Some(supported);
+                if let Err(e) = repo.update(&item).await {
+                    tracing::warn!(item_id, error = %e, "could not record known resume support");
+                }
+                if let Some(tx) = &state.download_queue_tx {
+                    let _ = tx.send(serde_json::json!({
+                        "kind": "update",
+                        "id": item_id,
+                        "resume_support": supported,
+                    }));
                 }
             }
         }
@@ -4238,12 +4227,12 @@ async fn run_managed_downloads(
                             accepted,
                         )
                         .await;
-                        if let Some((repo, item_id)) = &queue_link_for_drain {
-                            if let Ok(Some(mut item)) = repo.get(item_id).await {
-                                item.resume_support = Some(accepted);
-                                if let Err(e) = repo.update(&item).await {
-                                    tracing::warn!(item_id, error = %e, "could not persist resume support");
-                                }
+                        if let Some((repo, item_id)) = &queue_link_for_drain
+                            && let Ok(Some(mut item)) = repo.get(item_id).await
+                        {
+                            item.resume_support = Some(accepted);
+                            if let Err(e) = repo.update(&item).await {
+                                tracing::warn!(item_id, error = %e, "could not persist resume support");
                             }
                         }
                         if let (Some(tx), Some(item_id)) = (&queue_tx, &queue_item_id_for_drain) {
@@ -4331,19 +4320,19 @@ async fn run_managed_downloads(
         // `Downloading` for an earlier resource in the same multi-resource job (`downloading_state_
         // set`'s own docs) — a later resource's own wait for its permit is real, but the job as a
         // whole already has bytes moving, so it must stay `Downloading`, not revert to `Waiting`.
-        if !downloading_state_set.load(std::sync::atomic::Ordering::SeqCst) {
-            if let Some((repo, item_id)) = &queue_link {
-                update_queue_item_state(
-                    repo,
-                    state.download_queue_tx.as_ref(),
-                    item_id,
-                    lanrurugi_storage::download_queue::DownloadQueueState::Waiting,
-                    Some(job_id.clone()),
-                    None,
-                    None,
-                )
-                .await;
-            }
+        if !downloading_state_set.load(std::sync::atomic::Ordering::SeqCst)
+            && let Some((repo, item_id)) = &queue_link
+        {
+            update_queue_item_state(
+                repo,
+                state.download_queue_tx.as_ref(),
+                item_id,
+                lanrurugi_storage::download_queue::DownloadQueueState::Waiting,
+                Some(job_id.clone()),
+                None,
+                None,
+            )
+            .await;
         }
 
         let downloaded_result = download_one(

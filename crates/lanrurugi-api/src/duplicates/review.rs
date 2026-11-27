@@ -67,17 +67,17 @@ pub async fn ensure_with(
     // but never let it shadow a real review once one is configured.
     let usable = |cached: &ReviewVerdict| !(cached.fallback && has_provider);
 
-    if let Some(cached) = cache.get(&cache_key) {
-        if usable(cached) {
-            return cached.clone();
-        }
+    if let Some(cached) = cache.get(&cache_key)
+        && usable(cached)
+    {
+        return cached.clone();
     }
     // Verdicts written before the content key existed live under the bare group key.
-    if let Some(cached) = cache.get(&key).cloned() {
-        if usable(&cached) {
-            cache.insert(cache_key.clone(), cached.clone());
-            return cached;
-        }
+    if let Some(cached) = cache.get(&key).cloned()
+        && usable(&cached)
+    {
+        cache.insert(cache_key.clone(), cached.clone());
+        return cached;
     }
 
     let verdict = if has_provider {

@@ -568,10 +568,10 @@ impl Subscription {
         }
         // Nothing runs while the settings are still settling, however overdue it otherwise is: the
         // window exists precisely for the case where what was just saved is not what was wanted.
-        if let Some(changed) = self.settings_changed_at {
-            if now.saturating_sub(changed) < SETTLE_SECS {
-                return false;
-            }
+        if let Some(changed) = self.settings_changed_at
+            && now.saturating_sub(changed) < SETTLE_SECS
+        {
+            return false;
         }
         match self.last_checked_at {
             None => true,

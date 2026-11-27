@@ -154,16 +154,15 @@ pub(crate) async fn apply(state: &AppState, queue_item_id: &str, new_id: &Archiv
     // The archive's own place in the book, which the fresh record has at zero.
     if plan.progress > 0 {
         let page = plan.progress.min(new_archive.pagecount);
-        if page > 0 {
-            if let Err(e) = state
+        if page > 0
+            && let Err(e) = state
                 .repos
                 .archives
                 // No list length: the patch is reattached after this, which changes the list.
                 .set_progress(new_id, page, None, now_secs())
                 .await
-            {
-                tracing::warn!(%new_id, error = %e, "could not restore the re-downloaded archive's progress");
-            }
+        {
+            tracing::warn!(%new_id, error = %e, "could not restore the re-downloaded archive's progress");
         }
     }
 

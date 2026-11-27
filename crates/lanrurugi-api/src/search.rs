@@ -641,13 +641,13 @@ async fn search_archives_with_mode(
                             .get("arcid")
                             .and_then(|v| v.as_str())
                             .unwrap_or_default();
-                        if let Some(members) = by_tank.remove(id) {
-                            if let Some(object) = entry.as_object_mut() {
-                                object.insert(
-                                    "match_reason".into(),
-                                    json!({ "kind": "members", "members": members }),
-                                );
-                            }
+                        if let Some(members) = by_tank.remove(id)
+                            && let Some(object) = entry.as_object_mut()
+                        {
+                            object.insert(
+                                "match_reason".into(),
+                                json!({ "kind": "members", "members": members }),
+                            );
                         }
                     }
                 }

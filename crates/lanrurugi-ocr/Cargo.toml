@@ -10,7 +10,6 @@ image.workspace = true
 ndarray.workspace = true
 oar-ocr.workspace = true
 ort.workspace = true
-kmeans_colors.workspace = true
 palette.workspace = true
 rayon.workspace = true
 serde.workspace = true

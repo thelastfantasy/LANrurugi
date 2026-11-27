@@ -171,21 +171,20 @@ pub fn decide(
         let reconsidering = ctx.refreshed.iter().any(|r| r == &source)
             || ctx.reconsider.iter().any(|r| r == &source);
         if let (Some(cutoff), Some(posted), false) = (ctx.window_cutoff, posted_secs, reconsidering)
+            && posted < cutoff
         {
-            if posted < cutoff {
-                if ctx.keep_out_of_window {
-                    records.push(CandidateRecord {
-                        source_url: source,
-                        title: candidate.title.clone(),
-                        uploader: candidate.uploader.clone(),
-                        rating: candidate.rating,
-                        posted_at: posted_secs,
-                        tags: candidate.tags.clone(),
-                        verdict: CandidateVerdict::OutOfWindow,
-                    });
-                }
-                continue;
+            if ctx.keep_out_of_window {
+                records.push(CandidateRecord {
+                    source_url: source,
+                    title: candidate.title.clone(),
+                    uploader: candidate.uploader.clone(),
+                    rating: candidate.rating,
+                    posted_at: posted_secs,
+                    tags: candidate.tags.clone(),
+                    verdict: CandidateVerdict::OutOfWindow,
+                });
             }
+            continue;
         }
         let seen = ctx.already_seen.iter().any(|s| s == &source);
         // Only a work that was *rejected* is decided afresh; one that was handled is not revisited.

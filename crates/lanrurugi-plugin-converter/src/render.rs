@@ -188,39 +188,37 @@ fn collect_static_hash_keys_into(node: &PpiNode, var_name: &str, out: &mut Vec<S
             }) {
                 j += 1;
             }
-            if let Some(subscript) = children.get(j) {
-                if subscript.class == "PPI::Structure::Subscript" {
-                    let inner: Vec<&PpiNode> = subscript
-                        .children()
-                        .iter()
-                        .flat_map(|c| {
-                            if c.class == "PPI::Statement"
-                                || c.class == "PPI::Statement::Expression"
-                            {
-                                c.children().iter().collect::<Vec<_>>()
-                            } else {
-                                vec![c]
-                            }
-                        })
-                        .filter(|c| c.class != "PPI::Token::Whitespace")
-                        .collect();
-                    match inner.as_slice() {
-                        [tok] if tok.class == "PPI::Token::Word" => {
-                            out.push(tok.content.clone().unwrap_or_default());
+            if let Some(subscript) = children.get(j)
+                && subscript.class == "PPI::Structure::Subscript"
+            {
+                let inner: Vec<&PpiNode> = subscript
+                    .children()
+                    .iter()
+                    .flat_map(|c| {
+                        if c.class == "PPI::Statement" || c.class == "PPI::Statement::Expression" {
+                            c.children().iter().collect::<Vec<_>>()
+                        } else {
+                            vec![c]
                         }
-                        [tok]
-                            if tok.class == "PPI::Token::Quote::Single"
-                                || tok.class == "PPI::Token::Quote::Double" =>
-                        {
-                            let quote = if tok.class == "PPI::Token::Quote::Single" {
-                                '\''
-                            } else {
-                                '"'
-                            };
-                            out.push(strip_quotes(tok.content.as_deref().unwrap_or(""), quote));
-                        }
-                        _ => return false, // dynamic key ($var, an expression, ...) — bail out entirely.
+                    })
+                    .filter(|c| c.class != "PPI::Token::Whitespace")
+                    .collect();
+                match inner.as_slice() {
+                    [tok] if tok.class == "PPI::Token::Word" => {
+                        out.push(tok.content.clone().unwrap_or_default());
                     }
+                    [tok]
+                        if tok.class == "PPI::Token::Quote::Single"
+                            || tok.class == "PPI::Token::Quote::Double" =>
+                    {
+                        let quote = if tok.class == "PPI::Token::Quote::Single" {
+                            '\''
+                        } else {
+                            '"'
+                        };
+                        out.push(strip_quotes(tok.content.as_deref().unwrap_or(""), quote));
+                    }
+                    _ => return false, // dynamic key ($var, an expression, ...) — bail out entirely.
                 }
             }
         }
@@ -923,23 +921,23 @@ impl Renderer {
             // $other_captures );`). Checked before the single-symbol case below since this shape
             // wraps its symbols in a `Structure::List` rather than exposing exactly one bare
             // `PPI::Token::Symbol` as `my`'s immediate next child.
-            if let Some(list) = children.get(my_idx + 1) {
-                if list.class == "PPI::Structure::List" {
-                    let symbols = symbols_with_sigils_in(list);
-                    if !symbols.is_empty() {
-                        let decls: Vec<String> = symbols
-                            .iter()
-                            .map(|(sigil, name)| {
-                                let init = match sigil {
-                                    '@' => "[] as any[]",
-                                    '%' => "{} as Record<string, any>",
-                                    _ => "undefined",
-                                };
-                                format!("let {name} = {init};")
-                            })
-                            .collect();
-                        return decls.join("\n");
-                    }
+            if let Some(list) = children.get(my_idx + 1)
+                && list.class == "PPI::Structure::List"
+            {
+                let symbols = symbols_with_sigils_in(list);
+                if !symbols.is_empty() {
+                    let decls: Vec<String> = symbols
+                        .iter()
+                        .map(|(sigil, name)| {
+                            let init = match sigil {
+                                '@' => "[] as any[]",
+                                '%' => "{} as Record<string, any>",
+                                _ => "undefined",
+                            };
+                            format!("let {name} = {init};")
+                        })
+                        .collect();
+                    return decls.join("\n");
                 }
             }
             // Bare `my @arr;` / `my %hash;` / `my $x;` — a declaration with no initializer.
@@ -1787,10 +1785,11 @@ impl Renderer {
         }
 
         // `return (k => v, k2 => v2);` — the metadata-result hash-literal idiom.
-        if rest.len() == 1 && rest[0].class == "PPI::Structure::List" {
-            if let Some(rendered) = self.try_render_hash_return(rest[0]) {
-                return rendered;
-            }
+        if rest.len() == 1
+            && rest[0].class == "PPI::Structure::List"
+            && let Some(rendered) = self.try_render_hash_return(rest[0])
+        {
+            return rendered;
         }
 
         // `return ($a, $b);` / `return $a, $b;` — Perl's multi-value list return. Rendering this
@@ -1959,29 +1958,28 @@ impl Renderer {
             // `match` binding until now, since this operator itself was previously a no-op stub.
             if is_operator(tokens[i], "=~")
                 && tokens.get(i + 1).map(|t| t.class.as_str()) == Some("PPI::Token::Regexp::Match")
+                && let Some(js_regex) = render_perl_regex_literal(tokens[i + 1])
             {
-                if let Some(js_regex) = render_perl_regex_literal(tokens[i + 1]) {
-                    // Perl's `/g` flag in list context (`my (@caps) = $x =~ /pat/g;`) returns
-                    // every captured group across every match; JS's `.match()` with a `g` flag
-                    // returns only the full-match strings (capture groups are unreachable that
-                    // way — you'd need `matchAll` and to flatten each result's own groups
-                    // instead). That's a real semantic difference this converter can't safely
-                    // paper over without knowing whether the surrounding context is list or
-                    // scalar (a distinction PPI's tree doesn't make explicit at this token), so
-                    // it's surfaced as a warning for manual review rather than silently emitting
-                    // code that quietly returns the wrong values.
-                    if js_regex.contains('g') {
-                        self.warnings.push(format!(
+                // Perl's `/g` flag in list context (`my (@caps) = $x =~ /pat/g;`) returns
+                // every captured group across every match; JS's `.match()` with a `g` flag
+                // returns only the full-match strings (capture groups are unreachable that
+                // way — you'd need `matchAll` and to flatten each result's own groups
+                // instead). That's a real semantic difference this converter can't safely
+                // paper over without knowing whether the surrounding context is list or
+                // scalar (a distinction PPI's tree doesn't make explicit at this token), so
+                // it's surfaced as a warning for manual review rather than silently emitting
+                // code that quietly returns the wrong values.
+                if js_regex.contains('g') {
+                    self.warnings.push(format!(
                             "=~ with /g in list context ({js_regex}) — Perl returns every captured group across all matches; JS .match() with /g returns only full-match strings, not captures. Verify this call site by hand."
                         ));
-                    }
-                    self.uses_regex_match = true;
-                    let lhs = join_parts(&parts);
-                    parts.clear();
-                    parts.push(format!("(match = {lhs}.match({js_regex}))"));
-                    i += 2;
-                    continue;
                 }
+                self.uses_regex_match = true;
+                let lhs = join_parts(&parts);
+                parts.clear();
+                parts.push(format!("(match = {lhs}.match({js_regex}))"));
+                i += 2;
+                continue;
             }
             // `EXPR =~ !~ / etc.` negated match, boolean context (`if ($x !~ /pat/)`) — same
             // token shape as the plain `=~` + `Regexp::Match` case above, just wrapped in `!`;
@@ -1989,14 +1987,13 @@ impl Renderer {
             // case.
             if is_operator(tokens[i], "!~")
                 && tokens.get(i + 1).map(|t| t.class.as_str()) == Some("PPI::Token::Regexp::Match")
+                && let Some(js_regex) = render_perl_regex_literal(tokens[i + 1])
             {
-                if let Some(js_regex) = render_perl_regex_literal(tokens[i + 1]) {
-                    let lhs = join_parts(&parts);
-                    parts.clear();
-                    parts.push(format!("!{js_regex}.test({lhs})"));
-                    i += 2;
-                    continue;
-                }
+                let lhs = join_parts(&parts);
+                parts.clear();
+                parts.push(format!("!{js_regex}.test({lhs})"));
+                i += 2;
+                continue;
             }
             // `EXPR =~ $compiled_regex` / `EXPR !~ $compiled_regex` — matching against a
             // previously-`qr/.../`-compiled pattern stored in a variable, rather than an inline
@@ -2025,15 +2022,13 @@ impl Renderer {
             if is_operator(tokens[i], "=~")
                 && tokens.get(i + 1).map(|t| t.class.as_str())
                     == Some("PPI::Token::Regexp::Substitute")
-            {
-                if let Some(rendered_call) =
+                && let Some(rendered_call) =
                     self.render_regex_substitute_call(&join_parts(&parts), tokens[i + 1])
-                {
-                    parts.clear();
-                    parts.push(rendered_call);
-                    i += 2;
-                    continue;
-                }
+            {
+                parts.clear();
+                parts.push(rendered_call);
+                i += 2;
+                continue;
             }
             // `EXPR->to_string` (`Mojo::DOM`'s no-parens string-conversion method — Perl doesn't
             // require parens on a zero-arg method call) — without this, the generic `->` → `.`
@@ -2140,13 +2135,12 @@ impl Renderer {
                         groups[0][0].class.as_str(),
                         "PPI::Token::Regexp::Match" | "PPI::Token::QuoteLike::Regexp"
                     )
+                    && let Some(regex) = render_perl_regex_literal(groups[0][0])
                 {
-                    if let Some(regex) = render_perl_regex_literal(groups[0][0]) {
-                        let list_expr = self.render_expr_sequence(&groups[1]);
-                        parts.push(format!("{}.split({regex})", paren_wrap(&list_expr)));
-                        i += 2;
-                        continue;
-                    }
+                    let list_expr = self.render_expr_sequence(&groups[1]);
+                    parts.push(format!("{}.split({regex})", paren_wrap(&list_expr)));
+                    i += 2;
+                    continue;
                 }
             }
             if tokens[i].class == "PPI::Token::Word"
@@ -2347,15 +2341,15 @@ impl Renderer {
             // next single term) — the parenthesized form `defined($x)` is already handled by
             // `try_match_call`'s generic `Word` + `Structure::List` case; this covers the other
             // spelling, which that pattern doesn't match since there's no `Structure::List` here.
-            if is_word(tokens[i], "defined") {
-                if let Some(operand) = tokens.get(i + 1) {
-                    let rendered_operand = self.render_token(operand);
-                    parts.push(format!(
-                        "({rendered_operand} !== undefined && {rendered_operand} !== null)"
-                    ));
-                    i += 2;
-                    continue;
-                }
+            if is_word(tokens[i], "defined")
+                && let Some(operand) = tokens.get(i + 1)
+            {
+                let rendered_operand = self.render_token(operand);
+                parts.push(format!(
+                    "({rendered_operand} !== undefined && {rendered_operand} !== null)"
+                ));
+                i += 2;
+                continue;
             }
             // `exists $hash->{key}` (same named-unary-operator shape as `defined` above, but the
             // operand is routinely a full `$x->{a}->{b}` chain, not a single token — consuming
@@ -3663,17 +3657,17 @@ fn render_perl_regex_literal(node: &PpiNode) -> Option<String> {
     // left as-is, `(?i)` isn't valid JS regex syntax at all (no bare non-capturing modifier
     // group), a real syntax error deno's parser caught.
     let mut pattern = pattern;
-    if let Some(rest) = pattern.strip_prefix("(?") {
-        if let Some(close) = rest.find(')') {
-            let modifiers = &rest[..close];
-            if !modifiers.is_empty() && modifiers.chars().all(|c| matches!(c, 'i' | 'm' | 's')) {
-                for c in modifiers.chars() {
-                    if !js_flags.contains(c) {
-                        js_flags.push(c);
-                    }
+    if let Some(rest) = pattern.strip_prefix("(?")
+        && let Some(close) = rest.find(')')
+    {
+        let modifiers = &rest[..close];
+        if !modifiers.is_empty() && modifiers.chars().all(|c| matches!(c, 'i' | 'm' | 's')) {
+            for c in modifiers.chars() {
+                if !js_flags.contains(c) {
+                    js_flags.push(c);
                 }
-                pattern = &rest[close + 1..];
             }
+            pattern = &rest[close + 1..];
         }
     }
     // JS regex literals use `/` as their only delimiter regardless of what Perl's source used —

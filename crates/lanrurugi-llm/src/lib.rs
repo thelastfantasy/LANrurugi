@@ -109,10 +109,10 @@ async fn check_balance(key: &str) -> Result<(), LlmError> {
     }
 
     let body: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-    if let Some(available) = body["is_available"].as_bool() {
-        if !available {
-            return Err(LlmError::balance_unavailable());
-        }
+    if let Some(available) = body["is_available"].as_bool()
+        && !available
+    {
+        return Err(LlmError::balance_unavailable());
     }
     Ok(())
 }
@@ -128,10 +128,11 @@ pub async fn ensure_available(redis_config: &Pool) -> Result<(), LlmError> {
 
     {
         let cache = BALANCE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((cached_key, checked_at)) = cache.as_ref() {
-            if cached_key == &key && checked_at.elapsed() < BALANCE_CACHE_TTL {
-                return Ok(());
-            }
+        if let Some((cached_key, checked_at)) = cache.as_ref()
+            && cached_key == &key
+            && checked_at.elapsed() < BALANCE_CACHE_TTL
+        {
+            return Ok(());
         }
     }
 
@@ -654,15 +655,15 @@ async fn check_conversation(
 /// `serde_json::Value` without needing a real (or mocked-transport) HTTP round-trip.
 fn parse_tool_chat_response(parsed: &serde_json::Value) -> Result<ToolChatResponse, LlmError> {
     let message = &parsed["choices"][0]["message"];
-    if let Some(tool_calls) = message["tool_calls"].as_array() {
-        if !tool_calls.is_empty() {
-            let calls: Vec<ToolCall> = serde_json::from_value(message["tool_calls"].clone())
-                .map_err(|e| {
-                    warn!(error = %e, body = %parsed, "LLM API tool_calls not in expected shape");
-                    LlmError::bad_tool_calls(e)
-                })?;
-            return Ok(ToolChatResponse::ToolCalls(calls));
-        }
+    if let Some(tool_calls) = message["tool_calls"].as_array()
+        && !tool_calls.is_empty()
+    {
+        let calls: Vec<ToolCall> =
+            serde_json::from_value(message["tool_calls"].clone()).map_err(|e| {
+                warn!(error = %e, body = %parsed, "LLM API tool_calls not in expected shape");
+                LlmError::bad_tool_calls(e)
+            })?;
+        return Ok(ToolChatResponse::ToolCalls(calls));
     }
 
     if reasoning_exhausted(parsed) {
@@ -828,11 +829,11 @@ async fn tool_chat_streaming_once(
                 saw_reasoning_content = true;
             }
 
-            if let Some(text) = delta["content"].as_str() {
-                if !text.is_empty() {
-                    on_content_delta(text);
-                    content.push_str(text);
-                }
+            if let Some(text) = delta["content"].as_str()
+                && !text.is_empty()
+            {
+                on_content_delta(text);
+                content.push_str(text);
             }
 
             if let Some(delta_calls) = delta["tool_calls"].as_array() {

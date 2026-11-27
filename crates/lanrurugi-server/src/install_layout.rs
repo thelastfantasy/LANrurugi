@@ -62,7 +62,8 @@ pub fn apply() -> Vec<(&'static str, PathBuf)> {
     };
     let filled = defaults_for(&prefix, |var| std::env::var_os(var).is_some());
     for (var, path) in &filled {
-        std::env::set_var(var, path);
+        // SAFETY: called first thing in `main`, before the runtime or any other thread exists.
+        unsafe { std::env::set_var(var, path) };
     }
     filled
 }

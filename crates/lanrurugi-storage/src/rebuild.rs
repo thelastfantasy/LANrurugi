@@ -171,11 +171,11 @@ async fn update_references(
     // Left unfixed, every stamp on a re-keyed archive would silently point at an archive id that
     // no longer exists (caught via external code review, 2026-08-29).
     for stamp_id in stamp_ids {
-        if let Some(mut stamp) = stamps.get(stamp_id).await? {
-            if &stamp.archive_id == old_id {
-                stamp.archive_id = new_id.clone();
-                stamps.restore_raw(&stamp).await?;
-            }
+        if let Some(mut stamp) = stamps.get(stamp_id).await?
+            && &stamp.archive_id == old_id
+        {
+            stamp.archive_id = new_id.clone();
+            stamps.restore_raw(&stamp).await?;
         }
     }
     Ok(())

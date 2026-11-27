@@ -82,10 +82,10 @@ fn main() {
         if protocol::write_json(&mut stream, &response).is_err() {
             return;
         }
-        if let Some(bytes) = payload {
-            if protocol::write_frame(&mut stream, &bytes).is_err() {
-                return;
-            }
+        if let Some(bytes) = payload
+            && protocol::write_frame(&mut stream, &bytes).is_err()
+        {
+            return;
         }
     }
 }

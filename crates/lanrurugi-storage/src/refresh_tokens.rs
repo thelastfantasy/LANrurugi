@@ -389,10 +389,10 @@ impl RefreshTokenRepository {
                 .await?;
             for old_family_id in old_family_ids {
                 if old_family_id != family_id {
-                    if inherited_name.is_none() {
-                        if let Ok(Some(old_meta)) = self.get_family_meta(&old_family_id).await {
-                            inherited_name = old_meta.custom_name;
-                        }
+                    if inherited_name.is_none()
+                        && let Ok(Some(old_meta)) = self.get_family_meta(&old_family_id).await
+                    {
+                        inherited_name = old_meta.custom_name;
                     }
                     self.burn_family(&old_family_id).await?;
                 }
@@ -1063,17 +1063,16 @@ impl RefreshTokenRepository {
                         {
                             tracing::warn!(%family_id, error = %e, "failed to set device-index TTL");
                         }
-                        if let Some(custom_name) = meta.custom_name.as_deref() {
-                            if let Err(e) = conn
+                        if let Some(custom_name) = meta.custom_name.as_deref()
+                            && let Err(e) = conn
                                 .set_ex::<_, _, ()>(
                                     device_name_key(device_id),
                                     custom_name,
                                     DEVICE_NAME_TTL_SECS,
                                 )
                                 .await
-                            {
-                                tracing::warn!(%family_id, error = %e, "failed to persist device name");
-                            }
+                        {
+                            tracing::warn!(%family_id, error = %e, "failed to persist device name");
                         }
                     }
                 }

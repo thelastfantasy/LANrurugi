@@ -852,10 +852,10 @@ pub(crate) async fn snapshot(state: &AppState, include_ignored: bool) -> Value {
     let mut value = result_json(entry.as_ref(), running.as_deref());
     // Filtering is done here rather than before the cache write, so one entry serves both the
     // default view and "show ignored combinations".
-    if !include_ignored {
-        if let Some(suggestions) = value.get_mut("suggestions").and_then(|s| s.as_array_mut()) {
-            *suggestions = filter_ignored(std::mem::take(suggestions), &candidates.ignored);
-        }
+    if !include_ignored
+        && let Some(suggestions) = value.get_mut("suggestions").and_then(|s| s.as_array_mut())
+    {
+        *suggestions = filter_ignored(std::mem::take(suggestions), &candidates.ignored);
     }
     value
 }

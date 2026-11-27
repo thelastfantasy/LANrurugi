@@ -1048,10 +1048,10 @@ async fn find_stamp_by_position(
     position: &str,
 ) -> Result<Option<Stamp>, RepositoryError> {
     for id in stamp_ids {
-        if let Some(stamp) = stamps.get(id).await? {
-            if stamp.position == position {
-                return Ok(Some(stamp));
-            }
+        if let Some(stamp) = stamps.get(id).await?
+            && stamp.position == position
+        {
+            return Ok(Some(stamp));
         }
     }
     Ok(None)

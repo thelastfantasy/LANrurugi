@@ -563,15 +563,15 @@ pub(crate) async fn catalogue_staged_file(
     let fingerprint = match &placed {
         crate::download_manager::Placed::Copied(outcome) => {
             let actual = outcome.blake3.to_hex().to_string();
-            if let Some(expected) = expected_blake3 {
-                if expected != actual {
-                    let _ = tokio::fs::remove_file(&incoming).await;
-                    return Err(IngestDownloadError::StagedCorrupted {
-                        path: staging_path.display().to_string(),
-                        expected: expected.to_string(),
-                        actual,
-                    });
-                }
+            if let Some(expected) = expected_blake3
+                && expected != actual
+            {
+                let _ = tokio::fs::remove_file(&incoming).await;
+                return Err(IngestDownloadError::StagedCorrupted {
+                    path: staging_path.display().to_string(),
+                    expected: expected.to_string(),
+                    actual,
+                });
             }
             Some(actual)
         }
@@ -726,10 +726,10 @@ pub(crate) async fn catalogue_staged_file(
             // by its own name) leaves this copy as a redundant duplicate in the hash layout. Drop
             // it when the recorded path differs, or it would linger forever (`LRR_FILEMAP` points
             // at the record's own path, and no sweep looks in buckets).
-            if let Ok(Some(existing)) = state.repos.archives.get(&existing_id).await {
-                if Path::new(&existing.file) != dest.as_path() {
-                    let _ = tokio::fs::remove_file(&dest).await;
-                }
+            if let Ok(Some(existing)) = state.repos.archives.get(&existing_id).await
+                && Path::new(&existing.file) != dest.as_path()
+            {
+                let _ = tokio::fs::remove_file(&dest).await;
             }
             // As before 027, a rejected download leaves no staged bytes behind.
             undo.rejected().await;
@@ -838,10 +838,10 @@ pub(crate) async fn catalogue_staged_file(
             .and_then(|item| item.metadata_preview_namespace.as_deref());
         crate::plugins::run_enabled_metadata_plugins_on_archive(state, archive_id.as_str(), skip)
             .await;
-        if let (Some(_), Some(item)) = (skip, &preview) {
-            if let Some(preview_data) = item.metadata_preview.as_ref() {
-                apply_preview_metadata(state, archive_id.as_str(), preview_data).await;
-            }
+        if let (Some(_), Some(item)) = (skip, &preview)
+            && let Some(preview_data) = item.metadata_preview.as_ref()
+        {
+            apply_preview_metadata(state, archive_id.as_str(), preview_data).await;
         }
     }
 
@@ -860,16 +860,16 @@ pub(crate) async fn catalogue_staged_file(
     // every upload, download and share import passes through — the damaged list learns about it
     // here instead of waiting for a scan. Cheap: one record read, and nothing is written unless
     // the count really is zero.
-    if let Ok(Some(record)) = state.repos.archives.get(&archive_id).await {
-        if record.pagecount == 0 {
-            crate::integrity_scan::note_damage(
-                state,
-                &record,
-                crate::integrity_scan::Problem::NoPages,
-                "catalogued with no readable pages".to_string(),
-            )
-            .await;
-        }
+    if let Ok(Some(record)) = state.repos.archives.get(&archive_id).await
+        && record.pagecount == 0
+    {
+        crate::integrity_scan::note_damage(
+            state,
+            &record,
+            crate::integrity_scan::Problem::NoPages,
+            "catalogued with no readable pages".to_string(),
+        )
+        .await;
     }
 
     Ok(IngestedDownload {
@@ -1156,14 +1156,14 @@ async fn rename_into_bucket(incoming: &Path, dest: &Path) -> Result<(), IngestDo
     lanrurugi_storage::fsutil::in_dir(dest, || tokio::fs::rename(incoming, dest))
         .await
         .map_err(IngestDownloadError::Io)?;
-    if let Some(parent) = dest.parent() {
-        if let Err(e) = lanrurugi_core::io::sync_dir(parent).await {
-            let _ = tokio::fs::rename(dest, incoming).await;
-            return Err(IngestDownloadError::Copy {
-                path: dest.display().to_string(),
-                source: lanrurugi_core::io::CopyError::Durability(e),
-            });
-        }
+    if let Some(parent) = dest.parent()
+        && let Err(e) = lanrurugi_core::io::sync_dir(parent).await
+    {
+        let _ = tokio::fs::rename(dest, incoming).await;
+        return Err(IngestDownloadError::Copy {
+            path: dest.display().to_string(),
+            source: lanrurugi_core::io::CopyError::Durability(e),
+        });
     }
     Ok(())
 }

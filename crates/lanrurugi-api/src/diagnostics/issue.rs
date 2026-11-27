@@ -61,10 +61,10 @@ pub fn top_frame(stack: Option<&str>) -> Option<String> {
 /// The grouping key for an event. An event that carried its own fingerprint keeps it, so a report
 /// groups the same way here and on a tracker.
 pub fn fingerprint(event: &DiagnosticEvent) -> Fingerprint {
-    if let Some(supplied) = event.tags.get("fingerprint") {
-        if !supplied.trim().is_empty() {
-            return Fingerprint(supplied.trim().to_string());
-        }
+    if let Some(supplied) = event.tags.get("fingerprint")
+        && !supplied.trim().is_empty()
+    {
+        return Fingerprint(supplied.trim().to_string());
     }
     let mut hasher = blake3::Hasher::new();
     hasher.update(event.source.as_str().as_bytes());

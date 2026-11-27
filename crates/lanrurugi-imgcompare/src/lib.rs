@@ -861,14 +861,13 @@ fn load_fingerprints(
         }
     };
     let cache_key = hooks.cache.and_then(|_| fingerprint_cache_key(path, pages));
-    if let (Some(cache), Some(key)) = (hooks.cache, cache_key.as_deref()) {
-        if let Some(cached) = cache.get(key).and_then(|bytes| decode_fingerprints(&bytes)) {
-            if cached.len() == pages.len() {
-                report(pages.len());
-                tracing::info!(path = %path.display(), entries = pages.len(), "load_fingerprints: cache hit");
-                return Ok(cached);
-            }
-        }
+    if let (Some(cache), Some(key)) = (hooks.cache, cache_key.as_deref())
+        && let Some(cached) = cache.get(key).and_then(|bytes| decode_fingerprints(&bytes))
+        && cached.len() == pages.len()
+    {
+        report(pages.len());
+        tracing::info!(path = %path.display(), entries = pages.len(), "load_fingerprints: cache hit");
+        return Ok(cached);
     }
     report(0);
     let decoded_count = std::cell::Cell::new(0usize);

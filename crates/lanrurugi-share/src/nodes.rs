@@ -211,15 +211,14 @@ impl RendezvousStore {
             pkarr::SignedPacket::from_relay_payload(&key, &Bytes::copy_from_slice(&packet[32..]))
                 .map_err(|_| RefusalReason::NotFound)?;
         let name = hex(&key.to_bytes());
-        if let Some(existing) = self.get_raw(&name).await {
-            if let Ok(old) = pkarr::SignedPacket::from_relay_payload(
+        if let Some(existing) = self.get_raw(&name).await
+            && let Ok(old) = pkarr::SignedPacket::from_relay_payload(
                 &key,
                 &Bytes::copy_from_slice(&existing[32..]),
-            ) {
-                if old.more_recent_than(&signed) {
-                    return Ok(());
-                }
-            }
+            )
+            && old.more_recent_than(&signed)
+        {
+            return Ok(());
         }
         match self {
             Self::Redis(pool) => {

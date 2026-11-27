@@ -4159,7 +4159,6 @@ dependencies = [
  "semver",
  "sentry",
  "sentry-panic",
- "sentry-tower",
  "sentry-tracing",
  "serde",
  "serde_json",
@@ -4175,7 +4174,6 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tower",
- "tower-http 0.7.1",
  "tracing",
  "tracing-subscriber",
  "unicode-segmentation",
@@ -4436,7 +4434,6 @@ version = "1.0.0-beta.8"
 dependencies = [
  "image",
  "imageproc",
- "kmeans_colors",
  "lanrurugi-core",
  "ndarray",
  "oar-ocr",

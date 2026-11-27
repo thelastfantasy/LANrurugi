@@ -31,7 +31,6 @@ tokio-stream = { workspace = true, features = ["sync"] }
 axum.workspace = true
 bytes.workspace = true
 tower.workspace = true
-tower-http.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
@@ -60,7 +59,6 @@ iroh-relay.workspace = true
 # interface; see vendor/netwatch/FORK.md.
 netwatch = "0.19.3"
 sentry.workspace = true
-sentry-tower.workspace = true
 sentry-tracing.workspace = true
 sentry-panic.workspace = true
 sourcemap.workspace = true

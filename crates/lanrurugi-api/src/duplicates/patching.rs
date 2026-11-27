@@ -71,10 +71,10 @@ pub fn migrate_legacy_sources(
     let patch_path = patch::patch_path_for(archive_path);
     let mut metadata = patch::load(&patch_path, archive_path, blake3)?;
     for crc in metadata.legacy_sources() {
-        if let Some(hash) = found.get(&crc) {
-            if !metadata.sources_blake3.contains(hash) {
-                metadata.sources_blake3.push(hash.clone());
-            }
+        if let Some(hash) = found.get(&crc)
+            && !metadata.sources_blake3.contains(hash)
+        {
+            metadata.sources_blake3.push(hash.clone());
         }
     }
     metadata.sources.clear();
@@ -233,15 +233,14 @@ pub async fn create_patch(
     };
 
     if outcome.added > 0 {
-        if !target.has_patch {
-            if let Err(e) = state
+        if !target.has_patch
+            && let Err(e) = state
                 .repos
                 .archives
                 .update(&target.id, |a| a.has_patch = true)
                 .await
-            {
-                tracing::warn!(id = %body.target, error = %e, "patch written but has_patch flag not saved");
-            }
+        {
+            tracing::warn!(id = %body.target, error = %e, "patch written but has_patch flag not saved");
         }
         crate::archives::clear_page_thumbnails(&state, &body.target).await;
         // The patch zip itself only carries hashes, and it is exactly what becomes unreadable when

@@ -48,10 +48,10 @@ pub async fn lookup(state: &AppState, url: &str) -> Option<String> {
     let mut conn = state.redis.config.get().await.ok()?;
     let found: Option<String> = conn.hget(SOURCES_KEY, url).await.ok()?;
     drop(conn);
-    if let Some(id) = found {
-        if in_library(state, &id).await {
-            return Some(id);
-        }
+    if let Some(id) = found
+        && in_library(state, &id).await
+    {
+        return Some(id);
     }
     if url.contains('?') {
         return None;

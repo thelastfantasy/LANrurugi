@@ -121,15 +121,15 @@ impl ModelPricing {
     /// The rates that actually apply `at` a given instant — [`Self::peak`]'s rates if `at` falls
     /// inside [`Self::peak_schedule`], this struct's own (off-peak) rates otherwise.
     fn rates_at(&self, at: chrono::DateTime<chrono::Utc>) -> RatesRef {
-        if let (Some(peak), Some(schedule)) = (&self.peak, &self.peak_schedule) {
-            if schedule.contains(at) {
-                return RatesRef {
-                    input_per_million_usd: peak.input_per_million_usd,
-                    cached_input_per_million_usd: peak.cached_input_per_million_usd,
-                    cache_write_per_million_usd: peak.cache_write_per_million_usd,
-                    output_per_million_usd: peak.output_per_million_usd,
-                };
-            }
+        if let (Some(peak), Some(schedule)) = (&self.peak, &self.peak_schedule)
+            && schedule.contains(at)
+        {
+            return RatesRef {
+                input_per_million_usd: peak.input_per_million_usd,
+                cached_input_per_million_usd: peak.cached_input_per_million_usd,
+                cache_write_per_million_usd: peak.cache_write_per_million_usd,
+                output_per_million_usd: peak.output_per_million_usd,
+            };
         }
         RatesRef {
             input_per_million_usd: self.input_per_million_usd,
@@ -348,17 +348,16 @@ fn check_prices(models: &[ModelPricing]) -> Result<(), String> {
 pub async fn get(pool: &Pool, provider_id: &str) -> Result<ProviderPricing, String> {
     let key = cache_key(provider_id);
 
-    if let Ok(mut conn) = pool.get().await {
-        if let Ok(Some(raw)) = conn.get::<_, Option<String>>(&key).await {
-            if let Ok(cached) = serde_json::from_str::<ProviderPricing>(&raw) {
-                lanrurugi_llm::usage::record_local_cache_hit(
-                    pool,
-                    lanrurugi_llm::FeatureId::PROVIDER_PRICING,
-                )
-                .await;
-                return Ok(cached);
-            }
-        }
+    if let Ok(mut conn) = pool.get().await
+        && let Ok(Some(raw)) = conn.get::<_, Option<String>>(&key).await
+        && let Ok(cached) = serde_json::from_str::<ProviderPricing>(&raw)
+    {
+        lanrurugi_llm::usage::record_local_cache_hit(
+            pool,
+            lanrurugi_llm::FeatureId::PROVIDER_PRICING,
+        )
+        .await;
+        return Ok(cached);
     }
 
     let provider_id_owned = provider_id.to_string();
@@ -371,10 +370,10 @@ pub async fn get(pool: &Pool, provider_id: &str) -> Result<ProviderPricing, Stri
 
     match result {
         Ok(pricing) => {
-            if let Ok(mut conn) = pool.get().await {
-                if let Ok(raw) = serde_json::to_string(&pricing) {
-                    let _: Result<(), _> = conn.set_ex(&key, raw, CACHE_TTL_SECS).await;
-                }
+            if let Ok(mut conn) = pool.get().await
+                && let Ok(raw) = serde_json::to_string(&pricing)
+            {
+                let _: Result<(), _> = conn.set_ex(&key, raw, CACHE_TTL_SECS).await;
             }
             Ok(pricing)
         }
@@ -383,12 +382,11 @@ pub async fn get(pool: &Pool, provider_id: &str) -> Result<ProviderPricing, Stri
             // Last-known-good fallback — deliberately reads even a now-expired cache entry rather
             // than nothing (`GET` doesn't care whether Redis has since evicted it; if the key is
             // gone, this simply falls through to the real `Err` below).
-            if let Ok(mut conn) = pool.get().await {
-                if let Ok(Some(raw)) = conn.get::<_, Option<String>>(&key).await {
-                    if let Ok(cached) = serde_json::from_str::<ProviderPricing>(&raw) {
-                        return Ok(cached);
-                    }
-                }
+            if let Ok(mut conn) = pool.get().await
+                && let Ok(Some(raw)) = conn.get::<_, Option<String>>(&key).await
+                && let Ok(cached) = serde_json::from_str::<ProviderPricing>(&raw)
+            {
+                return Ok(cached);
             }
             Err(e)
         }

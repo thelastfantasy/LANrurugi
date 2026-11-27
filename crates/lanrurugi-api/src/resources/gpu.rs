@@ -165,10 +165,10 @@ impl GpuReader {
         }
         {
             let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some((at, section)) = cache.as_ref() {
-                if at.elapsed() < CACHE_TTL {
-                    return (Some(section.clone()), None);
-                }
+            if let Some((at, section)) = cache.as_ref()
+                && at.elapsed() < CACHE_TTL
+            {
+                return (Some(section.clone()), None);
             }
         }
         let prober = match &self.detected {

@@ -349,12 +349,13 @@ async fn reindex_restored(state: &AppState, record: &Archive) {
     }
     // The path was dropped from the filemap when the record was deleted; restoring it before a
     // scan sees the file avoids re-hashing bytes that are already catalogued.
-    if !record.file.is_empty() && FsPath::new(&record.file).is_file() {
-        if let Ok(mut conn) = state.redis.config.get().await {
-            let _: Result<(), _> = conn
-                .hset(FILEMAP_KEY, &record.file, record.id.as_str())
-                .await;
-        }
+    if !record.file.is_empty()
+        && FsPath::new(&record.file).is_file()
+        && let Ok(mut conn) = state.redis.config.get().await
+    {
+        let _: Result<(), _> = conn
+            .hset(FILEMAP_KEY, &record.file, record.id.as_str())
+            .await;
     }
 }
 
@@ -540,7 +541,8 @@ async fn restore_deletion(
     Path(id): Path<String>,
 ) -> Response {
     let auth = auth.as_ref().map(|e| &e.0);
-    let response = match restore_one(&state, &id).await {
+
+    match restore_one(&state, &id).await {
         RestoreOne::Restored { file_missing } => {
             record_manual(
                 &state,
@@ -594,8 +596,7 @@ async fn restore_deletion(
             .await;
             error(StatusCode::INTERNAL_SERVER_ERROR, "restore_deletion", e)
         }
-    };
-    response
+    }
 }
 
 async fn restore_all_deletions(
@@ -707,16 +708,15 @@ async fn clear_deletions(
     };
     let purged = entries.len();
     // A bulk purge is destructive enough to deserve the same pre-operation snapshot as a clean.
-    if purged > 0 {
-        if let Err(e) = crate::snapshots::take_export(
+    if purged > 0
+        && let Err(e) = crate::snapshots::take_export(
             &state,
             "pre-journal-purge",
             std::sync::Arc::new(crate::snapshots::NoProgress),
         )
         .await
-        {
-            tracing::warn!(error = %e, "could not snapshot before clearing the deletion journal");
-        }
+    {
+        tracing::warn!(error = %e, "could not snapshot before clearing the deletion journal");
     }
     if let Err(e) = clear_key(&state).await {
         return error(StatusCode::INTERNAL_SERVER_ERROR, "clear_deletions", e);

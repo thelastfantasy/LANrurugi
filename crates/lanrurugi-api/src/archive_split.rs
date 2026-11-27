@@ -89,65 +89,65 @@ fn resolve_multivolume_path(path: &Path, temp_dir: &Path) -> Option<PathBuf> {
     // Pattern A: `archive.7z.001`, `archive.rar.002`, ...
     let mut base_name = None;
     let mut parts = Vec::new();
-    if let Some((base, suffix)) = file_name.rsplit_once('.') {
-        if suffix.len() >= 2 && suffix.chars().all(|c| c.is_ascii_digit()) {
-            let base_path = path.with_file_name(base);
-            let dir = path.parent()?;
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                let mut numbered: Vec<(u64, PathBuf)> = entries
-                    .flatten()
-                    .filter_map(|e| {
-                        let p = e.path();
-                        let n = p.file_name()?.to_string_lossy().to_string();
-                        let (b, suffix) = n.rsplit_once('.')?;
-                        if b == base && suffix.chars().all(|c| c.is_ascii_digit()) {
-                            suffix.parse::<u64>().ok().map(|num| (num, p))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                numbered.sort_by_key(|(num, _)| *num);
-                if !numbered.is_empty() {
-                    parts = numbered.into_iter().map(|(_, p)| p).collect();
-                    base_name = Some(base_path);
-                }
+    if let Some((base, suffix)) = file_name.rsplit_once('.')
+        && suffix.len() >= 2
+        && suffix.chars().all(|c| c.is_ascii_digit())
+    {
+        let base_path = path.with_file_name(base);
+        let dir = path.parent()?;
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            let mut numbered: Vec<(u64, PathBuf)> = entries
+                .flatten()
+                .filter_map(|e| {
+                    let p = e.path();
+                    let n = p.file_name()?.to_string_lossy().to_string();
+                    let (b, suffix) = n.rsplit_once('.')?;
+                    if b == base && suffix.chars().all(|c| c.is_ascii_digit()) {
+                        suffix.parse::<u64>().ok().map(|num| (num, p))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            numbered.sort_by_key(|(num, _)| *num);
+            if !numbered.is_empty() {
+                parts = numbered.into_iter().map(|(_, p)| p).collect();
+                base_name = Some(base_path);
             }
         }
     }
 
     // Pattern B: `archive.part1.rar`, `archive.part00002.rar`
-    if base_name.is_none() && is_archive_or_sfx_name(&file_name) {
-        if let Some((before_part, ext)) = file_name.rsplit_once('.') {
-            if let Some((prefix, num_str)) = before_part.rsplit_once(".part") {
-                if num_str.chars().all(|c| c.is_ascii_digit()) {
-                    let dir = path.parent()?;
-                    let base_base = format!("{prefix}.{ext}");
-                    if let Ok(entries) = std::fs::read_dir(dir) {
-                        let mut numbered: Vec<(u64, PathBuf)> = entries
-                            .flatten()
-                            .filter_map(|e| {
-                                let p = e.path();
-                                let n = p.file_name()?.to_string_lossy().to_string();
-                                if let Some((p2, e2)) = n.rsplit_once('.') {
-                                    if e2 != ext {
-                                        return None;
-                                    }
-                                    let (pr, num_str) = p2.rsplit_once(".part")?;
-                                    if pr == prefix && num_str.chars().all(|c| c.is_ascii_digit()) {
-                                        return num_str.parse::<u64>().ok().map(|num| (num, p));
-                                    }
-                                }
-                                None
-                            })
-                            .collect();
-                        numbered.sort_by_key(|(num, _)| *num);
-                        if !numbered.is_empty() {
-                            parts = numbered.into_iter().map(|(_, p)| p).collect();
-                            base_name = Some(path.with_file_name(base_base));
+    if base_name.is_none()
+        && is_archive_or_sfx_name(&file_name)
+        && let Some((before_part, ext)) = file_name.rsplit_once('.')
+        && let Some((prefix, num_str)) = before_part.rsplit_once(".part")
+        && num_str.chars().all(|c| c.is_ascii_digit())
+    {
+        let dir = path.parent()?;
+        let base_base = format!("{prefix}.{ext}");
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            let mut numbered: Vec<(u64, PathBuf)> = entries
+                .flatten()
+                .filter_map(|e| {
+                    let p = e.path();
+                    let n = p.file_name()?.to_string_lossy().to_string();
+                    if let Some((p2, e2)) = n.rsplit_once('.') {
+                        if e2 != ext {
+                            return None;
+                        }
+                        let (pr, num_str) = p2.rsplit_once(".part")?;
+                        if pr == prefix && num_str.chars().all(|c| c.is_ascii_digit()) {
+                            return num_str.parse::<u64>().ok().map(|num| (num, p));
                         }
                     }
-                }
+                    None
+                })
+                .collect();
+            numbered.sort_by_key(|(num, _)| *num);
+            if !numbered.is_empty() {
+                parts = numbered.into_iter().map(|(_, p)| p).collect();
+                base_name = Some(path.with_file_name(base_base));
             }
         }
     }
@@ -168,43 +168,39 @@ fn resolve_multivolume_path(path: &Path, temp_dir: &Path) -> Option<PathBuf> {
                     let p = e.path();
                     let n = p.file_name()?.to_string_lossy().to_string();
                     for prefix in ["z", "r"] {
-                        if let Some(suffix) = n.strip_prefix(&format!("{stem_name}.{prefix}")) {
-                            if suffix.len() >= 2 && suffix.chars().all(|c| c.is_ascii_digit()) {
-                                if let Ok(num) = suffix.parse::<u64>() {
-                                    return Some((num, p));
-                                }
-                            }
+                        if let Some(suffix) = n.strip_prefix(&format!("{stem_name}.{prefix}"))
+                            && suffix.len() >= 2
+                            && suffix.chars().all(|c| c.is_ascii_digit())
+                            && let Ok(num) = suffix.parse::<u64>()
+                        {
+                            return Some((num, p));
                         }
                     }
                     // Generic numeric continuation: `archive.001`, `archive.002`, ...
-                    if let Some(suffix) = n.strip_prefix(&format!("{stem_name}.")) {
-                        if suffix.len() >= 2 && suffix.chars().all(|c| c.is_ascii_digit()) {
-                            if let Ok(num) = suffix.parse::<u64>() {
-                                return Some((num, p));
-                            }
-                        }
+                    if let Some(suffix) = n.strip_prefix(&format!("{stem_name}."))
+                        && suffix.len() >= 2
+                        && suffix.chars().all(|c| c.is_ascii_digit())
+                        && let Ok(num) = suffix.parse::<u64>()
+                    {
+                        return Some((num, p));
                     }
                     // Same-name split: `archive.7z` + `archive.7z.001`, `archive.zip` + `.zip.001`.
-                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                        if let Some(suffix) = n.strip_prefix(&format!("{stem_name}.{ext}.")) {
-                            if suffix.len() >= 2 && suffix.chars().all(|c| c.is_ascii_digit()) {
-                                if let Ok(num) = suffix.parse::<u64>() {
-                                    return Some((num, p));
-                                }
-                            }
-                        }
+                    if let Some(ext) = path.extension().and_then(|e| e.to_str())
+                        && let Some(suffix) = n.strip_prefix(&format!("{stem_name}.{ext}."))
+                        && suffix.len() >= 2
+                        && suffix.chars().all(|c| c.is_ascii_digit())
+                        && let Ok(num) = suffix.parse::<u64>()
+                    {
+                        return Some((num, p));
                     }
                     // New-style WinRAR/SFX continuation: `base.part2.rar`, `base.part3.rar`.
-                    if let Some(rest) = n.strip_prefix(&format!("{stem_name}.part")) {
-                        if let Some((num_str, ext)) = rest.rsplit_once('.') {
-                            if num_str.chars().all(|c| c.is_ascii_digit())
-                                && ARCHIVE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
-                            {
-                                if let Ok(num) = num_str.parse::<u64>() {
-                                    return Some((num, p));
-                                }
-                            }
-                        }
+                    if let Some(rest) = n.strip_prefix(&format!("{stem_name}.part"))
+                        && let Some((num_str, ext)) = rest.rsplit_once('.')
+                        && num_str.chars().all(|c| c.is_ascii_digit())
+                        && ARCHIVE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
+                        && let Ok(num) = num_str.parse::<u64>()
+                    {
+                        return Some((num, p));
                     }
                     None
                 })
@@ -1440,10 +1436,10 @@ async fn run_split_job(
                 // A record that lives by name (under `_byname/`) keeps its own path; the copy this
                 // loop just moved into the hash layout is then a redundant duplicate and would
                 // linger forever (nothing sweeps bucket files without a record).
-                if let Ok(Some(existing)) = state.repos.archives.get(&existing_id).await {
-                    if Path::new(&existing.file) != dest.as_path() {
-                        let _ = tokio::fs::remove_file(&dest).await;
-                    }
+                if let Ok(Some(existing)) = state.repos.archives.get(&existing_id).await
+                    && Path::new(&existing.file) != dest.as_path()
+                {
+                    let _ = tokio::fs::remove_file(&dest).await;
                 }
                 if !new_ids.contains(&existing_id) {
                     new_ids.push(existing_id.clone());
@@ -1463,10 +1459,10 @@ async fn run_split_job(
         // the pipeline then answers `Unchanged` — the record exists, so the split's own title never
         // reaches it and the reader sees a hash as the volume's name. Only the fallback title (the
         // record's own id) is replaced, so a real name is never trodden on.
-        if let Some(id) = new_id_by_path.get(path) {
-            if !zip_name.is_empty() {
-                ensure_readable_title(state, id, &zip_name).await;
-            }
+        if let Some(id) = new_id_by_path.get(path)
+            && !zip_name.is_empty()
+        {
+            ensure_readable_title(state, id, &zip_name).await;
         }
     }
 
@@ -1479,10 +1475,10 @@ async fn run_split_job(
     // and stamps can be transferred to the correct positions.
     let mut page_maps_for_ids = Vec::new();
     for path in &created_files {
-        if let Some(id) = new_id_by_path.get(path) {
-            if let Some(map) = page_maps.get(path) {
-                page_maps_for_ids.push((id.clone(), map.clone()));
-            }
+        if let Some(id) = new_id_by_path.get(path)
+            && let Some(map) = page_maps.get(path)
+        {
+            page_maps_for_ids.push((id.clone(), map.clone()));
         }
     }
 
@@ -1900,10 +1896,10 @@ fn build_volumes(
         let sources = source_by_output.get(target).cloned().unwrap_or_default();
         let mut map = HashMap::new();
         for (i, page_name) in pages.iter().enumerate() {
-            if let Some(source_path) = sources.get(page_name) {
-                if let Some(original_page) = original_page_by_path.get(source_path) {
-                    map.insert(i as u32 + 1, *original_page);
-                }
+            if let Some(source_path) = sources.get(page_name)
+                && let Some(original_page) = original_page_by_path.get(source_path)
+            {
+                map.insert(i as u32 + 1, *original_page);
             }
         }
         page_maps.insert(target.clone(), map);

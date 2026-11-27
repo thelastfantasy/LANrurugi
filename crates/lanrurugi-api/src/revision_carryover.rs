@@ -170,10 +170,10 @@ fn map_page(
         if let Some(index) = new_names.iter().position(|n| *n == key.name) {
             return position(index);
         }
-        if let (Some(hash), Some(new_hashes)) = (key.hash, new_hashes) {
-            if let Some(index) = new_hashes.iter().position(|h| *h == Some(hash)) {
-                return position(index);
-            }
+        if let (Some(hash), Some(new_hashes)) = (key.hash, new_hashes)
+            && let Some(index) = new_hashes.iter().position(|h| *h == Some(hash))
+        {
+            return position(index);
         }
     }
     (old_page >= 1 && old_page as usize <= new_names.len()).then_some(old_page)
@@ -277,17 +277,16 @@ pub(crate) async fn apply(state: &AppState, plan: Carryover, new_id: &ArchiveId)
         }
     }
 
-    if plan.progress > 0 && new_archive.lastreadpage == 0 {
-        if let Some(page) = target(plan.progress) {
-            if let Err(e) = state
-                .repos
-                .archives
-                .set_progress(new_id, page, None, now_secs())
-                .await
-            {
-                tracing::warn!(%new_id, error = %e, "could not carry the reading position across a revision");
-            }
-        }
+    if plan.progress > 0
+        && new_archive.lastreadpage == 0
+        && let Some(page) = target(plan.progress)
+        && let Err(e) = state
+            .repos
+            .archives
+            .set_progress(new_id, page, None, now_secs())
+            .await
+    {
+        tracing::warn!(%new_id, error = %e, "could not carry the reading position across a revision");
     }
 
     for catid in &plan.categories {

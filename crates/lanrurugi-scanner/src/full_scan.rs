@@ -604,10 +604,10 @@ pub async fn heal_pagecounts(archives: &ArchiveRepository) -> HealSummary {
                         a.pagecount = new_pagecount;
                         a.arcsize = new_arcsize;
                         a.heal_failed_at = None;
-                        if let Some(outline) = outline {
-                            if a.toc.is_empty() {
-                                a.toc = outline;
-                            }
+                        if let Some(outline) = outline
+                            && a.toc.is_empty()
+                        {
+                            a.toc = outline;
                         }
                     })
                     .await;

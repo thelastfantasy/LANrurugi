@@ -180,9 +180,10 @@ async fn validate(state: &AppState, body: &SubscriptionBody) -> Result<(), Respo
         }
         _ => {}
     }
-    if let Some(minimum) = declared_minimum_interval(state, &body.source).await {
-        if body.interval_secs < minimum {
-            return Err(error(
+    if let Some(minimum) = declared_minimum_interval(state, &body.source).await
+        && body.interval_secs < minimum
+    {
+        return Err(error(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "create_subscription",
                 format!(
@@ -190,7 +191,6 @@ async fn validate(state: &AppState, body: &SubscriptionBody) -> Result<(), Respo
                     body.interval_secs
                 ),
             ));
-        }
     }
     Ok(())
 }

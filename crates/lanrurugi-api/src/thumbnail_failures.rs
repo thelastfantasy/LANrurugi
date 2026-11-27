@@ -126,27 +126,27 @@ pub async fn blocked(state: &AppState, archive_id: &str, page: u32, file: &Path)
         .await
         .ok()
         .flatten();
-    if let Some(raw) = permanent {
-        if let Some((reason, stored_size, stored_mtime)) = decode_entry(&raw) {
-            let current = fingerprint(file).await;
-            let unchanged = match current {
-                Some(current) => fingerprint_matches(stored_size, stored_mtime, current),
-                // The file is gone entirely: this is no longer a "the bytes are broken" case, so
-                // do not speak for it — the generator's own I/O error decides.
-                None => false,
-            };
-            if unchanged {
-                return Some(Block {
-                    damaged: decode_flag(&raw),
-                    reason: reason.to_string(),
-                });
-            }
-            // The file changed since the failure (re-imported, repaired, replaced): its entry no
-            // longer describes it. Drop it and let this attempt be the deciding one.
-            let _: Result<(), _> = conn
-                .hdel(THUMBNAIL_BLACKLIST_KEY, slot(archive_id, page))
-                .await;
+    if let Some(raw) = permanent
+        && let Some((reason, stored_size, stored_mtime)) = decode_entry(&raw)
+    {
+        let current = fingerprint(file).await;
+        let unchanged = match current {
+            Some(current) => fingerprint_matches(stored_size, stored_mtime, current),
+            // The file is gone entirely: this is no longer a "the bytes are broken" case, so
+            // do not speak for it — the generator's own I/O error decides.
+            None => false,
+        };
+        if unchanged {
+            return Some(Block {
+                damaged: decode_flag(&raw),
+                reason: reason.to_string(),
+            });
         }
+        // The file changed since the failure (re-imported, repaired, replaced): its entry no
+        // longer describes it. Drop it and let this attempt be the deciding one.
+        let _: Result<(), _> = conn
+            .hdel(THUMBNAIL_BLACKLIST_KEY, slot(archive_id, page))
+            .await;
     }
 
     let retry: Option<String> = conn

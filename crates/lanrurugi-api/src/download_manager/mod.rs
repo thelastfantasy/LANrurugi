@@ -380,12 +380,12 @@ pub(crate) async fn place_into_library(
         // Any refusal (EXDEV, or a mount that answers EPERM) falls back to the copy, which then
         // reports a real problem with the destination itself.
         if tokio::fs::rename(from, to).await.is_ok() {
-            if let Some(parent) = to.parent() {
-                if let Err(e) = sync_dir(parent).await {
-                    // Not durable yet: hand the bytes back so the failure leaves them where they were.
-                    let _ = tokio::fs::rename(to, from).await;
-                    return Err(CopyError::Durability(e));
-                }
+            if let Some(parent) = to.parent()
+                && let Err(e) = sync_dir(parent).await
+            {
+                // Not durable yet: hand the bytes back so the failure leaves them where they were.
+                let _ = tokio::fs::rename(to, from).await;
+                return Err(CopyError::Durability(e));
             }
             return Ok(Placed::Moved);
         }

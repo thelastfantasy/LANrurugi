@@ -280,10 +280,10 @@ fn strip_scheme(input: &str) -> Option<&str> {
 /// The code inside a share link: the segment after `/s/` (or `/embed/s/`), or a `#` fragment.
 fn link_code(url: &str) -> Result<ShareCode, CodeError> {
     let (without_fragment, fragment) = url.split_once('#').unwrap_or((url, ""));
-    if !fragment.is_empty() {
-        if let Ok(code) = ShareCode::parse(fragment) {
-            return Ok(code);
-        }
+    if !fragment.is_empty()
+        && let Ok(code) = ShareCode::parse(fragment)
+    {
+        return Ok(code);
     }
     let path = without_fragment
         .split_once('?')

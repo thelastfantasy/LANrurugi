@@ -590,15 +590,13 @@ async fn group_view(
         }));
     }
     let best = detect::best_member(group, &pages_by_id, &sizes_by_id);
-    if let Some(best_id) = best.as_deref() {
-        if let Some(index) = members
+    if let Some(best_id) = best.as_deref()
+        && let Some(index) = members
             .iter()
             .position(|m| m.get("id").and_then(|v| v.as_str()) == Some(best_id))
-        {
-            if let Some(object) = members[index].as_object_mut() {
-                object.insert("best".to_string(), serde_json::Value::Bool(true));
-            }
-        }
+        && let Some(object) = members[index].as_object_mut()
+    {
+        object.insert("best".to_string(), serde_json::Value::Bool(true));
     }
     json!({
         "key": key,

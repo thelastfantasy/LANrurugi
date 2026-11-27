@@ -127,20 +127,20 @@ impl Equivalence {
 
         let mut cur: Cow<'a, str> = Cow::Borrowed(input);
 
-        if config.jp {
-            if let Some(next) = jp::pre_normalize(&cur) {
-                cur = Cow::Owned(next);
-            }
+        if config.jp
+            && let Some(next) = jp::pre_normalize(&cur)
+        {
+            cur = Cow::Owned(next);
         }
-        if config.width {
-            if let Some(next) = nfkc(&cur) {
-                cur = Cow::Owned(next);
-            }
+        if config.width
+            && let Some(next) = nfkc(&cur)
+        {
+            cur = Cow::Owned(next);
         }
-        if config.jp {
-            if let Some(next) = jp::post_normalize(&cur) {
-                cur = Cow::Owned(next);
-            }
+        if config.jp
+            && let Some(next) = jp::post_normalize(&cur)
+        {
+            cur = Cow::Owned(next);
         }
         // 日文汉字新旧字体：Jp2t 把新字体/变体收敛到旧字体（如 発→發、竜→龍）。
         // 必须放在 `zh` 的 T2s 之前，这样同时开 zh 时能继续 發→发。
@@ -150,16 +150,16 @@ impl Equivalence {
                 cur = Cow::Owned(next);
             }
         }
-        if config.latin {
-            if let Some(next) = latin::fold(&cur) {
-                cur = Cow::Owned(next);
-            }
+        if config.latin
+            && let Some(next) = latin::fold(&cur)
+        {
+            cur = Cow::Owned(next);
         }
         #[cfg(feature = "zh")]
-        if config.zh {
-            if let Some(next) = self.opencc.t2s(&cur) {
-                cur = Cow::Owned(next);
-            }
+        if config.zh
+            && let Some(next) = self.opencc.t2s(&cur)
+        {
+            cur = Cow::Owned(next);
         }
         // feature 关闭时，对应开关只是被忽略；不要留下未使用参数警告。
         let _ = (config.zh, config.jp);

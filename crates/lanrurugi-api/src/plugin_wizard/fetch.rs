@@ -182,10 +182,10 @@ impl FetchPolicy {
         let target = target_domain.and_then(host_of);
         let mut fetch_hosts: Vec<String> = target.iter().cloned().collect();
         for link in links {
-            if let Some(host) = host_of(link) {
-                if !fetch_hosts.contains(&host) {
-                    fetch_hosts.push(host);
-                }
+            if let Some(host) = host_of(link)
+                && !fetch_hosts.contains(&host)
+            {
+                fetch_hosts.push(host);
             }
         }
         Self {
@@ -391,20 +391,19 @@ pub(super) async fn fetch_with_policy(
             .map_err(|e| FetchError::Request(format!("请求失败: {e}")))?;
         let status = resp.status();
 
-        if status.is_redirection() {
-            if let Some(next) = resp
+        if status.is_redirection()
+            && let Some(next) = resp
                 .headers()
                 .get(reqwest::header::LOCATION)
                 .and_then(|v| v.to_str().ok())
                 .and_then(|loc| current.join(loc).ok())
-            {
-                if trail.len() >= REDIRECT_CAP {
-                    return Err(FetchError::RedirectCapExceeded { trail });
-                }
-                trail.push(next.clone());
-                current = next;
-                continue;
+        {
+            if trail.len() >= REDIRECT_CAP {
+                return Err(FetchError::RedirectCapExceeded { trail });
             }
+            trail.push(next.clone());
+            current = next;
+            continue;
         }
 
         let (body, total_bytes, body_truncated) = read_capped(resp).await?;

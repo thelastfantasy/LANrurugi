@@ -809,12 +809,12 @@ async fn transfer_archive(run: Arc<Run>, entry: ImportArchive) -> ArchiveOutcome
     // A resume only needs room for what is still missing; the pieces already on disk are in the
     // temp tree already.
     let missing = size.saturating_sub(already);
-    if let Some(available) = import_space(&run.dir) {
-        if missing > available {
-            return ArchiveOutcome::Failed(format!(
-                "disk_full: {missing} more bytes needed, {available} available on the temp disk"
-            ));
-        }
+    if let Some(available) = import_space(&run.dir)
+        && missing > available
+    {
+        return ArchiveOutcome::Failed(format!(
+            "disk_full: {missing} more bytes needed, {available} available on the temp disk"
+        ));
     }
     run.update(&id, |a| a.bytes_done = already.min(size)).await;
     // Pieces verified in an earlier run were counted then; resume from that high-water mark so a
@@ -1383,19 +1383,16 @@ pub async fn start(host: &Host, queue_item_id: &str, import_id: ShareImportId) -
                 .await;
                 // The record is what the settings page lists. A runner that gave up before it
                 // could build its own state left the row "transferring" forever.
-                if let Ok(Some(mut record)) = repo(&*host).get(&import_id).await {
-                    if record.error.is_none()
-                        && matches!(
-                            record.state,
-                            ImportState::Transferring
-                                | ImportState::Rebuilding
-                                | ImportState::Failed
-                        )
-                    {
-                        record.state = ImportState::Failed;
-                        record.error = Some(message.clone());
-                        let _ = repo(&*host).save(&record).await;
-                    }
+                if let Ok(Some(mut record)) = repo(&*host).get(&import_id).await
+                    && record.error.is_none()
+                    && matches!(
+                        record.state,
+                        ImportState::Transferring | ImportState::Rebuilding | ImportState::Failed
+                    )
+                {
+                    record.state = ImportState::Failed;
+                    record.error = Some(message.clone());
+                    let _ = repo(&*host).save(&record).await;
                 }
                 host.jobs().fail(&job, message).await;
             }
@@ -1493,10 +1490,11 @@ async fn run_import(
             .map(|a| a.size),
         concurrency,
     );
-    if let Some(available) = import_space(&dir) {
-        if own == 0 && needed > available {
-            return Err(format!("not_enough_disk:{needed}:{available}"));
-        }
+    if let Some(available) = import_space(&dir)
+        && own == 0
+        && needed > available
+    {
+        return Err(format!("not_enough_disk:{needed}:{available}"));
     }
     let filename_policy = record.filename_policy;
     let run = Arc::new(Run {

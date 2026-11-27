@@ -236,19 +236,18 @@ async fn update_translation_settings(
     // Store the credential separately, and only ever write it — never read it back out.
     // A provider served by the global key ignores any submitted value outright: allowing a second,
     // translation-only DeepSeek key would create two sources of truth for one account.
-    if let (Some(key), Some(provider)) = (body.api_key.as_ref(), settings.provider) {
-        if !key.trim().is_empty() && !uses_global_key(&state, provider).await {
-            if let Err(e) = credential_store(&state)
-                .store(&provider.credential_ref(), key.trim())
-                .await
-            {
-                return error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "update_translation_settings",
-                    e.to_string(),
-                );
-            }
-        }
+    if let (Some(key), Some(provider)) = (body.api_key.as_ref(), settings.provider)
+        && !key.trim().is_empty()
+        && !uses_global_key(&state, provider).await
+        && let Err(e) = credential_store(&state)
+            .store(&provider.credential_ref(), key.trim())
+            .await
+    {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "update_translation_settings",
+            e.to_string(),
+        );
     }
 
     crate::activity::record_translation_settings_change(

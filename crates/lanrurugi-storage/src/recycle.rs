@@ -367,13 +367,12 @@ pub async fn move_into_bin(
         })?;
     tokio::fs::rename(source_path, payload.join(&file_name)).await?;
     let mut patch_name = None;
-    if let Some(patch) = patch_source {
-        if let Some(name) = patch.file_name().map(|n| n.to_string_lossy().into_owned()) {
-            if patch.exists() {
-                tokio::fs::rename(patch, payload.join(&name)).await?;
-                patch_name = Some(name);
-            }
-        }
+    if let Some(patch) = patch_source
+        && let Some(name) = patch.file_name().map(|n| n.to_string_lossy().into_owned())
+        && patch.exists()
+    {
+        tokio::fs::rename(patch, payload.join(&name)).await?;
+        patch_name = Some(name);
     }
     Ok(patch_name)
 }

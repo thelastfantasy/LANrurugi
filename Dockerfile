@@ -6,7 +6,7 @@
 # release build of the single `lanrurugi-server` binary serving the built frontend as static assets
 # (Principle III — one deployable).
 
-ARG RUST_VERSION=1.99.1
+ARG RUST_VERSION=1.100.0
 ARG NODE_VERSION=26.13.0
 ARG DENO_VERSION=2.9.8
 ARG PNPM_VERSION=12.16.1

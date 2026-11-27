@@ -254,10 +254,11 @@ pub async fn report_damage(
         // such a page is moved like the original was. While the patch stays unreadable the server
         // only hands out lists of `pages_after`, so a `pages_before` here can only come from a list
         // fetched before the damage.
-        if let Some(shift) = record.progress_shift.clone() {
-            if shift.pages_before > 0 && archive.progress_pages == Some(shift.pages_before) {
-                apply_progress_shift(state, archive, shift, &record.pages).await;
-            }
+        if let Some(shift) = record.progress_shift.clone()
+            && shift.pages_before > 0
+            && archive.progress_pages == Some(shift.pages_before)
+        {
+            apply_progress_shift(state, archive, shift, &record.pages).await;
         }
         return None;
     }
@@ -282,11 +283,11 @@ pub async fn report_damage(
                 record.progress_shift = None;
             }
         }
-        if let Some(shift) = record.progress_shift.clone() {
-            if apply_progress_shift(state, archive, shift, &record.pages).await {
-                record.progress_shifted = Some(true);
-                progress_done = store(state, archive_id, &record).await;
-            }
+        if let Some(shift) = record.progress_shift.clone()
+            && apply_progress_shift(state, archive, shift, &record.pages).await
+        {
+            record.progress_shifted = Some(true);
+            progress_done = store(state, archive_id, &record).await;
         }
     }
     if marks_pending {

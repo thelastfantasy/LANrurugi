@@ -156,36 +156,36 @@ pub async fn plan(state: &AppState, selection: &Selection) -> Result<Plan, Strin
 
     let mut log_slices = Vec::new();
     let mut log_lines = 0;
-    if selection.categories.server_logs {
-        if let Some(dir) = &state.library.log_dir {
-            let mut budget = 8_000_usize;
-            for category in lanrurugi_core::logging::CATEGORIES {
-                let entries = logs::read(dir, category).await;
-                if entries.is_empty() {
-                    continue;
-                }
-                let picked = logs::slice(&entries, selection.from, selection.to);
-                if picked.is_empty() {
-                    continue;
-                }
-                let take = picked.len().min(budget);
-                budget -= take;
-                let text = picked[..take]
-                    .iter()
-                    .map(|entry| entry.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                log_lines += take;
-                log_slices.push((format!("server/{category}.log"), text));
-                if take < picked.len() {
-                    truncations.push(format!(
-                        "{category} log capped at {take} entries ({} dropped)",
-                        picked.len() - take
-                    ));
-                }
-                if budget == 0 {
-                    break;
-                }
+    if selection.categories.server_logs
+        && let Some(dir) = &state.library.log_dir
+    {
+        let mut budget = 8_000_usize;
+        for category in lanrurugi_core::logging::CATEGORIES {
+            let entries = logs::read(dir, category).await;
+            if entries.is_empty() {
+                continue;
+            }
+            let picked = logs::slice(&entries, selection.from, selection.to);
+            if picked.is_empty() {
+                continue;
+            }
+            let take = picked.len().min(budget);
+            budget -= take;
+            let text = picked[..take]
+                .iter()
+                .map(|entry| entry.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            log_lines += take;
+            log_slices.push((format!("server/{category}.log"), text));
+            if take < picked.len() {
+                truncations.push(format!(
+                    "{category} log capped at {take} entries ({} dropped)",
+                    picked.len() - take
+                ));
+            }
+            if budget == 0 {
+                break;
             }
         }
     }

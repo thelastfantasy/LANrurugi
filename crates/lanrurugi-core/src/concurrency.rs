@@ -86,12 +86,11 @@ fn env_override(name: &str) -> Option<usize> {
 /// (issue #206). Half the cores leaves the API real headroom; `LANRURUGI_SCAN_CONCURRENCY`
 /// overrides it outright. Also sizes the scanner's own Redis pools, so the two cannot disagree.
 pub fn scan_concurrency() -> usize {
-    if let Ok(raw) = std::env::var("LANRURUGI_SCAN_CONCURRENCY") {
-        if let Ok(parsed) = raw.trim().parse::<usize>() {
-            if parsed > 0 {
-                return parsed;
-            }
-        }
+    if let Ok(raw) = std::env::var("LANRURUGI_SCAN_CONCURRENCY")
+        && let Ok(parsed) = raw.trim().parse::<usize>()
+        && parsed > 0
+    {
+        return parsed;
     }
     (std::thread::available_parallelism()
         .map(|n| n.get())

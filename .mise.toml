@@ -10,12 +10,12 @@
 # installed for the toolchain ..., help: run `rustup component add ...`" — hit in CI first, since a
 # contributor machine that already had a system-wide Rust install with these components wouldn't
 # surface the gap).
-# Kept in lockstep with the `RUST_VERSION` ARG every Dockerfile pins (currently 1.99.1): CI installs
+# Kept in lockstep with the `RUST_VERSION` ARG every Dockerfile pins (currently 1.100.0): CI installs
 # its toolchain from *this* file while contributors build inside those images, so a drift between the
 # two means CI compiles with an older rustc than the code was written against. That is not
 # hypothetical — 1.97.1 here against 1.99.0 in the images let a dependency requiring rustc 1.98
 # (`avif-decode`) into the lockfile, and CI's `cargo check` failed outright on it.
-rust = { version = "1.99.1", components = "rustfmt,clippy" }
+rust = { version = "1.100.0", components = "rustfmt,clippy" }
 node = "26.13.0"
 deno = "2.9.8"
 pnpm = "12.16.1"
@@ -166,6 +166,14 @@ args=()
 for c in "$@"; do args+=(-p "$c"); done
 scripts/cargo-container-run.sh cargo update "${args[@]}"
 """
+
+[tasks.fix-edition]
+description = "cargo fix --edition across the workspace inside the dev container, for moving to the next Rust edition (run before changing `edition` in Cargo.toml)"
+run = "scripts/cargo-container-run.sh cargo fix --edition --workspace --all-targets --allow-dirty --allow-no-vcs"
+
+[tasks.clippy-fix]
+description = "Apply clippy's machine-applicable suggestions across the workspace inside the dev container (review the diff afterwards)"
+run = "scripts/cargo-container-run.sh cargo clippy --fix --workspace --all-targets --allow-dirty --allow-no-vcs"
 
 [tasks.doc-crate]
 description = "cargo doc --no-deps -p <crate> inside the dev container with rustdoc warnings denied — the documentation gate for a crate's public surface. Usage: mise run doc-crate -- <crate-name> [<crate-name> ...]"
