@@ -425,9 +425,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         <Button id="backup" onClick={() => navigate(routes.backup())}>
           {t("settings.databaseBackupRestore")}
         </Button>{" "}
-        <Button id="batch" onClick={() => navigate(routes.batch())}>
-          {t("batch.batchOperations")}
-        </Button>{" "}
         {/* Renders nothing when the deployment switched the wizard off — see its own docs. */}
         <WizardRerunButton />
         <DiagnosticsButton />

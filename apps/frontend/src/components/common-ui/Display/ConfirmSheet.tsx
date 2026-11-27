@@ -85,3 +85,53 @@ export function ConfirmSheet({
     </BottomSheet>
   )
 }
+
+/** Phone-width form of a choice between named outcomes: the message over one full-width button per
+ * choice, with the sheet's own bar as cancel. Like `ConfirmSheet`, the answer (`null` = cancelled)
+ * is reported once the sheet has slid away. */
+export function ChoiceSheet({
+  message,
+  choices,
+  cancelLabel,
+  onChoose,
+}: {
+  message: ReactNode
+  choices: readonly { value: string; label: ReactNode; danger?: boolean }[]
+  cancelLabel: ReactNode
+  onChoose: (value: string | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setOpen(true))
+    return () => cancelAnimationFrame(frame)
+  }, [])
+  const picked = useRef<string | null>(null)
+  return (
+    <BottomSheet
+      open={open}
+      onClose={() => setOpen(false)}
+      onExited={() => onChoose(picked.current)}
+      cancelLabel={cancelLabel}
+      zIndex={Z_DIALOG}
+    >
+      <div style={{ textAlign: "center", padding: "14px 4px 16px" }}>
+        <i className="fa fa-exclamation-triangle fa-2x" aria-hidden="true"></i>
+        <div style={{ fontWeight: "bold", fontSize: 15, marginTop: 12 }}>{message}</div>
+      </div>
+      {choices.map((choice) => (
+        <button
+          key={choice.value}
+          type="button"
+          className={choice.danger ? "stdbtn stdbtn-danger" : "stdbtn"}
+          style={{ display: "block", width: "100%", height: 48, margin: "0 0 8px", fontSize: 16, borderRadius: 6 }}
+          onClick={() => {
+            picked.current = choice.value
+            setOpen(false)
+          }}
+        >
+          {choice.label}
+        </button>
+      ))}
+    </BottomSheet>
+  )
+}

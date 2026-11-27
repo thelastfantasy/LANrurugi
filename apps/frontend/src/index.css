@@ -2038,8 +2038,8 @@ body:has([data-overlay="modal"]) {
 }
 
 /* AiSmartTankoubonDrawer.tsx's suggested-group checklist rows — the shared ArchiveChecklistItem
- * component itself carries no row spacing (Categories.tsx/Batch.tsx both rely on plain browser
- * default <li> layout, which is correct for their own denser lists), but this modal's own rows
+ * component itself carries no row spacing (Categories.tsx relies on plain browser
+ * default <li> layout, which is correct for its own denser list), but this modal's own rows
  * routinely show long, near-identical titles (same-series archives differing only in a volume
  * number/subtitle near the end) at the page's small base font size, and the default zero-padding
  * <li> packed them tight enough that adjacent rows were hard to visually separate at a glance —
@@ -2393,8 +2393,9 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
  * itself; aligning the stepper to the wrapper's own `top: 0`/`bottom: 0` left it taller than, and
  * shifted above, the input's actual visible box, reading as "the up arrow sits too high" (reported
  * live, 2026-09-07, confirmed via `getBoundingClientRect` — the stepper's box didn't match the
- * input's, not an icon-glyph offset). `top: 4px` matches `.stdinput`'s own `margin-top`; `bottom: 0`
- * matches its zero `margin-bottom`. Each button is exactly half that height via `flex: 1 1 50%`.
+ * input's, not an icon-glyph offset). `NumberInputShell` sets `top`/`height` from the input's own
+ * offset box at runtime; `top: 4px` here (`.stdinput`'s `margin-top`) only covers the first paint.
+ * Each button is exactly half that height via `flex: 1 1 50%`.
  *
  * Hidden until hover/focus-within, matching the native `::-webkit-inner-spin-button`'s own
  * hover-to-reveal behaviour — permanently overlaying two extra buttons on every number field on
@@ -4480,116 +4481,39 @@ div.gt.gt-single > span {
   border-top: 1px solid rgba(128, 128, 128, 0.35);
 }
 
-/* Batch operations: operations | selected | divider | picker. The picker column only exists once
-   the divider's button opens it; both lists fill the height the page gives them and scroll inside. */
-.batch-page {
-  text-align: left;
-}
-.batch-layout {
-  display: grid;
-  grid-template-columns: 340px minmax(260px, 1fr) 20px;
-  gap: 0 8px;
-  height: max(420px, calc(100vh - 230px));
-  margin-bottom: 12px;
-}
-.batch-layout.is-picker-open {
-  grid-template-columns: 340px minmax(240px, 1fr) 20px minmax(300px, 1.2fr);
-}
-.batch-ops {
-  overflow-y: auto;
-  min-width: 0;
-}
-.batch-panel {
+/* The selection drawer's batch view: one column, controls at the drawer's full width. */
+.batch-ops-panel {
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  border: 1px solid rgba(128, 128, 128, 0.35);
+  gap: 10px;
 }
-.batch-panel-head {
-  display: flex;
+.batch-ops-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  gap: 6px;
-  padding: 6px;
-  border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+  gap: 8px 10px;
 }
-.batch-head-btn {
-  width: auto;
+/* Spans both grid columns: the auto mode's one-line explanation under its radio row. */
+.batch-ops-hint {
+  grid-column: 1 / -1;
   margin: 0;
-  padding: 0 8px;
+  font-size: 12px;
+  opacity: 0.8;
 }
-.batch-list {
-  flex: 1;
-  min-height: 0;
+.batch-ops-note {
+  margin: 0;
+  text-align: center;
 }
-.batch-empty {
-  padding: 12px;
-  opacity: 0.75;
-}
-.batch-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 100%;
-  padding: 0 8px;
-  border-bottom: 1px solid rgba(128, 128, 128, 0.15);
-}
-.batch-row-pick {
-  cursor: pointer;
-}
-/* 13px rather than the page's inherited 8pt: at 8pt the titles were hard to read on the dark themes. */
-.batch-row-title {
-  font-size: 13px;
-  flex: 1;
+.batch-ops-start,
+.batch-ops-back {
+  width: 100%;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.batch-row-loading {
-  opacity: 0.6;
-  font-family: monospace;
-}
-.batch-row-kind {
-  opacity: 0.7;
-}
-.batch-row-remove {
-  flex: none;
-}
-/* Full height, so it reads as the edge between two columns; the button sits in its middle. */
-.batch-divider {
-  display: flex;
+  height: 36px;
+  margin: 0;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-left: 1px solid rgba(128, 128, 128, 0.35);
-  border-right: 1px solid rgba(128, 128, 128, 0.35);
-}
-.batch-divider-btn {
-  width: 20px;
-  min-width: 0;
-  height: 48px;
-  margin: 0;
-  padding: 0;
-}
-
-/* Phone: the selection fills the page; the operations bar is pinned to the bottom. */
-.batch-mobile .batch-selected {
-  height: calc(100dvh - 260px);
-  min-height: 300px;
-}
-.batch-mobile-bar {
-  position: sticky;
-  bottom: 0;
-  padding: 8px 0;
-  background-color: inherit;
-}
-.batch-mobile-bar .stdbtn {
-  width: 100%;
-  margin: 0;
-}
-/* The windowed list needs a height to window against; the drawer's own body only scrolls. */
-.batch-drawer-body .batch-picker {
-  height: calc(100dvh - 140px);
+  gap: 6px;
 }
 /* The AI-grouping filter row: `.stdinput` and `.stdbtn` are two different legacy controls, with
    different heights (21px + 2+2px padding vs 28px) and different margins (4px 1px 0 vs 1px), so the

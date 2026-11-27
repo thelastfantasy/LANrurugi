@@ -17,8 +17,8 @@ import { TagInput } from "@/components/Form"
 import { confirmDialog } from "@/dialog"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { routes } from "@/lib/routes"
-import { clearTagsExcept, PROTECTED_TAG_NAMESPACES, sourceTagValues } from "@/lib/tagFormat"
-import { findMatchingPlugin } from "@/pages/Upload/shared"
+import { clearTagsExcept, PROTECTED_TAG_NAMESPACES } from "@/lib/tagFormat"
+import { findSourcePlugin } from "@/pages/Upload/shared"
 import { toast } from "@/toast"
 
 /** A `source:` tag's URL rewritten into the form the plugin owning that site stores. */
@@ -129,11 +129,8 @@ function EditForm({ archiveId, archive }: { archiveId: string; archive: ArchiveM
 
   /** Runs the metadata plugin a `source:` tag belongs to, or else the enabled chain ingest runs. */
   async function autoScrape() {
-    const source = sourceTagValues(tags)
-      .map((value) => (/^https?:\/\//i.test(value) ? value : `https://${value}`))
-      .map((url) => ({ url, plugin: findMatchingPlugin(plugins.data, url) }))
-      .find((match) => match.plugin)
-    if (source?.plugin) {
+    const source = findSourcePlugin(plugins.data, tags)
+    if (source) {
       await runPlugin(source.plugin.namespace, source.plugin.oneshot_arg ? source.url : "")
       return
     }

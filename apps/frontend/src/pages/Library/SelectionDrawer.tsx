@@ -1,14 +1,18 @@
 import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
+  FaArrowLeft,
   FaCheckDouble,
   FaCompress,
   FaEject,
   FaGripVertical,
   FaHammer,
   FaList,
+  FaShareNodes,
   FaSquareCheck,
   FaTableCellsLarge,
+  FaTrashCan,
+  FaWandMagicSparkles,
   FaWindowMinimize,
   FaXmark,
 } from "react-icons/fa6"
@@ -16,10 +20,13 @@ import {
 import { useArchiveMetadata } from "@/api/hooks"
 import { type DragHandleProps, Drawer, DrawerFooter, SortableList } from "@/components/common-ui/Display"
 import { IconButton } from "@/components/common-ui/Form"
+import { StatusIcon } from "@/components/Display"
 import { useNearViewport } from "@/hooks/useNearViewport"
 import { useDataChange } from "@/lib/crossTabData"
 import { SELECTION_VIEW_KEY } from "@/lib/storageKeys"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
+
+import { BatchOperations, useBatchActions } from "./BatchOperations"
 
 type SelectionView = "list" | "grid"
 
@@ -57,8 +64,9 @@ export function SelectionDrawer({
   onSortSelection,
   sortingSelection,
   onClear,
-  onRunBatch,
-  onRunBatchOnFilter,
+  onBatchRemoved,
+  onShare,
+  onDeleteOne,
   onMerge,
 }: {
   open: boolean
@@ -70,15 +78,18 @@ export function SelectionDrawer({
   onReorder: (ids: string[]) => void
   onRemove: (id: string) => void
   onSelectPage: () => void
-  onSelectResults: () => void
+  onSelectResults: () => Promise<void>
   /** Orders the selection server-side; used instead of drag once it is too big to reorder by hand. */
   onSortSelection: (mode: "title" | "date_added" | "reverse") => void
   sortingSelection: boolean
   /** The all-results walk is in flight; the button shows it rather than silently doing nothing. */
   selectingResults: boolean
   onClear: () => void
-  onRunBatch: () => void
-  onRunBatchOnFilter: () => void
+  /** A batch delete removed these; they leave the selection. */
+  onBatchRemoved: (ids: string[]) => void
+  onShare: (ids: string[]) => void
+  /** One selected item is deleted like one archive on the grid: the same dialog, no typed confirmation. */
+  onDeleteOne: (id: string) => void
   onMerge: () => void
 }) {
   const { t } = useTranslation()
@@ -88,7 +99,7 @@ export function SelectionDrawer({
   // one. The button stays visible (disabled) so the rule is discoverable instead of the action
   // just vanishing once a second Tankoubon lands in the selection.
   const mergeBlockedByTank = tankCount > 1
-  // Another tab (`/batch`) may delete what is still listed here. Drop those rows on the spot: a
+  // Another tab may delete what is still listed here. Drop those rows on the spot: a
   // stale selection would fail every operation the user launches from it.
   useDataChange((change) => {
     for (const id of change.removed ?? []) {
@@ -104,6 +115,16 @@ export function SelectionDrawer({
     } catch {
       // A per-viewer convenience; without storage it just resets next time.
     }
+  }
+  // The batch view replaces the list until it is left or the selection empties (a batch delete).
+  const [batchOpen, setBatchOpen] = useState(false)
+  const actions = useBatchActions(selectedIds, onBatchRemoved)
+  const showBatch = batchOpen && count > 0
+  async function openBatch() {
+    // With nothing selected it runs over everything the filter matches — "tag-scan every untagged
+    // archive" should not need hundreds of ticks.
+    if (count === 0) await onSelectResults()
+    setBatchOpen(true)
   }
   const viewLabel = t(view === "list" ? "library.selectionViewGrid" : "library.selectionViewList") ?? undefined
   return (
@@ -123,7 +144,7 @@ export function SelectionDrawer({
       }
       headerActions={
         <>
-          {count > 0 && count <= SORT_ONLY_SELECTION && (
+          {!showBatch && count > 0 && count <= SORT_ONLY_SELECTION && (
             <IconButton
               variant="ghost-btn"
               icon={view === "list" ? <FaTableCellsLarge size={16} /> : <FaList size={16} />}
@@ -144,7 +165,15 @@ export function SelectionDrawer({
         </>
       }
     >
-      {count === 0 ? (
+      {showBatch ? (
+        <div className="flex flex-col gap-3">
+          <button type="button" className="stdbtn batch-ops-back" onClick={() => setBatchOpen(false)}>
+            <FaArrowLeft aria-hidden="true" />
+            {t("library.backToSelection")}
+          </button>
+          <BatchOperations actions={actions} />
+        </div>
+      ) : count === 0 ? (
         <div
           className="flex flex-col items-center justify-center gap-3 text-center"
           style={{ padding: "48px 16px", opacity: 0.8 }}
@@ -176,46 +205,84 @@ export function SelectionDrawer({
           }
         />
       )}
-      <DrawerFooter>
-        <div className="grid grid-cols-2 gap-2">
-          <button type="button" className="stdbtn" style={FOOTER_BUTTON} onClick={onSelectPage}>
-            <FaCheckDouble aria-hidden="true" />
-            {t("Select All on Page")}
-          </button>
-          <button
-            type="button"
-            className="stdbtn"
-            style={FOOTER_BUTTON}
-            disabled={selectingResults || filteredCount === 0}
-            onClick={onSelectResults}
-          >
-            {selectingResults ? <i className="fa fa-cog fa-spin" aria-hidden="true" /> : <FaSquareCheck aria-hidden="true" />}
-            {t("library.selectAllResults", { n: filteredCount })}
-          </button>
-          <button type="button" className="stdbtn" style={FOOTER_BUTTON} disabled={count === 0} onClick={onClear}>
-            <FaEject aria-hidden="true" />
-            {t("Clear Selection")}
-          </button>
-          {/* With nothing selected this runs over everything the filter matches — "tag-scan every
-              untagged archive" should not need hundreds of ticks. */}
-          <button type="button" className="stdbtn" style={FOOTER_BUTTON} onClick={count === 0 ? onRunBatchOnFilter : onRunBatch}>
-            <FaHammer aria-hidden="true" />
-            {count === 0 ? t("Batch process all {{n}} results", { n: filteredCount }) : t("Batch Operations")}
-          </button>
-          <button
-            type="button"
-            className="stdbtn"
-            style={{ ...FOOTER_BUTTON, gridColumn: "1 / -1" }}
-            disabled={!canMerge}
-            title={mergeBlockedByTank ? t("library.mergeBlockedByTank") ?? undefined : undefined}
-            onClick={onMerge}
-          >
-            <FaCompress aria-hidden="true" />
-            {t("Merge into Tankoubon")}
-            {mergeBlockedByTank && ` · ${t("library.tankoubonSelectedCount", { n: tankCount })}`}
-          </button>
-        </div>
-      </DrawerFooter>
+      {!showBatch && (
+        <DrawerFooter>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" className="stdbtn" style={FOOTER_BUTTON} onClick={onSelectPage}>
+              <FaCheckDouble aria-hidden="true" />
+              {t("Select All on Page")}
+            </button>
+            <button
+              type="button"
+              className="stdbtn"
+              style={FOOTER_BUTTON}
+              disabled={selectingResults || filteredCount === 0}
+              onClick={onSelectResults}
+            >
+              {selectingResults ? <i className="fa fa-cog fa-spin" aria-hidden="true" /> : <FaSquareCheck aria-hidden="true" />}
+              {t("library.selectAllResults", { n: filteredCount })}
+            </button>
+            <button type="button" className="stdbtn" style={FOOTER_BUTTON} disabled={count === 0} onClick={onClear}>
+              <FaEject aria-hidden="true" />
+              {t("Clear Selection")}
+            </button>
+            <button
+              type="button"
+              className="stdbtn"
+              style={FOOTER_BUTTON}
+              disabled={selectingResults || (count === 0 && filteredCount === 0)}
+              onClick={() => void openBatch()}
+            >
+              <FaHammer aria-hidden="true" />
+              {count === 0 ? t("Batch process all {{n}} results", { n: filteredCount }) : t("Batch Operations")}
+            </button>
+            {/* The everyday operations run in one tap, like merging; the rest sit in the batch view. */}
+            <button
+              type="button"
+              className="stdbtn"
+              style={FOOTER_BUTTON}
+              disabled={actions.busy || actions.archiveCount === 0}
+              title={t("batch.scrapeModeAutoHelp") ?? undefined}
+              onClick={() => void actions.scrape()}
+            >
+              {actions.busy ? <i className="fa fa-cog fa-spin" aria-hidden="true" /> : <FaWandMagicSparkles aria-hidden="true" />}
+              {actions.busy && actions.status ? actions.status : t("edit.autoScrape")}
+            </button>
+            <button
+              type="button"
+              className="stdbtn"
+              style={FOOTER_BUTTON}
+              disabled={count === 0}
+              onClick={() => onShare(selectedIds)}
+            >
+              <FaShareNodes aria-hidden="true" />
+              {t("batch.share")}
+            </button>
+            <button
+              type="button"
+              className="stdbtn"
+              style={FOOTER_BUTTON}
+              disabled={!canMerge}
+              title={mergeBlockedByTank ? t("library.mergeBlockedByTank") ?? undefined : undefined}
+              onClick={onMerge}
+            >
+              <FaCompress aria-hidden="true" />
+              {t("Merge into Tankoubon")}
+              {mergeBlockedByTank && ` · ${t("library.tankoubonSelectedCount", { n: tankCount })}`}
+            </button>
+            <button
+              type="button"
+              className="stdbtn stdbtn-danger"
+              style={FOOTER_BUTTON}
+              disabled={actions.busy || count === 0}
+              onClick={() => (count === 1 ? onDeleteOne(selectedIds[0]) : void actions.deleteSelected())}
+            >
+              <FaTrashCan aria-hidden="true" />
+              {t("common.delete")}
+            </button>
+          </div>
+        </DrawerFooter>
+      )}
     </Drawer>
   )
 }
@@ -330,6 +397,13 @@ const FOOTER_BUTTON = {
   gap: 6,
 } as const
 
+/** The grid cards' own Tankoubon icon, so a Tankoubon in the selection reads apart from an archive. */
+function TankMark({ id }: { id: string }) {
+  const { t } = useTranslation()
+  if (!isTankoubonId(id)) return null
+  return <StatusIcon kind="tankoubon" title={t("library.tankoubon") ?? undefined} style={{ marginRight: 4 }} />
+}
+
 const thumbSrc = (id: string) =>
   isTankoubonId(id) ? `/api/tankoubons/${id}/thumbnail` : `/api/archives/${id}/thumbnail`
 
@@ -386,6 +460,7 @@ function SelectedRow({
         style={{ width: 40, height: 56 }}
       />
       <span className="line-clamp-2 min-w-0 flex-1 break-words text-left" style={{ fontSize: 13 }}>
+        <TankMark id={id} />
         {metadata.data?.title ?? ""}
       </span>
       <IconButton
@@ -466,6 +541,7 @@ function SelectedTile({
         </button>
       </div>
       <span className="line-clamp-2 break-words text-left" style={{ fontSize: 12, lineHeight: 1.35 }}>
+        <TankMark id={id} />
         {metadata.data?.title ?? ""}
       </span>
     </div>

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 
-import { BottomSheet, ConfirmSheet, PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
+import { BottomSheet, ChoiceSheet, ConfirmSheet, PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
 import { Tooltip } from "@/components/common-ui/Display"
 import { Checkbox, Input } from "@/components/common-ui/Form"
 import { SearchSyntaxHelp } from "@/components/Display"
@@ -1472,6 +1472,17 @@ export function DialogHost() {
     const cancelChoice = () => {
       request.resolve(null)
       close()
+    }
+    if (phone) {
+      return (
+        <ChoiceSheet
+          key={requestKey(request)}
+          message={request.message}
+          choices={request.choices}
+          cancelLabel={t("common.cancel") ?? "Cancel"}
+          onChoose={(value) => (value === null ? cancelChoice() : choose(value))}
+        />
+      )
     }
     return createPortal(
       <>

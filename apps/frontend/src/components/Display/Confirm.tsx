@@ -75,7 +75,8 @@ export function Confirm({
         }}
       >
         <i className={`fa ${icon} fa-2x${danger ? " confirm-danger-icon" : ""}`} aria-hidden="true"></i>
-        <p style={{ fontWeight: "bold", margin: "12px 0" }}>{message}</p>
+        {/* A `div`, not a `p`: a message may carry form controls (block elements). */}
+        <div style={{ fontWeight: "bold", margin: "12px 0" }}>{message}</div>
         <div className="swal2-actions" style={{ display: "flex", justifyContent: "center", gap: 8 }}>
           <input type="button" className="stdbtn" value={cancelLabel ?? t("common.cancel") ?? undefined} onClick={onCancel} />
           <input

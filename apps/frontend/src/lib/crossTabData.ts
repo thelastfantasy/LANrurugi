@@ -3,9 +3,8 @@ import { useEffect, useRef } from "react"
 /**
  * Cross-tab library changes.
  *
- * `/batch` opens in its own tab and mutates the library with plain `fetch`, so the tab that opened
- * it keeps what it had cached — including a selection drawer still listing archives that another
- * tab just deleted. Two tabs share nothing but the server, and re-fetching everything on a timer to
+ * A batch run mutates the library with plain `fetch`, so any other open tab keeps what it had
+ * cached — including a selection drawer still listing archives that this tab just deleted. Two tabs share nothing but the server, and re-fetching everything on a timer to
  * discover that would cost more than the problem does, so the writer says so instead.
  */
 export const DATA_CHANNEL = "lanrurugi-data"

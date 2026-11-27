@@ -20,7 +20,6 @@ export const routes = {
   resources: () => "/resources",
   activity: () => "/activity",
   bookmarks: () => "/bookmarks",
-  batch: () => "/batch",
   // `section` deep-links to one of Settings' accordions; `useSectionDeepLink` opens+scrolls to it.
   settings: (section?: string) => (section ? `/config?section=${encodeURIComponent(section)}` : "/config"),
   categories: (categoryId?: string) =>

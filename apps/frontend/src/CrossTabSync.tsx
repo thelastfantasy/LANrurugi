@@ -1,4 +1,4 @@
-import { useQueryClient } from "@tanstack/react-query"
+import { type QueryClient, useQueryClient } from "@tanstack/react-query"
 
 import { useDataChange } from "./lib/crossTabData"
 
@@ -20,20 +20,23 @@ const AFFECTED_KEYS = [
   "tankoubon",
 ] as const
 
+/** Refetches everything a library change can make stale: another tab's, or a batch run in this one. */
+export function invalidateLibraryData(queryClient: QueryClient): void {
+  for (const key of AFFECTED_KEYS) {
+    void queryClient.invalidateQueries({ queryKey: [key] })
+  }
+}
+
 /**
  * Refetches what another tab changed. Mounted once, at the shell: a page that owns its own cache
  * entries (the Library listing, a reader, the selection drawer) is otherwise only ever refreshed by
- * its own mutations, so /batch in a second tab left every one of them showing state that no longer
- * exists.
+ * its own mutations, so a batch run in a second tab left every one of them showing state that no
+ * longer exists.
  */
 export function CrossTabSync() {
   const queryClient = useQueryClient()
 
-  useDataChange(() => {
-    for (const key of AFFECTED_KEYS) {
-      void queryClient.invalidateQueries({ queryKey: [key] })
-    }
-  })
+  useDataChange(() => invalidateLibraryData(queryClient))
 
   return null
 }
