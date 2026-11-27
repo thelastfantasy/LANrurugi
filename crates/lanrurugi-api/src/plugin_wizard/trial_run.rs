@@ -612,10 +612,10 @@ async fn resolve_login_credentials(
 /// private to that module; this is a minimal, read-only re-implementation of the same lookup).
 async fn resolve_login_namespace(state: &AppState, declared_namespace: &str) -> Option<String> {
     for ns in crate::plugins::discover_namespaces(&state.plugins_dir).await {
-        if let Ok(info) = state.plugins.plugin_info(&ns).await {
-            if info.namespace == declared_namespace {
-                return Some(ns);
-            }
+        if let Ok(info) = state.plugins.plugin_info(&ns).await
+            && info.namespace == declared_namespace
+        {
+            return Some(ns);
         }
     }
     None

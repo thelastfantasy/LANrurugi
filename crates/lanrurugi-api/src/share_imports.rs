@@ -297,14 +297,13 @@ async fn create_import(
     // Checked before claiming, so a selection that matches nothing never spends a download.
     let chosen: Option<std::collections::HashSet<String>> =
         body.archives.map(|ids| ids.into_iter().collect());
-    if let Some(chosen) = &chosen {
-        if !opened
+    if let Some(chosen) = &chosen
+        && !opened
             .manifest
             .archives()
             .any(|a| chosen.contains(&a.archive_id))
-        {
-            return error(StatusCode::BAD_REQUEST, "share_import", "nothing_selected");
-        }
+    {
+        return error(StatusCode::BAD_REQUEST, "share_import", "nothing_selected");
     }
     let wanted = |id: &str| chosen.as_ref().is_none_or(|c| c.contains(id));
     // Refused before anything is queued, with the reason (FR-021).

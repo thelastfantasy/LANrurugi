@@ -467,33 +467,33 @@ async fn create_upload_session(
     sweep_expired_sessions(&state).await;
 
     let file_name = sanitize_filename(&body.file_name);
-    if let Some(key) = body.client_key.as_deref().filter(|k| !k.is_empty()) {
-        if let Ok(mut entries) = tokio::fs::read_dir(&state.library.temp_dir).await {
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                let name = entry.file_name().to_string_lossy().to_string();
-                let Some(id) = session_id_from_meta_name(&name) else {
-                    continue;
-                };
-                let Some(session) = read_session(&state, id).await else {
-                    continue;
-                };
-                // Same client key *and* same name+size: the client is asking about the file it
-                // already started, not a different file that happens to hash its key the same way.
-                if session.client_key.as_deref() == Some(key)
-                    && session.file_name == file_name
-                    && session.file_size == body.file_size
-                {
-                    return axum::Json(json!({
-                        "operation": "upload",
-                        "success": 1,
-                        "upload_id": session.upload_id,
-                        "offset": staged_bytes(&state, &session).await,
-                        "file_name": session.file_name,
-                        "file_size": session.file_size,
-                        "resumed": true,
-                    }))
-                    .into_response();
-                }
+    if let Some(key) = body.client_key.as_deref().filter(|k| !k.is_empty())
+        && let Ok(mut entries) = tokio::fs::read_dir(&state.library.temp_dir).await
+    {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let Some(id) = session_id_from_meta_name(&name) else {
+                continue;
+            };
+            let Some(session) = read_session(&state, id).await else {
+                continue;
+            };
+            // Same client key *and* same name+size: the client is asking about the file it
+            // already started, not a different file that happens to hash its key the same way.
+            if session.client_key.as_deref() == Some(key)
+                && session.file_name == file_name
+                && session.file_size == body.file_size
+            {
+                return axum::Json(json!({
+                    "operation": "upload",
+                    "success": 1,
+                    "upload_id": session.upload_id,
+                    "offset": staged_bytes(&state, &session).await,
+                    "file_name": session.file_name,
+                    "file_size": session.file_size,
+                    "resumed": true,
+                }))
+                .into_response();
             }
         }
     }

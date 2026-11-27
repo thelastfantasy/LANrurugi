@@ -1404,10 +1404,10 @@ fn parse_progress_range_filter(tag: &str) -> Option<(f64, f64)> {
 /// in any casing; both `http://` and `https://` mean the same tag.
 fn strip_url_scheme(value: &str) -> &str {
     for prefix in ["https://", "http://"] {
-        if let Some(head) = value.get(..prefix.len()) {
-            if head.eq_ignore_ascii_case(prefix) {
-                return &value[prefix.len()..];
-            }
+        if let Some(head) = value.get(..prefix.len())
+            && head.eq_ignore_ascii_case(prefix)
+        {
+            return &value[prefix.len()..];
         }
     }
     value
@@ -1842,10 +1842,10 @@ async fn token_matches(
     // prefix-scan `INDEX_timestamp:2020*` and match every posting time in that decade. These tags
     // *are* indexed (`indexer::write_tag_indexes` writes every tag; `BASIC_NAMESPACES` only decides
     // what counts as "untagged"), so this reservation is a real guarantee, not a coincidence.
-    if let Some((namespace, _)) = token.tag.split_once(':') {
-        if date_filter_tags(&namespace.replace('?', "_")).is_some() {
-            return Ok(HashSet::new());
-        }
+    if let Some((namespace, _)) = token.tag.split_once(':')
+        && date_filter_tags(&namespace.replace('?', "_")).is_some()
+    {
+        return Ok(HashSet::new());
     }
 
     let mut ids = HashSet::new();
@@ -2575,14 +2575,13 @@ async fn tank_date_sort_value(
         .zrangebyscore(tank_id, -2, -2)
         .await
         .unwrap_or_default();
-    if let Some(tag) = own_tags.first().and_then(|m| m.strip_prefix("tags_")) {
-        if let Some(v) = tag
+    if let Some(tag) = own_tags.first().and_then(|m| m.strip_prefix("tags_"))
+        && let Some(v) = tag
             .split(',')
             .find_map(|t| t.trim().strip_prefix(sortkey_prefix))
             .and_then(|v| v.parse().ok())
-        {
-            return Some(v);
-        }
+    {
+        return Some(v);
     }
     let members: Vec<String> = archive_conn
         .zrangebyscore(tank_id, 1, "+inf")

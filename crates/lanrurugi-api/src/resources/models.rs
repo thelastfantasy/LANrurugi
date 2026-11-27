@@ -30,10 +30,10 @@ included in server.rss_bytes; these rows are not additional memory.";
 pub async fn usage(state: &AppState) -> Vec<ModelUsage> {
     {
         let cache = USAGE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((at, rows)) = cache.as_ref() {
-            if at.elapsed() < USAGE_CACHE_TTL {
-                return rows.clone();
-            }
+        if let Some((at, rows)) = cache.as_ref()
+            && at.elapsed() < USAGE_CACHE_TTL
+        {
+            return rows.clone();
         }
     }
 

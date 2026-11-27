@@ -104,10 +104,10 @@ pub fn restore_strings(line: &str, found: &[FoundString]) -> String {
                 digits.push(chars[j]);
                 j += 1;
             }
-            if let Ok(idx) = digits.parse::<usize>() {
-                if let Some(s) = found.get(idx) {
-                    out.push_str(&convert_string_content(s));
-                }
+            if let Ok(idx) = digits.parse::<usize>()
+                && let Some(s) = found.get(idx)
+            {
+                out.push_str(&convert_string_content(s));
             }
             i = j + 1;
             continue;

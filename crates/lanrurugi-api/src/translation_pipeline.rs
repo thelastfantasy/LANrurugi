@@ -383,10 +383,10 @@ async fn detect_with_degradation(
     // again below) simply falls through to a fresh detection call rather than being trusted.
     // A cache hit is by definition not degraded: only a non-degraded detection was ever allowed
     // to be persisted in the first place.
-    if let Ok(Some(existing)) = ctx.regions.get_detected(archive_id, page).await {
-        if !existing.is_empty() {
-            return Ok((existing, false));
-        }
+    if let Ok(Some(existing)) = ctx.regions.get_detected(archive_id, page).await
+        && !existing.is_empty()
+    {
+        return Ok((existing, false));
     }
 
     let (image, is_cover, _total) = load_page_image(state, archive_id, page).await?;
@@ -1449,15 +1449,14 @@ async fn translate_and_persist(
     }
 
     // --- 4. Usage accounting (FR-014) ----------------------------------------------------------
-    if let Some(tokens) = outcome.total_tokens {
-        if let Err(e) = ctx
+    if let Some(tokens) = outcome.total_tokens
+        && let Err(e) = ctx
             .budget
             .record(ctx.provider.as_str(), archive_id, page, tokens)
             .await
-        {
-            // Losing a usage counter must not lose the translation the user already paid for.
-            tracing::warn!(error = %e, "failed to record translation usage");
-        }
+    {
+        // Losing a usage counter must not lose the translation the user already paid for.
+        tracing::warn!(error = %e, "failed to record translation usage");
     }
 
     // --- 5. LLM-call activity telemetry (issue #100) -------------------------------------------

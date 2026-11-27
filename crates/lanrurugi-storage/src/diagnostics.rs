@@ -254,12 +254,12 @@ impl DiagnosticIssue {
         if event.level.rank() > self.level.rank() {
             self.level = event.level;
         }
-        if let Some(release) = &event.release {
-            if !self.releases.contains(release) {
-                self.releases.push(release.clone());
-                if self.releases.len() > 20 {
-                    self.releases.remove(0);
-                }
+        if let Some(release) = &event.release
+            && !self.releases.contains(release)
+        {
+            self.releases.push(release.clone());
+            if self.releases.len() > 20 {
+                self.releases.remove(0);
             }
         }
         if !self.sources.contains(&event.source) {

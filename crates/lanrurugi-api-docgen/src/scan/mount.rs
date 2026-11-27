@@ -190,19 +190,18 @@ struct MountVisitor<'a> {
 impl<'ast> Visit<'ast> for MountVisitor<'_> {
     fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
         let method = node.method.to_string();
-        if method == "nest" || method == "nest_service" {
-            if let Some(Expr::Lit(syn::ExprLit {
+        if (method == "nest" || method == "nest_service")
+            && let Some(Expr::Lit(syn::ExprLit {
                 lit: syn::Lit::Str(prefix),
                 ..
             })) = node.args.first().map(unparen)
-            {
-                self.nest_sites.push(NestSite {
-                    prefix: prefix.value(),
-                    call: method,
-                    file: self.file.to_string(),
-                    line: node.method.span().start().line,
-                });
-            }
+        {
+            self.nest_sites.push(NestSite {
+                prefix: prefix.value(),
+                call: method,
+                file: self.file.to_string(),
+                line: node.method.span().start().line,
+            });
         }
         syn::visit::visit_expr_method_call(self, node);
     }

@@ -379,10 +379,10 @@ fn percentile(sorted: &[u64], percent: u32) -> u64 {
 async fn library_section(state: &AppState) -> LibrarySection {
     {
         let cache = LIBRARY_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((at, section)) = cache.as_ref() {
-            if at.elapsed() < LIBRARY_CACHE_TTL {
-                return section.clone();
-            }
+        if let Some((at, section)) = cache.as_ref()
+            && at.elapsed() < LIBRARY_CACHE_TTL
+        {
+            return section.clone();
         }
     }
     let archives = state

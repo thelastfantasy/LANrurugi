@@ -153,10 +153,11 @@ pub async fn start(host: &Host) -> Result<Arc<ShareNet>, String> {
         let previous_port = *previous.relay_port.lock().await;
         let unchanged = previous.relay_key.lock().await.as_deref() == Some(relay_key.as_str());
         let mut relay_slot = previous.relay.lock().await;
-        if settings.flag("share_node_relay") && unchanged {
-            if let (Some(server), Some(port)) = (relay_slot.take(), previous_port) {
-                kept_relay = Some((server, port, previous_id));
-            }
+        if settings.flag("share_node_relay")
+            && unchanged
+            && let (Some(server), Some(port)) = (relay_slot.take(), previous_port)
+        {
+            kept_relay = Some((server, port, previous_id));
         }
         if let Some(relay) = relay_slot.take() {
             let _ = relay.shutdown().await;

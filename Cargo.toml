@@ -33,9 +33,8 @@ members = [
 
 [workspace.package]
 version = "1.0.0-beta.8"
-edition = "2021"
+edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/thelastfantasy/LANrurugi"
 
 [workspace.dependencies]
 if-addrs = "0.15"
@@ -104,7 +103,7 @@ jpeg2k = { version = "0.10", default-features = false, features = ["image", "ope
 # full frame. No `rayon` feature: thumbnail decodes already run on the capped workspace pool.
 jpeg-decoder = { version = "0.3", default-features = false }
 # Still-AVIF decoding via `rav1d`, the pure-Rust port of dav1d. Requires rustc >= 1.98, which is
-# why `RUST_VERSION` in the Dockerfiles tracks current stable (1.99) rather than an older pin.
+# why `RUST_VERSION` in the Dockerfiles tracks current stable (1.100) rather than an older pin.
 avif-decode = "3"
 clap = { version = "4.6", features = ["derive", "env"] }
 criterion = "0.8"

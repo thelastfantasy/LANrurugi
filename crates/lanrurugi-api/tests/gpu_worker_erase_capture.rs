@@ -27,10 +27,10 @@ fn e2e_enabled() -> Option<String> {
 }
 
 fn model_dir_available() -> bool {
-    if let Some(dir) = std::env::var_os(lanrurugi_inpaint::model_discovery::MODEL_DIR_ENV) {
-        if std::path::Path::new(&dir).is_dir() {
-            return true;
-        }
+    if let Some(dir) = std::env::var_os(lanrurugi_inpaint::model_discovery::MODEL_DIR_ENV)
+        && std::path::Path::new(&dir).is_dir()
+    {
+        return true;
     }
     lanrurugi_inpaint::model_discovery::find_model_dir().is_ok()
 }

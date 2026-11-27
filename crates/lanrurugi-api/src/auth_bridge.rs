@@ -191,10 +191,10 @@ async fn load_bridge_config(state: &AppState) -> Result<BridgeConfig, String> {
             .map(str::trim)
             .filter(|v| !v.is_empty())
         {
-            if let Some(origin) = normalize_origin(entry) {
-                if !trusted.contains(&origin) {
-                    trusted.push(origin);
-                }
+            if let Some(origin) = normalize_origin(entry)
+                && !trusted.contains(&origin)
+            {
+                trusted.push(origin);
             }
         }
     }
@@ -584,17 +584,17 @@ async fn start_bridge(
         .filter(|peer| peer != &current_origin && peer != &target_origin)
         .filter(|peer| allowed.contains(peer))
         .collect::<Vec<_>>();
-    if let Some((next, rest)) = remaining.split_first() {
-        if let Some(next_url) = start_url(
+    if let Some((next, rest)) = remaining.split_first()
+        && let Some(next_url) = start_url(
             next,
             &target_origin,
             &return_to,
             query.state.trim(),
             rest,
             guest_ok,
-        ) {
-            return redirect(&next_url);
-        }
+        )
+    {
+        return redirect(&next_url);
     }
 
     // No peer had a session — see `no_session_fallback` for where each kind of caller lands.

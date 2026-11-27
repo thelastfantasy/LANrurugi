@@ -116,10 +116,9 @@ pub(crate) async fn trusted_proxies(state: &AppState) -> Vec<ipnet::IpNet> {
         .lock()
         .expect("trusted proxies lock")
         .as_ref()
+        && at.elapsed() < TRUSTED_PROXIES_TTL
     {
-        if at.elapsed() < TRUSTED_PROXIES_TTL {
-            return list.clone();
-        }
+        return list.clone();
     }
     let settings = crate::share_settings::load(state).await;
     let list = parse_trusted_proxies(settings.text("share_trusted_proxies"));
@@ -221,14 +220,13 @@ fn forwarded_address(headers: &HeaderMap, peer: IpAddr, trusted: &[ipnet::IpNet]
         .find(|ip| !trusted.iter().any(|net| net.contains(*ip)) || is_cloudflare_edge(ip));
     let cloudflare_in_path =
         is_cloudflare_edge(&peer_ip) || nearest_hop.map(is_cloudflare_edge).unwrap_or(false);
-    if cloudflare_in_path {
-        if let Some(client) = headers
+    if cloudflare_in_path
+        && let Some(client) = headers
             .get("CF-Connecting-IP")
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.trim().parse::<IpAddr>().ok())
-        {
-            return lanrurugi_storage::shares::canonical_ip(client);
-        }
+    {
+        return lanrurugi_storage::shares::canonical_ip(client);
     }
     hops.iter()
         .rev()
@@ -604,10 +602,11 @@ fn defaults_from(settings: &ShareSettings, now: i64) -> Map<String, Value> {
     if let Some(days) = settings.number("share_default_expiry_days") {
         defaults.insert("expires_at".into(), json!(now + days as i64 * 86_400));
     }
-    if let Ok(ratio) = settings.text("share_default_target_ratio").parse::<f32>() {
-        if ratio > 0.0 && ratio.is_finite() {
-            defaults.insert("target_ratio".into(), json!(ratio));
-        }
+    if let Ok(ratio) = settings.text("share_default_target_ratio").parse::<f32>()
+        && ratio > 0.0
+        && ratio.is_finite()
+    {
+        defaults.insert("target_ratio".into(), json!(ratio));
     }
     let action = settings.text("share_default_ratio_action");
     if !action.is_empty() {

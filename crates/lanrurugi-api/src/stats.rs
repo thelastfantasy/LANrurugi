@@ -391,16 +391,15 @@ async fn overview(State(state): State<AppState>, auth: Option<Extension<AuthCont
         auth.as_deref().map(|a| &a.method),
         Some(AuthMethod::GuestVisitor)
     );
-    if !guest {
-        if let Some((generation, at, body)) = overview_cache()
+    if !guest
+        && let Some((generation, at, body)) = overview_cache()
             .lock()
             .expect("overview cache poisoned")
             .as_ref()
-        {
-            if *generation == library_generation() && at.elapsed() < OVERVIEW_CACHE_MAX_AGE {
-                return json_body(body.clone());
-            }
-        }
+        && *generation == library_generation()
+        && at.elapsed() < OVERVIEW_CACHE_MAX_AGE
+    {
+        return json_body(body.clone());
     }
 
     let now = std::time::SystemTime::now()

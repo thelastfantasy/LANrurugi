@@ -202,7 +202,7 @@ pub fn sample_of(path: &Path) -> std::io::Result<String> {
 
 /// The lock every write of `id`'s sidecar holds: a read-modify-write ([`amend`], [`rewrite`]) and
 /// a whole write ([`write`]) that interleave would otherwise drop each other's fields.
-async fn lock(id: &str) -> impl Send + 'static {
+async fn lock(id: &str) -> impl Send + 'static + use<> {
     crate::record_lock::lock(&format!("sidecar:{id}")).await
 }
 

@@ -62,8 +62,8 @@ pub fn promote_recurring_meltdowns(pattern: &mut VolumeFontPattern) -> Vec<FontI
     let mut eligible: Vec<(FontId, u32)> = pattern
         .meltdown_tally
         .iter()
-        .filter(|(font, &count)| {
-            count >= MELTDOWN_PROMOTION_THRESHOLD && !pattern.golden_set.contains(font)
+        .filter(|(font, count)| {
+            **count >= MELTDOWN_PROMOTION_THRESHOLD && !pattern.golden_set.contains(*font)
         })
         .map(|(f, &c)| (f.clone(), c))
         .collect();

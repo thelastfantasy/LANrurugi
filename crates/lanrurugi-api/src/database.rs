@@ -144,10 +144,10 @@ async fn stats(
                 Some((ns, t)) => (Some(ns.to_string()), t.to_string()),
                 None => (None, tag.clone()),
             };
-            if let Some(ns) = &namespace {
-                if excluded_namespaces.iter().any(|e| e == ns) {
-                    return None;
-                }
+            if let Some(ns) = &namespace
+                && excluded_namespaces.iter().any(|e| e == ns)
+            {
+                return None;
             }
             Some(json!({ "namespace": namespace, "text": text, "weight": weight }))
         })

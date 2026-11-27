@@ -284,10 +284,10 @@ async fn recheck(State(state): State<AppState>, Path(id): Path<ArchiveId>) -> Re
             )
         }
     };
-    if let Ok(mut conn) = state.redis.config.get().await {
-        if let Err(e) = store_finding(&mut conn, &id, &inspection).await {
-            tracing::warn!(%id, error = %e, "could not store an integrity finding");
-        }
+    if let Ok(mut conn) = state.redis.config.get().await
+        && let Err(e) = store_finding(&mut conn, &id, &inspection).await
+    {
+        tracing::warn!(%id, error = %e, "could not store an integrity finding");
     }
     apply_to_record(&state, &id, &inspection).await;
     let (damaged, finding) = match &inspection {

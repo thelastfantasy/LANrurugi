@@ -499,12 +499,11 @@ async fn delete_queue_item(
     // this item's own Redis record is gone there's no other path back to them short of the 24h
     // a stale-file sweep eventually catching it. Deleting the item is the user's explicit call
     // that they're done with this row entirely, so it removes its own staged file immediately.
-    if let Some(item) = &item {
-        if let Some(conflict) = &item.pending_filename_conflict {
-            if let Err(e) = tokio::fs::remove_file(&conflict.temp_path).await {
-                tracing::warn!(%id, temp_path = %conflict.temp_path, error = %e, "failed to remove pending-rename temp file on queue item delete");
-            }
-        }
+    if let Some(item) = &item
+        && let Some(conflict) = &item.pending_filename_conflict
+        && let Err(e) = tokio::fs::remove_file(&conflict.temp_path).await
+    {
+        tracing::warn!(%id, temp_path = %conflict.temp_path, error = %e, "failed to remove pending-rename temp file on queue item delete");
     }
 
     match state.download_queue.delete(&id).await {
@@ -1049,10 +1048,9 @@ async fn delete_selected(
         if let Some(conflict) = item
             .as_ref()
             .and_then(|i| i.pending_filename_conflict.as_ref())
+            && let Err(e) = tokio::fs::remove_file(&conflict.temp_path).await
         {
-            if let Err(e) = tokio::fs::remove_file(&conflict.temp_path).await {
-                tracing::warn!(%id, temp_path = %conflict.temp_path, error = %e, "failed to remove pending-rename temp file on queue item delete");
-            }
+            tracing::warn!(%id, temp_path = %conflict.temp_path, error = %e, "failed to remove pending-rename temp file on queue item delete");
         }
         remove_kept_bytes(item.as_ref()).await;
         if state.download_queue.delete(id).await.is_ok() {
@@ -1255,21 +1253,22 @@ async fn start_one_in(
 
     // Content addressing would catch this *after* re-downloading and hashing the whole file; the
     // registry exists to stop it here. Forced items already carry the user's explicit override.
-    if item.origin == lanrurugi_storage::download_queue::QueueItemOrigin::Download && !item.forced {
-        if let Some(existing_id) = crate::download_sources::lookup(state, &item.url).await {
-            item.state = DownloadQueueState::Error;
-            item.error = Some(
-                lanrurugi_core::queue_error::QueueError::SourceAlreadyImported {
-                    existing_id: existing_id.clone(),
-                },
-            );
-            item.finished_at = Some(now_ms());
-            let _ = state.download_queue.update(&item).await;
-            // Same reason as the duplicate-in-flight branch above: the row must flip to its
-            // blocked/error presentation immediately, not only after a manual refresh.
-            broadcast_item_update(state, &item);
-            return Err(StartError::SourceAlreadyImported(existing_id));
-        }
+    if item.origin == lanrurugi_storage::download_queue::QueueItemOrigin::Download
+        && !item.forced
+        && let Some(existing_id) = crate::download_sources::lookup(state, &item.url).await
+    {
+        item.state = DownloadQueueState::Error;
+        item.error = Some(
+            lanrurugi_core::queue_error::QueueError::SourceAlreadyImported {
+                existing_id: existing_id.clone(),
+            },
+        );
+        item.finished_at = Some(now_ms());
+        let _ = state.download_queue.update(&item).await;
+        // Same reason as the duplicate-in-flight branch above: the row must flip to its
+        // blocked/error presentation immediately, not only after a manual refresh.
+        broadcast_item_update(state, &item);
+        return Err(StartError::SourceAlreadyImported(existing_id));
     }
 
     // 017: a share import runs its own transfer task, not a plugin; stopping and retrying go
@@ -1812,10 +1811,10 @@ async fn remove_kept_bytes(item: Option<&lanrurugi_storage::download_queue::Down
     let Some(staged) = item.and_then(|i| i.staged.as_ref()) else {
         return;
     };
-    if let Err(e) = tokio::fs::remove_file(&staged.path).await {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(path = %staged.path, error = %e, "failed to remove a kept download");
-        }
+    if let Err(e) = tokio::fs::remove_file(&staged.path).await
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(path = %staged.path, error = %e, "failed to remove a kept download");
     }
 }
 

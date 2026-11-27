@@ -76,35 +76,35 @@ pub async fn require_api_key(
     let client_ip = client_ip(request.headers(), peer_addr);
     let user_agent = user_agent(request.headers());
 
-    if let Some(bearer_token) = bearer_token(request.headers()) {
-        if lanrurugi_storage::api_tokens::looks_like_api_token(bearer_token) {
-            match state.api_tokens.verify(bearer_token).await {
-                Ok(Some(record)) => {
-                    touch_last_used_throttled(&state, &record.id, client_ip.clone()).await;
-                    let auth = AuthContext {
-                        method: AuthMethod::Token {
-                            id: record.id,
-                            role: record.role,
-                        },
-                        client_ip,
-                        user_agent,
-                        client_reported: None,
-                        session_family_id: None,
-                    };
-                    if !authorize_route(&matched_path, request.method().as_str(), &auth).await {
-                        trace_request(&request, &auth, false);
-                        return route_forbidden_response();
-                    }
-                    trace_request(&request, &auth, true);
-                    request.extensions_mut().insert(auth);
-                    return next.run(request).await;
+    if let Some(bearer_token) = bearer_token(request.headers())
+        && lanrurugi_storage::api_tokens::looks_like_api_token(bearer_token)
+    {
+        match state.api_tokens.verify(bearer_token).await {
+            Ok(Some(record)) => {
+                touch_last_used_throttled(&state, &record.id, client_ip.clone()).await;
+                let auth = AuthContext {
+                    method: AuthMethod::Token {
+                        id: record.id,
+                        role: record.role,
+                    },
+                    client_ip,
+                    user_agent,
+                    client_reported: None,
+                    session_family_id: None,
+                };
+                if !authorize_route(&matched_path, request.method().as_str(), &auth).await {
+                    trace_request(&request, &auth, false);
+                    return route_forbidden_response();
                 }
-                Ok(None) => {} // not a valid token — fall through to the session-cookie check
-                Err(e) => {
-                    tracing::warn!(error = %e, "api token verification failed");
-                    // A Redis hiccup here shouldn't silently deny every API-token client; fall
-                    // through to the session check the same as "token not found" would.
-                }
+                trace_request(&request, &auth, true);
+                request.extensions_mut().insert(auth);
+                return next.run(request).await;
+            }
+            Ok(None) => {} // not a valid token — fall through to the session-cookie check
+            Err(e) => {
+                tracing::warn!(error = %e, "api token verification failed");
+                // A Redis hiccup here shouldn't silently deny every API-token client; fall
+                // through to the session check the same as "token not found" would.
             }
         }
     }
@@ -350,12 +350,12 @@ pub(crate) fn client_ip(
     headers: &axum::http::HeaderMap,
     peer_addr: std::net::SocketAddr,
 ) -> Option<String> {
-    if let Some(forwarded) = headers.get("X-Forwarded-For").and_then(|v| v.to_str().ok()) {
-        if let Some(first) = forwarded.split(',').next() {
-            let trimmed = first.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
+    if let Some(forwarded) = headers.get("X-Forwarded-For").and_then(|v| v.to_str().ok())
+        && let Some(first) = forwarded.split(',').next()
+    {
+        let trimmed = first.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
         }
     }
     Some(peer_addr.ip().to_string())

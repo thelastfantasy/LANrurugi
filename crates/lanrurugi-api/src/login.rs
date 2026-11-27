@@ -644,23 +644,23 @@ async fn refresh(
                 .device_info
                 .as_ref()
                 .and_then(|d| d.user_agent.as_ref());
-            if let Some(baseline) = baseline_ua_info {
-                if current_ua_info.as_ref() != Some(baseline) {
-                    record_manual(
-                        &state,
-                        Some(&refresh_auth),
-                        action_types::SESSION_DEVICE_CHANGED,
-                        ActivityTarget {
-                            id: None,
-                            label: None,
-                            kind: Some("session".to_string()),
-                        },
-                        Outcome::Success,
-                        Some(serde_json::json!({ "user_agent": baseline })),
-                        Some(serde_json::json!({ "user_agent": current_ua_info })),
-                    )
-                    .await;
-                }
+            if let Some(baseline) = baseline_ua_info
+                && current_ua_info.as_ref() != Some(baseline)
+            {
+                record_manual(
+                    &state,
+                    Some(&refresh_auth),
+                    action_types::SESSION_DEVICE_CHANGED,
+                    ActivityTarget {
+                        id: None,
+                        label: None,
+                        kind: Some("session".to_string()),
+                    },
+                    Outcome::Success,
+                    Some(serde_json::json!({ "user_agent": baseline })),
+                    Some(serde_json::json!({ "user_agent": current_ua_info })),
+                )
+                .await;
             }
 
             let mut response_headers = cookie_headers(cookies);
@@ -804,45 +804,41 @@ async fn logout(
     if let (Some(auth), Some(cookie_header)) = (
         auth,
         headers.get(header::COOKIE).and_then(|v| v.to_str().ok()),
-    ) {
-        if let Some(access_token) = crate::auth::find_auth_cookie(
-            cookie_header,
-            &auth.cookie_names.session,
-            session::COOKIE_NAME,
-        ) {
-            if let Some(family_id) =
-                session::family_id_ignoring_expiry(&auth.session_secret, &access_token)
-            {
-                match state.refresh_tokens.burn_family(&family_id).await {
-                    // Only recorded once a real, resolvable session was actually torn down —
-                    // not for a bare `POST /logout` with no cookie or an unparseable one, which
-                    // never had a session to end in the first place.
-                    Ok(()) => {
-                        record_manual(
-                            &state,
-                            Some(&AuthContext {
-                                method: AuthMethod::Session,
-                                client_ip: ip,
-                                user_agent: ua,
-                                client_reported,
-                                session_family_id: Some(family_id.clone()),
-                            }),
-                            action_types::SESSION_LOGOUT,
-                            ActivityTarget {
-                                id: None,
-                                label: None,
-                                kind: Some("session".to_string()),
-                            },
-                            Outcome::Success,
-                            None,
-                            None,
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "logout: failed to burn refresh-token family")
-                    }
-                }
+    ) && let Some(access_token) = crate::auth::find_auth_cookie(
+        cookie_header,
+        &auth.cookie_names.session,
+        session::COOKIE_NAME,
+    ) && let Some(family_id) =
+        session::family_id_ignoring_expiry(&auth.session_secret, &access_token)
+    {
+        match state.refresh_tokens.burn_family(&family_id).await {
+            // Only recorded once a real, resolvable session was actually torn down —
+            // not for a bare `POST /logout` with no cookie or an unparseable one, which
+            // never had a session to end in the first place.
+            Ok(()) => {
+                record_manual(
+                    &state,
+                    Some(&AuthContext {
+                        method: AuthMethod::Session,
+                        client_ip: ip,
+                        user_agent: ua,
+                        client_reported,
+                        session_family_id: Some(family_id.clone()),
+                    }),
+                    action_types::SESSION_LOGOUT,
+                    ActivityTarget {
+                        id: None,
+                        label: None,
+                        kind: Some("session".to_string()),
+                    },
+                    Outcome::Success,
+                    None,
+                    None,
+                )
+                .await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "logout: failed to burn refresh-token family")
             }
         }
     }

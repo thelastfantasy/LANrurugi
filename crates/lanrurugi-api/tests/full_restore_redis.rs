@@ -25,10 +25,10 @@ fn redis_binary() -> Option<PathBuf> {
         "/usr/local/bin/redis-server",
         "/usr/bin/redis-server",
     ] {
-        if let Ok(output) = Command::new(candidate).arg("--version").output() {
-            if output.status.success() {
-                return Some(PathBuf::from(candidate));
-            }
+        if let Ok(output) = Command::new(candidate).arg("--version").output()
+            && output.status.success()
+        {
+            return Some(PathBuf::from(candidate));
         }
     }
     None
@@ -107,16 +107,14 @@ async fn set(port: u16, key: &str, value: &str) {
 async fn wait_ready(port: u16) {
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
-        if let Ok(client) = redis::Client::open(format!("redis://127.0.0.1:{port}")) {
-            if let Ok(mut conn) = client.get_multiplexed_async_connection().await {
-                if redis::cmd("PING")
-                    .query_async::<String>(&mut conn)
-                    .await
-                    .is_ok()
-                {
-                    return;
-                }
-            }
+        if let Ok(client) = redis::Client::open(format!("redis://127.0.0.1:{port}"))
+            && let Ok(mut conn) = client.get_multiplexed_async_connection().await
+            && redis::cmd("PING")
+                .query_async::<String>(&mut conn)
+                .await
+                .is_ok()
+        {
+            return;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

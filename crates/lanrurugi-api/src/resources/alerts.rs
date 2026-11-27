@@ -69,29 +69,29 @@ impl Alerts {
                 }
             }
 
-            if let Some(full10) = cgroup.psi_memory.full10 {
-                if full10 > MEMORY_PRESSURE_PERCENT {
-                    fired.push(ThresholdAlert {
-                        kind: "memory_pressure".to_string(),
-                        at: now,
-                        message: format!("memory pressure full avg10 {full10:.2}%"),
-                        detail: serde_json::json!({ "psi_memory_full10": full10 }),
-                    });
-                }
+            if let Some(full10) = cgroup.psi_memory.full10
+                && full10 > MEMORY_PRESSURE_PERCENT
+            {
+                fired.push(ThresholdAlert {
+                    kind: "memory_pressure".to_string(),
+                    at: now,
+                    message: format!("memory pressure full avg10 {full10:.2}%"),
+                    detail: serde_json::json!({ "psi_memory_full10": full10 }),
+                });
             }
         }
 
-        if let (Some(count), Some(limit)) = (snapshot.server.fd_count, snapshot.server.fd_limit) {
-            if limit > 0 {
-                let ratio = count as f64 / limit as f64;
-                if ratio > FD_PRESSURE_RATIO {
-                    fired.push(ThresholdAlert {
-                        kind: "fd_pressure".to_string(),
-                        at: now,
-                        message: format!("{count} of {limit} file descriptors open"),
-                        detail: serde_json::json!({ "fd_count": count, "fd_limit": limit }),
-                    });
-                }
+        if let (Some(count), Some(limit)) = (snapshot.server.fd_count, snapshot.server.fd_limit)
+            && limit > 0
+        {
+            let ratio = count as f64 / limit as f64;
+            if ratio > FD_PRESSURE_RATIO {
+                fired.push(ThresholdAlert {
+                    kind: "fd_pressure".to_string(),
+                    at: now,
+                    message: format!("{count} of {limit} file descriptors open"),
+                    detail: serde_json::json!({ "fd_count": count, "fd_limit": limit }),
+                });
             }
         }
 

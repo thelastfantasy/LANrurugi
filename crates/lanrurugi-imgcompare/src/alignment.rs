@@ -186,47 +186,48 @@ pub fn align_sequences_with_rescue(
             let mut best = UNREACHABLE;
             let mut best_from = 0u8;
 
-            if i > 0 && j > 0 {
-                if let Some(prev_idx) = band_index(i as i64 - 1, j as i64 - 1) {
-                    let prev = cost[i - 1][prev_idx];
-                    if prev != UNREACHABLE {
-                        let raw_distance = a[i - 1].dist(&b[j - 1]);
-                        let distance = if raw_distance <= MAX_HAMMING_DISTANCE {
-                            Some(raw_distance)
-                        } else {
-                            rescued.get(&(i - 1, j - 1)).copied()
-                        };
-                        if let Some(distance) = distance {
-                            let candidate = prev + distance;
-                            if candidate < best {
-                                best = candidate;
-                                best_from = 0;
-                            }
+            if i > 0
+                && j > 0
+                && let Some(prev_idx) = band_index(i as i64 - 1, j as i64 - 1)
+            {
+                let prev = cost[i - 1][prev_idx];
+                if prev != UNREACHABLE {
+                    let raw_distance = a[i - 1].dist(&b[j - 1]);
+                    let distance = if raw_distance <= MAX_HAMMING_DISTANCE {
+                        Some(raw_distance)
+                    } else {
+                        rescued.get(&(i - 1, j - 1)).copied()
+                    };
+                    if let Some(distance) = distance {
+                        let candidate = prev + distance;
+                        if candidate < best {
+                            best = candidate;
+                            best_from = 0;
                         }
                     }
                 }
             }
-            if i > 0 {
-                if let Some(prev_idx) = band_index(i as i64 - 1, j as i64) {
-                    let prev = cost[i - 1][prev_idx];
-                    if prev != UNREACHABLE {
-                        let candidate = prev + skip_penalty;
-                        if candidate < best {
-                            best = candidate;
-                            best_from = 1;
-                        }
+            if i > 0
+                && let Some(prev_idx) = band_index(i as i64 - 1, j as i64)
+            {
+                let prev = cost[i - 1][prev_idx];
+                if prev != UNREACHABLE {
+                    let candidate = prev + skip_penalty;
+                    if candidate < best {
+                        best = candidate;
+                        best_from = 1;
                     }
                 }
             }
-            if j > 0 {
-                if let Some(prev_idx) = band_index(i as i64, j as i64 - 1) {
-                    let prev = cost[i][prev_idx];
-                    if prev != UNREACHABLE {
-                        let candidate = prev + skip_penalty;
-                        if candidate < best {
-                            best = candidate;
-                            best_from = 2;
-                        }
+            if j > 0
+                && let Some(prev_idx) = band_index(i as i64, j as i64 - 1)
+            {
+                let prev = cost[i][prev_idx];
+                if prev != UNREACHABLE {
+                    let candidate = prev + skip_penalty;
+                    if candidate < best {
+                        best = candidate;
+                        best_from = 2;
                     }
                 }
             }

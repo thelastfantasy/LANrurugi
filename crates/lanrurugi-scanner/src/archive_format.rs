@@ -586,10 +586,10 @@ pub fn read_entry(path: &Path, entry_name: &str) -> Result<Vec<u8>> {
     if !is_supported_archive(path) {
         return Err(ArchiveFormatError::UnsupportedExtension(extension_of(path)));
     }
-    if zip_random_access_eligible(path) {
-        if let Some(bytes) = read_entry_via_zip(path, entry_name) {
-            return Ok(bytes);
-        }
+    if zip_random_access_eligible(path)
+        && let Some(bytes) = read_entry_via_zip(path, entry_name)
+    {
+        return Ok(bytes);
     }
     let mut archive = RawArchiveReader::open(path)?;
     while let Some(entry) = archive.next_entry()? {
@@ -632,15 +632,15 @@ pub fn read_entries(path: &Path, entry_names: &[String]) -> Result<Vec<Option<Ve
 
     // Random access first: for a zip this is one seek per entry instead of a walk from the first
     // byte, and the fallback below still handles every name/format it can't serve.
-    if zip_random_access_eligible(path) {
-        if let Some(entries) = read_entries_via_zip(path, entry_names) {
-            tracing::info!(
-                path = %path.display(),
-                wanted = entry_names.len(),
-                "read_entries: served through the zip central directory (no forward scan)"
-            );
-            return Ok(entries);
-        }
+    if zip_random_access_eligible(path)
+        && let Some(entries) = read_entries_via_zip(path, entry_names)
+    {
+        tracing::info!(
+            path = %path.display(),
+            wanted = entry_names.len(),
+            "read_entries: served through the zip central directory (no forward scan)"
+        );
+        return Ok(entries);
     }
 
     let wanted: std::collections::HashSet<&str> = entry_names.iter().map(String::as_str).collect();
@@ -760,10 +760,10 @@ pub fn read_page_dimensions(path: &Path, names: &[String]) -> Result<Vec<Option<
         return Err(ArchiveFormatError::UnsupportedExtension(extension_of(path)));
     }
 
-    if zip_random_access_eligible(path) {
-        if let Some(dimensions) = read_page_dimensions_via_zip(path, names) {
-            return Ok(dimensions);
-        }
+    if zip_random_access_eligible(path)
+        && let Some(dimensions) = read_page_dimensions_via_zip(path, names)
+    {
+        return Ok(dimensions);
     }
 
     let mut wanted: std::collections::HashMap<&str, usize> = names

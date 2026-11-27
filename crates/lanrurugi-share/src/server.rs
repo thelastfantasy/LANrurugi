@@ -157,13 +157,12 @@ impl ShareProtocol {
         if write_frame_with_extras(&mut send, &header, &extras)
             .await
             .is_ok()
+            && let Some(body) = body
         {
-            if let Some(body) = body {
-                // Held while the bytes are on the wire, not just while they are encoded: a port
-                // rotation that tore the connection down here would cut a live transfer.
-                let _transfer = crate::runtime::TransferGuard::begin();
-                let _ = send.write_all(&body).await;
-            }
+            // Held while the bytes are on the wire, not just while they are encoded: a port
+            // rotation that tore the connection down here would cut a live transfer.
+            let _transfer = crate::runtime::TransferGuard::begin();
+            let _ = send.write_all(&body).await;
         }
         let _ = send.finish();
     }
@@ -552,15 +551,13 @@ impl ShareProtocol {
         }
         // Only bytes the importer has decoded and hash-verified count toward the ratio; a dropped
         // response or a re-fetched piece must not inflate it, or a 1.0 target could stall.
-        if verified_bytes > 0 {
-            if let Ok(delta) = repo(&self.host)
+        if verified_bytes > 0
+            && let Ok(delta) = repo(&self.host)
                 .add_claim_verified(&claim_id, verified_bytes)
                 .await
-            {
-                if delta > 0 {
-                    self.record_import(&share_id, delta).await;
-                }
-            }
+            && delta > 0
+        {
+            self.record_import(&share_id, delta).await;
         }
         if finished {
             self.flush_import(&share_id).await;
@@ -720,10 +717,10 @@ impl ShareProtocol {
                 None => Some(bytes),
             }
         };
-        if let Some(delta) = pending {
-            if let Err(e) = repo(&self.host).add_import_bytes(share_id, delta).await {
-                tracing::warn!(error = %e, "could not record served import bytes");
-            }
+        if let Some(delta) = pending
+            && let Err(e) = repo(&self.host).add_import_bytes(share_id, delta).await
+        {
+            tracing::warn!(error = %e, "could not record served import bytes");
         }
     }
 
@@ -743,10 +740,10 @@ impl ShareProtocol {
                 }
             })
         };
-        if let Some(delta) = pending {
-            if let Err(e) = repo(&self.host).add_import_bytes(share_id, delta).await {
-                tracing::warn!(error = %e, "could not flush the final served import bytes");
-            }
+        if let Some(delta) = pending
+            && let Err(e) = repo(&self.host).add_import_bytes(share_id, delta).await
+        {
+            tracing::warn!(error = %e, "could not flush the final served import bytes");
         }
     }
 

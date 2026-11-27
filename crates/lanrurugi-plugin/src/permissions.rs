@@ -28,19 +28,20 @@ pub fn build_flags(permissions: &DeclaredPermissions, may_write: bool) -> Vec<St
         // Deno accepts a comma-separated list; each entry is one declared host name.
         flags.push(format!("--allow-net={}", permissions.net.join(",")));
     }
-    if permissions.write && may_write {
-        if let Some(library) = crate::library_dir() {
-            let mut grant = library
-                .join(lanrurugi_storage::paths::BYNAME_DIR)
-                .display()
-                .to_string();
-            // A converted plugin may also write a scratch file on its way to building an archive.
-            if let Some(scratch) = crate::scratch_dir() {
-                grant.push(',');
-                grant.push_str(&scratch.display().to_string());
-            }
-            flags.push(format!("--allow-write={grant}"));
+    if permissions.write
+        && may_write
+        && let Some(library) = crate::library_dir()
+    {
+        let mut grant = library
+            .join(lanrurugi_storage::paths::BYNAME_DIR)
+            .display()
+            .to_string();
+        // A converted plugin may also write a scratch file on its way to building an archive.
+        if let Some(scratch) = crate::scratch_dir() {
+            grant.push(',');
+            grant.push_str(&scratch.display().to_string());
         }
+        flags.push(format!("--allow-write={grant}"));
     }
     flags
 }

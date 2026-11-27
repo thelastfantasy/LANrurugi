@@ -511,16 +511,15 @@ impl DownloadQueueRepository {
         for id in &ids {
             let key = item_key(id);
             let raw: Option<String> = conn.get(&key).await?;
-            if let Some(raw) = raw {
-                if let Ok(mut item) = serde_json::from_str::<DownloadQueueItem>(&raw) {
-                    if item.created_at == 0 || item.created_at < 1_000_000_000_000 {
-                        item.created_at = now;
-                        let raw = serde_json::to_string(&item)
-                            .map_err(|e| DownloadQueueStorageError::Json(key.clone(), e))?;
-                        let _: () = conn.set(&key, raw).await?;
-                        count += 1;
-                    }
-                }
+            if let Some(raw) = raw
+                && let Ok(mut item) = serde_json::from_str::<DownloadQueueItem>(&raw)
+                && (item.created_at == 0 || item.created_at < 1_000_000_000_000)
+            {
+                item.created_at = now;
+                let raw = serde_json::to_string(&item)
+                    .map_err(|e| DownloadQueueStorageError::Json(key.clone(), e))?;
+                let _: () = conn.set(&key, raw).await?;
+                count += 1;
             }
         }
         Ok(count)

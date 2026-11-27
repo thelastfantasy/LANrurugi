@@ -88,10 +88,10 @@ pub(super) async fn lookup(
     // three-key JSON shape instead of a flat list.
     let mut by_kind: std::collections::HashMap<&str, Vec<String>> = Default::default();
     for ns in &all_namespaces {
-        if let Ok(info) = state.plugins.plugin_info(ns).await {
-            if let Some(kind) = DOMAIN_BOUND_PLUGIN_TYPES.iter().find(|&&k| k == info.kind) {
-                by_kind.entry(kind).or_default().push(ns.clone());
-            }
+        if let Ok(info) = state.plugins.plugin_info(ns).await
+            && let Some(kind) = DOMAIN_BOUND_PLUGIN_TYPES.iter().find(|&&k| k == info.kind)
+        {
+            by_kind.entry(kind).or_default().push(ns.clone());
         }
     }
 

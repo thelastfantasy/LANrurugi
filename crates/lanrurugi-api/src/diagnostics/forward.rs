@@ -562,12 +562,12 @@ fn deployment_context(report: &Feedback<'_>, at_ms: i64, deployment: &Deployment
     if let Some(user_agent) = report.user_agent {
         context["user_agent"] = json!(user_agent);
     }
-    if let Some(client) = report.client.as_ref() {
-        if let Ok(Value::Object(fields)) = serde_json::to_value(client) {
-            for (key, value) in fields {
-                if !value.is_null() {
-                    context[key] = value;
-                }
+    if let Some(client) = report.client.as_ref()
+        && let Ok(Value::Object(fields)) = serde_json::to_value(client)
+    {
+        for (key, value) in fields {
+            if !value.is_null() {
+                context[key] = value;
             }
         }
     }

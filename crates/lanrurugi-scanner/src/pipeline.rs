@@ -396,30 +396,22 @@ pub async fn ingest_file_with_policy(
         });
     }
 
-    if let Some(intended_filename) = intended_filename {
-        if let Some(existing) = archives
+    if let Some(intended_filename) = intended_filename
+        && let Some(existing) = archives
             .find_by_exact_file_basename(intended_filename)
             .await?
-        {
-            if existing.id != id {
-                match duplicate_policy {
-                    DuplicatePolicy::Reject => {
-                        return Ok(IngestOutcome::Rejected {
-                            existing_id: existing.id,
-                            reason: DuplicateReason::Filename,
-                        });
-                    }
-                    DuplicatePolicy::Overwrite => {
-                        delete_existing_archive(
-                            archives,
-                            config_pool,
-                            search_pool,
-                            equivalence,
-                            &existing,
-                        )
-                        .await?;
-                    }
-                }
+        && existing.id != id
+    {
+        match duplicate_policy {
+            DuplicatePolicy::Reject => {
+                return Ok(IngestOutcome::Rejected {
+                    existing_id: existing.id,
+                    reason: DuplicateReason::Filename,
+                });
+            }
+            DuplicatePolicy::Overwrite => {
+                delete_existing_archive(archives, config_pool, search_pool, equivalence, &existing)
+                    .await?;
             }
         }
     }
@@ -727,49 +719,49 @@ async fn catalogue_new_archive(
     // The sidecar is written after the record exists and the bytes are final, never before: a
     // snapshot of an archive nobody can open would be worse than no snapshot. Only hash-layout
     // archives get one (020) — by-name archives carry their original name in the name itself.
-    if let Some(library) = path.parent().and_then(Path::parent) {
-        if lanrurugi_storage::paths::is_hash_layout_path(library, path, id.as_str()) {
-            // On a rebuild there is no `title_filename`: the name on disk is the id. Falling back
-            // to it would overwrite the only copy of the original name with `<id>.zip`, so an
-            // existing sidecar wins. Its `original_path` is preserved for the same reason. Read
-            // and written under the sidecar's lock: a download's primary source can be amended
-            // into it concurrently.
-            let written = lanrurugi_storage::sidecar::rewrite(library, id.as_str(), |previous| {
-                let original_filename = title_filename
-                    .map(str::to_string)
-                    .or_else(|| previous.as_ref().map(|s| s.original_filename.clone()))
-                    .or_else(|| {
-                        path.file_name()
-                            .and_then(|f| f.to_str())
-                            .map(str::to_string)
-                    })
-                    .unwrap_or_default();
-                let mut sidecar = lanrurugi_storage::sidecar::Sidecar::for_archive(
-                    id.as_str(),
-                    path,
-                    &original_filename,
-                    &archive.title,
-                )?;
-                sidecar.blake3 = archive.blake3.clone();
-                // A fresh record has no primary source yet; a rebuild keeps the one the old
-                // sidecar remembered.
-                sidecar.primary_source = archive
-                    .primary_source
-                    .clone()
-                    .or_else(|| previous.as_ref().and_then(|s| s.primary_source.clone()));
-                if let Some(previous) = previous {
-                    sidecar.original_path = previous.original_path;
-                    // Measured sizes stay valid as long as their file is unchanged, which
-                    // `FileDimensions::describes` checks whenever they are read.
-                    sidecar.page_dimensions = previous.page_dimensions;
-                    sidecar.patch_page_dimensions = previous.patch_page_dimensions;
-                }
-                Ok(sidecar)
-            })
-            .await;
-            if let Err(e) = written {
-                tracing::warn!(%id, error = %e, "failed to write the archive sidecar");
+    if let Some(library) = path.parent().and_then(Path::parent)
+        && lanrurugi_storage::paths::is_hash_layout_path(library, path, id.as_str())
+    {
+        // On a rebuild there is no `title_filename`: the name on disk is the id. Falling back
+        // to it would overwrite the only copy of the original name with `<id>.zip`, so an
+        // existing sidecar wins. Its `original_path` is preserved for the same reason. Read
+        // and written under the sidecar's lock: a download's primary source can be amended
+        // into it concurrently.
+        let written = lanrurugi_storage::sidecar::rewrite(library, id.as_str(), |previous| {
+            let original_filename = title_filename
+                .map(str::to_string)
+                .or_else(|| previous.as_ref().map(|s| s.original_filename.clone()))
+                .or_else(|| {
+                    path.file_name()
+                        .and_then(|f| f.to_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+            let mut sidecar = lanrurugi_storage::sidecar::Sidecar::for_archive(
+                id.as_str(),
+                path,
+                &original_filename,
+                &archive.title,
+            )?;
+            sidecar.blake3 = archive.blake3.clone();
+            // A fresh record has no primary source yet; a rebuild keeps the one the old
+            // sidecar remembered.
+            sidecar.primary_source = archive
+                .primary_source
+                .clone()
+                .or_else(|| previous.as_ref().and_then(|s| s.primary_source.clone()));
+            if let Some(previous) = previous {
+                sidecar.original_path = previous.original_path;
+                // Measured sizes stay valid as long as their file is unchanged, which
+                // `FileDimensions::describes` checks whenever they are read.
+                sidecar.page_dimensions = previous.page_dimensions;
+                sidecar.patch_page_dimensions = previous.patch_page_dimensions;
             }
+            Ok(sidecar)
+        })
+        .await;
+        if let Err(e) = written {
+            tracing::warn!(%id, error = %e, "failed to write the archive sidecar");
         }
     }
 

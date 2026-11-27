@@ -108,8 +108,10 @@ fn stub() -> &'static Stub {
         });
         let addr = rx.recv().unwrap();
         // Set once, before any test reads them, from the first `stub()` call.
-        std::env::set_var("LANRURUGI_DEEPSEEK_BASE_URL", format!("http://{addr}"));
-        std::env::set_var("DEEPSEEK_API_KEY", "test-key");
+        // Not provably sound: the test harness runs tests on several threads. Accepted because
+        // nothing else in this test binary reads this variable.
+        unsafe { std::env::set_var("LANRURUGI_DEEPSEEK_BASE_URL", format!("http://{addr}")) };
+        unsafe { std::env::set_var("DEEPSEEK_API_KEY", "test-key") };
         stub
     })
 }

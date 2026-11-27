@@ -507,8 +507,8 @@ async fn create_tankoubon_from_folder(
     {
         tracing::warn!(%candidate, error = %e, "failed to add new tank to search index");
     }
-    if !tags.is_empty() {
-        if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
+    if !tags.is_empty()
+        && let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
             &state.redis.search,
             &state.equivalence,
             &candidate,
@@ -516,9 +516,8 @@ async fn create_tankoubon_from_folder(
             &tags,
         )
         .await
-        {
-            tracing::warn!(%candidate, error = %e, "failed to index new tank tags");
-        }
+    {
+        tracing::warn!(%candidate, error = %e, "failed to index new tank tags");
     }
     let joined: Vec<String> = archive_ids.iter().map(|a| a.0.clone()).collect();
     if let Err(e) =

@@ -119,23 +119,24 @@ async fn put_preferences(
     };
 
     let sortby = body.library_sortby.map(|value| value.trim().to_string());
-    if let Some(sortby) = &sortby {
-        if sortby.is_empty() || sortby.len() > 64 || sortby.contains(['\r', '\n']) {
-            return error(
-                StatusCode::BAD_REQUEST,
-                "put_preferences",
-                "library_sortby must be 1..64 characters without newlines".to_string(),
-            );
-        }
+    if let Some(sortby) = &sortby
+        && (sortby.is_empty() || sortby.len() > 64 || sortby.contains(['\r', '\n']))
+    {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "put_preferences",
+            "library_sortby must be 1..64 characters without newlines".to_string(),
+        );
     }
-    if let Some(sortdir) = &body.library_sortdir {
-        if sortdir != "asc" && sortdir != "desc" {
-            return error(
-                StatusCode::BAD_REQUEST,
-                "put_preferences",
-                "library_sortdir must be \"asc\" or \"desc\"".to_string(),
-            );
-        }
+    if let Some(sortdir) = &body.library_sortdir
+        && sortdir != "asc"
+        && sortdir != "desc"
+    {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "put_preferences",
+            "library_sortdir must be \"asc\" or \"desc\"".to_string(),
+        );
     }
 
     let mut conn = match state.redis.config.get().await {
@@ -149,29 +150,27 @@ async fn put_preferences(
         }
     };
     let key = preferences_key(owner);
-    if let Some(sortby) = &sortby {
-        if let Err(e) = conn
+    if let Some(sortby) = &sortby
+        && let Err(e) = conn
             .hset::<_, _, _, ()>(&key, "library_sortby", sortby)
             .await
-        {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "put_preferences",
-                e.to_string(),
-            );
-        }
+    {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "put_preferences",
+            e.to_string(),
+        );
     }
-    if let Some(sortdir) = &body.library_sortdir {
-        if let Err(e) = conn
+    if let Some(sortdir) = &body.library_sortdir
+        && let Err(e) = conn
             .hset::<_, _, _, ()>(&key, "library_sortdir", sortdir)
             .await
-        {
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "put_preferences",
-                e.to_string(),
-            );
-        }
+    {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "put_preferences",
+            e.to_string(),
+        );
     }
 
     ok("put_preferences", []).into_response()

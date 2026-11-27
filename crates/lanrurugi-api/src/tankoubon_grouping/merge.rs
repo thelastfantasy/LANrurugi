@@ -433,10 +433,10 @@ fn shared_key(members: &[usize], by_key: &HashMap<String, Vec<usize>>) -> String
 fn series_keys(suggestion: &GroupSuggestion, titles: &HashMap<String, String>) -> HashSet<String> {
     let mut out = HashSet::new();
     for id in &suggestion.archive_ids {
-        if let Some(title) = titles.get(id) {
-            if let Some(key) = series_key(title) {
-                out.insert(key);
-            }
+        if let Some(title) = titles.get(id)
+            && let Some(key) = series_key(title)
+        {
+            out.insert(key);
         }
     }
     out
@@ -501,10 +501,10 @@ fn creators_of(
                 out.insert(value.to_lowercase());
             }
         }
-        if let Some(title) = titles.get(id) {
-            if let Some(value) = title_creator(title) {
-                out.insert(value);
-            }
+        if let Some(title) = titles.get(id)
+            && let Some(value) = title_creator(title)
+        {
+            out.insert(value);
         }
     }
     out
@@ -723,10 +723,10 @@ fn member_tag_sets(
                 .filter(|t| !t.is_empty())
                 .map(str::to_string)
                 .collect();
-            if !set.iter().any(|t| creator_value(t).is_some()) {
-                if let Some(creator) = titles.get(id).and_then(|t| title_creator(t)) {
-                    set.insert(format!("artist:{creator}"));
-                }
+            if !set.iter().any(|t| creator_value(t).is_some())
+                && let Some(creator) = titles.get(id).and_then(|t| title_creator(t))
+            {
+                set.insert(format!("artist:{creator}"));
             }
             set
         })

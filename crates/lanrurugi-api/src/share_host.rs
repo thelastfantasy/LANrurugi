@@ -232,10 +232,10 @@ impl ImportHost for AppState {
                             .collect();
                     }
                     // The importer's own source wins: it knows where *this* copy came from.
-                    if archive.primary_source.is_none() {
-                        if let Some(source) = shared.primary_source.clone() {
-                            archive.primary_source = Some(source);
-                        }
+                    if archive.primary_source.is_none()
+                        && let Some(source) = shared.primary_source.clone()
+                    {
+                        archive.primary_source = Some(source);
                     }
                 },
                 |old, new| crate::archives::reindex_title_and_tags(self, old, new),

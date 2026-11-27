@@ -139,24 +139,24 @@ fn apply_rules_to_tag(
                 }
             }
             Rule::RemoveNamespace(ns) => {
-                if let Some((prefix, _)) = tag.split_once(':') {
-                    if prefix.to_lowercase() == *ns {
-                        return None;
-                    }
+                if let Some((prefix, _)) = tag.split_once(':')
+                    && prefix.to_lowercase() == *ns
+                {
+                    return None;
                 }
             }
             Rule::StripNamespace(ns) => {
-                if let Some((prefix, rest)) = tag.split_once(':') {
-                    if prefix.to_lowercase() == *ns {
-                        tag = rest.to_string();
-                    }
+                if let Some((prefix, rest)) = tag.split_once(':')
+                    && prefix.to_lowercase() == *ns
+                {
+                    tag = rest.to_string();
                 }
             }
             Rule::ReplaceNamespace(m, v) => {
-                if let Some((prefix, rest)) = tag.split_once(':') {
-                    if prefix.to_lowercase() == *m {
-                        tag = format!("{v}:{rest}");
-                    }
+                if let Some((prefix, rest)) = tag.split_once(':')
+                    && prefix.to_lowercase() == *m
+                {
+                    tag = format!("{v}:{rest}");
                 }
             }
             Rule::Replace(m, v) => {

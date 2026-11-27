@@ -419,8 +419,8 @@ async fn create_or_rename_tankoubon(
             // never survives the default `sortby=title` search path's own `LRR_TITLES ∩ filtered`
             // step, staying invisible even after `TANKGROUPED_KEY` correctly lists it as a
             // candidate.
-            if old_name != grouping.name {
-                if let Err(e) = lanrurugi_search::indexer::update_title_index(
+            if old_name != grouping.name
+                && let Err(e) = lanrurugi_search::indexer::update_title_index(
                     &state.redis.search,
                     &state.equivalence,
                     &tankid,
@@ -428,20 +428,18 @@ async fn create_or_rename_tankoubon(
                     &grouping.name,
                 )
                 .await
-                {
-                    tracing::warn!(%tankid, error = %e, "failed to update tank title search index");
-                }
+            {
+                tracing::warn!(%tankid, error = %e, "failed to update tank title search index");
             }
             // Added once, unconditionally of member count, only on genuine creation (not a rename
             // of an existing tank, which already has its own id indexed) — see
             // `sync_tank_membership`'s own docs for why this must not depend on `archives` ever
             // becoming non-empty.
-            if is_new {
-                if let Err(e) =
+            if is_new
+                && let Err(e) =
                     lanrurugi_search::indexer::add_tank_to_index(&state.redis.search, &tankid).await
-                {
-                    tracing::warn!(%tankid, error = %e, "failed to add new tank to search index");
-                }
+            {
+                tracing::warn!(%tankid, error = %e, "failed to add new tank to search index");
             }
             let target = ActivityTarget {
                 id: Some(tankid.0.clone()),
@@ -1183,8 +1181,8 @@ pub(crate) async fn reindex_tankoubon(state: &AppState, id: &TankId, old: Groupi
     // tag, the Tankoubon never among them — "what you see is what you can find" broke
     // silently. This makes tag search actually reach what the tank's own metadata already
     // displays, independent of whether any individual member also happens to carry it.
-    if old.tags != new.tags {
-        if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
+    if old.tags != new.tags
+        && let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
             &state.redis.search,
             &state.equivalence,
             id.as_str(),
@@ -1192,12 +1190,11 @@ pub(crate) async fn reindex_tankoubon(state: &AppState, id: &TankId, old: Groupi
             &new.tags,
         )
         .await
-        {
-            tracing::warn!(%id, error = %e, "failed to update tank tag search index");
-        }
+    {
+        tracing::warn!(%id, error = %e, "failed to update tank tag search index");
     }
-    if old.name != new.name {
-        if let Err(e) = lanrurugi_search::indexer::update_title_index(
+    if old.name != new.name
+        && let Err(e) = lanrurugi_search::indexer::update_title_index(
             &state.redis.search,
             &state.equivalence,
             id,
@@ -1205,9 +1202,8 @@ pub(crate) async fn reindex_tankoubon(state: &AppState, id: &TankId, old: Groupi
             &new.name,
         )
         .await
-        {
-            tracing::warn!(%id, error = %e, "failed to update tank title search index");
-        }
+    {
+        tracing::warn!(%id, error = %e, "failed to update tank title search index");
     }
 }
 
@@ -1316,10 +1312,10 @@ async fn update_tankoubon(
                 }
                 if let Some(archive_ids) = archive_ids {
                     non_rating_change = true;
-                    if grouping.tags.is_empty() {
-                        if let Some(common_tags) = common_tags {
-                            grouping.tags = common_tags;
-                        }
+                    if grouping.tags.is_empty()
+                        && let Some(common_tags) = common_tags
+                    {
+                        grouping.tags = common_tags;
                     }
                     grouping.archives = archive_ids;
                 }
@@ -1629,17 +1625,16 @@ async fn dissolve_tankoubon(
             {
                 tracing::warn!(%id, error = %e, "failed to remove tank from search index");
             }
-            if !old_name.is_empty() {
-                if let Err(e) = lanrurugi_search::indexer::remove_title_index(
+            if !old_name.is_empty()
+                && let Err(e) = lanrurugi_search::indexer::remove_title_index(
                     &state.redis.search,
                     &state.equivalence,
                     id,
                     &old_name,
                 )
                 .await
-                {
-                    tracing::warn!(%id, error = %e, "failed to remove tank title search index");
-                }
+            {
+                tracing::warn!(%id, error = %e, "failed to remove tank title search index");
             }
             if record_activity {
                 record_manual(

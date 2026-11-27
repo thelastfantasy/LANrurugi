@@ -1449,19 +1449,15 @@ async fn put_settings(
     if auth
         .as_ref()
         .is_some_and(|axum::extract::Extension(a)| a.is_token())
-    {
-        if let Some(field) = TOKEN_AUTH_FORBIDDEN_SETTINGS_FIELDS
+        && let Some(field) = TOKEN_AUTH_FORBIDDEN_SETTINGS_FIELDS
             .iter()
             .find(|f| fields.contains_key(**f))
-        {
-            return error(
-                StatusCode::FORBIDDEN,
-                "put_settings",
-                format!(
-                    "API tokens cannot change \"{field}\" — this requires a real login session."
-                ),
-            );
-        }
+    {
+        return error(
+            StatusCode::FORBIDDEN,
+            "put_settings",
+            format!("API tokens cannot change \"{field}\" — this requires a real login session."),
+        );
     }
 
     let mut conn = match state.redis.config.get().await {
@@ -1580,17 +1576,17 @@ async fn put_settings(
         // FR-001/FR-003 of specs/021: the shape gate above only checks "starts with http(s)"; the
         // page scheme and the credential/query rules are checked here, where the page origin is
         // known.
-        if key == crate::download_url::FIELD {
-            if let Err(e) = crate::download_url::validate(
+        if key == crate::download_url::FIELD
+            && let Err(e) = crate::download_url::validate(
                 value.as_str().unwrap_or(""),
                 requested_page_origin.as_deref(),
-            ) {
-                return error(
-                    StatusCode::BAD_REQUEST,
-                    "put_settings",
-                    format!("Field \"{key}\": {}.", e.message()),
-                );
-            }
+            )
+        {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "put_settings",
+                format!("Field \"{key}\": {}.", e.message()),
+            );
         }
         changed_fields.push(key.clone());
         let _: () = match conn.hset(CONFIG_KEY, &key, stored).await {

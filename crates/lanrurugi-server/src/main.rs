@@ -399,15 +399,14 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             .await
             .ok()
             .flatten();
-        if stored.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) {
-            if let Ok(env_key) = std::env::var("DEEPSEEK_API_KEY") {
-                if !env_key.trim().is_empty() {
-                    let _: () = conn
-                        .hset(lanrurugi_storage::keys::CONFIG_KEY, "llm_api_key", &env_key)
-                        .await?;
-                    tracing::info!("llm_api_key auto-persisted from DEEPSEEK_API_KEY env var");
-                }
-            }
+        if stored.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true)
+            && let Ok(env_key) = std::env::var("DEEPSEEK_API_KEY")
+            && !env_key.trim().is_empty()
+        {
+            let _: () = conn
+                .hset(lanrurugi_storage::keys::CONFIG_KEY, "llm_api_key", &env_key)
+                .await?;
+            tracing::info!("llm_api_key auto-persisted from DEEPSEEK_API_KEY env var");
         }
     }
 
@@ -905,14 +904,13 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 };
                 match job.state {
                     lanrurugi_core::jobs::JobState::Finished => {
-                        if normalizer_stale {
-                            if let Err(e) = state
+                        if normalizer_stale
+                            && let Err(e) = state
                                 .recommend_cache
                                 .put_normalizer_version(rule_revision)
                                 .await
-                            {
-                                tracing::warn!(error = %e, "failed to persist recommend-cache normalizer version");
-                            }
+                        {
+                            tracing::warn!(error = %e, "failed to persist recommend-cache normalizer version");
                         }
                         if let Err(e) = state
                             .recommend_cache
@@ -1575,15 +1573,15 @@ async fn repair_zombie_archives(state: &AppState) {
                 tracing::warn!(id = %archive.id, error = %e, "failed to save repaired archive file path");
                 continue;
             }
-            if !old_file.is_empty() {
-                if let Ok(mut conn) = state.redis.config.get().await {
-                    use deadpool_redis::redis::AsyncCommands;
-                    use lanrurugi_storage::keys::FILEMAP_KEY;
-                    let _: Result<(), _> = conn.hdel(FILEMAP_KEY, &old_file).await;
-                    let _: Result<(), _> = conn
-                        .hset(FILEMAP_KEY, &archive.file, archive.id.as_str())
-                        .await;
-                }
+            if !old_file.is_empty()
+                && let Ok(mut conn) = state.redis.config.get().await
+            {
+                use deadpool_redis::redis::AsyncCommands;
+                use lanrurugi_storage::keys::FILEMAP_KEY;
+                let _: Result<(), _> = conn.hdel(FILEMAP_KEY, &old_file).await;
+                let _: Result<(), _> = conn
+                    .hset(FILEMAP_KEY, &archive.file, archive.id.as_str())
+                    .await;
             }
             continue;
         }
@@ -1618,12 +1616,12 @@ async fn repair_zombie_archives(state: &AppState) {
         // The record is gone, so nothing can ever ask for its thumbnail again; keeping the entry
         // would just leave the id blacklisted for a future import that reuses it.
         lanrurugi_api::thumbnail_failures::clear_archive(state, archive.id.as_str()).await;
-        if !archive.file.is_empty() {
-            if let Ok(mut conn) = state.redis.config.get().await {
-                use deadpool_redis::redis::AsyncCommands;
-                use lanrurugi_storage::keys::FILEMAP_KEY;
-                let _: Result<(), _> = conn.hdel(FILEMAP_KEY, &archive.file).await;
-            }
+        if !archive.file.is_empty()
+            && let Ok(mut conn) = state.redis.config.get().await
+        {
+            use deadpool_redis::redis::AsyncCommands;
+            use lanrurugi_storage::keys::FILEMAP_KEY;
+            let _: Result<(), _> = conn.hdel(FILEMAP_KEY, &archive.file).await;
         }
     }
     if kept > 0 {

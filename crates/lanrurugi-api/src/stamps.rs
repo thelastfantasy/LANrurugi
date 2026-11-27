@@ -352,59 +352,59 @@ async fn delete_stamp(
 
     match state.repos.stamps.delete(&id).await {
         Ok(()) => {
-            if let (Some(stamp), Some(page)) = (stamp, page) {
-                if crate::settings::read_stamp_autounbookmark(&state).await {
-                    // `stamps.delete` above already rewrote the archive's own `stamps` list —
-                    // re-fetch to see the post-delete membership, not a stale in-memory copy.
-                    if let Ok(Some(archive)) = state.repos.archives.get(&stamp.archive_id).await {
-                        let any_left = archive
-                            .stamp_ids
-                            .iter()
-                            .any(|sid| page_of(sid.as_str()) == Some(page));
-                        if !any_left
-                            && state
-                                .bookmarks
-                                .is_bookmarked(stamp.archive_id.as_str(), page)
-                                .await
-                                .unwrap_or(false)
+            if let (Some(stamp), Some(page)) = (stamp, page)
+                && crate::settings::read_stamp_autounbookmark(&state).await
+            {
+                // `stamps.delete` above already rewrote the archive's own `stamps` list —
+                // re-fetch to see the post-delete membership, not a stale in-memory copy.
+                if let Ok(Some(archive)) = state.repos.archives.get(&stamp.archive_id).await {
+                    let any_left = archive
+                        .stamp_ids
+                        .iter()
+                        .any(|sid| page_of(sid.as_str()) == Some(page));
+                    if !any_left
+                        && state
+                            .bookmarks
+                            .is_bookmarked(stamp.archive_id.as_str(), page)
+                            .await
+                            .unwrap_or(false)
+                    {
+                        let now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        match state
+                            .bookmarks
+                            .remove(stamp.archive_id.as_str(), page, now)
+                            .await
                         {
-                            let now = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .map(|d| d.as_secs())
-                                .unwrap_or(0);
-                            match state
-                                .bookmarks
-                                .remove(stamp.archive_id.as_str(), page, now)
-                                .await
-                            {
-                                Ok(()) => {
-                                    record_manual(
-                                        &state,
-                                        auth.as_ref().map(|e| &e.0),
-                                        action_types::STAMP_BOOKMARK_SYNC,
-                                        ActivityTarget {
-                                            id: Some(stamp.archive_id.0.clone()),
-                                            label: Some(archive.title.clone()),
-                                            kind: Some("archive".to_string()),
-                                        },
-                                        Outcome::Success,
-                                        None,
-                                        Some(json!({
-                                            "stamp": { "stamp_id": id, "page": page },
-                                            "bookmark": { "action": "remove", "page": page },
-                                        })),
-                                    )
-                                    .await;
-                                }
-                                Err(e) => {
-                                    // The stamp itself was already deleted successfully — same
-                                    // "secondary effect failure doesn't fail the request" posture
-                                    // as add_stamp's own equivalent branch above.
-                                    tracing::warn!(
-                                        archive_id = %stamp.archive_id, page, error = %e,
-                                        "failed to auto-remove bookmark after deleting a page's last stamp"
-                                    );
-                                }
+                            Ok(()) => {
+                                record_manual(
+                                    &state,
+                                    auth.as_ref().map(|e| &e.0),
+                                    action_types::STAMP_BOOKMARK_SYNC,
+                                    ActivityTarget {
+                                        id: Some(stamp.archive_id.0.clone()),
+                                        label: Some(archive.title.clone()),
+                                        kind: Some("archive".to_string()),
+                                    },
+                                    Outcome::Success,
+                                    None,
+                                    Some(json!({
+                                        "stamp": { "stamp_id": id, "page": page },
+                                        "bookmark": { "action": "remove", "page": page },
+                                    })),
+                                )
+                                .await;
+                            }
+                            Err(e) => {
+                                // The stamp itself was already deleted successfully — same
+                                // "secondary effect failure doesn't fail the request" posture
+                                // as add_stamp's own equivalent branch above.
+                                tracing::warn!(
+                                    archive_id = %stamp.archive_id, page, error = %e,
+                                    "failed to auto-remove bookmark after deleting a page's last stamp"
+                                );
                             }
                         }
                     }

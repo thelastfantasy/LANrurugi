@@ -17,7 +17,7 @@ static LOCKS: LazyLock<LockPool<String>> = LazyLock::new(LockPool::new);
 
 /// Waits for, then holds, the lock for `key` (for example `archive:<id>`) until the returned guard
 /// drops.
-pub async fn lock(key: &str) -> impl Send + 'static {
+pub async fn lock(key: &str) -> impl Send + 'static + use<> {
     LOCKS.async_lock(key.to_string()).await
 }
 

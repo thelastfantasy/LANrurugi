@@ -279,11 +279,11 @@ impl State<'_, '_> {
             "font" if !self_closing => {
                 self.font_depth += 1;
                 let level = tag.attr("size").and_then(|size| font_heading_level(&size));
-                if let Some(level) = level.filter(|_| self.heading.is_none()) {
-                    if self.text.trim().is_empty() {
-                        self.heading = Some(level);
-                        self.heading_font = Some(self.font_depth);
-                    }
+                if let Some(level) = level.filter(|_| self.heading.is_none())
+                    && self.text.trim().is_empty()
+                {
+                    self.heading = Some(level);
+                    self.heading_font = Some(self.font_depth);
                 }
             }
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {

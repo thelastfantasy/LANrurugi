@@ -147,10 +147,10 @@ fn projection_runs(projection: &[u32], min_run_len: usize) -> Vec<(usize, usize)
     for (i, &value) in projection.iter().chain(std::iter::once(&0u32)).enumerate() {
         if value >= threshold && start.is_none() {
             start = Some(i);
-        } else if value < threshold {
-            if let Some(start_index) = start.take() {
-                raw.push((start_index, i - 1));
-            }
+        } else if value < threshold
+            && let Some(start_index) = start.take()
+        {
+            raw.push((start_index, i - 1));
         }
     }
 
@@ -158,11 +158,11 @@ fn projection_runs(projection: &[u32], min_run_len: usize) -> Vec<(usize, usize)
     // visual column/row; only a real inter-character gap should split a run.
     let mut merged: Vec<(usize, usize)> = Vec::new();
     for (start, end) in raw {
-        if let Some(last) = merged.last_mut() {
-            if start.saturating_sub(last.1) <= 2 {
-                last.1 = end;
-                continue;
-            }
+        if let Some(last) = merged.last_mut()
+            && start.saturating_sub(last.1) <= 2
+        {
+            last.1 = end;
+            continue;
         }
         merged.push((start, end));
     }

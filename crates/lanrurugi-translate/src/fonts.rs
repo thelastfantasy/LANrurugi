@@ -78,24 +78,24 @@ impl std::fmt::Debug for FontLibrary {
 fn first_usable(candidates: &[&str], extra_dir: Option<&Path>) -> Option<Vec<u8>> {
     // A directory override is searched first and by filename, so an operator can drop in faces
     // without matching any distro's own layout.
-    if let Some(dir) = extra_dir {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            let mut files: Vec<PathBuf> = entries
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| {
-                    p.extension()
-                        .and_then(|e| e.to_str())
-                        .is_some_and(|e| matches!(e, "ttf" | "otf" | "ttc"))
-                })
-                .collect();
-            files.sort();
-            for path in files {
-                if let Ok(bytes) = std::fs::read(&path) {
-                    if FontRef::try_from_slice(&bytes).is_ok() {
-                        return Some(bytes);
-                    }
-                }
+    if let Some(dir) = extra_dir
+        && let Ok(entries) = std::fs::read_dir(dir)
+    {
+        let mut files: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| matches!(e, "ttf" | "otf" | "ttc"))
+            })
+            .collect();
+        files.sort();
+        for path in files {
+            if let Ok(bytes) = std::fs::read(&path)
+                && FontRef::try_from_slice(&bytes).is_ok()
+            {
+                return Some(bytes);
             }
         }
     }
@@ -150,10 +150,10 @@ impl FontLibrary {
         let mut set = FontSet::new(&self.fallback);
 
         for font_id in golden_set {
-            if let Some(bytes) = self.by_style.get(font_id.as_str()) {
-                if FontRef::try_from_slice(bytes).is_ok() {
-                    set = set.with_font(font_id.as_str(), bytes);
-                }
+            if let Some(bytes) = self.by_style.get(font_id.as_str())
+                && FontRef::try_from_slice(bytes).is_ok()
+            {
+                set = set.with_font(font_id.as_str(), bytes);
             }
         }
         Some(set)
