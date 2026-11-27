@@ -4000,6 +4000,10 @@ body div.ido {
     flex: 1 1 0;
     min-width: 0 !important;
   }
+  /* An icon-only button keeps its own width instead of taking a share of the row. */
+  .admin-actions > .stdbtn.admin-icon-btn {
+    flex: 0 0 auto;
+  }
 }
 
 @media (max-width: 768px) {
@@ -5767,26 +5771,6 @@ div.gt.gt-single > span {
 .split-progress {
   max-width: 420px;
   margin: 0 auto;
-}
-
-.split-progress-track {
-  height: 10px;
-  border: 1px solid currentColor;
-  overflow: hidden;
-}
-
-.split-progress-fill {
-  height: 100%;
-  background: currentColor;
-  transition: width 0.25s linear;
-}
-
-.split-progress-label {
-  margin-top: 4px;
-  text-align: center;
-  font-size: 0.85rem;
-  font-variant-numeric: tabular-nums;
-  opacity: 0.8;
 }
 
 .split-progress-warning {

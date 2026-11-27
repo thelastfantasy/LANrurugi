@@ -3,9 +3,9 @@ import { useTranslation } from "react-i18next"
 
 import { useJobProgressOverride } from "@/api/hooks"
 import type { JobRecord, JobRecordState } from "@/api/types"
-import { Tooltip } from "@/components/common-ui/Display"
+import { ProgressBar, Tooltip } from "@/components/common-ui/Display"
 import { useIsNarrowViewport } from "@/hooks"
-import { FONT_SIZE_SM, FONT_SIZE_XS } from "@/theme"
+import { FONT_SIZE_SM } from "@/theme"
 
 /** State → color, shared between the Jobs page's badges/borders and this component's default bar
  * color. `active` is per theme (`--job-active-color` in each theme file): the saturated green read
@@ -18,8 +18,6 @@ export const STATE_COLOR: Record<JobRecordState, string> = {
 }
 
 const BAR_HEIGHT = 8
-/** Taller than [`BAR_HEIGHT`], because the reading is rendered inside it rather than beside it. */
-const INLINE_BAR_HEIGHT = 20
 const BAR_BACKGROUND = "rgba(128,128,128,0.25)"
 const ROW_GAP = 6
 // Marks a rate-limited download's speed label so it's visually distinguishable at a glance.
@@ -254,106 +252,6 @@ export function computeEta(
   return displayed
 }
 
-/** A full-width bar with its reading inside the track.
- *
- * The bar used to share its row with a fixed-width label column, which left the track only as wide
- * as whatever the column did not reserve. Splitting the reading at the fill boundary — theme text
- * colour over the empty track, white over the filled part — keeps it readable without a per-theme
- * colour: the fill is `STATE_COLOR.active`, a green dark enough for white in every theme, and the
- * done row already writes white on that same green. The indeterminate variants keep the theme colour throughout (their moving 30%
- * block is rendered at low opacity, so the text stays legible over it). */
-function InlineBar({
-  ratio,
-  label,
-  color,
-  flowing = false,
-}: {
-  ratio: number | null
-  label: string
-  color: string
-  /** Animate the fill while the transfer is actually running; a paused/finished row must stay still. */
-  flowing?: boolean
-}) {
-  const pct = ratio == null ? 0 : Math.max(0, Math.min(1, ratio)) * 100
-  const textStyle: CSSProperties = {
-    position: "absolute",
-    inset: 0,
-    display: "flex",
-    alignItems: "center",
-    // Right-aligned, not centered: the fill grows from the left, so a centred reading is cut by the
-    // fill boundary through most of the transfer, while a right-aligned one only meets it late.
-    // Numbers also read naturally right-aligned.
-    justifyContent: "flex-end",
-    padding: "0 10px",
-    boxSizing: "border-box",
-    fontSize: FONT_SIZE_XS,
-    lineHeight: 1,
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    fontVariantNumeric: "tabular-nums",
-  }
-  return (
-    <div
-      style={{
-        position: "relative",
-        width: "100%",
-        height: INLINE_BAR_HEIGHT,
-        background: BAR_BACKGROUND,
-        borderRadius: 4,
-        overflow: "hidden",
-      }}
-    >
-      {ratio == null ? (
-        <div
-          style={{
-            position: "absolute",
-            top: 0,
-            bottom: 0,
-            left: 0,
-            width: "30%",
-            background: color,
-            opacity: 0.35,
-            borderRadius: 4,
-            animation: "lrr-indeterminate-bar 1.2s ease-in-out infinite",
-          }}
-        />
-      ) : (
-        <div
-          style={{
-            position: "absolute",
-            top: 0,
-            bottom: 0,
-            left: 0,
-            width: `${pct}%`,
-            backgroundColor: color,
-            // Clips the stripe layer, which is deliberately one tile wider than the fill.
-            overflow: "hidden",
-          }}
-        >
-          {flowing ? <div className="lrr-flowing-fill" /> : null}
-        </div>
-      )}
-      {ratio == null ? (
-        <span style={textStyle}>{label}</span>
-      ) : (
-        <>
-          <span style={{ ...textStyle, clipPath: `inset(0 0 0 ${pct}%)` }}>{label}</span>
-          <span
-            aria-hidden="true"
-            style={{
-              ...textStyle,
-              color: "#fff",
-              clipPath: `inset(0 ${100 - pct}% 0 0)`,
-            }}
-          >
-            {label}
-          </span>
-        </>
-      )}
-    </div>
-  )
-}
-
 /** Download-job progress bar: determinate ratio bar when `total_bytes` is known, an indeterminate
  * indicator when only `downloaded_bytes` is known, else the plain `progress` fraction bar. */
 export function JobProgressBar({
@@ -446,7 +344,7 @@ export function JobProgressBar({
     const reading = `${formatBytes(job.downloaded_bytes)} / ${formatBytes(job.total_bytes)} (${pctLabel}%)`
     if (inlineLabel) {
       return (
-        <InlineBar
+        <ProgressBar
           ratio={ratio}
           label={readingLabel ?? (speedLabel ? `${reading} · ${speedLabel}` : reading)}
           color={barColor}
@@ -488,7 +386,7 @@ export function JobProgressBar({
     })
     if (inlineLabel) {
       return (
-        <InlineBar
+        <ProgressBar
           ratio={null}
           label={readingLabel ?? (speedLabel ? `${reading} · ${speedLabel}` : reading)}
           color={barColor}
@@ -532,7 +430,7 @@ export function JobProgressBar({
   // would render a stalled-looking 0% for however long the server takes to send its first byte.
   if (pendingLabel != null) {
     if (inlineLabel) {
-      return <InlineBar ratio={null} label={pendingLabel} color={barColor} />
+      return <ProgressBar ratio={null} label={pendingLabel} color={barColor} />
     }
     return (
       <div style={rowStyle}>

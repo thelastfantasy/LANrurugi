@@ -917,6 +917,7 @@
   "library.shortcutsCloseSuggestions": "Close the suggestion panel",
   "library.shortcutsToggleHelp": "Open or close this shortcut list",
   "library.shortcutsCloseMenus": "Close the context menu or overlay",
+  "library.shortcutsExitSelection": "Leave selection mode (with the selection drawer open or minimized)",
   "library.shortcutsContextMenuHint": "Right-click an archive for its action menu",
   "library.recentSearchDeleted": "Deleted the recent search \"{{filter}}\"",
   "library.searchSyntaxHelp": "Search syntax help",

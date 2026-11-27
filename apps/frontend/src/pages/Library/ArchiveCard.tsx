@@ -1,6 +1,6 @@
 import type { TFunction } from "i18next"
 import type { MouseEvent } from "react"
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import type { ArchiveMetadata } from "@/api/types"
@@ -135,6 +135,22 @@ export function ArchiveCard({
   // Touch opens the menu on our own long-press timing; right-click stays on `onContextMenu`.
   const [cardEl, setCardEl] = useState<HTMLDivElement | null>(null)
   useLongPress(cardEl, (_, e) => onContextMenu(e, archive), { blockContextMenu: () => true })
+  // A title cut off at two lines is shown whole, laid over the cover, while the card is hovered
+  // (mouse) or pressed (touch) anywhere but its tag line. `null` = folded; else the card's own
+  // background, so the overlay matches every theme and the selected-card highlight.
+  const titleRef = useRef<HTMLAnchorElement | null>(null)
+  const [fullTitleBg, setFullTitleBg] = useState<string | null>(null)
+  function showFullTitle(e: React.PointerEvent) {
+    const title = titleRef.current
+    if (!cardEl || !title || (e.target as Element).closest(".id4")) {
+      setFullTitleBg(null)
+      return
+    }
+    if (fullTitleBg === null && title.scrollHeight > title.clientHeight + 1) {
+      setFullTitleBg(getComputedStyle(cardEl).backgroundColor)
+    }
+  }
+  const hideFullTitle = () => setFullTitleBg(null)
 
   function handleOpen(e: MouseEvent) {
     // Let the browser keep its own link gestures — Ctrl/Cmd/Shift for a new tab/window, Alt for
@@ -156,9 +172,38 @@ export function ArchiveCard({
       className={`id1${selected ? " msm-selected" : ""}`}
       id={id}
       onContextMenu={(e) => onContextMenu(e, archive)}
+      onPointerMove={(e) => e.pointerType === "mouse" && showFullTitle(e)}
+      onPointerLeave={(e) => e.pointerType === "mouse" && hideFullTitle()}
+      onPointerDown={(e) => e.pointerType !== "mouse" && showFullTitle(e)}
+      onPointerUp={(e) => e.pointerType !== "mouse" && hideFullTitle()}
+      onPointerCancel={hideFullTitle}
     >
-      <div className="id2" style={{ display: "flex", alignItems: "baseline", justifyContent: "center", gap: 2 }}>
+      <div
+        className="id2"
+        style={{ display: "flex", alignItems: "baseline", justifyContent: "center", gap: 2, position: "relative" }}
+      >
+        {fullTitleBg !== null && (
+          // An `a` so the theme's `div.id2 a` colour and weight apply; the clamp is undone inline.
+          <a
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              zIndex: 2,
+              display: "block",
+              overflow: "visible",
+              WebkitLineClamp: "unset",
+              background: fullTitleBg,
+              pointerEvents: "none",
+            }}
+          >
+            {highlightText(archive.title, highlightQuery)}
+          </a>
+        )}
         <Link
+          ref={titleRef}
           to={routes.reader(id)}
           title={archive.title}
           onClick={handleOpen}

@@ -30,7 +30,7 @@ import type {
   ArchivePage,
   CategoryMetadata,
 } from "@/api/types"
-import { Modal, Tooltip } from "@/components/common-ui/Display"
+import { Modal, ProgressBar, Tooltip } from "@/components/common-ui/Display"
 import { Button, IconButton, RatingWidget, Select } from "@/components/common-ui/Form"
 import { confirmDialog, newCategoryDialog, promptDialog } from "@/dialog"
 import { usePaginatedOverview } from "@/hooks/usePaginatedOverview"
@@ -787,7 +787,8 @@ export function ArchiveOverviewOverlay({
                       >
                         <Button
                           variant="stdbtn"
-                          style={{ minWidth: 0, width: "2em", padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                          className="admin-icon-btn"
+                          style={{ minWidth: 0, width: "auto", padding: "0 0.6em", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
                           onClick={() => setShowSplitPanel(true)}
                           aria-label={t("reader.archiveSplit") ?? undefined}
                         >
@@ -797,7 +798,8 @@ export function ArchiveOverviewOverlay({
                     ) : (
                       <Button
                         variant="stdbtn"
-                        style={{ minWidth: 0, width: "2em", padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                        className="admin-icon-btn"
+                        style={{ minWidth: 0, width: "auto", padding: "0 0.6em", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
                         onClick={() => setShowSplitPanel(true)}
                         aria-label={t("reader.archiveSplit") ?? undefined}
                       >
@@ -964,18 +966,16 @@ export function ArchiveOverviewOverlay({
                         </div>
                         {splitProgress !== null && (
                           <div style={{ marginTop: 12 }} className="split-progress">
-                            <div className="split-progress-track">
-                              <div
-                                className="split-progress-fill"
-                                style={{ width: `${Math.max(0, Math.min(100, Math.round(splitProgress * 100)))}%` }}
-                              />
-                            </div>
-                            <div className="split-progress-label">
-                              {t(`reader.splitStage.${splitStage ?? "started"}`)}
-                              {splitVolume ? ` ${splitVolume}` : ""}
-                              {splitDone !== null && splitTotal !== null ? ` · ${splitDone} / ${splitTotal}` : ""}
-                              {` · ${Math.round(splitProgress * 100)}%`}
-                            </div>
+                            <ProgressBar
+                              ratio={Math.max(0, Math.min(1, splitProgress))}
+                              label={
+                                t(`reader.splitStage.${splitStage ?? "started"}`) +
+                                (splitVolume ? ` ${splitVolume}` : "") +
+                                (splitDone !== null && splitTotal !== null ? ` · ${splitDone} / ${splitTotal}` : "") +
+                                ` · ${Math.round(splitProgress * 100)}%`
+                              }
+                              flowing={splitRunning}
+                            />
                           </div>
                         )}
                         {splitCreated !== null && (

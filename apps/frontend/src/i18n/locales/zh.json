@@ -963,6 +963,7 @@
   "library.shortcutsCloseSuggestions": "关闭建议面板",
   "library.shortcutsToggleHelp": "打开/关闭这个快捷键说明",
   "library.shortcutsCloseMenus": "关闭右键菜单或浮层",
+  "library.shortcutsExitSelection": "退出选择模式（选择抽屉开着或收起都可以）",
   "library.shortcutsContextMenuHint": "右键点击档案可打开操作菜单",
   "library.recentSearchDeleted": "已删除「{{filter}}」这条搜索记录",
   "library.searchSyntaxHelp": "搜索语法说明",

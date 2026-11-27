@@ -78,11 +78,22 @@ export function Library() {
       }
       if (e.key === "Escape" && shortcutsOpen) {
         setShortcutsOpen(false);
+        return;
+      }
+      // Escape leaves selection mode whether or not the drawer is open (the drawer alone would only
+      // minimize). A dialog or menu above it closes first: its own Escape is the one meant.
+      if (e.key === "Escape" && lib.multiSelect && !lib.contextMenu && !lib.autocompleteOpen) {
+        const dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"]').length;
+        if (dialogs > (selectionDrawerOpen ? 1 : 0)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setSelectionDrawerOpen(false);
+        void lib.handleToggleMultiSelect();
       }
     }
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [lib, shortcutsOpen]);
+  }, [lib, shortcutsOpen, selectionDrawerOpen]);
 
   if (lib.search.isError) {
     // 401 means the session just expired mid-view; RequireAuth is already navigating to /login.

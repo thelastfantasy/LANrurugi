@@ -3155,6 +3155,7 @@
   "library.shortcutsCloseSuggestions": "候補パネルを閉じる",
   "library.shortcutsToggleHelp": "このショートカット一覧を開く／閉じる",
   "library.shortcutsCloseMenus": "右クリックメニューやポップアップを閉じる",
+  "library.shortcutsExitSelection": "選択モードを終了（選択ドロワーが開いていても閉じていても）",
   "library.shortcutsContextMenuHint": "アーカイブを右クリックすると操作メニューが開きます",
   "library.recentSearchDeleted": "検索履歴「{{filter}}」を削除しました",
   "library.recycleWholeTankoubon": "単行本全体（すべてのアーカイブ）をごみ箱へ移動",

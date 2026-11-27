@@ -893,17 +893,27 @@ async fn emit_progress(
         .get(&archive_id.0)
         .cloned()
     {
-        let _ = tx.send(json!({
-            "progress": progress,
-            "stage": stage,
-            "done": done,
-            "total": total,
-            // Which volume the fields above describe — the panel prints it next to the stage so a
-            // five-volume split shows which one is in flight instead of one anonymous percentage.
-            "volume": volume,
-            "memory_kb": current_memory_kb(),
-        }));
+        let _ = tx.send(progress_frame(progress, stage, done, total, volume));
     }
+}
+
+fn progress_frame(
+    progress: f32,
+    stage: &str,
+    done: Option<usize>,
+    total: Option<usize>,
+    volume: Option<&str>,
+) -> serde_json::Value {
+    json!({
+        "progress": progress,
+        "stage": stage,
+        "done": done,
+        "total": total,
+        // Which volume the fields above describe — the panel prints it next to the stage so a
+        // five-volume split shows which one is in flight instead of one anonymous percentage.
+        "volume": volume,
+        "memory_kb": current_memory_kb(),
+    })
 }
 
 /// Drives the bar from work that actually happened, and never lets it walk backwards.
@@ -1258,203 +1268,42 @@ async fn run_split_job(
     let original_file_path = PathBuf::from(&archive.file);
     let original_path = resolve_multivolume_path(&original_file_path, &state.library.temp_dir)
         .unwrap_or_else(|| original_file_path.clone());
-    let entries = list_all_entries(&original_path).map_err(|e| e.to_string())?;
-    let original_pages = list_pages(&original_path).map_err(|e| e.to_string())?;
-    let original_page_by_path: HashMap<String, u32> = original_pages
-        .iter()
-        .enumerate()
-        .map(|(i, p)| (p.clone(), i as u32 + 1))
-        .collect();
-    let all_files: Vec<String> = entries
-        .iter()
-        .filter(|e| e.is_regular_file)
-        .map(|e| e.name.clone())
-        .collect();
     let total_groups = suggestion.split_groups.len().max(1);
-    let mut max_memory_kb = current_memory_kb().unwrap_or(0);
-    progress.emit(0.05, "reading", None, None, None).await;
-
-    let temp_root = state.library.temp_dir.join(format!(
-        "archive-split-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
-    ));
-    std::fs::create_dir_all(&temp_root).map_err(|e| e.to_string())?;
-
-    // Every ZIP is written under `temp_root` and only moves into the library once its content id
-    // is known (below), so a half-written output is never visible to the watcher or the pipeline.
-    let output_dir = temp_root.clone();
-
-    // Stream entries into each output ZIP one file at a time. We must NOT load every page's
-    // bytes into a HashMap at once: a 500MB+ RAR would OOM the browser/dev machine. `read_entry`
-    // reopens the archive per file, which is slower but keeps memory bounded.
-    let mut created_files = Vec::new();
-    // The readable name each staged ZIP carries into the library: it becomes the new archive's
-    // title and its sidecar's `original_filename`, which is the only place a split's pretty name
-    // survives once the bytes are hash-named.
-    let mut staged_names: HashMap<PathBuf, String> = HashMap::new();
-    let mut source_by_output: HashMap<PathBuf, HashMap<String, String>> = HashMap::new();
-    // Two groups can be named identically — a "vol 01-05" summary folder sitting beside the volume
-    // folders it repeats produces exactly that, and the analyser names a group after its own
-    // directory. Staging both into one path truncates the first group's ZIP with the second's
-    // bytes and leaves the first group's placement with nothing to move: reported live
-    // 2026-11-26 on a 5-volume RAR (第02巻 and 第05巻 vanished, and the source had already been
-    // deleted because nothing counted them as lost).
-    // Resolve every group's name and file set up front. Two things need the complete plan: the
-    // duplicate-name check (a name has to be reserved before the first ZIP is written) and the
-    // progress denominator — the bar counts pages written, so `total_pages` must be known before
-    // the first page, not discovered group by group.
-    let mut used_names: HashSet<String> = HashSet::new();
-    let plan: Vec<(String, Vec<String>)> = suggestion
-        .split_groups
-        .iter()
-        .map(|group| {
-            let zip_name = unique_zip_name(&group.zip_name, &mut used_names);
-            let files: Vec<String> = all_files
-                .iter()
-                .filter(|path| {
-                    group
-                        .source_dirs
-                        .iter()
-                        .any(|d| path.starts_with(&format!("{d}/")) || *path == d)
-                        || group.source_files.iter().any(|f| f == *path)
-                })
-                .cloned()
-                .collect();
-            (zip_name, files)
-        })
-        .collect();
-    let total_pages: usize = plan.iter().map(|(_, files)| files.len()).sum();
-    let mut written_pages = 0usize;
-    // One event per percent of the work, not one per page: 922 events over a local SSE stream is
-    // noise the UI would coalesce anyway, and each one costs a JSON frame.
-    let page_step = (total_pages / 100).max(1);
-
-    for (zip_name, group_files) in &plan {
-        let zip_name = zip_name.clone();
-        let target = output_dir.join(&zip_name);
-        staged_names.insert(target.clone(), zip_name.clone());
-        let mut target_sources: HashMap<String, String> = HashMap::new();
-        let file = std::fs::File::create(&target).map_err(|e| e.to_string())?;
-        // ZipWriter emits a header per member; against a bare `File` each one is its own syscall.
-        // The bundle writer (`download_manager/bundle.rs`) already buffers this way.
-        let mut writer = zip::ZipWriter::new(std::io::BufWriter::with_capacity(1 << 20, file));
-        let mut seen = HashSet::new();
-
-        if group_files.is_empty() {
-            writer.finish().map_err(|e| e.to_string())?;
-            created_files.push(target.clone());
-            continue;
-        }
-
-        // Read one output group's files in a single libarchive pass (5 opens for a 5-volume
-        // archive instead of 922), but keep only that group's bytes in memory at a time. That pass
-        // is the slow part of a volume — report it as its own stage, with the page count unchanged
-        // so the bar holds still instead of jumping ahead while nothing has been written yet.
-        progress
-            .emit(
-                0.08 + 0.72 * written_pages as f32 / total_pages.max(1) as f32,
-                "reading",
-                Some(written_pages),
-                Some(total_pages),
-                Some(&zip_name),
-            )
-            .await;
-        let group_bytes = read_entries(&original_path, group_files).map_err(|e| e.to_string())?;
-        let mut bytes_by_path: HashMap<String, Vec<u8>> = HashMap::new();
-        for (path, bytes) in group_files.iter().cloned().zip(group_bytes) {
-            if let Some(bytes) = bytes {
-                bytes_by_path.insert(path, bytes);
+    // Blocking work on an async worker also held back the SSE task waiting on this one, so every
+    // frame reached the page at once when ingesting first awaited.
+    let sender = state
+        .split_progress_tx
+        .lock()
+        .await
+        .get(&archive_id.0)
+        .cloned();
+    let mut shown = progress.shown;
+    let blocking_path = original_path.clone();
+    let temp_dir = state.library.temp_dir.clone();
+    let (built, shown) = tokio::task::spawn_blocking(move || {
+        let mut emit = |p: f32,
+                        stage: &str,
+                        done: Option<usize>,
+                        total: Option<usize>,
+                        volume: Option<&str>| {
+            shown = shown.max(p.clamp(0.0, 1.0));
+            if let Some(tx) = &sender {
+                let _ = tx.send(progress_frame(shown, stage, done, total, volume));
             }
-        }
-
-        for path in group_files {
-            let Some(bytes) = bytes_by_path.get(path) else {
-                continue;
-            };
-            if is_supported_archive_name(path) {
-                // Flatten nested archive contents. Nested archives are small compared to the
-                // whole outer archive, so reading them individually is fine.
-                let nested_path = temp_root.join(format!("nested-{}", path.replace('/', "-")));
-                std::fs::write(&nested_path, bytes).map_err(|e| e.to_string())?;
-                let nested_entries = list_all_entries(&nested_path).map_err(|e| e.to_string())?;
-                let inner_files: Vec<String> = nested_entries
-                    .iter()
-                    .filter(|e| e.is_regular_file)
-                    .map(|e| e.name.clone())
-                    .collect();
-                let inner_bytes =
-                    read_entries(&nested_path, &inner_files).map_err(|e| e.to_string())?;
-                for (inner_name, inner_data) in inner_files.iter().cloned().zip(inner_bytes) {
-                    if let Some(inner_data) = inner_data {
-                        let output_name = Path::new(&inner_name)
-                            .file_name()
-                            .map(|s| s.to_string_lossy().to_string())
-                            .unwrap_or_else(|| inner_name.clone());
-                        let written_name =
-                            write_zip_entry(&mut writer, &output_name, &inner_data, &mut seen)?;
-                        target_sources.insert(written_name, path.clone());
-                    }
-                }
-                let _ = std::fs::remove_file(&nested_path);
-            } else {
-                let output_name = Path::new(path)
-                    .file_name()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| path.clone());
-                let written_name = write_zip_entry(&mut writer, &output_name, bytes, &mut seen)?;
-                target_sources.insert(written_name, path.clone());
-            }
-            if let Some(mem_kb) = current_memory_kb() {
-                max_memory_kb = max_memory_kb.max(mem_kb);
-            }
-            written_pages += 1;
-            if written_pages.is_multiple_of(page_step) || written_pages == total_pages {
-                progress
-                    .emit(
-                        0.08 + 0.72 * written_pages as f32 / total_pages.max(1) as f32,
-                        "generating",
-                        Some(written_pages),
-                        Some(total_pages),
-                        Some(&zip_name),
-                    )
-                    .await;
-            }
-        }
-        // Drop the group's byte map before opening the next ZIP writer.
-        // `group_bytes` was already consumed into `bytes_by_path`; dropping the map is enough.
-        drop(bytes_by_path);
-        writer.finish().map_err(|e| e.to_string())?;
-        source_by_output.insert(target.clone(), target_sources);
-        created_files.push(target.clone());
-    }
-    progress
-        .emit(
-            0.82,
-            "generating",
-            Some(total_pages),
-            Some(total_pages),
-            None,
-        )
-        .await;
-    let mut page_maps: HashMap<PathBuf, HashMap<u32, u32>> = HashMap::new();
-    for target in &created_files {
-        let Ok(pages) = list_pages(target) else {
-            continue;
         };
-        let sources = source_by_output.get(target).cloned().unwrap_or_default();
-        let mut map = HashMap::new();
-        for (i, page_name) in pages.iter().enumerate() {
-            if let Some(source_path) = sources.get(page_name) {
-                if let Some(original_page) = original_page_by_path.get(source_path) {
-                    map.insert(i as u32 + 1, *original_page);
-                }
-            }
-        }
-        page_maps.insert(target.clone(), map);
-    }
+        let built = build_volumes(&blocking_path, &temp_dir, &suggestion, &mut emit);
+        (built, shown)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    progress.shown = progress.shown.max(shown);
+    let BuiltVolumes {
+        temp_root,
+        created_files,
+        staged_names,
+        page_maps,
+        max_memory_kb,
+    } = built?;
     progress
         .emit(0.84, "ingesting", Some(0), Some(total_groups), None)
         .await;
@@ -1833,6 +1682,239 @@ async fn run_split_job(
         "original_kept_for": new_ids.iter().map(|n| n.0.clone()).collect::<Vec<_>>(),
         "tankoubon_id": tankoubon_id,
     }))
+}
+
+/// `(progress, stage, done, total, volume)`, as [`emit_progress`] takes them.
+type EmitProgress<'a> = dyn FnMut(f32, &str, Option<usize>, Option<usize>, Option<&str>) + 'a;
+
+/// What [`build_volumes`] leaves for the async half of a split: the staged ZIPs and their names,
+/// each one's page mapping back to the source, and the staging directory to clean up.
+struct BuiltVolumes {
+    temp_root: PathBuf,
+    created_files: Vec<PathBuf>,
+    staged_names: HashMap<PathBuf, String>,
+    page_maps: HashMap<PathBuf, HashMap<u32, u32>>,
+    max_memory_kb: u64,
+}
+
+/// Reads the source and writes every volume's ZIP under a staging directory. Blocking, so it runs
+/// on the blocking pool; progress goes out through `emit` as it happens.
+fn build_volumes(
+    original_path: &Path,
+    temp_dir: &Path,
+    suggestion: &ArchiveSplitSuggestion,
+    emit: &mut EmitProgress<'_>,
+) -> Result<BuiltVolumes, String> {
+    let entries = list_all_entries(original_path).map_err(|e| e.to_string())?;
+    let original_pages = list_pages(original_path).map_err(|e| e.to_string())?;
+    let original_page_by_path: HashMap<String, u32> = original_pages
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.clone(), i as u32 + 1))
+        .collect();
+    let all_files: Vec<String> = entries
+        .iter()
+        .filter(|e| e.is_regular_file)
+        .map(|e| e.name.clone())
+        .collect();
+    let mut max_memory_kb = current_memory_kb().unwrap_or(0);
+    emit(0.05, "reading", None, None, None);
+
+    let temp_root = temp_dir.join(format!(
+        "archive-split-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&temp_root).map_err(|e| e.to_string())?;
+
+    // Every ZIP is written under `temp_root` and only moves into the library once its content id
+    // is known (below), so a half-written output is never visible to the watcher or the pipeline.
+    let output_dir = temp_root.clone();
+
+    // Stream entries into each output ZIP one file at a time. We must NOT load every page's
+    // bytes into a HashMap at once: a 500MB+ RAR would OOM the browser/dev machine. `read_entry`
+    // reopens the archive per file, which is slower but keeps memory bounded.
+    let mut created_files = Vec::new();
+    // The readable name each staged ZIP carries into the library: it becomes the new archive's
+    // title and its sidecar's `original_filename`, which is the only place a split's pretty name
+    // survives once the bytes are hash-named.
+    let mut staged_names: HashMap<PathBuf, String> = HashMap::new();
+    let mut source_by_output: HashMap<PathBuf, HashMap<String, String>> = HashMap::new();
+    // Two groups can be named identically — a "vol 01-05" summary folder sitting beside the volume
+    // folders it repeats produces exactly that, and the analyser names a group after its own
+    // directory. Staging both into one path truncates the first group's ZIP with the second's
+    // bytes and leaves the first group's placement with nothing to move: reported live
+    // 2026-11-26 on a 5-volume RAR (第02巻 and 第05巻 vanished, and the source had already been
+    // deleted because nothing counted them as lost).
+    // Resolve every group's name and file set up front. Two things need the complete plan: the
+    // duplicate-name check (a name has to be reserved before the first ZIP is written) and the
+    // progress denominator — the bar counts pages written, so `total_pages` must be known before
+    // the first page, not discovered group by group.
+    let mut used_names: HashSet<String> = HashSet::new();
+    let plan: Vec<(String, Vec<String>)> = suggestion
+        .split_groups
+        .iter()
+        .map(|group| {
+            let zip_name = unique_zip_name(&group.zip_name, &mut used_names);
+            let files: Vec<String> = all_files
+                .iter()
+                .filter(|path| {
+                    group
+                        .source_dirs
+                        .iter()
+                        .any(|d| path.starts_with(&format!("{d}/")) || *path == d)
+                        || group.source_files.iter().any(|f| f == *path)
+                })
+                .cloned()
+                .collect();
+            (zip_name, files)
+        })
+        .collect();
+    let total_pages: usize = plan.iter().map(|(_, files)| files.len()).sum();
+    let mut written_pages = 0usize;
+    let mut read_pages = 0usize;
+    // Reading a group out of the source is as slow as writing it, so a page counts once for each.
+    let fraction = |read: usize, written: usize| {
+        0.08 + 0.72 * (read + written) as f32 / (2 * total_pages).max(1) as f32
+    };
+    // One event per percent of the work, not one per page: 922 events over a local SSE stream is
+    // noise the UI would coalesce anyway, and each one costs a JSON frame.
+    let page_step = (total_pages / 100).max(1);
+
+    for (zip_name, group_files) in &plan {
+        let zip_name = zip_name.clone();
+        let target = output_dir.join(&zip_name);
+        staged_names.insert(target.clone(), zip_name.clone());
+        let mut target_sources: HashMap<String, String> = HashMap::new();
+        let file = std::fs::File::create(&target).map_err(|e| e.to_string())?;
+        // ZipWriter emits a header per member; against a bare `File` each one is its own syscall.
+        // The bundle writer (`download_manager/bundle.rs`) already buffers this way.
+        let mut writer = zip::ZipWriter::new(std::io::BufWriter::with_capacity(1 << 20, file));
+        let mut seen = HashSet::new();
+
+        if group_files.is_empty() {
+            writer.finish().map_err(|e| e.to_string())?;
+            created_files.push(target.clone());
+            continue;
+        }
+
+        // Read one output group's files in a single libarchive pass (5 opens for a 5-volume
+        // archive instead of 922), but keep only that group's bytes in memory at a time. That pass
+        // is the slow part of a volume — report it as its own stage, with the page count unchanged
+        // so the bar holds still instead of jumping ahead while nothing has been written yet.
+        emit(
+            fraction(read_pages, written_pages),
+            "reading",
+            Some(written_pages),
+            Some(total_pages),
+            Some(&zip_name),
+        );
+        let group_bytes = read_entries(original_path, group_files).map_err(|e| e.to_string())?;
+        read_pages += group_files.len();
+        emit(
+            fraction(read_pages, written_pages),
+            "generating",
+            Some(written_pages),
+            Some(total_pages),
+            Some(&zip_name),
+        );
+        let mut bytes_by_path: HashMap<String, Vec<u8>> = HashMap::new();
+        for (path, bytes) in group_files.iter().cloned().zip(group_bytes) {
+            if let Some(bytes) = bytes {
+                bytes_by_path.insert(path, bytes);
+            }
+        }
+
+        for path in group_files {
+            let Some(bytes) = bytes_by_path.get(path) else {
+                continue;
+            };
+            if is_supported_archive_name(path) {
+                // Flatten nested archive contents. Nested archives are small compared to the
+                // whole outer archive, so reading them individually is fine.
+                let nested_path = temp_root.join(format!("nested-{}", path.replace('/', "-")));
+                std::fs::write(&nested_path, bytes).map_err(|e| e.to_string())?;
+                let nested_entries = list_all_entries(&nested_path).map_err(|e| e.to_string())?;
+                let inner_files: Vec<String> = nested_entries
+                    .iter()
+                    .filter(|e| e.is_regular_file)
+                    .map(|e| e.name.clone())
+                    .collect();
+                let inner_bytes =
+                    read_entries(&nested_path, &inner_files).map_err(|e| e.to_string())?;
+                for (inner_name, inner_data) in inner_files.iter().cloned().zip(inner_bytes) {
+                    if let Some(inner_data) = inner_data {
+                        let output_name = Path::new(&inner_name)
+                            .file_name()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_else(|| inner_name.clone());
+                        let written_name =
+                            write_zip_entry(&mut writer, &output_name, &inner_data, &mut seen)?;
+                        target_sources.insert(written_name, path.clone());
+                    }
+                }
+                let _ = std::fs::remove_file(&nested_path);
+            } else {
+                let output_name = Path::new(path)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.clone());
+                let written_name = write_zip_entry(&mut writer, &output_name, bytes, &mut seen)?;
+                target_sources.insert(written_name, path.clone());
+            }
+            if let Some(mem_kb) = current_memory_kb() {
+                max_memory_kb = max_memory_kb.max(mem_kb);
+            }
+            written_pages += 1;
+            if written_pages.is_multiple_of(page_step) || written_pages == total_pages {
+                emit(
+                    fraction(read_pages, written_pages),
+                    "generating",
+                    Some(written_pages),
+                    Some(total_pages),
+                    Some(&zip_name),
+                );
+            }
+        }
+        // Drop the group's byte map before opening the next ZIP writer.
+        // `group_bytes` was already consumed into `bytes_by_path`; dropping the map is enough.
+        drop(bytes_by_path);
+        writer.finish().map_err(|e| e.to_string())?;
+        source_by_output.insert(target.clone(), target_sources);
+        created_files.push(target.clone());
+    }
+    emit(
+        0.82,
+        "generating",
+        Some(total_pages),
+        Some(total_pages),
+        None,
+    );
+    let mut page_maps: HashMap<PathBuf, HashMap<u32, u32>> = HashMap::new();
+    for target in &created_files {
+        let Ok(pages) = list_pages(target) else {
+            continue;
+        };
+        let sources = source_by_output.get(target).cloned().unwrap_or_default();
+        let mut map = HashMap::new();
+        for (i, page_name) in pages.iter().enumerate() {
+            if let Some(source_path) = sources.get(page_name) {
+                if let Some(original_page) = original_page_by_path.get(source_path) {
+                    map.insert(i as u32 + 1, *original_page);
+                }
+            }
+        }
+        page_maps.insert(target.clone(), map);
+    }
+    Ok(BuiltVolumes {
+        temp_root,
+        created_files,
+        staged_names,
+        page_maps,
+        max_memory_kb,
+    })
 }
 
 /// Indexes a volume under its own record's title, never the source archive's: a title member the
