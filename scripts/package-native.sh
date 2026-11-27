@@ -61,7 +61,7 @@ cp "$repo/scripts/fetch-ocr-model.sh" "$repo/scripts/fetch-inpaint-model.sh" \
     "$repo/scripts/fetch-bubble-seg-model.sh" "$root/scripts/"
 cp -R "$repo/packaging/service" "$root/service"
 cp "$repo/packaging/README.md" "$repo/packaging/fetch-models.sh" "$repo/packaging/install-service.sh" "$root/"
-cp "$repo/LICENSE" "$root/"
+cp "$repo/LICENSE-MIT" "$repo/LICENSE-APACHE" "$assets/THIRD_PARTY_LICENSES.txt" "$root/"
 chmod +x "$root"/scripts/*.sh "$root/fetch-models.sh" "$root/install-service.sh" "$root/service/lanrurugi.rc"
 
 mkdir -p "$out"

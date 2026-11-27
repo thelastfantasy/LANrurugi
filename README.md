@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/thelastfantasy/LANrurugi/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/thelastfantasy/LANrurugi/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/thelastfantasy/LANrurugi/actions/workflows/codeql.yml/badge.svg?branch=dev)](https://github.com/thelastfantasy/LANrurugi/actions/workflows/codeql.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#许可证)
 
 [主页](https://lrrg.dev) · [在线演示](https://demo.lrrg.dev) · [文档](https://docs.lrrg.dev) · [API 参考](https://api.lrrg.dev) · [插件 SDK](https://sdk.lrrg.dev)
 
@@ -81,4 +81,4 @@ docker run -d --name lanrurugi -p 3000:3000 \
 
 ## 许可证
 
-MIT —— 见 [LICENSE](./LICENSE)。
+MIT 或 Apache 2.0，二选一 —— 见 [LICENSE-MIT](./LICENSE-MIT) 与 [LICENSE-APACHE](./LICENSE-APACHE)。

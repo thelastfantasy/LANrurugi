@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/thelastfantasy/LANrurugi/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/thelastfantasy/LANrurugi/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/thelastfantasy/LANrurugi/actions/workflows/codeql.yml/badge.svg?branch=dev)](https://github.com/thelastfantasy/LANrurugi/actions/workflows/codeql.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#ライセンス)
 
 [ホームページ](https://lrrg.dev) · [デモ](https://demo.lrrg.dev) · [ドキュメント](https://docs.lrrg.dev) · [API リファレンス](https://api.lrrg.dev) · [プラグイン SDK](https://sdk.lrrg.dev)
 
@@ -89,4 +89,4 @@ NAS の管理画面、リバースプロキシ、LANraragi からの移行を含
 
 ## ライセンス
 
-MIT — [LICENSE](./LICENSE) を参照。
+MIT または Apache 2.0 のいずれかを選択できます — [LICENSE-MIT](./LICENSE-MIT) と [LICENSE-APACHE](./LICENSE-APACHE) を参照。

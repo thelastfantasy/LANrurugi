@@ -1,0 +1,5 @@
+The redis-server and redis-cli binaries in this image are Redis Open Source 8.2.1, copied unmodified
+from the official docker.io/library/redis:8.2.1-bookworm image. They are distributed under the
+GNU Affero General Public License v3 option of the licenses in LICENSE.txt.
+
+Complete corresponding source code: https://github.com/redis/redis/tree/8.2.1

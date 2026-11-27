@@ -175,6 +175,19 @@ run = "npx lefthook run pre-push"
 description = "cargo build --workspace inside the dev container (see scripts/cargo-container-run.sh for the resource guardrails)"
 run = "scripts/cargo-container-run.sh cargo build --workspace"
 
+[tasks.third-party-licenses]
+description = "Write dist/THIRD_PARTY_LICENSES.txt: the license files of every shipped Rust crate (from `cargo metadata` in the build container) and frontend package"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+scripts/cargo-container-run.sh sh -c 'cargo metadata --format-version 1 --locked > target/cargo-metadata.json'
+mkdir -p dist
+node scripts/third-party-licenses.mjs --out dist/THIRD_PARTY_LICENSES.txt \
+  --cargo-metadata .cargo-target/cargo-metadata.json \
+  --path-map "/workspace/target=$PWD/.cargo-target" --path-map "/workspace=$PWD" \
+  --path-map "/usr/local/cargo/registry=$PWD/.cargo-registry"
+"""
+
 [tasks.package-native]
 description = "Build the native release package for this Linux machine's architecture into dist/native/ (specs/015-native-platforms): release binaries in the build container, then frontend/docs/plugins, PDFium and ONNX Runtime. Smoke-test the result with scripts/smoke-native.sh."
 run = """
@@ -192,7 +205,10 @@ scripts/cargo-container-run.sh cargo clean --release -p libarchive2-sys
 scripts/cargo-container-run.sh env CMAKE_TOOLCHAIN_FILE=/workspace/packaging/libarchive-portable.cmake \
   cargo build --release -p lanrurugi-server -p lanrurugi-book-worker -p lanrurugi-embed-worker -p lanrurugi-gpu-worker
 [ -f apps/docs-site/public/openapi.json ] || mise run docs-api
-scripts/build-native-assets.sh .native-assets
+scripts/cargo-container-run.sh sh -c 'cargo metadata --format-version 1 --locked > target/cargo-metadata.json'
+THIRD_PARTY_CARGO_METADATA=.cargo-target/cargo-metadata.json \
+THIRD_PARTY_PATH_MAP="/workspace/target=$PWD/.cargo-target,/workspace=$PWD,/usr/local/cargo/registry=$PWD/.cargo-registry" \
+  scripts/build-native-assets.sh .native-assets
 scripts/package-native.sh "$platform" "$version" .cargo-target/release .native-assets dist/native
 """
 

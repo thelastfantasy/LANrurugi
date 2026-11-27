@@ -137,20 +137,26 @@ export function ArchiveCard({
   useLongPress(cardEl, (_, e) => onContextMenu(e, archive), { blockContextMenu: () => true })
   // A title cut off at two lines is shown whole, laid over the cover, while the card is hovered
   // (mouse) or pressed (touch) anywhere but its tag line. `null` = folded; else the card's own
-  // background, so the overlay matches every theme and the selected-card highlight.
+  // background, so the overlay matches every theme and the selected-card highlight. It takes the
+  // title's own box (not the whole row, which also holds the status icons) so the lines wrap and
+  // centre exactly where the folded title's did.
   const titleRef = useRef<HTMLAnchorElement | null>(null)
-  const [fullTitleBg, setFullTitleBg] = useState<string | null>(null)
+  const [fullTitle, setFullTitle] = useState<{ bg: string; left: number; width: number } | null>(null)
   function showFullTitle(e: React.PointerEvent) {
     const title = titleRef.current
     if (!cardEl || !title || (e.target as Element).closest(".id4")) {
-      setFullTitleBg(null)
+      setFullTitle(null)
       return
     }
-    if (fullTitleBg === null && title.scrollHeight > title.clientHeight + 1) {
-      setFullTitleBg(getComputedStyle(cardEl).backgroundColor)
+    if (fullTitle === null && title.scrollHeight > title.clientHeight + 1) {
+      setFullTitle({
+        bg: getComputedStyle(cardEl).backgroundColor,
+        left: title.offsetLeft,
+        width: title.getBoundingClientRect().width,
+      })
     }
   }
-  const hideFullTitle = () => setFullTitleBg(null)
+  const hideFullTitle = () => setFullTitle(null)
 
   function handleOpen(e: MouseEvent) {
     // Let the browser keep its own link gestures — Ctrl/Cmd/Shift for a new tab/window, Alt for
@@ -182,20 +188,21 @@ export function ArchiveCard({
         className="id2"
         style={{ display: "flex", alignItems: "baseline", justifyContent: "center", gap: 2, position: "relative" }}
       >
-        {fullTitleBg !== null && (
+        {fullTitle !== null && (
           // An `a` so the theme's `div.id2 a` colour and weight apply; the clamp is undone inline.
           <a
             aria-hidden="true"
             style={{
               position: "absolute",
               top: 0,
-              left: 0,
-              right: 0,
+              left: fullTitle.left,
+              width: fullTitle.width,
+              boxSizing: "border-box",
               zIndex: 2,
               display: "block",
               overflow: "visible",
               WebkitLineClamp: "unset",
-              background: fullTitleBg,
+              background: fullTitle.bg,
               pointerEvents: "none",
             }}
           >

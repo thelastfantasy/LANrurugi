@@ -3,7 +3,7 @@
 # Scope: this file exists to enforce a LICENSE gate on the dependency graph (issue #108).
 # The search-normalization work moved the project into the Chinese/Japanese text-conversion
 # crate ecosystem, which contains crates that are NOT license-compatible with this project's
-# MIT license. These were concrete near-misses during evaluation:
+# MIT OR Apache-2.0 license. These were concrete near-misses during evaluation:
 #
 #   * `zhconv`   — GPL-2.0-or-later  (would have forced the whole distributed binary under GPL)
 #   * `jp_utils` — AGPL-3.0          (even stronger network-copyleft)
@@ -50,7 +50,7 @@ confidence-threshold = 0.9
 exceptions = [
     # `smartstring` 1.0.1 declares `MPL-2.0+` (weak, file-level copyleft) and is NOT replaceable:
     # it is a hard transitive dependency of `casbin` -> `rhai` (the authorization layer). MPL-2.0
-    # is weak copyleft and imposes no obligations on this project's own MIT-licensed code, so it is
+    # is weak copyleft and imposes no obligations on this project's own MIT/Apache-2.0 code, so it is
     # accepted here rather than in the global `allow` list above (where it would silently green-light
     # MPL for every future crate). Re-check when bumping `casbin`/`rhai`.
     { allow = ["MPL-2.0"], crate = "smartstring" },

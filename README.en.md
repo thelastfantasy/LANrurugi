@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/thelastfantasy/LANrurugi/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/thelastfantasy/LANrurugi/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/thelastfantasy/LANrurugi/actions/workflows/codeql.yml/badge.svg?branch=dev)](https://github.com/thelastfantasy/LANrurugi/actions/workflows/codeql.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
 [Homepage](https://lrrg.dev) · [Live demo](https://demo.lrrg.dev) · [Docs](https://docs.lrrg.dev) · [API](https://api.lrrg.dev) · [Plugin SDK](https://sdk.lrrg.dev)
 
@@ -89,4 +89,4 @@ upgrade notice: [Releases](https://github.com/thelastfantasy/LANrurugi/releases)
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+Licensed under either of [MIT](./LICENSE-MIT) or [Apache-2.0](./LICENSE-APACHE), at your option.

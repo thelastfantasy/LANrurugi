@@ -116,7 +116,7 @@ pub fn assemble(merged: &Merged, policy: &Policy, notes: &AccessNotes, version: 
         "info": {
             "title": "LANrurugi API",
             "version": version,
-            "license": { "name": "MIT", "identifier": "MIT" },
+            "license": { "name": "MIT OR Apache-2.0", "identifier": "MIT OR Apache-2.0" },
             "description": DOCUMENT_DESCRIPTION,
         },
         "servers": [

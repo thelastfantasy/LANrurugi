@@ -32,4 +32,5 @@ cp -R apps/docs-site/dist-sdk "$out/docs/sdk"
 cp -R apps/docs-site/dist-swagger "$out/docs/swagger"
 # Tracked plugin files only: local AI-wizard drafts under plugins/custom/ stay out of packages.
 git ls-files -z plugins | xargs -0 tar -cf - | tar -xf - -C "$out/plugins" --strip-components=1
+node scripts/third-party-licenses.mjs --out "$out/THIRD_PARTY_LICENSES.txt"
 echo "build-native-assets: $out"

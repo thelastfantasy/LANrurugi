@@ -83,6 +83,17 @@ RUN cargo build --release -p lanrurugi-server -p lanrurugi-book-worker \
 # document and the hand-written sidecar) is the generator's other input, so it is copied in too.
 COPY docs/api ./docs/api
 RUN cargo run --release -p lanrurugi-api-docgen -- --output /build/openapi.json
+# Third-party notices (scripts/third-party-licenses.mjs): the crate list, plus every crate's license
+# and NOTICE files copied out under /licenses-src/<original path>, so the Node stage that writes the
+# file needs neither cargo nor the whole registry.
+RUN cargo metadata --format-version 1 --locked > /build/cargo-metadata.json \
+    && grep -o '"manifest_path":"[^"]*"' /build/cargo-metadata.json | sed 's/^"manifest_path":"//; s#/Cargo.toml"$##' \
+    | sort -u | while read -r dir; do \
+        for f in "$dir"/[Ll][Ii][Cc][Ee][Nn][CcSs][Ee]* "$dir"/[Cc][Oo][Pp][Yy][Ii][Nn][Gg]* "$dir"/[Nn][Oo][Tt][Ii][Cc][Ee]*; do \
+            [ -f "$f" ] && mkdir -p "/licenses-src$dir" && cp "$f" "/licenses-src$dir/"; \
+        done; \
+        if [ -d "$dir/LICENSES" ]; then mkdir -p "/licenses-src$dir" && cp -R "$dir/LICENSES" "/licenses-src$dir/"; fi; \
+    done; mkdir -p /licenses-src
 
 FROM node:${NODE_VERSION}-slim AS frontend-builder
 ARG PNPM_VERSION
@@ -99,6 +110,13 @@ COPY apps/frontend ./apps/frontend
 COPY apps/docs-site/package.json ./apps/docs-site/package.json
 RUN pnpm install --frozen-lockfile --filter lanrurugi-frontend
 RUN pnpm --filter lanrurugi-frontend run build
+
+FROM frontend-builder AS third-party-licenses
+COPY scripts/third-party-licenses.mjs ./scripts/
+COPY --from=rust-builder /build/cargo-metadata.json /build/cargo-metadata.json
+COPY --from=rust-builder /licenses-src /licenses-src
+RUN node scripts/third-party-licenses.mjs --out /build/THIRD_PARTY_LICENSES.txt \
+    --cargo-metadata /build/cargo-metadata.json --path-map /=/licenses-src
 
 # Official Deno "bin" image variant exists specifically to be copied from in multi-stage builds —
 # a pinned tag, never `latest` and never an unverified installer script (Principle IV). It's just
@@ -272,6 +290,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=deno-bin /deno /usr/local/bin/deno
 COPY --from=redis-bin /usr/local/bin/redis-server /usr/local/bin/redis-cli /usr/local/bin/
+# Their license texts, taken from the same upstream tags as the pinned versions above: bump
+# packaging/licenses/ together with REDIS_VERSION / DENO_VERSION.
+COPY packaging/licenses/redis /usr/local/share/doc/redis
+COPY packaging/licenses/deno /usr/local/share/doc/deno
 COPY --from=rust-builder /build/target/release/lanrurugi-server /usr/local/bin/lanrurugi-server
 # LD_PRELOAD shim for the Deno plugin dispatcher (see `lanrurugi-egress`); the pool looks for it
 # next to the server binary.
@@ -320,7 +342,10 @@ RUN case "${TARGETARCH:-amd64}" in \
     && (curl -fsSL -o /tmp/ort.tgz https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-${ort_arch}-${ORT_VERSION}.tgz \
         || curl -fsSL -o /tmp/ort.tgz https://registry.npmmirror.com/-/binary/onnxruntime/v${ORT_VERSION}/onnxruntime-linux-${ort_arch}-${ORT_VERSION}.tgz) \
     && tar xzf /tmp/ort.tgz -C /tmp onnxruntime-linux-${ort_arch}-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} \
+        onnxruntime-linux-${ort_arch}-${ORT_VERSION}/LICENSE onnxruntime-linux-${ort_arch}-${ORT_VERSION}/ThirdPartyNotices.txt \
     && cp /tmp/onnxruntime-linux-${ort_arch}-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} /usr/local/lib/ \
+    && mkdir -p /usr/local/share/doc/onnxruntime \
+    && cp /tmp/onnxruntime-linux-${ort_arch}-${ORT_VERSION}/LICENSE /tmp/onnxruntime-linux-${ort_arch}-${ORT_VERSION}/ThirdPartyNotices.txt /usr/local/share/doc/onnxruntime/ \
     && ln -sf libonnxruntime.so.${ORT_VERSION} /usr/local/lib/libonnxruntime.so.1 \
     && ln -sf libonnxruntime.so.1 /usr/local/lib/libonnxruntime.so \
     && ldconfig \
@@ -334,6 +359,8 @@ COPY --from=inpaint-model /models/inpaint /app/models/inpaint
 # candidate path.
 COPY --from=bubble-seg-model /models/bubble-seg /app/models/bubble-seg
 COPY --from=frontend-builder /build/apps/frontend/dist /usr/local/share/lanrurugi/frontend
+COPY LICENSE-MIT LICENSE-APACHE /usr/local/share/doc/lanrurugi/
+COPY --from=third-party-licenses /build/THIRD_PARTY_LICENSES.txt /usr/local/share/doc/lanrurugi/
 # Source maps for diagnostics symbolication (specs/018, research.md §7). They are built (hidden, so
 # no `sourceMappingURL` is served) and deliberately moved out of the static tree: the static handler
 # must never serve them, and nothing ships them to a user — the server resolves a frame against its
