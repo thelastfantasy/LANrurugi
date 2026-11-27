@@ -4114,7 +4114,6 @@ dependencies = [
  "casbin",
  "chrono",
  "chrono-tz",
- "crc32fast",
  "deadpool-redis",
  "ed25519-dalek",
  "flate2",
