@@ -10,7 +10,7 @@ Besides the [Docker image](../install/), every release ships native packages for
 | `lanrurugi-<version>-linux-x86_64.tar.gz` | 64-bit Linux with glibc 2.35 or newer (Debian 12, Ubuntu 22.04, Fedora 36, Arch, …) |
 | `lanrurugi-<version>-linux-aarch64.tar.gz` | ARM64 Linux, same baseline (e.g. Raspberry Pi 5, ARM servers) |
 | `lanrurugi-<version>-macos-arm64.tar.gz` | Apple Silicon Macs, macOS 13 or newer |
-| `lanrurugi-<version>-freebsd-x86_64.tar.gz` | FreeBSD 14 |
+| `lanrurugi-<version>-freebsd-x86_64.tar.gz` | FreeBSD 14.4 or later |
 
 Download them from the GitHub [Releases](https://github.com/thelastfantasy/LANrurugi/releases) page;
 `SHA256SUMS` lists every file's checksum.
