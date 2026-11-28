@@ -8,6 +8,10 @@ import versions from '../../../public/versions.json'
 // path has to strip that segment before composing links to a *different* version.
 export const base = import.meta.env.BASE_URL.replace(/\/$/, '')
 export const rootBase = base.replace(/\/v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, '')
+// The version this tree documents is served from the root, not `/v<version>/` (which only 301s
+// there), when this build *is* the root one.
+export const href = (version) =>
+  base === rootBase && version === import.meta.env.DOCS_VERSION ? `${rootBase}/` : `${rootBase}/v${version}/`
 
 
 
@@ -21,7 +25,7 @@ export const rootBase = base.replace(/\/v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, '
 
 <div class="lr-versions">
   {versions.map((entry) => (
-    <a class="lr-versions__row" href={`${rootBase}/v${entry.version}/`}>
+    <a class="lr-versions__row" href={href(entry.version)}>
       <span class="lr-versions__name">
         v{entry.version}
         {entry.prerelease && <span class="lr-versions__badge">预发布</span>}

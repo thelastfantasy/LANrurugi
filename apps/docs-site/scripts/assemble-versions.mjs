@@ -13,7 +13,8 @@
 // - `robots.txt` with the sitemap the root build generated;
 // - in every static older tree, the canonical link pointed at the same page at the root, or
 //   `noindex` where the latest version has no such page — the old copies stay readable without
-//   competing with the latest one in search results;
+//   competing with the latest one in search results — and its own sitemap removed, since it would
+//   list exactly the URLs those canonicals point away from;
 // - `_routes.json`, sending only the archived versions' paths to the Function.
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
@@ -105,15 +106,20 @@ for (const version of staticVersions) {
     writeFileSync(file, html)
     rewritten += 1
   }
+  for (const entry of readdirSync(tree)) {
+    if (/^sitemap.*\.xml$/.test(entry)) rmSync(join(tree, entry))
+  }
 }
 
 // The root's own not-found page: served with a 404 status, and marked so it is never indexed either.
+// Its canonical and language alternates name `/404/` and `/en/404/`, which do not exist, so they go.
 const notFoundPage = join(dist, '404.html')
 if (existsSync(notFoundPage)) {
-  const html = readFileSync(notFoundPage, 'utf8')
-  if (!html.includes('name="robots"')) {
-    writeFileSync(notFoundPage, html.replace('</head>', '<meta name="robots" content="noindex"></head>'))
-  }
+  let html = readFileSync(notFoundPage, 'utf8')
+    .replace(/<link\s+rel="alternate"\s+hreflang="[^"]*"[^>]*>/gi, '')
+    .replace(/<link\s+rel="canonical"[^>]*>/gi, '')
+  if (!html.includes('name="robots"')) html = html.replace('</head>', '<meta name="robots" content="noindex"></head>')
+  writeFileSync(notFoundPage, html)
 }
 
 const redirectsPath = join(dist, '_redirects')
