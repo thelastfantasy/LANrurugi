@@ -26,6 +26,10 @@ AI 推理在按需启动的子进程里运行。它有自己的数据库，不�
 
 <div class="lr-code-tabs">
 
+{/*
+  暂时注释掉 stable：`:latest` 只在发布正式版时才会打上，1.0 正式版之前它不存在，照抄会拉取失败。
+  发布 1.0 时取消注释（放回 beta 前面作为默认页），并把本页其余的 `:beta` 改回 `:latest`，见 docs/dev/release.md。
+
 ```yaml title="stable"
 services:
   lanrurugi:
@@ -43,6 +47,7 @@ services:
       - LANRURUGI_FORCE_SECURE_COOKIES=false
     restart: unless-stopped
 ```
+*/}
 ```yaml title="beta"
 services:
   lanrurugi:
@@ -89,7 +94,7 @@ docker run -d --name lanrurugi -p 3000:3000 \
   -v /path/to/library:/home/koyomi/lanrurugi/content \
   -v /path/to/thumb:/home/koyomi/lanrurugi/thumb \
   -v /path/to/database:/home/koyomi/lanrurugi/database \
-  ghcr.io/thelastfantasy/lanrurugi:latest
+  ghcr.io/thelastfantasy/lanrurugi:beta
 ```
 
 ## 换一个端口
@@ -106,7 +111,7 @@ docker run -d --name lanrurugi -p 3000:3000 \
 `-e LANRURUGI_BIND=0.0.0.0:8080` **不会生效**。
 
 ```sh
-docker run -d -p 8080:8080 ... ghcr.io/thelastfantasy/lanrurugi:latest \
+docker run -d -p 8080:8080 ... ghcr.io/thelastfantasy/lanrurugi:beta \
   serve --bind 0.0.0.0:8080
 ```
 
@@ -131,8 +136,8 @@ compose 里对应写 `command`：
 | Docker Hub | `jade913/lanrurugi` |
 
 上面的示例用的是 GitHub 的仓库。Docker Hub 对未登录用户有拉取次数限制；如果你的 NAS 面板只能从 Docker Hub
-搜索镜像，或者你更习惯用它，把镜像名换成 `jade913/lanrurugi` 即可。`latest` 指向最新的正式版本，
-也可以写具体的版本号。
+搜索镜像，或者你更习惯用它，把镜像名换成 `jade913/lanrurugi` 即可。`beta` 指向最新的测试版，也可以写具体的版本号。
+`latest` 指向最新的正式版本，1.0 正式版发布之前还没有这个标签，所以本页的示例暂时都用 `beta`。
 
 ## 从源码构建镜像
 

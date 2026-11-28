@@ -56,15 +56,16 @@ docker run -d --name lanrurugi -p 3000:3000 \
   -v /path/to/manga:/home/koyomi/lanrurugi/content \
   -v /path/to/thumb:/home/koyomi/lanrurugi/thumb \
   -v /path/to/database:/home/koyomi/lanrurugi/database \
-  ghcr.io/thelastfantasy/lanrurugi:latest
+  ghcr.io/thelastfantasy/lanrurugi:beta
 ```
 
 `http://<ホスト>:3000` を開きます。イメージに Redis が同梱されているため、別途データベースコンテナは不要です。
 NAS の管理画面、リバースプロキシ、LANraragi からの移行を含む完全な compose は
 [ドキュメント](https://docs.lrrg.dev/en/guide/install/) にあります。
 
-イメージは 2 チャンネルあります。`:latest` はリリース版、`:edge` は `dev` ブランチの最新コードです
-（壊れることがあるため、本番のライブラリには向けないでください）。
+<!-- `:latest` は正式版のリリース時にだけ付くため 1.0 より前には存在せず、上では当面 `:beta` を使っています。1.0 のリリース時に `:latest` に戻します（docs/dev/release.md 参照）。 -->
+イメージは 3 チャンネルあります。`:latest` は正式版（1.0 のリリース後に利用可能）、`:beta` はプレリリース版、
+`:edge` は `dev` ブランチの最新コードです（壊れることがあるため、本番のライブラリには向けないでください）。
 
 > **管理者の初期パスワードは `kamimamita`**（LANraragi と同じ）です。初回ログイン後すぐに設定画面で変更し、
 > 初期パスワードのままのインスタンスを LAN の外に公開しないでください。

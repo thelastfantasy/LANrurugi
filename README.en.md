@@ -57,15 +57,16 @@ docker run -d --name lanrurugi -p 3000:3000 \
   -v /path/to/manga:/home/koyomi/lanrurugi/content \
   -v /path/to/thumb:/home/koyomi/lanrurugi/thumb \
   -v /path/to/database:/home/koyomi/lanrurugi/database \
-  ghcr.io/thelastfantasy/lanrurugi:latest
+  ghcr.io/thelastfantasy/lanrurugi:beta
 ```
 
 Open `http://<host>:3000`. The image bundles Redis, so no separate database container is needed; a fuller
 compose file (NAS panels, reverse proxy, migrating from LANraragi) is in the
 [docs](https://docs.lrrg.dev/en/guide/install/).
 
-Two image channels: `:latest` follows releases, `:edge` follows the head of the `dev` branch (it can break —
-don't point a real library at it).
+<!-- `:latest` is only pushed by a final release and does not exist before 1.0, hence `:beta` above for now. Switch it back at the 1.0 release; see docs/dev/release.md. -->
+Three image channels: `:latest` follows final releases (available once 1.0 ships), `:beta` follows pre-releases,
+and `:edge` follows the head of the `dev` branch (it can break — don't point a real library at it).
 
 > **The default admin password is `kamimamita`** (same as LANraragi). Change it in Settings right after the
 > first login, and don't expose a default-password instance outside your LAN.

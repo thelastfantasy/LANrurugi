@@ -4534,6 +4534,7 @@ dependencies = [
  "lanrurugi-core",
  "lanrurugi-equivalence",
  "lanrurugi-storage",
+ "percent-encoding",
  "redis",
  "serde",
  "serde_json",

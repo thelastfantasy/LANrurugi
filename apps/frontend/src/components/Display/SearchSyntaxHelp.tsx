@@ -74,7 +74,12 @@ export function SearchSyntaxHelp() {
         </li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
           {t("library.searchSyntaxBookmarkName")}{" "}
-          <SyntaxExample>bookmark:&quot;chapter one&quot;</SyntaxExample>
+          <SyntaxExample>bookmark:&quot;chapter one&quot;</SyntaxExample>,{" "}
+          <SyntaxExample>bookmark:&quot;(intro | prologue) -draft&quot;</SyntaxExample>
+        </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxStampText")} <SyntaxExample>stamp:&quot;plot twist | reveal&quot;</SyntaxExample>,{" "}
+          <SyntaxExample>has:stamp</SyntaxExample>
         </li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
           {t("library.searchSyntaxPhrase")}{" "}

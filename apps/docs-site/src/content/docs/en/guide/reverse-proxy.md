@@ -94,7 +94,7 @@ Add labels to the LANrurugi compose service (this assumes Traefik already has an
 ```yaml
 services:
   lanrurugi:
-    image: ghcr.io/thelastfantasy/lanrurugi:latest
+    image: ghcr.io/thelastfantasy/lanrurugi:beta
     # Traefik serves it, so port 3000 no longer needs publishing
     volumes:
       - ./data/manga:/home/koyomi/lanrurugi/content

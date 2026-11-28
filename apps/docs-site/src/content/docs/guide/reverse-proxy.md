@@ -86,7 +86,7 @@ manga.example.com {
 ```yaml
 services:
   lanrurugi:
-    image: ghcr.io/thelastfantasy/lanrurugi:latest
+    image: ghcr.io/thelastfantasy/lanrurugi:beta
     # 由 Traefik 对外提供服务时，不需要再发布 3000 端口
     volumes:
       - ./data/manga:/home/koyomi/lanrurugi/content

@@ -47,7 +47,7 @@ docker run -d --name lanrurugi -p 3000:3000 \
   -v /path/to/manga:/home/koyomi/lanrurugi/content \
   -v /path/to/lanrurugi-data:/data \
   -e LANRURUGI_DATA_DIR=/data \
-  ghcr.io/thelastfantasy/lanrurugi:latest
+  ghcr.io/thelastfantasy/lanrurugi:beta
 ```
 
 两个挂载点：书库，和一个 `data` 目录（缩略图、Redis 数据库、模型、日志都在里面）。不设
@@ -57,7 +57,9 @@ docker run -d --name lanrurugi -p 3000:3000 \
 打开 `http://<服务器地址>:3000`。镜像自带 Redis，不需要额外的数据库容器；更完整的 compose（含 NAS 面板、
 反向代理、从 LANraragi 迁移的步骤）见[文档站「安装」](https://docs.lrrg.dev/guide/install/)。
 
-镜像有两个通道：`:latest` 跟随发布版，`:edge` 跟随 `dev` 分支的最新代码（可能坏，别指向正式书库）。
+<!-- `:latest` 只在发布正式版时才会打上，1.0 之前不存在，所以上面暂时写 `:beta`。发布 1.0 时改回 `:latest`，见 docs/dev/release.md。 -->
+镜像有三个通道：`:latest` 跟随正式版（1.0 发布后才有），`:beta` 跟随测试版，`:edge` 跟随 `dev` 分支的最新代码
+（可能坏，别指向正式书库）。
 
 > **默认管理员密码是 `kamimamita`**（与 LANraragi 一致）。首次登录后立刻在设置页改掉，不要把默认密码的实例
 > 暴露到局域网外。
