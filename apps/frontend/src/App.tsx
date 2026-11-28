@@ -113,6 +113,8 @@ export function App() {
             <Route path="/activity" element={<ActivityPage />} />
             <Route path="/bookmarks" element={<BookmarksPage />} />
             <Route path="/recycle-bin" element={<RecycleBinPage />} />
+            <Route path="/recycle-bin/other-deletions" element={<RecycleBinPage />} />
+            <Route path="/recycle-bin/*" element={<Navigate to="/recycle-bin" replace />} />
             <Route path="/edit/:archiveId" element={<Edit />} />
             <Route path="/tankoubon/:tankId/edit" element={<TankoubonEdit />} />
             <Route path="/config/categories" element={<Categories />} />

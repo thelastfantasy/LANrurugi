@@ -20,6 +20,7 @@ import {
 } from "@/components/common-ui/Display";
 import { RatingWidget } from "@/components/common-ui/Form";
 import { newCategoryDialog } from "@/dialog";
+import { useFullTitle } from "@/hooks/useFullTitle";
 import {
   PHONE_QUERY,
   useIsNarrowViewport,
@@ -528,17 +529,18 @@ export function ArchiveContextMenu({
  *  below it — out of flow, so the sheet keeps its height — until focus moves elsewhere. */
 function SheetTitle({ title }: { title: string }) {
   const palette = useMenuPalette();
-  const [expanded, setExpanded] = useState(false);
+  const { titleRef, overlay, open, hide } = useFullTitle<HTMLDivElement>();
+  const expanded = overlay !== null;
   const textStyle = { fontSize: 15, fontWeight: 600, cursor: "text" } as const;
   return (
     <div className="relative">
       <div
+        ref={titleRef}
         className="line-clamp-2 break-words select-all"
         style={{ ...textStyle, visibility: expanded ? "hidden" : undefined }}
         onClick={(e) => {
           const el = e.currentTarget;
-          if (el.scrollHeight > el.clientHeight + 1) setExpanded(true);
-          else window.getSelection()?.selectAllChildren(el);
+          if (!open(el)) window.getSelection()?.selectAllChildren(el);
         }}
       >
         {title}
@@ -558,7 +560,7 @@ function SheetTitle({ title }: { title: string }) {
             background: palette.bg,
             paddingBottom: 6,
           }}
-          onBlur={() => setExpanded(false)}
+          onBlur={hide}
           onClick={(e) => window.getSelection()?.selectAllChildren(e.currentTarget)}
         >
           {title}

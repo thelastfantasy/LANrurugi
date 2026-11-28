@@ -511,20 +511,26 @@ async fn list_deletions(State(state): State<AppState>) -> Response {
     };
     let retention_days = read_deletion_journal_days(&state).await;
     let total = entries.len();
-    let entries: Vec<_> = entries
-        .into_iter()
-        .map(|entry| {
-            let file_exists = !entry.path.is_empty() && FsPath::new(&entry.path).is_file();
-            json!({
-                "id": entry.record.id.as_str(),
-                "title": entry.record.title,
-                "deleted_at": rfc3339(entry.deleted_at_ms),
-                "source": entry.source,
-                "path": entry.path,
-                "file_exists": file_exists,
-            })
-        })
-        .collect();
+    let mut listed = Vec::with_capacity(total);
+    for entry in entries {
+        let file_exists = !entry.path.is_empty() && FsPath::new(&entry.path).is_file();
+        // The record can come back without the journal's help (a recycle-bin restore, a rescan of
+        // the same file); restoring such an entry only answers `already_exists`, so the UI hides it.
+        let record_exists = matches!(
+            state.repos.archives.get(&entry.record.id).await,
+            Ok(Some(_))
+        );
+        listed.push(json!({
+            "id": entry.record.id.as_str(),
+            "title": entry.record.title,
+            "deleted_at": rfc3339(entry.deleted_at_ms),
+            "source": entry.source,
+            "path": entry.path,
+            "file_exists": file_exists,
+            "record_exists": record_exists,
+        }));
+    }
+    let entries = listed;
     axum::Json(json!({
         "operation": "list_deletions",
         "success": 1,

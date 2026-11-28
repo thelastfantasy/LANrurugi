@@ -13,6 +13,8 @@
   清除前会先落一份 `pre-journal-purge` 快照。
 - 上限：20,000 条，超过按 `deleted_at_ms` 从旧到新淘汰。
 
+界面入口是回收站页的「其他方式删除的记录」标签页（`/recycle-bin/other-deletions`）：只列 `record_exists=false` 且不在回收站里的条目（单条删除的那份在回收站里恢复，信息更全）。用户在回收站输入安全密码永久删除（单条或清空）时，台账里对应的条目一起删掉；回收站到期或超容量自动清掉的不删，仍留在台账里兜底（`recycle::forget_purged`）。
+
 恢复用 `GET /api/deletions` + `POST /api/deletions/{id}/restore`（或 `restore-all`）。同 id 记录已存在时
 返回 409 `already_exists`，绝不覆盖。台账条目本身不记录分类/单行本归属、书签与 stamp——那些是独立的键，
 `purge_one_archive` 删除时一并清掉，需要它们时请用整库快照回退。

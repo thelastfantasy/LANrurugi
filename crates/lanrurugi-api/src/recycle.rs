@@ -541,6 +541,7 @@ async fn purge_entry_endpoint(
             .await;
         return match purge_tankoubon(&state, &tank).await {
             Ok(removed) => {
+                forget_purged(&state, &tank.grouping.archives).await;
                 record_manual(
                     &state,
                     auth_ref,
@@ -582,6 +583,7 @@ async fn purge_entry_endpoint(
     if let Err(e) = purge_entry(&state, &entry).await {
         return error(StatusCode::INTERNAL_SERVER_ERROR, "purge_archive", e);
     }
+    forget_purged(&state, std::slice::from_ref(&id)).await;
     record_manual(
         &state,
         auth_ref,
@@ -602,6 +604,16 @@ async fn purge_entry_endpoint(
         "id": id,
     }))
     .into_response()
+}
+
+/// A purge confirmed with the safety password means "forget it", so the archive's deletion-journal
+/// entry goes too; expiry and capacity eviction keep it as the safety net (specs/028).
+async fn forget_purged(state: &AppState, ids: &[ArchiveId]) {
+    for id in ids {
+        if let Err(e) = crate::deletions::forget_journal_entry(state, id.as_str()).await {
+            tracing::warn!(id = %id, error = %e, "failed to drop the deletion-journal entry of a purged archive");
+        }
+    }
 }
 
 async fn empty_bin(
@@ -650,6 +662,7 @@ async fn empty_bin(
         match purge_tankoubon(&state, tank).await {
             Ok(_) => {
                 deleted += 1;
+                forget_purged(&state, &tank.grouping.archives).await;
                 record_manual(
                     &state,
                     auth_ref,
@@ -673,6 +686,7 @@ async fn empty_bin(
         match purge_entry(&state, entry).await {
             Ok(()) => {
                 deleted += 1;
+                forget_purged(&state, std::slice::from_ref(&entry.id)).await;
                 record_manual(
                     &state,
                     auth_ref,

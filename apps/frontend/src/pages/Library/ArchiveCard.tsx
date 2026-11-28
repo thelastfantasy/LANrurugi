@@ -1,12 +1,13 @@
 import type { TFunction } from "i18next"
 import type { MouseEvent } from "react"
-import { useRef, useState } from "react"
+import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import type { ArchiveMetadata } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
 import { isPlainLinkClick,Link } from "@/components/common-ui/Link"
 import { FormatBadge, StatusIcon } from "@/components/Display"
+import { fullTitleOverlayStyle, useFullTitle } from "@/hooks/useFullTitle"
 import { useLongPress } from "@/hooks/useLongPress"
 import { routes } from "@/lib/routes"
 import { isBookExtension } from "@/lib/utils/bookFormats"
@@ -140,23 +141,7 @@ export function ArchiveCard({
   // background, so the overlay matches every theme and the selected-card highlight. It takes the
   // title's own box (not the whole row, which also holds the status icons) so the lines wrap and
   // centre exactly where the folded title's did.
-  const titleRef = useRef<HTMLAnchorElement | null>(null)
-  const [fullTitle, setFullTitle] = useState<{ bg: string; left: number; width: number } | null>(null)
-  function showFullTitle(e: React.PointerEvent) {
-    const title = titleRef.current
-    if (!cardEl || !title || (e.target as Element).closest(".id4")) {
-      setFullTitle(null)
-      return
-    }
-    if (fullTitle === null && title.scrollHeight > title.clientHeight + 1) {
-      setFullTitle({
-        bg: getComputedStyle(cardEl).backgroundColor,
-        left: title.offsetLeft,
-        width: title.getBoundingClientRect().width,
-      })
-    }
-  }
-  const hideFullTitle = () => setFullTitle(null)
+  const { titleRef, overlay: fullTitle, handlers: fullTitleHandlers } = useFullTitle<HTMLAnchorElement>(".id4")
 
   function handleOpen(e: MouseEvent) {
     // Let the browser keep its own link gestures — Ctrl/Cmd/Shift for a new tab/window, Alt for
@@ -178,11 +163,7 @@ export function ArchiveCard({
       className={`id1${selected ? " msm-selected" : ""}`}
       id={id}
       onContextMenu={(e) => onContextMenu(e, archive)}
-      onPointerMove={(e) => e.pointerType === "mouse" && showFullTitle(e)}
-      onPointerLeave={(e) => e.pointerType === "mouse" && hideFullTitle()}
-      onPointerDown={(e) => e.pointerType !== "mouse" && showFullTitle(e)}
-      onPointerUp={(e) => e.pointerType !== "mouse" && hideFullTitle()}
-      onPointerCancel={hideFullTitle}
+      {...fullTitleHandlers}
     >
       <div
         className="id2"
@@ -192,19 +173,7 @@ export function ArchiveCard({
           // An `a` so the theme's `div.id2 a` colour and weight apply; the clamp is undone inline.
           <a
             aria-hidden="true"
-            style={{
-              position: "absolute",
-              top: 0,
-              left: fullTitle.left,
-              width: fullTitle.width,
-              boxSizing: "border-box",
-              zIndex: 2,
-              display: "block",
-              overflow: "visible",
-              WebkitLineClamp: "unset",
-              background: fullTitle.bg,
-              pointerEvents: "none",
-            }}
+            style={{ ...fullTitleOverlayStyle(fullTitle), top: 0, overflow: "visible", WebkitLineClamp: "unset" }}
           >
             {highlightText(archive.title, highlightQuery)}
           </a>
