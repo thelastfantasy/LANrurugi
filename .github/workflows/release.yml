@@ -337,13 +337,23 @@ jobs:
             # `llvm` for bindgen (`libarchive2-sys`); `libiconv` because base only provides
             # `iconv_open`, while the static archive calls `libiconv_open`.
             pkg install -y curl git bash cmake pkgconf nasm llvm libiconv \
-              redis deno djvulibre pdfium onnxruntime \
+              redis deno djvulibre pdfium \
               noto-serif-sc noto-sans-sc
             # Best-effort: base already ships `liblz4.so`/`libzstd.so` (which is what the build
             # links against), and these packages are not published for every point release — asking
             # for them unconditionally aborted the whole release on 14.3 with "No packages available
             # to install matching 'lz4'" (first release attempt, 2026-11-04).
             pkg install -y lz4 zstd || true
+            # Upstream deleted its GitHub repository on 2026-11-18, so the package builders could not
+            # fetch the source and `latest` lost onnxruntime for 14/amd64 (the port has fetched from
+            # FreeBSD's own distcache since 2026-11-24). Fall back to `quarterly`, which kept it.
+            if ! pkg install -y onnxruntime; then
+              mkdir -p /usr/local/etc/pkg/repos
+              printf '%s\n' 'FreeBSD-quarterly: { url: "pkg+https://pkg.FreeBSD.org/${ABI}/quarterly", mirror_type: "srv", signature_type: "fingerprints", fingerprints: "/usr/share/keys/pkg", enabled: yes }' \
+                > /usr/local/etc/pkg/repos/FreeBSD-quarterly.conf
+              pkg update -r FreeBSD-quarterly
+              pkg install -y -r FreeBSD-quarterly onnxruntime
+            fi
           run: |
             case "${GITHUB_REF_NAME}" in
               *-*) export LANRURUGI_RELEASE_TRACK=beta ;;

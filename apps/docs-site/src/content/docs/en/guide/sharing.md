@@ -275,7 +275,7 @@ single number:
 | Field | Meaning |
 |---|---|
 | `protocol` | Wire-protocol epoch: the shape of every message, and the handshake itself |
-| `transport` | Transport generation (currently `iroh 1.4.1`). iroh's QUIC/relay protocol has no version negotiation, so it moves together with `protocol` |
+| `transport` | Transport generation (currently `iroh 1.5.0`). iroh's QUIC/relay protocol has no version negotiation, so it moves together with `protocol` |
 
 Both fields must match before two instances can import from or help deliver to each other. The check
 happens in the first frame: the engine travels in its own part of the frame, encoded separately from

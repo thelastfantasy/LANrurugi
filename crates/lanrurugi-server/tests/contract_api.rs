@@ -666,7 +666,7 @@ async fn search_syntax_matrix_covers_every_operator_and_its_combinations() {
             title: title.to_string(),
             // Basename deliberately spelled unlike the title, so `filename:` and `title:` cannot
             // accidentally agree.
-            file: format!("/nonexistent/{}-alpha-file-name.zip", id),
+            file: format!("/nonexistent/{}-file-name.zip", id),
             tags: tags.clone(),
             summary: String::new(),
             arcsize: *arcsize,
@@ -873,15 +873,13 @@ async fn search_syntax_matrix_covers_every_operator_and_its_combinations() {
         ),
         // --- text fields ----------------------------------------------------------------------
         (format!("{run} title:alpha"), vec![A, C], vec![E]),
-        // `filename:` is a documented *alias* of `title:` (`grammar.rs::split_field_prefix`: "the
-        // stored `title` is what legacy calls both"), so these two must agree — including on the
-        // basename-shaped token, which is deliberately unlike every fixture's title and is
-        // therefore expected to match nothing at all.
-        (format!("{run} filename:alpha"), vec![A, C], vec![E]),
+        // `filename:` is the archive's actual file name (`engine.rs::filename_filter`), not an
+        // alias of `title:`: a title word misses, the basename hits only its own archive.
+        (format!("{run} filename:alpha"), vec![], vec![A, C]),
         (
-            format!("{run} filename:alpha-file"),
-            vec![],
-            vec![A, B, C, E],
+            format!("{run} filename:{A}-file-name"),
+            vec![A],
+            vec![B, C, E],
         ),
         // --- phrase: order and adjacency, not just co-occurrence ------------------------------
         (

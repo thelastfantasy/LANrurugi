@@ -100,7 +100,8 @@ done
 if [ -n "${SMOKE_LIBRARY:-}" ]; then
     # Files present before start are catalogued by the start-up scan, which lists every book's
     # pages (the step that loads PDFium and the typesetter) before it reports.
-    want="$(find "$data/content" -type f | wc -l | tr -d ' ')"
+    # Dot directories are the server's own (the snapshot written at start-up, the recycle bin).
+    want="$(find "$data/content" -type f -not -path '*/.*' | wc -l | tr -d ' ')"
     i=0
     until plain | grep -q 'startup scan complete'; do
         i=$((i + 1))
