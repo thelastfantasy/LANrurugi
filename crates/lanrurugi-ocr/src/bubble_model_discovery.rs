@@ -34,10 +34,10 @@ fn candidate_dirs() -> Vec<PathBuf> {
     if let Some(dir) = std::env::var_os(MODEL_DIR_ENV) {
         candidates.push(PathBuf::from(dir));
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            candidates.push(exe_dir.join("models").join("bubble-seg"));
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        candidates.push(exe_dir.join("models").join("bubble-seg"));
     }
     candidates.push(PathBuf::from(SYSTEM_MODEL_DIR));
     candidates.push(PathBuf::from(CONTAINER_MODEL_DIR));

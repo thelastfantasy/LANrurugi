@@ -467,33 +467,33 @@ async fn create_upload_session(
     sweep_expired_sessions(&state).await;
 
     let file_name = sanitize_filename(&body.file_name);
-    if let Some(key) = body.client_key.as_deref().filter(|k| !k.is_empty()) {
-        if let Ok(mut entries) = tokio::fs::read_dir(&state.library.temp_dir).await {
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                let name = entry.file_name().to_string_lossy().to_string();
-                let Some(id) = session_id_from_meta_name(&name) else {
-                    continue;
-                };
-                let Some(session) = read_session(&state, id).await else {
-                    continue;
-                };
-                // Same client key *and* same name+size: the client is asking about the file it
-                // already started, not a different file that happens to hash its key the same way.
-                if session.client_key.as_deref() == Some(key)
-                    && session.file_name == file_name
-                    && session.file_size == body.file_size
-                {
-                    return axum::Json(json!({
-                        "operation": "upload",
-                        "success": 1,
-                        "upload_id": session.upload_id,
-                        "offset": staged_bytes(&state, &session).await,
-                        "file_name": session.file_name,
-                        "file_size": session.file_size,
-                        "resumed": true,
-                    }))
-                    .into_response();
-                }
+    if let Some(key) = body.client_key.as_deref().filter(|k| !k.is_empty())
+        && let Ok(mut entries) = tokio::fs::read_dir(&state.library.temp_dir).await
+    {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let Some(id) = session_id_from_meta_name(&name) else {
+                continue;
+            };
+            let Some(session) = read_session(&state, id).await else {
+                continue;
+            };
+            // Same client key *and* same name+size: the client is asking about the file it
+            // already started, not a different file that happens to hash its key the same way.
+            if session.client_key.as_deref() == Some(key)
+                && session.file_name == file_name
+                && session.file_size == body.file_size
+            {
+                return axum::Json(json!({
+                    "operation": "upload",
+                    "success": 1,
+                    "upload_id": session.upload_id,
+                    "offset": staged_bytes(&state, &session).await,
+                    "file_name": session.file_name,
+                    "file_size": session.file_size,
+                    "resumed": true,
+                }))
+                .into_response();
             }
         }
     }
@@ -927,6 +927,7 @@ async fn finalize_staged_upload(
             let plugin_summary = crate::plugins::run_enabled_metadata_plugins_on_archive(
                 state,
                 &ingested.archive_id,
+                None,
             )
             .await;
             if let Some(pending) = pending {
@@ -973,16 +974,8 @@ async fn finalize_staged_upload(
             .into_response()
         }
         Err(e) => {
-            // `PendingRename` is not a genuine failure the way the other variants are — the
-            // bytes are safe, staged in `temp_dir`, and `stage_pending_rename` (inside
-            // `ingest_downloaded_file`) already persisted the `PendingFilenameConflict` itself
-            // directly onto the queue item; this only needs to additionally record the matching
-            // `state`/`error`, mirroring `plugins.rs::start_download`'s own error-recording
-            // convention for the identical situation on the download side. The HTTP response
-            // below is still a plain error status either way — the frontend never reads this
-            // response body for its own error UI (this handler doesn't return an id/`Location`
-            // for the queue item), it always resolves via the queue item's next
-            // `GET /download_queue` poll.
+            // The HTTP response below is a plain error status: the frontend reads the outcome from
+            // the queue item's next `GET /download_queue` poll, not from this body.
             let queue_error = lanrurugi_core::queue_error::QueueError::from(&e);
             update_queue_item_state(
                 &state.download_queue,
@@ -995,34 +988,22 @@ async fn finalize_staged_upload(
             )
             .await;
 
-            // Bytes were staged and cataloging was genuinely attempted (`PendingRename` is
-            // excluded — see the doc comment above the `match` this arm belongs to — since that
-            // case isn't a real failure, the bytes just await a user decision). Checked against
-            // `e` itself, not the converted `queue_error` — `IngestDownloadError::PendingRename`
-            // and a genuine filename collision both convert to the same
-            // `QueueError::DuplicateFilename` shape, so only the pre-conversion error
-            // distinguishes them.
-            if !matches!(
-                e,
-                crate::download_manager::ingest::IngestDownloadError::PendingRename(_)
-            ) {
-                record_manual(
-                    state,
-                    auth,
-                    action_types::ARCHIVE_UPLOAD,
-                    ActivityTarget {
-                        id: None,
-                        label: Some(file_name.clone()),
-                        kind: Some("archive".to_string()),
-                    },
-                    Outcome::Failure {
-                        reason: e.to_string(),
-                    },
-                    None,
-                    None,
-                )
-                .await;
-            }
+            record_manual(
+                state,
+                auth,
+                action_types::ARCHIVE_UPLOAD,
+                ActivityTarget {
+                    id: None,
+                    label: Some(file_name.clone()),
+                    kind: Some("archive".to_string()),
+                },
+                Outcome::Failure {
+                    reason: e.to_string(),
+                },
+                None,
+                None,
+            )
+            .await;
 
             use lanrurugi_core::queue_error::QueueError;
             let (status, message, existing_id) = match &queue_error {

@@ -4,23 +4,32 @@
 //! legacy `LRR_DUPLICATE_GROUPS` hash in sync, and exposes the group/compare/decision endpoints the
 //! new `/duplicates` page uses. The legacy read endpoint (`GET /database/duplicates`) is unchanged.
 
+pub mod compare_cache;
 pub mod cover;
 pub mod decisions;
 pub mod detect;
 pub mod model;
 pub mod patching;
 pub mod review;
+pub mod scan;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use deadpool_redis::redis::AsyncCommands;
+use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
+use tokio::sync::broadcast;
+use tokio_stream::wrappers::BroadcastStream;
 
 use crate::common::error;
 use crate::AppState;
@@ -36,9 +45,14 @@ pub fn router() -> Router<AppState> {
             get(get_duplicates).delete(clear_duplicates),
         )
         .route("/database/duplicates/scan", post(scan_duplicates))
+        .route("/database/duplicates/events", get(scan_events))
         .route("/database/duplicates/groups", get(list_groups))
         .route("/database/duplicates/groups/{key}", get(group_detail))
         .route("/database/duplicates/compare", get(compare_pair))
+        .route(
+            "/database/duplicates/compare/progress",
+            get(compare_progress),
+        )
         .route("/database/duplicates/patch", post(patching::create_patch))
         .route(
             "/database/duplicates/decisions",
@@ -63,40 +77,23 @@ async fn scan_duplicates(
             "threshold must be between 0 and 7",
         );
     }
-    if state
-        .jobs
-        .by_name("find_duplicates")
-        .await
-        .iter()
-        .any(|job| !job.state.is_terminal())
-    {
+    let Some(job_id) = scan::start_scan(&state, threshold).await else {
         return error(
             StatusCode::CONFLICT,
             "find_duplicates",
             "a duplicate scan is already running",
         );
-    }
-
-    let job_id = state.jobs.create("find_duplicates").await;
-    let state_for_task = state.clone();
-    let job_for_task = job_id.clone();
-    tokio::spawn(async move {
-        state_for_task.jobs.mark_active(&job_for_task).await;
-        match run_scan(&state_for_task, threshold, &job_for_task).await {
-            Ok(found) => {
-                state_for_task
-                    .jobs
-                    .finish(&job_for_task, json!({ "groups_found": found }))
-                    .await
-            }
-            Err(message) => state_for_task.jobs.fail(&job_for_task, message).await,
-        }
-    });
+    };
 
     axum::Json(json!({"operation": "find_duplicates", "success": 1, "job": job_id})).into_response()
 }
 
-async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, String> {
+pub(crate) async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, String> {
+    // A restore replaces the keyspace; stop before hashing covers into records that may not exist
+    // afterwards.
+    if state.restore_gate.closed() {
+        return Err(lanrurugi_core::restore_gate::RESTORE_ABORTED_MESSAGE.to_string());
+    }
     let archives = state
         .repos
         .archives
@@ -104,11 +101,12 @@ async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, 
         .await
         .map_err(|e| e.to_string())?;
     // Only catalogued archives with a real file are candidates; an unfinished ingest has no cover,
-    // and one still in its metadata run is not offered for deletion (spec 025).
+    // and one still in its metadata run is not offered for deletion (spec 025). A record whose
+    // `file` is a directory (seen on a real library: empty name, path ending in `/`) has no file.
     let pending = crate::visibility::pending_ids(state).await;
     let mut metas: Vec<ArchiveMeta> = archives
         .iter()
-        .filter(|a| !a.file.trim().is_empty() && a.pagecount > 0)
+        .filter(|a| has_archive_file(&a.file) && a.pagecount > 0)
         .filter(|a| !pending.contains(a.id.as_str()))
         .map(|a| ArchiveMeta {
             id: a.id.as_str().to_string(),
@@ -118,6 +116,7 @@ async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, 
             size: a.arcsize,
         })
         .collect();
+    let library_ids: HashSet<String> = archives.iter().map(|a| a.id.as_str().to_string()).collect();
 
     // Members are compared as the reader shows them: a `.patch.zip` adds pages.
     let files: HashMap<String, String> = archives
@@ -141,8 +140,13 @@ async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, 
                 .map(|f| (m.id.clone(), f.clone(), blake3s.get(&m.id).cloned()))
         })
         .collect();
+    let files_for_sweep = files.clone();
     let mut patch_states: HashMap<String, patching::PatchState> =
         lanrurugi_core::concurrency::run_blocking(move || {
+            let swept = scan::sweep_patch_temps(&files_for_sweep);
+            if swept > 0 {
+                tracing::info!(swept, "removed leftover patch temp files");
+            }
             candidates
                 .iter()
                 .filter_map(|(id, file, blake3)| {
@@ -161,11 +165,51 @@ async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, 
     state.jobs.set_progress(job, 0.05).await;
 
     let ids: Vec<String> = metas.iter().map(|m| m.id.clone()).collect();
-    let covers = cover::collect(state, &ids).await;
+    let rejects = decisions::load_rejects(state).await;
+    // Cached covers first, then the rest one by one. The groups found so far are published as they
+    // grow, so the page can show them while the scan runs (it warns they may still change).
+    let mut hashes = cover::cached(state, &ids).await;
+    let missing: Vec<&String> = ids.iter().filter(|id| !hashes.contains_key(*id)).collect();
+    let mut published: Option<Vec<String>> = None;
+    scan::set_progress(scan::ScanPhase::Covers, 0, missing.len());
+    publish_partial(state, &metas, &hashes, threshold, &rejects, &mut published).await?;
+    let mut last_tick = Instant::now();
+    let mut last_publish = Instant::now();
+    let mut no_cover = 0usize;
+    for (done, id) in missing.iter().enumerate() {
+        if done.is_multiple_of(200) && state.restore_gate.closed() {
+            return Err(lanrurugi_core::restore_gate::RESTORE_ABORTED_MESSAGE.to_string());
+        }
+        match cover::hash_and_store(state, id).await {
+            Some(bytes) => {
+                hashes.insert((*id).clone(), bytes);
+            }
+            None => no_cover += 1,
+        }
+        if last_tick.elapsed() >= PROGRESS_INTERVAL {
+            scan::set_progress(scan::ScanPhase::Covers, done + 1, missing.len());
+            let fraction = (done + 1) as f32 / missing.len() as f32;
+            state.jobs.set_progress(job, 0.05 + 0.55 * fraction).await;
+            if last_publish.elapsed() >= PARTIAL_PUBLISH_INTERVAL {
+                publish_partial(state, &metas, &hashes, threshold, &rejects, &mut published)
+                    .await?;
+                last_publish = Instant::now();
+            }
+            notify_changed();
+            last_tick = Instant::now();
+        }
+    }
+    scan::store_no_cover(state, no_cover).await;
+    if no_cover > 0 {
+        tracing::info!(
+            no_cover,
+            "duplicate scan skipped archives without a cover thumbnail"
+        );
+    }
     state.jobs.set_progress(job, 0.6).await;
 
-    let rejects = decisions::load_rejects(state).await;
-    let hashes = covers.hashes;
+    scan::set_progress(scan::ScanPhase::Grouping, 0, 0);
+    notify_changed();
     let metas_for_task = metas.clone();
     let hashes_for_task = hashes.clone();
     let rejects_for_task = rejects.clone();
@@ -185,28 +229,29 @@ async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, 
         .iter()
         .flat_map(|group| detect::regroup_by_pairs(group, &hashes_for_regroup))
         .collect();
+    scan::set_progress(scan::ScanPhase::Patches, 0, 0);
+    notify_changed();
     attach_patch_info(&mut groups, &mut patch_states, &files, &blake3s).await?;
 
-    let mut conn = state.redis.config.get().await.map_err(|e| e.to_string())?;
-    let _: Result<(), _> = conn.del(GROUPS_KEY).await;
-    let _: Result<(), _> = conn.del(LEGACY_GROUPS_KEY).await;
-    for group in &groups {
-        let key = group_key(&group.members);
-        let value = serde_json::to_string(group).unwrap_or_default();
-        let _: Result<(), _> = conn.hset(GROUPS_KEY, &key, value).await;
-        let _: Result<(), _> = conn
-            .hset(
-                LEGACY_GROUPS_KEY,
-                format!("dupgp_{}", legacy_composite(&group.members)),
-                serde_json::to_string(&group.members).unwrap_or_default(),
-            )
-            .await;
-    }
+    store_groups(state, &groups).await?;
+    notify_changed();
     // Semantic review: one model call per group without a cached verdict. `ensure_with` reuses one
     // loaded map for the whole pass and stores both the content-keyed verdict and the group-keyed
     // copy the read endpoints use.
     let mut reviews = review::load_all(state).await;
-    for group in &groups {
+    for (done, group) in groups.iter().enumerate() {
+        if done.is_multiple_of(200) && state.restore_gate.closed() {
+            return Err(lanrurugi_core::restore_gate::RESTORE_ABORTED_MESSAGE.to_string());
+        }
+        if last_tick.elapsed() >= PROGRESS_INTERVAL {
+            scan::set_progress(scan::ScanPhase::Reviewing, done, groups.len());
+            state
+                .jobs
+                .set_progress(job, 0.6 + 0.35 * done as f32 / groups.len() as f32)
+                .await;
+            notify_changed();
+            last_tick = Instant::now();
+        }
         if group.patch_links.is_empty() {
             review::ensure_with(state, group, &metas, &mut reviews).await;
         } else {
@@ -214,8 +259,148 @@ async fn run_scan(state: &AppState, threshold: u32, job: &str) -> Result<usize, 
         }
     }
 
+    scan::set_progress(scan::ScanPhase::Cleanup, 0, 0);
+    notify_changed();
+    scan::prune(state, &library_ids, &groups, &metas).await;
+
     state.jobs.set_progress(job, 1.0).await;
     Ok(groups.len())
+}
+
+/// Whether an archive record points at a file: not empty, and not a directory path (a damaged
+/// record seen on a real library had its library folder, ending in `/`, as its file).
+fn has_archive_file(file: &str) -> bool {
+    let file = file.trim();
+    !file.is_empty() && !file.ends_with('/') && !file.ends_with(std::path::MAIN_SEPARATOR)
+}
+
+/// How often a running scan updates the progress it reports.
+const PROGRESS_INTERVAL: Duration = Duration::from_secs(1);
+
+/// How often a running scan republishes the groups found so far.
+const PARTIAL_PUBLISH_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Groups the covers hashed so far and stores them, without the patch links or model reviews the
+/// final pass adds.
+async fn publish_partial(
+    state: &AppState,
+    metas: &[ArchiveMeta],
+    hashes: &HashMap<String, [u8; 8]>,
+    threshold: u32,
+    rejects: &HashSet<(String, String)>,
+    published: &mut Option<Vec<String>>,
+) -> Result<(), String> {
+    let metas = metas.to_vec();
+    let hashes = hashes.clone();
+    let rejects = rejects.clone();
+    let groups = lanrurugi_core::concurrency::run_blocking(move || {
+        detect::build_groups(&metas, &hashes, threshold, now_secs(), &rejects)
+            .iter()
+            .flat_map(|group| detect::regroup_by_pairs(group, &hashes))
+            .collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    // Nothing to write or announce when the same groups came out again — the usual case on a
+    // rescan, where nearly every cover hash is already cached.
+    let mut keys: Vec<String> = groups.iter().map(|g| group_key(&g.members)).collect();
+    keys.sort();
+    if published.as_ref() == Some(&keys) {
+        return Ok(());
+    }
+    store_groups(state, &groups).await?;
+    *published = Some(keys);
+    notify_changed();
+    Ok(())
+}
+
+/// Replaces the stored groups (ours and legacy's) in one transaction, so a reader never sees the
+/// set half-written.
+async fn store_groups(state: &AppState, groups: &[GroupRecord]) -> Result<(), String> {
+    let mut conn = state.redis.config.get().await.map_err(|e| e.to_string())?;
+    let mut pipe = deadpool_redis::redis::pipe();
+    pipe.atomic().del(GROUPS_KEY).del(LEGACY_GROUPS_KEY);
+    for group in groups {
+        pipe.hset(
+            GROUPS_KEY,
+            group_key(&group.members),
+            serde_json::to_string(group).unwrap_or_default(),
+        );
+        pipe.hset(
+            LEGACY_GROUPS_KEY,
+            format!("dupgp_{}", legacy_composite(&group.members)),
+            serde_json::to_string(&group.members).unwrap_or_default(),
+        );
+    }
+    pipe.query_async::<()>(&mut conn)
+        .await
+        .map_err(|e| e.to_string())?;
+    GROUPS_REVISION.fetch_add(1, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Bumped whenever the stored groups are replaced or cleared, so the page refetches them only when
+/// they changed rather than on every progress update.
+static GROUPS_REVISION: AtomicU64 = AtomicU64::new(0);
+
+/// Wakes `GET /database/duplicates/events` subscribers whenever the stored groups or the scan's
+/// state change.
+fn scan_changes() -> &'static broadcast::Sender<()> {
+    static TX: OnceLock<broadcast::Sender<()>> = OnceLock::new();
+    TX.get_or_init(|| broadcast::channel(16).0)
+}
+
+fn notify_changed() {
+    let _ = scan_changes().send(());
+}
+
+/// Whether a duplicate scan is queued or running, and how far it is.
+async fn scan_status(state: &AppState) -> (bool, f32) {
+    state
+        .jobs
+        .by_name("find_duplicates")
+        .await
+        .iter()
+        .find(|job| !job.state.is_terminal())
+        .map_or((false, 1.0), |job| (true, job.progress))
+}
+
+/// The scan's state as the page reads it, in both the events and the groups listing.
+async fn status_json(state: &AppState) -> serde_json::Value {
+    let (scanning, progress) = scan_status(state).await;
+    let phase = scanning.then(scan::progress).flatten();
+    json!({
+        "scanning": scanning,
+        "progress": progress,
+        "revision": GROUPS_REVISION.load(Ordering::Relaxed),
+        "phase": phase.map(|p| p.phase),
+        "done": phase.map_or(0, |p| p.done),
+        "total": phase.map_or(0, |p| p.total),
+        "interrupted": scan::interrupted(state, scanning).await,
+        "no_cover": scan::no_cover(state).await,
+    })
+}
+
+/// `GET /database/duplicates/events` — SSE: a `status` event (see `status_json`) on connect
+/// and again whenever the stored groups or the scan's state change, so the page can refetch the
+/// groups as a scan finds them.
+async fn scan_events(State(state): State<AppState>) -> Response {
+    let rx = scan_changes().subscribe();
+    let first = futures_util::stream::once(async {});
+    let changes = BroadcastStream::new(rx).map(|_| ());
+    let stream = first.chain(changes).then(move |()| {
+        let state = state.clone();
+        async move {
+            Ok::<_, std::convert::Infallible>(
+                Event::default()
+                    .event("status")
+                    .data(status_json(&state).await.to_string()),
+            )
+        }
+    });
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 /// A patch whose sources are still CRC32s, with the files and BLAKE3s of the other members of its
@@ -356,6 +541,7 @@ async fn list_groups(State(state): State<AppState>) -> Response {
         views.push(group_view(&state, group, &key, &decision, review).await);
     }
     axum::Json(json!({
+        "status": status_json(&state).await,
         "scanned_at": groups.first().map(|g| g.built_at).unwrap_or(0),
         "algorithm": detect::ALGORITHM,
         "chained_groups": groups.iter().filter(|g| g.chained).count(),
@@ -404,18 +590,17 @@ async fn group_view(
         }));
     }
     let best = detect::best_member(group, &pages_by_id, &sizes_by_id);
-    if let Some(best_id) = best.as_deref() {
-        if let Some(index) = members
+    if let Some(best_id) = best.as_deref()
+        && let Some(index) = members
             .iter()
             .position(|m| m.get("id").and_then(|v| v.as_str()) == Some(best_id))
-        {
-            if let Some(object) = members[index].as_object_mut() {
-                object.insert("best".to_string(), serde_json::Value::Bool(true));
-            }
-        }
+        && let Some(object) = members[index].as_object_mut()
+    {
+        object.insert("best".to_string(), serde_json::Value::Bool(true));
     }
     json!({
         "key": key,
+        "resolved": decision.keeps_all(&group.members),
         "chained": group.chained,
         "middle": group.middle,
         "members": members,
@@ -481,6 +666,19 @@ async fn compare_pair(
         Ok(value) => axum::Json(value).into_response(),
         Err((status, message)) => error(status, "duplicates", message),
     }
+}
+
+/// `GET /database/duplicates/compare/progress?a=&b=` — how many pages of each side the running
+/// comparison of that pair has fingerprinted (`null` when it is not running).
+async fn compare_progress(Query(params): Query<CompareParams>) -> Response {
+    let key = compare_cache::progress_key(&params.a, &params.b);
+    let body = compare_cache::current(&key).map(|[a, b]| {
+        json!({
+            "a": { "done": a.0, "total": a.1 },
+            "b": { "done": b.0, "total": b.1 },
+        })
+    });
+    axum::Json(json!({ "progress": body })).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -651,6 +849,8 @@ async fn clear_duplicates(State(state): State<AppState>) -> Response {
     ] {
         let _: Result<(), _> = conn.del(key).await;
     }
+    GROUPS_REVISION.fetch_add(1, Ordering::Relaxed);
+    notify_changed();
     axum::Json(json!({"operation": "clear_duplicates", "success": 1})).into_response()
 }
 

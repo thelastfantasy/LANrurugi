@@ -348,6 +348,102 @@ input[type="checkbox"].lrr-checkbox-bare::after {
   backdrop-filter: blur(6px);
 }
 
+/* The G key's page jump, in the same dark on-screen style as the chapter panel above. */
+#reader-goto-osd {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 9000;
+  width: min(280px, 88vw);
+  margin: 0;
+  padding: 14px 18px 12px;
+  box-sizing: border-box;
+  color: #f2f2f2;
+  background: rgba(28, 28, 28, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+  text-align: center;
+}
+
+.reader-goto-osd-title {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.reader-goto-osd-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  margin: 12px 0 8px;
+  font-size: 1.6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+#reader-goto-osd input {
+  width: 4.5em;
+  padding: 2px 6px;
+  font: inherit;
+  text-align: center;
+  color: #f2f2f2;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  outline: none;
+  appearance: textfield;
+}
+
+#reader-goto-osd input::-webkit-inner-spin-button,
+#reader-goto-osd input::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+#reader-goto-osd input:focus {
+  border-color: rgba(255, 255, 255, 0.55);
+}
+
+.reader-goto-osd-total {
+  color: rgba(242, 242, 242, 0.7);
+}
+
+.reader-goto-osd-hint {
+  font-size: 0.7rem;
+  color: rgba(242, 242, 242, 0.6);
+}
+
+/* The go-to OSD's page scrubber, along the bottom of the screen (desktop only). Same dark OSD
+ * language as the panel above it; the slider draws in `currentColor`. */
+.reader-goto-scrubber {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: min(960px, 86vw);
+  padding: 8px 18px;
+  box-sizing: border-box;
+  color: #f2f2f2;
+  background: rgba(28, 28, 28, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+}
+
+.reader-goto-scrubber-end {
+  flex: none;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: rgba(242, 242, 242, 0.6);
+}
+
 .reader-chapter-osd-head {
   padding: 0 14px 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
@@ -1056,12 +1152,59 @@ input[type="checkbox"].lrr-checkbox-bare::after {
   min-width: 0;
 }
 
-.reader-headless-chapter {
+/* Only when the volume and the chapter inside it both show: the counter then spans both lines as
+   its own column, rather than sharing the first line with the volume name. */
+.reader-headless-line.is-two-line {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 10px;
+}
+
+.reader-headless-page-count {
   display: inline-flex;
+  align-items: baseline;
+  gap: 0.3em;
+  white-space: nowrap;
+}
+
+/* Two-line caption: the counter fills the same two rows rather than sitting as one small line with
+   empty space above and below it. Drawn as a stacked fraction — page over total across a hairline —
+   which reads as one object at this size and lines up with the two text rows beside it.
+   `tabular-nums` keeps the two numbers the same width so the bar doesn't shift between pages. */
+.reader-headless-line.is-two-line .reader-headless-page-count {
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.reader-headless-line.is-two-line .reader-headless-page-of {
+  display: none;
+}
+
+/* Numerator and denominator are the same size and the same ink: only the hairline says "fraction".
+   Different sizes read as emphasis on the current page, which is not what the glyph means. */
+.reader-headless-line.is-two-line .reader-headless-page-total {
+  align-self: stretch;
+  border-top: 1px solid currentColor;
+  padding-top: 1px;
+  text-align: center;
+}
+
+.reader-headless-chapter {
+  display: flex;
   align-items: center;
   gap: 5px;
   min-width: 0;
-  max-width: 100%;
+}
+
+/* The volume on the first line, the chapter inside it on the second. */
+.reader-headless-chapter-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 /* Icons keep their own width; only the name gives way when the row is narrow. */
@@ -1069,15 +1212,44 @@ input[type="checkbox"].lrr-checkbox-bare::after {
   flex: none;
 }
 
-.reader-headless-chapter-title {
+/* One row per line, so the chapter-start flag sits on the line that names the chapter it marks
+   instead of floating between the volume and its ToC. */
+.reader-headless-chapter-title-line,
+.reader-headless-chapter-toc-line {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+}
+
+.reader-headless-chapter-title,
+.reader-headless-chapter-toc {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.reader-headless-chapter-start {
+.reader-headless-chapter-toc {
+  opacity: 0.8;
+}
+
+/* react-icons render an `<svg>` at 1em; kept off the baseline so the glyph sits centred against the
+   text it marks rather than hanging from its descender. */
+.reader-headless-chapter-icon,
+.reader-headless-chapter-start,
+.reader-headless-chapter-toc-start {
+  flex: none;
+  align-self: center;
+  width: 0.85em;
+  height: 0.85em;
   opacity: 0.9;
+}
+
+/* The ToC marker is the quieter of the two: it recurs more often than a volume start. */
+.reader-headless-chapter-toc-start {
+  opacity: 0.7;
 }
 
 /* Headless leaves nothing but the page, so it is centred in the viewport at every width instead of
@@ -1711,10 +1883,10 @@ body:has([data-overlay="modal"]) {
  * introduced — but it's a genuine, confirmed usability break worth fixing outright rather than
  * preserving: this class carries only `div.id1`'s *visual* properties (nothing sizing-related,
  * since the panel already sets its own explicit width/height inline at every viewport), so it's
- * immune to the archive-card media query entirely. */
+ * immune to the archive-card media query entirely. Its colors are per theme, appended to each
+ * theme file. */
 .category-panel {
-  background: none repeat scroll 0 0 #f2efdf;
-  border: 1px solid #e3e0d1;
+  /* Colors come from each theme file's own `.category-panel` rule (its `div.id1` colors). */
   border-radius: 9px;
   display: inline-block;
   margin: 3px 2px 2px 3px;
@@ -1895,8 +2067,8 @@ body:has([data-overlay="modal"]) {
 }
 
 /* AiSmartTankoubonDrawer.tsx's suggested-group checklist rows — the shared ArchiveChecklistItem
- * component itself carries no row spacing (Categories.tsx/Batch.tsx both rely on plain browser
- * default <li> layout, which is correct for their own denser lists), but this modal's own rows
+ * component itself carries no row spacing (Categories.tsx relies on plain browser
+ * default <li> layout, which is correct for its own denser list), but this modal's own rows
  * routinely show long, near-identical titles (same-series archives differing only in a volume
  * number/subtitle near the end) at the page's small base font size, and the default zero-padding
  * <li> packed them tight enough that adjacent rows were hard to visually separate at a glance —
@@ -1982,6 +2154,11 @@ body:has([data-overlay="modal"]) {
 .ai-checkable-btn-toggle .fa-robot {
   position: absolute;
   inset: 0 0 0 10px;
+  /* Font Awesome 7 gives every `.fa` a fixed `1.25em` width. An absolutely positioned box that
+     already has a width ignores the `inset` stretch, so both glyphs below ended up in a small box at
+     the toggle's left instead of filling it — which put the check ~3px left of the circle's centre. */
+  width: auto;
+  height: auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1991,6 +2168,8 @@ body:has([data-overlay="modal"]) {
 .ai-checkable-btn-toggle-circle .fa-check {
   position: absolute;
   inset: 0;
+  width: auto;
+  height: auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2131,6 +2310,17 @@ body:has([data-overlay="modal"]) {
   grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
   gap: 5px;
 }
+
+/* The library grid and the duplicates groups ran edge to edge inside the `.ido` card (its legacy
+   padding is vertical only). On a phone `.ido` gets its own 3px padding below, which is enough. */
+@media (min-width: 641px) {
+  #thumbs_container.library-thumb-grid,
+  .duplicates-page {
+    padding-left: 16px;
+    padding-right: 16px;
+    box-sizing: border-box;
+  }
+}
 .library-thumb-grid div.id1 {
   width: auto;
   margin: 0;
@@ -2232,8 +2422,9 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
  * itself; aligning the stepper to the wrapper's own `top: 0`/`bottom: 0` left it taller than, and
  * shifted above, the input's actual visible box, reading as "the up arrow sits too high" (reported
  * live, 2026-09-07, confirmed via `getBoundingClientRect` — the stepper's box didn't match the
- * input's, not an icon-glyph offset). `top: 4px` matches `.stdinput`'s own `margin-top`; `bottom: 0`
- * matches its zero `margin-bottom`. Each button is exactly half that height via `flex: 1 1 50%`.
+ * input's, not an icon-glyph offset). `NumberInputShell` sets `top`/`height` from the input's own
+ * offset box at runtime; `top: 4px` here (`.stdinput`'s `margin-top`) only covers the first paint.
+ * Each button is exactly half that height via `flex: 1 1 50%`.
  *
  * Hidden until hover/focus-within, matching the native `::-webkit-inner-spin-button`'s own
  * hover-to-reveal behaviour — permanently overlaying two extra buttons on every number field on
@@ -2352,9 +2543,53 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 }
 .mobile-reader-toolbar a,
 .mobile-reader-toolbar .pagecount,
+.mobile-reader-toolbar .mobile-reader-toolbar-chapter,
 .mobile-reader-toolbar-icons button,
 .mobile-reader-toolbar-icons button i {
   color: #fff;
+}
+
+/* The page row: the page counter (and, on the paged toolbar, its arrow links) on the left, the
+   current chapter at the row's right edge — the phone's counterpart to headless reading's
+   bottom-left chapter line. `margin-left: auto` on the chapter is what pins it right in both the
+   centred paged row and the left-aligned infinite-scroll one; without a chapter it collapses to
+   nothing and the row keeps its old centred look. */
+.mobile-reader-toolbar-page-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 10px;
+  align-self: stretch;
+  min-width: 0;
+}
+
+.mobile-reader-toolbar-page-row--spread {
+  justify-content: flex-start;
+}
+
+.mobile-reader-toolbar-chapter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 58%;
+  margin-left: auto;
+  overflow: hidden;
+  font-size: 0.9rem;
+  line-height: 1.3;
+}
+
+/* Icons keep their own width; only the chapter name gives way on a narrow bar. */
+.mobile-reader-toolbar-chapter > i {
+  flex: none;
+  opacity: 0.85;
+}
+
+.mobile-reader-toolbar-chapter-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Settings → Security → Active Devices: rename/cancel are inline text actions, not standalone
@@ -2750,6 +2985,7 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   outline-offset: -2px;
 }
 
+
 /* Preview listing: one work per row, with enough room between rows to tell them apart. The rows were
    previously flush against each other, which made a long listing read as a wall of text. */
 /* Preview listing as a grid: the number, the title, its publication time, who uploaded it, its
@@ -2867,6 +3103,125 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
   opacity: 1;
 }
 
+/* Shared `common-ui/Tabs`: the download queue's `.queue-tab` palette (same class, same theme
+ * colours/opacity) on a fixed 32px line, plus a 3px currentColor bottom border for the active tab. */
+.common-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Tabs never show a focus ring or a focus border colour. Firefox (confirmed on Android) matches
+ * `:focus-visible` on a tapped button, so `:focus:not(:focus-visible)` was not enough — the gold
+ * focus border stayed on the active tab. The active tab already has its own selection colour, so the
+ * ring adds nothing but a second, conflicting highlight. */
+.stdbtn.queue-tab.common-tab,
+.stdbtn.queue-tab.common-tab:focus,
+.stdbtn.queue-tab.common-tab:focus-visible,
+.stdbtn.queue-tab.common-tab:hover {
+  outline: none;
+  border-color: currentColor;
+}
+
+/* The five themes' `.stdbtn:focus` repaints the whole button (e.g. g.css: background #F2EFDF,
+ * color #9B4E03) — that is the gold tab in the screenshots, not a border. `background`/`color` are
+ * inherited from the strip here, which is how these themes draw a resting `.stdbtn` anyway, so a
+ * focused tab is pixel-identical to an unfocused one. */
+.stdbtn.queue-tab.common-tab {
+  /* Transparent in every state, so the theme's `:focus` repaint (`background: #F2EFDF` on g) has
+   * nothing of ours to override and focusing cannot change what the tab looks like. */
+  background: transparent;
+}
+
+.stdbtn.queue-tab.common-tab:focus,
+.stdbtn.queue-tab.common-tab:focus-visible {
+  background: transparent;
+  color: inherit;
+}
+
+.stdbtn.common-tab {
+  box-sizing: border-box;
+  flex: 0 1 auto;
+  height: 32px;
+  min-height: 32px;
+  margin: 0;
+  padding: 0 8px;
+  /* Every tab keeps the theme's own four-sided border. The active tab adds only the thick bottom
+     bar below (and the caller's own active colours); no font-weight change. */
+}
+
+.stdbtn.common-tab.common-tab--active {
+  /* The active tab's thick bottom bar. Drawn as an inset shadow rather than a border so it adds no
+     width and cannot shift the strip: the box model of every tab stays identical. */
+  box-shadow: inset 0 -3px 0 currentColor;
+}
+
+
+/* The backup and recycle-bin pages' tab strips: equal segments, one row down to a 375px phone. */
+.backup-tabs,
+.recycle-tabs {
+  margin-bottom: 12px;
+}
+
+.backup-tabs > .stdbtn.common-tab,
+.recycle-tabs > .stdbtn.common-tab {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* Inside the download queue's group heading the strip is as wide as its labels, not the row. */
+.queue-group-tabs.common-tabs {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  margin-left: auto;
+}
+
+/* The download queue's group tabs: the shared 32px baseline on desktop, the queue's own compact
+   icon-over-count box on a phone (the ≤640 `.stdbtn.queue-tab` rule below). Horizontal padding is
+   pinned so the count never touches the edge. */
+.queue-group-tabs > .stdbtn.common-tab {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+/* The numeric count beside a tab's label: smaller than the label, tight line box, tabular digits,
+ * and a little breathing room from the icon/label. */
+.queue-tab-count {
+  display: inline-block;
+  margin: 2px 0 2px 3px;
+  font-size: 0.7rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  vertical-align: middle;
+}
+
+/* The count and the "needs an answer" badge travel as one row. The narrow layout turns a tab into
+   a column (icon over content), so leaving the badge outside this row dropped it onto a third line
+   and crowded the tab's bottom edge. */
+.queue-tab-count-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.queue-tab-undecided {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.7rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: #c79121;
+}
+
+/* The icon is a filled disc, so at `1em` it reads heavier and taller than the figures beside it —
+   at the count's own size (0.7rem) the disc is what made the badge look bigger than the number. */
+.queue-tab-undecided svg {
+  width: 0.78em;
+  height: 0.78em;
+}
+
 /* Download rows on a phone: every extra item in this wrapping flex row costs a whole line, and the
    two flag checkboxes are non-actionable once an item leaves `queued` — they were drawing an empty
    box and a tick on a line of their own, which is most of the wasted height (reported 2026-11-04). */
@@ -2950,6 +3305,29 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
     line-height: 1.1;
     white-space: nowrap;
   }
+
+  .queue-tab-count-row {
+    /* The column layout stacks icon over this row, so without the gap it sat directly on the
+       tab's bottom border. */
+    margin-top: 3px;
+  }
+
+  .queue-tab-count {
+    margin: 0;
+  }
+
+  /* Tighten the icon-to-count gap and give the count room underneath. Both live inside the fixed
+     40px line, so the button's own height and the icon's position do not move. */
+  .queue-group-tabs > .stdbtn.common-tab {
+    gap: 0;
+    padding-top: 1px;
+    padding-bottom: 5px;
+  }
+
+  .queue-group-tabs > .stdbtn.common-tab .fa {
+    line-height: 1;
+  }
+
 }
 
 /* The icon-only twin of `.pill-btn`, for sitting immediately beside it: square in purpose, round
@@ -3213,6 +3591,55 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 /* The heading row is not a work, so it carries none of the band colouring. */
 .preview-head .preview-index {
   opacity: 0.7;
+}
+
+/* A heading the reader can click to order the list by that column. It keeps the caller's own
+   `preview-*` class (the grid's tracks are measured from those) and resets what a `<button>` brings
+   along — border, background, the font shorthand, centred text. */
+.preview-head-sort {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  /* `.preview-row > *` already sets this; a button's own default padding would otherwise win. */
+  padding: 0 8px;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The verdict column is right-aligned, so its own heading has to end at the same edge. */
+.preview-head-sort.preview-verdict {
+  justify-content: flex-end;
+}
+
+.preview-head-sort-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Inactive: a fainter caret so a sortable column reads as sortable without competing with the
+   values. Active: full strength, on the theme's own text colour — no new colours, so no per-theme
+   rules. */
+.preview-head-sort .fa {
+  font-size: 0.95em;
+  opacity: 0.45;
+}
+
+.preview-head-sort:hover,
+.preview-head-sort-active {
+  opacity: 1;
+}
+
+.preview-head-sort-active .fa,
+.preview-head-sort:hover .fa {
+  opacity: 1;
 }
 
 /* Ordered language preference. A list rather than a single dropdown because the order itself is the
@@ -3604,6 +4031,10 @@ body div.ido {
     flex: 1 1 0;
     min-width: 0 !important;
   }
+  /* An icon-only button keeps its own width instead of taking a share of the row. */
+  .admin-actions > .stdbtn.admin-icon-btn {
+    flex: 0 0 auto;
+  }
 }
 
 @media (max-width: 768px) {
@@ -3739,31 +4170,55 @@ body div.ido {
   white-space: nowrap;
 }
 
-/* One maintenance script under the Plugins page's "维护脚本" section: an explanation and its single
- * "运行" button.
+/* One maintenance script under the Plugins page's "维护脚本" section: its name, its explanation, and
+ * the single "运行" button that runs it.
+ *
+ * A two-column grid rather than a flex row: the section body is centred like the rest of the page,
+ * which left each explanation centred while its button sat at the far edge — three competing
+ * alignments in one block. `text-align: left` keeps the reading column straight.
  *
  * The button must not shrink. `body input.stdbtn { min-width: 0 }` in the phone-width clamp above
- * exists so legacy's fixed-width buttons fit a 400px column, but inside a flex row it also lets the
- * button be squeezed below its own label — an `<input>` clips its text, so "运行" came out cut in
- * half (reported on a phone, 2026-11-03). The explanation wraps instead; below the phone breakpoint
- * the button drops to its own line rather than competing for the same one. */
+ * exists so legacy's fixed-width buttons fit a 400px column, but inside a shrinking column it also
+ * lets the button be squeezed below its own label — an `<input>` clips its text, so "运行" came out
+ * cut in half (reported on a phone, 2026-11-03). The `auto` track plus `justify-self: end` sizes it
+ * to its label instead. */
 .plugin-script-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 4px 0;
+  gap: 4px 16px;
+  padding: 10px 2px;
+  text-align: left;
+  border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.plugin-script-row > span {
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+/* The name is a caption for the paragraph under it, not the first words of it. */
+.plugin-script-row > span > b {
+  display: block;
+  margin-bottom: 2px;
 }
 
 .plugin-script-row > .stdbtn {
-  flex: 0 0 auto;
-  /* Right edge on its own line too, matching the desktop layout where it is pushed to the far side. */
-  margin-left: auto;
+  justify-self: end;
+}
+
+/* The repair script's review step: same left-aligned reading column as the row above it, so the
+ * "before → after" list does not sit centred under a centred heading. */
+.plugin-script-pending {
+  padding: 8px 2px 12px;
+  text-align: left;
+  font-size: 0.9rem;
+  line-height: 1.45;
 }
 
 @media (max-width: 640px) {
   .plugin-script-row {
-    flex-wrap: wrap;
+    gap: 6px 10px;
   }
 
   /* The phone clamp above zeroes `.stdbtn`'s own `min-width`, which leaves the button at its label's
@@ -4061,116 +4516,1319 @@ div.gt.gt-single > span {
   border-top: 1px solid rgba(128, 128, 128, 0.35);
 }
 
-/* Batch operations: operations | selected | divider | picker. The picker column only exists once
-   the divider's button opens it; both lists fill the height the page gives them and scroll inside. */
-.batch-page {
-  text-align: left;
-}
-.batch-layout {
-  display: grid;
-  grid-template-columns: 340px minmax(260px, 1fr) 20px;
-  gap: 0 8px;
-  height: max(420px, calc(100vh - 230px));
-  margin-bottom: 12px;
-}
-.batch-layout.is-picker-open {
-  grid-template-columns: 340px minmax(240px, 1fr) 20px minmax(300px, 1.2fr);
-}
-.batch-ops {
-  overflow-y: auto;
-  min-width: 0;
-}
-.batch-panel {
+/* The selection drawer's batch view: one column, controls at the drawer's full width. */
+.batch-ops-panel {
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  border: 1px solid rgba(128, 128, 128, 0.35);
+  gap: 10px;
 }
-.batch-panel-head {
-  display: flex;
+.batch-ops-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  gap: 6px;
-  padding: 6px;
-  border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+  gap: 8px 10px;
 }
-.batch-head-btn {
-  width: auto;
+/* Spans both grid columns: the auto mode's one-line explanation under its radio row. */
+.batch-ops-hint {
+  grid-column: 1 / -1;
   margin: 0;
-  padding: 0 8px;
+  font-size: 12px;
+  opacity: 0.8;
 }
-.batch-list {
-  flex: 1;
-  min-height: 0;
+.batch-ops-note {
+  margin: 0;
+  text-align: center;
 }
-.batch-empty {
-  padding: 12px;
-  opacity: 0.75;
-}
-.batch-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 100%;
-  padding: 0 8px;
-  border-bottom: 1px solid rgba(128, 128, 128, 0.15);
-}
-.batch-row-pick {
-  cursor: pointer;
-}
-.batch-row-title {
-  flex: 1;
+.batch-ops-start,
+.batch-ops-back {
+  width: 100%;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.batch-row-loading {
-  opacity: 0.6;
-  font-family: monospace;
-}
-.batch-row-kind {
-  opacity: 0.7;
-}
-.batch-row-remove {
-  flex: none;
-}
-/* Full height, so it reads as the edge between two columns; the button sits in its middle. */
-.batch-divider {
-  display: flex;
+  height: 36px;
+  margin: 0;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-left: 1px solid rgba(128, 128, 128, 0.35);
-  border-right: 1px solid rgba(128, 128, 128, 0.35);
+  gap: 6px;
 }
-.batch-divider-btn {
-  width: 20px;
-  min-width: 0;
-  height: 48px;
+/* The AI-grouping filter row: `.stdinput` and `.stdbtn` are two different legacy controls, with
+   different heights (21px + 2+2px padding vs 28px) and different margins (4px 1px 0 vs 1px), so the
+   clear button stood a few pixels taller than the field beside it. One height, no margins, both
+   border-box. */
+.ai-grouping-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ai-grouping-filter .stdinput,
+.ai-grouping-filter .stdbtn {
+  height: 28px;
   margin: 0;
-  padding: 0;
+  box-sizing: border-box;
+}
+.ai-grouping-filter .stdinput {
+  flex: 1;
+  min-width: 0;
+  padding: 0 8px;
+}
+.ai-grouping-filter .stdbtn {
+  flex-shrink: 0;
+  min-width: 28px;
+  padding: 0 6px;
+}
+.ai-grouping-filter > .fa-magnifying-glass {
+  font-size: 12px;
+  opacity: 0.6;
+}
+.ai-grouping-filter-count {
+  font-size: 11px;
+  opacity: 0.6;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
-/* Phone: the selection fills the page; the operations bar is pinned to the bottom. */
-.batch-mobile .batch-selected {
-  height: calc(100dvh - 260px);
-  min-height: 300px;
-}
-.batch-mobile-bar {
-  position: sticky;
-  bottom: 0;
-  padding: 8px 0;
-  background-color: inherit;
-}
-.batch-mobile-bar .stdbtn {
-  width: 100%;
-  margin: 0;
-}
-/* The windowed list needs a height to window against; the drawer's own body only scrolls. */
-.batch-drawer-body .batch-picker {
-  height: calc(100dvh - 140px);
-}
 .batch-ops-sheet {
   padding: 8px 12px;
   text-align: left;
+}
+/* On the phone the sheet is the whole operation, so its one action reads as one: the confirm
+   dialog's own button size (48px, full width, 16px), not the compact row height the desktop
+   column uses. Scoped to the sheet, so the desktop panel keeps its original size. */
+.batch-ops-sheet .batch-start-btn {
+  display: block;
+  width: 100%;
+  height: 48px;
+  margin: 8px 0 4px;
+  font-size: 16px;
+  border-radius: 6px;
+}
+/* The operation picker leads the sheet, so it takes the same size as the button below it — the
+   single-cell table it sits in is a layout leftover, so it gets stretched too (.favtag-btn's own
+   25px/10pt/3px-radius would otherwise win on the select). */
+.batch-ops-sheet .batch-operation-table,
+.batch-ops-sheet .batch-operation-table > tbody > tr > td {
+  width: 100%;
+  padding: 0;
+}
+/* A one-cell table still carries the default 2px cell spacing, which put the select 4px in from
+   the button below it — the visible mismatch. */
+.batch-ops-sheet .batch-operation-table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+.batch-ops-sheet .batch-operation-select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: 48px;
+  margin: 0 0 8px;
+  padding: 0 10px;
+  font-size: 16px;
+  border-radius: 6px;
+}
+
+/* Backup page (`pages/Settings/Backup.tsx`) — the import-rollback snapshot table at the top is the
+ * last record table left; the snapshot/export lists below it are card grids (`.backup-card-*`).
+ *
+ * Wide: an aligned grid, where each record's cells are the grid's own children (`display: contents`
+ * on the row wrapper, so columns still line up across records without a real `<table>`). The grid
+ * is `fit-content` and the wrapper scrolls, because a snapshot name next to a full contents summary
+ * can exceed the viewport well above the phone breakpoint too.
+ *
+ * Narrow (≤640px): every record becomes a stacked block instead, so no row can widen the page.
+ * That is the actual fix for the phone report — the import-snapshot table was four `auto` columns
+ * at `fit-content`, so a timestamp plus contents summary pushed the whole page past the viewport
+ * and the left-hand text got clipped. Only `currentColor` is used for the row divider, so all five
+ * themes keep their own text colour. */
+.backup-records-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.backup-records {
+  display: grid;
+  column-gap: 20px;
+  row-gap: 4px;
+  align-items: center;
+  margin: 0 auto;
+  width: fit-content;
+  text-align: left;
+}
+
+.backup-records--import-snapshots {
+  grid-template-columns: auto minmax(0, 28em) auto;
+}
+
+.backup-records-head,
+.backup-records-row {
+  display: contents;
+}
+
+.backup-cell-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+/* specs/028 snapshot & export management (`Backup.tsx`) — the page's legacy top half stays
+ * centered; these two blocks are left-aligned, following the Settings page's own row language.
+ *
+ * One control style for every input/select/button in them: legacy `.stdinput`/`.stdbtn` each pick
+ * their own height per theme (g/ex ≈ 21px, modern 28px), so a mixed row was visibly misaligned.
+ * Only `currentColor`-derived colours are used, so all five themes keep their own palette. */
+.backup-settings {
+  max-width: 960px;
+  margin: 0 auto;
+  text-align: left;
+}
+
+/* The recycle bin's tabs and lists share the Backup page's column width. */
+.recycle-content {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.backup-block-title {
+  margin: 0 0 4px;
+  text-align: left;
+}
+
+.backup-block-subtitle {
+  margin: 18px 0 4px;
+  text-align: left;
+}
+
+.backup-block-note {
+  margin: 0 0 12px;
+  text-align: left;
+  opacity: 0.85;
+}
+
+.backup-hint {
+  margin: 8px 0 0;
+  text-align: left;
+}
+
+/* Live create-job progress: the same 8px track/25% grey as the Job console's bar, filled with the
+ * page's own text colour so every theme keeps its palette. */
+.backup-run-progress {
+  margin-top: 8px;
+}
+
+.backup-progress-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: rgba(128, 128, 128, 0.25);
+}
+
+.backup-progress-fill {
+  height: 100%;
+  background: currentColor;
+  transition: width 120ms linear;
+}
+
+.backup-run-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin: 6px 0 0;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* The percentage and the byte counts each get their own line on a phone. */
+@media (max-width: 600px) {
+  .backup-run-status {
+    flex-direction: column;
+    gap: 2px;
+  }
+}
+
+.backup-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* One compact row per group: switches together, then the two labelled controls. Every item is a
+ * 32px line so the labels and controls share a baseline; only a phone wraps them. */
+.backup-inline-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 24px;
+}
+
+.backup-inline-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 32px;
+}
+
+.backup-inline-field > .lrr-switch {
+  min-height: 32px;
+}
+
+.backup-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.backup-status {
+  margin-top: 12px;
+  text-align: left;
+}
+
+.backup-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 4px;
+}
+
+/* Size-only modifiers for the snapshot/export blocks: `.stdinput` (inputs/selects) and `.stdbtn`
+ * (buttons) keep their own theme look; these only put every control on the same 32px line. */
+.stdinput.backup-control {
+  box-sizing: border-box;
+  height: 32px;
+  margin: 0;
+  /* `.stdbtn` borders are 2px in every theme; matching the width here (style/colour still come
+   * from the theme's own `.stdinput`) keeps a mixed row visually aligned. */
+  border-width: 2px;
+}
+
+.stdbtn.backup-btn {
+  box-sizing: border-box;
+  height: 32px;
+  margin: 0;
+}
+
+/* `.stdbtn`'s own 150px floor is sized for full-width settings forms; inside a card it would put
+ * one action per row. Width is the only thing dropped here — the theme's look stays as-is. */
+/* Card actions: each button is at least as wide as its own icon + label, and whatever space is
+ * left over is split evenly. A card with five actions therefore wraps to a second row instead of
+ * clipping the longest label. */
+.backup-card-actions .stdbtn.backup-btn {
+  /* Content-sized and never the only thing growing: a card with more actions than fit wraps into
+     rows of same-size buttons instead of stretching the leftover one across the whole width. */
+  flex: 0 1 auto;
+  width: auto;
+  min-width: max-content;
+  height: 32px;
+  /* Centred content with one symmetric gap: the icon used to sit tight against the left edge and
+     push the label off-centre, and the anchor form of this button also carried an underline. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  /* 8px keeps four actions on one row inside a card at the narrowest grid width. */
+  padding: 0 8px;
+  font-size: inherit;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.backup-card-actions .stdbtn.backup-btn > .fa {
+  margin: 0;
+  font-size: 0.95em;
+  line-height: 1;
+  vertical-align: 0;
+}
+
+/* react-icons draws an `1em` SVG instead of a font glyph, so it needs the same optical size and
+ * must not be squeezed by the flex line when the label is long. */
+/* The delete action lives in the card head, right-aligned: keeping it out of the action row is what
+ * lets download/restore/pin stay on one line at the narrowest grid width. */
+.backup-card-delete {
+  margin-left: auto;
+  min-width: 32px;
+  width: 32px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9em;
+  line-height: 1;
+}
+
+.backup-card-actions .stdbtn.backup-btn > svg {
+  flex: none;
+  margin: 0;
+  font-size: 0.95em;
+}
+
+.backup-control--time,
+.stdinput.backup-control--time {
+  width: 120px;
+}
+
+.backup-control--day,
+.stdinput.backup-control--day {
+  width: 140px;
+}
+
+/* The per-schedule retention editor sits inside the summary line, so it stays a compact
+ * inline triple: label, number, unit. */
+.stdinput.backup-control--keep {
+  width: 68px;
+  height: 32px;
+  text-align: center;
+}
+
+/* Warning bullets inside a confirmation dialog (the full-restore prompt). Themed as plain text so
+ * it inherits whatever the dialog's own colour is. */
+.dialog-warning-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  list-style: disc;
+}
+
+.dialog-warning-list > li {
+  margin: 2px 0;
+}
+
+.backup-keep-editor {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Seven fixed-width cron fields: second, minute, hour, day, month, weekday, year. */
+.backup-cron-fields {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  max-width: 428px;
+  margin-top: 10px;
+}
+
+.backup-cron-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.backup-cron-field > span {
+  font-size: 0.9em;
+  opacity: 0.8;
+}
+
+.backup-control--cron,
+.stdinput.backup-control--cron {
+  width: 100%;
+}
+
+/* The plan list: one bordered row per plan, in saved order. A row is a column so the seven cron
+ * fields get the full width instead of being squeezed between the name and the preset; only the
+ * header line wraps on a phone. */
+.backup-plan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.backup-plan-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-radius: 4px;
+}
+
+.backup-plan-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* The name takes whatever the switch and the preset leave, and shrinks rather than overflowing. */
+.stdinput.backup-plan-name {
+  flex: 1 1 140px;
+  width: auto;
+  min-width: 0;
+}
+
+/* Icon-only, so it must not inherit `.stdbtn`'s 150px floor. 32px is also the touch target. */
+.stdbtn.backup-plan-action {
+  flex: none;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* A saved plan, collapsed to one line: switch + name, then its cron, its runs and its two actions.
+ * The actions never leave their line — the text beside them wraps instead. */
+.backup-plan-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  min-width: 0;
+}
+
+.backup-plan-summary-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.backup-plan-title {
+  font-weight: bold;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.backup-plan-summary-rest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  min-width: 0;
+}
+
+.backup-plan-cron {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 0.9em;
+  opacity: 0.85;
+  overflow-wrap: anywhere;
+}
+
+/* Only rendered when nothing could be said about the expression; the list row otherwise shows the
+ * sentence alone and keeps the expression in its `title`. */
+.backup-plan-cron-raw {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  opacity: 0.7;
+  overflow-wrap: anywhere;
+}
+
+/* Nothing could be put into words, so the expression is the label and keeps full size. */
+.backup-plan-cron-raw--primary {
+  font-size: 1em;
+  opacity: 1;
+}
+
+.backup-plan-run-sep {
+  opacity: 0.6;
+}
+
+.backup-plan-run {
+  font-size: 0.9em;
+  opacity: 0.85;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.backup-plan-actions {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  margin-left: auto;
+}
+
+.backup-plan-actions--edit {
+  justify-content: flex-end;
+}
+
+/* Two named buttons per row rather than 150px-wide ones. */
+.backup-plan-actions--edit .stdbtn {
+  min-width: 0;
+  height: 32px;
+  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+/* 14px rather than the inherited ~13px: a lone glyph in a 32px target reads too small. */
+.stdbtn.backup-plan-action > svg,
+.backup-plan-actions--edit .stdbtn > svg {
+  flex: none;
+  font-size: 14px;
+}
+
+/* A phone stacks the row: switch + name, then the cron/runs line with both actions beside it. */
+@media (max-width: 700px) {
+  .backup-plan-summary {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .backup-plan-summary-main {
+    flex: none;
+  }
+
+  .backup-plan-summary-rest {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+}
+
+/* One chip per common shape. Selection reuses the theme's own `.queue-tab-active` accent, so no
+   colour is introduced here; the resting chip is the theme's own `.stdbtn`, dimmed like a tab. */
+.backup-preset-label {
+  display: block;
+  margin: 8px 0 4px;
+  font-size: 0.9em;
+  opacity: 0.8;
+}
+
+.backup-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.stdbtn.backup-preset {
+  box-sizing: border-box;
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 0;
+  height: 32px;
+  min-height: 32px;
+  margin: 0;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.9em;
+  opacity: 0.6;
+}
+
+.stdbtn.backup-preset:hover,
+.stdbtn.backup-preset.queue-tab-active {
+  opacity: 1;
+}
+
+/* The themes repaint a focused `.stdbtn` (g.css fills it gold); the active chip already carries the
+   selection accent, so focusing must not change it. Mirrors the queue tabs' own override. */
+.stdbtn.backup-preset:focus,
+.stdbtn.backup-preset:focus-visible {
+  outline: none;
+  background: transparent;
+  color: inherit;
+  border-color: currentColor;
+}
+
+/* The edit form's own rendering of the draft: sentence first, expression beside it for proof. */
+.backup-plan-sentence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin: 6px 0 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.backup-plan-sentence-sep {
+  opacity: 0.6;
+}
+
+.backup-plan-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  text-align: left;
+  opacity: 0.85;
+}
+
+/* Validation text keeps the row's size but not its faded colour. */
+.backup-plan-error {
+  opacity: 1;
+}
+
+/* One group per plan: a heading, then that plan's own card grid. */
+.backup-group {
+  margin-top: 20px;
+  min-width: 0;
+}
+
+.backup-group-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 0;
+  text-align: left;
+}
+
+.backup-group-next {
+  font-weight: normal;
+  opacity: 0.8;
+}
+
+/* The heading already separates the grids, so the first one needs no extra top gap. */
+.backup-group .backup-card-grid {
+  margin-top: 10px;
+}
+
+.backup-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 12px;
+  text-align: left;
+  opacity: 0.85;
+}
+
+/* Loading and the empty states are the only centered text in these blocks. */
+.backup-state {
+  margin: 16px 0;
+  text-align: center;
+  opacity: 0.75;
+}
+
+.backup-error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 4px;
+}
+
+.backup-error-title {
+  margin: 0;
+  font-weight: 700;
+}
+
+.backup-error details {
+  margin-top: 6px;
+}
+
+.backup-error summary {
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.backup-error-detail {
+  max-width: 100%;
+  margin: 6px 0 0;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.9em;
+}
+
+/* Automatic snapshots and exports are cards rather than record tables: `auto-fill` with a 260px
+ * minimum collapses to a single column on a phone, so no horizontal scroll container is needed and
+ * no card can widen the page. */
+.backup-card-grid {
+  display: grid;
+  /* 280px is the narrowest card that still fits the three actions (restore / download / pin) on one
+     row once "unpin" makes the label longer; below that the buttons would wrap on desktop only. */
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+  align-items: stretch;
+}
+
+.backup-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-radius: 4px;
+  text-align: left;
+}
+
+.backup-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.backup-card-name {
+  flex: 1 1 100%;
+  min-width: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.backup-card-badge {
+  flex: none;
+  padding: 0 8px;
+  font-size: 0.9em;
+  line-height: 1.7;
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  border-radius: 999px;
+}
+
+.backup-card-badge--pinned {
+  /* No auto margin: the card's delete button owns the "push right" role now, and two auto margins
+     would split the free space and strand this pill in the middle of the head row. */
+  /* The pin sits in the badge too now, so the pill's own line box cannot be what sets its height:
+     `inline-flex` + a gap keeps the glyph and the label on one centred line. */
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* `1em` SVG inside `line-height: 1.7` would grow the pill, so it is drawn slightly below the
+ * label's size and the line box keeps its height. */
+.backup-card-badge--pinned > svg {
+  flex: none;
+  font-size: 0.85em;
+}
+
+/* CJK glyphs sit high inside their line box (the font's ascent is much larger than its descent), so
+ * a centred line box leaves the label's ink ~1px above the pin's. Nudged to match the icon. */
+.backup-card-badge-label {
+  position: relative;
+  top: 0.5px;
+}
+
+/* The alias row: one clamped line of text plus its pencil, or a muted "add a note" affordance. */
+/* The note row keeps the same height whether it holds a note or the "add" affordance, so the
+ * "N 分钟前 · 大小 · 原因" line below lines up across a grid of cards. */
+.backup-note {
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 2px;
+}
+
+.backup-note--editing {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.backup-note-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Two lines at most; the full text stays available through `title`. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* An existing note: the text plus a small inline pencil, the whole row a click target. A bordered
+ * square button next to two lines of text read as a third action in the card. */
+.backup-note-view--empty {
+  opacity: 0.55;
+}
+
+.backup-note-view {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.backup-note-view:hover .backup-note-text,
+.backup-note-view:focus-visible .backup-note-text {
+  text-decoration: underline;
+}
+
+/* Inline, immediately after the last character — a separate flex item would sit at the end of the
+ * block instead of following the text, which reads as a stray icon on its own line. */
+.backup-note-pen {
+  display: inline;
+  vertical-align: -1px;
+  margin-left: 5px;
+  font-size: 11px;
+  opacity: 0.65;
+}
+
+/* Editing happens in place: no border, no background, the same font and metrics as the note text,
+ * so the row only differs by a caret and an underline while it is being edited. */
+.backup-note-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid currentColor;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+}
+
+.backup-note-input:focus,
+.backup-note-input:focus-visible {
+  outline: none;
+  border-bottom-color: currentColor;
+  box-shadow: none;
+}
+
+.backup-note-error {
+  flex: 1 1 100%;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.backup-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  /* A CJK run builds a taller inline box than the digits and Latin beside it, so with flex's
+     default stretch each fragment got its own baseline and the Chinese dropped a couple of pixels.
+     One explicit line-height plus baseline alignment keeps all three on the same line. */
+  align-items: baseline;
+  line-height: 1.5;
+  gap: 2px 8px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+.backup-card-meta > span + span::before {
+  content: "·";
+  margin-right: 8px;
+  opacity: 0.7;
+}
+
+.backup-card-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  /* Same reason as `.backup-card-meta`: a CJK label and a numeric value build different inline
+     boxes, so without a shared baseline and line-height the value sits a pixel or two high. */
+  align-items: baseline;
+  line-height: 1.5;
+  gap: 2px 12px;
+  margin: 0;
+}
+
+.backup-card-fact {
+  display: contents;
+}
+
+.backup-card-facts dt {
+  opacity: 0.75;
+}
+
+.backup-card-facts dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.backup-card-summary-missing {
+  opacity: 0.6;
+}
+
+.backup-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  row-gap: 8px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+
+/* `ImportConflictExample` sits inside a radio item's `inline-flex` label, which makes its text span
+ * a flex item: the flex item's automatic minimum size is the sample's min-content width, so the
+ * sample would widen the page no matter how the sample itself scrolls. Zeroing it only where this
+ * wrapper is present keeps the fix scoped to that one usage. */
+.ido label:has(.backup-records-scroll),
+.ido label span:has(.backup-records-scroll) {
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .backup-records {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    gap: 0;
+  }
+
+  /* The column headers only describe the grid, so they go with it. */
+  .backup-records-head {
+    display: none;
+  }
+
+  .backup-records-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 2px 10px;
+    padding: 8px 0;
+  }
+
+  .backup-records-row + .backup-records-row {
+    border-top: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  }
+
+  /* The contents summary takes its own line instead of squeezing the timestamp off the left
+   * edge; unbreakable text breaks rather than overflowing. */
+  .backup-cell-summary {
+    flex: 1 0 100%;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .backup-cell-actions {
+    order: 1;
+    flex-wrap: wrap;
+    justify-content: center;
+    white-space: normal;
+  }
+}
+
+/* Resource monitor page (`apps/frontend/src/pages/Resources/`). Layout only — every colour comes
+ * from the active theme file's `.resources-*` rules, and borders use `currentColor` so they follow
+ * the theme's text colour rather than pinning one. */
+.resources-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 4px 0 14px;
+}
+
+.resources-status {
+  font-weight: bold;
+}
+
+.resources-export,
+.resources-intervals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Wide screens get as many cards as fit; a phone gets one column, which is where the accordion's
+ * two-column squeeze used to break labels onto three lines. */
+.resources-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.resources-card {
+  min-width: 0;
+  padding: 8px 10px 10px;
+  border: 1px solid currentColor;
+}
+
+.resources-card-title {
+  margin: 0 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  font-size: 0.95rem;
+  font-weight: bold;
+  text-align: center;
+}
+
+.resources-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+/* The label column shrinks to its text and the value column takes the rest: a fixed 50/50 split
+ * wrapped "174 / 524288 · 0.0%" onto three lines while the label had room to spare. */
+.resources-table th {
+  width: 1%;
+  padding: 3px 10px 3px 0;
+  font-weight: normal;
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.resources-table td {
+  padding: 3px 0;
+  text-align: right;
+  vertical-align: top;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.resources-table td.resources-spark {
+  width: 84px;
+  padding-left: 6px;
+  text-align: right;
+  vertical-align: middle;
+}
+
+.resources-spark svg {
+  display: block;
+  margin-left: auto;
+}
+
+/* A card with no sparkline anywhere keeps that column for nothing but blank space; drop it so the
+ * numbers can use the width. `:has` on the card is enough — the column exists or it does not. */
+.resources-card:not(:has(.resources-spark:not(:empty))) .resources-table .resources-spark {
+  display: none;
+}
+
+.resources-hint {
+  opacity: 0.6;
+}
+
+/* An explanatory line under a table row is not another value: smaller, dimmed and left-aligned so
+ * the eye can skip it while scanning the numbers on the right. */
+.resources-note td {
+  padding: 2px 0 6px;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  opacity: 0.6;
+  text-align: left;
+}
+
+/* The explanation hangs off a small question-mark icon: it reads as a control, where a bare " ?"
+ * inside the label read as debris. */
+.resources-hint-icon {
+  opacity: 0.45;
+  font-size: 0.8em;
+  vertical-align: middle;
+  cursor: help;
+}
+
+.resources-tile-line {
+  display: block;
+}
+
+.resources-waiting {
+  padding: 24px 0;
+  opacity: 0.7;
+}
+
+@media (max-width: 560px) {
+  /* One line of status, one row of two export buttons, one row of three intervals — the wrapped
+   * flex left "5 秒" alone on a third line. */
+  .resources-head {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 8px;
+  }
+
+  .resources-status {
+    grid-column: 1 / -1;
+  }
+
+  .resources-export {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .resources-intervals {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  /* `.stdbtn` carries its own side padding, which made the third interval button wider than its
+   * 1fr track and pushed it past the page edge. */
+  .resources-head .stdbtn {
+    min-width: 0;
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+
+  .resources-table {
+    font-size: 0.8rem;
+  }
+
+  .resources-table td.resources-spark {
+    width: 64px;
+  }
+}
+
+/* The four readings a non-expert opens the page for. Colours come from the theme files'
+ * `.resources-ok/warn/bad` rules; this block only lays out the boxes and the meter. */
+.resources-overview {
+  margin: 10px 0 14px;
+}
+
+.resources-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.resources-tile {
+  border: 1px solid currentColor;
+  padding: 8px 10px 10px;
+}
+
+.resources-tile-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.resources-tile-label {
+  opacity: 0.85;
+}
+
+.resources-tile-level {
+  font-weight: bold;
+}
+
+.resources-tile-value {
+  margin: 4px 0 6px;
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.resources-meter {
+  display: block;
+  height: 6px;
+  background: color-mix(in srgb, currentColor 20%, transparent);
+}
+
+.resources-meter-fill {
+  display: block;
+  height: 100%;
+  background: currentColor;
+}
+
+.resources-tile-hint {
+  margin: 6px 0 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  opacity: 0.7;
+}
+
+.resources-legend {
+  margin: 8px 0 0;
+  font-size: 0.75rem;
+  opacity: 0.75;
+}
+
+.resources-dot {
+  display: inline-block;
+  width: 0.55em;
+  height: 0.55em;
+  margin-right: 0.4em;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: baseline;
+}
+
+@media (max-width: 560px) {
+  .resources-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .resources-tile-value {
+    font-size: 0.95rem;
+  }
+}
+
+/* The upload page's drop target. Same visual language as `.shortcut-sheet-shade` above — a dark
+ * scrim with a light panel — rather than a per-theme colour: the sheet is already theme-independent,
+ * and a wash mixed from `currentColor` let the queue rows behind it show through the label. */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 8999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* An indicator only: the drop must reach the window handler underneath. */
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.55);
+  /* The whole viewport is the target, so the frame sits at the screen edge, not around the panel. */
+  outline: 3px dashed rgba(255, 255, 255, 0.7);
+  outline-offset: -8px;
+}
+
+.drop-overlay-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 22px 32px;
+  border: 3px dashed rgba(255, 255, 255, 0.7);
+  border-radius: 12px;
+  background: rgba(28, 28, 28, 0.92);
+  color: #f2f2f2;
+  font-size: 1.1rem;
+  font-weight: bold;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+}
+
+.drop-overlay-box i {
+  font-size: 2.5rem;
+}
+
+.drop-overlay-hint {
+  font-size: 0.85rem;
+  font-weight: normal;
+  opacity: 0.75;
+}
+
+.split-progress {
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+.split-progress-warning {
+  margin-top: 6px;
+  text-align: center;
+  font-weight: 600;
+}
+
+/* The category row on the upload page: the trigger is a `<button>`, whose baseline is not the
+ * text's, so inline layout left it sitting a few pixels below the label and the "+" beside it.
+ * A flex row with `align-items: center` lines all three up. */
+.upload-category-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* `.favtag-btn` carries a 4px top margin for inline layout's baseline nudge; in this flex row it
+   only pushes the trigger below the centred line. */
+.upload-category-row > .favtag-btn {
+  margin-top: 0;
 }

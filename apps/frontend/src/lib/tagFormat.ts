@@ -130,3 +130,30 @@ export function getTagSearchURL(namespace: string, tag: string, timezone?: strin
   const query = buildSearchToken(namespace, searchValue, !isTimestamp)
   return `/?q=${encodeURIComponent(query)}`
 }
+
+/** Namespaces the archive editor's "clear tags" keeps: where the archive came from and when. */
+export const PROTECTED_TAG_NAMESPACES = ["date_added", "source", "timestamp"]
+
+/** `tags` with every tag removed except those in `keep`'s namespaces; `tags` itself (same string)
+ * when nothing would be removed. */
+export function clearTagsExcept(tags: string, keep: readonly string[]): string {
+  const all = tags
+    .split(/,\s?/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+  const kept = all.filter((tag) => {
+    const colon = tag.indexOf(":")
+    return colon > 0 && keep.includes(tag.slice(0, colon).trim().toLowerCase())
+  })
+  return kept.length === all.length ? tags : kept.join(", ")
+}
+
+/** The values of every `source:` tag in a comma-joined tag string. */
+export function sourceTagValues(tags: string): string[] {
+  return tags
+    .split(/,\s?/)
+    .map((t) => t.trim())
+    .filter((t) => t.toLowerCase().startsWith("source:"))
+    .map((t) => t.slice("source:".length).trim())
+    .filter(Boolean)
+}

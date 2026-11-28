@@ -5,9 +5,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-lanrurugi-storage = { workspace = true }
 lanrurugi-core = { workspace = true }
-lanrurugi-scanner = { workspace = true }
+# Only the criterion benches (`--features bench`) use these three.
+lanrurugi-storage = { workspace = true, optional = true }
+lanrurugi-scanner = { workspace = true, optional = true }
+lanrurugi-plugin = { workspace = true, optional = true }
 rayon = { workspace = true }
 image = { workspace = true }
 zip = { workspace = true }
@@ -17,7 +19,6 @@ serde_json = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
-rand = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 reqwest = { workspace = true }
@@ -35,7 +36,7 @@ time = { version = "0.3", features = ["formatting"] }
 criterion = { workspace = true, features = ["async_tokio"], optional = true }
 
 [features]
-bench = ["dep:criterion"]
+bench = ["dep:criterion", "dep:lanrurugi-storage", "dep:lanrurugi-scanner", "dep:lanrurugi-plugin"]
 
 [dev-dependencies]
 tempfile = "3"
@@ -51,5 +52,11 @@ path = "src/bin/compare.rs"
 [[bench]]
 name = "microbenches"
 path = "benches/benches.rs"
+harness = false
+required-features = ["bench"]
+
+[[bench]]
+name = "plugin_discovery"
+path = "benches/plugin_discovery.rs"
 harness = false
 required-features = ["bench"]

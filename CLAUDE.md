@@ -1,12 +1,17 @@
 <!-- SPECKIT START -->
-Seventeen feature specs exist. Status below is read from each spec's own `tasks.md` checkbox counts,
+Twenty-nine feature specs exist. Status below is read from each spec's own `tasks.md` checkbox counts,
 not from memory — a spec's header status is worth re-checking against its task list whenever this
-block is regenerated, because it has gone stale before.
+block is regenerated, because it has gone stale before. Counts last re-read 2026-11-24 (029 added the same day); `docs`-only
+and bookkeeping churn moves them, so treat a specific figure as a hint, not a fact.
 
 - **Implemented (all tasks complete)**: `001-lanrurugi-full-rewrite` (96/96), `002-job-console`
   (23/23), `003-ui-test-automation` (52/52), `005-download-plugin-progress` (41/41),
-  `006-ai-plugin-wizard` (53/53), `011-api-docs-site` (this feature's own list),
-  `013-ebook-formats` (31/31).
+  `006-ai-plugin-wizard` (53/53), `013-ebook-formats` (31/31), `015-native-platforms` (22/22),
+  `016-tankoubon-grouping-harness` (30/30), `018-error-telemetry-feedback` (70/70 — its 70 boxes
+  were ticked in one retrospective pass on 2026-11-24; its Implementation Record says what was
+  actually built and what was not verified), `020-hash-named-library` (30/30),
+  `023-share-crate-extraction` (22/22), `025-ingest-visibility-gate` (31/31),
+  `028-deletion-safety-net` (94/94).
 - **Code implemented, some tasks outstanding** — in every case the remainder is real-deployment
   or real-asset verification rather than unbuilt code: `004-ocr-manga-translation` (70/76,
   awaiting the `quickstart.md` scenarios that need real OCR model files),
@@ -17,7 +22,12 @@ block is regenerated, because it has gone stale before.
   already worked; its one open task is the repo-wide `mise run clippy` gate, blocked by
   pre-existing `result_large_err` warnings in crates this feature never touched. Its `tasks.md`
   Implementation Record states exactly what was and was not verified — notably that the
-  reader-facing HTTP end of its quickstart scenario 4 and all of scenario 5 were not exercised).
+  reader-facing HTTP end of its quickstart scenario 4 and all of scenario 5 were not exercised),
+  `011-api-docs-site` (46/50), `019-recycle-bin-safety-password` (43/49),
+  `021-direct-download-domain` (14/17), `022-share-network-hardening` (31/40 —
+  T025's FreeBSD `setfib` platform routing is the one genuinely unbuilt item, no `setfib`
+  anywhere in the tree; the rest is verification), `024-duplicate-review` (29/30),
+  `026-reading-aware-recommendations` (17/18), `027-ingest-integrity` (36/44).
 - **Code implemented, release verification outstanding**: `015-native-platforms` — native packages for
   Linux x86_64/aarch64, macOS arm64 and FreeBSD x86_64; the Linux package is verified locally in a clean
   Debian container, while macOS, FreeBSD and Linux aarch64 are only verified by
@@ -40,7 +50,44 @@ block is regenerated, because it has gone stale before.
   Record lists the network matrix (15 environments, all importing), the defects it found and fixed,
   and every departure from plan.md. `scripts/share-network-matrix.sh` / `share-traffic-check.sh`
   rerun them.
-- **Plan only, no `tasks.md` yet**: `008-subfolder-tankoubon`, `009-archive-split-suggestions`.
+- **Shipped, but no `tasks.md` ever generated**: `008-subfolder-tankoubon` (the
+  `POST /database/scripts/subfolders-to-tankoubons` script in `crates/lanrurugi-api/src/scripts.rs`
+  builds tankoubons from the library's top-level subfolders, LLM-enriched) and
+  `009-archive-split-suggestions` (`crates/lanrurugi-api/src/archive_split.rs` +
+  `/archives/{id}/split-suggestion`, `/split/execute`, `/split/stream`, `/split-tree`, the reader's
+  `TankoubonSplitModal.tsx`). Only `plan.md` exists for each, so their checkbox counts read 0 —
+  don't treat that as unbuilt work.
+- **Code implemented, deployment verification outstanding**: `029-download-ingest-latency` (33/39).
+  Per-job phase timing (`JobStatus.phases`, six-phase vocabulary in `crates/lanrurugi-core/src/jobs.rs`),
+  the queue row's three-segment readout (`apps/frontend/src/pages/Upload/queuePhases.ts`), the plugin
+  descriptor cache keyed by `mtime`+`size`+`ctime`+`inode` (so a `cp -p`-style replacement still
+  invalidates it; the 10-minute TTL is only a backstop), single-flight plus an automatic cap on
+  transient declaration processes (`worker_limit()` in `crates/lanrurugi-plugin/src/pool.rs` —
+  cores/2 clamped to 2–8; persistent per-plugin workers are deliberately never evicted, and they
+  have no idle timeout either), one lock **per plugin namespace** rather than one
+  for the whole worker table (so a plugin waiting on its site cannot delay another plugin's calls, while
+  one namespace still answers one call at a time from one process), skipping the metadata plugin whose
+  answer the queue row already carries, a `download_url` transaction with one span per phase, and the
+  `content_lock_held` timeout split in `crates/lanrurugi-scanner/src/pipeline.rs`.
+  Every unit test passes; the open tasks are the quickstart scenarios that need a real deployment
+  (T011/T020/T026/T029/T032/T035). Its `tasks.md` Implementation Record lists the four departures
+  from plan.md and the benchmark numbers behind each mechanism.
+- **Code implemented, real-deployment verification outstanding**: `030-resource-monitor` (31/31 — every
+  task ticked; the open items are the release-build timing, a GPU-enabled run and a real Sentry event,
+  listed in its `tasks.md` Implementation Record). A sampler that exists only while the `/resources` page
+  (`apps/frontend/src/pages/Resources/`, reachable from a Settings entry) is open
+  (`crates/lanrurugi-api/src/resources/`): `GET /api/resources` for one snapshot and
+  `GET /api/resources/stream` for an SSE feed whose first frame is a snapshot and whose later frames are
+  a ~470-byte `Sample` (it carries the overview tiles' readings too, so an open page keeps ticking). Both are **session-only** in `crates/lanrurugi-api/policy/route_policy.csv` —
+  an Admin API token and a guest visitor are refused, because the payload carries the process table and
+  Redis’s internal counters. Absent readings are `null` with a `*_unavailable` reason, never 0;
+  `memory.current` is always labelled as including page cache. Feedback bundles gained a `resources`
+  category, and `Plan.extra_files` now writes `diagnostics.json`, `config.redacted.json` and
+  `resources.json` — fixing two older defects where the first was always 0 bytes and the second was never
+  written at all. The stream paces frames with a 500 ms slack, because a 1 Hz request against a 1 Hz
+  sampler otherwise drops every other frame. GPU is opt-in (`LANRURUGI_RESOURCE_GPU=1`) because probing
+  may spawn a process, and a
+  debug build renders process names as `lanrurugi-server (debug)`.
 
 **Phase 1 — `001-lanrurugi-full-rewrite`** (build this first): plan at
 `specs/001-lanrurugi-full-rewrite/plan.md`. User Stories 1–8 — library continuity, non-merging
@@ -55,7 +102,7 @@ a build-time binary that recovers the route table by parsing `crates/lanrurugi-a
 merges it with the vendored upstream LANraragi OpenAPI document (`docs/api/legacy-openapi.yaml`,
 which supplies field-level documentation for the ~55 paths the two projects share) and hand-written
 fragments (`docs/api/sidecar/`), emitting one OpenAPI 3.1 JSON document; (b) a Starlight +
-`@scalar/starlight` documentation site under `docs/`, published from CI to Cloudflare Pages and
+`@scalar/starlight` documentation site under `apps/docs-site/` (moved out of `docs/` by #305), published from CI to Cloudflare Pages and
 shipped inside the image at `/docs` (`LANRURUGI_DOCS_DIR`) for offline reading. The route scan is
 applied *last* as the completeness authority, which makes "documented but not served" and "served but
 not documented" structurally impossible; the gates catch the residue (an unresolvable route, an
@@ -240,8 +287,8 @@ actually been run and the values shown to agree — not assumed, not eyeballed f
   `create_or_replace` is for new records and deliberate whole replacements only (constitution
   Principle III, #302). Writes/moves into library directories go through `fsutil::in_dir` (a
   concurrent prune can remove a bucket directory); the file also has a race-hunting checklist.
-- `docs/dev/release.md` — the release order (Dependabot, version bump, `dev` → `main`, tag, docs
-  republish, post-release checks).
+- `docs/dev/release.md` — the release order (Dependabot, version bump, `dev` → `main`, tag,
+  post-release checks).
 - `docs/dev/labels.md` — every issue and PR gets one `type:` label and at least one `area:` label;
   apply them when creating the issue/PR (`gh issue create --label …`, `gh pr create --label …`).
 
@@ -441,6 +488,28 @@ with no functional risk to independently verify against. (Non-UI changes — new
 flow, a new API contract — still warrant the agent's own functional verification, e.g. curling an
 endpoint or checking Redis state; this rule is specifically about *visual* polish, where "does this
 look right" is a judgment only the user watching their own screen can actually make.)
+
+## Never name a plugin in Rust — the plugin declares what it needs
+
+`crates/` must not branch on a plugin's namespace or name (`if plugin == "script/foldertocat"`,
+`info.namespace == "regexplugin"`). A plugin's identity lives in `plugins/`, not in the host: a
+hardcoded name means a third-party plugin cannot have the same capability and a renamed or
+reimplementation of that plugin silently loses it. Where the host has to do work *for* a plugin —
+compute an argument it cannot reach from the sandbox, apply a result it cannot write itself, run it
+ahead of its siblings — the plugin asks for that in `pluginInfo()`:
+
+| field | meaning |
+|---|---|
+| `host_arguments` | names of host-computed arguments to put in `args` (`other_archive_tags`, `archives`, `library_path`, `archive_id_by_path`) |
+| `host_results` | parts of its result the host writes back (`tag_updates`, `category_changes`) |
+| `run_order` | position in an auto-run chain, highest first — **not** the user-draggable `priority` the Plugins page stores in Redis |
+
+Anything undeclared costs nothing (a whole-library tag scan is not free, so it only happens when
+asked for). An unknown name in either list is `warn`-logged and skipped, never fatal. Adding a new
+host argument or effect means extending `host_argument`/`apply_host_results` in
+`crates/lanrurugi-api/src/plugins.rs` **and** the SDK's JSDoc, then bumping `SDK_VERSION` in
+`crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts` (minor for an optional addition) and running
+`mise run docs-sdk`.
 
 ## Custom colors must be theme-aware, never a hardcoded value
 

@@ -51,6 +51,8 @@ enum Command {
     EvalGrouping(lanrurugi_server::cli::eval_grouping::EvalGroupingArgs),
     /// Run a sharing rendezvous/relay node for other instances, with no library and no Redis.
     ShareNode(lanrurugi_server::cli::share_node::ShareNodeArgs),
+    /// List full backups, or restore the whole database from one without the HTTP server running.
+    Snapshots(lanrurugi_server::cli::snapshots::SnapshotsArgs),
     /// Clear the safety password (`specs/019`) and any verification lockout. For an operator who
     /// cannot log in; never accepts a password argument.
     ResetSafetyPassword(ResetSafetyPasswordArgs),
@@ -243,6 +245,9 @@ fn main() -> anyhow::Result<()> {
     let from_install_prefix = lanrurugi_server::install_layout::apply();
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        // The default 2 MiB overflowed in a debug build while a finished download was catalogued
+        // (start_download → ingest → catalogue_new_archive); unused stack is only reserved, not used.
+        .thread_stack_size(8 * 1024 * 1024)
         .build()?
         .block_on(run(from_install_prefix))
 }
@@ -277,6 +282,7 @@ async fn run(from_install_prefix: Vec<(&'static str, PathBuf)>) -> anyhow::Resul
         Command::ResetSafetyPassword(args) => reset_safety_password(args).await,
         Command::EvalGrouping(args) => lanrurugi_server::cli::eval_grouping::run(args).await,
         Command::ShareNode(args) => lanrurugi_server::cli::share_node::run(args).await,
+        Command::Snapshots(args) => lanrurugi_server::cli::snapshots::run(args).await,
         Command::TelemetryIngest(args) => lanrurugi_server::cli::telemetry_ingest::run(args).await,
         Command::Formats(args) => {
             tokio::task::spawn_blocking(move || lanrurugi_server::cli::formats::run(args)).await?
@@ -324,6 +330,11 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // (including the Rust side's own `plugins_dir.join(...)` in `lanrurugi-plugin::pool::Worker`)
     // rather than requiring every invocation of this binary to remember to pass an absolute path.
     let plugins_dir = std::fs::canonicalize(&args.plugins_dir)?;
+
+    // A plugin's write grant is scoped to `<library>/_byname` (see `lanrurugi_plugin::permissions`),
+    // so the library has to be known before the first worker spawns.
+    lanrurugi_plugin::set_library_dir(&args.library_path);
+    lanrurugi_plugin::set_scratch_dir(&args.temp_dir);
 
     let dispatcher_path = args.temp_dir.join("dispatcher.ts");
     std::fs::write(&dispatcher_path, lanrurugi_plugin::DISPATCHER_SCRIPT)?;
@@ -388,15 +399,14 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             .await
             .ok()
             .flatten();
-        if stored.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) {
-            if let Ok(env_key) = std::env::var("DEEPSEEK_API_KEY") {
-                if !env_key.trim().is_empty() {
-                    let _: () = conn
-                        .hset(lanrurugi_storage::keys::CONFIG_KEY, "llm_api_key", &env_key)
-                        .await?;
-                    tracing::info!("llm_api_key auto-persisted from DEEPSEEK_API_KEY env var");
-                }
-            }
+        if stored.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true)
+            && let Ok(env_key) = std::env::var("DEEPSEEK_API_KEY")
+            && !env_key.trim().is_empty()
+        {
+            let _: () = conn
+                .hset(lanrurugi_storage::keys::CONFIG_KEY, "llm_api_key", &env_key)
+                .await?;
+            tracing::info!("llm_api_key auto-persisted from DEEPSEEK_API_KEY env var");
         }
     }
 
@@ -516,6 +526,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     lanrurugi_api::authz::Authz::get().await;
 
     let state = AppState {
+        restore_gate: lanrurugi_core::restore_gate::RestoreGate::new(),
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         redis: redis.clone(),
         repos: repos.clone(),
@@ -610,6 +621,30 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 "recycle bin swept at startup"
             );
         }
+        if report.journal_purged + report.snapshots_removed > 0 {
+            tracing::info!(
+                journal_purged = report.journal_purged,
+                snapshots_removed = report.snapshots_removed,
+                "deletion safety net swept at startup"
+            );
+        }
+    }
+    // specs/028: the configurable snapshot schedule, on its own five-second tick — the crontab it
+    // evaluates has second granularity. The task is spawned (not awaited) so a first-run full backup
+    // of a large library never delays the server from accepting connections, and an interval's
+    // first tick is immediate — which is also the catch-up after downtime (see
+    // `snapshots::schedule_tick`). Settings are re-read on every tick, so a saved change applies
+    // within seconds instead of at the next restart.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                interval.tick().await;
+                lanrurugi_api::snapshots::schedule_tick(&state).await;
+            }
+        });
     }
     {
         let state = state.clone();
@@ -618,6 +653,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             interval.tick().await; // consume the immediate first tick; startup already swept
             loop {
                 interval.tick().await;
+                // Retention only — snapshot *generation* lives on the five-second schedule tick above.
                 lanrurugi_api::recycle::sweep(&state).await;
             }
         });
@@ -868,14 +904,13 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 };
                 match job.state {
                     lanrurugi_core::jobs::JobState::Finished => {
-                        if normalizer_stale {
-                            if let Err(e) = state
+                        if normalizer_stale
+                            && let Err(e) = state
                                 .recommend_cache
                                 .put_normalizer_version(rule_revision)
                                 .await
-                            {
-                                tracing::warn!(error = %e, "failed to persist recommend-cache normalizer version");
-                            }
+                        {
+                            tracing::warn!(error = %e, "failed to persist recommend-cache normalizer version");
                         }
                         if let Err(e) = state
                             .recommend_cache
@@ -944,7 +979,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                         // happens inside this call itself (once, after every enabled plugin has
                         // run) — see its own doc comment.
                         lanrurugi_api::plugins::run_enabled_metadata_plugins_on_archive(
-                            &state, &id,
+                            &state, &id, None,
                         )
                         .await;
 
@@ -1108,6 +1143,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             new_archive_tx: Some(new_archive_tx.clone()),
             locks: filename_locks.clone(),
             jobs: jobs.clone(),
+            restore_gate: Some(state.restore_gate.clone()),
         };
         // No catch-up here: the startup scan below covers what is already on disk.
         if let Err(e) = scanner.start(config, false).await {
@@ -1139,6 +1175,8 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let thumb_dir = args.thumb_dir.clone();
         let new_archive_tx = new_archive_tx.clone();
         let equivalence = state.equivalence.clone();
+        let restore_gate = state.restore_gate.clone();
+        let state = state.clone();
         tokio::spawn(async move {
             jobs.mark_active(&job_id).await;
             let scan_summary = lanrurugi_scanner::full_scan::full_scan(
@@ -1149,8 +1187,17 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 &jobs,
                 &job_id,
                 Some(new_archive_tx),
+                Some(&restore_gate),
             )
             .await;
+            if scan_summary.aborted {
+                jobs.fail(
+                    &job_id,
+                    lanrurugi_core::restore_gate::RESTORE_ABORTED_MESSAGE,
+                )
+                .await;
+                return;
+            }
             tracing::info!(
                 scanned = scan_summary.scanned,
                 already_known = scan_summary.already_known,
@@ -1158,10 +1205,54 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 errors = scan_summary.errors,
                 "startup scan complete"
             );
+            let diagnostics = scan_summary.diagnostics_json();
             lanrurugi_core::memory::release_free_heap_soon("startup scan finished");
             // Same pools as the scan above — this is background work, not a request.
             let heal_summary =
                 lanrurugi_scanner::full_scan::heal_pagecounts(&redis.scanner.archives()).await;
+            // An upgrade can change how a value folds — 1.0.0-beta.8 collapsed small kana, which
+            // bumped `RULE_REVISION` — and a stale fingerprint leaves the engine in its
+            // legacy-fallback double-read indefinitely: results stay correct, but every query still
+            // pays for the old indexes and the new equivalence never reaches existing archives. The
+            // rebuild runs here rather than on the HTTP path because it is the whole library, and
+            // after the scan above so archives it just catalogued are included.
+            let fingerprint_stale = !lanrurugi_search::indexer::fold_fingerprint_matches(
+                &state.redis.search,
+                &state.equivalence,
+            )
+            .await
+            .unwrap_or(false);
+            let search_index_rebuild = if fingerprint_stale {
+                match lanrurugi_search::indexer::rebuild_folded_indexes(
+                    &state.repos.archives,
+                    &state.repos.groupings,
+                    &state.redis.search,
+                    &state.equivalence,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        if let Err(e) = lanrurugi_search::indexer::set_fold_fingerprint(
+                            &state.redis.search,
+                            &state.equivalence.fingerprint(),
+                        )
+                        .await
+                        {
+                            tracing::warn!(error = %e, "failed to record fold fingerprint after the automatic rebuild");
+                        }
+                        tracing::info!(
+                            "stale search-index fingerprint: rebuilt the folded indexes"
+                        );
+                        serde_json::json!({ "rebuilt": true })
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "automatic search-index rebuild failed");
+                        serde_json::json!({ "rebuilt": false, "error": e.to_string() })
+                    }
+                }
+            } else {
+                serde_json::json!({ "rebuilt": false, "reason": "fingerprint current" })
+            };
             jobs.finish(
                 &job_id,
                 serde_json::json!({
@@ -1169,6 +1260,13 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     "already_known": scan_summary.already_known,
                     "newly_catalogued": scan_summary.catalogued,
                     "errors": scan_summary.errors,
+                    "scanned_files": scan_summary.scanned,
+                    "records_total": scan_summary.records_total,
+                    "overlap_percent": scan_summary.overlap_percent,
+                    "library_source": scan_summary.library_source,
+                    "library_source_known": scan_summary.library_source_known,
+                    "diagnostics": diagnostics,
+                    "search_index_rebuild": search_index_rebuild,
                     "pagecount_heal": {
                         "checked": heal_summary.checked,
                         "healed": heal_summary.healed,
@@ -1186,6 +1284,15 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // #332: the memory tier sets both image pools' limits (it logs them).
     lanrurugi_api::memory_mode::apply(&state).await;
     lanrurugi_core::memory::log_snapshot("startup");
+    // A duplicate scan a restart cut short starts again on its own, a minute in so it does not
+    // compete with the startup library scan for the disk.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            lanrurugi_api::duplicates::scan::resume_interrupted(&state).await;
+        });
+    }
     let app = app::build_app(state, args.static_dir, args.docs_dir);
     let listener = match args.bind.parse::<std::net::SocketAddr>() {
         Ok(addr) => tokio::net::TcpListener::from_std(lanrurugi_server::listen::bind(addr)?)?,
@@ -1431,6 +1538,17 @@ async fn repair_zombie_archives(state: &AppState) {
     for (mut archive, file_exists) in checked {
         let stale = archive.file.is_empty() || in_temp(&archive.file) || !file_exists;
         if !stale {
+            // The file is back: the restored-missing exemption has done its job.
+            if lanrurugi_api::deletions::is_restored_missing(state, archive.id.as_str()).await {
+                lanrurugi_api::deletions::clear_restored_missing(state, archive.id.as_str()).await;
+            }
+            continue;
+        }
+        // #{specs/028}: a record restored from the deletion journal is waiting for its file to come
+        // back (a not-yet-remounted library, a wrong mount that got fixed). Deleting it here would
+        // undo the restore before the operator can act, so it is exempt for the journal's window.
+        if lanrurugi_api::deletions::is_restored_missing(state, archive.id.as_str()).await {
+            kept += 1;
             continue;
         }
 
@@ -1455,15 +1573,15 @@ async fn repair_zombie_archives(state: &AppState) {
                 tracing::warn!(id = %archive.id, error = %e, "failed to save repaired archive file path");
                 continue;
             }
-            if !old_file.is_empty() {
-                if let Ok(mut conn) = state.redis.config.get().await {
-                    use deadpool_redis::redis::AsyncCommands;
-                    use lanrurugi_storage::keys::FILEMAP_KEY;
-                    let _: Result<(), _> = conn.hdel(FILEMAP_KEY, &old_file).await;
-                    let _: Result<(), _> = conn
-                        .hset(FILEMAP_KEY, &archive.file, archive.id.as_str())
-                        .await;
-                }
+            if !old_file.is_empty()
+                && let Ok(mut conn) = state.redis.config.get().await
+            {
+                use deadpool_redis::redis::AsyncCommands;
+                use lanrurugi_storage::keys::FILEMAP_KEY;
+                let _: Result<(), _> = conn.hdel(FILEMAP_KEY, &old_file).await;
+                let _: Result<(), _> = conn
+                    .hset(FILEMAP_KEY, &archive.file, archive.id.as_str())
+                    .await;
             }
             continue;
         }
@@ -1498,12 +1616,12 @@ async fn repair_zombie_archives(state: &AppState) {
         // The record is gone, so nothing can ever ask for its thumbnail again; keeping the entry
         // would just leave the id blacklisted for a future import that reuses it.
         lanrurugi_api::thumbnail_failures::clear_archive(state, archive.id.as_str()).await;
-        if !archive.file.is_empty() {
-            if let Ok(mut conn) = state.redis.config.get().await {
-                use deadpool_redis::redis::AsyncCommands;
-                use lanrurugi_storage::keys::FILEMAP_KEY;
-                let _: Result<(), _> = conn.hdel(FILEMAP_KEY, &archive.file).await;
-            }
+        if !archive.file.is_empty()
+            && let Ok(mut conn) = state.redis.config.get().await
+        {
+            use deadpool_redis::redis::AsyncCommands;
+            use lanrurugi_storage::keys::FILEMAP_KEY;
+            let _: Result<(), _> = conn.hdel(FILEMAP_KEY, &archive.file).await;
         }
     }
     if kept > 0 {
@@ -1599,6 +1717,7 @@ async fn rebuild_index(args: RebuildIndexArgs) -> anyhow::Result<()> {
         &args.thumb_dir,
         &jobs,
         &job_id,
+        None,
         None,
     )
     .await;

@@ -8,7 +8,7 @@
 # upstream repo (huyvux3005/manga109-segmentation-bubble, Apache-2.0) only publishes Ultralytics
 # `.pt` weights, no pre-exported ONNX. `dmMaze/comic-text-detector` — the other real candidate
 # researched — and the whole `manga-image-translator` ecosystem it lives in are GPL-3.0 and
-# incompatible with this project's MIT license; excluded regardless of integration cost, not
+# incompatible with this project's MIT OR Apache-2.0 license; excluded regardless of integration cost, not
 # considered further.
 #
 # The `.pt` → `.onnx` conversion is `ultralytics`'s own standard, officially-documented

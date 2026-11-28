@@ -70,9 +70,9 @@ impl LiveRateResolver {
 
 impl RateResolver for LiveRateResolver {
     fn resolve(&self, hostname: &str) -> BoxFuture<'static, Option<u64>> {
-        let gen = self.generation.load(Ordering::Relaxed);
+        let generation_seen = self.generation.load(Ordering::Relaxed);
         let cached = self.cache.lock().unwrap();
-        if cached.generation == gen {
+        if cached.generation == generation_seen {
             // Steady state: nothing changed since the last re-resolution — hand back the cached
             // value with no Redis read and no allocation beyond the returned future.
             let rate = cached.rate;
@@ -90,7 +90,7 @@ impl RateResolver for LiveRateResolver {
             let rules = resolve_domain_rules(&this.declared, override_.as_ref());
             let rate = super::domain_rules::resolve(&rules, &hostname).max_bytes_per_sec;
             *this.cache.lock().unwrap() = CachedRate {
-                generation: gen,
+                generation: generation_seen,
                 rate,
             };
             rate

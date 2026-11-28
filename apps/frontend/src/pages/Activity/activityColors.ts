@@ -31,7 +31,8 @@ export function actionTypeColor(actionType: string): ChipColor {
 }
 
 const ACTOR_KIND_COLORS: Record<string, ChipColor> = {
-  session: { bg: "#22c55e", text: "#ffffff" },
+  // Muted: nearly every row is an admin session, and a vivid fill on each one drowned the rest.
+  session: { bg: "#3e8e52", text: "#ffffff" },
   system: { bg: "#64748b", text: "#ffffff" },
   anonymous: { bg: "#9ca3af", text: "#1f2937" },
 }
@@ -64,8 +65,9 @@ export function actorKindColor(kind: string, tokenId?: string): ChipColor {
   return ACTOR_KIND_COLORS[kind] ?? FALLBACK_NAMESPACE_COLOR
 }
 
+/** Success is the normal case, so it is only tinted; a failure keeps the solid fill and stands out. */
 const OUTCOME_COLORS: Record<string, ChipColor> = {
-  success: { bg: "#22c55e", text: "#ffffff" },
+  success: { bg: "rgba(62, 142, 82, 0.18)", text: "var(--activity-success-text, #2f8a4a)" },
   failure: { bg: "#dc2626", text: "#ffffff" },
 }
 

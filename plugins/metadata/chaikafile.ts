@@ -15,7 +15,7 @@ export function pluginInfo() {
       { name: "param2", description: "Add tags without a namespace to the 'other:' namespace instead, mirroring E-H's behavior of namespacing everything", required: false, type: "bool" },
       { name: "param3", description: "Add a custom 'source:' tag to your archive. Example: chaika. Will NOT add a tag if blank", required: false, type: "string" },
     ],
-    declared_permissions: { net: [], read: false, write: true },
+    declared_permissions: { net: [], read: false, write: false },
     name: "Chaika.moe api.json",
     author: "thelastfantasy",
     description: "Collects metadata embedded into your archives as Chaika-style api.json files",

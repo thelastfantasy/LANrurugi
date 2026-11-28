@@ -56,10 +56,10 @@ fn candidate_dirs() -> Vec<PathBuf> {
     }
 
     // Next to the running binary — how a locally built `cargo run` finds a dev-fetched model.
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            candidates.push(exe_dir.join("models").join("manga-ocr"));
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        candidates.push(exe_dir.join("models").join("manga-ocr"));
     }
 
     candidates.push(PathBuf::from(SYSTEM_MODEL_DIR));

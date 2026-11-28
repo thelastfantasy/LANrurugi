@@ -421,10 +421,11 @@ pub fn merge_lines(
             // own three boxes and dropped the "直属の" tail of "本日より三皇女殿下直属の" —
             // caught from a real render the same day). Overlapping bubbles are treated as "one
             // physical bubble the model over-segmented", not as a boundary to enforce.
-            if let (Some(mi), Some(mj)) = (membership[i], membership[j]) {
-                if mi != mj && bubbles[mi].bbox.iou(&bubbles[mj].bbox) <= 0.0 {
-                    continue;
-                }
+            if let (Some(mi), Some(mj)) = (membership[i], membership[j])
+                && mi != mj
+                && bubbles[mi].bbox.iou(&bubbles[mj].bbox) <= 0.0
+            {
+                continue;
             }
             // …and a line that belongs to a real balloon must not merge with one that belongs to
             // *no* balloon, either. That second gap is how a hand-drawn SFX sitting on a balloon's

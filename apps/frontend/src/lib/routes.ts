@@ -12,11 +12,16 @@ export const routes = {
   duplicates: () => "/duplicates",
   stats: () => "/stats",
   backup: () => "/backup",
+  /** Deep link to one Backup tab. The snapshot tab is the bare `/backup` path. */
+  backupTab: (tab: "snapshot" | "import-export" | "legacy-import") =>
+    tab === "snapshot" ? "/backup" : `/backup/${tab}`,
+  /** The recycle bin's two tabs; the bin itself is the bare `/recycle-bin` path. */
+  recycleBinTab: (tab: "bin" | "journal") => (tab === "bin" ? "/recycle-bin" : "/recycle-bin/other-deletions"),
   logs: () => "/logs",
   jobs: () => "/jobs",
+  resources: () => "/resources",
   activity: () => "/activity",
   bookmarks: () => "/bookmarks",
-  batch: () => "/batch",
   // `section` deep-links to one of Settings' accordions; `useSectionDeepLink` opens+scrolls to it.
   settings: (section?: string) => (section ? `/config?section=${encodeURIComponent(section)}` : "/config"),
   categories: (categoryId?: string) =>

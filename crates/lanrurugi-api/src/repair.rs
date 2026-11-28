@@ -24,12 +24,11 @@ pub fn parse_json<T: DeserializeOwned>(text: &str) -> Result<T, String> {
         Err(e) => e.to_string(),
     };
     for (open, close) in [('{', '}'), ('[', ']')] {
-        if let (Some(start), Some(end)) = (text.find(open), text.rfind(close)) {
-            if start < end {
-                if let Ok(v) = serde_json::from_str::<T>(&text[start..=end]) {
-                    return Ok(v);
-                }
-            }
+        if let (Some(start), Some(end)) = (text.find(open), text.rfind(close))
+            && start < end
+            && let Ok(v) = serde_json::from_str::<T>(&text[start..=end])
+        {
+            return Ok(v);
         }
     }
     Err(whole)

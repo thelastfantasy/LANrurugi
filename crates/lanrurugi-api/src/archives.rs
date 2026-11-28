@@ -439,7 +439,12 @@ async fn get_archive_metadata(
 /// none of them drift on what "delete an archive" actually does.
 pub(crate) enum DeleteOneOutcome {
     NotFound,
-    Deleted { filename: String },
+    Deleted {
+        filename: String,
+        /// The record could not be copied into the deletion journal, so this delete cannot be
+        /// undone from the UI. The delete itself still succeeded (`research.md` D9).
+        journal_failed: bool,
+    },
     Error(String),
 }
 
@@ -455,15 +460,36 @@ pub(crate) struct PurgeOptions {
     /// The recycle path writes its own `archive.recycle` entry, so the purge tail must not also
     /// log "deleted".
     pub record_activity: bool,
+    /// What the deletion journal records as the origin (`specs/028`): `clean` / `single` /
+    /// `superseded` / `split` / `other`.
+    pub journal_source: &'static str,
 }
 
 impl PurgeOptions {
-    /// A permanent delete of a live archive (superseded revision, clean-database cleanup).
+    /// A permanent delete of a live archive with no more specific origin (superseded revision).
     pub(crate) const PERMANENT: Self = Self {
         remove_archive_file: true,
         keep_thumbnails: false,
         permanent: true,
         record_activity: true,
+        journal_source: "superseded",
+    };
+    /// A user-initiated delete of one archive (the reader's own delete button), including the
+    /// case where its file was already gone.
+    pub(crate) const SINGLE: Self = Self {
+        remove_archive_file: true,
+        keep_thumbnails: false,
+        permanent: true,
+        record_activity: true,
+        journal_source: "single",
+    };
+    /// Clean Database's own second pass.
+    pub(crate) const CLEAN: Self = Self {
+        remove_archive_file: true,
+        keep_thumbnails: false,
+        permanent: true,
+        record_activity: true,
+        journal_source: "clean",
     };
     /// Specs/019: the payload already moved into the bin, and its cover must survive there.
     pub(crate) const AFTER_RECYCLE: Self = Self {
@@ -471,6 +497,7 @@ impl PurgeOptions {
         keep_thumbnails: true,
         permanent: false,
         record_activity: false,
+        journal_source: "single",
     };
 }
 
@@ -487,6 +514,13 @@ pub(crate) async fn purge_one_archive(
         Ok(None) => return DeleteOneOutcome::NotFound,
         Err(e) => return DeleteOneOutcome::Error(e.to_string()),
     };
+    // specs/028: copy the whole record into the deletion journal *before* the record is gone. A
+    // failure never blocks the delete — it only means this particular one cannot be undone, which
+    // the caller has to report.
+    let journal =
+        crate::deletions::journal_put_best_effort(state, &archive, options.journal_source).await;
+    let journaled = matches!(journal, crate::deletions::JournalWrite::Recorded);
+    let journal_failed = matches!(journal, crate::deletions::JournalWrite::Failed);
     match state.repos.archives.delete(id).await {
         Ok(()) => {
             // The only success-path log line this handler had before this was added — every other
@@ -571,10 +605,10 @@ pub(crate) async fn purge_one_archive(
             }
             // `stamp_ids` was read off the record before it was deleted — a stamp's own
             // `STAMPS_*` hash is a separate key that the record's removal doesn't touch.
-            if !archive.stamp_ids.is_empty() {
-                if let Err(e) = state.repos.stamps.delete_many_raw(&archive.stamp_ids).await {
-                    tracing::warn!(%id, error = %e, "failed to remove deleted archive's stamps");
-                }
+            if !archive.stamp_ids.is_empty()
+                && let Err(e) = state.repos.stamps.delete_many_raw(&archive.stamp_ids).await
+            {
+                tracing::warn!(%id, error = %e, "failed to remove deleted archive's stamps");
             }
             // A completed download-queue entry references the archive(s) it produced via
             // `archive_ids` — deleting the archive without also deleting this entry left a
@@ -596,10 +630,10 @@ pub(crate) async fn purge_one_archive(
                         })
                         .map(|item| item.id)
                         .collect();
-                    if !stale.is_empty() {
-                        if let Err(e) = state.download_queue.delete_many(&stale).await {
-                            tracing::warn!(%id, error = %e, "failed to remove deleted archive's download-queue entries");
-                        }
+                    if !stale.is_empty()
+                        && let Err(e) = state.download_queue.delete_many(&stale).await
+                    {
+                        tracing::warn!(%id, error = %e, "failed to remove deleted archive's download-queue entries");
                     }
                 }
                 Err(e) => {
@@ -613,11 +647,26 @@ pub(crate) async fn purge_one_archive(
             // still left the file sitting on disk indefinitely), silently accumulating orphaned
             // files on every delete. Best-effort (logged, not propagated) for the same reason as
             // the search-index cleanup above — the DB record is already gone either way.
+            // `LRR_FILEMAP` maps this path to this id. Left behind after the record is gone, a
+            // re-upload of the identical bytes to the identical path ingests as "Unchanged" — the
+            // pipeline returns before writing a record, leaving the file on disk with nothing
+            // pointing at it and every reader URL for it 404ing. Best-effort, like the rest of this
+            // cleanup: the record is already gone either way.
+            match state.redis.config.get().await {
+                Ok(mut conn) => {
+                    let _: Result<(), _> = conn
+                        .hdel(lanrurugi_storage::keys::FILEMAP_KEY, &archive.file)
+                        .await;
+                }
+                Err(e) => {
+                    tracing::warn!(%id, error = %e, "could not drop the deleted archive's filemap entry")
+                }
+            }
             if options.remove_archive_file {
-                if let Err(e) = tokio::fs::remove_file(&archive.file).await {
-                    if e.kind() != std::io::ErrorKind::NotFound {
-                        tracing::warn!(%id, file = %archive.file, error = %e, "failed to remove deleted archive's file from disk");
-                    }
+                if let Err(e) = tokio::fs::remove_file(&archive.file).await
+                    && e.kind() != std::io::ErrorKind::NotFound
+                {
+                    tracing::warn!(%id, file = %archive.file, error = %e, "failed to remove deleted archive's file from disk");
                 }
                 // The sidecar snapshots this archive's own filename/title; with the bytes gone it
                 // can never be read back for anything, and leaving it behind is exactly the
@@ -637,10 +686,10 @@ pub(crate) async fn purge_one_archive(
             if options.remove_archive_file {
                 let patch_path =
                     lanrurugi_scanner::patch::patch_path_for(std::path::Path::new(&archive.file));
-                if let Err(e) = tokio::fs::remove_file(&patch_path).await {
-                    if e.kind() != std::io::ErrorKind::NotFound {
-                        tracing::warn!(%id, patch_path = %patch_path.display(), error = %e, "failed to remove deleted archive's patch file from disk");
-                    }
+                if let Err(e) = tokio::fs::remove_file(&patch_path).await
+                    && e.kind() != std::io::ErrorKind::NotFound
+                {
+                    tracing::warn!(%id, patch_path = %patch_path.display(), error = %e, "failed to remove deleted archive's patch file from disk");
                 }
             }
             if !options.keep_thumbnails {
@@ -658,9 +707,17 @@ pub(crate) async fn purge_one_archive(
             }
             DeleteOneOutcome::Deleted {
                 filename: archive.name,
+                journal_failed,
             }
         }
         Err(e) => {
+            // The record survived, so its journal entry is wrong: a later restore would find the
+            // id already present. Best-effort drop, matching every other cleanup on a failure.
+            if journaled
+                && let Err(e) = crate::deletions::forget_journal_entry(state, id.as_str()).await
+            {
+                tracing::warn!(%id, error = %e, "could not drop a journal entry for a failed delete");
+            }
             // The archive was found (a real target existed) but the actual DB delete failed —
             // a genuine attempted-and-failed deletion, not a pre-execution lookup miss.
             if options.record_activity {
@@ -694,13 +751,15 @@ pub(crate) async fn tank_member_delete_refusal(
     state: &AppState,
     id: &lanrurugi_core::ids::ArchiveId,
 ) -> Option<axum::response::Response> {
-    let in_tank = state
-        .repos
-        .groupings
-        .for_archive(id)
-        .await
-        .map(|tanks| !tanks.is_empty())
-        .unwrap_or(false);
+    let in_tank = match state.repos.groupings.for_archive(id).await {
+        Ok(tanks) => !tanks.is_empty(),
+        Err(e) => {
+            // Advisory only: refusing every delete while Redis is unreachable would be worse than
+            // letting this one tankoubon member go, which the user asked for explicitly.
+            tracing::warn!(id = %id, error = %e, "could not check whether an archive belongs to a Tankoubon; allowing the delete");
+            false
+        }
+    };
     if !in_tank {
         return None;
     }
@@ -732,12 +791,16 @@ async fn delete_archive(
     }
     match crate::recycle::recycle_archive(&state, &id, auth.as_ref().map(|e| &e.0)).await {
         DeleteOneOutcome::NotFound => not_found("delete_archive", format!("{id} does not exist.")),
-        DeleteOneOutcome::Deleted { filename } => axum::Json(json!({
+        DeleteOneOutcome::Deleted {
+            filename,
+            journal_failed,
+        } => axum::Json(json!({
             "operation": "delete_archive",
             "id": id,
             "filename": filename,
             "success": 1,
             "recycled": true,
+            "journal_failed": journal_failed,
         }))
         .into_response(),
         DeleteOneOutcome::Error(e) => error(StatusCode::INTERNAL_SERVER_ERROR, "delete_archive", e),
@@ -797,7 +860,7 @@ async fn batch_delete_archives(
                 filename: None,
                 error: Some(format!("{id} does not exist.")),
             },
-            DeleteOneOutcome::Deleted { filename } => {
+            DeleteOneOutcome::Deleted { filename, .. } => {
                 deleted_count += 1;
                 BatchDeleteResult {
                     id: id.to_string(),
@@ -807,13 +870,18 @@ async fn batch_delete_archives(
                     error: None,
                 }
             }
-            DeleteOneOutcome::Error(e) => BatchDeleteResult {
-                id: id.to_string(),
-                success: false,
-                recycled: false,
-                filename: None,
-                error: Some(e),
-            },
+            DeleteOneOutcome::Error(e) => {
+                // The response is a 200 with per-id results, so without this the only trace of a
+                // failed delete is a field a client may never look at.
+                tracing::error!(id = %id, error = %e, "batch delete failed for one archive");
+                BatchDeleteResult {
+                    id: id.to_string(),
+                    success: false,
+                    recycled: false,
+                    filename: None,
+                    error: Some(e),
+                }
+            }
         });
     }
     axum::Json(json!({
@@ -1169,42 +1237,43 @@ pub(crate) async fn serve_download_file(
         (None, _) => true,
     };
     let range = range.filter(|_| range_still_valid);
-    if let (Some(spec), Some(total)) = (range, length) {
-        if let Some((start, end)) = parse_byte_range(spec, total) {
-            if tokio::io::AsyncSeekExt::seek(&mut file, std::io::SeekFrom::Start(start))
-                .await
-                .is_ok()
+    if let (Some(spec), Some(total)) = (range, length)
+        && let Some((start, end)) = parse_byte_range(spec, total)
+    {
+        if tokio::io::AsyncSeekExt::seek(&mut file, std::io::SeekFrom::Start(start))
+            .await
+            .is_ok()
+        {
+            let mut response = (
+                StatusCode::PARTIAL_CONTENT,
+                [
+                    (header::CONTENT_TYPE, content_type.to_string()),
+                    (header::CONTENT_DISPOSITION, disposition.clone()),
+                    (
+                        header::CONTENT_RANGE,
+                        format!("bytes {start}-{end}/{total}"),
+                    ),
+                    (header::ACCEPT_RANGES, "bytes".to_string()),
+                ],
+                axum::body::Body::from_stream(tokio_util::io::ReaderStream::with_capacity(
+                    tokio::io::AsyncReadExt::take(file, end - start + 1),
+                    crate::common::STREAM_CHUNK_SIZE,
+                )),
+            )
+                .into_response();
+            response
+                .headers_mut()
+                .insert(header::CONTENT_LENGTH, (end - start + 1).into());
+            if let Some(etag) = etag.as_deref()
+                && let Ok(value) = header::HeaderValue::from_str(etag)
             {
-                let mut response = (
-                    StatusCode::PARTIAL_CONTENT,
-                    [
-                        (header::CONTENT_TYPE, content_type.to_string()),
-                        (header::CONTENT_DISPOSITION, disposition.clone()),
-                        (
-                            header::CONTENT_RANGE,
-                            format!("bytes {start}-{end}/{total}"),
-                        ),
-                        (header::ACCEPT_RANGES, "bytes".to_string()),
-                    ],
-                    axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(
-                        tokio::io::AsyncReadExt::take(file, end - start + 1),
-                    )),
-                )
-                    .into_response();
-                response
-                    .headers_mut()
-                    .insert(header::CONTENT_LENGTH, (end - start + 1).into());
-                if let Some(etag) = etag.as_deref() {
-                    if let Ok(value) = header::HeaderValue::from_str(etag) {
-                        response.headers_mut().insert(header::ETAG, value);
-                    }
-                }
-                return response;
+                response.headers_mut().insert(header::ETAG, value);
             }
-            // Seeking failed: start the body over rather than fail the download.
-            if let Ok(fresh) = tokio::fs::File::open(path).await {
-                file = fresh;
-            }
+            return response;
+        }
+        // Seeking failed: start the body over rather than fail the download.
+        if let Ok(fresh) = tokio::fs::File::open(path).await {
+            file = fresh;
         }
     }
     let mut response = (
@@ -1213,7 +1282,10 @@ pub(crate) async fn serve_download_file(
             (header::CONTENT_DISPOSITION, disposition),
             (header::ACCEPT_RANGES, "bytes".to_string()),
         ],
-        axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file)),
+        axum::body::Body::from_stream(tokio_util::io::ReaderStream::with_capacity(
+            file,
+            crate::common::STREAM_CHUNK_SIZE,
+        )),
     )
         .into_response();
     if let Some(length) = length {
@@ -1221,10 +1293,10 @@ pub(crate) async fn serve_download_file(
             .headers_mut()
             .insert(header::CONTENT_LENGTH, length.into());
     }
-    if let Some(etag) = etag.as_deref() {
-        if let Ok(value) = header::HeaderValue::from_str(etag) {
-            response.headers_mut().insert(header::ETAG, value);
-        }
+    if let Some(etag) = etag.as_deref()
+        && let Ok(value) = header::HeaderValue::from_str(etag)
+    {
+        response.headers_mut().insert(header::ETAG, value);
     }
     response
 }
@@ -1272,10 +1344,10 @@ impl Repack {
             key.push_str(&format!("{tag}\u{1f}{}\u{1f}", path.to_string_lossy()));
             if let Ok(meta) = std::fs::metadata(path) {
                 key.push_str(&format!("{}\u{1f}", meta.len()));
-                if let Ok(modified) = meta.modified() {
-                    if let Ok(since) = modified.duration_since(std::time::UNIX_EPOCH) {
-                        key.push_str(&format!("{}\u{1f}", since.as_nanos()));
-                    }
+                if let Ok(modified) = meta.modified()
+                    && let Ok(since) = modified.duration_since(std::time::UNIX_EPOCH)
+                {
+                    key.push_str(&format!("{}\u{1f}", since.as_nanos()));
                 }
             }
             key.push('\u{1e}');
@@ -1629,7 +1701,10 @@ async fn inline_pdf(archive: &Archive) -> Response {
             (header::CONTENT_TYPE, "application/pdf".to_string()),
             (header::CONTENT_DISPOSITION, disposition),
         ],
-        axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file)),
+        axum::body::Body::from_stream(tokio_util::io::ReaderStream::with_capacity(
+            file,
+            crate::common::STREAM_CHUNK_SIZE,
+        )),
     )
         .into_response();
     if let Some(length) = length {
@@ -1863,58 +1938,56 @@ async fn delete_patch(
         kind: Some("archive".to_string()),
     };
     let patch_path = lanrurugi_scanner::patch::patch_path_for(std::path::Path::new(&archive.file));
-    if patch_path.exists() {
-        if let Err(e) = tokio::fs::remove_file(&patch_path).await {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                // A real attempted patch-file deletion that failed (the target existed, the
-                // disk operation itself errored) — worth recording.
-                crate::activity::record_manual(
-                    &state,
-                    auth.as_ref().map(|e| &e.0),
-                    lanrurugi_storage::activity::action_types::ARCHIVE_PATCH_DELETE,
-                    patch_target,
-                    lanrurugi_storage::activity::Outcome::Failure {
-                        reason: e.to_string(),
-                    },
-                    None,
-                    None,
-                )
-                .await;
-                return error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "delete_patch",
-                    e.to_string(),
-                );
-            }
-        }
+    if patch_path.exists()
+        && let Err(e) = tokio::fs::remove_file(&patch_path).await
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        // A real attempted patch-file deletion that failed (the target existed, the
+        // disk operation itself errored) — worth recording.
+        crate::activity::record_manual(
+            &state,
+            auth.as_ref().map(|e| &e.0),
+            lanrurugi_storage::activity::action_types::ARCHIVE_PATCH_DELETE,
+            patch_target,
+            lanrurugi_storage::activity::Outcome::Failure {
+                reason: e.to_string(),
+            },
+            None,
+            None,
+        )
+        .await;
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "delete_patch",
+            e.to_string(),
+        );
     }
-    if archive.has_patch {
-        if let Err(e) = state
+    if archive.has_patch
+        && let Err(e) = state
             .repos
             .archives
             .update(&archive.id, |a| a.has_patch = false)
             .await
-        {
-            // Patch file removal already succeeded above; only the DB flag write failed — still
-            // a genuine attempted-and-failed operation.
-            crate::activity::record_manual(
-                &state,
-                auth.as_ref().map(|e| &e.0),
-                lanrurugi_storage::activity::action_types::ARCHIVE_PATCH_DELETE,
-                patch_target,
-                lanrurugi_storage::activity::Outcome::Failure {
-                    reason: e.to_string(),
-                },
-                None,
-                None,
-            )
-            .await;
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "delete_patch",
-                e.to_string(),
-            );
-        }
+    {
+        // Patch file removal already succeeded above; only the DB flag write failed — still
+        // a genuine attempted-and-failed operation.
+        crate::activity::record_manual(
+            &state,
+            auth.as_ref().map(|e| &e.0),
+            lanrurugi_storage::activity::action_types::ARCHIVE_PATCH_DELETE,
+            patch_target,
+            lanrurugi_storage::activity::Outcome::Failure {
+                reason: e.to_string(),
+            },
+            None,
+            None,
+        )
+        .await;
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "delete_patch",
+            e.to_string(),
+        );
     }
 
     clear_page_thumbnails(&state, id.as_str()).await;
@@ -1991,10 +2064,10 @@ pub(crate) async fn mark_cover_written(path: &std::path::Path) {
 
 /// Removes a cover file that no longer shows the current cover; a missing one is fine.
 pub(crate) async fn remove_stale_cover(path: &std::path::Path) {
-    if let Err(e) = tokio::fs::remove_file(path).await {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(path = %path.display(), error = %e, "could not remove a stale cover");
-        }
+    if let Err(e) = tokio::fs::remove_file(path).await
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(path = %path.display(), error = %e, "could not remove a stale cover");
     }
 }
 
@@ -2011,10 +2084,10 @@ pub(crate) async fn thumb_settings(
     static CACHE: Mutex<Option<(Instant, lanrurugi_scanner::thumbnail::ThumbSettings)>> =
         Mutex::new(None);
     const TTL: Duration = Duration::from_secs(5);
-    if let Some((at, settings)) = *CACHE.lock().unwrap_or_else(|e| e.into_inner()) {
-        if at.elapsed() < TTL {
-            return settings;
-        }
+    if let Some((at, settings)) = *CACHE.lock().unwrap_or_else(|e| e.into_inner())
+        && at.elapsed() < TTL
+    {
+        return settings;
     }
     let settings = match state.redis.config.get().await {
         Ok(mut conn) => lanrurugi_scanner::thumbnail::read_settings(&mut conn).await,
@@ -2200,6 +2273,24 @@ pub(crate) async fn get_archive_thumbnail(
 /// derive data from the *image* (the duplicate detector's perceptual hash) must treat the
 /// placeholder as "no cover available": it is one fixed PNG, so every archive that fell back to it
 /// would otherwise hash identically and look like a 100% visual match.
+/// The archive's cover thumbnail as already stored, in any format; never generates one. For work
+/// over the whole library (the duplicate scan) that must not decode thousands of archive pages.
+pub(crate) async fn stored_cover_thumbnail(state: &AppState, id: &str) -> Option<bytes::Bytes> {
+    use lanrurugi_scanner::thumbnail::ThumbFormat;
+    if !is_valid_archive_id(id) {
+        return None;
+    }
+    for format in [ThumbFormat::Webp, ThumbFormat::Jpeg, ThumbFormat::Jxl] {
+        let Some(path) = thumbnail_disk_path(state, id, 0, format) else {
+            continue;
+        };
+        if let Ok(contents) = tokio::fs::read(&path).await {
+            return Some(bytes::Bytes::from(contents));
+        }
+    }
+    None
+}
+
 pub(crate) fn is_placeholder_thumbnail(bytes: &[u8]) -> bool {
     bytes == PLACEHOLDER_THUMBNAIL
 }
@@ -2262,10 +2353,10 @@ pub(crate) async fn clear_page_thumbnails(state: &AppState, id: &str) {
         return;
     }
     let pages_dir = state.library.thumb_dir.join(&id[0..2]).join(id);
-    if let Err(e) = tokio::fs::remove_dir_all(&pages_dir).await {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(%id, error = %e, "could not clear page thumbnails");
-        }
+    if let Err(e) = tokio::fs::remove_dir_all(&pages_dir).await
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(%id, error = %e, "could not clear page thumbnails");
     }
 }
 
@@ -2904,8 +2995,8 @@ pub(crate) async fn reindex_title_and_tags(
     new: lanrurugi_core::entities::Archive,
 ) {
     let id = new.id.as_str();
-    if old.title != new.title {
-        if let Err(e) = lanrurugi_search::indexer::update_title_index(
+    if old.title != new.title
+        && let Err(e) = lanrurugi_search::indexer::update_title_index(
             &state.redis.search,
             &state.equivalence,
             id,
@@ -2913,12 +3004,11 @@ pub(crate) async fn reindex_title_and_tags(
             &new.title,
         )
         .await
-        {
-            tracing::warn!(%id, error = %e, "failed to update title search index");
-        }
+    {
+        tracing::warn!(%id, error = %e, "failed to update title search index");
     }
-    if old.tags != new.tags {
-        if let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
+    if old.tags != new.tags
+        && let Err(e) = lanrurugi_search::indexer::update_tag_indexes(
             &state.redis.search,
             &state.equivalence,
             id,
@@ -2926,9 +3016,8 @@ pub(crate) async fn reindex_title_and_tags(
             &new.tags,
         )
         .await
-        {
-            tracing::warn!(%id, error = %e, "failed to update tag search index");
-        }
+    {
+        tracing::warn!(%id, error = %e, "failed to update tag search index");
     }
 }
 
@@ -2941,6 +3030,9 @@ async fn update_archive_metadata(
     // The values it replaced are read under the record's lock along with the change, so the tag
     // diff and the index updates below describe exactly this write.
     let mut before: Option<(String, String, String)> = None;
+    // Set when this edit brought in a `source:` tag the record did not carry as its primary source
+    // yet — the sidecar is written after the record write succeeds, never before.
+    let mut source_changed = false;
     let updated = state
         .repos
         .archives
@@ -2957,6 +3049,16 @@ async fn update_archive_metadata(
                 }
                 if let Some(tags) = params.tags {
                     archive.tags = tags;
+                    // A hand-typed (or plugin-supplied) `source:` tag is the archive's origin, and
+                    // the record's `primary_source` plus its sidecar copy are where a rebuild reads
+                    // that from. Removing the tag deliberately does *not* clear `primary_source`:
+                    // where an archive came from is history, not a live tag.
+                    if let Some(source) = crate::download_sources::source_tag_value(&archive.tags)
+                        && archive.primary_source.as_deref() != Some(source.as_str())
+                    {
+                        archive.primary_source = Some(source);
+                        source_changed = true;
+                    }
                 }
                 if let Some(summary) = params.summary {
                     archive.summary = summary;
@@ -2990,6 +3092,10 @@ async fn update_archive_metadata(
                 .collect();
             let tags_added: Vec<&str> = new_tag_set.difference(&old_tag_set).copied().collect();
             let tags_removed: Vec<&str> = old_tag_set.difference(&new_tag_set).copied().collect();
+
+            if source_changed {
+                crate::download_sources::sync_sidecar_primary(&state, &archive).await;
+            }
 
             // A rating-only change (the Library page's right-click star widget's own write path,
             // `useLibrary.ts::updateRating`) rebuilds and resends the *entire* tags string just to
@@ -3952,14 +4058,14 @@ pub(crate) async fn serve_page(
             // served size for a page already converted and sitting in the cache — a 10 MB page
             // served as 227 KB read as "unoptimized" (real report, 2026-11-04). A stat, not an
             // encode: absent when the body is still the entry's own bytes.
-            if let crate::state::PageBody::File(path) = &page.body {
-                if let Ok(meta) = tokio::fs::metadata(path).await {
-                    header_map.insert(
-                        header::HeaderName::from_static("x-lrr-served-size"),
-                        header::HeaderValue::from_str(&meta.len().to_string())
-                            .unwrap_or(header::HeaderValue::from_static("0")),
-                    );
-                }
+            if let crate::state::PageBody::File(path) = &page.body
+                && let Ok(meta) = tokio::fs::metadata(path).await
+            {
+                header_map.insert(
+                    header::HeaderName::from_static("x-lrr-served-size"),
+                    header::HeaderValue::from_str(&meta.len().to_string())
+                        .unwrap_or(header::HeaderValue::from_static("0")),
+                );
             }
             if page.orig_width > 0 && page.orig_height > 0 {
                 header_map.insert(

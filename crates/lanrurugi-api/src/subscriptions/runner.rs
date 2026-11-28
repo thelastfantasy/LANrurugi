@@ -171,21 +171,20 @@ pub fn decide(
         let reconsidering = ctx.refreshed.iter().any(|r| r == &source)
             || ctx.reconsider.iter().any(|r| r == &source);
         if let (Some(cutoff), Some(posted), false) = (ctx.window_cutoff, posted_secs, reconsidering)
+            && posted < cutoff
         {
-            if posted < cutoff {
-                if ctx.keep_out_of_window {
-                    records.push(CandidateRecord {
-                        source_url: source,
-                        title: candidate.title.clone(),
-                        uploader: candidate.uploader.clone(),
-                        rating: candidate.rating,
-                        posted_at: posted_secs,
-                        tags: candidate.tags.clone(),
-                        verdict: CandidateVerdict::OutOfWindow,
-                    });
-                }
-                continue;
+            if ctx.keep_out_of_window {
+                records.push(CandidateRecord {
+                    source_url: source,
+                    title: candidate.title.clone(),
+                    uploader: candidate.uploader.clone(),
+                    rating: candidate.rating,
+                    posted_at: posted_secs,
+                    tags: candidate.tags.clone(),
+                    verdict: CandidateVerdict::OutOfWindow,
+                });
             }
+            continue;
         }
         let seen = ctx.already_seen.iter().any(|s| s == &source);
         // Only a work that was *rejected* is decided afresh; one that was handled is not revisited.
@@ -1167,6 +1166,25 @@ pub async fn run_check(state: &AppState, subscription_id: &str, trigger: CheckTr
         match queued {
             Ok(item) => {
                 routed.queued += 1;
+                let source = crate::plugins::trim_url(&item.url);
+                // Queued again, so it is not a deleted row any more — the history should follow the
+                // new decision rather than keep saying the user threw this work away.
+                if let Err(e) = state
+                    .subscriptions
+                    .forget_deleted(subscription_id, std::slice::from_ref(&source))
+                    .await
+                {
+                    tracing::warn!(%subscription_id, error = %e, "could not clear a deleted-work record");
+                }
+                // The accepted list is what the history's "accepted" tab is built from, so a work
+                // the check just queued has to be in it even if its queue row is later swept.
+                if let Err(e) = state
+                    .subscriptions
+                    .mark_accepted(subscription_id, std::slice::from_ref(&source))
+                    .await
+                {
+                    tracing::warn!(%subscription_id, error = %e, "could not record an accepted work");
+                }
                 // "Download automatically" means started, not merely enqueued: nothing would ever
                 // pick a `Queued` item up on its own (only the upload page's own Start buttons call
                 // into `start_one`). See `start_item_from_subscription`'s own docs.
@@ -1526,7 +1544,8 @@ async fn apply_snapshot_diff(
             // truncates its tag list, so writing those tags onto the archive would delete real ones.
             // That path also keeps the existing merge-never-delete rule.
             let summary =
-                crate::plugins::run_enabled_metadata_plugins_on_archive(state, archive_id).await;
+                crate::plugins::run_enabled_metadata_plugins_on_archive(state, archive_id, None)
+                    .await;
             tracing::info!(
                 subscription_id = %subscription.id,
                 source = %change.source,
@@ -1589,7 +1608,9 @@ pub async fn scheduler_loop(state: AppState) {
             last_sweep = Some(std::time::Instant::now());
             let run = crate::diagnostics::report::reporter().cron("subscription-sweep");
             sweep_finished_queue(&state).await;
+            sweep_accepted(&state).await;
             sweep_skipped(&state).await;
+            sweep_deleted(&state).await;
             sweep_rejected(&state).await;
             run.ok();
         }
@@ -1664,6 +1685,62 @@ async fn sweep_skipped(state: &AppState) {
             }
             Err(e) => {
                 tracing::warn!(subscription_id = %subscription.id, error = %e, "could not sweep skip records")
+            }
+        }
+    }
+}
+
+/// Drops accepted records past the download-record retention: this is the *only* way a row leaves the
+/// history's accepted tab (see `accepted_key`). Shares `download_queue_retention_days` with the queue
+/// sweep, so a row disappears exactly when its finished queue row would have.
+async fn sweep_accepted(state: &AppState) {
+    let days = crate::settings::read_queue_retention_days(state).await;
+    if days <= 0 {
+        return;
+    }
+    let cutoff_ms = now_epoch_ms() - days * 24 * 60 * 60 * 1000;
+    let Ok(subscriptions) = state.subscriptions.list_all().await else {
+        return;
+    };
+    for subscription in subscriptions {
+        match state
+            .subscriptions
+            .prune_accepted_before(&subscription.id, cutoff_ms)
+            .await
+        {
+            Ok(0) => {}
+            Ok(removed) => {
+                tracing::info!(subscription_id = %subscription.id, removed, days, "swept accepted-work records")
+            }
+            Err(e) => {
+                tracing::warn!(subscription_id = %subscription.id, error = %e, "could not sweep accepted-work records")
+            }
+        }
+    }
+}
+
+/// Drops delete records (queue and library) past `DELETED_RETENTION_DAYS`: they exist only to explain
+/// a row the user may still recognize, and an explanation nobody will read again is just
+/// accumulating state. The row's accepted record expires with its mark, so the row leaves the
+/// history then instead of going back to reading "added to the download queue".
+async fn sweep_deleted(state: &AppState) {
+    let cutoff_ms = now_epoch_ms()
+        - lanrurugi_storage::subscriptions::DELETED_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    let Ok(subscriptions) = state.subscriptions.list_all().await else {
+        return;
+    };
+    for subscription in subscriptions {
+        match state
+            .subscriptions
+            .prune_deleted_before(&subscription.id, cutoff_ms)
+            .await
+        {
+            Ok(0) => {}
+            Ok(removed) => {
+                tracing::info!(subscription_id = %subscription.id, removed, "swept deleted-work records")
+            }
+            Err(e) => {
+                tracing::warn!(subscription_id = %subscription.id, error = %e, "could not sweep deleted-work records")
             }
         }
     }
@@ -2162,6 +2239,7 @@ mod tests {
             error: Some(lanrurugi_plugin::protocol::PluginError {
                 error_code: "source unreachable".into(),
                 data: None,
+                settings: None,
             }),
             ..Default::default()
         };

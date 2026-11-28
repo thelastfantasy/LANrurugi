@@ -94,6 +94,7 @@
           </p>
           <div class="hero-cta">
             <a class="btn primary" href="#start" data-i18n="cta.start">部署到自己的机器</a>
+            <a class="btn ghost" href="{{t:link.demoHref}}" data-i18n="cta.demo">在线演示</a>
             <a class="btn ghost" href="https://github.com/thelastfantasy/LANrurugi">
               <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
                 <path
@@ -543,8 +544,12 @@
           </ol>
           <div class="code-wrap">
             <div class="compose-tabs" role="tablist" aria-label="镜像通道">
+              <!--
+                暂时注释掉 stable：`:latest` 只在发布正式版时才会打上，1.0 之前它不存在，照抄会拉取失败。
+                发布 1.0 时取消注释（放回 beta 前面并设为默认选中），并把 copy.mjs 里 compose 的 `:beta` 改回 `:latest`，见 docs/dev/release.md。
               <button type="button" role="tab" aria-selected="true" class="compose-tab active" data-compose-tag="latest">stable</button>
-              <button type="button" role="tab" aria-selected="false" class="compose-tab" data-compose-tag="beta">beta</button>
+              -->
+              <button type="button" role="tab" aria-selected="true" class="compose-tab active" data-compose-tag="beta">beta</button>
             </div>
             <button type="button" class="copy-btn" data-target="compose-yaml" data-copied="{{t:start.copied}}">
               <span data-i18n="start.copy">复制</span>
@@ -628,7 +633,7 @@
         </p>
         <p class="footer-license">
           © 2026 thelastfantasy ·
-          <a href="https://github.com/thelastfantasy/LANrurugi/blob/main/LICENSE" data-i18n="footer.license">MIT 许可</a>
+          <a href="https://github.com/thelastfantasy/LANrurugi/blob/main/LICENSE-APACHE" data-i18n="footer.license">MIT 或 Apache 2.0 许可</a>
         </p>
       </div>
     </footer>

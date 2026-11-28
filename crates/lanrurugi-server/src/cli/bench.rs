@@ -120,6 +120,7 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         tokio::sync::mpsc::unbounded_channel::<lanrurugi_scanner::events::IngestEvent>();
 
     let state = AppState {
+        restore_gate: lanrurugi_core::restore_gate::RestoreGate::new(),
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         discovery_singleflight: std::sync::Arc::new(
             lanrurugi_core::singleflight::Singleflight::new(8),
@@ -189,8 +190,10 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         tokio::spawn(async move {
             while let Some(event) = new_archive_rx.recv().await {
                 if let lanrurugi_scanner::events::IngestEvent::Catalogued { id } = event {
-                    lanrurugi_api::plugins::run_enabled_metadata_plugins_on_archive(&state, &id)
-                        .await;
+                    lanrurugi_api::plugins::run_enabled_metadata_plugins_on_archive(
+                        &state, &id, None,
+                    )
+                    .await;
                 }
             }
         });

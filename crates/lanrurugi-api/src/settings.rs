@@ -55,6 +55,40 @@ pub(crate) const DEFAULT_RECYCLE_RETENTION_DAYS: i64 = 30;
 /// default — the retention window is the bound until an operator opts into a cap. GiB rather than
 /// MiB so the smallest meaningful cap is 1 GiB instead of a one-megabyte foot-gun.
 pub(crate) const DEFAULT_RECYCLE_MAX_SIZE_GB: i64 = 0;
+/// specs/028: how long a deletion-journal entry stays restorable. `0` turns the journal off
+/// (nothing recorded, and the sweep clears what an earlier setting left behind).
+pub(crate) const DEFAULT_DELETION_JOURNAL_DAYS: i64 = 30;
+/// specs/028: a clean that plans to delete `> deletion_guard_min` records *and* at least this
+/// percentage of the library is refused unless the request repeats it with `force=1`.
+pub(crate) const DEFAULT_DELETION_GUARD_PERCENT: i64 = 25;
+pub(crate) const DEFAULT_DELETION_GUARD_MIN: i64 = 50;
+/// specs/028: automatic snapshot retention.
+pub(crate) const DEFAULT_SNAPSHOT_DAILY_KEEP: i64 = 7;
+pub(crate) const DEFAULT_SNAPSHOT_WEEK_KEEP: i64 = 4;
+/// Full Redis backups kept **per schedule**. Three is the shipped default: enough to cover "I broke
+/// it yesterday and noticed today", which is the case the safety net exists for. Each schedule gets
+/// its own budget, so adding a second plan does not evict the first one's history.
+pub(crate) const DEFAULT_SNAPSHOT_FULL_KEEP: i64 = 3;
+/// specs/028 follow-up: the automatic snapshot schedule. On by default (a deployment that never
+/// touches these fields keeps the behaviour the feature shipped with), fired by a crontab
+/// expression evaluated in the server's local timezone.
+pub(crate) const DEFAULT_SNAPSHOT_SCHEDULE_ENABLED: bool = true;
+/// Monday 03:00:00 — quiet hours, and the one full backup a week a production-sized library wants
+/// unless the operator asks for more.
+pub(crate) const DEFAULT_SNAPSHOT_CRON: &str = crate::snapshots::cron::DEFAULT_CRON;
+/// Which preset the settings UI should highlight. Only an echo for the UI: the expression itself is
+/// authoritative, so a hand-edited `snapshot_cron` in Redis still schedules what it says.
+pub(crate) const DEFAULT_SNAPSHOT_CRON_PRESET: &str = "weekly";
+/// The scheduled snapshots themselves: a JSON array of
+/// `{id, label, enabled, preset, cron}`. Empty means "never configured", which the scheduler
+/// resolves to one default schedule built from the three legacy single-schedule keys.
+/// A fresh install ships one enabled plan: every Sunday at 03:00 **in the instance's own
+/// timezone** (`read_timezone`), not UTC — a schedule is only meaningful as local wall-clock time.
+pub(crate) const DEFAULT_SNAPSHOT_SCHEDULES: &str =
+    r#"[{"id":"plan-1","label":"","enabled":true,"preset":"weekly","cron":"0 0 3 * * 0 *"}]"#;
+/// How many scheduled snapshots the UI may configure. Every enabled one takes a full Redis backup
+/// on its own cadence, and each keeps its own `FULL_BACKUP_KEEP` files.
+pub(crate) const MAX_SNAPSHOT_SCHEDULES: usize = 10;
 
 pub fn router() -> Router<AppState> {
     // `/settings/password` ("账号安全类" danger) — no API token, admin-role or not, may change the
@@ -255,6 +289,151 @@ pub(crate) async fn read_skipped_retention_days(state: &AppState) -> i64 {
             .unwrap_or(DEFAULT_SKIPPED_RETENTION_DAYS),
         Err(_) => DEFAULT_SKIPPED_RETENTION_DAYS,
     }
+}
+
+/// One numeric `LRR_CONFIG` field, with the declared default when it was never written or is
+/// unparsable. specs/028's four settings all come through here rather than each repeating the
+/// pattern.
+async fn read_number(state: &AppState, key: &str, default: i64) -> i64 {
+    match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, key)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(default),
+        Err(_) => default,
+    }
+}
+
+/// A string setting, with `default` for a field that was never written (and for one stored as
+/// blank, which a truncated write or a cleared form can leave behind).
+async fn read_string(state: &AppState, key: &str, default: &str) -> String {
+    let stored = match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, key)
+            .await
+            .ok()
+            .flatten(),
+        Err(_) => None,
+    };
+    match stored.as_deref().map(str::trim) {
+        Some(value) if !value.is_empty() => value.to_string(),
+        _ => default.to_string(),
+    }
+}
+
+/// `read_number`'s boolean counterpart: an absent field means "never saved", not "off", so it takes
+/// `default` rather than `false`.
+async fn read_bool(state: &AppState, key: &str, default: bool) -> bool {
+    match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, key)
+            .await
+            .ok()
+            .flatten()
+            .map(|v| v != "0")
+            .unwrap_or(default),
+        Err(_) => default,
+    }
+}
+
+/// specs/028: journal retention in days; `0` disables recording.
+pub(crate) async fn read_deletion_journal_days(state: &AppState) -> i64 {
+    read_number(
+        state,
+        "deletion_journal_days",
+        DEFAULT_DELETION_JOURNAL_DAYS,
+    )
+    .await
+}
+
+/// specs/028: batch-deletion guard, in percent of the library and an absolute floor.
+pub(crate) async fn read_deletion_guard_percent(state: &AppState) -> i64 {
+    read_number(
+        state,
+        "deletion_guard_percent",
+        DEFAULT_DELETION_GUARD_PERCENT,
+    )
+    .await
+}
+
+pub(crate) async fn read_deletion_guard_min(state: &AppState) -> i64 {
+    read_number(state, "deletion_guard_min", DEFAULT_DELETION_GUARD_MIN).await
+}
+
+/// The IANA timezone the operator chose (`Asia/Tokyo`, `UTC`, …). Read live like every other
+/// scheduling input; an unset, empty or unparseable value falls back to UTC, matching the search
+/// side's own fallback (`lanrurugi_search::engine`).
+pub(crate) async fn read_timezone(state: &AppState) -> chrono_tz::Tz {
+    let stored = match state.redis.config.get().await {
+        Ok(mut conn) => conn
+            .hget::<_, _, Option<String>>(CONFIG_KEY, "timezone")
+            .await
+            .ok()
+            .flatten(),
+        Err(_) => None,
+    };
+    let Some(name) = stored
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    else {
+        return chrono_tz::UTC;
+    };
+    match name.parse::<chrono_tz::Tz>() {
+        Ok(tz) => tz,
+        Err(_) => {
+            // A stored but unreadable value schedules snapshots at the wrong hour, so it is
+            // reported rather than silently treated as "no timezone configured".
+            tracing::warn!(timezone = %name, "stored timezone is not a valid IANA name; using UTC");
+            chrono_tz::UTC
+        }
+    }
+}
+
+/// specs/028: how many daily / weekly snapshots the retention sweep keeps.
+pub(crate) async fn read_snapshot_daily_keep(state: &AppState) -> i64 {
+    read_number(state, "snapshot_daily_keep", DEFAULT_SNAPSHOT_DAILY_KEEP).await
+}
+
+pub(crate) async fn read_snapshot_week_keep(state: &AppState) -> i64 {
+    read_number(state, "snapshot_week_keep", DEFAULT_SNAPSHOT_WEEK_KEEP).await
+}
+
+/// Full backups kept per schedule (`retention_plan`'s third budget).
+pub(crate) async fn read_snapshot_full_keep(state: &AppState) -> i64 {
+    read_number(state, "snapshot_full_keep", DEFAULT_SNAPSHOT_FULL_KEEP).await
+}
+
+/// specs/028 follow-up: the automatic snapshot schedule — the master switch, the crontab
+/// expression and the UI's preset echo. All three are read live on every scheduler tick, so a saved
+/// change applies on the next tick rather than at the next restart.
+pub(crate) async fn read_snapshot_schedule_enabled(state: &AppState) -> bool {
+    read_bool(
+        state,
+        "snapshot_schedule_enabled",
+        DEFAULT_SNAPSHOT_SCHEDULE_ENABLED,
+    )
+    .await
+}
+
+/// The crontab expression (`秒 分 时 日 月 星期 [年]`). Validation happens on write; a stored value
+/// that no longer parses is handled by the scheduler (warn + default) rather than here.
+pub(crate) async fn read_snapshot_cron(state: &AppState) -> String {
+    read_string(state, "snapshot_cron", DEFAULT_SNAPSHOT_CRON).await
+}
+
+/// The scheduled snapshots as stored (a JSON array), or the empty string when never configured.
+pub(crate) async fn read_snapshot_schedules(state: &AppState) -> String {
+    read_string(state, "snapshot_schedules", DEFAULT_SNAPSHOT_SCHEDULES).await
+}
+
+/// Which preset button the settings UI should show as selected (`hourly` / `daily` / `weekly` /
+/// `monthly` / `custom`). Purely an echo — never used to compute a schedule.
+pub(crate) async fn read_snapshot_cron_preset(state: &AppState) -> String {
+    read_string(state, "snapshot_cron_preset", DEFAULT_SNAPSHOT_CRON_PRESET).await
 }
 
 /// Which release line the update check follows. An explicit setting wins; otherwise the track the
@@ -542,6 +721,13 @@ const STRING_FIELDS: &[(&str, &str)] = &[
     // queues a full rebuild job (see the side-effect branch in `put_settings` below) since a
     // tier change can't be applied retroactively by the incremental one-way backfill alone.
     ("recommendprecision", "medium"),
+    // specs/028 follow-up: the scheduled snapshots — a JSON array of
+    // `{id, label, enabled, preset, cron}`, each cron a crontab expression
+    // (`秒 分 时 日 月 星期 [年]`) evaluated in the app's `timezone` setting. Validated on write, so
+    // a bad expression is a 400 naming the offending segment rather than a schedule that silently
+    // never fires. The pre-multi-schedule `snapshot_cron` / `snapshot_cron_preset` /
+    // `snapshot_schedule_enabled` fields are still *read* as the fallback when this is empty.
+    ("snapshot_schedules", DEFAULT_SNAPSHOT_SCHEDULES),
 ];
 
 /// `STRING_FIELDS`' own `tagrules` default, exposed for `plugins.rs::get_computed_tagrules` to
@@ -617,6 +803,15 @@ const NUMBER_FIELDS: &[(&str, i64)] = &[
     // specs/019 — the recycle bin's two bounds, enforced by `recycle::sweep`.
     ("recycle_retention_days", DEFAULT_RECYCLE_RETENTION_DAYS),
     ("recycle_max_size_gb", DEFAULT_RECYCLE_MAX_SIZE_GB),
+    // specs/028 — deletion safety net. The journal's own retention, the batch-delete guard
+    // (`> N records` and `>= P% of the library`), and automatic snapshot retention. All read live
+    // on every use, so a saved change applies without a restart.
+    ("deletion_journal_days", DEFAULT_DELETION_JOURNAL_DAYS),
+    ("deletion_guard_percent", DEFAULT_DELETION_GUARD_PERCENT),
+    ("deletion_guard_min", DEFAULT_DELETION_GUARD_MIN),
+    ("snapshot_daily_keep", DEFAULT_SNAPSHOT_DAILY_KEEP),
+    ("snapshot_week_keep", DEFAULT_SNAPSHOT_WEEK_KEEP),
+    ("snapshot_full_keep", DEFAULT_SNAPSHOT_FULL_KEEP),
     // Log rotation (`lanrurugi_server::telemetry`): a category file rolls when it passes this many
     // megabytes, and only this many files are kept per category (the active one included). Read
     // once at startup and on every rollover decision, so a saved change applies without a restart.
@@ -693,6 +888,8 @@ const BOOL_FIELDS: &[(&str, bool)] = &[
     // "stored in `LRR_CONFIG` but driven from a page other than Settings" precedent as
     // `replacetitles` above. Read by `login::status` to compute `first_run_wizard_pending`.
     ("first_run_wizard_done", false),
+    // (The per-schedule `enabled` flag lives inside `snapshot_schedules`, above: each schedule
+    // switches on and off on its own.)
 ];
 
 /// Normalizes a configured/request origin to a `scheme://host:port` string with a known default
@@ -725,6 +922,86 @@ pub(crate) fn normalize_origin(value: &str) -> Option<String> {
 /// out of `put_settings`'s write loop as a plain, `Redis`-free function so the field/value matrix
 /// (unknown key, wrong JSON type, invalid `theme` value) can be unit-tested directly rather than
 /// only reachable through a real HTTP request against a live Redis (issue #65).
+/// One scheduled snapshot, as the settings JSON array carries it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct SnapshotScheduleSetting {
+    /// Filename-safe slug: it ends up in the snapshot's own name (`…-scheduled-<id>.rdb`).
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub preset: String,
+    pub cron: String,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Checks the whole array and rejects the first bad schedule by index, so the settings UI can point
+/// at the row instead of failing the save with "invalid JSON somewhere".
+fn validate_snapshot_schedules(text: &str) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Ok(());
+    }
+    let items: Vec<SnapshotScheduleSetting> = serde_json::from_str(text).map_err(|e| {
+        format!("Field \"snapshot_schedules\" is not a JSON array of schedules: {e}")
+    })?;
+    if items.len() > MAX_SNAPSHOT_SCHEDULES {
+        return Err(format!(
+            "Field \"snapshot_schedules\" holds {} schedules; at most {MAX_SNAPSHOT_SCHEDULES} are allowed.",
+            items.len()
+        ));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for (index, item) in items.iter().enumerate() {
+        let position = index + 1;
+        let id = item.id.trim();
+        if id.is_empty()
+            || id.len() > 32
+            || !id
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        {
+            return Err(format!(
+                "Schedule {position}: id must be 1-32 characters of a-z, 0-9 or '-', got \"{}\".",
+                item.id
+            ));
+        }
+        if !seen.insert(id.to_string()) {
+            return Err(format!("Schedule {position}: id \"{id}\" is used twice."));
+        }
+        if item.label.chars().count() > 64 {
+            return Err(format!(
+                "Schedule {position}: the label is longer than 64 characters."
+            ));
+        }
+        // The preset is only the UI's echo of which button produced this expression, so it is a
+        // short slug rather than an enum — an enum here would reject every preset the UI adds.
+        if item.preset.is_empty()
+            || item.preset.len() > 32
+            || !item
+                .preset
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        {
+            return Err(format!(
+                "Schedule {position}: preset must be 1-32 characters of a-z, 0-9 or '-', got \"{}\".",
+                item.preset
+            ));
+        }
+        if let Err(e) = item.cron.parse::<crate::snapshots::cron::CronSchedule>() {
+            return Err(format!(
+                "Schedule {position}: \"{}\" is not a valid crontab: {e}",
+                item.cron
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
     // `llm_api_key` is deliberately absent from `STRING_FIELDS` — that list doubles as
     // `get_settings`'s own read-loop allowlist, and the real key must never be echoed back to the
@@ -806,6 +1083,47 @@ fn validate_setting_field(key: &str, value: &Value) -> Result<String, String> {
         if count < 0 {
             return Err("Field \"max_login_devices\" must be >= 0 (0 = unlimited).".to_string());
         }
+    }
+    if matches!(
+        key,
+        "deletion_journal_days"
+            | "deletion_guard_percent"
+            | "deletion_guard_min"
+            | "snapshot_daily_keep"
+            | "snapshot_week_keep"
+            | "snapshot_full_keep"
+    ) {
+        // data-model.md §4's ranges: a guard of 0% or a keep-count of 0 would disable the safety
+        // net by accident, so both are rejected rather than silently meaningless.
+        let (min, max) = match key {
+            "deletion_journal_days" => (0, 3_650),
+            "deletion_guard_percent" => (1, 100),
+            "deletion_guard_min" => (1, 1_000_000),
+            _ => (1, 365),
+        };
+        let Some(value) = value.as_i64() else {
+            return Err(format!("Field \"{key}\" must be a number."));
+        };
+        if value < min || value > max {
+            return Err(format!("Field \"{key}\" must be between {min} and {max}."));
+        }
+    }
+    if key == "snapshot_schedules" {
+        // Stored as a JSON *string* (every setting in `CONFIG_KEY` is a Redis hash field), but a
+        // client may just as well send the array itself.
+        let text = match value {
+            Value::String(text) => text.clone(),
+            Value::Array(_) => serde_json::to_string(value)
+                .map_err(|e| format!("Field \"snapshot_schedules\" could not be stored: {e}"))?,
+            _ => {
+                return Err(
+                    "Field \"snapshot_schedules\" must be a JSON array (or its serialized form)."
+                        .to_string(),
+                )
+            }
+        };
+        validate_snapshot_schedules(&text)?;
+        return Ok(text);
     }
     if key == "plugin_bind_interface" {
         let name = value.as_str().unwrap_or("").trim();
@@ -1131,19 +1449,15 @@ async fn put_settings(
     if auth
         .as_ref()
         .is_some_and(|axum::extract::Extension(a)| a.is_token())
-    {
-        if let Some(field) = TOKEN_AUTH_FORBIDDEN_SETTINGS_FIELDS
+        && let Some(field) = TOKEN_AUTH_FORBIDDEN_SETTINGS_FIELDS
             .iter()
             .find(|f| fields.contains_key(**f))
-        {
-            return error(
-                StatusCode::FORBIDDEN,
-                "put_settings",
-                format!(
-                    "API tokens cannot change \"{field}\" — this requires a real login session."
-                ),
-            );
-        }
+    {
+        return error(
+            StatusCode::FORBIDDEN,
+            "put_settings",
+            format!("API tokens cannot change \"{field}\" — this requires a real login session."),
+        );
     }
 
     let mut conn = match state.redis.config.get().await {
@@ -1262,17 +1576,17 @@ async fn put_settings(
         // FR-001/FR-003 of specs/021: the shape gate above only checks "starts with http(s)"; the
         // page scheme and the credential/query rules are checked here, where the page origin is
         // known.
-        if key == crate::download_url::FIELD {
-            if let Err(e) = crate::download_url::validate(
+        if key == crate::download_url::FIELD
+            && let Err(e) = crate::download_url::validate(
                 value.as_str().unwrap_or(""),
                 requested_page_origin.as_deref(),
-            ) {
-                return error(
-                    StatusCode::BAD_REQUEST,
-                    "put_settings",
-                    format!("Field \"{key}\": {}.", e.message()),
-                );
-            }
+            )
+        {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "put_settings",
+                format!("Field \"{key}\": {}.", e.message()),
+            );
         }
         changed_fields.push(key.clone());
         let _: () = match conn.hset(CONFIG_KEY, &key, stored).await {
@@ -1738,6 +2052,98 @@ mod validate_setting_field_tests {
             validate_setting_field("first_run_wizard_done", &json!(true)).unwrap(),
             "1"
         );
+    }
+
+    /// A keep-count of 0 would turn the snapshot safety net off by accident, so it is refused
+    /// rather than silently meaningless; the shipped default and the upper bound are accepted.
+    #[test]
+    fn snapshot_full_keep_rejects_zero() {
+        assert!(NUMBER_FIELDS
+            .iter()
+            .any(|(k, v)| *k == "snapshot_full_keep" && *v == 3));
+        assert!(validate_setting_field("snapshot_full_keep", &json!(3)).is_ok());
+        assert!(validate_setting_field("snapshot_full_keep", &json!(1)).is_ok());
+        assert!(validate_setting_field("snapshot_full_keep", &json!(365)).is_ok());
+        let zero =
+            validate_setting_field("snapshot_full_keep", &json!(0)).expect_err("0 must be refused");
+        assert!(zero.contains("between 1 and 365"), "{zero}");
+        assert!(validate_setting_field("snapshot_full_keep", &json!(366)).is_err());
+    }
+
+    /// specs/028 follow-up: the scheduled-snapshot array. Each entry is validated by position so
+    /// the Settings page can point at the offending row, an id stays filename-safe (it ends up in
+    /// the snapshot's own name), and the legacy single-schedule keys are still accepted on write
+    /// even though they no longer appear in the field lists.
+    #[test]
+    fn snapshot_schedules_validate() {
+        // A fresh install ships one Sunday 03:00 plan, and that default must itself validate.
+        assert!(STRING_FIELDS
+            .iter()
+            .any(|(k, _)| *k == "snapshot_schedules"));
+        assert!(validate_snapshot_schedules(DEFAULT_SNAPSHOT_SCHEDULES).is_ok());
+        assert!(DEFAULT_SNAPSHOT_SCHEDULES.contains(crate::snapshots::cron::DEFAULT_CRON));
+        assert!(!BOOL_FIELDS
+            .iter()
+            .any(|(k, _)| *k == "snapshot_schedule_enabled"));
+
+        // Never configured, and one well-formed schedule.
+        assert_eq!(
+            validate_setting_field("snapshot_schedules", &json!("")).unwrap(),
+            ""
+        );
+        let one = json!([{
+            "id": "plan-1",
+            "label": "每周",
+            "enabled": true,
+            "preset": "weekly",
+            "cron": "0 0 3 * * 1"
+        }]);
+        assert!(validate_setting_field("snapshot_schedules", &one).is_ok());
+        // A cron carrying the optional year still passes.
+        let with_year = json!([{"id":"p","label":"","enabled":true,"preset":"custom","cron":"0 0 0 1 1 * 2030"}]);
+        assert!(validate_setting_field("snapshot_schedules", &with_year).is_ok());
+        // The "first Sunday of the month" preset is a real preset value, not an unknown string.
+        let first_sunday = json!([{
+            "id": "plan-2",
+            "label": "",
+            "enabled": true,
+            "preset": "monthly-first-weekday",
+            "cron": "0 0 3 * * 0#1 *"
+        }]);
+        assert!(validate_setting_field("snapshot_schedules", &first_sunday).is_ok());
+
+        // The second entry's bad expression is reported against that entry.
+        let bad_cron = json!([
+            {"id":"a","label":"","enabled":true,"preset":"daily","cron":"0 0 3 * * *"},
+            {"id":"b","label":"","enabled":true,"preset":"daily","cron":"0 0 99 * * *"}
+        ]);
+        let err = validate_setting_field("snapshot_schedules", &bad_cron).unwrap_err();
+        assert!(err.contains("Schedule 2"), "{err}");
+        assert!(err.contains("hours"), "{err}");
+
+        // Ids and presets must be filename-safe slugs; ids must also be unique.
+        for bad in [
+            json!([{"id":"Plan 1","label":"","enabled":true,"preset":"daily","cron":"0 0 3 * * *"}]),
+            json!([{"id":"","label":"","enabled":true,"preset":"daily","cron":"0 0 3 * * *"}]),
+            json!([{"id":"a","label":"","enabled":true,"preset":"Sometimes!","cron":"0 0 3 * * *"}]),
+            json!([{"id":"a","label":"","enabled":true,"preset":"","cron":"0 0 3 * * *"}]),
+            json!([{"id":"a","label":"","enabled":true,"preset":"daily","cron":"0 0 3 * * *"},
+                   {"id":"a","label":"","enabled":true,"preset":"daily","cron":"0 0 4 * * *"}]),
+        ] {
+            assert!(
+                validate_setting_field("snapshot_schedules", &bad).is_err(),
+                "{bad}"
+            );
+        }
+        assert!(validate_setting_field("snapshot_schedules", &json!("not json")).is_err());
+        assert!(validate_setting_field("snapshot_schedules", &json!(300)).is_err());
+
+        // The pre-multi-schedule keys are still *read* as the fallback (`SnapshotSchedule::
+        // load_all`), but no longer writable: `snapshot_schedules` replaced them.
+        for legacy in ["snapshot_cron", "snapshot_cron_preset"] {
+            let err = validate_setting_field(legacy, &json!("0 0 3 * * 1")).unwrap_err();
+            assert!(err.contains("Unknown settings field"), "{err}");
+        }
     }
 
     #[test]

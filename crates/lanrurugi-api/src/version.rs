@@ -269,15 +269,15 @@ pub fn current_release() -> Option<String> {
     RELEASE_CACHE
         .get_or_init(|| {
             let usable = |value: &str| !value.is_empty() && value != "unknown";
-            if let Ok(value) = std::env::var("LANRURUGI_RELEASE") {
-                if usable(&value) {
-                    return Some(value);
-                }
+            if let Ok(value) = std::env::var("LANRURUGI_RELEASE")
+                && usable(&value)
+            {
+                return Some(value);
             }
-            if let Some(value) = option_env!("LANRURUGI_RELEASE") {
-                if usable(value) {
-                    return Some(value.to_string());
-                }
+            if let Some(value) = option_env!("LANRURUGI_RELEASE")
+                && usable(value)
+            {
+                return Some(value.to_string());
             }
             current_sha()
         })
@@ -287,15 +287,17 @@ pub fn current_release() -> Option<String> {
 pub(crate) fn current_sha() -> Option<String> {
     SHA_CACHE
         .get_or_init(|| {
-            if let Ok(value) = std::env::var("LANRURUGI_GIT_SHA") {
-                if !value.is_empty() && value != "unknown" {
-                    return Some(value);
-                }
+            if let Ok(value) = std::env::var("LANRURUGI_GIT_SHA")
+                && !value.is_empty()
+                && value != "unknown"
+            {
+                return Some(value);
             }
-            if let Some(value) = option_env!("LANRURUGI_GIT_SHA") {
-                if !value.is_empty() && value != "unknown" {
-                    return Some(value.to_string());
-                }
+            if let Some(value) = option_env!("LANRURUGI_GIT_SHA")
+                && !value.is_empty()
+                && value != "unknown"
+            {
+                return Some(value.to_string());
             }
             let output = Command::new("git")
                 .arg("rev-parse")
@@ -388,10 +390,10 @@ async fn github_get(path: &str) -> Result<Value, String> {
         .get(&url)
         .header("Accept", "application/vnd.github.v3+json")
         .header("User-Agent", "lanrurugi");
-    if let Ok(token) = std::env::var("LANRURUGI_GITHUB_TOKEN") {
-        if !token.is_empty() {
-            request = request.bearer_auth(token);
-        }
+    if let Ok(token) = std::env::var("LANRURUGI_GITHUB_TOKEN")
+        && !token.is_empty()
+    {
+        request = request.bearer_auth(token);
     }
     let response = request.send().await.map_err(|e| e.to_string())?;
     if !response.status().is_success() {
@@ -709,10 +711,11 @@ async fn changelog_since(
 async fn changelog_for(since: Option<&str>, version: &str, sha: Option<&str>) -> Option<Value> {
     let since = since?;
     let key = format!("{version},{}|{since}", sha.unwrap_or("unknown"));
-    if let Some(cached) = CHANGELOG_CACHE.lock().unwrap().as_ref() {
-        if cached.key == key && cached.fetched_at.elapsed() < CACHE_TTL {
-            return Some(cached.data.clone());
-        }
+    if let Some(cached) = CHANGELOG_CACHE.lock().unwrap().as_ref()
+        && cached.key == key
+        && cached.fetched_at.elapsed() < CACHE_TTL
+    {
+        return Some(cached.data.clone());
     }
     if recently_failed(&CHANGELOG_FAILED, &key) {
         return None;
@@ -882,10 +885,10 @@ pub fn built_at_millis() -> Option<i64> {
 
 /// Container hostname, so several installs forwarding to one tracker stay distinguishable.
 pub fn hostname() -> String {
-    if let Ok(value) = std::env::var("HOSTNAME") {
-        if !value.trim().is_empty() {
-            return value;
-        }
+    if let Ok(value) = std::env::var("HOSTNAME")
+        && !value.trim().is_empty()
+    {
+        return value;
     }
     std::fs::read_to_string("/etc/hostname")
         .ok()

@@ -63,6 +63,7 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
     let state = AppState {
+        restore_gate: lanrurugi_core::restore_gate::RestoreGate::new(),
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         discovery_singleflight: std::sync::Arc::new(
             lanrurugi_core::singleflight::Singleflight::new(8),
@@ -1322,6 +1323,7 @@ async fn static_frontend_is_served_with_spa_fallback() {
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
     let state = AppState {
+        restore_gate: lanrurugi_core::restore_gate::RestoreGate::new(),
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         discovery_singleflight: std::sync::Arc::new(
             lanrurugi_core::singleflight::Singleflight::new(8),
@@ -1499,6 +1501,7 @@ async fn docs_dir_is_served_under_docs_and_not_shadowed_by_the_spa_fallback() {
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
     let state = AppState {
+        restore_gate: lanrurugi_core::restore_gate::RestoreGate::new(),
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         discovery_singleflight: std::sync::Arc::new(
             lanrurugi_core::singleflight::Singleflight::new(8),
@@ -1786,6 +1789,7 @@ async fn subfolders_to_categories_creates_a_category_visible_in_list_all() {
         .unwrap();
 
     let state = AppState {
+        restore_gate: lanrurugi_core::restore_gate::RestoreGate::new(),
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         discovery_singleflight: std::sync::Arc::new(
             lanrurugi_core::singleflight::Singleflight::new(8),
@@ -2002,6 +2006,7 @@ async fn subfolders_to_tankoubons_creates_tankoubons_visible_in_list_all() {
     }
 
     let state = AppState {
+        restore_gate: lanrurugi_core::restore_gate::RestoreGate::new(),
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         discovery_singleflight: std::sync::Arc::new(
             lanrurugi_core::singleflight::Singleflight::new(8),
@@ -2693,4 +2698,72 @@ async fn source_lookup_answers_at_the_archive_level_for_a_batch() {
     lanrurugi_search::indexer::remove_archive_index(&redis.search, &eq, &id, title, &tags)
         .await
         .unwrap();
+}
+
+/// The write gate itself, on a router that has only the routes the table names — no Redis, no app
+/// state, so this is a pure check of the middleware's allow/deny table.
+#[tokio::test]
+async fn a_closed_restore_gate_pauses_writes_and_lets_reads_through() {
+    use axum::body::Body;
+    use axum::middleware::from_fn_with_state;
+    use axum::routing::{get, post};
+    use tower::ServiceExt;
+
+    let gate = lanrurugi_core::restore_gate::RestoreGate::new();
+    let app = axum::Router::new()
+        .route("/api/archives", get(|| async { "read" }))
+        .route("/api/archives", post(|| async { "write" }))
+        .route("/api/login", post(|| async { "login" }))
+        .route("/api/backups/x/restore", post(|| async { "restore" }))
+        .layer(from_fn_with_state(
+            gate.clone(),
+            lanrurugi_api::procedure::restore_write_gate,
+        ));
+
+    let call = |method: &'static str, uri: &'static str| {
+        let app = app.clone();
+        async move {
+            app.oneshot(
+                axum::http::Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+        }
+    };
+
+    gate.close();
+    assert_eq!(
+        call("GET", "/api/archives").await.status(),
+        axum::http::StatusCode::OK,
+        "reads stay available during a restore"
+    );
+    assert_eq!(
+        call("POST", "/api/login").await.status(),
+        axum::http::StatusCode::OK,
+        "login must keep working, or a logged-out user could not come back"
+    );
+    let paused = call("POST", "/api/archives").await;
+    assert_eq!(paused.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+    let body = axum::body::to_bytes(paused.into_body(), 4096)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap()["reason"],
+        "restore_in_progress"
+    );
+    assert_eq!(
+        call("POST", "/api/backups/x/restore").await.status(),
+        axum::http::StatusCode::CONFLICT,
+        "a second restore is a conflict, not a retryable 503"
+    );
+
+    gate.open();
+    assert_eq!(
+        call("POST", "/api/archives").await.status(),
+        axum::http::StatusCode::OK
+    );
 }

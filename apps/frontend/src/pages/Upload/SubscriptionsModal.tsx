@@ -32,14 +32,26 @@ import { toast } from "@/toast"
 
 import { CandidateTitleLink } from "../Settings/CandidateTitleLink"
 import { PendingApprovals } from "../Settings/PendingApprovals"
+import { preferredTitle } from "../Settings/preferredTitle"
 import { SubscriptionGroupHead, useCollapsedGroups } from "../Settings/SubscriptionGroupHead"
 import {
   PostedCell,
   RatingCell,
+  reasonText,
   SUBSCRIPTION_LIST_COLUMNS,
   UploaderCell,
 } from "../Settings/SubscriptionPreview"
-import { groupBySubscription, reservationReasonText, tooSoonText } from "../Settings/subscriptionVerdicts"
+import { SortHead } from "../Settings/SubscriptionSortHead"
+import type { SortFields, SubscriptionSort, SubscriptionSortKey } from "../Settings/subscriptionVerdicts"
+import {
+  compareBySort,
+  comparePostedDesc,
+  groupBySubscription,
+  nextSubscriptionSort,
+  reservationReasonText,
+  SUBSCRIPTION_DEFAULT_SORT,
+  tooSoonText,
+} from "../Settings/subscriptionVerdicts"
 import { ICON_BUTTON_STYLE } from "./shared"
 
 export type SubscriptionsBand = "pending" | "all" | "match" | "failed" | "blocked"
@@ -83,6 +95,17 @@ function bandOf(record: CandidateRecord): "match" | "waiting" | "excluded" | "he
 function outcomeOf(entry: HistoryEntry): { key: string; band: keyof typeof ROW_CLASS } | null {
   // Answered "no" from the approval list, and never queued: the cycle's "awaiting approval" is stale.
   if (entry.skipped && !entry.download) return { key: "subscriptions.outcomeSkipped", band: "excluded" }
+  // Deleted after it was handled. Checked first because it is the newest fact about the work: a queue
+  // row can say `done` while the archive has already been thrown out of the library.
+  if (entry.deleted) {
+    return {
+      key:
+        entry.deleted.kind === "recycled"
+          ? "subscriptions.outcomeDeletedRecycled"
+          : "subscriptions.outcomeDeletedQueue",
+      band: "excluded",
+    }
+  }
   const state = entry.download?.state
   switch (state) {
     case "done":
@@ -93,9 +116,11 @@ function outcomeOf(entry: HistoryEntry): { key: string; band: keyof typeof ROW_C
       return { key: "upload.cancelled", band: "excluded" }
     case "awaiting_revision_confirmation":
       return { key: "subscriptions.verdictAwaitingApproval", band: "waiting" }
-    default:
-      return null
   }
+  // Nothing in the queue speaks for this row any more (the retained rows age out, a deleted one is
+  // gone), but the library holds it: that is what the row's decision actually led to.
+  if (entry.held) return { key: "subscriptions.outcomeCatalogued", band: "held" }
+  return null
 }
 
 /** One Font Awesome class per queue state. Shape carries the state and the tooltip names it — no new
@@ -423,20 +448,70 @@ export function SubscriptionsModal({
           reservation: r,
         }
       })
-      return [...queued, ...unqueued].sort((a, b) => b.checked_at - a.checked_at)
+      return [...queued, ...unqueued]
     }
     // "Accepted" is about what happened, not about what the cycle's verdict says *now*: a work that
     // was queued and has since been catalogued reads `already_held`, and one still sitting in the
     // queue reads `queued` — both were accepted, and the queue record is the evidence of it. Without
     // the `download` half this tab is empty whenever nothing happens to be in flight at this second.
-    if (band === "match")
-      return all.filter((e) => (bandOf(e.candidate) === "match" && !e.skipped) || e.download != null)
+    // "Accepted" is a membership list, not a view of the current state: a row stays here until its
+    // record expires. Deriving it from the verdict or the queue row instead is what let a row vanish
+    // for a reason that is not expiry — a later cycle re-reading it as `already_held`, a queue row
+    // swept after its retention, a work deleted from the library.
+    if (band === "match") return all.filter((e) => e.accepted === true && !e.skipped)
     return all.filter((e) => bandOf(e.candidate) === "excluded")
   }, [history.data, band, blockedRows, reservations.data])
   const rows = unfilteredRows.filter(
     (e) =>
       (!subscriptionFilter || e.subscription_id === subscriptionFilter) &&
       (band !== "all" || !skippedOnly || (e.skipped && !e.download)),
+  )
+
+  // Every band reads in the clicked column's order, not just the ones the API already sorts: the
+  // blocked list comes from its own endpoint in block order, and the failure list merges two
+  // sources. Publication time is the default and stays the tie-breaker underneath every column, so
+  // the list is never left in an order two equal values could shuffle (`comparePostedDesc` is what
+  // makes that a total order).
+  const [sort, setSort] = useState<SubscriptionSort>(SUBSCRIPTION_DEFAULT_SORT)
+  const onSort = useCallback(
+    (key: SubscriptionSortKey) => setSort((current) => nextSubscriptionSort(current, key)),
+    [],
+  )
+  const sortFields = useCallback(
+    (e: Row): SortFields => {
+      const outcome = e.reservation ? { key: "subscriptions.outcomeDownloadFailed" } : outcomeOf(e)
+      return {
+        // The title the row shows, so sorting this column reorders what the reader is reading.
+        title: preferredTitle(e.candidate.title, titleOrder) ?? e.candidate.source_url,
+        posted: e.candidate.posted_at ?? null,
+        uploader: e.candidate.uploader ?? "",
+        rating: e.candidate.rating ?? null,
+        // Likewise the verdict's own wording: a blocked work and an outcome the queue recorded read
+        // as different answers, and those answers are what this column is being sorted by.
+        verdict:
+          band === "blocked"
+            ? t("subscriptions.blockedWork")
+            : outcome
+              ? t(outcome.key)
+              : reasonText(t, e.candidate).short,
+      }
+    },
+    [band, t, titleOrder],
+  )
+  const sortedRows = useMemo(() => {
+    const keyed = rows.map((e) => ({ e, fields: sortFields(e) }))
+    keyed.sort((a, b) => compareBySort(a.fields, b.fields, sort) || comparePostedDesc(a.e, b.e))
+    return keyed.map((k) => k.e)
+  }, [rows, sort, sortFields])
+
+  // Groups keep the order of the subscription filter's own list (the order `useSubscriptions`
+  // answers in, which is the order the select above offers): a heading click reorders the works
+  // *inside* a subscription and nothing else. Grouping the sorted rows without that order is what
+  // made a column click reshuffle whole subscriptions instead of rows.
+  const groups = groupBySubscription(
+    sortedRows,
+    (e) => e.subscription_id,
+    (subscriptions.data ?? []).map((sub) => sub.id),
   )
   const all = subscriptions.data ?? []
   const pendingShown = (pending.data ?? []).filter(
@@ -516,7 +591,7 @@ export function SubscriptionsModal({
         )
       ) : history.isPending || (band === "blocked" && blocked.isPending) ? (
         <HistorySkeleton />
-      ) : rows.length === 0 ? (
+      ) : sortedRows.length === 0 ? (
         <p className="sub-form-hint">
           {t(
             band === "blocked"
@@ -538,14 +613,44 @@ export function SubscriptionsModal({
         >
           <div className="preview-row preview-head">
             <span className="preview-index">#</span>
-            <span className="preview-title">{t("subscriptions.colWork")}</span>
-            <span className="preview-posted">{t("subscriptions.field.posted_at")}</span>
-            <span className="preview-uploader">{t("subscriptions.colUploader")}</span>
-            <span className="preview-rating">{t("subscriptions.field.rating")}</span>
-            <span className="preview-verdict">{t("subscriptions.colVerdict")}</span>
+            <SortHead
+              className="preview-title"
+              label={t("subscriptions.colWork")}
+              sortKey="title"
+              sort={sort}
+              onSort={onSort}
+            />
+            <SortHead
+              className="preview-posted"
+              label={t("subscriptions.field.posted_at")}
+              sortKey="posted"
+              sort={sort}
+              onSort={onSort}
+            />
+            <SortHead
+              className="preview-uploader"
+              label={t("subscriptions.colUploader")}
+              sortKey="uploader"
+              sort={sort}
+              onSort={onSort}
+            />
+            <SortHead
+              className="preview-rating"
+              label={t("subscriptions.field.rating")}
+              sortKey="rating"
+              sort={sort}
+              onSort={onSort}
+            />
+            <SortHead
+              className="preview-verdict"
+              label={t("subscriptions.colVerdict")}
+              sortKey="verdict"
+              sort={sort}
+              onSort={onSort}
+            />
           </div>
 
-          {groupBySubscription(rows, (e) => e.subscription_id).map((group) => (
+          {groups.map((group) => (
             <Fragment key={group.subscriptionId}>
               <SubscriptionGroupHead
                 name={
@@ -569,6 +674,12 @@ export function SubscriptionsModal({
               : e.download?.error
                 ? <QueueErrorText error={e.download.error as QueueError} />
                 : null
+            // The row's own time: when it was thrown away, when it entered the library — the fact a
+            // catalogued row is about — or, failing both, when a check last saw it. The tooltip
+            // names which of the three it is showing.
+            const happenedAt = e.deleted?.at ?? e.added_at ?? e.checked_at
+            const happenedWhat =
+              !e.deleted && e.added_at ? "subscriptions.colAdded" : "subscriptions.colWhen"
             return (
             <div
               key={`${e.subscription_id}-${e.candidate.source_url}-${e.checked_at}-${i}`}
@@ -585,14 +696,30 @@ export function SubscriptionsModal({
                     fixed-width and always present: only downloaded works have a state, and letting
                     their titles start further right than everyone else's would be worse than the
                     icon is good. */}
-                {e.download && (
+                {(e.download || e.deleted) && (
                   <span className="history-title-state">
-                    <Tooltip label={stateLabel(e.download.state, t)} zIndex={9700}>
-                      <i
-                        className={`fa ${DOWNLOAD_STATE_ICON[e.download.state] ?? "fa-circle"} history-state-icon ${stateIconClass(e.download.state)}`}
-                        aria-label={stateLabel(e.download.state, t) ?? undefined}
-                      ></i>
-                    </Tooltip>
+                    {e.deleted ? (
+                      <Tooltip
+                        label={t("subscriptions.outcomeDeletedHint", {
+                          when: new Date(e.deleted.at * 1000).toLocaleString(),
+                        })}
+                        zIndex={9700}
+                      >
+                        {/* A shape of its own rather than a new colour: nothing is in flight and
+                            nothing is in the library, so neither existing state's colour fits. */}
+                        <i
+                          className="fa fa-trash history-state-icon history-state-running"
+                          aria-label={t("subscriptions.outcomeDeleted") ?? undefined}
+                        ></i>
+                      </Tooltip>
+                    ) : e.download ? (
+                      <Tooltip label={stateLabel(e.download.state, t)} zIndex={9700}>
+                        <i
+                          className={`fa ${DOWNLOAD_STATE_ICON[e.download.state] ?? "fa-circle"} history-state-icon ${stateIconClass(e.download.state)}`}
+                          aria-label={stateLabel(e.download.state, t) ?? undefined}
+                        ></i>
+                      </Tooltip>
+                    ) : null}
                   </span>
                 )}
                 <CandidateTitleLink record={e.candidate} order={titleOrder} />
@@ -621,8 +748,8 @@ export function SubscriptionsModal({
                   ) : (
                     <Verdict record={e.candidate} />
                   )}
-                <span className="history-when" title={t("subscriptions.colWhen")}>
-                  {new Date(e.checked_at * 1000).toLocaleString()}
+                <span className="history-when" title={t(happenedWhat)}>
+                  {new Date(happenedAt * 1000).toLocaleString()}
                 </span>
                 {/* Both directions from the row itself. The history cannot mark a blocked work by
                     itself — in it, a blocked work reads exactly like any other seen one — so the

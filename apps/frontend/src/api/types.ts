@@ -40,7 +40,15 @@ export interface ArchiveMetadata {
    *  in a result set its own tags do not explain. */
   match_reason?: {
     kind: "members"
-    members: { arcid: string; name: string }[]
+    members: {
+      arcid: string
+      /** The volume's own title, so a chapter name never appears alone. */
+      title?: string
+      /** The name the tankoubon gives this volume, when it has one. */
+      chapter?: string | null
+      /** `chapter` when set, else `title` — kept for callers that only want one label. */
+      name: string
+    }[]
   }
 }
 
@@ -148,6 +156,12 @@ export interface Settings {
   recycle_retention_days: number
   /** Recycle-bin size cap in GiB; `0` means unlimited. */
   recycle_max_size_gb: number
+  /** specs/028: the whole snapshot plan list as a JSON array string (an empty string means the
+   *  plans were never configured). Written whole by the backups page; `/api/backups` reports the
+   *  same list with the instants computed from each plan's cron. */
+  snapshot_schedules?: string
+  /** Full snapshot backups kept per schedule (1-365). */
+  snapshot_full_keep?: number
   /** Absolute refresh-token lifetime in seconds — an optional hard cap anchored to the original
    *  login; silent refreshes never extend it. `0` means no cap at all, so a session lives as long
    *  as it is used at least once per `refresh_token_idle_lifetime_secs`. */
@@ -348,6 +362,9 @@ export interface PluginInfo {
   version: string
   icon: string | null
   oneshot_arg: string | null
+  /** The plugin's own `pluginInfo().namespace` — what a `login_from` refers to it by. `namespace`
+   * above is its file path (`login/ehentai`), which is what every endpoint takes. */
+  declared_namespace: string
   login_from: string | null
   /** Regex matched against a candidate URL to trigger a download/metadata fetch. Not for
    * domain-ownership lookups — see `domain_match`. */
@@ -689,6 +706,25 @@ export interface HistoryEntry {
     /** Whether the queue would accept starting it again. */
     can_retry: boolean
   } | null
+  /** The work has since been deleted: `recycled` from the library (still restorable from the recycle
+   *  bin) or `queue` (the user threw the queue row away before it arrived). The cycle's verdict is
+   *  never rewritten, so without this a deleted work reads as "queued" for ever. */
+  deleted?: {
+    at: number
+    kind: "recycled" | "queue"
+  } | null
+  /** No queue record is left to speak for this work, but the library holds an archive with its
+   *  source: the finished queue rows are swept by the retention setting, and a deleted one leaves
+   *  nothing behind — hence "已入库" in the library yet "added to the download queue" here. */
+  held?: boolean
+  /** When the library's own archive for this source entered the library (its `date_added:`).
+   *  Present for every row the library still holds — a row the queue also reports on included,
+   *  since a finished download is not when the work was catalogued. Absent when the work is gone
+   *  from the library, or its archive was stamped without one (`usedateadded` off). */
+  added_at?: number | null
+  /** This subscription queued the work for download. The accepted tab's membership predicate, kept
+   *  on the subscription's own record so a row only ever leaves that tab by expiring. */
+  accepted?: boolean
 }
 
 export interface SubscriptionSource {
@@ -880,10 +916,8 @@ export interface StatsNamespaceTags {
 export interface StatsPreferences {
   read_archives: number
   namespaces: { namespace: string; weight: number; archives: number }[]
-  /** The promoted axes (`language`, `artist`, `circle`, `cosplayer`) — always shown, in that order, however
-   *  low they rank among all namespaces; excluded from `by_namespace`. */
-  highlights: StatsNamespaceTags[]
-  /** Top tags for the remaining namespaces. */
+  /** Top tags per namespace: the promoted axes (`language`, `artist`, `circle`, `cosplayer`) first,
+   *  in that order however low they rank, then the highest-weighted of the rest. */
   by_namespace: StatsNamespaceTags[]
   /** Read archives per rating, `stars: 0` meaning unrated. */
   ratings: { stars: number; archives: number }[]
@@ -900,6 +934,22 @@ export interface JobStatus {
 
 /** Native job-console shape, distinct from the legacy-mimicking `JobStatus` above. */
 export type JobRecordState = "queued" | "active" | "finished" | "failed"
+
+/** One entry of a job's own phase timeline (029, `contracts/jobs-phases.md`). Epoch milliseconds. */
+export interface JobPhase {
+  name: DownloadPhaseName
+  started_at: number
+  ended_at?: number | null
+}
+
+/** The fixed vocabulary shared with the server: anything else is a bug, not a future phase. */
+export type DownloadPhaseName =
+  | "queued"
+  | "negotiate"
+  | "waiting"
+  | "transfer"
+  | "ingest"
+  | "publish"
 
 export interface JobRecord {
   id: string
@@ -922,6 +972,11 @@ export interface JobRecord {
   /** Absent means unlimited (or non-download job). */
   rate_limit_bytes_per_sec?: number
   rate_limit_matched_pattern?: string
+  /** Fixed phase timeline of a download task (029). Absent — the whole key, not `[]` — for every
+   *  job that never reports phases, which is also the fallback the queue row uses to show a single
+   *  total instead of a breakdown. At most one entry is still open (`ended_at` absent) while it runs;
+   *  a finished/failed job has them all closed. */
+  phases?: JobPhase[]
   result: unknown | null
   /** `true` when the result exceeded the server's size cap and was dropped (not partially kept). */
   result_truncated: boolean
@@ -955,7 +1010,14 @@ export type PluginErrorValue = string | number
 /** Every structured download-queue failure the backend can produce, tagged by `kind` so
  * `QueueErrorText` can map it to a translated, interpolated string. */
 export type QueueError =
-  | { kind: "plugin_reported"; plugin: string; error_code: string; data: Record<string, PluginErrorValue> }
+  | {
+      kind: "plugin_reported"
+      plugin: string
+      error_code: string
+      data: Record<string, PluginErrorValue>
+      /** The plugin says this is fixed in settings: its own (`self`) or its login plugin's. */
+      settings?: "self" | "login"
+    }
   | { kind: "plugin_execution_failed"; plugin: string }
   | { kind: "malformed_plugin_response"; plugin: string }
   | { kind: "empty_plugin_result"; plugin: string }
@@ -1030,6 +1092,11 @@ export interface DownloadQueueItem {
    *  finished row keeps its rate after the job's in-memory record is gone. Absent for rows that
    *  completed before the field existed. */
   average_bytes_per_sec?: number | null
+  /** The job's phase timeline, persisted when the download completes for the same reason as the
+   *  rate above: without it a finished row whose job record is gone has to report its whole elapsed
+   *  time, waiting included, and cannot show the queue/transfer/ingest split. Absent for rows that
+   *  completed before the field existed. */
+  phases?: JobPhase[] | null
   /** Whether the server actually serving this download honours `Range`, learned from a real resume
    *  attempt (or a previous download behind the same domain rule). `false` means pausing and
    *  continuing restarts the transfer; absent means nothing has been observed yet. */
@@ -1663,6 +1730,8 @@ export interface DuplicateReview {
 
 export interface DuplicateGroupView {
   key: string
+  /** Every member was explicitly kept: handled, and listed apart from the groups still to decide. */
+  resolved?: boolean
   chained: boolean
   middle: string | null
   members: DuplicateMember[]
@@ -1673,7 +1742,26 @@ export interface DuplicateGroupView {
   patch_links?: { target: string; source: string }[]
 }
 
+/** A duplicate scan's state, from `GET /database/duplicates/events` and the groups listing. */
+export interface DuplicateScanStatus {
+  /** A scan is queued or running; the stored groups are what it has found so far. */
+  scanning: boolean
+  /** The running scan's progress, 0–1. */
+  progress: number
+  /** Changes whenever the stored groups do; the page refetches them only then. */
+  revision: number
+  phase: "preparing" | "covers" | "grouping" | "patches" | "reviewing" | "cleanup" | null
+  /** Covers hashed / groups reviewed so far, and of how many; both 0 in phases that do not count. */
+  done: number
+  total: number
+  /** A scan was cut short by a restart and has not started again yet: the groups are incomplete. */
+  interrupted: boolean
+  /** Archives the last scan could not compare because they have no cover thumbnail. */
+  no_cover: number
+}
+
 export interface DuplicateGroupsResponse {
+  status?: DuplicateScanStatus
   scanned_at: number
   algorithm: string
   chained_groups: number
@@ -1783,4 +1871,179 @@ export interface IntegrityScanStatus {
   running: { job: string; done: number; total: number } | null
   last_run: { finished_at: number; checked: number; damaged: number; cancelled: boolean } | null
   archives: DamagedArchive[]
+}
+
+// --- specs/028 deletion safety net: automatic snapshots & deletion journal ----------------
+
+/** What one snapshot contains — the counts the dashboard reads off the snapshot's own document,
+ *  plus the file's size on disk. `null` on a snapshot the server could not read (or one taken by
+ *  an older server that did not record a summary). */
+export interface BackupSummary {
+  archives: number
+  archives_with_tags: number
+  categories: number
+  tankoubons: number
+  stamps: number
+  bookmarks: number
+  bytes: number
+}
+
+/** One plan in the automatic snapshot schedule (`GET /api/backups`'s `schedule.items`). The cron
+ *  string is the source of truth; `next_runs` is what the server computed from it. Editing writes
+ *  the whole list as JSON into the `snapshot_schedules` setting — this shape is read-only. */
+export interface BackupScheduleItem {
+  /** Stable short id, generated by the page when the plan is added (`plan-…`). */
+  id: string
+  /** User-editable; may be empty, in which case the page shows a positional fallback name. */
+  label: string
+  enabled: boolean
+  /** `hourly` | `daily` | `weekly` | `monthly` | `monthly-first-weekday` | `custom`. */
+  preset: string
+  /** 6–7 fields (`second minute hour day month weekday [year]`). */
+  cron: string
+  /** RFC 3339 instant of the last automatic run, or `null` before the first one. */
+  last_fire_at: string | null
+  /** The next five fire instants, RFC 3339, empty when the plan is off or the cron never fires. */
+  next_runs: string[]
+}
+
+/** The automatic snapshot schedule as the server has it (`GET /api/backups`). Every plan is
+ *  evaluated in `timezone`; the list itself lives in the `snapshot_schedules` setting. */
+export interface BackupSchedule {
+  /** Display label for the zone the crons are evaluated in, e.g. `Asia/Tokyo (+09:00)`. */
+  timezone: string
+  /** The bare IANA id (`Asia/Tokyo`) — what `Intl.DateTimeFormat` accepts. */
+  timezone_name?: string
+  items: BackupScheduleItem[]
+}
+
+/** `POST /api/backups/schedule/preview` — validation + the next five runs for a candidate cron. */
+export interface CronPreviewResponse {
+  valid: boolean
+  error?: string | null
+  next_runs: string[]
+}
+
+/** One file under `<library>/.lanrurugi-backups/` (`GET /api/backups`), newest first.
+ *  `"backup"` is a full Redis RDB dump (only an operator can put it back, by replacing the file and
+ *  restarting Redis); `"export"` is a JSON document this page can restore by itself. */
+export interface BackupEntry {
+  name: string
+  created_at: string
+  reason: string
+  size_bytes: number
+  /** `false` means the file exists but isn't a parseable backup document (for a `backup` entry: an
+   *  unreadable RDB) — the restore action is offered for exports only. */
+  usable: boolean
+  /** `"backup"` | `"export"`; absent while a server that predates the split answers. */
+  kind?: string
+  /** Kept forever regardless of the daily/weekly/`pre-*` retention windows. */
+  pinned?: boolean
+  /** The plan that produced this file, or `null` for a manual/`pre-*` one. Optional (and
+   *  `null`-able) so a server that predates the field reads as "no plan". */
+  schedule_id?: string | null
+  /** That plan's label at the time the file was recorded; the page prefers its own live list. */
+  schedule_label?: string | null
+  /** A user-supplied alias for this file, at most 200 characters. The field is omitted when empty. */
+  note?: string
+  /** Absent as well as `null` while a server that predates the field answers — the page renders
+   *  both as an unknown summary rather than crashing. Only JSON exports carry one. */
+  summary?: BackupSummary | null
+}
+
+export interface BackupsResponse {
+  operation: string
+  success: number
+  daily_keep: number
+  week_keep: number
+  /** Full backups kept per schedule (`snapshot_full_keep`); the snapshot list's own budget. */
+  full_keep?: number
+  entries: BackupEntry[]
+  /** Optional for the same reason as `BackupEntry.summary`: an older server simply omits it. */
+  schedule?: BackupSchedule | null
+}
+
+/** `POST /api/backups` / `POST /api/backups/export` — both start an asynchronous job. */
+export interface BackupJobResponse {
+  job_id: string
+}
+
+/** `GET /api/backups/jobs/{id}` and the SSE stream's event payloads. */
+export interface BackupJobStatus {
+  /** `queued` | `running` | `done` | `failed` (a newer server may add states). */
+  state: string
+  /** 0–100, one-decimal precision. */
+  percent: number
+  bytes_written: number
+  bytes_expected: number
+  started_at: string | null
+  finished_at: string | null
+  error?: string | null
+  /** Present once the job is done. */
+  entry?: BackupEntry | null
+  /** The legacy import's summary object, when the job carries one. */
+  notes?: unknown
+}
+
+export interface DeleteBackupResponse {
+  operation: string
+  success: number
+  deleted: string
+}
+
+/** `POST`/`DELETE /api/backups/{name}/pin` — both idempotent, both answer with the resulting state. */
+export interface PinBackupResponse {
+  operation: string
+  success: number
+  name: string
+  pinned: boolean
+}
+
+export interface RestoreBackupResponse {
+  operation: string
+  success: number
+  restored_from: string
+  /** The `pre-restore` snapshot taken before this restore ran. */
+  safety: string
+  /** The asynchronous restore job to follow over `/api/backups/jobs/{id}/events`. */
+  job_id: string
+}
+
+/** One journal entry that can still be restored (`GET /api/deletions`). */
+export interface DeletionEntry {
+  id: string
+  title: string
+  deleted_at: string
+  /** What removed the record: `clean` | `single` | `superseded` | `split` | `other`. */
+  source: string
+  path: string
+  /** A `stat` at read time — false means restoring leaves the record without its file. */
+  file_exists: boolean
+  /** The record is back already (a recycle-bin restore, a rescan); restoring would be refused. */
+  record_exists: boolean
+}
+
+export interface DeletionsResponse {
+  operation: string
+  success: number
+  retention_days: number
+  total: number
+  entries: DeletionEntry[]
+}
+
+export interface RestoreDeletionResponse {
+  operation: string
+  success: number
+  id: string
+  restored: number
+  file_missing: boolean
+}
+
+export interface RestoreAllDeletionsResponse {
+  operation: string
+  success: number
+  restored: number
+  skipped: number
+  missing_files: number
+  failed: number
 }

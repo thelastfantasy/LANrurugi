@@ -4,7 +4,7 @@
 # bundled plugins. Same steps as the image's frontend-builder/docs-builder stages.
 #
 # Usage: build-native-assets.sh <out-dir>
-# Needs pnpm, node, deno and mise; docs/public/openapi.json must exist
+# Needs pnpm, node, deno and mise; apps/docs-site/public/openapi.json must exist
 # (`cargo run -p lanrurugi-api-docgen`, or `mise run docs-api`).
 set -eu
 
@@ -13,8 +13,8 @@ repo="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo"
 case "$out" in /*) ;; *) out="$repo/$out" ;; esac
 
-if [ ! -f docs/public/openapi.json ]; then
-    echo "build-native-assets: docs/public/openapi.json is missing — run mise run docs-api" >&2
+if [ ! -f apps/docs-site/public/openapi.json ]; then
+    echo "build-native-assets: apps/docs-site/public/openapi.json is missing — run mise run docs-api" >&2
     exit 1
 fi
 
@@ -27,9 +27,10 @@ DOCS_BASE=/docs/ DOCS_SDK_URL=/docs/sdk/ pnpm --filter lanrurugi-docs run build
 rm -rf "$out"
 mkdir -p "$out/docs" "$out/plugins"
 cp -R apps/frontend/dist "$out/frontend"
-cp -R docs/dist/. "$out/docs/"
-cp -R docs/dist-sdk "$out/docs/sdk"
-cp -R docs/dist-swagger "$out/docs/swagger"
+cp -R apps/docs-site/dist/. "$out/docs/"
+cp -R apps/docs-site/dist-sdk "$out/docs/sdk"
+cp -R apps/docs-site/dist-swagger "$out/docs/swagger"
 # Tracked plugin files only: local AI-wizard drafts under plugins/custom/ stay out of packages.
 git ls-files -z plugins | xargs -0 tar -cf - | tar -xf - -C "$out/plugins" --strip-components=1
+node scripts/third-party-licenses.mjs --out "$out/THIRD_PARTY_LICENSES.txt"
 echo "build-native-assets: $out"

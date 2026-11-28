@@ -1,6 +1,6 @@
 //! Carries the current HTTP request's trace identity into code that reports its own spans.
 //!
-//! `sentry_tower`'s [`SentryHttpLayer`] creates one transaction per request and installs it in the
+//! `sentry_tower`'s `SentryHttpLayer` creates one transaction per request and installs it in the
 //! hub's *scope* — which is thread-local, not task-local. A handler may resume on a different
 //! worker thread than the one that first polled the request, so a span started deep inside a
 //! handler has no reliable way to find that transaction, and `sentry::start_span` would attach to

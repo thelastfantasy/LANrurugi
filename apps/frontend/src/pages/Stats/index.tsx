@@ -10,7 +10,7 @@ import { routes } from "@/lib/routes"
 import { getTagSearchURL } from "@/lib/tagFormat"
 import { useApplyTheme } from "@/theme"
 
-import { StatsCard, useStatsPanel } from "./Charts"
+import { StatsCard, StatsSection, useStatsPanel } from "./Charts"
 import { formatBytes } from "./format"
 import { FormatDistribution } from "./FormatDistribution"
 import { IngestHistory } from "./IngestHistory"
@@ -188,10 +188,8 @@ export function Stats() {
         </div>
       )}
 
-      <h3 className="ih" style={{ marginTop: 20 }}>
-        {t("stats.tagCloud")}
-      </h3>
-
+      {/* A card like the dashboard sections above, so the cloud and its tag list line up with them. */}
+      <StatsSection title={t("stats.tagCloud")} icon="fa-tags">
       {stats.isLoading ? (
         <div id="statsLoading" style={{ width: "80%", marginLeft: "auto", marginRight: "auto", textAlign: "center" }}>
           <p>
@@ -220,7 +218,7 @@ export function Stats() {
           <ul
             className="collapsible extensible with-right-caret"
             id="detailedStats"
-            style={{ width: "80%", marginLeft: "auto", marginRight: "auto" }}
+            style={{ width: "100%", margin: 0, padding: 0 }}
           >
             <CollapsibleSection
               id="detailed-stats"
@@ -274,8 +272,8 @@ export function Stats() {
           </ul>
         </>
       )}
+      </StatsSection>
 
-      <br />
       <input type="button" id="goback" className="stdbtn" value={t("common.returnToLibrary") ?? undefined} onClick={() => navigate(routes.library())} />
     </div>
   )

@@ -353,10 +353,10 @@ pub async fn review_group(
     if members.len() < minimum {
         return Review::simple(ReviewStatus::FellBack, Some("members_changed".into()));
     }
-    if existing.is_none() {
-        if let Some(reason) = settled_reason(members) {
-            return Review::simple(ReviewStatus::Settled, Some(reason));
-        }
+    if existing.is_none()
+        && let Some(reason) = settled_reason(members)
+    {
+        return Review::simple(ReviewStatus::Settled, Some(reason));
     }
     let hash = content_hash(members, existing);
     if let Some(review) = cached(pool, id, &hash).await {

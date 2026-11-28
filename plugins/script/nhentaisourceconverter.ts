@@ -1,10 +1,10 @@
 // Converted from LANraragi/lib/LANraragi/Plugin/Scripts/nHentaiSourceConverter.pm, then hand-fixed
 // since the converter's raw output called a nonexistent JS equivalent of
 // `LANraragi::Model::Config->get_redis` (a Deno-sandboxed plugin has no direct Redis/archive-
-// storage access) — the host now fetches every archive's `id`/`tags` into `hostArgs.archives`
-// before this call, and this plugin returns its intended rewrites in `updates` for the host to
-// apply afterward, rather than writing storage itself (see `ScriptHostArgs`'s own docs in
-// `plugin-sdk.ts`).
+// storage access) — this plugin names `archives` in `host_arguments`, so the host fetches every
+// archive's `id`/`tags` into `hostArgs.archives` before the call, and names `tag_updates` in
+// `host_results`, so the rewrites this plugin returns in `updates` are written by the host rather
+// than by the plugin itself (see `ScriptHostArgs`'s own docs in `plugin-sdk.ts`).
 
 export function pluginInfo() {
   return {
@@ -16,6 +16,10 @@ export function pluginInfo() {
     author: "Guerra24 (ported)",
     description: "Converts \"source:{id}\" tags with 6 or less digits into \"source:nhentai.net/g/{id}\"",
     version: "0.1",
+    // Whole-library by design: the rewrite is computed across every record, not just one archive.
+    host_arguments: ["archives"],
+    // The plugin returns intended rewrites in `updates`; the host writes them back.
+    host_results: ["tag_updates"],
   };
 }
 

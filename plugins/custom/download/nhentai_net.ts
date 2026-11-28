@@ -74,12 +74,13 @@ function buildAuthHeaders(
 
 function errorForStatus(
   status: number,
-): { error_code: string; data: { status: string } } {
+): { error_code: string; data: { status: string }; settings?: "login" } {
   switch (status) {
     case 401:
       return {
         error_code: "nHentai API authentication failed",
         data: { status: String(status) },
+        settings: "login",
       };
     case 404:
       return {
@@ -137,7 +138,7 @@ export async function execDownload(hostArgs: NHentaiDownloadHostArgs) {
     logger.warn(
       "No Authorization header available from the nhapiauth login plugin — the nHentai download API requires an API key",
     );
-    return { error: { error_code: "Missing nHentai API credentials" } };
+    return { error: { error_code: "Missing nHentai API credentials", settings: "login" } };
   }
 
   let response: Response;

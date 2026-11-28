@@ -329,12 +329,16 @@ mod tests {
         // SAFETY of env mutation in tests: each test runs on its own thread; serialized via
         // the env var name being unique to this test.
         let artifact = &MODEL_ARTIFACTS[0];
-        std::env::set_var(
-            "LANRURUGI_EMBEDDING_MODEL_URL",
-            "https://mirror.example/model.onnx",
-        );
+        // Not provably sound: the test harness runs tests on several threads. Accepted because
+        // nothing else in this test binary reads this variable.
+        unsafe {
+            std::env::set_var(
+                "LANRURUGI_EMBEDDING_MODEL_URL",
+                "https://mirror.example/model.onnx",
+            )
+        };
         let url = resolved_url(artifact);
-        std::env::remove_var("LANRURUGI_EMBEDDING_MODEL_URL");
+        unsafe { std::env::remove_var("LANRURUGI_EMBEDDING_MODEL_URL") };
         assert_eq!(url, "https://mirror.example/model.onnx");
         // And the default when unset.
         assert!(resolved_url(artifact).contains("huggingface.co"));

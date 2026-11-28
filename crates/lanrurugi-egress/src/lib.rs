@@ -85,35 +85,37 @@ fn iface() -> Option<&'static CString> {
 /// The `sockaddr` is read field by field: `connect()` hands us whatever the caller passed, and the
 /// family is the only field guaranteed to exist for both address families.
 unsafe fn is_loopback(addr: *const libc::sockaddr) -> bool {
-    if addr.is_null() {
-        return true;
-    }
-    match (*addr).sa_family as c_int {
-        libc::AF_INET => {
-            let sin = &*(addr as *const libc::sockaddr_in);
-            // `s_addr` holds the address in network order; read back through the host's own byte
-            // order to recover the octets as they sit in memory.
-            let octets = sin.sin_addr.s_addr.to_ne_bytes();
-            // Loopback/unspecified are not egress; 169.254/16 is link-local (a camera, a printer,
-            // a container's own discovery) and binding it to the tunnel turns a working local call
-            // into a timeout, the same reason the IPv6 branch skips `fe80::/10`.
-            let first = octets[0];
-            first == 127 || first == 0 || (first == 169 && octets[1] == 254)
+    unsafe {
+        if addr.is_null() {
+            return true;
         }
-        libc::AF_INET6 => {
-            let sin6 = &*(addr as *const libc::sockaddr_in6);
-            let octets = sin6.sin6_addr.s6_addr;
-            let loopback = octets[..15].iter().all(|b| *b == 0) && octets[15] == 1;
-            // ::ffff:127.x.x.x — an IPv4 loopback expressed as IPv6.
-            let v4_mapped_loopback = octets[..10].iter().all(|b| *b == 0)
-                && octets[10] == 0xff
-                && octets[11] == 0xff
-                && octets[12] == 127;
-            // Link-local (fe80::/10) is not routable through the interface we are pinning to.
-            let link_local = octets[0] == 0xfe && (octets[1] & 0xc0) == 0x80;
-            loopback || v4_mapped_loopback || link_local
+        match (*addr).sa_family as c_int {
+            libc::AF_INET => {
+                let sin = &*(addr as *const libc::sockaddr_in);
+                // `s_addr` holds the address in network order; read back through the host's own byte
+                // order to recover the octets as they sit in memory.
+                let octets = sin.sin_addr.s_addr.to_ne_bytes();
+                // Loopback/unspecified are not egress; 169.254/16 is link-local (a camera, a printer,
+                // a container's own discovery) and binding it to the tunnel turns a working local call
+                // into a timeout, the same reason the IPv6 branch skips `fe80::/10`.
+                let first = octets[0];
+                first == 127 || first == 0 || (first == 169 && octets[1] == 254)
+            }
+            libc::AF_INET6 => {
+                let sin6 = &*(addr as *const libc::sockaddr_in6);
+                let octets = sin6.sin6_addr.s6_addr;
+                let loopback = octets[..15].iter().all(|b| *b == 0) && octets[15] == 1;
+                // ::ffff:127.x.x.x — an IPv4 loopback expressed as IPv6.
+                let v4_mapped_loopback = octets[..10].iter().all(|b| *b == 0)
+                    && octets[10] == 0xff
+                    && octets[11] == 0xff
+                    && octets[12] == 127;
+                // Link-local (fe80::/10) is not routable through the interface we are pinning to.
+                let link_local = octets[0] == 0xfe && (octets[1] & 0xc0) == 0x80;
+                loopback || v4_mapped_loopback || link_local
+            }
+            _ => true,
         }
-        _ => true,
     }
 }
 
@@ -127,22 +129,24 @@ unsafe fn is_loopback(addr: *const libc::sockaddr) -> bool {
 /// of another kind (a regular file, say) makes this fail with `ENOTSOCK`, which the caller turns
 /// into a refused connection rather than a crash.
 unsafe fn bind_device(fd: c_int) -> bool {
-    let Some(name) = iface() else {
-        return true;
-    };
-    let bytes = name.as_bytes_with_nul();
-    let ok = libc::setsockopt(
-        fd,
-        libc::SOL_SOCKET,
-        libc::SO_BINDTODEVICE,
-        bytes.as_ptr() as *const c_void,
-        bytes.len() as libc::socklen_t,
-    ) == 0;
-    if !ok {
-        // Leave errno from setsockopt in place so the caller sees EPERM/ENODEV, not a bare -1.
-        return false;
+    unsafe {
+        let Some(name) = iface() else {
+            return true;
+        };
+        let bytes = name.as_bytes_with_nul();
+        let ok = libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_BINDTODEVICE,
+            bytes.as_ptr() as *const c_void,
+            bytes.len() as libc::socklen_t,
+        ) == 0;
+        if !ok {
+            // Leave errno from setsockopt in place so the caller sees EPERM/ENODEV, not a bare -1.
+            return false;
+        }
+        true
     }
-    true
 }
 
 /// libc's `connect`, wrapped to pin the socket before the real call. `#[no_mangle]` keeps the
@@ -153,20 +157,22 @@ unsafe fn bind_device(fd: c_int) -> bool {
 /// The signature mirrors libc's own: `addr` must describe `len` bytes of a valid `sockaddr` for
 /// `fd`, and `fd` must be a socket the caller owns. Arguments are forwarded unchanged to the real
 /// function resolved through `RTLD_NEXT`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect(
     fd: c_int,
     addr: *const libc::sockaddr,
     len: libc::socklen_t,
 ) -> c_int {
-    if !is_loopback(addr) && !bind_device(fd) {
-        return -1;
-    }
-    match real_connect() {
-        Some(f) => f(fd, addr, len),
-        None => {
-            *libc::__errno_location() = libc::ENOSYS;
-            -1
+    unsafe {
+        if !is_loopback(addr) && !bind_device(fd) {
+            return -1;
+        }
+        match real_connect() {
+            Some(f) => f(fd, addr, len),
+            None => {
+                *libc::__errno_location() = libc::ENOSYS;
+                -1
+            }
         }
     }
 }
@@ -178,7 +184,7 @@ pub unsafe extern "C" fn connect(
 ///
 /// The signature mirrors libc's own: `buf` must be readable for `len` bytes, `addr` must describe
 /// `addr_len` bytes of a valid `sockaddr` for `fd`, and `fd` must be a socket the caller owns.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sendto(
     fd: c_int,
     buf: *const c_void,
@@ -187,14 +193,16 @@ pub unsafe extern "C" fn sendto(
     addr: *const libc::sockaddr,
     addr_len: libc::socklen_t,
 ) -> isize {
-    if !is_loopback(addr) && !bind_device(fd) {
-        return -1;
-    }
-    match real_sendto() {
-        Some(f) => f(fd, buf, len, flags, addr, addr_len),
-        None => {
-            *libc::__errno_location() = libc::ENOSYS;
-            -1
+    unsafe {
+        if !is_loopback(addr) && !bind_device(fd) {
+            return -1;
+        }
+        match real_sendto() {
+            Some(f) => f(fd, buf, len, flags, addr, addr_len),
+            None => {
+                *libc::__errno_location() = libc::ENOSYS;
+                -1
+            }
         }
     }
 }
@@ -202,11 +210,12 @@ pub unsafe extern "C" fn sendto(
 /// Tells the dispatcher the shim is loaded and in force. Runs before `main`, so the environment is
 /// single-threaded and this is the same mechanism glibc uses for its own constructors.
 extern "C" fn mark_active() {
-    std::env::set_var("LANRURUGI_EGRESS_ACTIVE", "1");
+    // SAFETY: an `.init_array` constructor runs before `main`, while the process is single-threaded.
+    unsafe { std::env::set_var("LANRURUGI_EGRESS_ACTIVE", "1") };
 }
 
 #[used]
-#[link_section = ".init_array"]
+#[unsafe(link_section = ".init_array")]
 static INIT: extern "C" fn() = mark_active;
 
 /// libc's `sendmsg`, the third way a datagram leaves without `connect`/`sendto` (a connected UDP
@@ -217,23 +226,25 @@ static INIT: extern "C" fn() = mark_active;
 ///
 /// `msg` must be a valid `msghdr` for `fd`; `msg_name` (when set) must describe `msg_namelen` bytes
 /// of a `sockaddr`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sendmsg(fd: c_int, msg: *const libc::msghdr, flags: c_int) -> isize {
-    let addr = if msg.is_null() {
-        std::ptr::null()
-    } else {
-        (*msg).msg_name as *const libc::sockaddr
-    };
-    // A null name is a connected socket: `connect` already pinned it, and there is nothing new to
-    // vindicate here.
-    if !addr.is_null() && !is_loopback(addr) && !bind_device(fd) {
-        return -1;
-    }
-    match real_sendmsg() {
-        Some(f) => f(fd, msg, flags),
-        None => {
-            *libc::__errno_location() = libc::ENOSYS;
-            -1
+    unsafe {
+        let addr = if msg.is_null() {
+            std::ptr::null()
+        } else {
+            (*msg).msg_name as *const libc::sockaddr
+        };
+        // A null name is a connected socket: `connect` already pinned it, and there is nothing new to
+        // vindicate here.
+        if !addr.is_null() && !is_loopback(addr) && !bind_device(fd) {
+            return -1;
+        }
+        match real_sendmsg() {
+            Some(f) => f(fd, msg, flags),
+            None => {
+                *libc::__errno_location() = libc::ENOSYS;
+                -1
+            }
         }
     }
 }
@@ -243,27 +254,29 @@ pub unsafe extern "C" fn sendmsg(fd: c_int, msg: *const libc::msghdr, flags: c_i
 /// # Safety
 ///
 /// `vec` must be readable for `vlen` `mmsghdr`s, each with a valid `msg_name` when set.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn sendmmsg(
     fd: c_int,
     vec: *mut libc::mmsghdr,
     vlen: libc::c_uint,
     flags: c_int,
 ) -> c_int {
-    if !vec.is_null() {
-        for index in 0..vlen as usize {
-            let msg = &*vec.add(index);
-            let addr = msg.msg_hdr.msg_name as *const libc::sockaddr;
-            if !addr.is_null() && !is_loopback(addr) && !bind_device(fd) {
-                return -1;
+    unsafe {
+        if !vec.is_null() {
+            for index in 0..vlen as usize {
+                let msg = &*vec.add(index);
+                let addr = msg.msg_hdr.msg_name as *const libc::sockaddr;
+                if !addr.is_null() && !is_loopback(addr) && !bind_device(fd) {
+                    return -1;
+                }
             }
         }
-    }
-    match real_sendmmsg() {
-        Some(f) => f(fd, vec, vlen, flags),
-        None => {
-            *libc::__errno_location() = libc::ENOSYS;
-            -1
+        match real_sendmmsg() {
+            Some(f) => f(fd, vec, vlen, flags),
+            None => {
+                *libc::__errno_location() = libc::ENOSYS;
+                -1
+            }
         }
     }
 }

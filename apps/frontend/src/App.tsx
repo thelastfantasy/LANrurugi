@@ -1,11 +1,12 @@
 import { lazy,Suspense } from "react"
-import { BrowserRouter, Route, Routes, useParams } from "react-router-dom"
+import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom"
 import { ToastContainer } from "react-toastify"
 
 import { AndroidToastTransition } from "@/toast"
 
 import { AuthBridgeGate } from "./AuthBridgeGate"
 import { NotFoundPage } from "./components/Display/NotFoundPage"
+import { CrossTabSync } from "./CrossTabSync"
 import { DialogHost } from "./dialog"
 import { FirstRunWizardGate } from "./FirstRunWizardGate"
 import { Layout } from "./Layout"
@@ -23,7 +24,6 @@ import { AllowGuest, RequireAuth, RequireGuest } from "./RouteGuards"
  * had to download and parse.
  */
 const ActivityPage = lazy(() => import("./pages/Activity").then((m) => ({ default: m.ActivityPage })))
-const Batch = lazy(() => import("./pages/Batch").then((m) => ({ default: m.Batch })))
 const BookmarksPage = lazy(() =>
   import("./pages/Bookmarks").then((m) => ({ default: m.BookmarksPage })),
 )
@@ -34,6 +34,9 @@ const FirstRunWizard = lazy(() =>
   import("./pages/FirstRunWizard").then((m) => ({ default: m.FirstRunWizard })),
 )
 const Jobs = lazy(() => import("./pages/Jobs").then((m) => ({ default: m.Jobs })))
+const Resources = lazy(() =>
+  import("./pages/Resources").then((m) => ({ default: m.Resources })),
+)
 const Logs = lazy(() => import("./pages/Logs").then((m) => ({ default: m.Logs })))
 const Plugins = lazy(() => import("./pages/Plugins").then((m) => ({ default: m.Plugins })))
 const PluginWizard = lazy(() =>
@@ -61,6 +64,7 @@ export function App() {
   return (
     <BrowserRouter>
       <AuthBridgeGate />
+      <CrossTabSync />
       <FirstRunWizardGate />
       {/* Toasts dismiss on a horizontal swipe. The library's own default asks for 80% of the
           toast's width, which on a phone is nearly a full-screen drag — reported as "swipe does
@@ -109,19 +113,27 @@ export function App() {
             <Route path="/activity" element={<ActivityPage />} />
             <Route path="/bookmarks" element={<BookmarksPage />} />
             <Route path="/recycle-bin" element={<RecycleBinPage />} />
+            <Route path="/recycle-bin/other-deletions" element={<RecycleBinPage />} />
+            <Route path="/recycle-bin/*" element={<Navigate to="/recycle-bin" replace />} />
             <Route path="/edit/:archiveId" element={<Edit />} />
             <Route path="/tankoubon/:tankId/edit" element={<TankoubonEdit />} />
             <Route path="/config/categories" element={<Categories />} />
             <Route path="/config/categories/:categoryId" element={<Categories />} />
-            <Route path="/batch" element={<Batch />} />
+            {/* Batch operations live in the Library's selection drawer now; old links land there. */}
+            <Route path="/batch" element={<Navigate to="/" replace />} />
             <Route path="/upload" element={<Upload />} />
             <Route path="/config/plugins" element={<Plugins />} />
             <Route path="/config/plugins/wizard" element={<PluginWizard />} />
             <Route path="/duplicates" element={<Duplicates />} />
             <Route path="/stats" element={<Stats />} />
             <Route path="/backup" element={<Backup />} />
+            <Route path="/backup/import-export" element={<Backup />} />
+            <Route path="/backup/legacy-import" element={<Backup />} />
+            {/* Any other /backup/... falls back to the default tab rather than the 404 page. */}
+            <Route path="/backup/*" element={<Navigate to="/backup" replace />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/jobs" element={<Jobs />} />
+            <Route path="/resources" element={<Resources />} />
             {/* Admin-only, like everything else in this block: it edits the admin password and the
                 instance's LLM key, so a guest must never reach it — not even on a guest-mode
                 deployment where `/` and the reader are open to anonymous visitors. `RequireAuth`

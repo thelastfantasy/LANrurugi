@@ -27,6 +27,34 @@ impl JobState {
     }
 }
 
+/// The fixed phase vocabulary of a download task's timeline (`specs/029-download-ingest-latency/
+/// contracts/jobs-phases.md`). Shared by the job record, the instrumentation in `lanrurugi-api`
+/// and the trace spans, so the two timelines can never drift apart.
+pub const PHASE_QUEUED: &str = "queued";
+pub const PHASE_NEGOTIATE: &str = "negotiate";
+pub const PHASE_WAITING: &str = "waiting";
+pub const PHASE_TRANSFER: &str = "transfer";
+pub const PHASE_INGEST: &str = "ingest";
+pub const PHASE_PUBLISH: &str = "publish";
+
+/// One interval of a job's own timeline. Epoch milliseconds, the same unit as `started_at`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobPhase {
+    pub name: String,
+    pub started_at: i64,
+    /// `None` only for the phase currently running (at most one such entry, contract C4); every
+    /// phase is closed by the time the job reaches a terminal state.
+    pub ended_at: Option<i64>,
+}
+
+/// Closes the newest still-open phase, if any. Used both by `begin_phase` and by the terminal
+/// transitions, so no path can leave a phase open.
+fn close_open_phase(phases: &mut [JobPhase], now: i64) {
+    if let Some(open) = phases.iter_mut().rev().find(|p| p.ended_at.is_none()) {
+        open.ended_at = Some(now.max(open.started_at));
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobStatus {
     pub id: String,
@@ -85,6 +113,11 @@ pub struct JobStatus {
     pub started_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<i64>,
+    /// The task's own phase timeline, in order (029). Empty — and then omitted from JSON — for
+    /// every job that never reports phases, which keeps the field purely additive for existing
+    /// clients; a job in a terminal state has every entry closed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub phases: Vec<JobPhase>,
     /// [`JobStatus::average_bytes_per_sec`]'s window: the first progress tick's byte count and
     /// wall-clock time. Not serialized — the UI only needs the derived rate.
     #[serde(skip)]
@@ -129,6 +162,7 @@ impl JobStatus {
             rate_limit_matched_pattern: None,
             started_at: None,
             finished_at: None,
+            phases: Vec::new(),
             transfer_started_at: None,
             transfer_start_bytes: 0,
             result: None,
@@ -252,6 +286,41 @@ impl JobRegistry {
             // an elapsed time — and a lower average speed — that includes the failed run.
             job.started_at = Some(now_ms());
             job.finished_at = None;
+            // A retry is a new attempt, not a continuation: appending a second `queued` behind the
+            // failed run's phases would break the "one monotonic timeline" invariant (V6).
+            job.phases.clear();
+        }
+    }
+
+    /// Opens `name` as the job's current phase, closing whatever phase was still open. Re-entering
+    /// the phase that is already open is a no-op, so a retry loop or a repeated mark is harmless.
+    /// The previous phase's end and the new phase's start share one timestamp, which is what keeps
+    /// the array monotonic (contract C3).
+    pub async fn begin_phase(&self, id: &str, name: &str) {
+        let now = now_ms();
+        if let Some(job) = self.jobs.write().await.get_mut(id) {
+            if job
+                .phases
+                .last()
+                .is_some_and(|phase| phase.name == name && phase.ended_at.is_none())
+            {
+                return;
+            }
+            close_open_phase(&mut job.phases, now);
+            job.phases.push(JobPhase {
+                name: name.to_string(),
+                started_at: now,
+                ended_at: None,
+            });
+        }
+    }
+
+    /// Closes the currently open phase without opening a new one — for the last phase of a task,
+    /// whose end is the task's own end.
+    pub async fn end_phase(&self, id: &str) {
+        let now = now_ms();
+        if let Some(job) = self.jobs.write().await.get_mut(id) {
+            close_open_phase(&mut job.phases, now);
         }
     }
 
@@ -317,7 +386,9 @@ impl JobRegistry {
         if let Some(job) = self.jobs.write().await.get_mut(id) {
             job.state = JobState::Finished;
             job.progress = 1.0;
-            job.finished_at = Some(now_ms());
+            let now = now_ms();
+            job.finished_at = Some(now);
+            close_open_phase(&mut job.phases, now);
             job.result = result;
             job.result_truncated = result_truncated;
         }
@@ -326,7 +397,9 @@ impl JobRegistry {
     pub async fn fail(&self, id: &str, error: impl Into<String>) {
         if let Some(job) = self.jobs.write().await.get_mut(id) {
             job.state = JobState::Failed;
-            job.finished_at = Some(now_ms());
+            let now = now_ms();
+            job.finished_at = Some(now);
+            close_open_phase(&mut job.phases, now);
             job.error = Some(error.into());
         }
     }
@@ -776,5 +849,121 @@ mod tests {
         });
         let job: JobStatus = serde_json::from_value(value).unwrap();
         assert!(!job.result_truncated);
+    }
+
+    // ---- 029: phase timeline (contracts/jobs-phases.md) ----
+
+    #[tokio::test]
+    async fn phases_appear_in_order_and_share_the_boundary_timestamp() {
+        let reg = JobRegistry::new();
+        let id = reg.create("download_url").await;
+        reg.begin_phase(&id, PHASE_QUEUED).await;
+        reg.begin_phase(&id, PHASE_NEGOTIATE).await;
+        reg.begin_phase(&id, PHASE_WAITING).await;
+
+        let job = reg.get(&id).await.unwrap();
+        let names: Vec<&str> = job.phases.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec![PHASE_QUEUED, PHASE_NEGOTIATE, PHASE_WAITING]);
+        // C3/C4: one shared boundary, at most one open entry, and it is the last one.
+        for pair in job.phases.windows(2) {
+            assert_eq!(pair[0].ended_at, Some(pair[1].started_at));
+        }
+        assert!(job.phases[..job.phases.len() - 1]
+            .iter()
+            .all(|p| p.ended_at.is_some()));
+        assert_eq!(job.phases.last().unwrap().ended_at, None);
+    }
+
+    #[tokio::test]
+    async fn re_entering_the_open_phase_does_not_append_a_second_entry() {
+        let reg = JobRegistry::new();
+        let id = reg.create("download_url").await;
+        reg.begin_phase(&id, PHASE_TRANSFER).await;
+        reg.begin_phase(&id, PHASE_TRANSFER).await;
+        assert_eq!(reg.get(&id).await.unwrap().phases.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn terminal_states_close_every_phase() {
+        for finish in [true, false] {
+            let reg = JobRegistry::new();
+            let id = reg.create("download_url").await;
+            reg.begin_phase(&id, PHASE_TRANSFER).await;
+            if finish {
+                reg.finish(&id, json!({})).await;
+            } else {
+                reg.fail(&id, "boom").await;
+            }
+            let job = reg.get(&id).await.unwrap();
+            assert!(
+                job.phases.iter().all(|p| p.ended_at.is_some()),
+                "a terminal job must not keep a phase open: {:?}",
+                job.phases
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn phases_the_task_never_reached_are_not_recorded() {
+        // C6: a task that failed during negotiation shows no transfer/ingest/publish entry.
+        let reg = JobRegistry::new();
+        let id = reg.create("download_url").await;
+        reg.begin_phase(&id, PHASE_QUEUED).await;
+        reg.begin_phase(&id, PHASE_NEGOTIATE).await;
+        reg.fail(&id, "negotiation failed").await;
+        let names: Vec<String> = reg
+            .get(&id)
+            .await
+            .unwrap()
+            .phases
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        assert_eq!(
+            names,
+            vec![PHASE_QUEUED.to_string(), PHASE_NEGOTIATE.to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn end_phase_closes_the_last_entry_without_opening_a_new_one() {
+        let reg = JobRegistry::new();
+        let id = reg.create("download_url").await;
+        reg.begin_phase(&id, PHASE_INGEST).await;
+        reg.end_phase(&id).await;
+        let job = reg.get(&id).await.unwrap();
+        assert_eq!(job.phases.len(), 1);
+        assert!(job.phases[0].ended_at.is_some());
+        // Idempotent: closing an already-closed timeline changes nothing.
+        let closed_at = job.phases[0].ended_at;
+        reg.end_phase(&id).await;
+        assert_eq!(reg.get(&id).await.unwrap().phases[0].ended_at, closed_at);
+    }
+
+    #[tokio::test]
+    async fn a_job_that_never_reports_phases_omits_the_key() {
+        // C1: absence, not `[]` — an old client must see the same payload it always did.
+        let reg = JobRegistry::new();
+        let id = reg.create("backup").await;
+        let value = serde_json::to_value(reg.get(&id).await.unwrap()).unwrap();
+        assert!(value.get("phases").is_none(), "got: {value}");
+    }
+
+    #[tokio::test]
+    async fn a_retry_starts_a_new_timeline_instead_of_appending_to_the_failed_one() {
+        // V6: the queue's retry re-activates the same job; its phases must not grow a second
+        // `queued` behind the failed attempt's.
+        let reg = JobRegistry::new();
+        let id = reg.create("download_url").await;
+        reg.begin_phase(&id, PHASE_QUEUED).await;
+        reg.begin_phase(&id, PHASE_NEGOTIATE).await;
+        reg.fail(&id, "first attempt").await;
+
+        reg.mark_active(&id).await;
+        reg.begin_phase(&id, PHASE_QUEUED).await;
+        let job = reg.get(&id).await.unwrap();
+        assert_eq!(job.phases.len(), 1);
+        assert_eq!(job.phases[0].name, PHASE_QUEUED);
+        assert_eq!(job.phases[0].ended_at, None);
     }
 }

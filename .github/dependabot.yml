@@ -53,6 +53,14 @@ updates:
       - dependency-name: bincode
         versions:
           - ">=3.0.0"
+      # iroh is moved by .github/workflows/vendor-forks.yml, not here: `vendor/iroh-relay`,
+      # `vendor/netwatch` and `vendor/n0-dns-resolver` are patched forks (022: binding share traffic to an interface), and every
+      # iroh release requires the matching iroh-relay, so a plain bump drops the fork and fails to
+      # build (#368, #371). That workflow reapplies `vendor/patches/` to the new releases instead.
+      - dependency-name: iroh
+      - dependency-name: iroh-relay
+      - dependency-name: netwatch
+      - dependency-name: n0-dns-resolver
 
   # Whole pnpm workspace — one entry, not one per package.
   #

@@ -14,7 +14,7 @@ export function pluginInfo() {
     namespace: "Hdoujinplugin",
     type: "metadata" as const,
     parameters: [],
-    declared_permissions: { net: [], read: false, write: true },
+    declared_permissions: { net: [], read: false, write: false },
     name: "HDoujin",
     author: "thelastfantasy",
     description: "Collects metadata embedded into your archives by HDoujin Downloader's JSON or TXT files.",

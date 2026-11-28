@@ -31,6 +31,7 @@ fn scanner_config(state: &AppState) -> lanrurugi_scanner::handle::ScannerConfig 
         new_archive_tx: Some(state.new_archive_tx.clone()),
         locks: state.filename_locks.clone(),
         jobs: state.jobs.clone(),
+        restore_gate: Some(state.restore_gate.clone()),
     }
 }
 

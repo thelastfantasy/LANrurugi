@@ -76,35 +76,35 @@ pub async fn require_api_key(
     let client_ip = client_ip(request.headers(), peer_addr);
     let user_agent = user_agent(request.headers());
 
-    if let Some(bearer_token) = bearer_token(request.headers()) {
-        if lanrurugi_storage::api_tokens::looks_like_api_token(bearer_token) {
-            match state.api_tokens.verify(bearer_token).await {
-                Ok(Some(record)) => {
-                    touch_last_used_throttled(&state, &record.id, client_ip.clone()).await;
-                    let auth = AuthContext {
-                        method: AuthMethod::Token {
-                            id: record.id,
-                            role: record.role,
-                        },
-                        client_ip,
-                        user_agent,
-                        client_reported: None,
-                        session_family_id: None,
-                    };
-                    if !authorize_route(&matched_path, request.method().as_str(), &auth).await {
-                        trace_request(&request, &auth, false);
-                        return route_forbidden_response();
-                    }
-                    trace_request(&request, &auth, true);
-                    request.extensions_mut().insert(auth);
-                    return next.run(request).await;
+    if let Some(bearer_token) = bearer_token(request.headers())
+        && lanrurugi_storage::api_tokens::looks_like_api_token(bearer_token)
+    {
+        match state.api_tokens.verify(bearer_token).await {
+            Ok(Some(record)) => {
+                touch_last_used_throttled(&state, &record.id, client_ip.clone()).await;
+                let auth = AuthContext {
+                    method: AuthMethod::Token {
+                        id: record.id,
+                        role: record.role,
+                    },
+                    client_ip,
+                    user_agent,
+                    client_reported: None,
+                    session_family_id: None,
+                };
+                if !authorize_route(&matched_path, request.method().as_str(), &auth).await {
+                    trace_request(&request, &auth, false);
+                    return route_forbidden_response();
                 }
-                Ok(None) => {} // not a valid token — fall through to the session-cookie check
-                Err(e) => {
-                    tracing::warn!(error = %e, "api token verification failed");
-                    // A Redis hiccup here shouldn't silently deny every API-token client; fall
-                    // through to the session check the same as "token not found" would.
-                }
+                trace_request(&request, &auth, true);
+                request.extensions_mut().insert(auth);
+                return next.run(request).await;
+            }
+            Ok(None) => {} // not a valid token — fall through to the session-cookie check
+            Err(e) => {
+                tracing::warn!(error = %e, "api token verification failed");
+                // A Redis hiccup here shouldn't silently deny every API-token client; fall
+                // through to the session check the same as "token not found" would.
             }
         }
     }
@@ -189,6 +189,64 @@ pub async fn require_api_key(
     trace_request(&request, &auth, true);
     request.extensions_mut().insert(auth);
     next.run(request).await
+}
+
+/// Refuses new writes while a full database restore is replacing the Redis keyspace.
+///
+/// `DEBUG RELOAD` swaps every key at once, so a write admitted during the swap lands either in a
+/// dataset that is about to disappear or on the restored (older) one. Reads stay open — the
+/// restore's own progress is polled over GET — and so do login/logout, because otherwise a session
+/// that expired mid-restore could not even be renewed. A second restore request is answered with
+/// `409 restore_in_progress` rather than the generic 503 so the caller can tell "already running"
+/// from "the server is paused".
+///
+/// Takes the gate directly rather than the whole `AppState`: the layer runs after `require_api_key`,
+/// and this keeps the unit test free of a Redis-backed state.
+pub async fn restore_write_gate(
+    State(gate): State<lanrurugi_core::restore_gate::RestoreGate>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if request.method().is_safe() {
+        return next.run(request).await;
+    }
+    let path = request.uri().path();
+    if path == "/api/login" || path == "/api/logout" {
+        return next.run(request).await;
+    }
+    // Registered before the check, not after: otherwise a restore could close the gate and see
+    // nothing in flight between this request's check and its registration, then swap the dataset
+    // under it. A request that registers and then finds the gate closed backs out unserved.
+    let guard = lanrurugi_core::restore_gate::WriteGuard::new(&gate);
+    if !gate.closed() {
+        let _guard = guard;
+        return next.run(request).await;
+    }
+    drop(guard);
+    // The reason is the same for both refusals; only the status differs — a second restore is a
+    // conflict with the one already running, everything else is "try again when it is done".
+    let is_restore = path.starts_with("/api/backups/") && path.ends_with("/restore");
+    let status = if is_restore {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    let message = if is_restore {
+        "A database restore is already in progress."
+    } else {
+        lanrurugi_core::restore_gate::RESTORE_IN_PROGRESS_MESSAGE
+    };
+    let reason = lanrurugi_core::restore_gate::RESTORE_IN_PROGRESS_REASON;
+    (
+        status,
+        axum::Json(serde_json::json!({
+            "operation": "restore_write_gate",
+            "success": 0,
+            "error": message,
+            "reason": reason,
+        })),
+    )
+        .into_response()
 }
 
 /// Shared by both the `Token` and `Session` branches of [`require_api_key`] — see that function's
@@ -292,12 +350,12 @@ pub(crate) fn client_ip(
     headers: &axum::http::HeaderMap,
     peer_addr: std::net::SocketAddr,
 ) -> Option<String> {
-    if let Some(forwarded) = headers.get("X-Forwarded-For").and_then(|v| v.to_str().ok()) {
-        if let Some(first) = forwarded.split(',').next() {
-            let trimmed = first.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
+    if let Some(forwarded) = headers.get("X-Forwarded-For").and_then(|v| v.to_str().ok())
+        && let Some(first) = forwarded.split(',').next()
+    {
+        let trimmed = first.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
         }
     }
     Some(peer_addr.ip().to_string())

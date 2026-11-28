@@ -214,10 +214,10 @@ fn outline_from_sexpr(text: &str, page_count: usize) -> Vec<OutlineItem> {
         }
     }
     let mut out = Vec::new();
-    if let Some(Node::List(items)) = parse_sexpr(text) {
-        if items.first() == Some(&Node::Atom("bookmarks".into())) {
-            walk(&items[1..], 0, page_count, &mut out);
-        }
+    if let Some(Node::List(items)) = parse_sexpr(text)
+        && items.first() == Some(&Node::Atom("bookmarks".into()))
+    {
+        walk(&items[1..], 0, page_count, &mut out);
     }
     out
 }

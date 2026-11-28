@@ -297,18 +297,17 @@ async fn create_import(
     // Checked before claiming, so a selection that matches nothing never spends a download.
     let chosen: Option<std::collections::HashSet<String>> =
         body.archives.map(|ids| ids.into_iter().collect());
-    if let Some(chosen) = &chosen {
-        if !opened
+    if let Some(chosen) = &chosen
+        && !opened
             .manifest
             .archives()
             .any(|a| chosen.contains(&a.archive_id))
-        {
-            return error(StatusCode::BAD_REQUEST, "share_import", "nothing_selected");
-        }
+    {
+        return error(StatusCode::BAD_REQUEST, "share_import", "nothing_selected");
     }
     let wanted = |id: &str| chosen.as_ref().is_none_or(|c| c.contains(id));
     // Refused before anything is queued, with the reason (FR-021).
-    let (claim_id, manifest, _ticket) = match import::claim(&opened).await {
+    let (claim_id, manifest, _ticket, extras) = match import::claim(&opened).await {
         Ok(c) => c,
         Err(e) => return net_error(e),
     };
@@ -361,6 +360,10 @@ async fn create_import(
             .filter(|a| wanted(&a.sharer_archive_id))
             .collect(),
         manifest: serde_json::to_value(&manifest).unwrap_or(Value::Null),
+        extras: extras
+            .into_iter()
+            .map(|extra| (extra.archive_id, extra.fields))
+            .collect(),
         category: body.category,
         queue_item_id: item.id.clone(),
         concurrency: settings.number("share_import_concurrency").unwrap_or(3) as u32,

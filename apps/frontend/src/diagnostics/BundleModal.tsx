@@ -56,6 +56,7 @@ export function BundleView() {
     frontend_events: true,
     environment: true,
     config: false,
+    resources: true,
   })
   const [truncate, setTruncate] = useState(false)
   const [language, setLanguage] = useState<"zh" | "en">("zh")
@@ -198,6 +199,14 @@ export function BundleView() {
           }
         >
           {t("diagnostics.bundle.config")}
+        </CheckboxField>
+        <CheckboxField
+          checked={categories.resources}
+          onCheckedChange={(checked) =>
+            setCategories((current) => ({ ...current, resources: checked }))
+          }
+        >
+          {t("diagnostics.bundle.resources")}
         </CheckboxField>
         <CheckboxField checked={truncate} onCheckedChange={setTruncate}>
           {t("diagnostics.bundle.truncate")}

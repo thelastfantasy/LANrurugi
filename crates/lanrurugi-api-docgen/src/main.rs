@@ -24,7 +24,7 @@ use lanrurugi_api_docgen::{access_notes, emit, legacy, merge, policy, scan, side
 )]
 struct Args {
     /// Where to write the generated document.
-    #[arg(long, default_value = "docs/public/openapi.json")]
+    #[arg(long, default_value = "apps/docs-site/public/openapi.json")]
     output: PathBuf,
 
     /// Root of the route source to scan.

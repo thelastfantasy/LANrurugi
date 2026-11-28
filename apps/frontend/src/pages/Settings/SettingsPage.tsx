@@ -24,6 +24,7 @@ import { ArchiveFilesSection } from "./ArchiveFilesSection"
 import { GlobalSection } from "./GlobalSection"
 import { LlmUsageSection } from "./LlmUsageSection"
 import { RecycleBinSection } from "./RecycleBinSection"
+import { ResourcesSection } from "./ResourcesSection"
 import { SecuritySection } from "./SecuritySection"
 import { SharingSection } from "./SharingSection"
 import { SubscriptionsSection } from "./SubscriptionsSection"
@@ -424,9 +425,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
         <Button id="backup" onClick={() => navigate(routes.backup())}>
           {t("settings.databaseBackupRestore")}
         </Button>{" "}
-        <Button id="batch" onClick={() => navigate(routes.batch())}>
-          {t("batch.batchOperations")}
-        </Button>{" "}
         {/* Renders nothing when the deployment switched the wizard off — see its own docs. */}
         <WizardRerunButton />
         <DiagnosticsButton />
@@ -457,6 +455,8 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
               setHtmltitle={setHtmltitle}
               language={language}
               setLanguage={setLanguage}
+              timezone={timezone}
+              setTimezone={setTimezone}
               pagesize={pagesize}
               setPagesize={setPagesize}
               enableresize={enableresize}
@@ -648,8 +648,6 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
               setUsedateadded={setUsedateadded}
               usedatemodified={usedatemodified}
               setUsedatemodified={setUsedatemodified}
-              timezone={timezone}
-              setTimezone={setTimezone}
               onStatus={setStatus}
             />
           </SectionErrorBoundary>
@@ -660,6 +658,10 @@ function SettingsForm({ settings }: { settings: SettingsType }) {
 
           <SectionErrorBoundary as="li" section="llm-usage">
             <LlmUsageSection />
+          </SectionErrorBoundary>
+
+          <SectionErrorBoundary as="li" section="resources">
+            <ResourcesSection />
           </SectionErrorBoundary>
 
           <SectionErrorBoundary as="li" section="background-workers">

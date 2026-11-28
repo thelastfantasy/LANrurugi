@@ -179,6 +179,105 @@ describe("RowStats", () => {
     expect(line).toMatch(/23:10:18|11:10:18/)
   })
 
+  it("breaks a finished run down into queueing, transfer and ingest", () => {
+    const started = new Date(2026, 9, 7, 10, 0, 0).getTime()
+    vi.setSystemTime(started + 3_600_000)
+    renderStats(
+      item({ state: "done", finished_at: started + 1_056_000, file_size: 916 * 1024 * 1024 }),
+      job({
+        state: "finished",
+        started_at: started,
+        finished_at: started + 1_056_000,
+        total_bytes: 916 * 1024 * 1024,
+        // The 916 MB sample from the report: 13:03 queueing, 4:27 transferring, 0:06 ingest.
+        phases: [
+          { name: "queued", started_at: started, ended_at: started + 0 },
+          { name: "negotiate", started_at: started, ended_at: started + 60_000 },
+          { name: "waiting", started_at: started + 60_000, ended_at: started + 783_000 },
+          { name: "transfer", started_at: started + 783_000, ended_at: started + 1_050_000 },
+          { name: "ingest", started_at: started + 1_050_000, ended_at: started + 1_056_000 },
+        ],
+      }),
+    )
+
+    const line = screen.getByText(/started today/).textContent ?? ""
+    expect(line).toMatch(/queued 13:03/)
+    expect(line).toMatch(/downloading 4:27/)
+    expect(line).toMatch(/ingesting 0:06/)
+    // The headline figure says what it measures, now that the segments sit beside it.
+    expect(line).toMatch(/17:36 total \(queue included\)/)
+  })
+
+  it("keeps the breakdown for a finished row whose job record is gone", () => {
+    // The registry is in-process only: a restart drops the job, and the item's own copy of the
+    // timeline is then the only thing that can still separate transfer time from queueing.
+    const started = new Date(2026, 9, 7, 10, 0, 0).getTime()
+    vi.setSystemTime(started + 3_600_000)
+    renderStats(
+      item({
+        state: "done",
+        started_at: started,
+        finished_at: started + 16_500,
+        file_size: 29 * 1024 * 1024,
+        average_bytes_per_sec: 4_190_000,
+        phases: [
+          { name: "queued", started_at: started, ended_at: started + 900 },
+          { name: "negotiate", started_at: started + 900, ended_at: started + 4_400 },
+          { name: "waiting", started_at: started + 4_400, ended_at: started + 7_600 },
+          { name: "transfer", started_at: started + 7_600, ended_at: started + 16_300 },
+          { name: "ingest", started_at: started + 16_300, ended_at: started + 16_500 },
+        ],
+      }),
+      undefined,
+    )
+
+    const line = screen.getByText(/started today/).textContent ?? ""
+    expect(line).toMatch(/queued 0:07/)
+    expect(line).toMatch(/downloading 0:08/)
+    expect(line).toMatch(/ingesting 0:00/)
+    expect(line).toMatch(/0:16 total \(queue included\)/)
+    // The rate is the one persisted with the item, not a whole-span derivation.
+    expect(line).toContain("4.0 MB/s")
+  })
+
+  it("keeps the plain elapsed figure when the server reports no timeline", () => {
+    const started = new Date(2026, 9, 7, 10, 0, 0).getTime()
+    vi.setSystemTime(started + 3_600_000)
+    renderStats(
+      item({ state: "done", finished_at: started + 90_000, file_size: 90 * 1024 * 1024 }),
+      job({ state: "finished", started_at: started, finished_at: started + 90_000 }),
+    )
+
+    const line = screen.getByText(/started today/).textContent ?? ""
+    expect(line).toMatch(/1:30 elapsed/)
+    expect(line).not.toMatch(/queued/)
+    expect(line).not.toMatch(/ingesting/)
+  })
+
+  it("treats an open ingest phase as cataloguing even while the transferring flag still says otherwise", () => {
+    // The flag only knows "not transferring"; a job reporting an open `ingest` phase is writing the
+    // archive into the library, and a remaining-time estimate there would be fiction.
+    const started = new Date(2026, 9, 7, 10, 0, 0).getTime()
+    vi.setSystemTime(started + 120_000)
+    renderStats(
+      item({ state: "downloading", transferring: true }),
+      job({
+        state: "active",
+        started_at: started,
+        downloaded_bytes: 100 * 1024 * 1024,
+        total_bytes: 1024 * 1024 * 1024,
+        average_bytes_per_sec: 1024 * 1024,
+        phases: [
+          { name: "queued", started_at: started, ended_at: started + 1_000 },
+          { name: "transfer", started_at: started + 1_000, ended_at: started + 60_000 },
+          { name: "ingest", started_at: started + 60_000, ended_at: null },
+        ],
+      }),
+    )
+
+    expect(screen.getByText(/started today/).textContent ?? "").not.toMatch(/left/)
+  })
+
   it("renders only the subscription mark when there is nothing to measure", () => {
     const { container } = renderStats(item({ state: "queued", subscription_id: "s1" }), undefined)
 

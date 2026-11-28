@@ -605,25 +605,23 @@ async fn download_one_inner(
     // reuses the sidecar that's already there (it describes the same underlying content, verified
     // via `If-Range` above), so overwriting it here would be redundant, not wrong, but skipped
     // anyway for clarity.
-    if !resumed {
-        if let Some(paths) = &resume_paths {
-            let meta = ResumeMetadata {
-                url: req.url.clone(),
-                etag: response
-                    .headers()
-                    .get(reqwest::header::ETAG)
-                    .and_then(|v| v.to_str().ok())
-                    .map(str::to_string),
-                last_modified: response
-                    .headers()
-                    .get(reqwest::header::LAST_MODIFIED)
-                    .and_then(|v| v.to_str().ok())
-                    .map(str::to_string),
-                filename: filename.clone(),
-                confirmed_len: Some(0),
-            };
-            let _ = write_meta(&paths.meta_path, &meta).await;
-        }
+    if !resumed && let Some(paths) = &resume_paths {
+        let meta = ResumeMetadata {
+            url: req.url.clone(),
+            etag: response
+                .headers()
+                .get(reqwest::header::ETAG)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string),
+            last_modified: response
+                .headers()
+                .get(reqwest::header::LAST_MODIFIED)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string),
+            filename: filename.clone(),
+            confirmed_len: Some(0),
+        };
+        let _ = write_meta(&paths.meta_path, &meta).await;
     }
     // The sidecar the confirmation points below rewrite: the one just written, or the resumed one.
     let mut confirm_meta = match (&resume_paths, &resume_state) {
@@ -787,16 +785,16 @@ async fn download_one_inner(
     // way to call incomplete. Skipped when the response declared no length at all: nHentai answers
     // with `Transfer-Encoding: chunked`, and demanding a length would break downloads that are
     // perfectly fine.
-    if let Some(expected) = total_bytes {
-        if downloaded != expected {
-            if resume_paths.is_none() {
-                let _ = tokio::fs::remove_file(&staging_path).await;
-            }
-            return Err(DownloadError::Truncated {
-                expected,
-                got: downloaded,
-            });
+    if let Some(expected) = total_bytes
+        && downloaded != expected
+    {
+        if resume_paths.is_none() {
+            let _ = tokio::fs::remove_file(&staging_path).await;
         }
+        return Err(DownloadError::Truncated {
+            expected,
+            got: downloaded,
+        });
     }
 
     // Download genuinely complete — a resumable call's sidecar has done its job (nothing left to
@@ -837,10 +835,10 @@ async fn confirm_before_leaving(
     meta: &mut Option<ResumeMetadata>,
     downloaded: u64,
 ) {
-    if let (Some(paths), Some(meta)) = (resume_paths, meta.as_mut()) {
-        if let Err(e) = confirm_progress(file, paths, meta, downloaded).await {
-            tracing::warn!(error = %e, "could not record download progress for a resume");
-        }
+    if let (Some(paths), Some(meta)) = (resume_paths, meta.as_mut())
+        && let Err(e) = confirm_progress(file, paths, meta, downloaded).await
+    {
+        tracing::warn!(error = %e, "could not record download progress for a resume");
     }
 }
 

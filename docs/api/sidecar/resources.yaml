@@ -1,0 +1,63 @@
+# Process and host resource monitoring (`specs/030-resource-monitor/`). Session-only: an API token
+# and a guest visitor are both refused by `route_policy.csv`, because the snapshot names every
+# process, the plugin table and Redis's internal counters.
+#
+# `x-internal: true` keeps these out of the published reference while the coverage and policy gates
+# still see them: the only caller is this repository's own `/resources` page, and the finished
+# feedback bundle reuses the same snapshot. The descriptions stay here because this file is where
+# the contract is written down.
+"/api/resources":
+  get:
+    summary: Read one resource snapshot
+    description: |
+      One full observation, read fresh: server process, cgroup (memory split, PSI, `memory.events`,
+      pids), the process tree, per-plugin worker processes, local model usage, queue depth and phase
+      timings, Redis's own counters, network totals, cache hit counters, library totals and disk
+      space. Registers no observer, so calling it does not start a sampling task.
+
+      Every rate needs two observations: `window_ms` is `0` on the first call after start, and each
+      rate is then `null` rather than a fabricated number. A section that could not be read carries
+      `null` plus a `*_unavailable` reason beside it, and a `debug` build reports
+      `build.profile: "debug"` (its processes are rendered as `name (debug)` in the panel).
+    tags: [resources]
+    x-internal: true
+    responses:
+      "200":
+        description: The snapshot.
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      "401": { description: No session. }
+      "403": { description: An API token or guest visitor — this route needs a real session. }
+      "503": { description: "`resources unavailable: …` — the snapshot could not be serialised." }
+
+"/api/resources/stream":
+  get:
+    summary: Stream resource samples over SSE
+    description: |
+      Attaches an observer and pushes one `snapshot` event immediately, then a `sample` event at
+      `interval_ms` (default 1000, clamped to 500–5000). The sampler runs at 1 Hz and a client asking
+      for a longer interval is served every nth frame, so a slower reader never re-times the sampler.
+      A `keep-alive` comment is sent every 15 s.
+
+      Sampling exists only while somebody is attached: dropping the response stream releases the
+      observer, and the last one to leave stops the sampler and clears the history. The history is
+      in memory only (≤ 1800 samples, roughly 30 minutes) and is never written to disk.
+    tags: [resources]
+    x-internal: true
+    parameters:
+      - name: interval_ms
+        in: query
+        required: false
+        schema: { type: integer, minimum: 500, maximum: 5000, default: 1000 }
+    responses:
+      "200":
+        description: "`text/event-stream` with `snapshot` and `sample` events."
+        content:
+          text/event-stream:
+            schema:
+              type: string
+      "401": { description: No session. }
+      "403": { description: An API token or guest visitor — this route needs a real session. }

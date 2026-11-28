@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 
-import { ApiError, fetchJson, sendJson } from "@/api/client";
+import { fetchJson, sendJson } from "@/api/client";
 import {
   useCategories,
   useCreateTankoubon,
@@ -31,6 +31,7 @@ import {
   TANKOUBON_ONLY,
   UNTAGGED_ONLY,
 } from "@/lib/constants";
+import { deleteArchiveToBin, sourceTagFrom } from "@/lib/deleteArchive";
 import { routes } from "@/lib/routes";
 import {
   appendToken,
@@ -52,7 +53,6 @@ import {
   INDEX_ORDER_KEY,
   INDEX_SORT_KEY,
   INDEX_VIEW_MODE_KEY,
-  MSM_SELECTION_KEY,
   RECENT_SEARCHES_KEY,
 } from "@/lib/storageKeys";
 import {
@@ -73,6 +73,12 @@ import { useDocumentTitle } from "./useDocumentTitle";
 
 let defaultPasswordToastShownThisPageLoad = false;
 let storageWarningToastShownThisPageLoad = false;
+
+/** A trailing `\` escapes nothing (usually a slip next to Enter), so it is dropped from the URL,
+ *  the input and the history alike, as the server's lexer already ignores it. */
+function cleanFilter(filter: string): string {
+  return filter.replace(/[\s\\]+$/, "");
+}
 
 export function useLibrary() {
   /** Keep in step with the server's `HISTORY_CAP`: stored is 100, shown is this many. */
@@ -105,7 +111,7 @@ const { t } = useTranslation();
   const [filterInputOverride, setFilterInputOverride] = useState<string | null>(
     null,
   );
-  const appliedFilter = urlParams.get("q") ?? "";
+  const appliedFilter = cleanFilter(urlParams.get("q") ?? "");
   const filterInput = filterInputOverride ?? appliedFilter;
   useDocumentTitle(appliedFilter || undefined);
 
@@ -231,7 +237,11 @@ const { t } = useTranslation();
     }
     // Only a genuinely *applied* filter is history-worthy — paging, sorting and category clicks
     // all route through here without carrying an `appliedFilter`.
-    if (overrides.appliedFilter !== undefined) rememberSearch(overrides.appliedFilter);
+    if (overrides.appliedFilter !== undefined) {
+      const appliedFilter = cleanFilter(overrides.appliedFilter);
+      overrides = { ...overrides, appliedFilter };
+      rememberSearch(appliedFilter);
+    }
     // `nextOrder` has to be handed to `buildSearch` explicitly: it re-derives the direction from
     // `overrides.order ?? order`, so leaving it out made a field switch fall back to the *previous*
     // field's direction — relevance's forced `asc` turned "Date" into oldest-first.
@@ -543,8 +553,8 @@ const { t } = useTranslation();
     });
   }
 
-  /** Selects every archive the current filter matches, not just the 100 on screen. Same page walk
-   * as `runBatchOnFilter`, since `/search` has no id-only projection. */
+  /** Selects every archive the current filter matches, not just the 100 on screen. Walks the pages
+   * through `fetchFilteredIds`. */
   async function selectAllResults() {
     if (selectingAllResults || (search.data?.recordsFiltered ?? 0) === 0) return;
     setSelectingAllResults(true);
@@ -570,19 +580,9 @@ const { t } = useTranslation();
     clearSelection();
   }
 
-  function runBatchOnSelection() {
-    if (selectedIds.length === 0) return;
-    // `/batch` reads (and clears) the selection from this same localStorage key on load.
-    localStorage.setItem(MSM_SELECTION_KEY, JSON.stringify(selectedIds));
-    window.open("/batch", "_blank");
-  }
-
-  /** Batch operations over everything the current filter matches, with no manual selection —
-   *  "run a tag scan over every untagged archive" is the case this exists for.
-   *
-   *  `/search` pages by a fixed `pagesize` (100 by default) and returns no id-only projection, so
-   *  this walks the pages it already knows the count of rather than adding another endpoint for
-   *  one button. Ids are handed to `/batch` through the same `MSM_SELECTION_KEY` handoff. */
+  /** Every id the current filter matches, in the given order. `/search` pages by a fixed `pagesize`
+   *  (100 by default) and returns no id-only projection, so this walks the pages it already knows
+   *  the count of rather than adding another endpoint. */
   async function fetchFilteredIds(
     overrides?: { sortby?: string; order?: "asc" | "desc" },
   ): Promise<string[]> {
@@ -643,13 +643,6 @@ const { t } = useTranslation();
     } finally {
       setSortingSelection(false);
     }
-  }
-
-  async function runBatchOnFilter() {
-    const ids = await fetchFilteredIds();
-    if (ids.length === 0) return;
-    localStorage.setItem(MSM_SELECTION_KEY, JSON.stringify(ids));
-    window.open("/batch", "_blank");
   }
 
   const selectedTankIds = selectedIds.filter(isTankoubonId);
@@ -741,15 +734,7 @@ const { t } = useTranslation();
 
   /** This archive's `source:` tag, from whatever the page already holds. */
   function sourceTagOf(archiveId: string): string | undefined {
-    const tags = shown.find((a) => a.arcid === archiveId)?.tags;
-    if (!tags) return undefined;
-    for (const tag of tags.split(",")) {
-      const value = tag.trim();
-      if (value.toLowerCase().startsWith("source:")) {
-        return value.slice("source:".length).trim();
-      }
-    }
-    return undefined;
+    return sourceTagFrom(shown.find((a) => a.arcid === archiveId)?.tags);
   }
 
   /// `blockResubscribe` defaults to blocking, which is also what doing nothing achieves: a work stays
@@ -760,9 +745,11 @@ const { t } = useTranslation();
     isTank: boolean,
     blockResubscribe = true,
     tankMode: "dissolve" | "recycle" = "dissolve",
-  ) {
+    /** The archive's `source:` URL when the caller already has it (one not on the current page). */
+    knownSource?: string,
+  ): Promise<boolean> {
     // Read before the delete, since the archive's own tags are what name the source.
-    const source = !isTank && !blockResubscribe ? sourceTagOf(archiveId) : undefined;
+    const source = !isTank && !blockResubscribe ? (knownSource ?? sourceTagOf(archiveId)) : undefined;
 
     if (isTank) {
       const query = tankMode === "recycle" ? "?mode=recycle" : "";
@@ -773,71 +760,17 @@ const { t } = useTranslation();
       if (tankMode === "recycle") {
         toast({ heading: t("recycleBin.movedToBin"), icon: "success" });
       }
-    } else {
-      try {
-        await sendJson("DELETE", `/archives/${archiveId}`)
-      } catch (err) {
-        // The server refuses to delete a healthy archive that a Tankoubon still lists (it would
-        // silently reshuffle that book), and says why — that message is what the user needs.
-        toast({
-          heading:
-            err instanceof ApiError && err.status === 409
-              ? t("library.deleteTankMemberRefused")
-              : err instanceof Error
-                ? err.message
-                : String(err),
-          icon: "error",
-        })
-        return
-      };
-      // Recoverable for the retention window: offer the undo right where the mistake happened
-      // (spec 019 FR-034) instead of making the user open the bin page.
-      toast({
-        heading: t("recycleBin.movedToBin"),
-        icon: "success",
-        action: {
-          label: t("recycleBin.undo"),
-          onClick: () => {
-            void (async () => {
-              try {
-                await sendJson("POST", `/recycle-bin/${encodeURIComponent(archiveId)}/restore`);
-                await queryClient.invalidateQueries({ queryKey: ["archives"] });
-                await queryClient.invalidateQueries({ queryKey: ["recycle-bin"] });
-                toast({ heading: t("recycleBin.restored"), icon: "success" });
-              } catch {
-                toast({ heading: t("recycleBin.restoreFailed"), icon: "error" });
-              }
-            })();
-          },
-        },
-      });
-    }
-
-    if (source) {
-      // After the delete, and failures are swallowed: the archive is already gone, and a failure here
-      // only means a subscription will not re-offer the work — not something to surface as a failed
-      // delete.
-      try {
-        const { tracking } = await fetchJson<{ tracking: { id: string }[] }>(
-          `/subscriptions/tracking?source=${encodeURIComponent(source)}`,
-        );
-        await Promise.all(
-          tracking.map((s) =>
-            sendJson("POST", `/subscriptions/${encodeURIComponent(s.id)}/forget`, {
-              sources: [source],
-              all: false,
-            }),
-          ),
-        );
-      } catch {
-        // Nothing to do — the work simply stays recorded as seen.
-      }
+    } else if (!(await deleteArchiveToBin({ archiveId, reconsiderSource: source, queryClient, t }))) {
+      return false;
     }
     queryClient.invalidateQueries({ queryKey: ["archive", archiveId] });
     queryClient.invalidateQueries({ queryKey: ["archives"] });
     await queryClient.invalidateQueries({
       predicate: (query) => query.queryKey[0] === "search",
     });
+    // Gone from the library, so gone from the selection too.
+    setSelectedIds((prev) => prev.filter((id) => id !== archiveId));
+    return true;
   }
 
   function handleContextMenu(
@@ -951,8 +884,6 @@ const { t } = useTranslation();
     handleOpenArchive,
     selectedTankIds,
     canMerge,
-    runBatchOnSelection,
-    runBatchOnFilter,
     filteredCount: search.data?.recordsFiltered ?? 0,
     mergeSelectionIntoTankoubon,
     searchInputRef,

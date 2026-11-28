@@ -5,7 +5,7 @@ import type { DownloadQueueItem, PluginInfo } from "@/api/types"
 import { Tooltip } from "@/components/common-ui/Display"
 import { TagTable } from "@/components/Display"
 import { useHorizontalScroll } from "@/hooks"
-import { splitTagsByNamespace } from "@/lib/tagFormat"
+import { sourceTagValues, splitTagsByNamespace } from "@/lib/tagFormat"
 import { FONT_SIZE_XS } from "@/theme"
 
 /* ─── Horizontal page strip (duplicate review patch assignment) ─── */
@@ -83,8 +83,19 @@ export function TruncatedFilename({
     )
   }
   const { stem, ext } = splitFilenameStemAndExt(text)
+  // `alignItems: "baseline"` is load-bearing: with the flex default (`stretch`) the extension's
+  // 14px line box is stretched to the stem's 17px one and its text sits at the top of that box,
+  // so `.rar` visibly rides 3px above the filename it belongs to.
   return (
-    <span style={{ display: "inline-flex", minWidth: 0, maxWidth: "100%", ...style }}>
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "baseline",
+        minWidth: 0,
+        maxWidth: "100%",
+        ...style,
+      }}
+    >
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{stem}</span>
       {ext && <span style={{ flexShrink: 0 }}>.{ext}</span>}
     </span>
@@ -106,6 +117,20 @@ export function matchesPattern(plugin: PluginInfo, url: string): boolean {
  * for actual dispatch. Use `findPluginByDomain` for "does a plugin exist for this domain at all". */
 export function findMatchingPlugin(plugins: PluginInfo[] | undefined, url: string): PluginInfo | null {
   return plugins?.find((p) => matchesPattern(p, url)) ?? null
+}
+
+/** The metadata plugin one of an archive's `source:` tags belongs to, and that tag as a URL — the
+ *  first part of "auto scrape" (Edit page and batch); without one the enabled chain runs instead. */
+export function findSourcePlugin(
+  plugins: PluginInfo[] | undefined,
+  tags: string,
+): { plugin: PluginInfo; url: string } | null {
+  for (const value of sourceTagValues(tags)) {
+    const url = /^https?:\/\//i.test(value) ? value : `https://${value}`
+    const plugin = findMatchingPlugin(plugins, url)
+    if (plugin) return { plugin, url }
+  }
+  return null
 }
 
 /** Lowercases and strips a leading `www.` — mirrors the backend's own `normalize_domain`. */

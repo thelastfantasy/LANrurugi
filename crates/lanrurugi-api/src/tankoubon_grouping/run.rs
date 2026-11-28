@@ -381,6 +381,7 @@ async fn run_once(
     candidates: &CandidateSet,
 ) -> Result<Option<CachedSuggestions>, RunError> {
     let started = Instant::now();
+    restore_check(state)?;
     let settings = GroupingSettings::default();
 
     // 1. Everything already known: title, tags, and the persisted vector when it still matches the
@@ -396,6 +397,9 @@ async fn run_once(
     for (i, id) in candidates.ungrouped_ids.iter().enumerate() {
         if handle.is_cancelled() {
             return Ok(None);
+        }
+        if i.is_multiple_of(200) {
+            restore_check(state)?;
         }
         let Ok(Some(archive)) = state
             .repos
@@ -548,6 +552,8 @@ async fn run_once(
     let hub_for_task = hub.clone();
     let handle_for_task = handle.clone();
     let task_ids = all_ids.clone();
+    // Kept for building the orphan list after the grouping task has consumed its own copy.
+    let all_ids_for_orphans = all_ids.clone();
     // `Arc` rather than a clone: 7k vectors of 1024 f32 is ~28 MB, and copies of that would be
     // both slower and a needless second peak. The maps stay readable here afterwards.
     let vectors_shared = Arc::new(vectors_by_id);
@@ -565,9 +571,30 @@ async fn run_once(
             .iter()
             .map(|(id, v)| (id.as_str(), v.as_slice()))
             .collect();
+        // Creator named only in the title (see `title_creator`): fed to the scorer as an `artist:`
+        // tag so the creator gate and tag overlap can see it, without rewriting the archive's tags
+        // (the review payload still shows the archive's own tags).
+        let derived_creators: HashMap<String, String> = tags_for_task
+            .iter()
+            .filter(|(_, tags)| {
+                !tags
+                    .split(',')
+                    .any(|tag| super::creator_value(tag.trim()).is_some())
+            })
+            .filter_map(|(id, _)| {
+                let title = titles_for_task.get(id)?;
+                super::title_creator(title).map(|creator| (id.clone(), format!("artist:{creator}")))
+            })
+            .collect();
         let tag_refs: HashMap<&str, HashSet<&str>> = tags_for_task
             .iter()
-            .map(|(id, t)| (id.as_str(), tag_set(t)))
+            .map(|(id, t)| {
+                let mut set = tag_set(t);
+                if let Some(creator) = derived_creators.get(id.as_str()) {
+                    set.insert(creator.as_str());
+                }
+                (id.as_str(), set)
+            })
             .collect();
         let token_refs: HashMap<&str, HashSet<&str>> = titles_for_task
             .iter()
@@ -601,6 +628,19 @@ async fn run_once(
     if handle.is_cancelled() {
         return Ok(None);
     }
+
+    // Works the graph left out entirely: they are in the candidate set but in no group, so they would
+    // never be suggested — and therefore never be merged either. `merge` offers them to the model as
+    // one-member candidates (see its own docs).
+    let grouped: HashSet<&str> = groups
+        .iter()
+        .flat_map(|(group, _, _)| group.iter().map(String::as_str))
+        .collect();
+    let orphans: Vec<String> = all_ids_for_orphans
+        .iter()
+        .filter(|id| !grouped.contains(id.as_str()))
+        .cloned()
+        .collect();
 
     // 5. Group -> suggestion shape. At most one existing-Tankoubon node per group, by
     // `tankoubon_pair_gate`'s own guarantee.
@@ -657,6 +697,18 @@ async fn run_once(
         "computed_at": computed_at,
     }));
 
+    // Cross-group merge before the reviews: a series the graph split into several suggestions should
+    // be one card by the time anything reviews it (see `merge`'s own docs).
+    let suggestions = super::merge::same_series(
+        state,
+        suggestions,
+        &orphans,
+        &titles_shared,
+        &tags_shared,
+        &settings,
+    )
+    .await;
+
     let enriched =
         enrich_suggestions(state, suggestions, &titles_shared, &tags_shared, &settings).await;
 
@@ -686,6 +738,18 @@ async fn write_cache(state: &AppState, entry: &CachedSuggestions) -> Result<(), 
 struct RunError {
     code: &'static str,
     message: String,
+}
+
+/// The restore checkpoint: grouping caches vectors and suggestions, both of which would be written
+/// into a keyspace that is about to be replaced.
+fn restore_check(state: &AppState) -> Result<(), RunError> {
+    if state.restore_gate.closed() {
+        return Err(RunError {
+            code: lanrurugi_core::restore_gate::RESTORE_IN_PROGRESS_REASON,
+            message: lanrurugi_core::restore_gate::RESTORE_ABORTED_MESSAGE.to_string(),
+        });
+    }
+    Ok(())
 }
 
 async fn execute(
@@ -788,10 +852,10 @@ pub(crate) async fn snapshot(state: &AppState, include_ignored: bool) -> Value {
     let mut value = result_json(entry.as_ref(), running.as_deref());
     // Filtering is done here rather than before the cache write, so one entry serves both the
     // default view and "show ignored combinations".
-    if !include_ignored {
-        if let Some(suggestions) = value.get_mut("suggestions").and_then(|s| s.as_array_mut()) {
-            *suggestions = filter_ignored(std::mem::take(suggestions), &candidates.ignored);
-        }
+    if !include_ignored
+        && let Some(suggestions) = value.get_mut("suggestions").and_then(|s| s.as_array_mut())
+    {
+        *suggestions = filter_ignored(std::mem::take(suggestions), &candidates.ignored);
     }
     value
 }

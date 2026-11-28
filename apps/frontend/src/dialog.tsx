@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 
-import { BottomSheet, ConfirmSheet, PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
+import { BottomSheet, ChoiceSheet, ConfirmSheet, PopupMenu, PopupMenuItem } from "@/components/common-ui/Display"
 import { Tooltip } from "@/components/common-ui/Display"
 import { Checkbox, Input } from "@/components/common-ui/Form"
 import { SearchSyntaxHelp } from "@/components/Display"
@@ -124,8 +124,10 @@ type DialogRequest =
       kind: "confirm"
       message: ReactNode
       danger: boolean
-      // The confirm button stays disabled until typed text matches the localized "delete" word.
+      // The confirm button stays disabled until typed text matches the localized "delete" word
+      // (`typedWord` overrides that word for actions whose verb is not "delete").
       requireTypedConfirmation: boolean
+      typedWord?: string
       resolve: (value: boolean) => void
     }
   | {
@@ -149,6 +151,12 @@ type DialogRequest =
       kind: "info"
       message: ReactNode
       resolve: () => void
+    }
+  | {
+      kind: "choice"
+      message: ReactNode
+      choices: readonly DialogChoice[]
+      resolve: (value: string | null) => void
     }
 
 let currentRequest: DialogRequest | null = null
@@ -194,10 +202,36 @@ export function confirmDialog(
   })
 }
 
+/** `confirmDialog` with a caller-chosen word to type, for actions too large to approve with one
+ *  click (a full database restore reads "type 还原", not "type 删除"). */
+export function typedConfirmDialog(message: ReactNode, word: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    setRequest({ kind: "confirm", message, danger: true, requireTypedConfirmation: true, typedWord: word, resolve })
+  })
+}
+
 /** Single-button acknowledgement dialog for content that can't be recovered if dismissed unread. */
 export function infoDialog(message: ReactNode): Promise<void> {
   return new Promise((resolve) => {
     setRequest({ kind: "info", message, resolve: () => resolve() })
+  })
+}
+
+/** One named option in a `choiceDialog`. */
+export interface DialogChoice {
+  value: string
+  label: string
+  danger?: boolean
+}
+
+/** Confirm dialog with named outcomes instead of yes/no — e.g. "delete these snapshots too" vs
+ *  "keep them". Resolves the picked `value`, or null when cancelled. */
+export function choiceDialog(
+  message: ReactNode,
+  choices: readonly DialogChoice[],
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    setRequest({ kind: "choice", message, choices, resolve })
   })
 }
 
@@ -1218,9 +1252,10 @@ export function DialogHost() {
 
   const requiredConfirmationWord =
     request.kind === "confirm" && request.requireTypedConfirmation
-      ? i18n.resolvedLanguage === "en"
-        ? (t("common.delete") ?? "DELETE").toUpperCase()
-        : (t("common.delete") ?? "DELETE")
+      ? (request.typedWord ??
+        (i18n.resolvedLanguage === "en"
+          ? (t("common.delete") ?? "DELETE").toUpperCase()
+          : (t("common.delete") ?? "DELETE")))
       : null
 
   function close() {
@@ -1423,6 +1458,73 @@ export function DialogHost() {
             onSubmit={submitStampEditor}
             onCancel={cancelStampEditor}
           />
+        </div>
+      </>,
+      document.body,
+    )
+  }
+
+  if (request.kind === "choice") {
+    const choose = (value: string) => {
+      request.resolve(value)
+      close()
+    }
+    const cancelChoice = () => {
+      request.resolve(null)
+      close()
+    }
+    if (phone) {
+      return (
+        <ChoiceSheet
+          key={requestKey(request)}
+          message={request.message}
+          choices={request.choices}
+          cancelLabel={t("common.cancel") ?? "Cancel"}
+          onChoose={(value) => (value === null ? cancelChoice() : choose(value))}
+        />
+      )
+    }
+    return createPortal(
+      <>
+        <div style={{ position: "fixed", inset: 0, zIndex: Z_DIALOG, background: "rgba(0,0,0,0.4)" }} onClick={cancelChoice} />
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="swal2-popup"
+          style={{
+            position: "fixed",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            zIndex: Z_DIALOG + 1,
+            display: "block",
+            width: 380,
+            maxWidth: "calc(100vw - 32px)",
+            boxSizing: "border-box",
+            padding: 20,
+            textAlign: "center",
+            borderRadius: ".2em",
+            boxShadow: "0 2px 10px rgba(0,0,0,.4)",
+            animation: "confirm-pop-in 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.2)",
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") cancelChoice()
+          }}
+        >
+          <div style={{ fontWeight: "bold", margin: "0 0 16px" }}>{request.message}</div>
+          <div className="swal2-actions" style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 8 }}>
+            {request.choices.map((choice) => (
+              <input
+                key={choice.value}
+                type="button"
+                className={choice.danger ? "stdbtn stdbtn-danger" : "stdbtn"}
+                value={choice.label}
+                onClick={() => choose(choice.value)}
+              />
+            ))}
+            {/* Focused by default so Enter never lands on a destructive choice. */}
+            <input type="button" className="stdbtn" value={t("common.cancel") ?? "Cancel"} onClick={cancelChoice} autoFocus />
+          </div>
         </div>
       </>,
       document.body,

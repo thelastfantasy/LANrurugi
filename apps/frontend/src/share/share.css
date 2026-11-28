@@ -589,7 +589,15 @@ div.ido.share-closed p:last-child {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* One grid for the whole list, with each row subgridded onto it: the bar and the state column then
+   start and end at the same x on every row (#288), and the state column is sized to the longest
+   text in the list — "447.0 MB / 489.1 MB" is longer than "完成" and a per-row max-content was
+   sizing it per row, which put the bars of different rows out of line. */
 .share-import-archives {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px max-content 22px;
+  align-items: center;
+  column-gap: 6px;
   list-style: none;
   margin: 0 0 4px 24px;
   padding: 0;
@@ -597,13 +605,11 @@ div.ido.share-closed p:last-child {
   overflow-y: auto;
   font-size: 0.85em;
 }
-/* A grid, not a flex row: an open button, a note or an error on one row must not push that row's
-   bar and state out of line with the others (#288). */
 .share-import-archives li {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 120px 9em 22px;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
-  column-gap: 6px;
   padding: 1px 0;
 }
 .share-import-archive-action {
@@ -726,11 +732,17 @@ div.ido.share-closed p:last-child {
   display: block;
   height: 100%;
 }
+/* The word sits at the row's left edge; its byte count is pushed to the column's right edge, so the
+   numbers line up whatever the word before them is. */
 .share-import-archive-state {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: right;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   white-space: nowrap;
+}
+.share-import-archive-size {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
 }
 /* The row's buttons are sized to their icon or word, not `.stdbtn`'s fixed width. */
 .share-import-row .share-import-btn {
@@ -772,8 +784,8 @@ div.ido.share-closed p:last-child {
   user-select: all;
 }
 @media (max-width: 560px) {
-  .share-import-archives li {
-    grid-template-columns: minmax(0, 1fr) 60px 7.5em 22px;
+  .share-import-archives {
+    grid-template-columns: minmax(0, 1fr) 60px max-content 22px;
   }
   /* Phone: the title and progress keep the full first line; the buttons wrap to a line of their own. */
   .share-import-row {
@@ -1208,6 +1220,9 @@ div.ido.share-closed p:last-child {
 .share-ratio-presets {
   display: inline-flex;
   gap: 4px;
+  /* The number field beside it is a `.stdinput`, whose 4px `margin-top` sits inside its wrapper;
+     without the same offset the presets centre 2px above the field's visible box. */
+  margin-top: 4px;
 }
 
 .share-ratio-presets .stdbtn {

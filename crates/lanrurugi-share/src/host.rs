@@ -155,6 +155,11 @@ pub struct SharedMetadata {
     pub tags: String,
     pub summary: String,
     pub toc: Vec<lanrurugi_share_proto::messages::Chapter>,
+    /// The sharer's `primary_source`, when it has one.
+    pub primary_source: Option<String>,
+    /// `extras` this build does not understand: kept as they arrived, so a later upgrade can use
+    /// them instead of the import having quietly dropped them.
+    pub unknown_extras: Vec<(String, String)>,
 }
 
 /// The fields a share needs to describe an archive without loading its bytes.
@@ -171,6 +176,9 @@ pub struct ShareArchive {
     pub pagecount: u32,
     pub arcsize: u64,
     pub toc: Vec<lanrurugi_share_proto::messages::Chapter>,
+    /// Where the metadata came from. Travels in the frame's trailer (`EXTRA_PRIMARY_SOURCE`), not
+    /// as a message field — see `lanrurugi_share_proto::extras`.
+    pub primary_source: Option<String>,
 }
 
 /// A tankoubon as a share sees it: its members in volume order.

@@ -20,6 +20,9 @@ fn map_bookmarks_error(e: lanrurugi_storage::bookmarks::BookmarksError) -> Repos
     }
 }
 
+/// Reports `(done, total)` records as a long restore moves through its input.
+pub type RecordProgress<'a> = &'a (dyn Fn(u64, u64) + Send + Sync);
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RestoreSummary {
     pub archives_updated: usize,
@@ -38,7 +41,34 @@ pub async fn restore(
     stamps: &StampRepository,
     bookmarks: &BookmarksRepository,
 ) -> Result<RestoreSummary, RepositoryError> {
+    restore_with_progress(
+        doc,
+        archives,
+        categories,
+        groupings,
+        stamps,
+        bookmarks,
+        &|_, _| {},
+    )
+    .await
+}
+
+/// [`restore`], reporting per-archive progress. `total` is the document's archive count — the
+/// categories/tankoubons/stamps/bookmarks that follow are quick single writes, so the bar is
+/// dominated by (and accurate for) the per-archive pass.
+pub async fn restore_with_progress(
+    doc: &BackupDocument,
+    archives: &ArchiveRepository,
+    categories: &CategoryRepository,
+    groupings: &GroupingRepository,
+    stamps: &StampRepository,
+    bookmarks: &BookmarksRepository,
+    progress: RecordProgress<'_>,
+) -> Result<RestoreSummary, RepositoryError> {
     let mut summary = RestoreSummary::default();
+    let total = doc.archives.len() as u64;
+    let mut done = 0u64;
+    progress(done, total);
 
     for backup_archive in &doc.archives {
         let restored = archives
@@ -52,6 +82,8 @@ pub async fn restore(
                 }
             })
             .await?;
+        done += 1;
+        progress(done, total);
         if restored.is_none() {
             // Per Backup/Export document semantics: restore only re-attaches metadata to
             // archives that already exist on this instance (matched by ID); it never fabricates

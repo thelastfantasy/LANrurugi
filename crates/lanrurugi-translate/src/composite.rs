@@ -2108,40 +2108,40 @@ fn draw_region_horizontal(
 ) {
     let upem = font.raster.units_per_em().unwrap_or(1000.0);
 
-    if let Some(shape) = shape {
-        if let Some((font_px, lines)) = fit_horizontal_in_shape(text, font, shape, upem) {
-            let px_scale = PxScale::from(font_px);
-            let scaled = font.raster.as_scaled(px_scale);
-            let line_pitch = scaled.height() * LINE_SPACING_FACTOR;
-            for line in &lines {
-                let shaped = shape_line(
+    if let Some(shape) = shape
+        && let Some((font_px, lines)) = fit_horizontal_in_shape(text, font, shape, upem)
+    {
+        let px_scale = PxScale::from(font_px);
+        let scaled = font.raster.as_scaled(px_scale);
+        let line_pitch = scaled.height() * LINE_SPACING_FACTOR;
+        for line in &lines {
+            let shaped = shape_line(
+                font,
+                &line.text,
+                harfrust::Direction::LeftToRight,
+                font_px,
+                upem,
+            );
+            let mut pen_x = line.x_start + (line.x_width - shaped.advance).max(0.0) / 2.0;
+            // Same baseline convention as the rectangular path below: the line's own cell top,
+            // plus the font's ascent.
+            let pen_y = line.y_centre - line_pitch / 2.0 + scaled.ascent();
+            for glyph in &shaped.glyphs {
+                draw_glyph(
+                    page,
                     font,
-                    &line.text,
-                    harfrust::Direction::LeftToRight,
-                    font_px,
-                    upem,
+                    glyph.glyph_id,
+                    px_scale,
+                    pen_x + glyph.x_offset,
+                    pen_y - glyph.y_offset,
+                    fg,
+                    bold,
+                    outline,
                 );
-                let mut pen_x = line.x_start + (line.x_width - shaped.advance).max(0.0) / 2.0;
-                // Same baseline convention as the rectangular path below: the line's own cell top,
-                // plus the font's ascent.
-                let pen_y = line.y_centre - line_pitch / 2.0 + scaled.ascent();
-                for glyph in &shaped.glyphs {
-                    draw_glyph(
-                        page,
-                        font,
-                        glyph.glyph_id,
-                        px_scale,
-                        pen_x + glyph.x_offset,
-                        pen_y - glyph.y_offset,
-                        fg,
-                        bold,
-                        outline,
-                    );
-                    pen_x += glyph.x_advance;
-                }
+                pen_x += glyph.x_advance;
             }
-            return;
         }
+        return;
     }
 
     let Some((font_px, lines)) = fit_text(text, font, w, h) else {
@@ -2326,28 +2326,28 @@ fn draw_region_vertical(
 ) {
     let upem = font.raster.units_per_em().unwrap_or(1000.0);
 
-    if let Some(shape) = shape {
-        if let Some((font_px, columns)) = fit_vertical_in_shape(text, font, shape, upem) {
-            let px_scale = PxScale::from(font_px);
-            let pitch = vertical_pitch(font, font_px);
-            for column in &columns {
-                draw_vertical_column(
-                    page,
-                    font,
-                    px_scale,
-                    upem,
-                    font_px,
-                    column.x_centre,
-                    column.y_top,
-                    &column.text,
-                    pitch,
-                    fg,
-                    bold,
-                    outline,
-                );
-            }
-            return;
+    if let Some(shape) = shape
+        && let Some((font_px, columns)) = fit_vertical_in_shape(text, font, shape, upem)
+    {
+        let px_scale = PxScale::from(font_px);
+        let pitch = vertical_pitch(font, font_px);
+        for column in &columns {
+            draw_vertical_column(
+                page,
+                font,
+                px_scale,
+                upem,
+                font_px,
+                column.x_centre,
+                column.y_top,
+                &column.text,
+                pitch,
+                fg,
+                bold,
+                outline,
+            );
         }
+        return;
     }
 
     let Some((font_px, columns)) = fit_text_vertical(text, font, w, h) else {
@@ -2811,10 +2811,10 @@ fn shape_line(
         direction,
         harfrust::Direction::TopToBottom | harfrust::Direction::BottomToTop
     );
-    if is_vertical_direction {
-        if let Some(han) = harfrust::Script::from_iso15924_tag(harfrust::Tag::new(b"Hani")) {
-            buffer.set_script(Some(han));
-        }
+    if is_vertical_direction
+        && let Some(han) = harfrust::Script::from_iso15924_tag(harfrust::Tag::new(b"Hani"))
+    {
+        buffer.set_script(Some(han));
     }
 
     // 0.15's `shape` reports failures instead of returning an output; a font it refuses to shape

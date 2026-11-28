@@ -67,17 +67,17 @@ pub async fn ensure_with(
     // but never let it shadow a real review once one is configured.
     let usable = |cached: &ReviewVerdict| !(cached.fallback && has_provider);
 
-    if let Some(cached) = cache.get(&cache_key) {
-        if usable(cached) {
-            return cached.clone();
-        }
+    if let Some(cached) = cache.get(&cache_key)
+        && usable(cached)
+    {
+        return cached.clone();
     }
     // Verdicts written before the content key existed live under the bare group key.
-    if let Some(cached) = cache.get(&key).cloned() {
-        if usable(&cached) {
-            cache.insert(cache_key.clone(), cached.clone());
-            return cached;
-        }
+    if let Some(cached) = cache.get(&key).cloned()
+        && usable(&cached)
+    {
+        cache.insert(cache_key.clone(), cached.clone());
+        return cached;
     }
 
     let verdict = if has_provider {
@@ -290,6 +290,19 @@ fn local_verdict(members: &[&ArchiveMeta], why: &str) -> ReviewVerdict {
     }
 }
 
+/// The keys a group's verdict is cached under: its group key and its content key.
+pub fn keys_for(group: &GroupRecord, metas: &[ArchiveMeta]) -> [String; 2] {
+    let key = super::group_key(&group.members);
+    let members: Vec<&ArchiveMeta> = group
+        .members
+        .iter()
+        .filter_map(|id| metas.iter().find(|m| &m.id == id))
+        .take(MAX_MEMBERS)
+        .collect();
+    let content = review_cache_key(&key, &members);
+    [key, content]
+}
+
 fn review_cache_key(key: &str, members: &[&ArchiveMeta]) -> String {
     let signature: String = members
         .iter()
@@ -321,22 +334,40 @@ pub async fn compare(
     let (a_size, b_size) = (a.arcsize, b.arcsize);
     let (a_owned, b_owned) = (a_id.to_string(), b_id.to_string());
 
+    let cache = super::compare_cache::DiskFingerprintCache::new(&state.library.temp_dir);
+    let progress_key = super::compare_cache::progress_key(a_id, b_id);
+    let key_for_task = progress_key.clone();
     let result = lanrurugi_core::concurrency::run_blocking(move || {
-        lanrurugi_imgcompare::compare_archives(&a_path, &b_path, a_owned, a_size, b_owned, b_size)
+        let report =
+            |side, done, total| super::compare_cache::report(&key_for_task, side, done, total);
+        lanrurugi_imgcompare::compare_archives_with(
+            &a_path,
+            &b_path,
+            a_owned,
+            a_size,
+            b_owned,
+            b_size,
+            lanrurugi_imgcompare::CompareHooks {
+                cache: Some(&cache),
+                progress: Some(&report),
+            },
+        )
     })
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("comparison failed: {e}"),
-        )
-    })?
-    .map_err(|e| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("comparison failed: {e}"),
-        )
-    })?;
+    .await;
+    super::compare_cache::finish(&progress_key);
+    let result = result
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("comparison failed: {e}"),
+            )
+        })?
+        .map_err(|e| {
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("comparison failed: {e}"),
+            )
+        })?;
 
     Ok(json!({
         "a": {"id": a_id, "title": a_title, "size": a_size, "pages": result.a_total_pages},

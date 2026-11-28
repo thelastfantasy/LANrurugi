@@ -80,6 +80,10 @@ export function pluginInfo() {
       " you can manage them as you please by creating your own set of Tag Rules.<br>" +
       `My only suggestion is that you should place the rule "<i>-${PLUGIN_TAG_NS}*</i>" as your last rule to cleanup all the unnecessary elements.`,
     version: "0.1",
+    // Runs before every other metadata plugin: everything downstream reads the title and tags this
+    // one derives from the filename. Stated here rather than matched on the namespace by the host,
+    // and deliberately not the user-draggable `priority` the Plugins page stores server-side.
+    run_order: 100,
     icon: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAAAXNSR0IArs4c6QAAAL1JREFUOI1jZMABpNbH/sclx8DAwPAscDEjNnEMQUIGETIYhUOqYdgMhTPINQzdUEZqGIZsKBM1DEIGTOiuexqwCKdidDl0vtT62P9kuZCJEWuKYWBgYGBgRHbh04BFDNIb4jAUbbSrZTARUkURg6lD10OUC/0PNaMYgs1Skgwk1jCSDCQWoBg46dYmhite0+D8pwGLCMY6uotRDOy8toZBkI2HIhcO/pxCm8KBUkOxFl/kGoq3gCXFYFxVAACeoU/8xSNybwAAAABJRU5ErkJggg==",
   };
 }

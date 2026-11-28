@@ -181,6 +181,7 @@ async fn a_bundle_carries_events_and_no_secrets() {
             frontend_events: true,
             environment: true,
             config: false,
+            resources: false,
         },
         truncate: false,
         resolve_stacks: false,

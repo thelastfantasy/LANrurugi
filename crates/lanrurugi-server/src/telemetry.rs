@@ -326,16 +326,16 @@ impl CategorizedMakeWriter {
         let active = self.active_path(category);
         // An empty file (a previous run's first open, or a truncated one) has nothing worth
         // keeping — moving it aside would just litter the directory with empty rotated files.
-        if let Ok(meta) = std::fs::metadata(&active) {
-            if meta.len() > 0 {
-                // Named after the day its content belongs to, not today's: a file left over from
-                // yesterday must not masquerade as today's.
-                let day = meta.modified().ok().map(local_date).unwrap_or(today);
-                let target = self.rotated_path(category, day);
-                if let Err(e) = std::fs::rename(&active, &target) {
-                    // Better a file that keeps growing than a log line lost in the writer.
-                    eprintln!("lanrurugi: failed to rotate {active:?} to {target:?}: {e}");
-                }
+        if let Ok(meta) = std::fs::metadata(&active)
+            && meta.len() > 0
+        {
+            // Named after the day its content belongs to, not today's: a file left over from
+            // yesterday must not masquerade as today's.
+            let day = meta.modified().ok().map(local_date).unwrap_or(today);
+            let target = self.rotated_path(category, day);
+            if let Err(e) = std::fs::rename(&active, &target) {
+                // Better a file that keeps growing than a log line lost in the writer.
+                eprintln!("lanrurugi: failed to rotate {active:?} to {target:?}: {e}");
             }
         }
         self.prune(category);

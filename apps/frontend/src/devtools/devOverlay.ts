@@ -129,9 +129,11 @@ function render() {
   const errors = list.filter((e) => e.kind === "error").reduce((n, e) => n + e.count, 0)
   const logged = list.filter((e) => e.kind === "console").reduce((n, e) => n + e.count, 0)
   const requests = list.filter((e) => e.kind === "request").length
-  badge.hidden = list.length === 0
+  // `style.display`, not the `hidden` attribute: the theme's `.ido`/`.stdbtn` rules set `display`,
+  // which outranks the browser's `[hidden]` rule, so the panel stayed up and could not be closed.
+  badge.style.display = list.length === 0 ? "none" : ""
   badge.textContent = `⚠ ${errors} error${errors === 1 ? "" : "s"} · ${logged} console${requests ? ` · ${requests} loop` : ""}`
-  panel.hidden = !open
+  panel.style.display = open ? "" : "none"
   if (!open) return
   const body = panel.querySelector<HTMLDivElement>("[data-dev-list]")
   if (!body) return
@@ -170,10 +172,9 @@ function mount() {
   badge = document.createElement("button")
   badge.type = "button"
   badge.className = "stdbtn"
-  badge.hidden = true
   badge.title = "Development problems (dev server only)"
   badge.style.cssText =
-    "position:fixed;right:8px;bottom:8px;z-index:2147483646;width:auto;height:auto;line-height:1.4;margin:0;padding:3px 8px;font-size:12px;opacity:.9"
+    "display:none;position:fixed;right:8px;bottom:8px;z-index:2147483646;width:auto;height:auto;line-height:1.4;margin:0;padding:3px 8px;font-size:12px;opacity:.9"
   badge.addEventListener("click", () => {
     open = !open
     render()
@@ -182,9 +183,8 @@ function mount() {
   panel = document.createElement("div")
   // `.ido` carries the active theme's page colours.
   panel.className = "ido"
-  panel.hidden = true
   panel.style.cssText =
-    "position:fixed;right:8px;bottom:40px;z-index:2147483647;width:min(720px,calc(100vw - 16px));max-height:60vh;overflow:auto;padding:8px 12px;text-align:left;border:2px solid currentColor;box-shadow:0 4px 16px rgba(0,0,0,.4);font-size:12px"
+    "display:none;position:fixed;right:8px;bottom:40px;z-index:2147483647;width:min(720px,calc(100vw - 16px));max-height:60vh;overflow:auto;padding:8px 12px;text-align:left;border:2px solid currentColor;box-shadow:0 4px 16px rgba(0,0,0,.4);font-size:12px"
   const header = document.createElement("div")
   header.style.cssText = "display:flex;align-items:center"
   const heading = document.createElement("strong")

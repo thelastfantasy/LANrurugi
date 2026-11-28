@@ -4,9 +4,9 @@
 
 [![CI](https://github.com/thelastfantasy/LANrurugi/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/thelastfantasy/LANrurugi/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/thelastfantasy/LANrurugi/actions/workflows/codeql.yml/badge.svg?branch=dev)](https://github.com/thelastfantasy/LANrurugi/actions/workflows/codeql.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#许可证)
 
-[主页](https://lrrg.dev) · [文档](https://docs.lrrg.dev) · [API 参考](https://api.lrrg.dev) · [插件 SDK](https://sdk.lrrg.dev)
+[主页](https://lrrg.dev) · [在线演示](https://demo.lrrg.dev) · [文档](https://docs.lrrg.dev) · [API 参考](https://api.lrrg.dev) · [插件 SDK](https://sdk.lrrg.dev)
 
 自托管的漫画 / 同人志库管理器。Rust 后端 + React 前端，从零重写 [LANraragi](https://github.com/Difegue/LANraragi)。
 
@@ -22,7 +22,7 @@
 - **库与阅读**：分类、标签、阅读进度、全文搜索与标签过滤；书架 / 网格 / 列表视图，界面支持 14 种语言。
   损坏档案扫描能快速找出截断或打不开的文件，书库里标出并可用 `is:damaged` 筛选，集中移入回收站或替换后重新检测。
 - **插件**：元数据、下载、登录三类插件跑在 Deno 子进程里，按命名空间隔离权限；也能让 AI 向导按站点生成新插件。
-- **下载**：字节级进度、暂停 / 断点续传、按域名并发上限与限速；订阅自动追更（发现新作 → 规则判定 → 入队），候选先预览再决定。
+- **下载**：字节级进度、暂停 / 断点续传、按域名并发上限与限速；队列里能看清排队、传输、入库各花了多久。订阅自动追更（发现新作 → 规则判定 → 入队），候选先预览再决定。
   入库时核对长度与整文件 BLAKE3 指纹、落盘后才删源，断电或复制出错都不会丢掉唯一的一份。
 - **分享**：把档案或单行本分享给别人，对方在浏览器里读、下载，或用自己的 LANrurugi 直接导入 —— 直连、打洞、
   中继兜底，不依赖第三方服务。
@@ -30,8 +30,15 @@
 - **电子书**：PDF、EPUB、MOBI/AZW3、DjVu、FB2、TXT 与压缩包一起入库、一样阅读。
 - **回收站与安全密码**：删除先移入回收站（保留期 / 容量可配），恢复时带回标签、分类、书签和阅读进度；
   永久删除与清空回收站需要单独的四位安全密码（连续输错会锁定），忘记可用登录密码或命令行重置。
+- **备份与删除安全网**：定时 RDB 快照与 JSON 导出，计划用 cron 表达（可到秒），按实例时区解释；列表里能看内容
+  摘要、加备注、钉住不被清理。每次删除都会先记台账，清理数据库等不经过回收站删掉的档案记录，连同标签、简介与阅读进度
+  都能在回收站页恢复（分类、书签要靠快照回退）；一次清理超过总数的四分之一会先拦下来要求确认。
 - **原生安装包**：Linux（x86_64 / aarch64）、macOS（Apple Silicon）、FreeBSD，解压即用，不需要容器。
 - **资源占用**：按机器或容器的内存自动选择图片处理档位，小内存设备也能跑；设置里可强制低内存模式，以速度换内存。
+- **资源监视**：独立的 `/resources` 页面（设置页有入口），打开才采样、关掉即零占用 —— 服务进程与插件进程的 CPU / 内存、cgroup 的
+  anon / file / slab 与 PSI 压力、进程树、本地模型调用、队列耗时、Redis 计数都在一屏；每个数字带窗口与来源，
+  读不到的显示 `—` 而不是 0。反馈包可以一起带上当时的资源快照（`resources.json`，已脱敏）；debug 构建的进程名
+  会标出 `(debug)`。
 
 ## 快速开始
 
@@ -40,7 +47,7 @@ docker run -d --name lanrurugi -p 3000:3000 \
   -v /path/to/manga:/home/koyomi/lanrurugi/content \
   -v /path/to/lanrurugi-data:/data \
   -e LANRURUGI_DATA_DIR=/data \
-  ghcr.io/thelastfantasy/lanrurugi:latest
+  ghcr.io/thelastfantasy/lanrurugi:beta
 ```
 
 两个挂载点：书库，和一个 `data` 目录（缩略图、Redis 数据库、模型、日志都在里面）。不设
@@ -50,7 +57,9 @@ docker run -d --name lanrurugi -p 3000:3000 \
 打开 `http://<服务器地址>:3000`。镜像自带 Redis，不需要额外的数据库容器；更完整的 compose（含 NAS 面板、
 反向代理、从 LANraragi 迁移的步骤）见[文档站「安装」](https://docs.lrrg.dev/guide/install/)。
 
-镜像有两个通道：`:latest` 跟随发布版，`:edge` 跟随 `dev` 分支的最新代码（可能坏，别指向正式书库）。
+<!-- `:latest` 只在发布正式版时才会打上，1.0 之前不存在，所以上面暂时写 `:beta`。发布 1.0 时改回 `:latest`，见 docs/dev/release.md。 -->
+镜像有三个通道：`:latest` 跟随正式版（1.0 发布后才有），`:beta` 跟随测试版，`:edge` 跟随 `dev` 分支的最新代码
+（可能坏，别指向正式书库）。
 
 > **默认管理员密码是 `kamimamita`**（与 LANraragi 一致）。首次登录后立刻在设置页改掉，不要把默认密码的实例
 > 暴露到局域网外。
@@ -74,4 +83,4 @@ docker run -d --name lanrurugi -p 3000:3000 \
 
 ## 许可证
 
-MIT —— 见 [LICENSE](./LICENSE)。
+MIT 或 Apache 2.0，二选一 —— 见 [LICENSE-MIT](./LICENSE-MIT) 与 [LICENSE-APACHE](./LICENSE-APACHE)。

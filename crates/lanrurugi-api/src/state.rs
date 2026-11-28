@@ -90,6 +90,9 @@ pub struct AppState {
     pub redis: RedisDbs,
     pub repos: Repositories,
     pub jobs: JobRegistry,
+    /// Closed while a full database restore replaces the keyspace: the HTTP layer refuses new
+    /// writes and long jobs stop at their next checkpoint.
+    pub restore_gate: lanrurugi_core::restore_gate::RestoreGate,
     pub auth: AuthConfig,
     /// 搜索通假实例：索引写入和查询匹配共用同一 `FoldConfig`/归一化管线。
     pub equivalence: Arc<Equivalence>,
@@ -295,6 +298,13 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// The process-wide resource sampler (030). It is a singleton rather than a field: one process
+    /// has one `/proc` view, and `AppState` is built in a dozen places (including every integration
+    /// test) where a required field would be pure noise.
+    pub fn resources(&self) -> &'static std::sync::Arc<crate::resources::watch::ResourceWatch> {
+        crate::resources::watch::ResourceWatch::global()
+    }
+
     /// Thin delegate to [`FilenameLocks::lock`] — kept so `download_manager::ingest`'s existing
     /// `state.lock_filename(filename)` call site didn't need to change when this lock moved into
     /// `lanrurugi-core` to become shared with the watcher path too.

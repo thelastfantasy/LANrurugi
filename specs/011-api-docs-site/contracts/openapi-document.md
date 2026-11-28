@@ -76,6 +76,11 @@ mutating route denies it explicitly — so it is the one a new route can silentl
 gate asked whether the policy mentioned a route at all; the `/api/*` wildcards make that
 unanswerable, so it could never fire. A gate that cannot fail is worse than no gate.)
 
+Internal endpoints (the diagnostics and resource monitors the app's own UI calls) are excluded from
+`paths` entirely: a fragment marks them `x-internal: true`, `merge` keeps them so the coverage and
+policy gates still see them, and `emit` skips them. The document's `info.description` says so, so a
+reader does not read the absence as an oversight.
+
 ## Per-operation custom fields
 
 Consumers may rely on these; they exist so a reader can tell how much to trust an entry and where to

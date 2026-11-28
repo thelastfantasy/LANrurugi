@@ -305,10 +305,11 @@ requirements specific to reproducing an existing, already-shipped UI.
                                  # setup guides) — not a replacement for spec-kit's specs/
   specs/                        # spec-kit planning artifacts (not shipped code)
   ```
-- **Project license**: MIT (`LICENSE` at repo root), for the LANrurugi project itself. This is
+- **Project license**: MIT OR Apache-2.0, at the user's option (`LICENSE-MIT` and `LICENSE-APACHE`
+  at repo root), for the LANrurugi project itself. This is
   independent of, and compatible with, the licenses of dependencies chosen elsewhere in this
   document — Apache-2.0 dependencies (e.g. `oar-ocr`, kha-white's `manga-ocr`) are freely usable
-  from an MIT project with no copyleft interaction; GPL-3.0 code (e.g. Koharu, deliberately
+  from an MIT/Apache-2.0 project with no copyleft interaction; GPL-3.0 code (e.g. Koharu, deliberately
   avoided as a dependency per `specs/004-ocr-manga-translation/research.md` §1) would not be,
   which is one more concrete reason that avoidance decision was correct, not just cautious.
 - **Backend**: Rust, Tokio async runtime, Axum web framework.

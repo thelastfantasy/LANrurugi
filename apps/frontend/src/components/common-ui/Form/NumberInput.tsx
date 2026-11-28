@@ -1,4 +1,4 @@
-import { useRef } from "react"
+import { useLayoutEffect, useRef } from "react"
 
 import { Input } from "@/components/common-ui/Form/Input"
 
@@ -166,17 +166,36 @@ function NumberInputShell({
   step_: (direction: 1 | -1) => void
   children: React.ReactNode
 }) {
+  const wrapperRef = useRef<HTMLSpanElement>(null)
+  const stepperRef = useRef<HTMLSpanElement>(null)
+  // Fit the stepper to the input's own box. Its margin and height vary by caller (`.stdinput`'s
+  // 4px top margin, or none), so no fixed offset in CSS lines up with all of them.
+  useLayoutEffect(() => {
+    const input = wrapperRef.current?.querySelector("input")
+    const stepper = stepperRef.current
+    if (!input || !stepper) return
+    const fit = () => {
+      stepper.style.top = `${input.offsetTop}px`
+      stepper.style.height = `${input.offsetHeight}px`
+      stepper.style.bottom = "auto"
+    }
+    fit()
+    const observer = new ResizeObserver(fit)
+    observer.observe(input)
+    return () => observer.disconnect()
+  }, [])
   return (
     // `inline-flex` + centred, not `inline-block`: an inline-block wrapper counts its child's
     // `margin-top` (`.stdinput` has 4px of it) into its own height without collapsing it, so the
     // input's visible box sat a couple of pixels lower than a bare `.stdinput` beside it in the
     // same row — visible on the share form's expiry row, where a number field sits next to a date.
     <span
+      ref={wrapperRef}
       className="number-input-wrapper"
       style={{ position: "relative", display: "inline-flex", alignItems: "center", ...style }}
     >
       {children}
-      <span className="number-input-stepper">
+      <span ref={stepperRef} className="number-input-stepper">
         <button
           type="button"
           className="number-input-stepper__btn number-input-stepper__btn--up"

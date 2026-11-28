@@ -117,6 +117,7 @@ async fn test_app() -> Option<(axum::Router, RedisDbs)> {
         lanrurugi_backup::import_snapshot::ImportSnapshotRepository::new(redis.config.clone()),
     );
     let state = AppState {
+        restore_gate: lanrurugi_core::restore_gate::RestoreGate::new(),
         subscriptions: Arc::new(
             lanrurugi_storage::subscriptions::SubscriptionRepository::new(redis.config.clone()),
         ),
@@ -647,6 +648,99 @@ async fn session_only_route_rejects_a_real_admin_token_but_accepts_a_real_sessio
     );
     assert!(theme_json["theme"].is_string());
     assert!(theme_json["language"].is_string());
+
+    purge_all_refresh_and_api_tokens(&redis).await;
+}
+
+/// 030: the resource snapshot lists every process, Redis internals and the plugin table, so it is
+/// Session-only — same bar as 018's diagnostics routes. A real Admin-role API token gets a 403 with
+/// no numbers in the body; a real session reaches the handler.
+#[tokio::test]
+async fn resource_snapshot_is_session_only_and_rejects_an_admin_token() {
+    let _guard = redis_state_lock().lock().await;
+    let Some((app, redis)) = test_app().await else {
+        eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+        return;
+    };
+    purge_all_refresh_and_api_tokens(&redis).await;
+
+    let login_resp = request(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        Some("password=kamimamita"),
+    )
+    .await;
+    assert_eq!(login_resp.status(), axum::http::StatusCode::OK);
+    let cookie = cookie_header(&set_cookie_values(&login_resp));
+
+    let create_resp = request_json(
+        &app,
+        "POST",
+        "/api/tokens",
+        Some(&cookie),
+        None,
+        Some(r#"{"name":"resources-test-admin","role":"admin"}"#),
+    )
+    .await;
+    assert_eq!(create_resp.status(), axum::http::StatusCode::OK);
+    let create_bytes = axum::body::to_bytes(create_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let create_json: serde_json::Value = serde_json::from_slice(&create_bytes).unwrap();
+    let raw_token = create_json["data"]["token"]
+        .as_str()
+        .expect("create_token must return the raw token value")
+        .to_string();
+
+    for path in ["/api/resources", "/api/resources/stream"] {
+        let via_token = request_json(&app, "GET", path, None, Some(&raw_token), None).await;
+        assert_eq!(
+            via_token.status(),
+            axum::http::StatusCode::FORBIDDEN,
+            "an Admin-role API token must not reach {path}"
+        );
+        let body = axum::body::to_bytes(via_token.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(
+            !text.contains("rss_bytes") && !text.contains("used_memory"),
+            "a refused {path} must not leak numbers, got: {text}"
+        );
+
+        let via_session = request_json(&app, "GET", path, Some(&cookie), None, None).await;
+        assert_ne!(
+            via_session.status(),
+            axum::http::StatusCode::FORBIDDEN,
+            "a real session must not be blocked from {path}"
+        );
+
+        let anonymous = request(&app, "GET", path, None, None).await;
+        assert_eq!(
+            anonymous.status(),
+            axum::http::StatusCode::UNAUTHORIZED,
+            "an unauthenticated caller must not reach {path}"
+        );
+    }
+
+    // The one-shot route answers with a real snapshot for the session, which is what proves the
+    // policy let the handler run rather than merely not-403'ing it somewhere earlier.
+    let snapshot = request_json(&app, "GET", "/api/resources", Some(&cookie), None, None).await;
+    assert_eq!(snapshot.status(), axum::http::StatusCode::OK);
+    let bytes = axum::body::to_bytes(snapshot.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        json["server"]["pid"].is_number(),
+        "snapshot has a server pid"
+    );
+    assert!(
+        json["build"]["profile"] == "debug" || json["build"]["profile"] == "release",
+        "snapshot reports the build profile"
+    );
 
     purge_all_refresh_and_api_tokens(&redis).await;
 }

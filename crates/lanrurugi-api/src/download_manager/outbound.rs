@@ -43,10 +43,10 @@ pub fn outbound_client() -> Result<reqwest::Client, DownloadError> {
         return Ok(lanrurugi_core::http_client::default_client());
     };
     let mut slot = client_slot().lock().expect("outbound client lock");
-    if let Some((cached, client)) = slot.as_ref() {
-        if cached == &name {
-            return Ok(client.clone());
-        }
+    if let Some((cached, client)) = slot.as_ref()
+        && cached == &name
+    {
+        return Ok(client.clone());
     }
     let built = lanrurugi_core::http_client::build(lanrurugi_core::http_client::bind_outbound(
         reqwest::Client::builder()

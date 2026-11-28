@@ -20,6 +20,7 @@ import {
 } from "@/components/common-ui/Display";
 import { RatingWidget } from "@/components/common-ui/Form";
 import { newCategoryDialog } from "@/dialog";
+import { useFullTitle } from "@/hooks/useFullTitle";
 import {
   PHONE_QUERY,
   useIsNarrowViewport,
@@ -29,7 +30,7 @@ import { copyWithToast } from "@/lib/clipboard";
 import { routes } from "@/lib/routes";
 import { splitTagsByNamespace } from "@/lib/tagFormat";
 import { isTankoubonId } from "@/lib/utils/isTankoubonId";
-import { Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme";
+import { FONT_SIZE_XS, Z_OVERLAY_BACKDROP, Z_OVERLAY_CONTENT } from "@/theme";
 import { toast } from "@/toast";
 
 import { type ContextMenuState } from "./types";
@@ -309,8 +310,27 @@ export function ArchiveContextMenu({
             style={{ width: 48, height: 68 }}
           />
           <div className="min-w-0 flex-1">
-            <div className="line-clamp-2 break-words" style={{ fontSize: 15, fontWeight: 600 }}>
-              {archive.title}
+            <SheetTitle title={archive.title} />
+            {/* The id on one line, small: it is what logs, the API and a bug report name an archive
+                by, and a phone has no hover tooltip or address bar to read it from. A tap selects
+                all of it for copying; the translucent grey chip reads on every theme. */}
+            <div
+              className="truncate select-all"
+              style={{
+                display: "inline-block",
+                maxWidth: "100%",
+                marginTop: 4,
+                padding: "1px 6px",
+                borderRadius: 4,
+                background: "rgba(128,128,128,0.22)",
+                fontSize: FONT_SIZE_XS,
+                fontFamily: "monospace",
+                fontStyle: "italic",
+                cursor: "text",
+              }}
+              onClick={(e) => window.getSelection()?.selectAllChildren(e.currentTarget)}
+            >
+              {archive.arcid}
             </div>
             {loggedIn && <div style={{ marginTop: 8 }}>{ratingWidget(28)}</div>}
           </div>
@@ -504,3 +524,48 @@ export function ArchiveContextMenu({
   );
 }
 
+/** The sheet's title, two lines at most. A tap selects all of it for copying into a search, like
+ *  the id below; when two lines cut it off, the same tap also lays the whole title over what is
+ *  below it — out of flow, so the sheet keeps its height — until focus moves elsewhere. */
+function SheetTitle({ title }: { title: string }) {
+  const palette = useMenuPalette();
+  const { titleRef, overlay, open, hide } = useFullTitle<HTMLDivElement>();
+  const expanded = overlay !== null;
+  const textStyle = { fontSize: 15, fontWeight: 600, cursor: "text" } as const;
+  return (
+    <div className="relative">
+      <div
+        ref={titleRef}
+        className="line-clamp-2 break-words select-all"
+        style={{ ...textStyle, visibility: expanded ? "hidden" : undefined }}
+        onClick={(e) => {
+          const el = e.currentTarget;
+          if (!open(el)) window.getSelection()?.selectAllChildren(el);
+        }}
+      >
+        {title}
+      </div>
+      {expanded && (
+        <div
+          ref={(el) => {
+            if (!el || el.contains(document.activeElement)) return;
+            el.focus({ preventScroll: true });
+            window.getSelection()?.selectAllChildren(el);
+          }}
+          tabIndex={-1}
+          className="absolute inset-x-0 top-0 break-words select-all outline-none"
+          style={{
+            ...textStyle,
+            zIndex: 1,
+            background: palette.bg,
+            paddingBottom: 6,
+          }}
+          onBlur={hide}
+          onClick={(e) => window.getSelection()?.selectAllChildren(e.currentTarget)}
+        >
+          {title}
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { FaBookmark, FaFlag, FaListUl } from "react-icons/fa6";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { unreadableArchiveCode } from "@/api/apiError";
@@ -34,11 +35,10 @@ import {
   MenuSeparator,
   SheetGrid,
   SheetTile,
-  Tooltip,
 } from "@/components/common-ui/Display";
 import { Badge } from "@/components/common-ui/Display"
 import { Keycap as Key } from "@/components/common-ui/Display/Keycap";
-import { IconButton, ToggleButtonMenu } from "@/components/common-ui/Form";
+import { IconButton, Slider, ToggleButtonMenu } from "@/components/common-ui/Form";
 import { currentRating,RatingWidget } from "@/components/common-ui/Form/RatingWidget";
 import { isPlainLinkClick } from "@/components/common-ui/Link"
 import {
@@ -48,7 +48,7 @@ import {
   StatusIcon,
 } from "@/components/Display";
 import { Footer } from "@/components/Layout";
-import { confirmDialog, promptDialog } from "@/dialog";
+import { confirmDialog } from "@/dialog";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useHasPhysicalKeyboard } from "@/hooks/useHasPhysicalKeyboard";
 import { useIsNarrowViewport } from "@/hooks/useIsNarrowViewport";
@@ -110,6 +110,7 @@ import {
   storeFitAction,
 } from "./FitMenuButton";
 import { MarkerLayer } from "./MarkerLayer";
+import { ReaderMagnifier } from "./ReaderMagnifier";
 import { SettingsOverlay } from "./SettingsOverlay";
 import { TankoubonSplitModal } from "./TankoubonSplitModal";
 import { UnreadableArchivePage } from "./UnreadableArchivePage";
@@ -287,7 +288,7 @@ function wipeDuration(renderedHeight: number): number {
   return Math.min(WIPE_MAX_MS, Math.max(WIPE_MIN_MS, Math.round(renderedHeight / WIPE_SPEED_PX_PER_MS)));
 }
 
-type OverlayKind = "archive" | "settings" | "help" | "chapters" | null;
+type OverlayKind = "archive" | "settings" | "help" | "chapters" | "goto" | null;
 
 interface WakeLockSentinelLike {
   release(): Promise<void>;
@@ -297,6 +298,11 @@ interface WakeLockSentinelLike {
 /** TanStack Query key for a reader's recommendation shortlist — prefetched ahead of time so the
  * boundary panel opens with data already cached (LLM rerank takes seconds). */
 const RECS_QUERY_KEY = (id: string) => ["reader-recommendations", id] as const;
+
+/** Keep a prefetched shortlist for an hour. TanStack's default is 5 minutes of inactivity, which a
+ * single long read already exceeds — the prefetch would be collected mid-read and the boundary
+ * panel would re-ask the server (a model call when the cache digest has moved on). */
+const RECS_GC_MS = 60 * 60 * 1000;
 
 /** Fixed 16x16 square badge chip on recommendation-card thumbnails, neutral dark overlay chrome. */
 const badgeChipStyle: React.CSSProperties = {
@@ -391,6 +397,10 @@ function TapSidesDemo() {
     </svg>
   );
 }
+
+/** The magnifier's switch, outside the component: moving to the next archive remounts the reader
+ * (`App.tsx` keys it by id) and must not turn it off; a page reload still does. */
+const magnifierSession = { on: false };
 
 export function Reader() {
   const { t } = useTranslation();
@@ -524,26 +534,62 @@ export function Reader() {
   const translationArchiveId = isTank
     ? tankReading.getArchiveForPage(currentPage)?.arcId ?? null
     : archiveId;
-  // The chapter the current page belongs to, for headless mode's bottom-left line. Chapters have
-  // two sources and both count: a Tankoubon's member archives, and a plain archive's own ToC.
-  const currentChapter = useMemo(() => {
-    if (isTank) {
-      const chapter = tankReading.chapters.find(
-        (c) => currentPage >= c.startPage && currentPage <= c.endPage,
-      );
-      return chapter
-        ? { title: displayTocName(chapter.title, t), startPage: chapter.startPage }
-        : null;
-    }
-    // The last ToC entry at or before the current page — the same "which chapter am I in"
-    // question the overview's chapter selector answers. First entry wins on a shared page.
-    let entry: TocEntry | undefined;
-    for (const candidate of metadata.data?.toc ?? []) {
-      if (candidate.page > currentPage) continue;
-      if (!entry || candidate.page > entry.page) entry = candidate;
-    }
-    return entry ? { title: displayTocName(entry.name, t), startPage: entry.page } : null;
-  }, [currentPage, isTank, tankReading.chapters, metadata.data?.toc, t]);
+  // The chapter a page belongs to, for headless mode's bottom-left line and the phone toolbar's
+  // page row. Chapters have two sources and both count: a Tankoubon's member archives, and a plain
+  // archive's own ToC.
+  const chapterForPage = useCallback(
+    (page: number): {
+      title: string;
+      startPage: number;
+      tocTitle?: string;
+      /** Global page the innermost ToC entry itself begins on — its own "this is a chapter start"
+       *  marker, which can differ from the volume's start page. */
+      tocPage?: number;
+    } | null => {
+      if (isTank) {
+        const chapter = tankReading.chapters.find(
+          (c) => page >= c.startPage && page <= c.endPage,
+        );
+        if (!chapter) return null;
+        // A tankoubon's members are its top level, but each member may have ToC entries of its
+        // own — the merged ToC (member chapters + their ToC, already globalised) is what the
+        // overview's chapter selector lists, so it is also the innermost name for a page. Without
+        // this the headless line named only the volume and dropped every real chapter name.
+        let inner: TocEntry | undefined;
+        for (const candidate of metadata.data?.toc ?? []) {
+          if (candidate.page > page || candidate.page < chapter.startPage) continue;
+          if (candidate.synthetic) continue;
+          if (!inner || candidate.page > inner.page) inner = candidate;
+        }
+        return {
+          title: displayTocName(chapter.title, t),
+          startPage: chapter.startPage,
+          tocTitle: inner ? displayTocName(inner.name, t) : undefined,
+          tocPage: inner?.page,
+        };
+      }
+      // The last ToC entry at or before the page — the same "which chapter am I in" question the
+      // overview's chapter selector answers. First entry wins on a shared page.
+      let entry: TocEntry | undefined;
+      for (const candidate of metadata.data?.toc ?? []) {
+        if (candidate.page > page) continue;
+        if (!entry || candidate.page > entry.page) entry = candidate;
+      }
+      return entry ? { title: displayTocName(entry.name, t), startPage: entry.page } : null;
+    },
+    [isTank, tankReading.chapters, metadata.data?.toc, t],
+  );
+  const currentChapter = useMemo(() => chapterForPage(currentPage), [chapterForPage, currentPage]);
+  // Two different starts, two different markers: the volume (chapter) begins, and the ToC entry
+  // inside it begins. They often fall on different pages, and a page can be both.
+  const isChapterStart = !!currentChapter && currentPage === currentChapter.startPage;
+  const isTocStart = !!currentChapter?.tocPage && currentPage === currentChapter.tocPage;
+  const chapterStartFlag = isChapterStart ? (
+    <FaFlag className="reader-headless-chapter-start" title={t("reader.chapterStart")} />
+  ) : null;
+  const tocStartFlag = isTocStart ? (
+    <FaListUl className="reader-headless-chapter-toc-start" title={t("reader.tocStart")} />
+  ) : null;
   // Chapters for the headless jump OSD (`t`). A Tankoubon's members are the top level and each
   // member's own ToC entries hang under it; a plain archive's ToC is a flat list.
   const chapterGroups = useMemo(() => {
@@ -642,6 +688,10 @@ export function Reader() {
   const [showHeadlessFileInfo, setShowHeadlessFileInfo] = useState(false);
   // The chapter OSD's own scroll container, so opening it can centre the current chapter.
   const chapterOsdRef = useRef<HTMLDivElement | null>(null);
+  // The go-to OSD's page field, and the page its scrubber is being dragged to (null when idle):
+  // the drag only previews; the jump happens on release.
+  const gotoInputRef = useRef<HTMLInputElement | null>(null);
+  const [scrubPage, setScrubPage] = useState<number | null>(null);
   // Opening the OSD should land on the chapter being read, not at the top of the list — the same
   // "bring the current item into view" behaviour the archive overview's grid has.
   useEffect(() => {
@@ -733,6 +783,12 @@ export function Reader() {
   // it stays at 10% and only comes back when the pointer reaches the corner it lives in (or when
   // it is hovered/focused — CSS covers those two).
   const [headlessControlsRevealed, setHeadlessControlsRevealed] = useState(false);
+  const [magnifierOn, setMagnifierOnState] = useState(() => magnifierSession.on);
+  const setMagnifierOn = (on: boolean) => {
+    magnifierSession.on = on;
+    setMagnifierOnState(on);
+  };
+  if (!headless && magnifierOn) setMagnifierOn(false);
   useEffect(() => {
     if (!headless || !supportsHover) return;
     function onMove(e: MouseEvent) {
@@ -1191,7 +1247,10 @@ export function Reader() {
   const placeholderDims =
     pageTinyDims[spread.left] ?? pageDimensions[spread.left] ?? lastDimsRef.current ?? UNKNOWN_PAGE_DIMS;
   /** Sizing for that placeholder, in the fit mode currently selected. */
-  const placeholderStyle: React.CSSProperties | null = mainReady[spread.left]
+  // Paged mode only: infinite scroll never loads the paged image, so the row would stay up for
+  // good, spanning the margins and swallowing their clicks.
+  const placeholderStyle: React.CSSProperties | null =
+    readerSettings.infiniteScroll || mainReady[spread.left]
     ? null
       : readerSettings.fitMode === FIT_MODE.FIT_HEIGHT
         ? {
@@ -1988,6 +2047,7 @@ export function Reader() {
     void queryClient.prefetchQuery({
       queryKey: RECS_QUERY_KEY(archiveId),
       staleTime: 60_000,
+      gcTime: RECS_GC_MS,
       queryFn: () =>
         fetch(
           `/api/reader/recommendations/${encodeURIComponent(archiveId)}?limit=10`,
@@ -2023,6 +2083,7 @@ export function Reader() {
       .fetchQuery({
         queryKey: RECS_QUERY_KEY(archiveId),
         staleTime: 60_000,
+        gcTime: RECS_GC_MS,
         queryFn: () =>
           fetch(
             `/api/reader/recommendations/${encodeURIComponent(archiveId)}?limit=10`,
@@ -2138,7 +2199,9 @@ export function Reader() {
     } else if (!supportsHover) {
       onInfiniteScrollTap(clientY);
     } else {
-      goToInfiniteScrollPage(currentPage, target);
+      // A vertical strip of pages turns by the screen's lower/upper half, exactly as J/K do;
+      // left/right halves beside a column of pages read as two unrelated controls.
+      pressStepKey(clientY >= window.innerHeight / 2 ? "next" : "prev");
     }
   }
   const turnFromOutsideRef = useRef(turnFromOutside);
@@ -2618,7 +2681,7 @@ export function Reader() {
   const currentBookmark = (bookmarks.data ?? []).find((b) => b.page === currentPage);
   const isPageBookmarked = currentBookmark !== undefined;
 
-  async function toggleBookmark() {
+  async function toggleBookmark({ announce = false }: { announce?: boolean } = {}) {
     if (!loggedIn) {
       const template = t("reader.aHrefUrlLogin") ?? "";
       toast({
@@ -2630,10 +2693,24 @@ export function Reader() {
       return;
     }
     if (!archiveId) return;
-    if (isPageBookmarked) {
-      await removeBookmark.mutateAsync({ archiveId, page: currentPage });
-    } else {
-      await addBookmark.mutateAsync({ archiveId, page: currentPage });
+    try {
+      if (isPageBookmarked) {
+        await removeBookmark.mutateAsync({ archiveId, page: currentPage });
+        if (announce) {
+          toast({ heading: t("reader.bookmarkRemoved", { page: currentPage }) ?? undefined, icon: "info" })
+        }
+      } else {
+        await addBookmark.mutateAsync({ archiveId, page: currentPage });
+        if (announce) {
+          toast({ heading: t("reader.bookmarkAdded", { page: currentPage }) ?? undefined, icon: "success" })
+        }
+      }
+    } catch (err) {
+      // A failed write used to reject into nothing (`void toggleBookmark()`): in headless reading
+      // there is no toolbar icon to notice it either, so say it out loud when nothing else can.
+      if (announce) {
+        toast({ text: err instanceof Error ? err.message : String(err), icon: "error" })
+      }
     }
   }
 
@@ -2687,6 +2764,16 @@ export function Reader() {
         if (e.key === "Escape") {
           setArchiveTransition(null);
         }
+        return;
+      }
+
+      // Over an open panel the page is not being read: only Escape and the panel's own toggle key
+      // act, so Home/End, arrows, M, N and the rest go to the panel instead of the page behind it.
+      if (overlay !== null) {
+        const toggleKey = { archive: "q", settings: "o", help: "?", goto: "g" }[overlay];
+        if (e.key !== "Escape" && e.key !== toggleKey) return;
+      } else if (document.querySelector('[role="dialog"], [role="alertdialog"]')) {
+        // Any other modal (a confirm, the split panel) owns the keyboard, Escape included.
         return;
       }
 
@@ -2750,6 +2837,13 @@ export function Reader() {
           }
           return;
         case " ":
+          // Headless fits the page to the screen, so there is nothing to scroll: Space toggles the
+          // magnifier there instead.
+          if (headless) {
+            e.preventDefault();
+            setMagnifierOn(!magnifierOn);
+            return;
+          }
           window.scrollBy({
             top: window.innerHeight * 0.8,
             behavior: "smooth",
@@ -2780,19 +2874,19 @@ export function Reader() {
           }
           return;
         case "b":
-          void toggleBookmark();
+          // Headless hides the toolbar, so the bookmark icon's own state change is the only
+          // feedback there would be — the toast is what makes the shortcut answer at all.
+          void toggleBookmark({ announce: headless });
           return;
         case "f":
           toggleFullScreen();
           return;
-        case "g": {
-          void (async () => {
-            const value = await promptDialog(t("reader.goToPage") ?? "");
-            const page = value ? parseInt(value, 10) : NaN;
-            if (!Number.isNaN(page)) selectPage(page);
-          })();
+        case "g":
+          // `preventDefault` so the "g" itself is not typed into the field that opens with focus.
+          e.preventDefault();
+          setScrubPage(null);
+          setOverlay("goto");
           return;
-        }
         case "h":
           toggleHeadless();
           return;
@@ -2809,9 +2903,9 @@ export function Reader() {
             updateReaderSettings({ mangaMode: !readerSettings.mangaMode });
             return;
           }
-          // Headless only (deliberate: the fit modes belong to the no-chrome reading view), and a
-          // no-op in endless scroll where the page column already sizes itself.
-          if (!headless || readerSettings.infiniteScroll) return;
+          // Headless only (deliberate: the fit modes belong to the no-chrome reading view). Endless
+          // scroll applies them too, as its fit menu shows.
+          if (!headless) return;
           e.preventDefault();
           const cycle = [FIT_MODE.CONTAINER, FIT_MODE.FIT_WIDTH, FIT_MODE.FIT_HEIGHT] as const;
           const next = cycle[(cycle.indexOf(readerSettings.fitMode) + 1) % cycle.length];
@@ -2887,6 +2981,7 @@ export function Reader() {
     markerPlacementMode,
     archiveTransition,
     headless,
+    magnifierOn,
     toggleHeadless,
     overlay,
     chapterGroups,
@@ -3389,8 +3484,10 @@ export function Reader() {
   if (readerSettings.fitMode === FIT_MODE.FIT_HEIGHT) {
     const heightVh =
       readerSettings.hideHeader || headless || readerSettings.infiniteScroll ? 98 : 90;
+    // The measured height is the space around one page in the paged view; in endless scroll the
+    // image area is the whole column, scrolled far above the viewport, so it measured as huge.
     imageStyle.maxHeight =
-      fitHeightPx !== null ? `${fitHeightPx}px` : `${heightVh}vh`;
+      fitHeightPx !== null && !readerSettings.infiniteScroll ? `${fitHeightPx}px` : `${heightVh}vh`;
     // On desktop the container hugs the page (legacy's shape), but not tighter than the toolbar
     // needs: its two side icon groups are absolutely positioned (198px and 214px) and the paginator
     // between them is ~224px — plus another 120px when the adjacent-archive arrows are shown, which
@@ -3414,6 +3511,13 @@ export function Reader() {
   } else {
     outerStyle.maxWidth = "1200px";
   }
+
+  // A `width: 100%` page (fit-width, a custom container width) inside the shrink-to-fit page frame
+  // resolved against its own natural width, so a page narrower than the column was never scaled up
+  // (legacy fills the column). The frame takes the full width in those modes. A spread already
+  // fills it, and widening its frame let the left page take the room from the right one.
+  const pageFrameFill: React.CSSProperties =
+    imageStyle.width === "100%" && !isSpreadShowing ? { width: "100%" } : {};
 
   // Infinite scroll: the ratio reserved for pages nobody has measured yet, and the pages whose
   // images may request bytes (see `infiniteLoadView`). Loaded pages keep their `src` regardless.
@@ -3491,6 +3595,13 @@ export function Reader() {
   const placementImageStyle: React.CSSProperties = markerPlacementMode
     ? { ...imageStyle, zIndex: 22, cursor: "cell", touchAction: "none" }
     : imageStyle;
+
+  /** The G panel's jump: clamped to the book, and closing the panel either way. */
+  const jumpToTypedPage = (typed: string) => {
+    const page = parseInt(typed, 10);
+    setOverlay(null);
+    if (!Number.isNaN(page)) selectPage(Math.min(totalPages, Math.max(1, page)));
+  };
 
   const helpContent = (
     <div className="reader-help-body">
@@ -3594,6 +3705,19 @@ export function Reader() {
                 <Key>H</Key>
               </span>
               <span>{t("reader.hToggleHeadless")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>Space</Key>
+              </span>
+              <span>{t("reader.helpMagnifierToggle")}</span>
+            </li>
+            <li>
+              <span className="reader-help-keys">
+                <Key>+</Key>
+                <Key>-</Key>
+              </span>
+              <span>{t("reader.helpMagnifierZoom")}</span>
             </li>
             {loggedIn && (
               <li>
@@ -3805,15 +3929,15 @@ export function Reader() {
           />
         )}
         {hasPhysicalKeyboard ? (
-          <Tooltip label={helpContent} maxWidth={420}>
-            <IconButton
-              variant="ghost-btn"
-              icon="fas fa-question-circle fa-2x"
-              title={t("reader.help") ?? undefined}
-              size={32}
-              style={{ marginRight: 13, borderRadius: "50%" }}
-            />
-          </Tooltip>
+          // Opens the same help panel as `?`; a hover popover of the whole list covered the page.
+          <IconButton
+            variant="ghost-btn"
+            icon="fas fa-question-circle fa-2x"
+            title={t("reader.help") ?? undefined}
+            size={32}
+            style={{ marginRight: 13, borderRadius: "50%" }}
+            onClick={() => setOverlay(overlay === "help" ? null : "help")}
+          />
         ) : null}
       </div>
       <div className="absolute-options absolute-right">
@@ -4034,6 +4158,27 @@ export function Reader() {
       </BottomSheet>
     </>
   );
+  // The toolbar's page row can name a page other than `currentPage`: in infinite scroll it is the
+  // page the long press summoned the bar on, so the chapter has to follow that page.
+  const toolbarPage =
+    readerSettings.infiniteScroll && infiniteToolbarPage !== null
+      ? infiniteToolbarPage
+      : currentPage;
+  const toolbarChapter = chapterForPage(toolbarPage);
+  // The phone counterpart to headless reading's bottom-left chapter line: which chapter this page
+  // belongs to, plus legacy's flag on the chapter's own first page. A caption, not a control.
+  const toolbarChapterLabel = toolbarChapter && (
+    <span className="mobile-reader-toolbar-chapter" title={toolbarChapter.title}>
+      <i className="fas fa-bookmark" aria-hidden="true" />
+      <span className="mobile-reader-toolbar-chapter-title">{toolbarChapter.title}</span>
+      {toolbarPage === toolbarChapter.startPage && (
+        <i
+          className="fas fa-flag mobile-reader-toolbar-chapter-start"
+          title={t("reader.chapterStart")}
+        />
+      )}
+    </span>
+  );
   const mobileToolbar = (!readerSettings.infiniteScroll ||
     (touchInfiniteToolbar && infiniteToolbarPage !== null)) && (
     <div
@@ -4044,7 +4189,12 @@ export function Reader() {
         readerSettings.infiniteScroll ? " mobile-reader-toolbar--sheet" : ""
       }`}
     >
-      {arrows}
+      {arrows && (
+        <div className="mobile-reader-toolbar-page-row">
+          {arrows}
+          {toolbarChapterLabel}
+        </div>
+      )}
       {readerSettings.infiniteScroll && infiniteToolbarPage !== null && (
         // Infinite scroll has no paginator, so the page the toolbar was summoned on is named here.
         <div
@@ -4056,8 +4206,14 @@ export function Reader() {
             alignSelf: "stretch",
           }}
         >
-          <div style={{ whiteSpace: "nowrap" }}>
-            {infiniteToolbarPage} / {totalPages}
+          <div
+            className="mobile-reader-toolbar-page-row mobile-reader-toolbar-page-row--spread"
+            style={{ whiteSpace: "nowrap" }}
+          >
+            <span>
+              {infiniteToolbarPage} / {totalPages}
+            </span>
+            {toolbarChapterLabel}
           </div>
           <div style={{ fontSize: "0.75em", overflowWrap: "anywhere" }}>
             {pageInfoBody(infiniteToolbarPage)}
@@ -4138,15 +4294,15 @@ export function Reader() {
           />
         )}
         {hasPhysicalKeyboard ? (
-          <Tooltip label={helpContent} maxWidth={420}>
-            <IconButton
-              variant="ghost-btn"
-              icon="fas fa-question-circle fa-2x"
-              title={t("reader.help") ?? undefined}
-              size={32}
-              style={{ borderRadius: "50%" }}
-            />
-          </Tooltip>
+          // Opens the same help panel as `?`; a hover popover of the whole list covered the page.
+          <IconButton
+            variant="ghost-btn"
+            icon="fas fa-question-circle fa-2x"
+            title={t("reader.help") ?? undefined}
+            size={32}
+            style={{ borderRadius: "50%" }}
+            onClick={() => setOverlay(overlay === "help" ? null : "help")}
+          />
         ) : null}
         {/* Moved out of the overflow menu, not duplicated: this is the same action that entry
             performed (the archive currently being shown — a tank's member when reading one), so the
@@ -4422,6 +4578,12 @@ export function Reader() {
 
   return (
     <>
+      {/* Paused, not switched off, while one of the reader's own layers is open. */}
+      <ReaderMagnifier
+        active={
+          magnifierOn && overlay === null && !showTankSplit && shareItem === null && !moreSheetOpen
+        }
+      />
       <div
         id="i1"
         className={headless ? "sni reader-headless" : "sni"}
@@ -4475,23 +4637,41 @@ export function Reader() {
             }
           >
             <div className="reader-headless-title">{metadata.data?.title}</div>
-            <div className="reader-headless-line">
-              <span>
-                {currentPage} / {totalPages}
+            <div
+              className={
+                "reader-headless-line" + (currentChapter?.tocTitle ? " is-two-line" : "")
+              }
+            >
+              {/* Two lines only when there is a chapter inside the volume to show; otherwise this is
+                  the plain one-row caption it has always been. With two lines the counter becomes
+                  its own grid cell, vertically centred beside them. */}
+              <span className="reader-headless-page-count">
+                <span className="reader-headless-page-current">{currentPage}</span>
+                <span className="reader-headless-page-total">
+                  <span className="reader-headless-page-of">/ </span>
+                  {totalPages}
+                </span>
               </span>
               {currentChapter && (
                 <span className="reader-headless-chapter">
-                  <i className="fas fa-bookmark" aria-hidden="true" />
-                  {/* The title truncates on its own: clipping the whole row (the obvious fix) used
-                      to push the chapter-start flag off the end, so the marker vanished exactly when
-                      a long chapter name needed it. */}
-                  <span className="reader-headless-chapter-title">{currentChapter.title}</span>
-                  {currentPage === currentChapter.startPage && (
-                    <i
-                      className="fas fa-flag reader-headless-chapter-start"
-                      title={t("reader.chapterStart")}
-                    />
-                  )}
+                  <FaBookmark className="reader-headless-chapter-icon" aria-hidden="true" />
+                  <span className="reader-headless-chapter-text">
+                    {/* Each line truncates on its own: clipping the whole row (the obvious fix) used
+                        to push the chapter-start flag off the end, so the marker vanished exactly
+                        when a long chapter name needed it. */}
+                    <span className="reader-headless-chapter-title-line">
+                      <span className="reader-headless-chapter-title">{currentChapter.title}</span>
+                      {chapterStartFlag}
+                    </span>
+                    {currentChapter.tocTitle && (
+                      <span className="reader-headless-chapter-toc-line">
+                        <span className="reader-headless-chapter-toc">
+                          {currentChapter.tocTitle}
+                        </span>
+                        {tocStartFlag}
+                      </span>
+                    )}
+                  </span>
                 </span>
               )}
             </div>
@@ -4584,17 +4764,15 @@ export function Reader() {
                     onLoad={(e) => onImageLoad(i + 1, e)}
                     onError={onImageError}
                     onClick={(e) => {
-                      // Headless also listens on the document; this tap is already handled.
+                      // Headless also listens on the document; this click is settled here.
                       e.preventDefault();
-                      if (!supportsHover) {
-                        onInfiniteScrollTap(e.clientY, i + 1);
+                      // With a mouse the whole reading area — page and margin alike — is J (lower half)
+                      // or K (upper half), the same as a click beside the page.
+                      if (supportsHover) {
+                        pressStepKey(e.clientY >= window.innerHeight / 2 ? "next" : "prev");
                         return;
                       }
-                      const isLeftHalf = e.clientX < window.innerWidth / 2;
-                      goToInfiniteScrollPage(
-                        i + 1,
-                        isLeftHalf ? "prev" : "next",
-                      );
+                      onInfiniteScrollTap(e.clientY, i + 1);
                     }}
                   />
                 );
@@ -4617,11 +4795,11 @@ export function Reader() {
                   stepOrTurn(isLeftHalf ? "prev" : "next", "click");
                 }}
                 className="reader-page-frame"
-                style={{ position: "relative", display: "inline-flex" }}
+                style={{ position: "relative", display: "inline-flex", ...pageFrameFill }}
               >
                 <span
                   className="reader-page-frame-inner"
-                  style={{ position: "relative", display: "inline-flex" }}
+                  style={{ position: "relative", display: "inline-flex", ...pageFrameFill }}
                 >
                   {pageTinyBlobs[spread.left] ? (
                     <img
@@ -4956,6 +5134,89 @@ export function Reader() {
             >
               <div className="navigation-help-toast">{helpContent}</div>
             </div>
+          </>
+        )}
+
+        {overlay === "goto" && (
+          <>
+            <div
+              id="overlay-shade"
+              style={{ display: "block", opacity: 0.6 }}
+              onClick={() => setOverlay(null)}
+            />
+            <form
+              id="reader-goto-osd"
+              role="dialog"
+              aria-modal="true"
+              aria-label={t("reader.goToPageTitle")}
+              onSubmit={(e) => {
+                e.preventDefault();
+                const field = e.currentTarget.elements.namedItem("page") as HTMLInputElement;
+                jumpToTypedPage(field.value);
+              }}
+            >
+              <div className="reader-goto-osd-title">{t("reader.goToPageTitle")}</div>
+              <div className="reader-goto-osd-row">
+                <input
+                  ref={gotoInputRef}
+                  name="page"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  maxLength={String(totalPages).length}
+                  defaultValue={currentPage}
+                  autoFocus
+                  onFocus={(e) => e.currentTarget.select()}
+                  onKeyDown={(e) => {
+                    // The reader's own key handler ignores inputs, so these keys are handled here.
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      setOverlay(null);
+                      return;
+                    }
+                    if (e.ctrlKey || e.metaKey || e.altKey) return;
+                    // Any other typed character that is not a digit ends the number, like Enter.
+                    if (e.key === "Tab" || (e.key.length === 1 && !/[0-9]/.test(e.key))) {
+                      e.preventDefault();
+                      jumpToTypedPage(e.currentTarget.value);
+                    }
+                  }}
+                  onChange={(e) => {
+                    const digits = e.currentTarget.value.replace(/\D/g, "");
+                    e.currentTarget.value = digits;
+                    // Jump as soon as another digit could only overshoot the last page.
+                    const page = Number(digits);
+                    if (digits && page > 0 && page * 10 > totalPages) jumpToTypedPage(digits);
+                  }}
+                  aria-label={t("reader.goToPageTitle")}
+                />
+                <span className="reader-goto-osd-total">/ {totalPages}</span>
+              </div>
+              <div className="reader-goto-osd-hint">{t("reader.goToPageHint")}</div>
+            </form>
+            {/* Desktop only: a page scrubber along the bottom. Dragging previews the page (in the
+                field above too); releasing, or a plain click on the track, jumps there. */}
+            {supportsHover && totalPages > 1 && (
+              <div className="reader-goto-scrubber">
+                <span className="reader-goto-scrubber-end">1</span>
+                <Slider
+                  min={1}
+                  max={totalPages}
+                  value={scrubPage ?? currentPage}
+                  onValueChange={(page) => {
+                    setScrubPage(page);
+                    if (gotoInputRef.current) gotoInputRef.current.value = String(page);
+                  }}
+                  onValueCommitted={(page) => {
+                    setScrubPage(null);
+                    jumpToTypedPage(String(page));
+                  }}
+                  thumbLabel={`${scrubPage ?? currentPage} / ${totalPages}`}
+                  aria-label={t("reader.goToPageTitle") ?? undefined}
+                />
+                <span className="reader-goto-scrubber-end">{totalPages}</span>
+              </div>
+            )}
           </>
         )}
 

@@ -16,6 +16,7 @@ use serde_json::json;
 use crate::activity::record_manual;
 use crate::auth_context::AuthContext;
 use crate::common::{error, not_found};
+use crate::snapshots::BackupProgress;
 use crate::AppState;
 use lanrurugi_storage::activity::{action_types, ActivityTarget, Outcome};
 use lanrurugi_storage::keys::CONFIG_KEY;
@@ -143,10 +144,10 @@ async fn stats(
                 Some((ns, t)) => (Some(ns.to_string()), t.to_string()),
                 None => (None, tag.clone()),
             };
-            if let Some(ns) = &namespace {
-                if excluded_namespaces.iter().any(|e| e == ns) {
-                    return None;
-                }
+            if let Some(ns) = &namespace
+                && excluded_namespaces.iter().any(|e| e == ns)
+            {
+                return None;
             }
             Some(json!({ "namespace": namespace, "text": text, "weight": weight }))
         })
@@ -160,6 +161,18 @@ async fn stats(
 // no gain on a path that has already failed.
 #[allow(clippy::result_large_err)]
 async fn build_backup_document(state: &AppState) -> Result<BackupDocument, Response> {
+    build_backup_document_result(state)
+        .await
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, "serve_backup", e))
+}
+
+/// The same document, as a plain error — for the export path (`snapshots::take_export`), which
+/// reports failures into an operation's result rather than answering an HTTP request. Both share
+/// this one builder so an export and a manual `GET /database/backup` can never drift on what they
+/// contain.
+pub(crate) async fn build_backup_document_result(
+    state: &AppState,
+) -> Result<BackupDocument, String> {
     let mut doc = lanrurugi_backup::build::build(
         &state.repos.archives,
         &state.repos.categories,
@@ -168,13 +181,7 @@ async fn build_backup_document(state: &AppState) -> Result<BackupDocument, Respo
         &state.bookmarks,
     )
     .await
-    .map_err(|e| {
-        error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "serve_backup",
-            e.to_string(),
-        )
-    })?;
+    .map_err(|e| e.to_string())?;
 
     add_translation_state(state, &mut doc).await;
     add_share_identity(state, &mut doc).await;
@@ -260,7 +267,10 @@ async fn queue_backup(State(state): State<AppState>) -> Response {
                 let value = serde_json::to_value(doc).unwrap_or(serde_json::Value::Null);
                 jobs.finish(&job_id_for_task, value).await;
             }
-            Err(e) => jobs.fail(&job_id_for_task, e.to_string()).await,
+            Err(e) => {
+                tracing::error!(error = %e, "building a database backup failed");
+                jobs.fail(&job_id_for_task, e.to_string()).await
+            }
         }
     });
 
@@ -317,42 +327,90 @@ async fn queue_restore(
         }
     };
 
-    record_manual(
+    // specs/028: a full snapshot before the library is rewritten. Reported in the job result but
+    // never blocking.
+    let snapshot = crate::snapshots::take_for_operation(&state, "pre-restore").await;
+    let (job_id, progress_job) = start_restore_job(
         &state,
-        auth.as_ref().map(|e| &e.0),
-        action_types::DATABASE_RESTORE,
-        ActivityTarget {
-            id: None,
-            label: None,
-            kind: Some("database".to_string()),
+        doc,
+        auth.as_ref().map(|e| e.0.clone()),
+        snapshot,
+        RestoreActivity {
+            action_type: action_types::DATABASE_RESTORE,
+            target: ActivityTarget {
+                id: None,
+                label: None,
+                kind: Some("database".to_string()),
+            },
         },
-        Outcome::Success,
-        None,
-        None,
     )
     .await;
+    axum::Json(json!({
+        "operation": "queue_restore",
+        "success": 1,
+        // `job` keeps the Jobs-console entry the endpoint always returned; `job_id` is the
+        // progress job the SSE stream is keyed by.
+        "job": job_id,
+        "job_id": progress_job.id,
+        "started_at": progress_job.status().started_at,
+        "events": format!("/api/backups/jobs/{}/events", progress_job.id),
+    }))
+    .into_response()
+}
 
+/// How a restore is framed in the activity log. The job writes the entry only once the outcome is
+/// known, so history never claims Success for a restore that then failed.
+pub(crate) struct RestoreActivity {
+    pub action_type: &'static str,
+    pub target: ActivityTarget,
+}
+
+/// Starts the background restore shared by the multipart upload endpoint and
+/// `POST /backups/{name}/restore`. The caller has already taken the pre-restore snapshot (they want
+/// its name in their own response) and supplies the activity framing; this runs the job and
+/// records its outcome.
+pub(crate) async fn start_restore_job(
+    state: &AppState,
+    doc: BackupDocument,
+    auth_for_task: Option<AuthContext>,
+    snapshot: crate::snapshots::SnapshotOutcome,
+    activity: RestoreActivity,
+) -> (String, std::sync::Arc<crate::snapshots::BackupJob>) {
     let job_id = state.jobs.create("restore").await;
+    let progress_job = crate::snapshots::start_progress_job("restore");
     let jobs = state.jobs.clone();
     let repos = state.repos.clone();
     let job_id_for_task = job_id.clone();
     let state_for_task = state.clone();
-    let auth_for_task = auth.as_ref().map(|e| e.0.clone());
+    let progress_job_for_task = progress_job.clone();
 
     tokio::spawn(async move {
         jobs.mark_active(&job_id_for_task).await;
-        let result = lanrurugi_backup::restore::restore(
+        // Record-counted: `percent = done / total` through the same sink the backups use.
+        // Archive writes are 0–90 %; the categories/stamps/bookmarks and translation state that
+        // follow are the remaining 10 %, which the terminal event then closes out at 100.
+        let sink = progress_job_for_task.clone();
+        let progress = move |done: u64, total: u64| {
+            let percent = crate::snapshots::record_percent(done, total) * 0.9;
+            sink.update(done, total, percent);
+        };
+        let result = lanrurugi_backup::restore::restore_with_progress(
             &doc,
             &repos.archives,
             &repos.categories,
             &repos.groupings,
             &repos.stamps,
             &state_for_task.bookmarks,
+            &progress,
         )
         .await;
         match result {
             Ok(summary) => {
-                let _ = lanrurugi_backup::restore::relink_stamp_ids(&doc, &repos.archives).await;
+                if let Err(e) =
+                    lanrurugi_backup::restore::relink_stamp_ids(&doc, &repos.archives).await
+                {
+                    tracing::warn!(error = %e, "failed to relink stamp ids after a restore");
+                }
                 restore_share_identity(&state_for_task, &doc).await;
 
                 // Phase 2 translation state (FR-022). A backup taken before this feature existed
@@ -371,35 +429,43 @@ async fn queue_restore(
                 )
                 .await;
 
-                jobs.finish(
-                    &job_id_for_task,
-                    json!({
-                        "archives_updated": summary.archives_updated,
-                        "archives_skipped_missing": summary.archives_skipped_missing,
-                        "categories_restored": summary.categories_restored,
-                        "tankoubons_restored": summary.tankoubons_restored,
-                        "stamps_restored": summary.stamps_restored,
-                        "bookmarks_restored": summary.bookmarks_restored,
-                        "glossaries_restored": translation.glossaries_restored,
-                        "font_patterns_restored": translation.font_patterns_restored,
-                        "text_region_sets_restored": translation.text_region_sets_restored,
-                    }),
+                let result = json!({
+                    "restored": summary.archives_updated,
+                    "skipped": summary.archives_skipped_missing,
+                    "archives_updated": summary.archives_updated,
+                    "archives_skipped_missing": summary.archives_skipped_missing,
+                    "categories_restored": summary.categories_restored,
+                    "tankoubons_restored": summary.tankoubons_restored,
+                    "stamps_restored": summary.stamps_restored,
+                    "bookmarks_restored": summary.bookmarks_restored,
+                    "glossaries_restored": translation.glossaries_restored,
+                    "font_patterns_restored": translation.font_patterns_restored,
+                    "text_region_sets_restored": translation.text_region_sets_restored,
+                    "snapshot": snapshot,
+                });
+                progress_job_for_task.finish_with_result(result.clone());
+                jobs.finish(&job_id_for_task, result).await;
+                record_manual(
+                    &state_for_task,
+                    auth_for_task.as_ref(),
+                    activity.action_type,
+                    activity.target,
+                    Outcome::Success,
+                    None,
+                    None,
                 )
                 .await;
             }
             Err(e) => {
+                tracing::error!(error = %e, "database restore failed");
                 // The restore was actually attempted (request already accepted, task running) and
                 // failed partway through — distinct from the earlier body/JSON validation
                 // rejections above, which never got this far.
                 record_manual(
                     &state_for_task,
                     auth_for_task.as_ref(),
-                    action_types::DATABASE_RESTORE,
-                    ActivityTarget {
-                        id: None,
-                        label: None,
-                        kind: Some("database".to_string()),
-                    },
+                    activity.action_type,
+                    activity.target,
                     Outcome::Failure {
                         reason: e.to_string(),
                     },
@@ -407,12 +473,13 @@ async fn queue_restore(
                     None,
                 )
                 .await;
+                progress_job_for_task.fail(e.to_string());
                 jobs.fail(&job_id_for_task, e.to_string()).await;
             }
         }
     });
 
-    axum::Json(json!({ "operation": "queue_restore", "success": 1, "job": job_id })).into_response()
+    (job_id, progress_job)
 }
 
 async fn clear_new_all(
@@ -432,10 +499,15 @@ async fn clear_new_all(
     let mut cleared = 0u32;
     for archive in archives {
         if archive.isnew {
-            let _ = state.repos.archives.set_isnew(&archive.id, false).await;
-            let _ =
+            if let Err(e) = state.repos.archives.set_isnew(&archive.id, false).await {
+                tracing::warn!(error = %e, id = %archive.id, "failed to clear the new flag");
+            }
+            if let Err(e) =
                 lanrurugi_search::indexer::set_isnew_index(&state.redis.search, &archive.id, false)
-                    .await;
+                    .await
+            {
+                tracing::warn!(error = %e, id = %archive.id, "failed to clear the new flag index");
+            }
             cleared += 1;
         }
     }
@@ -482,10 +554,14 @@ async fn drop_database(
                     .query_async::<()>(&mut conn)
                     .await
                 {
+                    tracing::error!(error = %e, "FLUSHDB failed while dropping the database");
                     failures.push(e.to_string());
                 }
             }
-            Err(e) => failures.push(e.to_string()),
+            Err(e) => {
+                tracing::error!(error = %e, "could not reach Redis while dropping the database");
+                failures.push(e.to_string());
+            }
         }
     }
 
@@ -568,9 +644,48 @@ async fn tidy_tags(State(state): State<AppState>) -> Response {
 /// outright. This differs from legacy's exact trigger (a `LRR_FILEMAP` cross-reference mismatch,
 /// verified in `Utils/Database.pm::clean_database`) but preserves the same observable two-run
 /// behavior for the common case (file deleted from disk out from under LANrurugi).
+/// `POST /database/clean?force=1` — the one destructive batch operation whose scale is known up
+/// front, so `specs/028` gates it. `force` accepts `1`/`true` (query-string bools only parse
+/// `true`/`false`, and the documented spelling is `force=1`).
+#[derive(Debug, Deserialize, Default)]
+pub struct CleanParams {
+    #[serde(default)]
+    force: Option<String>,
+}
+
+fn wants_force(value: Option<&str>) -> bool {
+    matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("1" | "true" | "yes" | "on")
+    )
+}
+
+/// The guard's own arithmetic, extracted so its boundaries can be tested without a real library
+/// (`research.md` D6). Both conditions must hold: a *big number* alone in a large library is fine,
+/// and a large *fraction* of a tiny library is fine too.
+pub(crate) fn needs_guard(
+    planned: usize,
+    total: usize,
+    guard_percent: i64,
+    guard_min: i64,
+) -> bool {
+    if total == 0 || planned == 0 {
+        return false;
+    }
+    let percent = (planned as i64) * 100 / total as i64;
+    planned as i64 > guard_min && percent >= guard_percent
+}
+
+/// `1` only when the write succeeded: `unlinked` reports unlinks that happened, not attempts, so a
+/// failed write must not be added to the count the response shows.
+fn unlinked_by<T, E>(cleared: &Result<T, E>) -> u32 {
+    u32::from(cleared.is_ok())
+}
+
 async fn clean_database(
     State(state): State<AppState>,
     auth: Option<axum::extract::Extension<AuthContext>>,
+    Query(params): Query<CleanParams>,
 ) -> Response {
     let archives = match state.repos.archives.list_all().await {
         Ok(a) => a,
@@ -583,8 +698,60 @@ async fn clean_database(
         }
     };
 
+    // specs/028: the batch-deletion guard. Only the second pass (records whose `file` was already
+    // cleared) actually deletes; clearing `file` is reversible and must never be blocked, or a
+    // normal clean can never make progress. `planned > guard_min` *and* `planned >= percent%` of
+    // the library is what "a large fraction in one go" means — both must hold.
+    let total = archives.len();
+    let planned = archives.iter().filter(|a| a.file.is_empty()).count();
+    let guard_percent = crate::settings::read_deletion_guard_percent(&state).await;
+    let guard_min = crate::settings::read_deletion_guard_min(&state).await;
+    let percent = if total == 0 {
+        0
+    } else {
+        (planned as i64) * 100 / total as i64
+    };
+    if !wants_force(params.force.as_deref())
+        && needs_guard(planned, total, guard_percent, guard_min)
+    {
+        tracing::warn!(
+            planned,
+            total,
+            percent,
+            guard_percent,
+            guard_min,
+            "clean database refused: planned deletion is above the guard"
+        );
+        return (
+            StatusCode::CONFLICT,
+            axum::Json(json!({
+                "operation": "clean_database",
+                "success": 0,
+                "error": format!(
+                    "This clean would delete {planned} records ({percent}% of {total}), above the \
+                     {guard_percent}%/{guard_min} guard. Re-run with force=1 to confirm."
+                ),
+                "planned": planned,
+                "total": total,
+                "percent": percent,
+                "guard_percent": guard_percent,
+                "guard_min": guard_min,
+            })),
+        )
+            .into_response();
+    }
+
+    // specs/028: a full snapshot before anything irreversible happens. A failure is reported in
+    // the response but never stops the clean (`research.md` D9).
+    let snapshot = crate::snapshots::take_for_operation(&state, "pre-clean").await;
+
     let mut deleted = 0u32;
     let mut unlinked = 0u32;
+    let mut journaled = 0u32;
+    let mut journal_failed = 0u32;
+    let overlap_percent = crate::library_diagnostics::overlap_percent(&archives);
+    let (library_source, library_source_known) =
+        crate::library_diagnostics::library_source(&state.library.archive_dir);
     for archive in archives {
         if archive.file.is_empty() {
             // Reuses the single-delete path rather than repeating a subset of it (issue #102).
@@ -599,26 +766,48 @@ async fn clean_database(
                 &state,
                 &archive.id,
                 auth.as_ref().map(|e| &e.0),
-                crate::archives::PurgeOptions::PERMANENT,
+                crate::archives::PurgeOptions::CLEAN,
             )
             .await
             {
                 crate::archives::DeleteOneOutcome::Error(e) => {
                     tracing::warn!(id = %archive.id, error = %e, "clean_database failed to delete an archive");
                 }
+                crate::archives::DeleteOneOutcome::Deleted {
+                    journal_failed: failed,
+                    ..
+                } => {
+                    deleted += 1;
+                    if failed {
+                        journal_failed += 1;
+                    } else {
+                        journaled += 1;
+                    }
+                }
                 _ => deleted += 1,
             }
             continue;
         }
         if !std::path::Path::new(&archive.file).exists() {
-            let _ = state
+            let cleared = state
                 .repos
                 .archives
                 .update(&archive.id, |a| a.file.clear())
                 .await;
-            unlinked += 1;
+            if let Err(e) = &cleared {
+                tracing::warn!(error = %e, id = %archive.id, "clean_database failed to clear a missing archive's file field");
+            }
+            unlinked += unlinked_by(&cleared);
         }
     }
+
+    let diagnostics = json!({
+        "records_total": total,
+        "records_total_after": total - deleted as usize,
+        "overlap_percent": overlap_percent,
+        "library_source": library_source,
+        "library_source_known": library_source_known,
+    });
 
     record_manual(
         &state,
@@ -631,7 +820,14 @@ async fn clean_database(
         },
         Outcome::Success,
         None,
-        Some(json!({ "deleted": deleted, "unlinked": unlinked })),
+        Some(json!({
+            "deleted": deleted,
+            "unlinked": unlinked,
+            "journaled": journaled,
+            "journal_failed": journal_failed,
+            "snapshot": snapshot,
+            "diagnostics": diagnostics,
+        })),
     )
     .await;
 
@@ -640,6 +836,10 @@ async fn clean_database(
         "success": 1,
         "deleted": deleted,
         "unlinked": unlinked,
+        "journaled": journaled,
+        "journal_failed": journal_failed,
+        "snapshot": snapshot,
+        "diagnostics": diagnostics,
     }))
     .into_response()
 }
@@ -713,8 +913,12 @@ async fn run_rebuild_sequence(
         jobs,
         job_id,
         Some(state.new_archive_tx.clone()),
+        Some(&state.restore_gate),
     )
     .await;
+    if scan_summary.aborted {
+        return Err(lanrurugi_core::restore_gate::RESTORE_ABORTED_MESSAGE.to_string());
+    }
 
     // Rewrite canonical title/tag indexes for every existing archive/tank. Without this,
     // `full_scan` alone only catalogs genuinely new files and existing archives would never get
@@ -727,6 +931,23 @@ async fn run_rebuild_sequence(
     )
     .await
     {
+        tracing::error!(error = %e, "rebuilding folded indexes failed");
+        record_manual(
+            state,
+            auth,
+            action_type,
+            ActivityTarget {
+                id: None,
+                label: None,
+                kind: Some("database".to_string()),
+            },
+            Outcome::Failure {
+                reason: e.to_string(),
+            },
+            None,
+            None,
+        )
+        .await;
         return Err(e.to_string());
     }
 
@@ -800,6 +1021,7 @@ async fn run_rebuild_sequence(
     }
 
     Ok(json!({
+        "diagnostics": scan_summary.diagnostics_json(),
         "rekeyed": rekey_summary.rekeyed.len(),
         "unchanged": rekey_summary.unchanged,
         "missing_file": rekey_summary.missing_file,
@@ -867,6 +1089,9 @@ async fn rebuild_index(
 
     tokio::spawn(async move {
         jobs.mark_active(&job_id_for_task).await;
+        // specs/028: a full snapshot before re-keying/rescanning the library. A failure is
+        // reported in the job result, never fatal.
+        let snapshot = crate::snapshots::take_for_operation(&state_for_task, "pre-reindex").await;
         match run_rebuild_sequence(
             &state_for_task,
             &job_id_for_task,
@@ -875,8 +1100,19 @@ async fn rebuild_index(
         )
         .await
         {
-            Ok(result) => jobs.finish(&job_id_for_task, result).await,
-            Err(e) => jobs.fail(&job_id_for_task, e).await,
+            Ok(mut result) => {
+                if let Some(map) = result.as_object_mut() {
+                    map.insert(
+                        "snapshot".to_string(),
+                        serde_json::to_value(&snapshot).unwrap_or(serde_json::Value::Null),
+                    );
+                }
+                jobs.finish(&job_id_for_task, result).await
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "index rebuild failed");
+                jobs.fail(&job_id_for_task, e).await
+            }
         }
     });
 
@@ -985,6 +1221,8 @@ async fn queue_import_legacy(
     let on_existing: lanrurugi_backup::import_legacy::ImportConflictMode = query.on_existing.into();
     let minimize_tags = query.minimize_tags;
     let job_id = state.jobs.create("import_legacy").await;
+    let progress_job = crate::snapshots::start_progress_job("import");
+    let progress_job_for_task = progress_job.clone();
     let jobs = state.jobs.clone();
     let repos = state.repos.clone();
     let job_id_for_task = job_id.clone();
@@ -995,7 +1233,14 @@ async fn queue_import_legacy(
 
     tokio::spawn(async move {
         jobs.mark_active(&job_id_for_task).await;
-        let import_result = lanrurugi_backup::import_legacy::import_from_legacy(
+        // The archive writes are the bulk of the import; keep the last 10 % for the rollback
+        // snapshot and the index rebuild that follow.
+        let sink = progress_job_for_task.clone();
+        let progress = move |done: u64, total: u64| {
+            let percent = crate::snapshots::record_percent(done, total) * 0.9;
+            sink.update(done, total, percent);
+        };
+        let import_result = lanrurugi_backup::import_legacy::import_from_legacy_with_progress(
             doc,
             on_existing,
             minimize_tags,
@@ -1003,6 +1248,7 @@ async fn queue_import_legacy(
             &repos.categories,
             &repos.groupings,
             &repos.stamps,
+            &progress,
         )
         .await;
 
@@ -1016,6 +1262,7 @@ async fn queue_import_legacy(
             Err((e, summary, snapshot)) => (summary, snapshot, Some(e)),
         };
         if let Some(e) = &import_error {
+            tracing::error!(error = %e, "legacy import failed partway through");
             record_manual(
                 &state_for_task,
                 auth_for_task.as_ref(),
@@ -1084,6 +1331,7 @@ async fn queue_import_legacy(
             && summary.tankoubons_restored == 0
             && summary.stamps_restored == 0;
         if nothing_written && import_error.is_none() {
+            progress_job_for_task.finish_with_result(summary_json.clone());
             jobs.finish(&job_id_for_task, summary_json).await;
         } else {
             match run_rebuild_sequence(
@@ -1103,18 +1351,21 @@ async fn queue_import_legacy(
                         // rather than only "it failed" with no indication of the partial write.
                         Some(e) => {
                             result["partial"] = json!(true);
-                            jobs.fail(
-                                &job_id_for_task,
-                                format!("{e} (partial progress: {result})"),
-                            )
-                            .await;
+                            let message = format!("{e} (partial progress: {result})");
+                            progress_job_for_task.fail(message.clone());
+                            jobs.fail(&job_id_for_task, message).await;
                         }
                         None => {
+                            progress_job_for_task.finish_with_result(result.clone());
                             jobs.finish(&job_id_for_task, result).await;
                         }
                     }
                 }
-                Err(e) => jobs.fail(&job_id_for_task, e).await,
+                Err(e) => {
+                    tracing::error!(error = %e, "post-import index rebuild failed");
+                    progress_job_for_task.fail(e.clone());
+                    jobs.fail(&job_id_for_task, e).await;
+                }
             }
         }
     });
@@ -1123,6 +1374,9 @@ async fn queue_import_legacy(
         "operation": "queue_import_legacy",
         "success": 1,
         "job": job_id,
+        "job_id": progress_job.id,
+        "started_at": progress_job.status().started_at,
+        "events": format!("/api/backups/jobs/{}/events", progress_job.id),
     }))
     .into_response()
 }
@@ -1246,5 +1500,44 @@ async fn delete_import_snapshot(
             "delete_import_snapshot",
             e.to_string(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// specs/028 T024 — the documented boundary: `> min` records **and** `>= percent` of the
+    /// library. A clean just under either bound must execute unguarded.
+    #[test]
+    fn the_guard_needs_both_the_absolute_and_the_relative_floor() {
+        // 51 records of 100 = 51%: over both 25% and 50 records -> guarded.
+        assert!(needs_guard(51, 100, 25, 50));
+        // Exactly the floor: `> 50` is false at 50, so this is allowed.
+        assert!(!needs_guard(50, 100, 25, 50));
+        // 51 records of 10,000 = 0%: a big number but a tiny fraction -> allowed.
+        assert!(!needs_guard(51, 10_000, 25, 50));
+        // 60 records of 1,000 = 6%, under the percentage -> allowed.
+        assert!(!needs_guard(60, 1_000, 25, 50));
+        // Exactly 25% of 400 = 100 records: the percentage is inclusive, so guarded.
+        assert!(needs_guard(100, 400, 25, 50));
+        // A tiny library cannot trip the absolute floor at all.
+        assert!(!needs_guard(3, 4, 1, 50));
+        // An empty library never needs confirmation.
+        assert!(!needs_guard(0, 0, 25, 50));
+        // `force` is applied by the caller; the arithmetic itself has no notion of it.
+        assert!(!wants_force(None));
+        assert!(wants_force(Some("1")));
+    }
+
+    /// A clean that could not clear an archive's `file` field must not report it as unlinked —
+    /// the response's `unlinked` used to count the attempt, claiming a file was unlinked while the
+    /// record still pointed at it.
+    #[test]
+    fn a_failed_unlink_is_not_counted() {
+        let cleared: Result<Option<String>, String> = Ok(Some("ok".to_string()));
+        assert_eq!(unlinked_by(&cleared), 1);
+        let refused: Result<Option<String>, String> = Err("redis unreachable".to_string());
+        assert_eq!(unlinked_by(&refused), 0);
     }
 }

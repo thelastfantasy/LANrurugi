@@ -153,10 +153,11 @@ pub async fn start(host: &Host) -> Result<Arc<ShareNet>, String> {
         let previous_port = *previous.relay_port.lock().await;
         let unchanged = previous.relay_key.lock().await.as_deref() == Some(relay_key.as_str());
         let mut relay_slot = previous.relay.lock().await;
-        if settings.flag("share_node_relay") && unchanged {
-            if let (Some(server), Some(port)) = (relay_slot.take(), previous_port) {
-                kept_relay = Some((server, port, previous_id));
-            }
+        if settings.flag("share_node_relay")
+            && unchanged
+            && let (Some(server), Some(port)) = (relay_slot.take(), previous_port)
+        {
+            kept_relay = Some((server, port, previous_id));
         }
         if let Some(relay) = relay_slot.take() {
             let _ = relay.shutdown().await;
@@ -605,6 +606,22 @@ pub async fn note_transfer(
 pub async fn read_frame<T: serde::de::DeserializeOwned>(
     recv: &mut RecvStream,
 ) -> Result<(ShareEngine, T), ShareNetError> {
+    let (engine, message, _) = read_frame_with_extras(recv).await?;
+    Ok((engine, message))
+}
+
+/// `read_frame` plus the metadata fields a newer sharer appended after the message. A sender that
+/// predates them leaves nothing behind, which reads as an empty list.
+pub async fn read_frame_with_extras<T: serde::de::DeserializeOwned>(
+    recv: &mut RecvStream,
+) -> Result<
+    (
+        ShareEngine,
+        T,
+        Vec<lanrurugi_share_proto::extras::ArchiveExtras>,
+    ),
+    ShareNetError,
+> {
     // Reading bytes is a transport concern: a reset stream, a dropped relay or a VPN rekey shows up
     // here, and 022 US2 requires those to be retried, not to fail the import. Only a frame this
     // build cannot decode (below) is `Protocol`.
@@ -626,9 +643,9 @@ pub async fn read_frame<T: serde::de::DeserializeOwned>(
         framing::decode_engine(&engine).map_err(|e| ShareNetError::Protocol(e.to_string()))?;
     let mut body = vec![0u8; total - framing::ENGINE_LEN_BYTES - engine_len];
     recv.read_exact(&mut body).await.map_err(read_err)?;
-    let message =
-        framing::decode_payload(&body).map_err(|e| ShareNetError::Protocol(e.to_string()))?;
-    Ok((engine, message))
+    let (message, extras) = framing::decode_payload_with_extras(&body)
+        .map_err(|e| ShareNetError::Protocol(e.to_string()))?;
+    Ok((engine, message, extras))
 }
 
 pub async fn write_frame<T: serde::Serialize>(
@@ -641,12 +658,42 @@ pub async fn write_frame<T: serde::Serialize>(
         .map_err(|e| ShareNetError::Unreachable(e.to_string()))
 }
 
+/// `write_frame` with the unnamed metadata fields appended after the message — see
+/// `lanrurugi_share_proto::extras` for why a trailer rather than another struct field.
+pub async fn write_frame_with_extras<T: serde::Serialize>(
+    send: &mut SendStream,
+    message: &T,
+    extras: &[lanrurugi_share_proto::extras::ArchiveExtras],
+) -> Result<(), ShareNetError> {
+    let frame = framing::encode_with_extras(message, extras)
+        .map_err(|e| ShareNetError::Protocol(e.to_string()))?;
+    send.write_all(&frame)
+        .await
+        .map_err(|e| ShareNetError::Unreachable(e.to_string()))
+}
+
 /// Sends one request on a fresh stream and returns the response header, plus the stream for a
 /// body that follows it. A `Refused` answer becomes an error.
 pub async fn call(
     conn: &Connection,
     request: Request,
 ) -> Result<(Response, RecvStream), ShareNetError> {
+    let (response, _, recv) = call_with_extras(conn, request).await?;
+    Ok((response, recv))
+}
+
+/// `call`, also returning the unnamed fields the peer appended after its answer.
+pub async fn call_with_extras(
+    conn: &Connection,
+    request: Request,
+) -> Result<
+    (
+        Response,
+        Vec<lanrurugi_share_proto::extras::ArchiveExtras>,
+        RecvStream,
+    ),
+    ShareNetError,
+> {
     let (mut send, mut recv) = conn
         .open_bi()
         .await
@@ -654,9 +701,9 @@ pub async fn call(
     write_frame(&mut send, &request).await?;
     send.finish()
         .map_err(|e| ShareNetError::Unreachable(e.to_string()))?;
-    let (engine, response) = tokio::time::timeout(
+    let (engine, response, extras) = tokio::time::timeout(
         Duration::from_secs(ANSWER_TIMEOUT_SECS),
-        read_frame::<Response>(&mut recv),
+        read_frame_with_extras::<Response>(&mut recv),
     )
     .await
     .map_err(|_| ShareNetError::Unreachable("the sharer did not answer in time".into()))??;
@@ -669,7 +716,7 @@ pub async fn call(
     }
     match response {
         Response::Refused(reason) => Err(ShareNetError::Refused(reason)),
-        response => Ok((response, recv)),
+        response => Ok((response, extras, recv)),
     }
 }
 

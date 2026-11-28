@@ -612,10 +612,10 @@ async fn resolve_login_credentials(
 /// private to that module; this is a minimal, read-only re-implementation of the same lookup).
 async fn resolve_login_namespace(state: &AppState, declared_namespace: &str) -> Option<String> {
     for ns in crate::plugins::discover_namespaces(&state.plugins_dir).await {
-        if let Ok(info) = state.plugins.plugin_info(&ns).await {
-            if info.namespace == declared_namespace {
-                return Some(ns);
-            }
+        if let Ok(info) = state.plugins.plugin_info(&ns).await
+            && info.namespace == declared_namespace
+        {
+            return Some(ns);
         }
     }
     None
@@ -763,6 +763,7 @@ mod tests {
         )
         .expect("failed to write out the real plugin SDK script");
         let state = AppState {
+            restore_gate: lanrurugi_core::restore_gate::RestoreGate::new(),
             equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
             discovery_singleflight: std::sync::Arc::new(
                 lanrurugi_core::singleflight::Singleflight::new(8),
@@ -806,6 +807,9 @@ mod tests {
             domain_match: vec![],
             generated_by_wizard: false,
             sidecar_files: vec![],
+            host_arguments: vec![],
+            host_results: vec![],
+            run_order: 0,
             data_version: 1,
             capabilities: vec![],
         };

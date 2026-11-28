@@ -19,8 +19,13 @@ import { pathToFileURL } from "node:url"
 /** The config logical database (`RedisDbs`' `DB_CONFIG`), where every record below lives. */
 const DB_CONFIG = "2"
 
+/** The archive logical database, where the recycle bin's entries live. */
+const DB_ARCHIVE = "0"
+
 const SUB_MANUAL = "seed0000-0000-4000-8000-subscription1"
 const SUB_AUTO = "seed0000-0000-4000-8000-subscription2"
+/** History rows for works that were accepted and then deleted (see `historyCandidates`). */
+const SUB_HISTORY = "seed0000-0000-4000-8000-subscription3"
 const now = () => Math.floor(Date.now() / 1000)
 
 function subscription(id, name, autoDownload) {
@@ -74,6 +79,38 @@ function candidate(n, verdict, extra = {}) {
     tags: ["language:chinese", "other:seed"],
     verdict,
     ...extra,
+  }
+}
+
+/** A work whose accepted decision is no longer described by the download queue: it either arrived
+ *  (`held`), or was thrown away from the queue, or was deleted from the library afterwards. The
+ *  cycle keeps saying "queued", which is exactly the stale state the history view has to correct. */
+function historyCandidate(n, source) {
+  return candidate(n, { verdict: "queued" }, { source_url: source })
+}
+
+/** A recycle-bin entry for `source`, whose only purpose is the history's "deleted" join: it has no
+ *  payload on disk, so restoring it reports a missing payload — nothing here is restorable. */
+function recycledEntry(id, title, source) {
+  return {
+    schema: 1,
+    id,
+    title,
+    name: title,
+    original_path: `/home/koyomi/lanrurugi/content/${id.slice(0, 2)}/${id}.zip`,
+    file_name: `${id}.zip`,
+    size: 1024,
+    page_count: 1,
+    deleted_at: now() - 120,
+    deleted_by: { kind: "session", label: "session" },
+    snapshot: {
+      tags: `source:${source},language:chinese,other:seed`,
+      summary: "",
+      isnew: false,
+      lastreadpage: 0,
+      lastreadtime: 0,
+      primary_source: source,
+    },
   }
 }
 
@@ -150,6 +187,52 @@ export function seedCommands() {
   ])
   commands.push([DB_CONFIG, "DEL", `LANRURUGI_SUBSCRIPTION_CYCLES_${SUB_MANUAL}`])
   commands.push([DB_CONFIG, "LPUSH", `LANRURUGI_SUBSCRIPTION_CYCLES_${SUB_MANUAL}`, JSON.stringify(cycle)])
+
+  // Works that were accepted and then deleted — the two states the history cannot get from the
+  // download queue at all: a row deleted from the queue (nothing left but the subscription's own
+  // delete record) and an archive deleted from the library (still in the recycle bin).
+  const recycledSource = "example.invalid/g/5001/seed"
+  const queueDeletedSource = "example.invalid/g/5002/seed"
+  const historyCycle = {
+    id: "seed0000-0000-4000-8000-cycle0000002",
+    subscription_id: SUB_HISTORY,
+    started_at: now() - 720,
+    finished_at: now() - 700,
+    outcome: "completed",
+    candidates_seen: 2,
+    candidates: [
+      historyCandidate(10, recycledSource),
+      historyCandidate(11, queueDeletedSource),
+    ],
+  }
+  const history = subscription(SUB_HISTORY, "Seed: deleted works", false)
+  commands.push([DB_CONFIG, "SET", `LANRURUGI_SUBSCRIPTION_${history.id}`, JSON.stringify(history)])
+  commands.push([DB_CONFIG, "SADD", "LANRURUGI_SUBSCRIPTIONS", history.id])
+  // The work was delivered, so it is seen; the decision stays "queued" in the cycle.
+  for (const source of [recycledSource, queueDeletedSource]) {
+    commands.push([DB_CONFIG, "SADD", `LANRURUGI_SUBSCRIPTION_SEEN_${SUB_HISTORY}`, source])
+  }
+  commands.push([DB_CONFIG, "DEL", `LANRURUGI_SUBSCRIPTION_CYCLES_${SUB_HISTORY}`])
+  commands.push([
+    DB_CONFIG,
+    "LPUSH",
+    `LANRURUGI_SUBSCRIPTION_CYCLES_${SUB_HISTORY}`,
+    JSON.stringify(historyCycle),
+  ])
+  commands.push([
+    DB_ARCHIVE,
+    "HSET",
+    "LANRURUGI_RECYCLE_BIN",
+    "5eed000000000000000000000000000000000001",
+    JSON.stringify(recycledEntry("5eed000000000000000000000000000000000001", "Seed work 10", recycledSource)),
+  ])
+  commands.push([
+    DB_CONFIG,
+    "HSET",
+    `LANRURUGI_SUBSCRIPTION_DELETED_${SUB_HISTORY}`,
+    queueDeletedSource,
+    String(Date.now() - 120_000),
+  ])
   return commands
 }
 

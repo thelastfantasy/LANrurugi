@@ -1,10 +1,12 @@
 # iroh-relay (fork)
 
-Upstream: `iroh-relay 1.4.1` from crates.io, copied verbatim except for the change below.
+Upstream: the crates.io release named in `vendor/patches/iroh-relay/VERSION`. `vendor/iroh-relay/` is generated
+from it by `scripts/vendor-forks.sh` (release + `*.patch`, `Cargo.append.toml` + this file); never edit it by hand.
 
 ## Diff
 
-- `Cargo.toml`: adds `socket2 = "0.6"` (already in this workspace's lockfile).
+- `Cargo.toml`: `socket2 = "0.6"` (already in this workspace's lockfile), appended from
+  `Cargo.append.toml`.
 - `src/client.rs`: `set_bind_device` + `bind_device`, the process-global interface pin.
 - `src/client/tls.rs`: `connect_bound` replaces `TcpStream::connect` for the relay's TCP dial. With an
   interface pinned it builds the socket itself, sets `SO_BINDTODEVICE`, connects non-blockingly, and

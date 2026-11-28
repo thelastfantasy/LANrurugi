@@ -100,6 +100,19 @@ Write a fragment when you want to:
 Do **not** write a fragment merely to restate what upstream already says — the upstream layer
 already supplies it, and a copy will drift.
 
+## Internal endpoints
+
+An operation may carry `x-internal: true`. That hides it from the generated document while keeping
+it in everything the gates check: the route is still counted as described (so the completeness
+assertion still balances), its `route_policy.csv` rules are still validated, and its access notes are
+still applied. Use it for endpoints whose only caller is this repository's own frontend — the
+diagnostics and resource monitors, which refuse API tokens outright, so publishing them would
+describe a contract no API consumer can use.
+
+The marker is consumed during the merge and never reaches the document; a value other than `true` or
+`false` (a typo, a quoted string) fails instead of quietly publishing the endpoint. A tag used only
+by internal operations is not emitted, so no empty group appears in the reference.
+
 ## What does not belong in a fragment
 
 - The route itself. Routes come from the code; a fragment can only describe a route that already

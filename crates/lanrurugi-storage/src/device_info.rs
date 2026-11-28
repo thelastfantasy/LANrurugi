@@ -438,12 +438,11 @@ impl DeviceInfo {
         // platform carries the useful architecture, e.g. "Linux x86_64". Windows' UA version is
         // "NT 10.0", which just duplicates "Windows 10" if appended verbatim, so omit those
         // noisy-but-redundant forms rather than rendering "Windows 10 NT 10.0".
-        if os.eq_ignore_ascii_case("Linux") {
-            if let Some(platform) =
+        if os.eq_ignore_ascii_case("Linux")
+            && let Some(platform) =
                 client.and_then(|c| c.platform.clone().or_else(|| c.uach_platform.clone()))
-            {
-                os = platform;
-            }
+        {
+            os = platform;
         }
         let os_version = ua.os_version.trim();
         let os = if os_version.is_empty()

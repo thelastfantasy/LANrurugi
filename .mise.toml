@@ -10,12 +10,12 @@
 # installed for the toolchain ..., help: run `rustup component add ...`" — hit in CI first, since a
 # contributor machine that already had a system-wide Rust install with these components wouldn't
 # surface the gap).
-# Kept in lockstep with the `RUST_VERSION` ARG every Dockerfile pins (currently 1.99.1): CI installs
+# Kept in lockstep with the `RUST_VERSION` ARG every Dockerfile pins (currently 1.100.0): CI installs
 # its toolchain from *this* file while contributors build inside those images, so a drift between the
 # two means CI compiles with an older rustc than the code was written against. That is not
 # hypothetical — 1.97.1 here against 1.99.0 in the images let a dependency requiring rustc 1.98
 # (`avif-decode`) into the lockfile, and CI's `cargo check` failed outright on it.
-rust = { version = "1.99.1", components = "rustfmt,clippy" }
+rust = { version = "1.100.0", components = "rustfmt,clippy" }
 node = "26.13.0"
 deno = "2.9.8"
 pnpm = "12.16.1"
@@ -157,6 +157,28 @@ for c in "$@"; do args+=(-p "$c"); done
 scripts/cargo-container-run.sh cargo check "${args[@]}"
 """
 
+[tasks.cargo-update]
+description = "cargo update -p <crate> inside the dev container, for a hand-made dependency bump. Usage: mise run cargo-update -- <crate-name> [<crate-name> ...]"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+args=()
+for c in "$@"; do args+=(-p "$c"); done
+scripts/cargo-container-run.sh cargo update "${args[@]}"
+"""
+
+[tasks.vendor-forks]
+description = "Regenerate the patched forks under vendor/ from their crates.io release plus vendor/patches/ (after changing a VERSION there). `-- --check` only verifies. See scripts/vendor-forks.sh"
+run = "scripts/vendor-forks.sh"
+
+[tasks.fix-edition]
+description = "cargo fix --edition across the workspace inside the dev container, for moving to the next Rust edition (run before changing `edition` in Cargo.toml)"
+run = "scripts/cargo-container-run.sh cargo fix --edition --workspace --all-targets --allow-dirty --allow-no-vcs"
+
+[tasks.clippy-fix]
+description = "Apply clippy's machine-applicable suggestions across the workspace inside the dev container (review the diff afterwards)"
+run = "scripts/cargo-container-run.sh cargo clippy --fix --workspace --all-targets --allow-dirty --allow-no-vcs"
+
 [tasks.doc-crate]
 description = "cargo doc --no-deps -p <crate> inside the dev container with rustdoc warnings denied — the documentation gate for a crate's public surface. Usage: mise run doc-crate -- <crate-name> [<crate-name> ...]"
 run = """
@@ -175,6 +197,19 @@ run = "npx lefthook run pre-push"
 description = "cargo build --workspace inside the dev container (see scripts/cargo-container-run.sh for the resource guardrails)"
 run = "scripts/cargo-container-run.sh cargo build --workspace"
 
+[tasks.third-party-licenses]
+description = "Write dist/THIRD_PARTY_LICENSES.txt: the license files of every shipped Rust crate (from `cargo metadata` in the build container) and frontend package"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+scripts/cargo-container-run.sh sh -c 'cargo metadata --format-version 1 --locked > target/cargo-metadata.json'
+mkdir -p dist
+node scripts/third-party-licenses.mjs --out dist/THIRD_PARTY_LICENSES.txt \
+  --cargo-metadata .cargo-target/cargo-metadata.json \
+  --path-map "/workspace/target=$PWD/.cargo-target" --path-map "/workspace=$PWD" \
+  --path-map "/usr/local/cargo/registry=$PWD/.cargo-registry"
+"""
+
 [tasks.package-native]
 description = "Build the native release package for this Linux machine's architecture into dist/native/ (specs/015-native-platforms): release binaries in the build container, then frontend/docs/plugins, PDFium and ONNX Runtime. Smoke-test the result with scripts/smoke-native.sh."
 run = """
@@ -191,8 +226,11 @@ version="$(git describe --tags --always 2>/dev/null || echo dev)"
 scripts/cargo-container-run.sh cargo clean --release -p libarchive2-sys
 scripts/cargo-container-run.sh env CMAKE_TOOLCHAIN_FILE=/workspace/packaging/libarchive-portable.cmake \
   cargo build --release -p lanrurugi-server -p lanrurugi-book-worker -p lanrurugi-embed-worker -p lanrurugi-gpu-worker
-[ -f docs/public/openapi.json ] || mise run docs-api
-scripts/build-native-assets.sh .native-assets
+[ -f apps/docs-site/public/openapi.json ] || mise run docs-api
+scripts/cargo-container-run.sh sh -c 'cargo metadata --format-version 1 --locked > target/cargo-metadata.json'
+THIRD_PARTY_CARGO_METADATA=.cargo-target/cargo-metadata.json \
+THIRD_PARTY_PATH_MAP="/workspace/target=$PWD/.cargo-target,/workspace=$PWD,/usr/local/cargo/registry=$PWD/.cargo-registry" \
+  scripts/build-native-assets.sh .native-assets
 scripts/package-native.sh "$platform" "$version" .cargo-target/release .native-assets dist/native
 """
 
@@ -230,7 +268,7 @@ run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-recommend --release
 
 # ── 011-api-docs-site ────────────────────────────────────────────────────────
 [tasks.docs-api]
-description = "Generate the API reference document (docs/public/openapi.json) from the server's own route table. Extra args go to the generator: `mise run docs-api -- --check` runs the gates without writing."
+description = "Generate the API reference document (apps/docs-site/public/openapi.json) from the server's own route table. Extra args go to the generator: `mise run docs-api -- --check` runs the gates without writing."
 # Passes `$@` through so `--check`, `--quiet` and the path overrides in
 # specs/011-api-docs-site/contracts/docgen-cli.md are all reachable from here.
 run = "scripts/cargo-container-run.sh cargo run -p lanrurugi-api-docgen -- \"$@\""
@@ -275,7 +313,7 @@ description = "Preview the release notes for the next tag (bilingual when DEEPSE
 run = "python3 scripts/release-changelog.py"
 
 [tasks.docs-sdk]
-description = "Build deliverable 3 of 3: the plugin-authoring SDK reference into docs/dist-sdk/ — the browsable HTML tree plus a path-normalised machine-readable JSON, both from the same TypeScript the plugin runtime loads. Deployed as its own Cloudflare Pages project; the server image copies it under /docs/sdk/."
+description = "Build deliverable 3 of 3: the plugin-authoring SDK reference into apps/docs-site/dist-sdk/ — the browsable HTML tree plus a path-normalised machine-readable JSON, both from the same TypeScript the plugin runtime loads. Deployed as its own Cloudflare Pages project; the server image copies it under /docs/sdk/."
 # Same three sources as `plugin-sdk-docs`, and for the same reason: `plugins/legacy-globals.d.ts`
 # carries `MetadataHostArgs`/`LoginHostArgs`/`ScriptHostArgs`/`DownloadHostArgs`/
 # `PluginErrorException`, and a run without it silently drops every one of those symbols from the
@@ -290,7 +328,7 @@ description = "Build deliverable 3 of 3: the plugin-authoring SDK reference into
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
-out=docs/dist-sdk
+out=apps/docs-site/dist-sdk
 rm -rf "$out"
 sources=(
   crates/lanrurugi-plugin/dispatcher/plugin-sdk.ts
@@ -312,7 +350,7 @@ build_one() {
   # deno doc has no extra-stylesheet option; this links the shared LANrurugi palette into every
   # page, and the version switcher and the old-version notice.
   SDK_VERSION="$version" SDK_LATEST_VERSION="$latest" SDK_VERSION_DIR="$dir" \
-    node docs/scripts/theme-sdk.mjs "$dest"
+    node apps/docs-site/scripts/theme-sdk.mjs "$dest"
 }
 
 build_one . "$out" "$latest" ""
@@ -345,6 +383,7 @@ cat > "$out/404.html" <<'HTMLEOF'
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
+    <meta name="robots" content="noindex" />
     <title>404 — LANrurugi Plugin SDK</title>
   </head>
   <body style="font-family: system-ui, sans-serif; padding: 4rem 2rem; text-align: center">
@@ -354,16 +393,20 @@ cat > "$out/404.html" <<'HTMLEOF'
 </html>
 HTMLEOF
 # Same Cloudflare Pages headers as the docs site (noindex on the *.pages.dev hosts).
-cp docs/public/_headers "$out/_headers"
+cp apps/docs-site/public/_headers "$out/_headers"
 echo "wrote $out (SDK $latest at the root) and $out/versions.json: $(cat "$out/versions.json")"
 """
 
+[tasks.docs-check-indexing]
+description = "Search-engine indexing gate over the built docs, Swagger UI, SDK and homepage directories (self canonicals, sitemaps, no redirecting or broken links, old versions out of the index). Run after docs-build + assemble-versions, docs-swagger, docs-sdk and `node homepage/build.mjs`; CI runs it before publishing."
+run = "node apps/docs-site/scripts/check-indexing.mjs"
+
 [tasks.docs-swagger]
-description = "Build deliverable 2 of 3: a standalone Swagger UI page over the same openapi.json, into docs/dist-swagger/ — browsable schemas and a request panel, neither of which the prose reference can offer. Two locales: `/` is Chinese, `/en/` English. Deployed as its own Cloudflare Pages project."
+description = "Build deliverable 2 of 3: a standalone Swagger UI page over the same openapi.json, into apps/docs-site/dist-swagger/ — browsable schemas and a request panel, neither of which the prose reference can offer. Two locales: `/` is Chinese, `/en/` English. Deployed as its own Cloudflare Pages project."
 run = "pnpm --filter lanrurugi-docs run build:swagger"
 
 [tasks.docs-build]
-description = "Build deliverable 1 of 3: the documentation site into docs/dist/. DOCS_BASE picks the deployment shape: `/` (default) for the public site, `/docs/` for the copy inside the server image. DOCS_SDK_URL points the sidebar's SDK entry at the SDK deployment. Requires the generated docs/public/openapi.json (`mise run docs-api`)."
+description = "Build deliverable 1 of 3: the documentation site into apps/docs-site/dist/. DOCS_BASE picks the deployment shape: `/` (default) for the public site, `/docs/` for the copy inside the server image. DOCS_SDK_URL points the sidebar's SDK entry at the SDK deployment. Requires the generated apps/docs-site/public/openapi.json (`mise run docs-api`)."
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
@@ -372,7 +415,7 @@ pnpm --filter lanrurugi-docs run build
 """
 
 [tasks.docs-dev]
-description = "Serve the documentation site locally with hot reload. Requires the generated docs/public/ artefacts (`mise run docs-api` and `mise run docs-sdk`), since the site renders them rather than producing them."
+description = "Serve the documentation site locally with hot reload. Requires the generated apps/docs-site/public/ artefacts (`mise run docs-api` and `mise run docs-sdk`), since the site renders them rather than producing them."
 run = "pnpm --filter lanrurugi-docs run dev"
 
 [tasks.plugin-sdk-docs]

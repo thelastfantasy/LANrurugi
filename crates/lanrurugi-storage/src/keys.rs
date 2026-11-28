@@ -309,6 +309,37 @@ pub const RECYCLE_BIN_KEY: &str = "LANRURUGI_RECYCLE_BIN";
 /// purged.
 pub const RECYCLE_TANKS_KEY: &str = "LANRURUGI_RECYCLE_TANKS";
 
+/// Additive, LANrurugi-only (`specs/028-deletion-safety-net`). Hash on the **archive** logical DB
+/// (same DB as the archive records): archive id -> JSON journal entry. Holds at most 20,000
+/// entries, oldest evicted first, so a clean that drops 100k records cannot fill Redis. Retention
+/// itself is configurable (`deletion_journal_days`).
+pub const DELETION_JOURNAL_KEY: &str = "LANRURUGI_DELETION_JOURNAL";
+
+/// Additive, LANrurugi-only (`specs/028-deletion-safety-net`). Hash on the **config** logical DB
+/// (next to the settings it is driven by): `last_daily_at` / `last_weekly_at` as RFC 3339 UTC
+/// strings. Remembering the last slot served is what keeps a restart from duplicating a snapshot
+/// and a missed slot from being skipped forever — the scheduler compares it against the most recent
+/// scheduled instant rather than against "today".
+pub const SNAPSHOT_SCHEDULE_KEY: &str = "LANRURUGI_SNAPSHOT_SCHEDULE";
+
+/// Additive, LANrurugi-only (`specs/028-deletion-safety-net`). Set on the **config** logical DB
+/// whose members are snapshot file names the user pinned: retention never evicts a pinned snapshot,
+/// whatever its tier's keep count says. Members are cleaned up whenever the snapshot file is
+/// deleted, so the set cannot outlive what it points at.
+pub const SNAPSHOT_PINS_KEY: &str = "LANRURUGI_SNAPSHOT_PINS";
+
+/// Additive, LANrurugi-only (`specs/028-deletion-safety-net`). Hash on the **config** logical DB:
+/// snapshot file name -> free-text note ("why this snapshot exists"). Kept in Redis rather than in
+/// the snapshot so a note costs the backup nothing and a restore never has to understand it; a
+/// replaced RDB loses its notes, which is accepted. Fields are dropped together with their file.
+pub const BACKUP_NOTES_KEY: &str = "LANRURUGI_BACKUP_NOTES";
+
+/// Records restored from the journal whose file is still missing (#specs/028, FR-004). The startup
+/// zombie repair deletes any record whose `file` is gone, which would undo exactly the restore that
+/// is meant to survive until the file comes back; this set exempts them for the journal's retention
+/// window. Field: archive id, value: restore timestamp in ms.
+pub const RESTORED_MISSING_KEY: &str = "LANRURUGI_RESTORED_MISSING";
+
 /// `LRR_CONFIG` field holding the safety password's bcrypt hash (absent = not configured). Excluded
 /// from the generic settings GET/PUT like legacy's own `password` field.
 pub const SAFETY_PASSWORD_HASH_FIELD: &str = "safety_password_hash";

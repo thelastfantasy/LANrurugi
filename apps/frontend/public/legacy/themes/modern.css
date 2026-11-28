@@ -1688,3 +1688,66 @@ textarea {
     background-color: rgba(80, 140, 205, 0.25);
     border-left: 3px solid rgb(80, 140, 205);
 }
+
+/* Categories page's archive panel (`.category-panel` in index.css): this theme's `div.id1` colors. */
+.category-panel {
+  background: #43464E;
+  border: 1px solid transparent;
+}
+
+/* Running/finished job and download bars (`STATE_COLOR.active` in JobProgress.tsx). White text sits on it. */
+:root {
+  --job-active-color: #3e8e52;
+  /* Text of the Activity page's tinted "success" chip (activityColors.ts). */
+  --activity-success-text: #7fd394;
+}
+
+/* A disabled destructive button looks like any disabled `.stdbtn` (this theme's own), not a dimmed red one. */
+.stdbtn-danger:disabled {
+  background: #34353B;
+  border: 0 none;
+  color: #FFFFFF;
+}
+
+/* 030 resource monitor: an alerting row, the live/connecting status word and the sparkline stroke.
+   Each value is this theme's own: alerts reuse `.stdbtn-danger`'s red, the sparkline this theme's
+   accent hue, per the project's custom-color rule (a hardcoded color would only fit one theme). */
+.resources-alert {
+    color: #C0392B;
+}
+
+.resources-status-live {
+    color: #3b97ea;
+}
+
+.resources-status-error {
+    color: #C0392B;
+}
+
+.resources-status-connecting,
+.resources-status-idle {
+    opacity: 0.65;
+}
+
+.resources-sparkline {
+    color: #3b97ea;
+}
+
+/* Resource monitor health colours: green = normal, yellow = getting high, red = over the limit. */
+.resources-ok {
+    color: #2e9e5b;
+}
+
+.resources-warn {
+    color: #d08a00;
+}
+
+.resources-bad {
+    color: #d03434;
+}
+
+
+/* Reader magnifier lens rim (LANrurugi addition): the blue of .tankoubon-member-row */
+.reader-magnifier {
+    border-color: rgb(59, 151, 234);
+}

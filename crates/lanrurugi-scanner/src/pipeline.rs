@@ -204,17 +204,26 @@ pub async fn run(
                 }
                 tracing::warn!(?path, error = %e, "failed to ingest file");
             }
-            Err(_) => {
-                if let Some(tx) = &new_archive_tx {
-                    let _ = tx.send(IngestEvent::Failed {
-                        path: Some(path.to_string_lossy().to_string()),
-                        reason: format!("ingestion timed out after {INGEST_TIMEOUT:?}"),
-                    });
-                }
-                tracing::warn!(?path, timeout = ?INGEST_TIMEOUT, "ingestion timed out");
-            }
+            Err(_) => report_ingest_timeout(&path, new_archive_tx.as_ref()),
         }
     }
+}
+
+/// Reports a timed-out ingest. Silence when another ingest of the same bytes holds the content
+/// lock — this host is queueing, not failing — and the usual warning plus `Failed` otherwise.
+fn report_ingest_timeout(path: &Path, new_archive_tx: Option<&mpsc::UnboundedSender<IngestEvent>>) {
+    let waiting_on_another_ingest = matches!(size_aware_id(path), Ok(id) if content_lock_held(&id));
+    if waiting_on_another_ingest {
+        tracing::debug!(?path, "another ingest owns this content, standing down");
+        return;
+    }
+    if let Some(tx) = new_archive_tx {
+        let _ = tx.send(IngestEvent::Failed {
+            path: Some(path.to_string_lossy().to_string()),
+            reason: format!("ingestion timed out after {INGEST_TIMEOUT:?}"),
+        });
+    }
+    tracing::warn!(?path, timeout = ?INGEST_TIMEOUT, "ingestion timed out");
 }
 
 pub async fn ingest_file(
@@ -325,32 +334,46 @@ pub async fn ingest_file_with_policy(
 
     if let Some(previous_id) = previous_id.map(ArchiveId) {
         if previous_id == id {
-            return Ok(IngestOutcome::Unchanged { id });
+            // The filemap entry can outlive the record it points at — nothing prunes the map when a
+            // record is deleted. Trusting it blindly would return before a record is ever written:
+            // the file then sits on disk with nothing pointing at it, so its reader URL 404s and
+            // every later scan reaches this same branch and does nothing (seen live: a split deleted
+            // its source, then the user re-uploaded the identical file to the identical path).
+            if archives.get(&id).await?.is_some() {
+                return Ok(IngestOutcome::Unchanged { id });
+            }
+            tracing::warn!(
+                %id,
+                path = %path_str,
+                "filemap entry pointed at an id with no record; cataloguing the file again"
+            );
         }
 
-        // Content changed: re-key the existing record (non-destructive — metadata carries over),
-        // exactly matching legacy's `change_archive_id` semantics for a rewritten file.
-        match archives.rename_id(&previous_id, &id).await {
-            Ok(()) => {
-                // New bytes under the old record: the carried-over fingerprint is stale (027).
-                let fingerprint = fingerprint(path, blake3).await?;
-                archives.set_blake3(&id, &fingerprint).await?;
-                let _: () = config_conn
-                    .hset(FILEMAP_KEY, &path_str, id.as_str())
-                    .await?;
-                return Ok(IngestOutcome::Rekeyed {
-                    old_id: previous_id,
-                    new_id: id,
-                });
+        if previous_id != id {
+            // Content changed: re-key the existing record (non-destructive — metadata carries over),
+            // exactly matching legacy's `change_archive_id` semantics for a rewritten file.
+            match archives.rename_id(&previous_id, &id).await {
+                Ok(()) => {
+                    // New bytes under the old record: the carried-over fingerprint is stale (027).
+                    let fingerprint = fingerprint(path, blake3).await?;
+                    archives.set_blake3(&id, &fingerprint).await?;
+                    let _: () = config_conn
+                        .hset(FILEMAP_KEY, &path_str, id.as_str())
+                        .await?;
+                    return Ok(IngestOutcome::Rekeyed {
+                        old_id: previous_id,
+                        new_id: id,
+                    });
+                }
+                Err(e) if e.to_string().contains("no such key") => {
+                    // The filemap pointed at an ID that no longer exists — most likely
+                    // `lanrurugi_storage::rebuild::rekey_all` already re-keyed this exact archive by
+                    // its own (equivalent) path without going through this filemap entry. Fall
+                    // through to the "no recorded previous ID" path below: refresh the filemap and
+                    // treat `id` on its own merits (already tracked vs. genuinely new).
+                }
+                Err(e) => return Err(e.into()),
             }
-            Err(e) if e.to_string().contains("no such key") => {
-                // The filemap pointed at an ID that no longer exists — most likely
-                // `lanrurugi_storage::rebuild::rekey_all` already re-keyed this exact archive by
-                // its own (equivalent) path without going through this filemap entry. Fall
-                // through to the "no recorded previous ID" path below: refresh the filemap and
-                // treat `id` on its own merits (already tracked vs. genuinely new).
-            }
-            Err(e) => return Err(e.into()),
         }
     }
 
@@ -373,30 +396,22 @@ pub async fn ingest_file_with_policy(
         });
     }
 
-    if let Some(intended_filename) = intended_filename {
-        if let Some(existing) = archives
+    if let Some(intended_filename) = intended_filename
+        && let Some(existing) = archives
             .find_by_exact_file_basename(intended_filename)
             .await?
-        {
-            if existing.id != id {
-                match duplicate_policy {
-                    DuplicatePolicy::Reject => {
-                        return Ok(IngestOutcome::Rejected {
-                            existing_id: existing.id,
-                            reason: DuplicateReason::Filename,
-                        });
-                    }
-                    DuplicatePolicy::Overwrite => {
-                        delete_existing_archive(
-                            archives,
-                            config_pool,
-                            search_pool,
-                            equivalence,
-                            &existing,
-                        )
-                        .await?;
-                    }
-                }
+        && existing.id != id
+    {
+        match duplicate_policy {
+            DuplicatePolicy::Reject => {
+                return Ok(IngestOutcome::Rejected {
+                    existing_id: existing.id,
+                    reason: DuplicateReason::Filename,
+                });
+            }
+            DuplicatePolicy::Overwrite => {
+                delete_existing_archive(archives, config_pool, search_pool, equivalence, &existing)
+                    .await?;
             }
         }
     }
@@ -704,49 +719,49 @@ async fn catalogue_new_archive(
     // The sidecar is written after the record exists and the bytes are final, never before: a
     // snapshot of an archive nobody can open would be worse than no snapshot. Only hash-layout
     // archives get one (020) — by-name archives carry their original name in the name itself.
-    if let Some(library) = path.parent().and_then(Path::parent) {
-        if lanrurugi_storage::paths::is_hash_layout_path(library, path, id.as_str()) {
-            // On a rebuild there is no `title_filename`: the name on disk is the id. Falling back
-            // to it would overwrite the only copy of the original name with `<id>.zip`, so an
-            // existing sidecar wins. Its `original_path` is preserved for the same reason. Read
-            // and written under the sidecar's lock: a download's primary source can be amended
-            // into it concurrently.
-            let written = lanrurugi_storage::sidecar::rewrite(library, id.as_str(), |previous| {
-                let original_filename = title_filename
-                    .map(str::to_string)
-                    .or_else(|| previous.as_ref().map(|s| s.original_filename.clone()))
-                    .or_else(|| {
-                        path.file_name()
-                            .and_then(|f| f.to_str())
-                            .map(str::to_string)
-                    })
-                    .unwrap_or_default();
-                let mut sidecar = lanrurugi_storage::sidecar::Sidecar::for_archive(
-                    id.as_str(),
-                    path,
-                    &original_filename,
-                    &archive.title,
-                )?;
-                sidecar.blake3 = archive.blake3.clone();
-                // A fresh record has no primary source yet; a rebuild keeps the one the old
-                // sidecar remembered.
-                sidecar.primary_source = archive
-                    .primary_source
-                    .clone()
-                    .or_else(|| previous.as_ref().and_then(|s| s.primary_source.clone()));
-                if let Some(previous) = previous {
-                    sidecar.original_path = previous.original_path;
-                    // Measured sizes stay valid as long as their file is unchanged, which
-                    // `FileDimensions::describes` checks whenever they are read.
-                    sidecar.page_dimensions = previous.page_dimensions;
-                    sidecar.patch_page_dimensions = previous.patch_page_dimensions;
-                }
-                Ok(sidecar)
-            })
-            .await;
-            if let Err(e) = written {
-                tracing::warn!(%id, error = %e, "failed to write the archive sidecar");
+    if let Some(library) = path.parent().and_then(Path::parent)
+        && lanrurugi_storage::paths::is_hash_layout_path(library, path, id.as_str())
+    {
+        // On a rebuild there is no `title_filename`: the name on disk is the id. Falling back
+        // to it would overwrite the only copy of the original name with `<id>.zip`, so an
+        // existing sidecar wins. Its `original_path` is preserved for the same reason. Read
+        // and written under the sidecar's lock: a download's primary source can be amended
+        // into it concurrently.
+        let written = lanrurugi_storage::sidecar::rewrite(library, id.as_str(), |previous| {
+            let original_filename = title_filename
+                .map(str::to_string)
+                .or_else(|| previous.as_ref().map(|s| s.original_filename.clone()))
+                .or_else(|| {
+                    path.file_name()
+                        .and_then(|f| f.to_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+            let mut sidecar = lanrurugi_storage::sidecar::Sidecar::for_archive(
+                id.as_str(),
+                path,
+                &original_filename,
+                &archive.title,
+            )?;
+            sidecar.blake3 = archive.blake3.clone();
+            // A fresh record has no primary source yet; a rebuild keeps the one the old
+            // sidecar remembered.
+            sidecar.primary_source = archive
+                .primary_source
+                .clone()
+                .or_else(|| previous.as_ref().and_then(|s| s.primary_source.clone()));
+            if let Some(previous) = previous {
+                sidecar.original_path = previous.original_path;
+                // Measured sizes stay valid as long as their file is unchanged, which
+                // `FileDimensions::describes` checks whenever they are read.
+                sidecar.page_dimensions = previous.page_dimensions;
+                sidecar.patch_page_dimensions = previous.patch_page_dimensions;
             }
+            Ok(sidecar)
+        })
+        .await;
+        if let Err(e) = written {
+            tracing::warn!(%id, error = %e, "failed to write the archive sidecar");
         }
     }
 
@@ -835,25 +850,34 @@ pub(crate) fn book_outline_toc(path: &Path) -> Vec<lanrurugi_core::entities::Toc
 /// One mutex per content id, so two ingests of the same bytes serialize instead of racing for the
 /// same destination path. Entries are dropped once no one holds or waits on them.
 pub async fn content_lock(id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+    content_mutex(id).lock_owned().await
+}
+
+/// Whether some other task currently holds [`content_lock`] for `id`, without waiting for it.
+///
+/// A timeout with this true is a busy host (two ingests of the same bytes, one of which had to
+/// take its turn), not a failure: reporting it as one made a routine queue look like a broken
+/// scanner (029 FR-011).
+pub fn content_lock_held(id: &str) -> bool {
+    content_mutex(id).try_lock().is_err()
+}
+
+fn content_mutex(id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
     use std::sync::{Arc, LazyLock, Mutex, Weak};
 
     static LOCKS: LazyLock<Mutex<std::collections::HashMap<String, Weak<tokio::sync::Mutex<()>>>>> =
         LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
-    let lock: Arc<tokio::sync::Mutex<()>> = {
-        let mut locks = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
-        locks.retain(|_, weak| weak.strong_count() > 0);
-        let entry = locks.entry(id.to_string()).or_default();
-        match entry.upgrade() {
-            Some(lock) => lock,
-            None => {
-                let lock = Arc::new(tokio::sync::Mutex::new(()));
-                *entry = Arc::downgrade(&lock);
-                lock
-            }
+    let mut locks = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    locks.retain(|_, weak| weak.strong_count() > 0);
+    match locks.entry(id.to_string()).or_default().upgrade() {
+        Some(lock) => lock,
+        None => {
+            let lock = Arc::new(tokio::sync::Mutex::new(()));
+            locks.insert(id.to_string(), Arc::downgrade(&lock));
+            lock
         }
-    };
-    lock.lock_owned().await
+    }
 }
 
 #[cfg(test)]
@@ -940,6 +964,69 @@ mod tests {
 
         archives.delete(&id).await.unwrap();
         let mut conn = config_pool.get().await.unwrap();
+        let _: () = conn
+            .hdel(FILEMAP_KEY, path.to_string_lossy().to_string())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_stale_filemap_entry_does_not_skip_cataloguing() {
+        // Regression test for a real, shipped bug: the filemap entry survives a record's deletion
+        // (nothing pruned it), so re-uploading the identical bytes to the identical path hit the
+        // "path already tracked under this id" branch, returned `Unchanged` and never wrote a
+        // record — the file sat on disk with nothing pointing at it and its reader URL 404'd.
+        let Some((archive_pool, config_pool, search_pool)) = test_pools(27).await else {
+            eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
+            return;
+        };
+        let archives = ArchiveRepository::new(archive_pool);
+        let dir = tempfile::tempdir().unwrap();
+        let thumb_dir = tempfile::tempdir().unwrap();
+        let path = make_zip_with_pages(dir.path(), "book.zip", 2);
+
+        let first = ingest_file(
+            &archives,
+            &config_pool,
+            &search_pool,
+            &Equivalence::default(),
+            thumb_dir.path(),
+            &path,
+        )
+        .await
+        .unwrap();
+        let IngestOutcome::Catalogued { id } = first else {
+            panic!("expected Catalogued, got {first:?}");
+        };
+
+        // Delete the record but leave the filemap entry behind, exactly what a purge that forgot
+        // to prune the map used to leave.
+        archives.delete(&id).await.unwrap();
+        let mut conn = config_pool.get().await.unwrap();
+        let mapped: Option<String> = conn
+            .hget(FILEMAP_KEY, path.to_string_lossy().to_string())
+            .await
+            .unwrap();
+        assert_eq!(mapped.as_deref(), Some(id.as_str()));
+
+        let second = ingest_file(
+            &archives,
+            &config_pool,
+            &search_pool,
+            &Equivalence::default(),
+            thumb_dir.path(),
+            &path,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            second,
+            IngestOutcome::Catalogued { id: id.clone() },
+            "a filemap entry pointing at a deleted record must not short-circuit the catalogue"
+        );
+        assert!(archives.get(&id).await.unwrap().is_some());
+
+        archives.delete(&id).await.unwrap();
         let _: () = conn
             .hdel(FILEMAP_KEY, path.to_string_lossy().to_string())
             .await
@@ -1444,5 +1531,58 @@ mod tests {
             .hdel(FILEMAP_KEY, good.to_string_lossy().to_string())
             .await
             .unwrap();
+    }
+
+    /// A file with unique bytes, so its content id cannot collide with another test's.
+    async fn scratch_file(label: &str) -> std::path::PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("t029-{label}-{}-{stamp}.zip", std::process::id()));
+        tokio::fs::write(&path, label.as_bytes()).await.unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn a_timeout_while_another_ingest_holds_the_content_is_not_a_failure() {
+        // The watcher can see the bytes a download is about to catalogue; when it does, the second
+        // ingest waits on the content lock and can blow the timeout through no fault of its own.
+        let path = scratch_file("held").await;
+        let id = lanrurugi_storage::id::size_aware_id(&path).unwrap();
+        let guard = content_lock(&id).await;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        report_ingest_timeout(&path, Some(&tx));
+        drop(guard);
+        drop(tx);
+
+        assert!(
+            rx.recv().await.is_none(),
+            "waiting on another ingest must not be reported as a failed scan"
+        );
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    #[tokio::test]
+    async fn a_timeout_with_nobody_holding_the_content_is_still_a_failure() {
+        let path = scratch_file("stuck").await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        report_ingest_timeout(&path, Some(&tx));
+        drop(tx);
+
+        let event = rx.recv().await.expect("a genuine timeout must be reported");
+        match event {
+            IngestEvent::Failed {
+                path: reported,
+                reason,
+            } => {
+                assert_eq!(reported.as_deref(), Some(path.to_string_lossy().as_ref()));
+                assert!(reason.contains("timed out"), "reason was {reason}");
+            }
+            other => panic!("expected a Failed event, got {other:?}"),
+        }
+        let _ = tokio::fs::remove_file(&path).await;
     }
 }

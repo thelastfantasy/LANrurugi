@@ -4,9 +4,9 @@
 
 [![CI](https://github.com/thelastfantasy/LANrurugi/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/thelastfantasy/LANrurugi/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/thelastfantasy/LANrurugi/actions/workflows/codeql.yml/badge.svg?branch=dev)](https://github.com/thelastfantasy/LANrurugi/actions/workflows/codeql.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
-[Homepage](https://lrrg.dev) · [Docs](https://docs.lrrg.dev) · [API](https://api.lrrg.dev) · [Plugin SDK](https://sdk.lrrg.dev)
+[Homepage](https://lrrg.dev) · [Live demo](https://demo.lrrg.dev) · [Docs](https://docs.lrrg.dev) · [API](https://api.lrrg.dev) · [Plugin SDK](https://sdk.lrrg.dev)
 
 A self-hosted manga / doujinshi library manager. Rust backend, React frontend, a from-scratch rewrite of
 [LANraragi](https://github.com/Difegue/LANraragi).
@@ -26,8 +26,9 @@ differences), see [docs/comparison-with-lanraragi.md](./docs/comparison-with-lan
   views, 14 UI languages.
 - **Plugins**: metadata, download and login plugins run in Deno subprocesses with per-namespace permissions;
   the AI wizard can generate new ones for a site.
-- **Downloads**: byte-level progress, pause / resume, per-domain concurrency and rate limits; subscriptions that discover new
-  releases, apply your rules, and queue them after a preview.
+- **Downloads**: byte-level progress, pause / resume, per-domain concurrency and rate limits, and a queue that says how long
+  each download spent queueing, transferring and ingesting; subscriptions that discover new releases, apply your rules,
+  and queue them after a preview.
 - **Sharing**: send an archive or a tankoubon to someone who reads it in the browser, downloads it, or imports
   it into their own instance — direct, hole-punched, or relayed, with no third-party service involved.
 - **In-page translation**: OCR → erase the original text → typeset the translation, on a cloud API or a local
@@ -37,6 +38,17 @@ differences), see [docs/comparison-with-lanraragi.md](./docs/comparison-with-lan
   and size cap; restoring brings back tags, categories, bookmarks and reading progress. Permanent delete
   and emptying the bin need a separate four-digit safety password (lockout after repeated failures),
   resettable with the login password or from the CLI.
+- **Backups and a deletion safety net**: scheduled RDB snapshots and JSON exports, driven by cron
+  expressions (down to seconds) in the instance's own timezone; the list shows what each file contains,
+  lets you add a note and pin one against cleanup. Every delete records a ledger first, so an archive record
+  removed without passing through the recycle bin (a database clean, for one) can be restored from the
+  recycle bin page with its tags, summary and reading progress (categories and bookmarks come back from a
+  snapshot), and a cleanup touching more than a quarter of the library asks for confirmation first.
+- **Resource monitor**: a live panel in Settings that samples only while it is open and stops the
+  moment it closes — server and plugin-process CPU/memory, the cgroup's anon/file/slab and memory PSI,
+  the real process tree, local model usage, queue phase timings and Redis counters on one screen. Every
+  number carries its window and source, and an unreadable one shows `—` rather than 0. Feedback bundles can
+  carry the same snapshot (`resources.json`, scrubbed); debug builds label their processes `(debug)`.
 - **Native packages**: Linux (x86_64 / aarch64), macOS (Apple Silicon) and FreeBSD — unpack and run, no container.
 
 ## Quick start
@@ -46,15 +58,16 @@ docker run -d --name lanrurugi -p 3000:3000 \
   -v /path/to/manga:/home/koyomi/lanrurugi/content \
   -v /path/to/thumb:/home/koyomi/lanrurugi/thumb \
   -v /path/to/database:/home/koyomi/lanrurugi/database \
-  ghcr.io/thelastfantasy/lanrurugi:latest
+  ghcr.io/thelastfantasy/lanrurugi:beta
 ```
 
 Open `http://<host>:3000`. The image bundles Redis, so no separate database container is needed; a fuller
 compose file (NAS panels, reverse proxy, migrating from LANraragi) is in the
 [docs](https://docs.lrrg.dev/en/guide/install/).
 
-Two image channels: `:latest` follows releases, `:edge` follows the head of the `dev` branch (it can break —
-don't point a real library at it).
+<!-- `:latest` is only pushed by a final release and does not exist before 1.0, hence `:beta` above for now. Switch it back at the 1.0 release; see docs/dev/release.md. -->
+Three image channels: `:latest` follows final releases (available once 1.0 ships), `:beta` follows pre-releases,
+and `:edge` follows the head of the `dev` branch (it can break — don't point a real library at it).
 
 > **The default admin password is `kamimamita`** (same as LANraragi). Change it in Settings right after the
 > first login, and don't expose a default-password instance outside your LAN.
@@ -78,4 +91,4 @@ upgrade notice: [Releases](https://github.com/thelastfantasy/LANrurugi/releases)
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+Licensed under either of [MIT](./LICENSE-MIT) or [Apache-2.0](./LICENSE-APACHE), at your option.

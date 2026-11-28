@@ -35,21 +35,63 @@ pub async fn record(state: &AppState, url: &str, archive_id: &str) {
 
 /// The archive `url` already produced, if that archive is still in the library (a deleted one
 /// must not block a re-download).
+///
+/// The registry holds URLs exactly as they were added, so it misses the same gallery written
+/// another way (`/g/1` vs `/g/1/`) and archives that never came through the queue (an upload, a
+/// share import). Those still carry the URL as a `source:` tag in `trim_url` form, which is what
+/// the fallback looks for. A URL with a query is left to the registry: `trim_url` drops the query,
+/// and on some sites that is what tells two works apart.
 pub async fn lookup(state: &AppState, url: &str) -> Option<String> {
     if url.is_empty() || !url.starts_with("http") {
         return None;
     }
     let mut conn = state.redis.config.get().await.ok()?;
     let found: Option<String> = conn.hget(SOURCES_KEY, url).await.ok()?;
-    let id = found?;
-    let archive = state
+    drop(conn);
+    if let Some(id) = found
+        && in_library(state, &id).await
+    {
+        return Some(id);
+    }
+    if url.contains('?') {
+        return None;
+    }
+    let tag = format!("source:{}", crate::plugins::trim_url(url));
+    let mut ids =
+        lanrurugi_search::indexer::ids_with_tag(&state.redis.search, &state.equivalence, &tag)
+            .await
+            .ok()?;
+    ids.retain(|id| !id.starts_with("TANK_"));
+    ids.sort();
+    for id in ids {
+        if in_library(state, &id).await {
+            return Some(id);
+        }
+    }
+    None
+}
+
+async fn in_library(state: &AppState, id: &str) -> bool {
+    state
         .repos
         .archives
-        .get(&lanrurugi_core::ids::ArchiveId::from(id.clone()))
+        .get(&lanrurugi_core::ids::ArchiveId::from(id.to_string()))
         .await
         .ok()
-        .flatten()?;
-    (!archive.file.trim().is_empty()).then_some(id)
+        .flatten()
+        .is_some_and(|archive| !archive.file.trim().is_empty())
+}
+
+/// The `source:` tag's own value (the trimmed URL the archive came from), when the tag string has
+/// one. `Archive::primary_source` is exactly this value, and the sidecar is its on-disk copy — so a
+/// user who types a `source:` tag into the reader's metadata editor gets both, not just the tag.
+pub(crate) fn source_tag_value(tags: &str) -> Option<String> {
+    tags.split(',')
+        .map(str::trim)
+        .find_map(|t| t.strip_prefix("source:"))
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
 }
 
 /// Copies an archive's primary source into its sidecar, the copy a rebuild after a lost Redis reads
@@ -85,8 +127,15 @@ pub async fn backfill_primary_sources(state: &AppState) -> usize {
     if done {
         return 0;
     }
-    let entries: std::collections::HashMap<String, String> =
-        conn.hgetall(SOURCES_KEY).await.unwrap_or_default();
+    let entries: std::collections::HashMap<String, String> = match conn.hgetall(SOURCES_KEY).await {
+        Ok(entries) => entries,
+        Err(e) => {
+            // A failed read is not an empty registry: marking the back-fill done here would mean
+            // it never runs again and those archives keep no primary source forever.
+            tracing::warn!(error = %e, "could not read the download source registry; leaving the primary-source back-fill unmarked");
+            return 0;
+        }
+    };
     drop(conn);
     let mut marked = 0;
     for (url, id) in entries {
@@ -118,6 +167,17 @@ pub async fn backfill_primary_sources(state: &AppState) -> usize {
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_source_tag_is_what_becomes_the_primary_source() {
+        assert_eq!(
+            source_tag_value("date_added:1,source:e-hentai.org/g/1/abc,artist:x"),
+            Some("e-hentai.org/g/1/abc".to_string())
+        );
+        assert_eq!(source_tag_value("date_added:1,artist:x"), None);
+        assert_eq!(source_tag_value("source:"), None);
+        assert_eq!(source_tag_value(""), None);
+    }
+
     #[tokio::test]
     async fn a_non_http_source_is_never_recorded() {
         let Some(state) = crate::plugins::tests::test_state().await else {
@@ -125,6 +185,85 @@ mod tests {
         };
         record(&state, "local_upload", "abc").await;
         assert!(lookup(&state, "local_upload").await.is_none());
+    }
+
+    /// An archive whose `source:` tag names the gallery counts as already imported even when the
+    /// registry never saw that spelling of the URL (or the archive never came through the queue).
+    #[tokio::test]
+    async fn a_source_tag_blocks_another_spelling_of_the_same_url() {
+        let Some(state) = crate::plugins::tests::test_state().await else {
+            return;
+        };
+        let id = "5a7e".repeat(10);
+        let tags = "source:nhentai.net/g/987654,artist:x";
+        let archive = lanrurugi_core::entities::Archive {
+            id: lanrurugi_core::ids::ArchiveId(id.clone()),
+            name: "n".into(),
+            title: "t".into(),
+            file: "/x.zip".into(),
+            tags: tags.into(),
+            summary: String::new(),
+            arcsize: 1,
+            pagecount: 1,
+            isnew: false,
+            lastreadpage: 0,
+            lastreadtime: 0,
+            thumbhash: None,
+            toc: vec![],
+            stamp_ids: vec![],
+            heal_failed_at: None,
+            corrupted_pages: vec![],
+            has_patch: false,
+            blake3: None,
+            primary_source: None,
+            progress_pages: None,
+        };
+        state
+            .repos
+            .archives
+            .create_or_replace(&archive)
+            .await
+            .unwrap();
+        lanrurugi_search::indexer::update_tag_indexes(
+            &state.redis.search,
+            &state.equivalence,
+            &id,
+            "",
+            tags,
+        )
+        .await
+        .unwrap();
+
+        for url in [
+            "https://nhentai.net/g/987654/",
+            "http://www.nhentai.net/g/987654",
+        ] {
+            assert_eq!(
+                lookup(&state, url).await.as_deref(),
+                Some(id.as_str()),
+                "{url}"
+            );
+        }
+        assert_eq!(lookup(&state, "https://nhentai.net/g/9876540/").await, None);
+        // A query can be what identifies the work, so it is not folded away.
+        assert_eq!(
+            lookup(&state, "https://nhentai.net/g/987654/?x=1").await,
+            None
+        );
+
+        let _ = lanrurugi_search::indexer::update_tag_indexes(
+            &state.redis.search,
+            &state.equivalence,
+            &id,
+            tags,
+            "",
+        )
+        .await;
+        let _ = state
+            .repos
+            .archives
+            .delete(&lanrurugi_core::ids::ArchiveId(id))
+            .await;
     }
 
     /// #302: the registry gives an already-downloaded archive its primary source, but only while

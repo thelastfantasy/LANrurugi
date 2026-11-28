@@ -10,6 +10,7 @@
 pub mod attachment;
 pub mod bundle;
 pub mod cron;
+pub mod download_trace;
 pub mod forward;
 pub mod issue;
 pub mod logs;
@@ -409,25 +410,23 @@ async fn list_issues(
             if !sources.is_empty() && !issue.sources.iter().any(|s| sources.contains(s.as_str())) {
                 return false;
             }
-            if let Some(release) = &query.release {
-                if !release.is_empty() && !issue.releases.contains(release) {
-                    return false;
-                }
-            }
-            if let Some(from) = query.from {
-                if issue.last_seen < from {
-                    return false;
-                }
-            }
-            if let Some(to) = query.to {
-                if issue.first_seen > to {
-                    return false;
-                }
-            }
-            if !needle.is_empty() && !issue.title.to_lowercase().contains(&needle) {
+            if let Some(release) = &query.release
+                && !release.is_empty()
+                && !issue.releases.contains(release)
+            {
                 return false;
             }
-            true
+            if let Some(from) = query.from
+                && issue.last_seen < from
+            {
+                return false;
+            }
+            if let Some(to) = query.to
+                && issue.first_seen > to
+            {
+                return false;
+            }
+            needle.is_empty() || issue.title.to_lowercase().contains(&needle)
         })
         .collect();
     if query.sort.as_deref() == Some("frequent") {
@@ -588,10 +587,10 @@ async fn list_events(State(state): State<AppState>, Query(query): Query<EventQue
         if !sources.is_empty() && !sources.contains(event.source.as_str()) {
             continue;
         }
-        if let Some(fingerprint) = &query.fingerprint {
-            if &event.fingerprint.0 != fingerprint {
-                continue;
-            }
+        if let Some(fingerprint) = &query.fingerprint
+            && &event.fingerprint.0 != fingerprint
+        {
+            continue;
         }
         events_out.push(event_json(&event));
         if events_out.len() >= limit {
@@ -1401,10 +1400,10 @@ pub mod ingest {
             if line.is_empty() {
                 continue;
             }
-            if let Ok(value) = serde_json::from_str::<Value>(line) {
-                if value.get("type").is_some() {
-                    current = Some(value);
-                }
+            if let Ok(value) = serde_json::from_str::<Value>(line)
+                && value.get("type").is_some()
+            {
+                current = Some(value);
             }
         }
         let event = match event {

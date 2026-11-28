@@ -128,12 +128,13 @@ impl Fb2 {
                 }
                 Event::Empty(e) => {
                     let name = e.local_name();
-                    if name.as_ref() == "image" && in_any(&stack, "body") {
-                        if let Some(href) = attr(&e, "href") {
-                            flush_para(&mut book, &mut text);
-                            images.push(href.trim_start_matches('#').to_owned());
-                            book.push(Block::Image(ImageRef(images.len() - 1)));
-                        }
+                    if name.as_ref() == "image"
+                        && in_any(&stack, "body")
+                        && let Some(href) = attr(&e, "href")
+                    {
+                        flush_para(&mut book, &mut text);
+                        images.push(href.trim_start_matches('#').to_owned());
+                        book.push(Block::Image(ImageRef(images.len() - 1)));
                     }
                 }
                 Event::Text(t) => {

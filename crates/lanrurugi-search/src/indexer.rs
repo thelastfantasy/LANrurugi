@@ -76,6 +76,12 @@ pub(crate) fn folded_tag_key(eq: &Equivalence, tag: &str) -> String {
     format!("INDEX_{}", eq.fold(&tag.trim().to_lowercase()))
 }
 
+/// Ids (archives and Tankoubons) carrying exactly `tag`, from the folded tag index search reads.
+pub async fn ids_with_tag(search_pool: &Pool, eq: &Equivalence, tag: &str) -> Result<Vec<String>> {
+    let mut conn = search_pool.get().await?;
+    Ok(conn.smembers(folded_tag_key(eq, tag)).await?)
+}
+
 /// Writes both the original and canonical title-index members for one archive/tank (idempotent).
 async fn write_title_indexes(
     conn: &mut deadpool_redis::Connection,

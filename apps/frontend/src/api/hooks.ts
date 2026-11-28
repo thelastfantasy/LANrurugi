@@ -11,7 +11,6 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { clearDiagnosticsDevice } from "@/diagnostics/device"
 import { startDiagnostics } from "@/diagnostics/sdk"
 import { buildChanged, type BuildIdentity,readSeenBuild, sinceIdentity, writeSeenBuild } from "@/lib/seenBuild"
-import { MSM_SELECTION_KEY } from "@/lib/storageKeys"
 import { isTankoubonId } from "@/lib/utils/isTankoubonId"
 import { clearSearchNavigationState } from "@/pages/Reader/crossArchiveNav"
 import { SESSION_QUERY_KEY } from "@/session/queryKey"
@@ -39,6 +38,10 @@ import type {
   ArchiveMetadata,
   ArchiveSplitTreeResponse,
   AuthBridgeConfig,
+  BackupEntry,
+  BackupJobResponse,
+  BackupJobStatus,
+  BackupsResponse,
   BatchDeleteArchivesResponse,
   BookmarkedPageResponse,
   BookmarkSort,
@@ -47,6 +50,9 @@ import type {
   ChangelogRelease,
   CheckCycle,
   Condition,
+  CronPreviewResponse,
+  DeleteBackupResponse,
+  DeletionsResponse,
   DownloadQueueItem,
   DownloadQueueListResponse,
   DuplicateCompare,
@@ -69,6 +75,7 @@ import type {
   OnlyMatchingBookmarksResponse,
   PageDimensionsResponse,
   PendingApproval,
+  PinBackupResponse,
   PluginInfo,
   PluginOptions,
   PluginOptionsUpdate,
@@ -78,6 +85,9 @@ import type {
   RandomArchivesResponse,
   RecycleBinView,
   ReservationListItem,
+  RestoreAllDeletionsResponse,
+  RestoreBackupResponse,
+  RestoreDeletionResponse,
   RestoreResult,
   SafetyPasswordStatus,
   SearchResponse,
@@ -178,7 +188,14 @@ export function useUpdateSettings() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (partial: SettingsUpdate) => sendJson("PUT", "/settings", partial),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
+    onSuccess: (_saved, partial) => {
+      void queryClient.invalidateQueries({ queryKey: ["settings"] })
+      // Snapshot plans carry server-computed `next_runs`, which a timezone change moves; without
+      // this the plan list keeps showing the old clock until the page is reloaded.
+      if (partial.timezone !== undefined) {
+        void queryClient.invalidateQueries({ queryKey: ["backups"] })
+      }
+    },
   })
 }
 
@@ -633,11 +650,24 @@ export function useAnalyzeArchiveSplit() {
 export function useExecuteArchiveSplit() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, deleteOriginal }: { id: string; deleteOriginal?: boolean }) =>
-      sendJson<{ job_id: string; success: number }>(
+    mutationFn: ({
+      id,
+      deleteOriginal,
+      createTankoubon,
+    }: {
+      id: string
+      deleteOriginal?: boolean
+      createTankoubon?: boolean
+    }) => {
+      const params = new URLSearchParams()
+      if (deleteOriginal !== undefined) params.set("delete_original", String(deleteOriginal))
+      if (createTankoubon !== undefined) params.set("create_tankoubon", String(createTankoubon))
+      const query = params.toString()
+      return sendJson<{ job_id: string; success: number }>(
         "POST",
-        `/archives/${id}/split/execute${deleteOriginal !== undefined ? `?delete_original=${deleteOriginal}` : ""}`,
-      ),
+        `/archives/${id}/split/execute${query ? `?${query}` : ""}`,
+      )
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["archives"] })
       queryClient.invalidateQueries({ queryKey: ["tankoubon-full"] })
@@ -666,6 +696,9 @@ export function useAddTocEntry(id: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["archive", id] })
       queryClient.invalidateQueries({ queryKey: ["archives"] })
+      // A chapter set while reading a tankoubon belongs to the member archive, but the open tank
+      // view renders its merged ToC from /tankoubons/{id}/full.
+      queryClient.invalidateQueries({ queryKey: ["tankoubon-full"] })
     },
   })
 }
@@ -677,6 +710,7 @@ export function useRemoveTocEntry(id: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["archive", id] })
       queryClient.invalidateQueries({ queryKey: ["archives"] })
+      queryClient.invalidateQueries({ queryKey: ["tankoubon-full"] })
     },
   })
 }
@@ -690,6 +724,7 @@ export function useAddTocEntryForId() {
     onSuccess: (_data, { id }) => {
       queryClient.invalidateQueries({ queryKey: ["archive", id] })
       queryClient.invalidateQueries({ queryKey: ["archives"] })
+      queryClient.invalidateQueries({ queryKey: ["tankoubon-full"] })
     },
   })
 }
@@ -702,6 +737,7 @@ export function useRemoveTocEntryForId() {
     onSuccess: (_data, { id }) => {
       queryClient.invalidateQueries({ queryKey: ["archive", id] })
       queryClient.invalidateQueries({ queryKey: ["archives"] })
+      queryClient.invalidateQueries({ queryKey: ["tankoubon-full"] })
     },
   })
 }
@@ -1254,7 +1290,7 @@ export function useLogin() {
  * in-memory query cache (otherwise a page that doesn't remount — client-side `navigate`, not a
  * reload — keeps serving the outgoing session's cached `["settings"]`/etc. responses until each
  * query happens to refetch on its own), content-derived browsing state (last search, cross-archive
- * navigation), and the unconsumed Library→Batch multi-select handoff. Deliberately leaves every
+ * navigation). Deliberately leaves every
  * pure display-preference key alone (theme, sort order, reader layout, ...) — those aren't a
  * privacy or correctness concern, and wiping them would just make the next login worse for no
  * benefit. */
@@ -1277,7 +1313,6 @@ export function useLogout() {
       await queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY })
       clearSearchNavigationState()
       clearLastRefreshTimestamp()
-      localStorage.removeItem(MSM_SELECTION_KEY)
       // The diagnostics device id is per login session, not per browser forever: a shared machine
       // must not hand the next admin the previous one's id.
       clearDiagnosticsDevice()
@@ -2020,15 +2055,23 @@ export function useTidyTags() {
 
 /** 027: fills in the whole-file fingerprint of archives catalogued before it was recorded. */
 export function useBlake3Backfill() {
+  const queryClient = useQueryClient()
   return useMutation({
     mutationFn: () =>
       sendJson<{ job: string; already_running?: boolean }>("POST", "/database/blake3-backfill"),
+    // The settings page only offers Stop while the job shows up as running, so the row has to see
+    // the new job without waiting for the next poll.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
   })
 }
 
 export function useStopBlake3Backfill() {
+  const queryClient = useQueryClient()
   return useMutation({
     mutationFn: () => sendJson<{ stopped: boolean }>("DELETE", "/database/blake3-backfill"),
+    // Cancellation lands at the end of the current batch, so the job stays active a little longer
+    // and the row keeps its Stop control until it actually ends — which is what we want.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["jobs"] }),
   })
 }
 
@@ -2124,6 +2167,19 @@ export function duplicateCompareQuery(a: string | null, b: string | null) {
 
 export function useDuplicateCompare(a: string | null, b: string | null) {
   return useQuery({ ...duplicateCompareQuery(a, b), enabled: a !== null && b !== null })
+}
+
+/** How far a running comparison has fingerprinted each side; polled only while it runs. */
+export function useDuplicateCompareProgress(a: string | null, b: string | null, running: boolean) {
+  return useQuery({
+    queryKey: ["duplicates", "compare-progress", a, b],
+    queryFn: () =>
+      fetchJson<{ progress: { a: { done: number; total: number }; b: { done: number; total: number } } | null }>(
+        `/database/duplicates/compare/progress?a=${encodeURIComponent(a ?? "")}&b=${encodeURIComponent(b ?? "")}`,
+      ),
+    enabled: running && a !== null && b !== null,
+    refetchInterval: running ? 700 : false,
+  })
 }
 
 export function useSaveDuplicateDecisions() {
@@ -2718,7 +2774,9 @@ export function useRecycleBin() {
 
 function invalidateAfterBinChange(queryClient: ReturnType<typeof useQueryClient>) {
   void queryClient.invalidateQueries({ queryKey: ["recycle-bin"] })
+  void queryClient.invalidateQueries({ queryKey: ["deletions"] })
   void queryClient.invalidateQueries({ queryKey: ["archives"] })
+  void queryClient.invalidateQueries({ queryKey: ["backups"] })
   void queryClient.invalidateQueries({ queryKey: ["bookmarks"] })
   void queryClient.invalidateQueries({ queryKey: ["tankoubon"] })
   void queryClient.invalidateQueries({ queryKey: ["stats"] })
@@ -2789,5 +2847,223 @@ export function useResetSafetyPassword() {
       queryClient.setQueryData(["safety-password"], status)
       void queryClient.invalidateQueries({ queryKey: ["recycle-bin"] })
     },
+  })
+}
+
+// --- specs/028 deletion safety net: automatic snapshots + deletion journal -----------------
+
+/** Everything a restore can have changed — a database restore can touch any of these. */
+export function invalidateAfterDataRestore(queryClient: ReturnType<typeof useQueryClient>) {
+  void queryClient.invalidateQueries({ queryKey: ["archives"] })
+  void queryClient.invalidateQueries({ queryKey: ["backups"] })
+  void queryClient.invalidateQueries({ queryKey: ["bookmarks"] })
+  void queryClient.invalidateQueries({ queryKey: ["categories"] })
+  void queryClient.invalidateQueries({ queryKey: ["deletions"] })
+  void queryClient.invalidateQueries({ queryKey: ["recycle-bin"] })
+  void queryClient.invalidateQueries({ queryKey: ["library-status"] })
+  void queryClient.invalidateQueries({ queryKey: ["stats"] })
+  void queryClient.invalidateQueries({ queryKey: ["tankoubon"] })
+}
+
+export function useBackups() {
+  return useQuery({
+    queryKey: ["backups"],
+    queryFn: () => fetchJson<BackupsResponse>("/backups"),
+  })
+}
+
+/** Validation + the next five fire instants for a candidate cron. A POST because the expression
+ *  can be far too long for a query string, but it is a pure preview — safe to cache per expression. */
+export function useCronPreview(cron: string | null) {
+  return useQuery({
+    queryKey: ["cron-preview", cron],
+    queryFn: () => sendJson<CronPreviewResponse>("POST", "/backups/schedule/preview", { cron }),
+    enabled: cron !== null && cron.trim() !== "",
+    retry: false,
+    staleTime: 30_000,
+  })
+}
+
+/** Both create actions return a job id; progress arrives over SSE, and the list refreshes once the
+ *  job reports `done` (the component does that, not the mutation). */
+export function useCreateBackup() {
+  return useMutation({
+    mutationFn: () => sendJson<BackupJobResponse>("POST", "/backups"),
+  })
+}
+
+/** The JSON half of the manual actions — `POST /api/backups` now takes a full RDB snapshot. */
+export function useCreateExport() {
+  return useMutation({
+    mutationFn: () => sendJson<BackupJobResponse>("POST", "/backups/export"),
+  })
+}
+
+/** One-shot status read, used only as the fallback when the SSE stream cannot be established. */
+export function fetchBackupJob(jobId: string) {
+  return fetchJson<BackupJobStatus>(`/backups/jobs/${encodeURIComponent(jobId)}`)
+}
+
+/** Live progress for one backup job over SSE — the same pattern as this file's other stream hooks
+ *  (`useSubscriptionCheckProgress`): the `EventSource` lives in the effect, named events update
+ *  state, and the effect's cleanup closes it. When the stream cannot be established at all, one
+ *  `GET /api/backups/jobs/{id}` fills in the last known state and `live` turns false.
+ *
+ *  `onTerminal` fires from the event/response callback (not from an effect), so callers can freeze
+ *  their own result state without a state-in-effect round trip. */
+const EMPTY_JOB_STATUS: BackupJobStatus = {
+  state: "running",
+  percent: 0,
+  bytes_written: 0,
+  bytes_expected: 0,
+  started_at: null,
+  finished_at: null,
+  error: null,
+  entry: null,
+}
+
+export function useBackupJobProgress(
+  jobId: string | null,
+  onTerminal?: (status: BackupJobStatus) => void,
+) {
+  const [stream, setStream] = useState<{
+    jobId: string
+    status: BackupJobStatus
+    live: boolean
+  } | null>(null)
+  const terminalRef = useRef(onTerminal)
+  terminalRef.current = onTerminal
+
+  useEffect(() => {
+    if (!jobId) return
+    // Catch-up read on (re)connect: a panel switch closes the stream, and the job may have finished
+    // while it was hidden. Cheap, and skipped whenever a stream status already exists.
+    void fetchBackupJob(jobId)
+      .then((status) => {
+        setStream((old) => (old && old.jobId === jobId ? old : { jobId, status, live: true }))
+        if (status.state === "done" || status.state === "failed") terminalRef.current?.(status)
+      })
+      .catch(() => undefined)
+    const source = new EventSource(`/api/backups/jobs/${encodeURIComponent(jobId)}/events`)
+    const onEvent = (event: Event) => {
+      const raw = (event as MessageEvent<string>).data
+      // A native connection failure fires `error` with no data; `onerror` below handles that.
+      if (!raw) return
+      const data = JSON.parse(raw) as Partial<BackupJobStatus>
+      const next: BackupJobStatus = {
+        state:
+          event.type === "done"
+            ? "done"
+            : event.type === "error"
+              ? "failed"
+              : (data.state ?? "running"),
+        percent: data.percent ?? 0,
+        bytes_written: data.bytes_written ?? 0,
+        bytes_expected: data.bytes_expected ?? 0,
+        started_at: data.started_at ?? null,
+        finished_at: data.finished_at ?? null,
+        error: data.error ?? null,
+        entry: data.entry ?? null,
+      }
+      setStream({ jobId, status: next, live: true })
+      if (event.type === "done" || event.type === "error") {
+        source.close()
+        terminalRef.current?.(next)
+      }
+    }
+    for (const name of ["progress", "done", "error"]) source.addEventListener(name, onEvent)
+    source.onerror = () => {
+      // `CONNECTING` means the browser is retrying by itself; only a closed stream falls back.
+      if (source.readyState !== EventSource.CLOSED) return
+      setStream((old) =>
+        old && old.jobId === jobId ? { ...old, live: false } : { jobId, status: EMPTY_JOB_STATUS, live: false },
+      )
+      void fetchBackupJob(jobId)
+        .then((status) => {
+          setStream({ jobId, status, live: false })
+          if (status.state === "done" || status.state === "failed") terminalRef.current?.(status)
+        })
+        .catch(() => undefined)
+    }
+    return () => source.close()
+  }, [jobId])
+
+  const current = stream && stream.jobId === jobId ? stream : null
+  return { status: current?.status ?? null, live: current?.live ?? true }
+}
+
+/** Whole-database restore from one export; the server takes a `pre-restore` export first. */
+export function useRestoreBackup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) =>
+      sendJson<RestoreBackupResponse>("POST", `/backups/${encodeURIComponent(name)}/restore`),
+    onSuccess: () => invalidateAfterDataRestore(queryClient),
+  })
+}
+
+/** Remove one snapshot or export by name. The server refuses the newest usable one with a 409
+ *  (`reason: "last_usable"`) — the guard that keeps at least one restorable file on disk. */
+export function useDeleteBackup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) =>
+      sendJson<DeleteBackupResponse>("DELETE", `/backups/${encodeURIComponent(name)}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["backups"] }),
+  })
+}
+
+/** Pin/unpin are both idempotent; a pinned file is skipped by the retention sweep. */
+export function usePinBackup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) =>
+      sendJson<PinBackupResponse>("POST", `/backups/${encodeURIComponent(name)}/pin`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["backups"] }),
+  })
+}
+
+export function useUnpinBackup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) =>
+      sendJson<PinBackupResponse>("DELETE", `/backups/${encodeURIComponent(name)}/pin`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["backups"] }),
+  })
+}
+
+/** `PATCH /api/backups/{name}` — an alias lives beside the file, so the backup itself is untouched;
+ *  `null` (or an empty string) clears it. Saving answers with the updated entry. */
+export function useSetBackupNote() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ name, note }: { name: string; note: string | null }) =>
+      sendJson<BackupEntry>("PATCH", `/backups/${encodeURIComponent(name)}`, { note }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["backups"] }),
+  })
+}
+
+export function useDeletions() {
+  return useQuery({
+    queryKey: ["deletions"],
+    queryFn: () => fetchJson<DeletionsResponse>("/deletions"),
+  })
+}
+
+export function useRestoreDeletion() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) =>
+      sendJson<RestoreDeletionResponse>("POST", `/deletions/${encodeURIComponent(id)}/restore`),
+    onSuccess: () => invalidateAfterDataRestore(queryClient),
+  })
+}
+
+/** Each entry is restored independently — one failure doesn't abort the rest. */
+export function useRestoreAllDeletions() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => sendJson<RestoreAllDeletionsResponse>("POST", "/deletions/restore-all"),
+    onSuccess: () => invalidateAfterDataRestore(queryClient),
   })
 }

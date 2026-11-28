@@ -162,10 +162,10 @@ impl DiagnosticsSettings {
     /// The tracker one event's source should go to: its own override, else the default. `None`
     /// means that source has no tracker and nothing may be sent for it.
     pub fn tracker_dsn_for(&self, source: &str) -> Option<String> {
-        if let Some(dsn) = self.tracker_routes().get(source) {
-            if !dsn.trim().is_empty() {
-                return Some(dsn.trim().to_string());
-            }
+        if let Some(dsn) = self.tracker_routes().get(source)
+            && !dsn.trim().is_empty()
+        {
+            return Some(dsn.trim().to_string());
         }
         self.tracker_dsn().map(str::to_string)
     }

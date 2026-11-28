@@ -7,12 +7,14 @@ import {
   useBlake3Backfill,
   useCleanDatabase,
   useDropDatabase,
+  useJobs,
   useStopBlake3Backfill,
   useTidyTags,
 } from "@/api/hooks"
 import type { MemoryMode } from "@/api/types"
 import { NumberInput } from "@/components/common-ui/Form"
 import { CollapsibleSection } from "@/components/Display"
+import { TimezoneSelect } from "@/components/Form"
 import { confirmDialog } from "@/dialog"
 import { routes } from "@/lib/routes"
 import { getImageFormatSupport } from "@/lib/utils/imageFormatSupport"
@@ -44,6 +46,8 @@ export function GlobalSection({
   setHtmltitle,
   language,
   setLanguage,
+  timezone,
+  setTimezone,
   pagesize,
   setPagesize,
   enableresize,
@@ -94,6 +98,8 @@ export function GlobalSection({
   setHtmltitle: (v: string) => void
   language: string
   setLanguage: (v: string) => void
+  timezone: string
+  setTimezone: (v: string) => void
   pagesize: number
   setPagesize: (v: number) => void
   enableresize: boolean
@@ -159,6 +165,12 @@ export function GlobalSection({
   const blake3Backfill = useBlake3Backfill()
   const stopBlake3Backfill = useStopBlake3Backfill()
   const dropDatabase = useDropDatabase()
+  const jobs = useJobs()
+  // 027 US5: the stop control exists only while a backfill is actually running — a permanent one
+  // would spend almost all of its life answering "nothing is running", which reads as broken.
+  const blake3BackfillRunning = (jobs.data ?? []).some(
+    (job) => job.name === "blake3_backfill" && (job.state === "queued" || job.state === "active"),
+  )
 
   return (
     <CollapsibleSection id="global" icon="fa-cubes" title={t("settings.globalSettings")}>
@@ -172,6 +184,13 @@ export function GlobalSection({
             <LanguageOrderEditor value={language} onChange={setLanguage} />
             <br />
             {t("settings.selectTheLanguageForThe")}
+          </Row>
+          <Row label={t("settings.timezone")}>
+            {/* `date_added` display + day-range search resolve in this IANA timezone so every
+                viewer agrees on which day an archive belongs to, regardless of browser timezone. */}
+            <TimezoneSelect value={timezone} onChange={setTimezone} ariaLabel={t("settings.timezone")} />
+            <br />
+            {t("settings.ianaTimezoneIdentifierEG")}
           </Row>
           <Row label={t("settings.archivesPerPage")}>
             <NumberInput style={{ width: "100%" }} value={pagesize} onValueChange={setPagesize} />
@@ -505,17 +524,24 @@ export function GlobalSection({
               )
             }}
           >
-            {t("settings.blake3BackfillDescription")}{" "}
-            <button
-              type="button"
-              className="stdbtn"
-              onClick={async () => {
-                const result = await stopBlake3Backfill.mutateAsync()
-                onStatus(t(result.stopped ? "settings.blake3BackfillStopped" : "settings.blake3BackfillIdle"))
-              }}
-            >
-              {t("settings.blake3BackfillStop")}
-            </button>
+            {t("settings.blake3BackfillDescription")}
+            {blake3BackfillRunning && (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  className="stdbtn"
+                  onClick={async () => {
+                    const result = await stopBlake3Backfill.mutateAsync()
+                    onStatus(
+                      t(result.stopped ? "settings.blake3BackfillStopped" : "settings.blake3BackfillIdle"),
+                    )
+                  }}
+                >
+                  {t("settings.blake3BackfillStop")}
+                </button>
+              </>
+            )}
           </ActionRow>
           <ActionRow
             id="clean-db"

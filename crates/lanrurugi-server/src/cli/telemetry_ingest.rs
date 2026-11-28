@@ -131,25 +131,24 @@ impl Heartbeat {
             return Err("version must look like semver");
         }
         for (field, value) in [("arch", &self.arch), ("os", &self.os)] {
-            if let Some(value) = value {
-                if value.is_empty() || value.len() > 32 || !value.bytes().all(is_word_byte) {
-                    return Err(if field == "arch" {
-                        "arch must be a short identifier"
-                    } else {
-                        "os must be a short identifier"
-                    });
-                }
+            if let Some(value) = value
+                && (value.is_empty() || value.len() > 32 || !value.bytes().all(is_word_byte))
+            {
+                return Err(if field == "arch" {
+                    "arch must be a short identifier"
+                } else {
+                    "os must be a short identifier"
+                });
             }
         }
-        if let Some(channel) = &self.channel {
-            if channel.is_empty()
+        if let Some(channel) = &self.channel
+            && (channel.is_empty()
                 || channel.len() > 16
                 || !channel
                     .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-            {
-                return Err("channel must be a short lowercase identifier");
-            }
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))
+        {
+            return Err("channel must be a short lowercase identifier");
         }
         Ok(())
     }

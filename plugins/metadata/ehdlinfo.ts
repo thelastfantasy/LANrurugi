@@ -54,7 +54,7 @@ export function pluginInfo() {
       { name: "japanese_title", description: "Use Japanese title if available", required: false, type: "bool" },
       { name: "save_summary", description: "Save \"description\" as summary", required: false, type: "bool" },
     ],
-    declared_permissions: { net: [], read: false, write: true },
+    declared_permissions: { net: [], read: false, write: false },
     name: "EHDL info.txt",
     author: "thelastfantasy",
     description: "EHDL info.txt metadata parser",

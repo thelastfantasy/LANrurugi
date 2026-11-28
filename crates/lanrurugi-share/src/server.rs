@@ -25,8 +25,8 @@ use crate::host::{Host, ShareHost};
 use crate::manifest::browse_manifest;
 use crate::runtime::RatioState;
 use crate::runtime::{
-    blobs, direct_address, read_frame, wait_for_direct_address, write_frame, Session, Shared,
-    DIRECT_PATH_WAIT,
+    blobs, direct_address, read_frame, wait_for_direct_address, write_frame,
+    write_frame_with_extras, Session, Shared, DIRECT_PATH_WAIT,
 };
 use crate::shares::repo;
 use crate::util::{hex, now_secs};
@@ -146,13 +146,23 @@ impl ShareProtocol {
             Ok(answer) => answer,
             Err(reason) => (Response::Refused(reason), None),
         };
-        if write_frame(&mut send, &header).await.is_ok() {
-            if let Some(body) = body {
-                // Held while the bytes are on the wire, not just while they are encoded: a port
-                // rotation that tore the connection down here would cut a live transfer.
-                let _transfer = crate::runtime::TransferGuard::begin();
-                let _ = send.write_all(&body).await;
+        // Metadata the message schemas do not name rides after it, where a build that has never
+        // heard of it will never look: an older peer imports exactly as it always did.
+        let extras = match &header {
+            Response::Opened { manifest, .. } | Response::Claimed { manifest, .. } => {
+                crate::manifest::manifest_extras(&self.host, manifest).await
             }
+            _ => Vec::new(),
+        };
+        if write_frame_with_extras(&mut send, &header, &extras)
+            .await
+            .is_ok()
+            && let Some(body) = body
+        {
+            // Held while the bytes are on the wire, not just while they are encoded: a port
+            // rotation that tore the connection down here would cut a live transfer.
+            let _transfer = crate::runtime::TransferGuard::begin();
+            let _ = send.write_all(&body).await;
         }
         let _ = send.finish();
     }
@@ -541,15 +551,13 @@ impl ShareProtocol {
         }
         // Only bytes the importer has decoded and hash-verified count toward the ratio; a dropped
         // response or a re-fetched piece must not inflate it, or a 1.0 target could stall.
-        if verified_bytes > 0 {
-            if let Ok(delta) = repo(&self.host)
+        if verified_bytes > 0
+            && let Ok(delta) = repo(&self.host)
                 .add_claim_verified(&claim_id, verified_bytes)
                 .await
-            {
-                if delta > 0 {
-                    self.record_import(&share_id, delta).await;
-                }
-            }
+            && delta > 0
+        {
+            self.record_import(&share_id, delta).await;
         }
         if finished {
             self.flush_import(&share_id).await;
@@ -709,10 +717,10 @@ impl ShareProtocol {
                 None => Some(bytes),
             }
         };
-        if let Some(delta) = pending {
-            if let Err(e) = repo(&self.host).add_import_bytes(share_id, delta).await {
-                tracing::warn!(error = %e, "could not record served import bytes");
-            }
+        if let Some(delta) = pending
+            && let Err(e) = repo(&self.host).add_import_bytes(share_id, delta).await
+        {
+            tracing::warn!(error = %e, "could not record served import bytes");
         }
     }
 
@@ -732,10 +740,10 @@ impl ShareProtocol {
                 }
             })
         };
-        if let Some(delta) = pending {
-            if let Err(e) = repo(&self.host).add_import_bytes(share_id, delta).await {
-                tracing::warn!(error = %e, "could not flush the final served import bytes");
-            }
+        if let Some(delta) = pending
+            && let Err(e) = repo(&self.host).add_import_bytes(share_id, delta).await
+        {
+            tracing::warn!(error = %e, "could not flush the final served import bytes");
         }
     }
 

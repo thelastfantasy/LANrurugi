@@ -47,21 +47,6 @@ pub enum IngestDownloadError {
         existing_id: String,
         reason: DuplicateReason,
     },
-    /// A `Filename` collision (see [`DuplicateReason::Filename`]) that was staged to `temp_dir`
-    /// instead of being immediately rejected — deliberately not folded into `Duplicate`, since a
-    /// caller needs to persist the extra staging info (`temp_path`/`crc32`) onto the queue item,
-    /// not just render a generic error. See `PendingFilenameConflict`'s own docs for why this
-    /// exists at all (unlike a `ContentHash` collision, this one has a real, safe resolution the
-    /// user can pick).
-    #[error("filename collides with an existing archive, staged for user resolution: {0:?}")]
-    PendingRename(PendingFilenameConflict),
-    /// A `Filename` collision whose source archive's pages were already extracted and patched into
-    /// the colliding target — no conflict menu to offer; the staged file can be discarded.
-    #[error("source archive already patched into {existing_id}")]
-    AlreadyPatched {
-        existing_id: String,
-        filename: String,
-    },
     /// What arrived is not an archive with pages — typically a web page the server answered with
     /// (a "still being prepared" notice) under a 200. Refused before cataloguing (#300); the bytes
     /// are dropped, so a retry downloads again.
@@ -71,6 +56,10 @@ pub enum IngestDownloadError {
         /// The page's own text, when it was a web page: usually the server saying why.
         page_excerpt: Option<String>,
     },
+    /// A full database restore is in progress: nothing was written and the staged file is intact,
+    /// so the download can be retried once the restore finishes.
+    #[error("{0}")]
+    RestoreInProgress(String),
 }
 
 /// Refuses a staged download that cannot be opened as an archive or has no pages. A library scan
@@ -144,9 +133,8 @@ pub(crate) fn html_excerpt(bytes: &[u8]) -> Option<String> {
 
 /// Converts to the structured, translatable `QueueError` the frontend actually renders — logs
 /// the original `Display` text via `tracing::warn!` here (the one place it's available before
-/// being discarded) rather than serializing it anywhere user-facing. `Duplicate`/`PendingRename`
-/// need no log: their fields are already fully structured and user-actionable (unlike the other
-/// two, genuine internal faults).
+/// being discarded) rather than serializing it anywhere user-facing. `Duplicate` needs no log: its
+/// fields are already fully structured and user-actionable (unlike the internal faults).
 impl From<&IngestDownloadError> for lanrurugi_core::queue_error::QueueError {
     fn from(e: &IngestDownloadError) -> Self {
         use lanrurugi_core::queue_error::QueueError;
@@ -222,16 +210,8 @@ impl From<&IngestDownloadError> for lanrurugi_core::queue_error::QueueError {
                     page_excerpt: page_excerpt.clone(),
                 }
             }
-            IngestDownloadError::PendingRename(conflict) => QueueError::DuplicateFilename {
-                existing_id: conflict.existing_id.clone(),
-                filename: conflict.original_filename.clone(),
-            },
-            IngestDownloadError::AlreadyPatched {
-                existing_id,
-                filename,
-            } => QueueError::AlreadyPatched {
-                existing_id: existing_id.clone(),
-                filename: filename.clone(),
+            IngestDownloadError::RestoreInProgress(message) => QueueError::IngestFailed {
+                reason: message.clone(),
             },
         }
     }
@@ -301,10 +281,7 @@ pub async fn adopt_pending_conflict(
 /// shared by the download pipeline (`plugins::run_managed_downloads`) and the web UI's user upload
 /// (`upload.rs::upload_archive`), both of which funnel through `ingest_downloaded_file` but carry
 /// different actors/context. `source` is `"download"` or `"upload"`; `extra` carries that source's
-/// own fields (plugin/url/queue item, or the upload's category/origin). `PendingRename` is
-/// deliberately not recorded as a failure — the bytes are safely staged awaiting the user's own
-/// overwrite/rename decision, the same "not a genuine failure" distinction `upload.rs` already
-/// draws for its own `archive.upload` record.
+/// own fields (plugin/url/queue item, or the upload's category/origin).
 pub(crate) async fn record_ingest_result(
     state: &AppState,
     auth: Option<&AuthContext>,
@@ -337,7 +314,6 @@ pub(crate) async fn record_ingest_result(
             )
             .await;
         }
-        Err(IngestDownloadError::PendingRename(_)) => {}
         Err(e) => {
             crate::activity::record_archive_ingest(
                 state,
@@ -424,13 +400,74 @@ async fn ingest_staged_download(
     .await
 }
 
+/// The queue row this task's download belongs to, when it has one — the carrier of the preview
+/// taken before the download started (029 US3). Keyed on the task's own clock rather than passed
+/// down through every cataloguing call, which has no business knowing about queue rows.
+async fn download_metadata_preview(
+    state: &AppState,
+) -> Option<lanrurugi_storage::download_queue::DownloadQueueItem> {
+    let item_id = crate::ingest_clock::queue_item_id()?;
+    state.download_queue.get(&item_id).await.ok().flatten()
+}
+
+/// Applies the preview's title and tags to the archive that was just catalogued, because the
+/// plugin that produced them is being skipped, not its result. Written through the same
+/// `update_then` + reindex path the plugin chain uses — never a whole-record overwrite.
+async fn apply_preview_metadata(state: &AppState, archive_id: &str, preview: &serde_json::Value) {
+    let title = preview
+        .get("title")
+        .and_then(serde_json::Value::as_str)
+        .filter(|t| !t.trim().is_empty())
+        .map(str::to_string);
+    let tags = match preview.get("tags").and_then(serde_json::Value::as_str) {
+        Some(tags) if !tags.trim().is_empty() => {
+            Some(match crate::plugins::get_computed_tagrules(state).await {
+                Some(rules) => crate::tag_rules::apply_tag_rules(tags, &rules),
+                None => tags.to_string(),
+            })
+        }
+        _ => None,
+    };
+    if title.is_none() && tags.is_none() {
+        return;
+    }
+    let updated = state
+        .repos
+        .archives
+        .update_then(
+            &lanrurugi_core::ids::ArchiveId(archive_id.to_string()),
+            |archive| {
+                if let Some(tags) = &tags {
+                    // `set_tags(..., append=1)`: new tags after the existing ones, first occurrence
+                    // wins — the same merge the plugin chain performs for a live result.
+                    let mut seen = std::collections::HashSet::new();
+                    let merged: Vec<&str> = archive
+                        .tags
+                        .split(',')
+                        .chain(tags.split(','))
+                        .map(str::trim)
+                        .filter(|t| !t.is_empty() && seen.insert(*t))
+                        .collect();
+                    archive.tags = merged.join(",");
+                }
+                if let Some(title) = &title {
+                    archive.title = title.clone();
+                }
+            },
+            |old, new| crate::archives::reindex_title_and_tags(state, old, new),
+        )
+        .await;
+    if let Err(e) = updated {
+        tracing::warn!(%archive_id, error = %e, "failed to apply the cached metadata preview");
+    }
+}
+
 /// Runs `ingest_file_with_policy` against `staging_path` with the given `intended_filename`/
 /// `duplicate_policy`, then (on a successful `Catalogued`/`Rekeyed`/`Unchanged`) finishes
 /// cataloguing exactly like this module's own original single-path logic always did — move into
 /// `archive_dir`, stamp the `source:` tag, fix up `LRR_FILEMAP`, run auto-plugins. Shared between
-/// the original download-ingest path and both filename-conflict resolution paths
-/// (`resolve_overwrite`/`resolve_rename` in `download_queue.rs`), which only differ in what
-/// `intended_filename`/`duplicate_policy` they pass in.
+/// the download-ingest path and [`adopt_pending_conflict`], the startup repair that catalogues a
+/// file a pre-020 filename conflict left staged.
 ///
 /// `keep_bytes_on_failure` keeps the copy when cataloguing fails and no record was written: a
 /// download can be fetched again, but a file adopted at startup is the user's only copy.
@@ -446,6 +483,11 @@ pub(crate) async fn catalogue_staged_file(
     restore_staging_on_failure: bool,
     defer_publication: bool,
 ) -> Result<IngestedDownload, IngestDownloadError> {
+    if state.restore_gate.closed() {
+        return Err(IngestDownloadError::RestoreInProgress(
+            lanrurugi_core::restore_gate::RESTORE_ABORTED_MESSAGE.to_string(),
+        ));
+    }
     // The destination is derived from the bytes, not from the name: the id is the content hash and
     // the file is `<bucket>/<id>.<ext>`, so two downloads can never want the same path for
     // different bytes (020). That removes the filename lock, the collision policy and the
@@ -489,15 +531,15 @@ pub(crate) async fn catalogue_staged_file(
     let fingerprint = match &placed {
         crate::download_manager::Placed::Copied(outcome) => {
             let actual = outcome.blake3.to_hex().to_string();
-            if let Some(expected) = expected_blake3 {
-                if expected != actual {
-                    let _ = tokio::fs::remove_file(&incoming).await;
-                    return Err(IngestDownloadError::StagedCorrupted {
-                        path: staging_path.display().to_string(),
-                        expected: expected.to_string(),
-                        actual,
-                    });
-                }
+            if let Some(expected) = expected_blake3
+                && expected != actual
+            {
+                let _ = tokio::fs::remove_file(&incoming).await;
+                return Err(IngestDownloadError::StagedCorrupted {
+                    path: staging_path.display().to_string(),
+                    expected: expected.to_string(),
+                    actual,
+                });
             }
             Some(actual)
         }
@@ -652,10 +694,10 @@ pub(crate) async fn catalogue_staged_file(
             // by its own name) leaves this copy as a redundant duplicate in the hash layout. Drop
             // it when the recorded path differs, or it would linger forever (`LRR_FILEMAP` points
             // at the record's own path, and no sweep looks in buckets).
-            if let Ok(Some(existing)) = state.repos.archives.get(&existing_id).await {
-                if Path::new(&existing.file) != dest.as_path() {
-                    let _ = tokio::fs::remove_file(&dest).await;
-                }
+            if let Ok(Some(existing)) = state.repos.archives.get(&existing_id).await
+                && Path::new(&existing.file) != dest.as_path()
+            {
+                let _ = tokio::fs::remove_file(&dest).await;
             }
             // As before 027, a rejected download leaves no staged bytes behind.
             undo.rejected().await;
@@ -751,8 +793,24 @@ pub(crate) async fn catalogue_staged_file(
     // Skipped when the caller defers publication: that caller (the upload path) runs its own
     // plugin pass *after* the user's own title/tags are saved — which is the pass whose results
     // actually matter — so running one here as well made every upload pay for two full passes.
+    // 029 US2/T014: the plugin chain is the publish step, marked on its own because it waits on
+    // remote metadata APIs rather than on this host's disk. A no-op outside a download task (an
+    // upload or share import has no job clock), and the phase is closed by the job's own finish.
+    crate::ingest_clock::mark(lanrurugi_core::jobs::PHASE_PUBLISH).await;
     if !defer_publication {
-        crate::plugins::run_enabled_metadata_plugins_on_archive(state, archive_id.as_str()).await;
+        // 029 US3: the download's start-time metadata fetch already asked one plugin; asking it
+        // again here is a second round trip for an answer this row has been carrying all along.
+        let preview = download_metadata_preview(state).await;
+        let skip = preview
+            .as_ref()
+            .and_then(|item| item.metadata_preview_namespace.as_deref());
+        crate::plugins::run_enabled_metadata_plugins_on_archive(state, archive_id.as_str(), skip)
+            .await;
+        if let (Some(_), Some(item)) = (skip, &preview)
+            && let Some(preview_data) = item.metadata_preview.as_ref()
+        {
+            apply_preview_metadata(state, archive_id.as_str(), preview_data).await;
+        }
     }
 
     // Published: the archive now carries whatever the plugins found (a failure inside the run is
@@ -770,16 +828,16 @@ pub(crate) async fn catalogue_staged_file(
     // every upload, download and share import passes through — the damaged list learns about it
     // here instead of waiting for a scan. Cheap: one record read, and nothing is written unless
     // the count really is zero.
-    if let Ok(Some(record)) = state.repos.archives.get(&archive_id).await {
-        if record.pagecount == 0 {
-            crate::integrity_scan::note_damage(
-                state,
-                &record,
-                crate::integrity_scan::Problem::NoPages,
-                "catalogued with no readable pages".to_string(),
-            )
-            .await;
-        }
+    if let Ok(Some(record)) = state.repos.archives.get(&archive_id).await
+        && record.pagecount == 0
+    {
+        crate::integrity_scan::note_damage(
+            state,
+            &record,
+            crate::integrity_scan::Problem::NoPages,
+            "catalogued with no readable pages".to_string(),
+        )
+        .await;
     }
 
     Ok(IngestedDownload {
@@ -935,56 +993,6 @@ async fn list_resize_cache_entries(cache_dir: &Path) -> Option<Vec<ResizeCacheEn
     Some(out)
 }
 
-/// Resolves a `PendingFilenameConflict` by deleting the colliding archive and cataloguing the
-/// staged file under its originally-intended filename — `download_queue.rs::overwrite_queue_item`'s
-/// own implementation, kept here alongside `catalogue_staged_file` since it's the only other
-/// caller of that helper.
-pub async fn resolve_overwrite(
-    state: &AppState,
-    conflict: &PendingFilenameConflict,
-    source_url: Option<&str>,
-) -> Result<IngestedDownload, IngestDownloadError> {
-    catalogue_staged_file(
-        state,
-        Path::new(&conflict.temp_path),
-        &conflict.original_filename,
-        None,
-        source_url,
-        DuplicatePolicy::Overwrite,
-        false,
-        false,
-        false,
-    )
-    .await
-}
-
-/// Resolves a `PendingFilenameConflict` by cataloguing the staged file under a new, user-supplied
-/// filename instead — the existing archive is left untouched. If `new_filename` *also* collides
-/// (rare — the user picked a name that happens to already be taken by some other archive), this
-/// returns another `IngestDownloadError::PendingRename` for the same staged content under the new
-/// name, so the user can simply try again with yet another name rather than losing the staged
-/// bytes.
-pub async fn resolve_rename(
-    state: &AppState,
-    conflict: &PendingFilenameConflict,
-    new_filename: &str,
-    source_url: Option<&str>,
-    _queue_item_id: Option<&str>,
-) -> Result<IngestedDownload, IngestDownloadError> {
-    catalogue_staged_file(
-        state,
-        Path::new(&conflict.temp_path),
-        new_filename,
-        None,
-        source_url,
-        DuplicatePolicy::Reject,
-        false,
-        false,
-        false,
-    )
-    .await
-}
-
 /// Removes the bits this call produced, or — when the caller kept a queue row pointing at
 /// `staging_path` — puts them back there so a later retry can re-ingest instead of re-downloading.
 async fn put_bytes_back(file: &Path, staging_path: &Path, restore: bool) {
@@ -1066,14 +1074,14 @@ async fn rename_into_bucket(incoming: &Path, dest: &Path) -> Result<(), IngestDo
     lanrurugi_storage::fsutil::in_dir(dest, || tokio::fs::rename(incoming, dest))
         .await
         .map_err(IngestDownloadError::Io)?;
-    if let Some(parent) = dest.parent() {
-        if let Err(e) = lanrurugi_core::io::sync_dir(parent).await {
-            let _ = tokio::fs::rename(dest, incoming).await;
-            return Err(IngestDownloadError::Copy {
-                path: dest.display().to_string(),
-                source: lanrurugi_core::io::CopyError::Durability(e),
-            });
-        }
+    if let Some(parent) = dest.parent()
+        && let Err(e) = lanrurugi_core::io::sync_dir(parent).await
+    {
+        let _ = tokio::fs::rename(dest, incoming).await;
+        return Err(IngestDownloadError::Copy {
+            path: dest.display().to_string(),
+            source: lanrurugi_core::io::CopyError::Durability(e),
+        });
     }
     Ok(())
 }
@@ -1701,6 +1709,68 @@ mod tests {
             .expect("a record was written");
         assert_eq!(archive.name, "[DL版] (中国翻訳)");
         assert_eq!(archive.title, archive.name, "an empty title is unusable");
+    }
+    /// 029 FR-005: skipping the plugin whose answer the queue row already carries must still land
+    /// that answer on the archive — the round trip is what is being skipped, not its result.
+    #[tokio::test]
+    async fn a_skipped_plugin_still_contributes_its_preview_title_and_tags() {
+        let root = tempfile::tempdir().unwrap();
+        let Some(state) = state_with_temp_dirs(root.path()).await else {
+            return;
+        };
+        let _lock = lanrurugi_storage::test_support::RedisTestLock::acquire(
+            &state.redis.archive,
+            "preview_metadata",
+        )
+        .await;
+
+        let download = staged_zip(root.path(), &format!("preview-{}", uuid::Uuid::new_v4()));
+        let done = catalogue_staged_file(
+            &state,
+            &download,
+            "Preview.zip",
+            None,
+            None,
+            DuplicatePolicy::Reject,
+            false,
+            false,
+            false,
+        )
+        .await
+        .expect("catalogued");
+        // A catalogued file's own title is derived from the filename; the preview must replace it.
+        state
+            .repos
+            .archives
+            .update(
+                &lanrurugi_core::ids::ArchiveId(done.archive_id.clone()),
+                |archive| {
+                    archive.title = "from-the-filename".to_string();
+                    archive.tags = "language:japanese,artist:existing".to_string();
+                },
+            )
+            .await
+            .unwrap();
+
+        let preview = serde_json::json!({
+            "title": "Plugin Title",
+            // `artist:existing` is already on the archive: the merge keeps one copy.
+            "tags": "artist:existing,language:english",
+        });
+        apply_preview_metadata(&state, done.archive_id.as_str(), &preview).await;
+
+        let record = state
+            .repos
+            .archives
+            .get(&lanrurugi_core::ids::ArchiveId(done.archive_id.clone()))
+            .await
+            .unwrap()
+            .expect("the archive is still there");
+        assert_eq!(record.title, "Plugin Title");
+        assert_eq!(
+            record.tags,
+            "language:japanese,artist:existing,language:english"
+        );
     }
 }
 

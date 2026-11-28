@@ -49,7 +49,7 @@ export async function execLogin(hostArgs: { customargs: string[] }) {
     useragent = useragentcustom;
   }
   if (fakku_sid !== "" && useragent !== "") {
-    logger.info(`Cookie provided (${fakku_sid})!`);
+    logger.info("Cookie provided");
     ua.cookie_jar.add({name: 'fakku_sid', value: fakku_sid, domain: 'fakku.net', path: '/'});
     logger.debug(`Using Useragent: (${useragent})!`);
     ua.transactor.name(useragent);

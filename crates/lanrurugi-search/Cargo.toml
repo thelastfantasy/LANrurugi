@@ -10,6 +10,7 @@ lanrurugi-storage.workspace = true
 lanrurugi-equivalence = { workspace = true, features = ["full"] }
 serde.workspace = true
 serde_json.workspace = true
+percent-encoding.workspace = true
 tokio.workspace = true
 redis.workspace = true
 deadpool-redis.workspace = true

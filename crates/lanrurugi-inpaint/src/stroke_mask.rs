@@ -187,7 +187,7 @@ pub fn sample_stroke_colour(crop: &RgbImage, raw_mask: &[bool]) -> Option<Rgb<u8
     let stroke_pixels: Vec<Rgb<u8>> = crop
         .pixels()
         .zip(raw_mask.iter())
-        .filter(|(_, &is_stroke)| is_stroke)
+        .filter(|(_, is_stroke)| **is_stroke)
         .map(|(px, _)| *px)
         .collect();
     if stroke_pixels.is_empty() {
@@ -542,13 +542,13 @@ pub fn local_background_stroke_mask(
             }
         }
         let supplemented_coverage = raw.iter().filter(|&&m| m).count() as f32 / raw.len() as f32;
-        if supplemented_coverage < MIN_PLAUSIBLE_RAW_COVERAGE {
-            if let Some(kmeans_raw) = kmeans_stroke_mask(crop) {
-                let kmeans_coverage =
-                    kmeans_raw.iter().filter(|&&m| m).count() as f32 / kmeans_raw.len() as f32;
-                if kmeans_coverage > supplemented_coverage {
-                    raw = kmeans_raw;
-                }
+        if supplemented_coverage < MIN_PLAUSIBLE_RAW_COVERAGE
+            && let Some(kmeans_raw) = kmeans_stroke_mask(crop)
+        {
+            let kmeans_coverage =
+                kmeans_raw.iter().filter(|&&m| m).count() as f32 / kmeans_raw.len() as f32;
+            if kmeans_coverage > supplemented_coverage {
+                raw = kmeans_raw;
             }
         }
     }

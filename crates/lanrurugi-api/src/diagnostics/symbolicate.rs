@@ -128,10 +128,10 @@ fn maps_root() -> PathBuf {
 fn load_map(path: &std::path::Path) -> Option<Arc<SourceMap>> {
     static CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<Arc<SourceMap>>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(cache) = cache.lock() {
-        if let Some(hit) = cache.get(path) {
-            return hit.clone();
-        }
+    if let Ok(cache) = cache.lock()
+        && let Some(hit) = cache.get(path)
+    {
+        return hit.clone();
     }
     let loaded = std::fs::read(path)
         .ok()
@@ -180,10 +180,12 @@ mod tests {
         // A one-line map: column 0 of the generated file maps to line 3, column 5 of `src/a.ts`.
         let map = r#"{"version":3,"file":"main.js","sources":["src/a.ts"],"names":["boom"],"mappings":"AAAA"}"#;
         std::fs::write(release.join("main.js.map"), map).unwrap();
-        std::env::set_var("LANRURUGI_SOURCEMAPS_DIR", &dir);
+        // Not provably sound: the test harness runs tests on several threads. Accepted because
+        // nothing else in this test binary reads this variable.
+        unsafe { std::env::set_var("LANRURUGI_SOURCEMAPS_DIR", &dir) };
         let resolved = resolve_stack(Some("abc123"), "    at main (main.js:1:1)");
         assert!(resolved.contains("src/a.ts"), "{resolved}");
-        std::env::remove_var("LANRURUGI_SOURCEMAPS_DIR");
+        unsafe { std::env::remove_var("LANRURUGI_SOURCEMAPS_DIR") };
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -68,7 +68,7 @@ address in `direct_addrs`.
 - [x] T011 [US1] (2026-11-09: `start_services` 起完端点立刻 `publish_all`，因此地址变化/端口轮换/改设置触发的重建都会当场重发记录，不再等每小时那一轮) Address-change handling on top of `spawn_interface_watch`: when the pinned interface's addresses
   change, rebuild the endpoint **and** republish the node record immediately, reusing
   `retract_node_record`/`publish_share` (FR-004).
-- [x] T012 [US1] Tests: unit test for the address filter (done: `share_net::publish`'s pinned/unpinned pair); quickstart A still needs a real tun0
+- [x] T012 [US1] (2026-11-27: quickstart A automated as `scripts/share-pin-check.sh` — a second interface stands in for the tunnel; it found iroh's HTTPS/captive-portal probes, port mapping, mDNS (including a stale announcement surviving every rebind) and DNS lookups leaving through the physical link, all fixed; the check now sees zero packets there while pinned and after the tunnel drops) Tests: unit test for the address filter (done: `share_net::publish`'s pinned/unpinned pair); quickstart A still needs a real tun0
   before/after, and the capture file's packet count.
 
 ---

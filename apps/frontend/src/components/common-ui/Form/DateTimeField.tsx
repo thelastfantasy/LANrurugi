@@ -179,8 +179,19 @@ export function DateTimePanel({
     onChange(mode === "date" ? formatDate(date) : formatLocal(date))
 
   const pickDay = (day: Date | undefined) => {
-    if (!day) return
-    write(new Date(day.getFullYear(), day.getMonth(), day.getDate(), parsed.getHours(), parsed.getMinutes()))
+    // Tapping the already-selected day reports `undefined` — react-day-picker's single mode reads
+    // a repeat tap as "clear the selection" unless `required` is set (see the DayPicker below, which
+    // sets it). Keep the day and still fire, so the tap never feels dead.
+    const target = day ?? parsed
+    write(
+      new Date(
+        target.getFullYear(),
+        target.getMonth(),
+        target.getDate(),
+        parsed.getHours(),
+        parsed.getMinutes(),
+      ),
+    )
   }
 
   const pickTime = (hours: number, minutes: number) => {
@@ -217,6 +228,9 @@ export function DateTimePanel({
       >
       <DayPicker
         mode="single"
+        // Without this a repeat tap on the selected day clears the selection instead of picking it,
+        // which surfaced as "the current date cannot be clicked".
+        required
         month={month}
         onMonthChange={(next) => {
           setSlide(next > month ? "next" : "prev")

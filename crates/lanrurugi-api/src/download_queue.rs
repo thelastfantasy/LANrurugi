@@ -15,7 +15,7 @@ use axum::routing::{get, patch, post};
 use axum::Router;
 use futures_util::StreamExt;
 use lanrurugi_plugin::protocol::PluginInfo;
-use lanrurugi_storage::download_queue::DownloadQueueState;
+use lanrurugi_storage::download_queue::{DownloadQueueItem, DownloadQueueState};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio_stream::wrappers::BroadcastStream;
@@ -155,9 +155,28 @@ async fn fetch_queue_item_metadata(
     }
 }
 
+/// Clears `transferring` once an item has left `Downloading`.
+///
+/// The flag is raised at the first byte and lowered when the bytes are all in; a run that failed,
+/// was stopped or was cancelled mid-transfer never reached that point, so the item kept reporting a
+/// transfer in progress and the queue heading counted it (real report: "2 transferring" over two
+/// rows that had been dead for minutes).
+pub(crate) fn settle_transferring(item: &mut lanrurugi_storage::download_queue::DownloadQueueItem) {
+    if item.state != lanrurugi_storage::download_queue::DownloadQueueState::Downloading {
+        item.transferring = false;
+    }
+}
+
 async fn list_queue(State(state): State<AppState>) -> Response {
     match state.download_queue.list_all().await {
-        Ok(items) => axum::Json(json!({ "items": items })).into_response(),
+        Ok(mut items) => {
+            // Records written before the flag was settled on failure can still read `true` in a
+            // state where nothing is moving bytes; the list is where the header's count comes from.
+            for item in &mut items {
+                settle_transferring(item);
+            }
+            axum::Json(json!({ "items": items })).into_response()
+        }
         Err(e) => error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "list_download_queue",
@@ -480,18 +499,20 @@ async fn delete_queue_item(
     // this item's own Redis record is gone there's no other path back to them short of the 24h
     // a stale-file sweep eventually catching it. Deleting the item is the user's explicit call
     // that they're done with this row entirely, so it removes its own staged file immediately.
-    if let Some(item) = &item {
-        if let Some(conflict) = &item.pending_filename_conflict {
-            if let Err(e) = tokio::fs::remove_file(&conflict.temp_path).await {
-                tracing::warn!(%id, temp_path = %conflict.temp_path, error = %e, "failed to remove pending-rename temp file on queue item delete");
-            }
-        }
+    if let Some(item) = &item
+        && let Some(conflict) = &item.pending_filename_conflict
+        && let Err(e) = tokio::fs::remove_file(&conflict.temp_path).await
+    {
+        tracing::warn!(%id, temp_path = %conflict.temp_path, error = %e, "failed to remove pending-rename temp file on queue item delete");
     }
 
     match state.download_queue.delete(&id).await {
         Ok(()) => {
             if let Some(tx) = &state.download_queue_tx {
                 let _ = tx.send(serde_json::json!({ "kind": "remove", "id": &id }));
+            }
+            if let Some(item) = &item {
+                record_subscription_deletion(&state, item).await;
             }
             record_manual(
                 &state,
@@ -1027,15 +1048,17 @@ async fn delete_selected(
         if let Some(conflict) = item
             .as_ref()
             .and_then(|i| i.pending_filename_conflict.as_ref())
+            && let Err(e) = tokio::fs::remove_file(&conflict.temp_path).await
         {
-            if let Err(e) = tokio::fs::remove_file(&conflict.temp_path).await {
-                tracing::warn!(%id, temp_path = %conflict.temp_path, error = %e, "failed to remove pending-rename temp file on queue item delete");
-            }
+            tracing::warn!(%id, temp_path = %conflict.temp_path, error = %e, "failed to remove pending-rename temp file on queue item delete");
         }
         remove_kept_bytes(item.as_ref()).await;
         if state.download_queue.delete(id).await.is_ok() {
             if let Some(tx) = &state.download_queue_tx {
                 let _ = tx.send(serde_json::json!({ "kind": "remove", "id": id }));
+            }
+            if let Some(item) = &item {
+                record_subscription_deletion(&state, item).await;
             }
             deleted.push(id.clone());
         }
@@ -1057,6 +1080,25 @@ async fn delete_selected(
         .await;
     }
     axum::Json(json!({ "deleted": deleted })).into_response()
+}
+
+/// Remembers a deleted item so its subscription's history can say "deleted".
+///
+/// Deleting the row is what erases the evidence: the cycle recorded only the decision (`queued`), so
+/// without this the panel would keep claiming the work was added to the queue long after the user
+/// threw it away. Only subscription-owned items have a history to correct.
+async fn record_subscription_deletion(state: &AppState, item: &DownloadQueueItem) {
+    let Some(subscription_id) = &item.subscription_id else {
+        return;
+    };
+    let source = crate::plugins::trim_url(&item.url);
+    if let Err(e) = state
+        .subscriptions
+        .mark_deleted(subscription_id, &[source])
+        .await
+    {
+        tracing::warn!(%subscription_id, error = %e, "could not record a deleted subscription work");
+    }
 }
 
 #[derive(Debug)]
@@ -1211,21 +1253,22 @@ async fn start_one_in(
 
     // Content addressing would catch this *after* re-downloading and hashing the whole file; the
     // registry exists to stop it here. Forced items already carry the user's explicit override.
-    if item.origin == lanrurugi_storage::download_queue::QueueItemOrigin::Download && !item.forced {
-        if let Some(existing_id) = crate::download_sources::lookup(state, &item.url).await {
-            item.state = DownloadQueueState::Error;
-            item.error = Some(
-                lanrurugi_core::queue_error::QueueError::SourceAlreadyImported {
-                    existing_id: existing_id.clone(),
-                },
-            );
-            item.finished_at = Some(now_ms());
-            let _ = state.download_queue.update(&item).await;
-            // Same reason as the duplicate-in-flight branch above: the row must flip to its
-            // blocked/error presentation immediately, not only after a manual refresh.
-            broadcast_item_update(state, &item);
-            return Err(StartError::SourceAlreadyImported(existing_id));
-        }
+    if item.origin == lanrurugi_storage::download_queue::QueueItemOrigin::Download
+        && !item.forced
+        && let Some(existing_id) = crate::download_sources::lookup(state, &item.url).await
+    {
+        item.state = DownloadQueueState::Error;
+        item.error = Some(
+            lanrurugi_core::queue_error::QueueError::SourceAlreadyImported {
+                existing_id: existing_id.clone(),
+            },
+        );
+        item.finished_at = Some(now_ms());
+        let _ = state.download_queue.update(&item).await;
+        // Same reason as the duplicate-in-flight branch above: the row must flip to its
+        // blocked/error presentation immediately, not only after a manual refresh.
+        broadcast_item_update(state, &item);
+        return Err(StartError::SourceAlreadyImported(existing_id));
     }
 
     // 017: a share import runs its own transfer task, not a plugin; stopping and retrying go
@@ -1277,6 +1320,12 @@ async fn start_one_in(
         item.title = None;
         item.metadata_preview = None;
         item.metadata_preview_at = None;
+        // Same lifetime as the preview itself (029 contract Q2): a retry re-fetches at start time,
+        // and a stale namespace would tell cataloguing to skip a plugin whose output is gone.
+        item.metadata_preview_namespace = None;
+        // A retry is a new attempt, so the row must not keep the failed run's timeline on top of
+        // the fresh one the job registry is about to build (`mark_active` clears its own copy).
+        item.phases.clear();
         // A retry after a filename-conflict `Error` must also drop the stale conflict record —
         // otherwise `QueueItemRow.tsx`'s right-side button rendering (`item.pending_filename_
         // conflict ? <ConflictMenu> : ...`) keeps showing the old resolve-conflict button through
@@ -1391,9 +1440,25 @@ fn has_running_duplicate(
     item: &lanrurugi_storage::download_queue::DownloadQueueItem,
     all_items: &[lanrurugi_storage::download_queue::DownloadQueueItem],
 ) -> bool {
-    all_items
-        .iter()
-        .any(|other| other.id != item.id && other.url == item.url && is_in_flight(other.state))
+    all_items.iter().any(|other| {
+        other.id != item.id && same_source(&other.url, &item.url) && is_in_flight(other.state)
+    })
+}
+
+/// The same source URL written two ways (`https://www.` vs `https://`, a trailing `/`). The
+/// query is kept: on some sites it is what tells two works apart.
+fn same_source(a: &str, b: &str) -> bool {
+    fn key(url: &str) -> &str {
+        let url = url.trim();
+        let url = url
+            .strip_prefix("https://")
+            .or_else(|| url.strip_prefix("http://"))
+            .unwrap_or(url);
+        url.strip_prefix("www.")
+            .unwrap_or(url)
+            .trim_end_matches('/')
+    }
+    a == b || key(a) == key(b)
 }
 
 /// `POST /download_queue/{id}/stop` — cancels an in-flight (`Starting`/`Downloading`) item's
@@ -1746,10 +1811,10 @@ async fn remove_kept_bytes(item: Option<&lanrurugi_storage::download_queue::Down
     let Some(staged) = item.and_then(|i| i.staged.as_ref()) else {
         return;
     };
-    if let Err(e) = tokio::fs::remove_file(&staged.path).await {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(path = %staged.path, error = %e, "failed to remove a kept download");
-        }
+    if let Err(e) = tokio::fs::remove_file(&staged.path).await
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(path = %staged.path, error = %e, "failed to remove a kept download");
     }
 }
 
@@ -1913,6 +1978,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_same_source_written_another_way_is_still_a_running_duplicate() {
+        let running = item(
+            "a",
+            "https://www.nhentai.net/g/1/",
+            DownloadQueueState::Downloading,
+        );
+        let added = item("b", "https://nhentai.net/g/1", DownloadQueueState::Queued);
+        assert!(has_running_duplicate(
+            &added,
+            &[running.clone(), added.clone()]
+        ));
+        let other = item("c", "https://nhentai.net/g/12", DownloadQueueState::Queued);
+        assert!(!has_running_duplicate(
+            &other,
+            &[running.clone(), other.clone()]
+        ));
+        let query = item(
+            "d",
+            "https://nhentai.net/g/1/?p=2",
+            DownloadQueueState::Queued,
+        );
+        assert!(!has_running_duplicate(&query, &[running, query.clone()]));
+    }
+
+    #[test]
+    fn a_row_that_left_downloading_is_not_still_transferring() {
+        let mut downloading = item("a", "https://e/a", DownloadQueueState::Downloading);
+        downloading.transferring = true;
+        settle_transferring(&mut downloading);
+        assert!(
+            downloading.transferring,
+            "a live transfer keeps its flag — this is what the heading counts"
+        );
+
+        for state in [DownloadQueueState::Error, DownloadQueueState::Cancelled] {
+            let mut dead = item("b", "https://e/b", state);
+            dead.transferring = true;
+            settle_transferring(&mut dead);
+            assert!(!dead.transferring, "{state:?} cannot be moving bytes");
+        }
+    }
+
+    #[test]
     fn paused_is_resumable_but_not_in_flight() {
         assert!(is_startable(DownloadQueueState::Paused));
         assert!(!is_in_flight(DownloadQueueState::Paused));
@@ -1921,6 +2029,7 @@ mod tests {
 
     fn item(id: &str, url: &str, state: DownloadQueueState) -> DownloadQueueItem {
         DownloadQueueItem {
+            metadata_preview_namespace: None,
             subscription_id: None,
             share_import_id: None,
             id: id.to_string(),
@@ -1929,6 +2038,7 @@ mod tests {
             plugin_namespace: "download/ehentai".to_string(),
             file_size: None,
             average_bytes_per_sec: None,
+            phases: Vec::new(),
             resume_support: None,
             category: None,
             metadata_tags: Vec::new(),

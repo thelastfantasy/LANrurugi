@@ -1,7 +1,8 @@
+import { useQueryClient } from "@tanstack/react-query"
 import type { CSSProperties } from "react"
 import { useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 
 import {
   useEmptyBin,
@@ -12,6 +13,7 @@ import {
 } from "@/api/hooks"
 import type { RecycleEntry } from "@/api/types"
 import { Button, IconButton, Input } from "@/components/common-ui/Form"
+import { Tabs } from "@/components/common-ui/Tabs"
 import { useIsNarrowViewport } from "@/hooks"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { formatBytes } from "@/lib/formatBytes"
@@ -19,6 +21,7 @@ import { routes } from "@/lib/routes"
 import { FONT_SIZE_SM } from "@/theme"
 import { toast } from "@/toast"
 
+import { DeletionJournal, JournalRestoreAllButton, useJournalEntries } from "./DeletionJournal"
 import { RecycleRow } from "./RecycleRow"
 import { SafetyPasswordDialog } from "./SafetyPasswordDialog"
 
@@ -37,11 +40,31 @@ const SKELETON_CELL: CSSProperties = {
   minWidth: 0,
 }
 
+/** Every toolbar control is 30px tall so the icon button and the labelled button share one baseline. */
+const TOOLBAR_ACTION: CSSProperties = {
+  height: 30,
+  minWidth: 0,
+  width: "auto",
+  margin: 0,
+  padding: "0 10px 1px",
+  boxSizing: "border-box",
+  display: "inline-flex",
+  alignItems: "center",
+}
+
+function tabLabel(label: string, count: number) {
+  return count > 0 ? `${label} (${count})` : label
+}
+
 /** The recycle bin (spec 019). Recoverable until the safety password says otherwise. */
 export function RecycleBinPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  const location = useLocation()
+  const queryClient = useQueryClient()
   const narrow = useIsNarrowViewport()
+  // The tab is the URL, like the Backup page's: refresh and back/forward land on the same tab.
+  const activeTab = location.pathname.replace(/\/+$/, "") === routes.recycleBinTab("journal") ? "journal" : "bin"
   useDocumentTitle(t("recycleBin.title") ?? undefined)
   const bin = useRecycleBin()
   const safety = useSafetyPasswordStatus()
@@ -63,6 +86,12 @@ export function RecycleBinPage() {
   }
 
   const entries = useMemo(() => bin.data?.entries ?? [], [bin.data])
+  /** Archive ids the bin holds, tank members included — the journal tab leaves these out. */
+  const binIds = useMemo(
+    () => new Set(entries.flatMap((entry) => [entry.id, ...entry.members.map((member) => member.id)])),
+    [entries],
+  )
+  const { journal, entries: journalEntries } = useJournalEntries(binIds)
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
     if (!needle) return entries
@@ -134,245 +163,271 @@ export function RecycleBinPage() {
   return (
     <div className="ido" style={{ paddingLeft: 12, paddingRight: 12, boxSizing: "border-box" }}>
       <h1 className="ih">{t("recycleBin.title")}</h1>
-      <p style={{ fontSize: FONT_SIZE_SM }}>
-        {t("recycleBin.help")}
-        {summary}
-      </p>
+      <div className="recycle-content">
+        <Tabs
+          className="recycle-tabs"
+          activeKey={activeTab}
+          ariaLabel={t("recycleBin.title") ?? undefined}
+          onChange={(key) => navigate(routes.recycleBinTab(key === "journal" ? "journal" : "bin"))}
+          items={[
+            { key: "bin", label: tabLabel(t("recycleBin.tabBin"), entries.length) },
+            { key: "journal", label: tabLabel(t("recycleBin.journalTitle"), journalEntries.length) },
+          ]}
+        />
+        <p style={{ fontSize: FONT_SIZE_SM }}>
+          {activeTab === "bin" ? (
+            <>
+              {t("recycleBin.help")}
+              {summary}
+            </>
+          ) : (journal.data?.retention_days ?? 0) > 0 ? (
+            t("recycleBin.journalHelp", { days: journal.data?.retention_days })
+          ) : (
+            t("recycleBin.journalDisabled")
+          )}
+        </p>
 
-      {/* Centred like the Activity page's filter bar; every control is 30px tall so the icon
-          button and the labelled button share one baseline. */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: narrow ? "flex-start" : "center",
-          alignItems: "center",
-          gap: 8,
-          flexWrap: "wrap",
-        }}
-      >
+        {/* Centred like the Activity page's filter bar; every control is 30px tall so the icon
+            button and the labelled button share one baseline. */}
         <div
           style={{
-            position: "relative",
-            // Desktop: the Activity-filter width. Phone: take the first row's free space so the
-            // refresh button and the empty-bin action line up at the edges.
-            flex: narrow ? "1 1 200px" : "0 0 auto",
-            width: narrow ? "auto" : 320,
-            maxWidth: "100%",
-            height: 30,
+            display: "flex",
+            justifyContent: narrow ? "flex-start" : "center",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
           }}
         >
-          <i
-            className="fa fa-search"
-            aria-hidden="true"
+          <div
             style={{
-              position: "absolute",
-              left: 9,
-              top: "50%",
-              transform: "translateY(-50%)",
-              opacity: 0.55,
-              pointerEvents: "none",
-              fontSize: "0.85em",
-            }}
-          ></i>
-          <Input
-            value={query}
-            onValueChange={setQuery}
-            placeholder={t("recycleBin.filterPlaceholder")}
-            aria-label={t("recycleBin.filterPlaceholder")}
-            style={{
-              width: "100%",
+              position: "relative",
+              // Desktop: the Activity-filter width. Phone: take the first row's free space so the
+              // refresh button and the empty-bin action line up at the edges.
+              flex: narrow ? "1 1 200px" : "0 0 auto",
+              width: narrow ? "auto" : 320,
+              maxWidth: "100%",
               height: 30,
-              margin: 0,
-              padding: "2px 6px 2px 26px",
-              boxSizing: "border-box",
-            }}
-          />
-        </div>
-        <IconButton
-          icon="fa fa-sync"
-          size={30}
-          title={t("recycleBin.refresh")}
-          aria-label={t("recycleBin.refresh")}
-          onClick={() => void bin.refetch()}
-          disabled={bin.isFetching}
-          style={{ width: 30, height: 30, minWidth: 30, margin: 0, boxSizing: "border-box" }}
-        />
-        <div style={{ marginLeft: narrow ? "auto" : 0 }}>
-          <Button
-            onClick={() => setPending({ kind: "empty" })}
-            disabled={entries.length === 0}
-          style={{
-            height: 30,
-            minWidth: 0,
-            width: "auto",
-            margin: 0,
-            padding: "0 10px 1px",
-            boxSizing: "border-box",
-            display: "inline-flex",
-            alignItems: "center",
             }}
           >
-            {t("recycleBin.emptyBin")}
-          </Button>
-        </div>
-      </div>
-
-      {bin.isLoading && narrow && (
-        <div role="status" aria-label={t("common.loading")} style={{ marginTop: 16 }}>
-          {Array.from({ length: 4 }, (_, row) => (
-            <div
-              key={row}
+            <i
+              className="fa fa-search"
               aria-hidden="true"
               style={{
-                display: "flex",
-                gap: 10,
-                padding: "10px 0",
-                borderBottom: "1px solid rgba(128,128,128,0.15)",
-                alignItems: "flex-start",
+                position: "absolute",
+                left: 9,
+                top: "50%",
+                transform: "translateY(-50%)",
+                opacity: 0.55,
+                pointerEvents: "none",
+                fontSize: "0.85em",
               }}
-            >
-              <span className="skeleton-bar" style={{ width: 48, height: 66 }} />
-              <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-                <span
-                  className="skeleton-bar"
-                  style={{ width: `${60 + ((row * 7) % 25)}%`, animationDelay: `${row * 0.15}s` }}
-                />
-                <span
-                  className="skeleton-bar"
-                  style={{ width: "80%", height: 8, animationDelay: `${row * 0.15}s` }}
-                />
-              </div>
-              <span className="skeleton-bar" style={{ width: 30, height: 30 }} />
-            </div>
-          ))}
-        </div>
-      )}
-
-      {bin.isLoading && !narrow && (
-        <div style={{ overflowX: "auto", marginTop: 16 }}>
-          <div
-            role="status"
-            aria-label={t("common.loading")}
-            style={{
-              display: "grid",
-              gridTemplateColumns: RECYCLE_GRID,
-              columnGap: 12,
-              fontSize: FONT_SIZE_SM,
-              minWidth: 720,
-              textAlign: "left",
-            }}
-          >
-            {/* Same header as the real table, so nothing shifts when the rows arrive. */}
-            <div />
-            <div style={{ opacity: 0.45, padding: "4px 0" }}>{t("recycleBin.columnArchive")}</div>
-            <div style={{ opacity: 0.45, padding: "4px 0" }}>{t("recycleBin.columnSize")}</div>
-            <div style={{ opacity: 0.45, padding: "4px 0" }}>{t("recycleBin.columnDeleted")}</div>
-            <div style={{ opacity: 0.45, padding: "4px 0" }}>{t("recycleBin.columnRemaining")}</div>
-            <div style={{ opacity: 0.45, padding: "4px 0", textAlign: "right" }}>
-              {t("recycleBin.columnActions")}
-            </div>
-            {Array.from({ length: 4 }, (_, row) => (
-              <div key={row} style={{ display: "contents" }} aria-hidden="true">
-                <div style={{ ...SKELETON_CELL }}>
-                  <span className="skeleton-bar" style={{ width: 44, height: 60 }} />
-                </div>
-                <div style={{ ...SKELETON_CELL, flexDirection: "column", alignItems: "stretch", gap: 6 }}>
-                  <span
-                    className="skeleton-bar"
-                    style={{ width: `${55 + ((row * 11) % 30)}%`, animationDelay: `${row * 0.15}s` }}
-                  />
-                  <span className="skeleton-bar" style={{ width: "40%", height: 8, animationDelay: `${row * 0.15}s` }} />
-                </div>
-                <div style={SKELETON_CELL}>
-                  <span className="skeleton-bar" style={{ width: "60%" }} />
-                </div>
-                <div style={SKELETON_CELL}>
-                  <span className="skeleton-bar" style={{ width: "80%" }} />
-                </div>
-                <div style={SKELETON_CELL}>
-                  <span className="skeleton-bar" style={{ width: "60%" }} />
-                </div>
-                <div style={{ ...SKELETON_CELL, justifyContent: "flex-end" }}>
-                  <span className="skeleton-bar" style={{ width: 26, height: 26 }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {bin.isError && (
-        <div style={{ textAlign: "center", margin: "24px 0" }}>
-          <i className="fa fa-3x fa-exclamation-triangle"></i>
-          <p>{t("recycleBin.loadFailed")}</p>
-          <Button onClick={() => void bin.refetch()}>{t("recycleBin.retry")}</Button>
-        </div>
-      )}
-
-      {!bin.isLoading && !bin.isError && filtered.length === 0 && (
-        <div style={{ textAlign: "center", margin: "24px 0" }}>
-          <i className="fa fa-3x fa-recycle"></i>
-          <p>{entries.length === 0 ? t("recycleBin.empty") : t("recycleBin.noMatches")}</p>
-        </div>
-      )}
-
-      {!bin.isLoading && !bin.isError && filtered.length > 0 && narrow && (
-        <div style={{ marginTop: 16 }}>
-          {filtered.map((entry) => (
-            <RecycleRow
-              key={entry.id}
-              entry={entry}
-              narrow
-              expanded={expanded.has(entry.id)}
-              onToggleExpand={() => toggleExpanded(entry.id)}
-              onRestore={(target) => void handleRestore(target)}
-              onPurge={(target) => setPending({ kind: "purge", entry: target })}
-              restoring={restore.isPending && restore.variables === entry.id}
+            ></i>
+            <Input
+              value={query}
+              onValueChange={setQuery}
+              placeholder={t("recycleBin.filterPlaceholder")}
+              aria-label={t("recycleBin.filterPlaceholder")}
+              style={{
+                width: "100%",
+                height: 30,
+                margin: 0,
+                padding: "2px 6px 2px 26px",
+                boxSizing: "border-box",
+              }}
             />
-          ))}
-        </div>
-      )}
-
-      {!bin.isLoading && !bin.isError && filtered.length > 0 && !narrow && (
-        <div style={{ overflowX: "auto", marginTop: 16 }}>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: RECYCLE_GRID,
-              columnGap: 12,
-              fontSize: FONT_SIZE_SM,
-              minWidth: 720,
-              // `.ido` centres its text; the table's cells are laid out from the left, so without
-              // this every header sits in the middle of its column while the values start at the edge.
-              textAlign: "left",
+          </div>
+          <IconButton
+            icon="fa fa-sync"
+            size={30}
+            title={t("recycleBin.refresh")}
+            aria-label={t("recycleBin.refresh")}
+            onClick={() => {
+              void bin.refetch()
+              void queryClient.invalidateQueries({ queryKey: ["deletions"] })
             }}
-          >
-            <div></div>
-            <div style={{ opacity: 0.65, padding: "4px 0" }}>{t("recycleBin.columnArchive")}</div>
-            <div style={{ opacity: 0.65, padding: "4px 0" }}>{t("recycleBin.columnSize")}</div>
-            <div style={{ opacity: 0.65, padding: "4px 0" }}>{t("recycleBin.columnDeleted")}</div>
-            <div style={{ opacity: 0.65, padding: "4px 0" }}>{t("recycleBin.columnRemaining")}</div>
-            <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "right" }}>
-              {t("recycleBin.columnActions")}
-            </div>
-            {filtered.map((entry) => (
-              <RecycleRow
-                key={entry.id}
-                entry={entry}
-                expanded={expanded.has(entry.id)}
-                onToggleExpand={() => toggleExpanded(entry.id)}
-                onRestore={(target) => void handleRestore(target)}
-                onPurge={(target) => setPending({ kind: "purge", entry: target })}
-                restoring={restore.isPending && restore.variables === entry.id}
-              />
-            ))}
+            disabled={bin.isFetching}
+            style={{ width: 30, height: 30, minWidth: 30, margin: 0, boxSizing: "border-box" }}
+          />
+          <div style={{ marginLeft: narrow ? "auto" : 0 }}>
+            {activeTab === "bin" ? (
+              <Button
+                onClick={() => setPending({ kind: "empty" })}
+                disabled={entries.length === 0}
+                style={TOOLBAR_ACTION}
+              >
+                {t("recycleBin.emptyBin")}
+              </Button>
+            ) : (
+              <JournalRestoreAllButton disabled={journalEntries.length === 0} style={TOOLBAR_ACTION} />
+            )}
           </div>
         </div>
-      )}
 
-      {bin.data && bin.data.leftovers.count > 0 && (
-        <p style={{ fontSize: FONT_SIZE_SM }}>{t("recycleBin.leftovers", { count: bin.data.leftovers.count })}</p>
-      )}
+        {activeTab === "journal" && (
+          <DeletionJournal journal={journal} entries={journalEntries} query={query} narrow={narrow} />
+        )}
+
+        {activeTab === "bin" && (
+          <>
+            {bin.isLoading && narrow && (
+              <div role="status" aria-label={t("common.loading")} style={{ marginTop: 16 }}>
+                {Array.from({ length: 4 }, (_, row) => (
+                  <div
+                    key={row}
+                    aria-hidden="true"
+                    style={{
+                      display: "flex",
+                      gap: 10,
+                      padding: "10px 0",
+                      borderBottom: "1px solid rgba(128,128,128,0.15)",
+                      alignItems: "flex-start",
+                    }}
+                  >
+                    <span className="skeleton-bar" style={{ width: 48, height: 66 }} />
+                    <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+                      <span
+                        className="skeleton-bar"
+                        style={{ width: `${60 + ((row * 7) % 25)}%`, animationDelay: `${row * 0.15}s` }}
+                      />
+                      <span
+                        className="skeleton-bar"
+                        style={{ width: "80%", height: 8, animationDelay: `${row * 0.15}s` }}
+                      />
+                    </div>
+                    <span className="skeleton-bar" style={{ width: 30, height: 30 }} />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {bin.isLoading && !narrow && (
+              <div style={{ overflowX: "auto", marginTop: 16 }}>
+                <div
+                  role="status"
+                  aria-label={t("common.loading")}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: RECYCLE_GRID,
+                    columnGap: 12,
+                    fontSize: FONT_SIZE_SM,
+                    minWidth: 720,
+                    textAlign: "left",
+                  }}
+                >
+                  {/* Same header as the real table, so nothing shifts when the rows arrive. */}
+                  <div />
+                  <div style={{ opacity: 0.45, padding: "4px 0" }}>{t("recycleBin.columnArchive")}</div>
+                  <div style={{ opacity: 0.45, padding: "4px 0" }}>{t("recycleBin.columnSize")}</div>
+                  <div style={{ opacity: 0.45, padding: "4px 0" }}>{t("recycleBin.columnDeleted")}</div>
+                  <div style={{ opacity: 0.45, padding: "4px 0" }}>{t("recycleBin.columnRemaining")}</div>
+                  <div style={{ opacity: 0.45, padding: "4px 0", textAlign: "right" }}>
+                    {t("recycleBin.columnActions")}
+                  </div>
+                  {Array.from({ length: 4 }, (_, row) => (
+                    <div key={row} style={{ display: "contents" }} aria-hidden="true">
+                      <div style={{ ...SKELETON_CELL }}>
+                        <span className="skeleton-bar" style={{ width: 44, height: 60 }} />
+                      </div>
+                      <div style={{ ...SKELETON_CELL, flexDirection: "column", alignItems: "stretch", gap: 6 }}>
+                        <span
+                          className="skeleton-bar"
+                          style={{ width: `${55 + ((row * 11) % 30)}%`, animationDelay: `${row * 0.15}s` }}
+                        />
+                        <span className="skeleton-bar" style={{ width: "40%", height: 8, animationDelay: `${row * 0.15}s` }} />
+                      </div>
+                      <div style={SKELETON_CELL}>
+                        <span className="skeleton-bar" style={{ width: "60%" }} />
+                      </div>
+                      <div style={SKELETON_CELL}>
+                        <span className="skeleton-bar" style={{ width: "80%" }} />
+                      </div>
+                      <div style={SKELETON_CELL}>
+                        <span className="skeleton-bar" style={{ width: "60%" }} />
+                      </div>
+                      <div style={{ ...SKELETON_CELL, justifyContent: "flex-end" }}>
+                        <span className="skeleton-bar" style={{ width: 26, height: 26 }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {bin.isError && (
+              <div style={{ textAlign: "center", margin: "24px 0" }}>
+                <i className="fa fa-3x fa-exclamation-triangle"></i>
+                <p>{t("recycleBin.loadFailed")}</p>
+                <Button onClick={() => void bin.refetch()}>{t("recycleBin.retry")}</Button>
+              </div>
+            )}
+
+            {!bin.isLoading && !bin.isError && filtered.length === 0 && (
+              <div style={{ textAlign: "center", margin: "24px 0" }}>
+                <i className="fa fa-3x fa-recycle"></i>
+                <p>{entries.length === 0 ? t("recycleBin.empty") : t("recycleBin.noMatches")}</p>
+              </div>
+            )}
+
+            {!bin.isLoading && !bin.isError && filtered.length > 0 && narrow && (
+              <div style={{ marginTop: 16 }}>
+                {filtered.map((entry) => (
+                  <RecycleRow
+                    key={entry.id}
+                    entry={entry}
+                    narrow
+                    expanded={expanded.has(entry.id)}
+                    onToggleExpand={() => toggleExpanded(entry.id)}
+                    onRestore={(target) => void handleRestore(target)}
+                    onPurge={(target) => setPending({ kind: "purge", entry: target })}
+                    restoring={restore.isPending && restore.variables === entry.id}
+                  />
+                ))}
+              </div>
+            )}
+
+            {!bin.isLoading && !bin.isError && filtered.length > 0 && !narrow && (
+              <div style={{ overflowX: "auto", marginTop: 16 }}>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: RECYCLE_GRID,
+                    columnGap: 12,
+                    fontSize: FONT_SIZE_SM,
+                    minWidth: 720,
+                    // `.ido` centres its text; the table's cells are laid out from the left, so without
+                    // this every header sits in the middle of its column while the values start at the edge.
+                    textAlign: "left",
+                  }}
+                >
+                  <div></div>
+                  <div style={{ opacity: 0.65, padding: "4px 0" }}>{t("recycleBin.columnArchive")}</div>
+                  <div style={{ opacity: 0.65, padding: "4px 0" }}>{t("recycleBin.columnSize")}</div>
+                  <div style={{ opacity: 0.65, padding: "4px 0" }}>{t("recycleBin.columnDeleted")}</div>
+                  <div style={{ opacity: 0.65, padding: "4px 0" }}>{t("recycleBin.columnRemaining")}</div>
+                  <div style={{ opacity: 0.65, padding: "4px 0", textAlign: "right" }}>
+                    {t("recycleBin.columnActions")}
+                  </div>
+                  {filtered.map((entry) => (
+                    <RecycleRow
+                      key={entry.id}
+                      entry={entry}
+                      expanded={expanded.has(entry.id)}
+                      onToggleExpand={() => toggleExpanded(entry.id)}
+                      onRestore={(target) => void handleRestore(target)}
+                      onPurge={(target) => setPending({ kind: "purge", entry: target })}
+                      restoring={restore.isPending && restore.variables === entry.id}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {bin.data && bin.data.leftovers.count > 0 && (
+              <p style={{ fontSize: FONT_SIZE_SM }}>{t("recycleBin.leftovers", { count: bin.data.leftovers.count })}</p>
+            )}
+          </>
+        )}
+      </div>
 
       <div style={{ marginTop: 26, textAlign: "center" }}>
         <Button onClick={() => navigate(routes.library())}>{t("common.returnToLibrary")}</Button>

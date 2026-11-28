@@ -1,5 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
+import { FaCircleExclamation, FaDownload, FaRss } from "react-icons/fa6"
+import { useSearchParams } from "react-router-dom"
 
 import { fetchJson, sendJson } from "@/api/client"
 import {
@@ -13,6 +15,7 @@ import {
 import type { ArchiveMetadata, DownloadQueueItem, JobRecord, PluginInfo } from "@/api/types"
 import { MenuItem, MenuSeparator, Tooltip } from "@/components/common-ui/Display"
 import { SplitButton } from "@/components/common-ui/Form"
+import { Tabs } from "@/components/common-ui/Tabs"
 import { CollapsibleSection } from "@/components/Display"
 import { useIsNarrowViewport } from "@/hooks"
 import { FONT_SIZE_XS } from "@/theme"
@@ -31,7 +34,19 @@ import {
 } from "./shared"
 
 /** Which half of a group's list a tab shows. */
-type QueueTab = "manual" | "subscription"
+export type QueueTab = "manual" | "subscription"
+
+/** The tab a URL asks one group to show.
+ *
+ *  Read from the address rather than `localStorage`: the reader's back button (a swipe on a phone)
+ *  returns to the URL the row was opened from, so the tab the user left is still there — and that
+ *  survives a refresh or a shared link without leaving a storage key behind. An untouched group
+ *  contributes nothing, so the page's own default never turns into a query parameter. */
+export function tabByGroupFromUrl(params: URLSearchParams): Record<string, QueueTab> {
+  const group = params.get("queue_group")
+  const tab = params.get("queue_tab")
+  return group && (tab === "manual" || tab === "subscription") ? { [group]: tab } : {}
+}
 
 /** Rows a group shows before its list starts scrolling instead of growing the page. */
 const QUEUE_SCROLL_AFTER = 25
@@ -93,20 +108,27 @@ export function DownloadQueuePanel({
   /** Which tab each group is showing. Absent = the default, `manual` — a person's own paste is what
    * they came to this page to watch, and a subscription's bulk arriving must not switch the view
    * under them. Kept per group so a choice made for one plugin doesn't follow them to another. */
-  const [tabByGroup, setTabByGroup] = useState<Record<string, QueueTab>>({})
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [tabByGroup, setTabByGroup] = useState<Record<string, QueueTab>>(() =>
+    tabByGroupFromUrl(searchParams),
+  )
   /** On a phone the two tab labels ("Manual" / "From subscriptions") eat the heading's whole width,
    *  squeezing the group name and the counts. The icon carries the same distinction there, with the
    *  count kept beside it and the label moved to a tooltip / `aria-label`. */
   const narrow = useIsNarrowViewport()
 
-  /** The tabs a group shows, and the items behind each. A group with only one kind of item has
-   * nothing to switch between, so it gets no tabs at all — the per-row "from a subscription" badge
-   * already says where those came from. */
+  /** The tabs a group shows, the items behind each, and the tab in effect. Any subscription items
+   * keep the tabs up — once the manual rows were cleared, the remaining subscription rows otherwise
+   * looked like manual ones, the per-row badge being too small to notice. A group of manual rows
+   * only has nothing to tell apart and gets no tabs. The tab in effect is the chosen one unless that
+   * side is empty, so clearing a side never leaves the group showing nothing. */
   const tabsFor = useCallback(
-    (groupItems: DownloadQueueItem[]) => {
+    (groupItems: DownloadQueueItem[], chosen: QueueTab | undefined) => {
       const { manual, fromSubscriptions } = partitionByOrigin(groupItems)
-      const tabs = manual.length > 0 && fromSubscriptions.length > 0
-      return { manual, fromSubscriptions, tabs }
+      const tabs = fromSubscriptions.length > 0
+      const preferred = chosen ?? "manual"
+      const tab: QueueTab = preferred === "manual" && manual.length === 0 ? "subscription" : preferred
+      return { manual, fromSubscriptions, tabs, tab }
     },
     [],
   )
@@ -124,9 +146,9 @@ export function DownloadQueuePanel({
   const visibleItems = useMemo(() => {
     const out: DownloadQueueItem[] = []
     for (const [namespace, groupItems] of grouped) {
-      const { manual, fromSubscriptions, tabs } = tabsFor(groupItems)
+      const { manual, fromSubscriptions, tabs, tab } = tabsFor(groupItems, tabByGroup[namespace])
       if (!tabs) out.push(...groupItems)
-      else out.push(...((tabByGroup[namespace] ?? "manual") === "manual" ? manual : fromSubscriptions))
+      else out.push(...(tab === "manual" ? manual : fromSubscriptions))
     }
     return out
   }, [grouped, tabByGroup, tabsFor])
@@ -249,9 +271,14 @@ export function DownloadQueuePanel({
 
   /** Start the whole checkbox selection (the split button's left half). */
   async function startSelection() {
-    // Display order, not click order: the server starts them in the order given.
-    const selectedIds = visibleItems.filter((i) => effectiveSelected.has(i.id)).map((i) => i.id)
-    await startSelected.mutateAsync(selectedIds)
+    // One request per group, all fired together. The server starts a request's ids in the order
+    // it receives them, so a single request meant every later group waited behind the earlier
+    // ones' plugin round-trips — with a full queue that reads as "group A starts, then group B".
+    // Per-group requests keep each group's own order (the server's turn queue) while letting all
+    // groups begin at once.
+    const groups = startableByGroup.map((g) => g.ids)
+    if (groups.length === 0) return
+    await Promise.all(groups.map((ids) => startSelected.mutateAsync(ids)))
     setSelected(new Set())
   }
 
@@ -356,12 +383,11 @@ export function DownloadQueuePanel({
             const isLocalUpload = namespace === LOCAL_UPLOAD_NAMESPACE
             const isShareImport = namespace === SHARE_IMPORT_NAMESPACE
             const groupTitle = groupTitleFor(namespace)
-            const { manual, fromSubscriptions, tabs } = tabsFor(groupItems)
+            const { manual, fromSubscriptions, tabs, tab } = tabsFor(groupItems, tabByGroup[namespace])
             // `downloading` also covers the cataloguing/writing phase that follows the transfer,
             // so a raw count of those rows overstates how many are actually pulling bytes — this
             // is the number the concurrency limit applies to.
             const transferringCount = groupItems.filter((it) => it.transferring === true).length
-            const tab: QueueTab = tabByGroup[namespace] ?? "manual"
             const shown = tabs ? (tab === "manual" ? manual : fromSubscriptions) : groupItems
             // Splitting a list must not bury the rows that need an answer, so whichever tab holds
             // them says how many rather than leaving them one click away and unannounced.
@@ -386,44 +412,66 @@ export function DownloadQueuePanel({
                     )}
                     {tabs && (
                       // The heading itself toggles the section; a tab click must not also do that.
-                      <span className="queue-group-tabs" onClick={(e) => e.stopPropagation()}>
-                        {(["manual", "subscription"] as const).map((which) => (
-                          <button
-                            key={which}
-                            type="button"
-                            className={`stdbtn queue-tab${tab === which ? " queue-tab-active" : ""}`}
-                            aria-pressed={tab === which}
-                            // The accessible name never depends on the icon being understood, and it
-                            // stays present in both layouts.
-                            aria-label={which === "manual" ? t("upload.tabManual") : t("upload.tabSubscription")}
-                            onClick={() => setTabByGroup((prev) => ({ ...prev, [namespace]: which }))}
-                          >
-                            {narrow ? (
-                              <Tooltip
-                                label={which === "manual" ? t("upload.tabManual") : t("upload.tabSubscription")}
-                              >
-                                <i
-                                  className={`fa ${which === "manual" ? "fa-download" : "fa-rss"}`}
-                                  aria-hidden="true"
-                                ></i>
-                              </Tooltip>
-                            ) : which === "manual" ? (
-                              t("upload.tabManual")
-                            ) : (
-                              t("upload.tabSubscription")
-                            )}{" "}
-                            {which === "manual" ? manual.length : fromSubscriptions.length}
-                            {undecided[which] > 0 && (
-                              <Tooltip label={t("upload.tabUndecided", { count: undecided[which] }) ?? ""}>
-                                <span style={{ color: "#c79121", marginLeft: 4 }}>
-                                  <i className="fa fa-exclamation-circle" aria-hidden="true"></i>{" "}
-                                  {undecided[which]}
+                      <Tabs
+                        className="queue-group-tabs"
+                        activeKey={tab}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(which) => {
+                          setTabByGroup((prev) => ({ ...prev, [namespace]: which as QueueTab }))
+                          // Mirror it into the address with `replace`: switching tabs must not
+                          // push history entries, but the entry the reader returns to carries it.
+                          setSearchParams(
+                            (prev) => {
+                              const next = new URLSearchParams(prev)
+                              next.set("queue_group", namespace)
+                              next.set("queue_tab", which)
+                              return next
+                            },
+                            { replace: true },
+                          )
+                        }}
+                        items={(["manual", "subscription"] as const).map((which) => {
+                          const label = which === "manual" ? t("upload.tabManual") : t("upload.tabSubscription")
+                          return {
+                            key: which,
+                            disabled: which === "manual" && manual.length === 0,
+                            ariaLabel: label,
+                            label: (
+                              <>
+                                {narrow ? (
+                                  <Tooltip label={label}>
+                                    {which === "manual" ? (
+                                      <FaDownload aria-hidden="true" />
+                                    ) : (
+                                      <FaRss aria-hidden="true" />
+                                    )}
+                                  </Tooltip>
+                                ) : (
+                                  label
+                                )}
+                                {/* One row, not three: the narrow layout stacks a tab's icon
+                                    over its content, so a badge on its own line pushed the tab's
+                                    bottom edge out and crowded the count. */}
+                                <span className="queue-tab-count-row">
+                                  <span className="queue-tab-count">
+                                    {which === "manual" ? manual.length : fromSubscriptions.length}
+                                  </span>
+                                  {undecided[which] > 0 && (
+                                    <Tooltip
+                                      label={t("upload.tabUndecided", { count: undecided[which] }) ?? ""}
+                                    >
+                                      <span className="queue-tab-undecided">
+                                        <FaCircleExclamation aria-hidden="true" />
+                                        {undecided[which]}
+                                      </span>
+                                    </Tooltip>
+                                  )}
                                 </span>
-                              </Tooltip>
-                            )}
-                          </button>
-                        ))}
-                      </span>
+                              </>
+                            ),
+                          }
+                        })}
+                      />
                     )}
                   </span>
                 }

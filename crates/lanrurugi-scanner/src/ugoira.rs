@@ -125,21 +125,20 @@ fn read_manifest(archive: &mut ZipArchive<File>, index: usize) -> Result<Manifes
 /// names entries the ZIP does not contain is rejected rather than silently shortened — that would
 /// play a different animation than the one the file describes.
 fn plan_frames(archive: &mut ZipArchive<File>) -> Result<Vec<PlannedFrame>, UgoiraError> {
-    if let Some(index) = find_manifest(archive) {
-        if let Ok(manifest) = read_manifest(archive, index) {
-            if !manifest.frames.is_empty() {
-                let mut planned = Vec::with_capacity(manifest.frames.len());
-                for frame in &manifest.frames {
-                    let name = frame.file.trim_start_matches("./").to_string();
-                    let delay = frame.delay.or(frame.delay_ms).unwrap_or(0);
-                    planned.push(PlannedFrame {
-                        name,
-                        delay_ms: clamp_delay(delay),
-                    });
-                }
-                return Ok(planned);
-            }
+    if let Some(index) = find_manifest(archive)
+        && let Ok(manifest) = read_manifest(archive, index)
+        && !manifest.frames.is_empty()
+    {
+        let mut planned = Vec::with_capacity(manifest.frames.len());
+        for frame in &manifest.frames {
+            let name = frame.file.trim_start_matches("./").to_string();
+            let delay = frame.delay.or(frame.delay_ms).unwrap_or(0);
+            planned.push(PlannedFrame {
+                name,
+                delay_ms: clamp_delay(delay),
+            });
         }
+        return Ok(planned);
     }
 
     let mut names: Vec<String> = Vec::new();

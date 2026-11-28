@@ -20,4 +20,12 @@ jobs:
           # holding `contents: write` and GH_TOKEN. As a variable it is data. (Found by actionlint.)
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/$HEAD_REF"
+          # A merge can be the thing that deletes the branch (`gh pr merge --delete-branch`, or the
+          # repo's auto-delete setting), in which case this workflow races it and the ref is already
+          # gone — a 422 here reddened a whole run for nothing. Probe first, so "already deleted" is
+          # a notice rather than a failure.
+          if gh api "repos/${{ github.repository }}/git/refs/heads/$HEAD_REF" >/dev/null 2>&1; then
+            gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/$HEAD_REF"
+          else
+            echo "::notice::$HEAD_REF is already gone — nothing to delete."
+          fi

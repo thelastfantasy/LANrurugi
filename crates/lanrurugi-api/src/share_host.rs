@@ -45,6 +45,7 @@ impl ShareHost for AppState {
                 summary: archive.summary.clone(),
                 pagecount: archive.pagecount,
                 arcsize: archive.arcsize,
+                primary_source: archive.primary_source.clone(),
                 toc: archive
                     .toc
                     .iter()
@@ -230,11 +231,20 @@ impl ImportHost for AppState {
                             })
                             .collect();
                     }
+                    // The importer's own source wins: it knows where *this* copy came from.
+                    if archive.primary_source.is_none()
+                        && let Some(source) = shared.primary_source.clone()
+                    {
+                        archive.primary_source = Some(source);
+                    }
                 },
                 |old, new| crate::archives::reindex_title_and_tags(self, old, new),
             );
-            let _ = updated.await;
+            if let Ok(Some(archive)) = updated.await {
+                crate::download_sources::sync_sidecar_primary(self, &archive).await;
+            }
             crate::plugins::apply_metadata_tags(self, id.as_str(), &shared.tags).await;
+            keep_unknown_extras(self, &id, &shared.unknown_extras).await;
         })
     }
 
@@ -385,5 +395,25 @@ impl ImportHost for AppState {
             "id": queue_item_id,
             "import": crate::share_imports::detail(record, false),
         }));
+    }
+}
+
+/// Writes metadata names this build does not know into the sidecar, so an upgrade can use them
+/// instead of the import having dropped them. The record has no slot for arbitrary fields, and
+/// inventing one would put unknown shapes in Redis; the sidecar is JSON and already ours.
+async fn keep_unknown_extras(state: &AppState, id: &ArchiveId, extras: &[(String, String)]) {
+    if extras.is_empty() {
+        return;
+    }
+    let pairs: Vec<(String, String)> = extras.to_vec();
+    if let Err(e) =
+        lanrurugi_storage::sidecar::amend(&state.library.archive_dir, id.as_str(), |sidecar| {
+            for (name, value) in &pairs {
+                sidecar.extras.insert(name.clone(), value.clone());
+            }
+        })
+        .await
+    {
+        tracing::warn!(%id, error = %e, "could not keep the shared metadata this build does not know");
     }
 }

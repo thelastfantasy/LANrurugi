@@ -61,13 +61,25 @@ export function SearchSyntaxHelp() {
           {t("library.searchSyntaxTitleField")} <SyntaxExample>title:tari</SyntaxExample>
         </li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxWorkField")} <SyntaxExample>work:maiden</SyntaxExample>
+        </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxFieldScope")} <SyntaxExample>work:fate zero</SyntaxExample>,{" "}
+          <SyntaxExample>work:&quot;fate zero&quot;</SyntaxExample>
+        </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
           {t("library.searchSyntaxAttributes")} <SyntaxExample>is:new</SyntaxExample>,{" "}
           <SyntaxExample>is:reading</SyntaxExample>, <SyntaxExample>is:completed</SyntaxExample>,{" "}
           <SyntaxExample>has:patch</SyntaxExample>, <SyntaxExample>in:tank</SyntaxExample>
         </li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
           {t("library.searchSyntaxBookmarkName")}{" "}
-          <SyntaxExample>bookmark:&quot;chapter one&quot;</SyntaxExample>
+          <SyntaxExample>bookmark:&quot;chapter one&quot;</SyntaxExample>,{" "}
+          <SyntaxExample>bookmark:&quot;(intro | prologue) -draft&quot;</SyntaxExample>
+        </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxStampText")} <SyntaxExample>stamp:&quot;plot twist | reveal&quot;</SyntaxExample>,{" "}
+          <SyntaxExample>has:stamp</SyntaxExample>
         </li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
           {t("library.searchSyntaxPhrase")}{" "}
@@ -90,7 +102,18 @@ export function SearchSyntaxHelp() {
           {t("library.searchSyntaxDateAdded")} <SyntaxExample>date_added:2026-08-20</SyntaxExample>
         </li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
-          {t("library.searchSyntaxNumericCompare")} <SyntaxExample>pages:&gt;100</SyntaxExample>, <SyntaxExample>read:&lt;5</SyntaxExample>
+          {t("library.searchSyntaxDateNamespaces")} <SyntaxExample>timestamp:2026-08-20</SyntaxExample>,{" "}
+          <SyntaxExample>time:&gt;=2026-08-01</SyntaxExample>
+        </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {t("library.searchSyntaxDateTime")} <SyntaxExample>timestamp:2026-08-20T14:30</SyntaxExample>,{" "}
+          <SyntaxExample>time:&gt;=2026-08-20T14:30:05</SyntaxExample>
+        </li>
+        <li style={{ listStyleType: "disc", marginBottom: 6 }}>
+          {/* One example per operator: `>` `>=` `<` `<=` and `=` all work for `pages:` and `read:`. */}
+          {t("library.searchSyntaxNumericCompare")} <SyntaxExample>pages:&gt;=100</SyntaxExample>,{" "}
+          <SyntaxExample>pages:&lt;=300</SyntaxExample>, <SyntaxExample>pages:=24</SyntaxExample>,{" "}
+          <SyntaxExample>read:&lt;5</SyntaxExample>
         </li>
         <li style={{ listStyleType: "disc", marginBottom: 6 }}>
           {t("library.searchSyntaxRelevance")} <SyntaxExample>sortby=relevance</SyntaxExample>

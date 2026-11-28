@@ -156,7 +156,10 @@ export function ShareImportRow({ item, job }: { item: DownloadQueueItem; job: Jo
             </div>
           ) : d ? (
             <div style={{ fontSize: FONT_SIZE_XS }}>
-              {formatBytes(d.bytes_done)} / {formatBytes(d.bytes_total)}
+              {/* A finished import has nothing left to show a ratio for: the total is the size. */}
+              {item.state === "done"
+                ? formatBytes(d.bytes_total)
+                : `${formatBytes(d.bytes_done)} / ${formatBytes(d.bytes_total)}`}
               {d.items_failed > 0 && ` · ${t("share.importRow.failed", { count: d.items_failed })}`}
             </div>
           ) : null}
@@ -227,9 +230,19 @@ export function ShareImportRow({ item, job }: { item: DownloadQueueItem; job: Jo
               </span>
               <ArchiveProgress archive={a} />
               <span className="share-import-archive-state">
-                {a.state === "transferring"
-                  ? `${formatBytes(a.bytes_done)} / ${formatBytes(a.size)}`
-                  : t(`share.importRow.state.${a.state}`)}
+                {a.state === "transferring" ? (
+                  <span className="share-import-archive-size">
+                    {formatBytes(a.bytes_done)} / {formatBytes(a.size)}
+                  </span>
+                ) : (
+                  <>
+                    <span>{t(`share.importRow.state.${a.state}`)}</span>
+                    {/* A finished archive's size, right-aligned so every row's number lines up. */}
+                    {a.size > 0 && (
+                      <span className="share-import-archive-size">{formatBytes(a.size)}</span>
+                    )}
+                  </>
+                )}
               </span>
               {/* Always present, empty or not, so every row's bar and state line up (#288). */}
               <span className="share-import-archive-action">

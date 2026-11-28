@@ -126,10 +126,19 @@ pub async fn store(state: &AppState, archive_id: &str, record: &PatchRecord) -> 
 
 /// Drops the record — the patch is gone, so nothing about it is true any more.
 pub async fn forget(state: &AppState, archive_id: &str) {
-    let Ok(mut conn) = state.redis.archive.get().await else {
-        return;
+    let mut conn = match state.redis.archive.get().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            tracing::warn!(archive = %archive_id, error = %e, "could not reach Redis to forget a patch record");
+            return;
+        }
     };
-    let _: Result<(), _> = conn.hdel(KEY, archive_id).await;
+    let dropped: Result<(), _> = conn.hdel(KEY, archive_id).await;
+    if let Err(e) = dropped {
+        // A record left behind outlives the patch it describes and keeps being served to the
+        // damage report as if those pages still carried it.
+        tracing::warn!(archive = %archive_id, error = %e, "failed to forget a patch record");
+    }
 }
 
 /// Remembers that `source` contributed pages to `archive_id`'s patch, and re-records where those
@@ -245,10 +254,11 @@ pub async fn report_damage(
         // such a page is moved like the original was. While the patch stays unreadable the server
         // only hands out lists of `pages_after`, so a `pages_before` here can only come from a list
         // fetched before the damage.
-        if let Some(shift) = record.progress_shift.clone() {
-            if shift.pages_before > 0 && archive.progress_pages == Some(shift.pages_before) {
-                apply_progress_shift(state, archive, shift, &record.pages).await;
-            }
+        if let Some(shift) = record.progress_shift.clone()
+            && shift.pages_before > 0
+            && archive.progress_pages == Some(shift.pages_before)
+        {
+            apply_progress_shift(state, archive, shift, &record.pages).await;
         }
         return None;
     }
@@ -273,11 +283,11 @@ pub async fn report_damage(
                 record.progress_shift = None;
             }
         }
-        if let Some(shift) = record.progress_shift.clone() {
-            if apply_progress_shift(state, archive, shift, &record.pages).await {
-                record.progress_shifted = Some(true);
-                progress_done = store(state, archive_id, &record).await;
-            }
+        if let Some(shift) = record.progress_shift.clone()
+            && apply_progress_shift(state, archive, shift, &record.pages).await
+        {
+            record.progress_shifted = Some(true);
+            progress_done = store(state, archive_id, &record).await;
         }
     }
     if marks_pending {

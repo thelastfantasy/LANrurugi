@@ -41,7 +41,9 @@ use unicode_normalization::UnicodeNormalization;
 /// 分类动态规则全部复用同一实例。`fold_with` / `fold_pattern_with` 允许单次覆盖
 /// 语言开关，但调用方必须保证索引也是用同一套开关建立的。
 /// 归一化规则 revision。只要规则/依赖行为对 canonical key 有影响，就 +1。
-pub const RULE_REVISION: u32 = 1;
+///
+/// 2：日文折叠新增小写假名归一（`ァ`→`ア`、`ッ`→`ツ` 等），旧索引需重建后才生效。
+pub const RULE_REVISION: u32 = 2;
 
 pub struct Equivalence {
     config: FoldConfig,
@@ -125,20 +127,20 @@ impl Equivalence {
 
         let mut cur: Cow<'a, str> = Cow::Borrowed(input);
 
-        if config.jp {
-            if let Some(next) = jp::pre_normalize(&cur) {
-                cur = Cow::Owned(next);
-            }
+        if config.jp
+            && let Some(next) = jp::pre_normalize(&cur)
+        {
+            cur = Cow::Owned(next);
         }
-        if config.width {
-            if let Some(next) = nfkc(&cur) {
-                cur = Cow::Owned(next);
-            }
+        if config.width
+            && let Some(next) = nfkc(&cur)
+        {
+            cur = Cow::Owned(next);
         }
-        if config.jp {
-            if let Some(next) = jp::post_normalize(&cur) {
-                cur = Cow::Owned(next);
-            }
+        if config.jp
+            && let Some(next) = jp::post_normalize(&cur)
+        {
+            cur = Cow::Owned(next);
         }
         // 日文汉字新旧字体：Jp2t 把新字体/变体收敛到旧字体（如 発→發、竜→龍）。
         // 必须放在 `zh` 的 T2s 之前，这样同时开 zh 时能继续 發→发。
@@ -148,16 +150,16 @@ impl Equivalence {
                 cur = Cow::Owned(next);
             }
         }
-        if config.latin {
-            if let Some(next) = latin::fold(&cur) {
-                cur = Cow::Owned(next);
-            }
+        if config.latin
+            && let Some(next) = latin::fold(&cur)
+        {
+            cur = Cow::Owned(next);
         }
         #[cfg(feature = "zh")]
-        if config.zh {
-            if let Some(next) = self.opencc.t2s(&cur) {
-                cur = Cow::Owned(next);
-            }
+        if config.zh
+            && let Some(next) = self.opencc.t2s(&cur)
+        {
+            cur = Cow::Owned(next);
         }
         // feature 关闭时，对应开关只是被忽略；不要留下未使用参数警告。
         let _ = (config.zh, config.jp);

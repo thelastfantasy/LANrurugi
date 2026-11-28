@@ -55,11 +55,23 @@ pub fn no_proxy() -> Option<reqwest::NoProxy> {
 
 /// A reqwest client for rendezvous relays that follows the same proxy.
 pub fn http_client(timeout: std::time::Duration) -> reqwest::Client {
-    // Same egress interface as the endpoint: pkarr publication and relay signalling are part of
-    // the peer-to-peer path, and leaving them on the default route would tie the real address to
-    // the node code.
-    let mut builder =
-        lanrurugi_core::http_client::bind_outbound(reqwest::Client::builder().timeout(timeout));
+    // Same interface as the endpoint: pkarr publication and relay signalling are part of the
+    // peer-to-peer path, and leaving them on the default route would tie the real address to the
+    // node code. That is sharing's own pin (`share_bind_interface`), not the downloads' egress
+    // interface: the two are set separately. Names resolve through the pinned resolver too, since
+    // the system's `getaddrinfo` would ask whatever nameserver the default route reaches.
+    let mut builder = reqwest::Client::builder().timeout(timeout);
+    if let Some(device) = crate::net::pinned_device() {
+        #[cfg(target_os = "linux")]
+        {
+            builder = builder.interface(&device);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = device;
+        builder = builder.dns_resolver(std::sync::Arc::new(PinnedDns(
+            iroh::dns::DnsResolver::new(),
+        )));
+    }
     match choose() {
         Choice::Http(url) | Choice::Socks(url) => {
             if let Ok(proxy) = reqwest::Proxy::all(url.as_str()) {
@@ -348,5 +360,26 @@ mod tests {
         let mut back = [0u8; 5];
         client.read_exact(&mut back).await.unwrap();
         assert_eq!(&back, b"hello");
+    }
+}
+
+/// reqwest's resolver hook over iroh's DNS resolver, whose sockets follow the sharing pin.
+#[derive(Debug, Clone)]
+struct PinnedDns(iroh::dns::DnsResolver);
+
+impl reqwest::dns::Resolve for PinnedDns {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let dns = self.0.clone();
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            let addrs: Vec<SocketAddr> = dns
+                .lookup_ipv4_ipv6(host, std::time::Duration::from_secs(10))
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+                .map(|ip| SocketAddr::new(ip, 0))
+                .collect();
+            let addrs: reqwest::dns::Addrs = Box::new(addrs.into_iter());
+            Ok(addrs)
+        })
     }
 }

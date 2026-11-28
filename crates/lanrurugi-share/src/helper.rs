@@ -396,6 +396,7 @@ mod tests {
             claim_id: String::new(),
             title: String::new(),
             manifest: serde_json::Value::Null,
+            extras: Default::default(),
             category: None,
             queue_item_id: String::new(),
             archives: vec![archive("a", "aa"), archive("b", "bb")],

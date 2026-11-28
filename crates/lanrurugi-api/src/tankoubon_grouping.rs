@@ -74,6 +74,7 @@
 
 mod eval;
 mod labels;
+mod merge;
 pub mod review;
 mod run;
 
@@ -178,6 +179,25 @@ struct GroupSuggestion {
     /// Stored with the record for the reviewer; not sent to the client.
     #[serde(skip)]
     hints: review::ReviewHints,
+}
+
+impl GroupSuggestion {
+    /// A one-member candidate for [`merge`]'s adoption pass: a work the graph left out entirely, with
+    /// no evidence or hints of its own (it has no pair that scored).
+    pub(crate) fn orphan(id: String) -> Self {
+        let suggestion_id = lanrurugi_storage::ignored_group_suggestions::suggestion_id(
+            std::slice::from_ref(&id),
+            None,
+        );
+        Self {
+            archive_ids: vec![id],
+            existing_tankoubon_id: None,
+            suggestion_id,
+            evidence: Vec::new(),
+            review: None,
+            hints: review::ReviewHints::default(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -340,6 +360,42 @@ fn title_tokens(title: &str) -> HashSet<&str> {
         .collect()
 }
 
+/// A creator the title states but the tags never got: the first bracketed segment that names
+/// someone, e.g. `[anko×ANTAI×haron] 凸感ロマンス【合本版】`.
+///
+/// Real, live-confirmed gap: four members of one suggestion carried no `artist:`/`circle:`/`group:`
+/// tag at all, so the creator gate had nothing to compare and two unrelated works slipped in on
+/// title-token overlap alone. Used only inside the grouping scorer — no archive is rewritten.
+pub(crate) fn title_creator(title: &str) -> Option<String> {
+    let start = title.find(['[', '【'])?;
+    let open = title[start..].chars().next()?;
+    let close = if open == '[' { ']' } else { '】' };
+    let rest = &title[start + open.len_utf8()..];
+    let end = rest.find(close)?;
+    let segment = rest[..end].trim();
+    if !plausible_creator(segment) {
+        return None;
+    }
+    Some(segment.to_lowercase())
+}
+
+/// Whether a bracketed segment could name a creator rather than a release marker or a catalogue
+/// number: it has to be short, contain letters, and not be one of the marker tokens every listing
+/// carries (`中国翻訳`, `DL版`, …).
+fn plausible_creator(segment: &str) -> bool {
+    let len = segment.chars().count();
+    if !(2..=40).contains(&len) {
+        return false;
+    }
+    if segment.contains([':', '：', '=', '/']) {
+        return false;
+    }
+    if !segment.chars().any(|c| c.is_alphabetic()) {
+        return false;
+    }
+    !lanrurugi_scanner::release_markers::is_marker(segment)
+}
+
 /// Whether `id` is a synthetic node standing in for an existing Tankoubon (see this module's own
 /// top-level docs on how one participates in the clique algorithm), not a real archive — reuses
 /// the same `TANK_` id-prefix convention `ai_group_suggestions` already relies on elsewhere to
@@ -382,6 +438,9 @@ pub struct GroupingSettings {
     pub review_max_members: usize,
     pub review_max_tags: usize,
     pub review_title_chars: usize,
+    /// Ask the model once per candidate cluster which suggestions are one series, and merge those
+    /// (see `merge`). Off keeps the graph's own grouping exactly as it was.
+    pub merge_same_series: bool,
 }
 
 impl Default for GroupingSettings {
@@ -395,6 +454,7 @@ impl Default for GroupingSettings {
             strip_release_markers: true,
             idf_tags: true,
             review_max_members: 12,
+            merge_same_series: true,
             review_max_tags: 6,
             review_title_chars: 80,
         }
@@ -1666,6 +1726,24 @@ mod tests {
             groups.is_empty(),
             "a category conflict must block grouping even at otherwise-perfect similarity, got {groups:?}"
         );
+    }
+
+    #[test]
+    fn title_creator_takes_the_bracketed_name_but_not_a_release_marker() {
+        assert_eq!(
+            title_creator("[anko×ANTAI×haron] 凸感ロマンス【合本版】 第01巻"),
+            Some("anko×antai×haron".to_string())
+        );
+        assert_eq!(
+            title_creator("[Same Circle] A Series 第2巻"),
+            Some("same circle".to_string())
+        );
+        // Markers, catalogue numbers and tag-shaped segments name no one.
+        assert_eq!(title_creator("[中国翻訳] 作品 第1巻"), None);
+        assert_eq!(title_creator("【DL版】作品"), None);
+        assert_eq!(title_creator("[2024] 作品"), None);
+        assert_eq!(title_creator("[artist:x] 作品"), None);
+        assert_eq!(title_creator("作品 第1巻"), None);
     }
 
     #[test]

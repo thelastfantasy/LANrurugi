@@ -126,11 +126,11 @@ pub(crate) async fn get_plugin_customargs(
         .hget(plugin_settings_key(namespace), "customargs")
         .await
         .unwrap_or_default();
-    if let Some(raw) = raw {
-        if let Ok(saved) = serde_json::from_str::<Vec<Value>>(&raw) {
-            for ((slot, param), value) in args.iter_mut().zip(parameters).zip(saved) {
-                *slot = coerce_customarg(param.param_type.as_deref(), value);
-            }
+    if let Some(raw) = raw
+        && let Ok(saved) = serde_json::from_str::<Vec<Value>>(&raw)
+    {
+        for ((slot, param), value) in args.iter_mut().zip(parameters).zip(saved) {
+            *slot = coerce_customarg(param.param_type.as_deref(), value);
         }
     }
     args
@@ -347,14 +347,13 @@ fn login_cache_put(key: String, value: Value) {
         // Bounded: entries are keyed by one login plugin's configured values, and a stale entry is
         // dropped the moment it is looked up again, so growth needs a plugin whose configuration
         // keeps changing mid-run — at which point dropping the oldest is the right answer anyway.
-        if cache.len() > 64 {
-            if let Some(oldest) = cache
+        if cache.len() > 64
+            && let Some(oldest) = cache
                 .iter()
                 .min_by_key(|(_, (at, _))| *at)
                 .map(|(k, _)| k.clone())
-            {
-                cache.remove(&oldest);
-            }
+        {
+            cache.remove(&oldest);
         }
         cache.insert(key, (std::time::Instant::now(), value));
     }
@@ -430,6 +429,8 @@ pub fn router() -> Router<AppState> {
             get(get_plugin_settings).put(put_plugin_settings),
         )
         .route("/plugins/priority", post(put_plugin_priority))
+        .route("/plugins/canonicalize-source", post(canonicalize_source))
+        .route("/plugins/auto", post(run_auto_plugins))
         .route("/download_url", post(download_url))
         .route("/plugins/upload", post(upload_plugin))
         .route("/plugins/export", get(export_plugin))
@@ -668,6 +669,136 @@ async fn canonicalize_sources_for(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AutoPluginsQuery {
+    id: String,
+}
+
+/// `POST /plugins/auto?id=` — the archive editor's "auto scrape" for an archive no `source:` tag
+/// ties to one plugin: the same enabled-plugin chain ingest runs. Answers with the archive's
+/// title, tags and summary as they now are, so the open form can take them over.
+async fn run_auto_plugins(
+    State(state): State<AppState>,
+    auth: Option<axum::extract::Extension<crate::auth_context::AuthContext>>,
+    Query(query): Query<AutoPluginsQuery>,
+) -> Response {
+    let id = lanrurugi_core::ids::ArchiveId(query.id.clone());
+    let label = match state.repos.archives.get(&id).await {
+        Ok(Some(archive)) => archive.title,
+        Ok(None) => return error(StatusCode::NOT_FOUND, "auto_plugins", "No such archive."),
+        Err(e) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "auto_plugins",
+                e.to_string(),
+            )
+        }
+    };
+    let summary = run_enabled_metadata_plugins_on_archive(&state, &query.id, None).await;
+    crate::activity::record_manual(
+        &state,
+        auth.as_ref().map(|e| &e.0),
+        lanrurugi_storage::activity::action_types::METADATA_PLUGIN_AUTORUN,
+        lanrurugi_storage::activity::ActivityTarget {
+            id: Some(query.id.clone()),
+            label: Some(label),
+            kind: Some("archive".to_string()),
+        },
+        lanrurugi_storage::activity::Outcome::Success,
+        None,
+        Some(json!({
+            "successes": summary.successes,
+            "failures": summary.failures,
+            "added_tags": summary.added_tags,
+        })),
+    )
+    .await;
+    match state.repos.archives.get(&id).await {
+        Ok(Some(archive)) => axum::Json(json!({
+            "operation": "auto_plugins",
+            "success": 1,
+            "successes": summary.successes,
+            "failures": summary.failures,
+            "declined": summary.declined,
+            "added_tags": summary.added_tags,
+            "title": archive.title,
+            "tags": archive.tags,
+            "summary": archive.summary,
+        }))
+        .into_response(),
+        Ok(None) => error(StatusCode::NOT_FOUND, "auto_plugins", "No such archive."),
+        Err(e) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "auto_plugins",
+            e.to_string(),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CanonicalizeSourceBody {
+    url: String,
+}
+
+/// `POST /plugins/canonicalize-source` — the stored `source:` form of a URL typed into a tag
+/// editor. The first plugin whose `url_pattern` matches and that exports `canonicalizeSource`
+/// decides it, download plugins before metadata ones (each in priority order): download plugins
+/// write the `source:` tags that revision and duplicate checks later compare against. Nothing
+/// matching falls back to [`trim_typed_source`], which keeps the query string.
+async fn canonicalize_source(
+    State(state): State<AppState>,
+    axum::Json(body): axum::Json<CanonicalizeSourceBody>,
+) -> Response {
+    let url = body.url.trim().to_string();
+    for kind in ["download", "metadata"] {
+        let namespaces = namespaces_of_kind(&state, kind).await;
+        for ns in sort_namespaces_by_priority(&state, &namespaces).await {
+            let Ok(info) = state.plugins.plugin_info(&ns).await else {
+                continue;
+            };
+            let matches = info
+                .url_pattern
+                .as_deref()
+                .and_then(|p| regex::Regex::new(p).ok())
+                .is_some_and(|re| re.is_match(&url));
+            if !matches {
+                continue;
+            }
+            match state
+                .plugins
+                .canonicalize_sources(&ns, std::slice::from_ref(&url))
+                .await
+            {
+                Ok(Some(mut canonical)) if canonical.len() == 1 => {
+                    return axum::Json(json!({ "source": canonical.remove(0), "plugin": ns }))
+                        .into_response();
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(
+                    plugin = %ns,
+                    error = %e,
+                    "canonicalizeSource failed; trying the next matching plugin"
+                ),
+            }
+        }
+    }
+    axum::Json(json!({ "source": trim_typed_source(&url), "plugin": null })).into_response()
+}
+
+/// [`trim_url`] without dropping the query: for a site no plugin knows, the query may be the only
+/// part naming the work (`view.php?id=5512`). The fragment still goes.
+fn trim_typed_source(url: &str) -> String {
+    let url = url.trim();
+    let url = url.split('#').next().unwrap_or(url);
+    let (path, query) = url.split_once('?').unwrap_or((url, ""));
+    let path = trim_url(path);
+    if query.is_empty() {
+        path
+    } else {
+        format!("{path}?{query}")
+    }
+}
+
 /// Works out whether this download is a newer/older revision of something already catalogued, from
 /// the `version_history` its plugin reported (issue #107).
 ///
@@ -866,14 +997,14 @@ async fn put_plugin_options(
         );
     };
 
-    if let Some(rules) = &body.domain_rules {
-        if let Err((message, field)) = validate_domain_rules(rules) {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                axum::Json(json!({ "error": message, "field": field })),
-            )
-                .into_response();
-        }
+    if let Some(rules) = &body.domain_rules
+        && let Err((message, field)) = validate_domain_rules(rules)
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            axum::Json(json!({ "error": message, "field": field })),
+        )
+            .into_response();
     }
 
     // Partial update (contract: "a field omitted from the request body is left at its current
@@ -974,10 +1105,10 @@ pub(crate) async fn resolve_declared_namespace(
     let all = discover_namespaces(&state.plugins_dir).await;
     let ordered = sort_namespaces_by_priority(state, &all).await;
     for ns in &ordered {
-        if let Ok(info) = state.plugins.plugin_info(ns).await {
-            if info.namespace == declared_namespace {
-                return Some((ns.clone(), info));
-            }
+        if let Ok(info) = state.plugins.plugin_info(ns).await
+            && info.namespace == declared_namespace
+        {
+            return Some((ns.clone(), info));
         }
     }
     None
@@ -1198,51 +1329,53 @@ async fn list_plugins(State(state): State<AppState>, Path(kind): Path<String>) -
 
     let mut plugins = Vec::new();
     for ns in namespaces {
-        if let Ok(info) = state.plugins.plugin_info(&ns).await {
-            if kind == "all" || info.kind == kind {
-                let counter = per_type_counter.entry(info.kind.clone()).or_insert(0);
-                discovery_index.insert(ns.clone(), *counter);
-                *counter += 1;
+        if let Ok(info) = state.plugins.plugin_info(&ns).await
+            && (kind == "all" || info.kind == kind)
+        {
+            let counter = per_type_counter.entry(info.kind.clone()).or_insert(0);
+            discovery_index.insert(ns.clone(), *counter);
+            *counter += 1;
 
-                let priority = get_plugin_priority(&state, &ns).await;
-                plugins.push(json!({
-                    // The file-discovery-path namespace (`ns`, e.g. `download/pixiv`) — not the
-                    // plugin's own self-declared `info.namespace` (e.g. `pixivdl`, legacy's
-                    // `plugin_info()` `namespace` field). Every other endpoint that takes a
-                    // `namespace`/`plugin` parameter (`/plugins/use`, `/plugins/options`,
-                    // `/plugins/settings`) resolves it straight through `discover_namespaces`'s
-                    // own path-based scheme (`PluginPool::plugin_info`/`execute` join it onto
-                    // `plugins_dir` as `{namespace}.ts`), so returning the *declared* value here
-                    // instead would silently 404 every one of those calls — a real, previously
-                    // shipped bug this fixes, not a hypothetical one (confirmed via a live
-                    // container: `POST /plugins/use?plugin=pixivdl` 404s, `plugin=download/pixiv`
-                    // works). Unlike legacy (one flat plugin directory, so the two values were
-                    // always identical there), this rewrite's category subfolders/`custom/` tree
-                    // make them genuinely different strings.
-                    "namespace": ns,
-                    "type": info.kind,
-                    "name": info.name,
-                    "author": info.author,
-                    "description": info.description,
-                    "version": info.version,
-                    "icon": info.icon,
-                    "oneshot_arg": info.oneshot_arg,
-                    // The plugin's own self-declared login_from value (e.g. "ehlogin") — display
-                    // only here (legacy's "This plugin depends on the login plugin ..." note,
-                    // `plugins.html.tt2` line 143-145); the real call-time resolution to a
-                    // file-path namespace happens in `resolve_declared_namespace`, not here.
-                    "login_from": info.login_from,
-                    "url_pattern": info.url_pattern,
-                    "domain_match": info.domain_match,
-                    "generated_by_wizard": info.generated_by_wizard,
-                    "priority": priority,
-                    "parameters": info.parameters.iter().map(|p| json!({
-                        "name": p.name,
-                        "desc": p.description,
-                        "type": p.param_type,
-                    })).collect::<Vec<_>>(),
-                }));
-            }
+            let priority = get_plugin_priority(&state, &ns).await;
+            plugins.push(json!({
+                // The file-discovery-path namespace (`ns`, e.g. `download/pixiv`) — not the
+                // plugin's own self-declared `info.namespace` (e.g. `pixivdl`, legacy's
+                // `plugin_info()` `namespace` field). Every other endpoint that takes a
+                // `namespace`/`plugin` parameter (`/plugins/use`, `/plugins/options`,
+                // `/plugins/settings`) resolves it straight through `discover_namespaces`'s
+                // own path-based scheme (`PluginPool::plugin_info`/`execute` join it onto
+                // `plugins_dir` as `{namespace}.ts`), so returning the *declared* value here
+                // instead would silently 404 every one of those calls — a real, previously
+                // shipped bug this fixes, not a hypothetical one (confirmed via a live
+                // container: `POST /plugins/use?plugin=pixivdl` 404s, `plugin=download/pixiv`
+                // works). Unlike legacy (one flat plugin directory, so the two values were
+                // always identical there), this rewrite's category subfolders/`custom/` tree
+                // make them genuinely different strings.
+                "namespace": ns,
+                // What another plugin's `login_from` names this one by.
+                "declared_namespace": info.namespace,
+                "type": info.kind,
+                "name": info.name,
+                "author": info.author,
+                "description": info.description,
+                "version": info.version,
+                "icon": info.icon,
+                "oneshot_arg": info.oneshot_arg,
+                // The plugin's own self-declared login_from value (e.g. "ehlogin") — display
+                // only here (legacy's "This plugin depends on the login plugin ..." note,
+                // `plugins.html.tt2` line 143-145); the real call-time resolution to a
+                // file-path namespace happens in `resolve_declared_namespace`, not here.
+                "login_from": info.login_from,
+                "url_pattern": info.url_pattern,
+                "domain_match": info.domain_match,
+                "generated_by_wizard": info.generated_by_wizard,
+                "priority": priority,
+                "parameters": info.parameters.iter().map(|p| json!({
+                    "name": p.name,
+                    "desc": p.description,
+                    "type": p.param_type,
+                })).collect::<Vec<_>>(),
+            }));
         }
     }
 
@@ -1280,25 +1413,58 @@ pub struct UsePluginParams {
 /// settings hash (which includes things like `session_secret`/`password` a plugin has no
 /// business reading).
 async fn get_plugin_relevant_settings(state: &AppState) -> Value {
-    let Ok(mut conn) = state.redis.config.get().await else {
-        return json!({});
-    };
-    let fields: std::collections::HashMap<String, String> =
-        conn.hgetall(CONFIG_KEY).await.unwrap_or_default();
+    match read_config_fields(state).await {
+        Some(fields) => relevant_settings(&fields),
+        None => json!({}),
+    }
+}
+
+fn relevant_settings(fields: &std::collections::HashMap<String, String>) -> Value {
     json!({
         "usedateadded": fields.get("usedateadded").map(|v| v != "0").unwrap_or(true),
         "usedatemodified": fields.get("usedatemodified").map(|v| v != "0").unwrap_or(false),
     })
 }
 
+/// The whole config hash, or `None` when Redis is unreachable — the callers below each turn that
+/// into their own "carry on without settings" answer, so the distinction has to survive this far.
+async fn read_config_fields(state: &AppState) -> Option<std::collections::HashMap<String, String>> {
+    let mut conn = state.redis.config.get().await.ok()?;
+    Some(conn.hgetall(CONFIG_KEY).await.unwrap_or_default())
+}
+
+/// Both `LRR_CONFIG` reads one metadata-plugin run needs, from a single round trip: the hash is the
+/// same for every plugin in the loop, so reading it per plugin only multiplied trip count.
+struct PluginRunConfig {
+    settings: Value,
+    tagrules: Option<String>,
+}
+
+impl PluginRunConfig {
+    async fn read(state: &AppState) -> Self {
+        match read_config_fields(state).await {
+            Some(fields) => Self {
+                settings: relevant_settings(&fields),
+                tagrules: tag_rules_text(&fields),
+            },
+            None => Self {
+                settings: json!({}),
+                tagrules: None,
+            },
+        }
+    }
+}
+
 /// The `tagrules` setting's raw text, but only when `tagruleson` is enabled (`Model/Plugins.pm`'s
 /// own `if (LANraragi::Model::Config->enable_tagrules)` gate) — `None` means "don't rewrite
 /// anything", collapsing both "the switch is off" and "Redis is unreachable" into the same safe
 /// no-op rather than a metadata-plugin run failing outright over an unrelated config read.
-async fn get_computed_tagrules(state: &AppState) -> Option<String> {
-    let mut conn = state.redis.config.get().await.ok()?;
-    let fields: std::collections::HashMap<String, String> =
-        conn.hgetall(CONFIG_KEY).await.unwrap_or_default();
+pub(crate) async fn get_computed_tagrules(state: &AppState) -> Option<String> {
+    let fields = read_config_fields(state).await?;
+    tag_rules_text(&fields)
+}
+
+fn tag_rules_text(fields: &std::collections::HashMap<String, String>) -> Option<String> {
     let enabled = fields.get("tagruleson").map(|v| v != "0").unwrap_or(true);
     if !enabled {
         return None;
@@ -1324,32 +1490,82 @@ fn extract_archive_id(oneshot: &str) -> Option<String> {
     (hex_run.len() == ARCHIVE_ID_LEN).then_some(hex_run)
 }
 
-/// `plugins/metadata/copyarchivetags.ts`'s one real need: another archive's stored `tags` string,
-/// looked up by an ID this plugin extracts from its own oneshot `arg` (not `params.id`, which is
-/// the *current* archive) — resolved host-side since a Deno-sandboxed plugin has no direct storage
-/// access (mirrors `LANraragi::Utils::Database::get_tags`, a plain by-ID field read).
-async fn get_other_archive_tags(state: &AppState, plugin: &str, arg: Option<&str>) -> Value {
-    if plugin != "metadata/copyarchivetags" {
-        return Value::Null;
-    }
-    let Some(other_id) = arg.and_then(extract_archive_id) else {
-        return Value::Null;
-    };
-    match state
-        .repos
-        .archives
-        .get(&lanrurugi_core::ids::ArchiveId(other_id))
-        .await
-    {
-        Ok(Some(archive)) => json!(archive.tags),
-        _ => Value::Null,
+/// Resolves one host-computed argument, by the name a plugin declared in its own
+/// `pluginInfo().host_arguments`.
+///
+/// A Deno-sandboxed plugin has no storage access, so anything it needs from the library has to be
+/// handed to it — but naming it in the manifest is what makes the host pay for it, because some of
+/// these are whole-library reads. An unrecognised name is a plugin bug: warn and pass nothing, so a
+/// typo costs one argument instead of the whole call.
+async fn host_argument(state: &AppState, name: &str, arg: Option<&str>) -> Option<Value> {
+    match name {
+        // Another archive's stored `tags`, by an ID the plugin extracts from its own oneshot `arg`
+        // (not `params.id`, which is the *current* archive) — mirrors
+        // `LANraragi::Utils::Database::get_tags`, a plain by-ID field read.
+        "other_archive_tags" => {
+            let other_id = arg.and_then(extract_archive_id)?;
+            match state
+                .repos
+                .archives
+                .get(&lanrurugi_core::ids::ArchiveId(other_id))
+                .await
+            {
+                Ok(Some(archive)) => Some(json!(archive.tags)),
+                _ => None,
+            }
+        }
+        // Every archive's `id`/`tags`, deliberately whole-library: a tag rewrite computed in JS
+        // needs to see every record, not just the one being processed (mirrors
+        // `nHentaiSourceConverter.pm::run_script`).
+        "archives" => match state.repos.archives.list_all().await {
+            Ok(archives) => Some(json!(archives
+                .into_iter()
+                .map(|a| json!({ "id": a.id, "tags": a.tags }))
+                .collect::<Vec<_>>())),
+            Err(_) => None,
+        },
+        // The library's own archive-directory root, so a plugin can walk the real filesystem
+        // itself via `Deno.readDir`.
+        "library_path" => Some(json!(state.library.archive_dir.display().to_string())),
+        // `path -> archive id`, so the files a plugin found can be resolved back to real IDs.
+        "archive_id_by_path" => match state.repos.archives.list_all().await {
+            Ok(archives) => Some(Value::Object(
+                archives
+                    .into_iter()
+                    .map(|a| (a.file, json!(a.id)))
+                    .collect(),
+            )),
+            Err(_) => None,
+        },
+        other => {
+            tracing::warn!(
+                argument = %other,
+                "plugin declared a host argument the host does not know"
+            );
+            None
+        }
     }
 }
 
-/// Normalizes a URL the same way both `plugins/script/sourcefinder.ts` (via
-/// `get_existing_archive_id_for_url` below) and legacy's `SourceFinder.pm::run_script` do before
-/// comparing it against a stored `source:` tag — strips scheme, `www.`, any query string, and a
-/// trailing slash.
+/// Adds every host argument `info` declared to a plugin call's args, keyed by the declared name.
+async fn with_host_arguments(
+    state: &AppState,
+    info: &PluginInfo,
+    arg: Option<&str>,
+    args: serde_json::Map<String, Value>,
+) -> Value {
+    let mut args = args;
+    for name in &info.host_arguments {
+        if let Some(value) = host_argument(state, name, arg).await {
+            args.insert(name.clone(), value);
+        }
+    }
+    Value::Object(args)
+}
+
+/// Normalizes a URL before comparing it against a stored `source:` tag — strips scheme, `www.`,
+/// any query string, and a trailing slash. Also the fallback when a plugin has no
+/// `canonicalizeSource` export of its own.
 pub(crate) fn trim_url(url: &str) -> String {
     let url = url.trim();
     let without_scheme = url
@@ -1363,100 +1579,27 @@ pub(crate) fn trim_url(url: &str) -> String {
     without_query.trim_end_matches('/').to_string()
 }
 
-/// `plugins/script/sourcefinder.ts`'s one real need: the ID of whichever archive (if any) has a
-/// `source:` tag matching `url` — resolved host-side the same way `get_other_archive_tags` resolves
-/// `copyarchivetags`' need, since a Deno-sandboxed plugin has no direct storage access. Legacy
-/// maintains a dedicated `LRR_URLMAP` index for this; this scans every archive's tags on demand
-/// instead (same simplification already used by `GET /database/stats` — correct, just not
-/// index-accelerated, acceptable at personal-library scale).
-///
-/// Domain aliases (E-Hentai/ExHentai and friends) come from whichever installed plugin claims this
-/// URL, via its own `canonicalizeSource` — issue #107 replaced the hardcoded two-branch alias
-/// special case that used to live here. `sourcefinder` itself is a script plugin with no such
-/// export; the knowledge belongs to the plugin that owns the domain, not to this call site.
-async fn get_existing_archive_id_for_url(
-    state: &AppState,
-    plugin: &str,
-    url: Option<&str>,
-) -> Value {
-    if plugin != "script/sourcefinder" {
-        return Value::Null;
-    }
-    let Some(url) = url else {
-        return Value::Null;
-    };
-    if trim_url(url).is_empty() {
-        return Value::Null;
-    }
-
-    let Ok(archives) = state.repos.archives.list_all().await else {
-        return Value::Null;
-    };
-
-    // Whichever plugin claims this URL supplies the domain-alias knowledge; absent one, the
-    // generic trim applies to both sides, which is what a site without aliases needs anyway.
-    let owning_plugin = {
-        let namespaces = discover_namespaces(&state.plugins_dir).await;
-        find_matching_plugin(state, &namespaces, url)
-            .await
-            .map(|(ns, _)| ns)
-    };
-
-    // One batch: this URL first, then every stored `source:` tag, so a plugin round-trip happens
-    // once rather than once per archive.
-    let mut raw = vec![url.to_string()];
-    let mut owners: Vec<&lanrurugi_core::ids::ArchiveId> = Vec::new();
-    for archive in &archives {
-        for tag in archive.tags.split(',') {
-            if let Some(source) = tag.trim().strip_prefix("source:") {
-                raw.push(source.to_string());
-                owners.push(&archive.id);
+/// Applies the host-side half of a script plugin's read-compute-return-write split, for each
+/// effect the plugin declared in its own `pluginInfo().host_results`. The plugin never writes
+/// storage; it returns what it wants written and the host performs it here.
+async fn apply_host_results(state: &AppState, info: &PluginInfo, data: &Value) {
+    for name in &info.host_results {
+        match name.as_str() {
+            "tag_updates" => script_tag_updates(state, data).await,
+            "category_changes" => foldertocat_categories(state, data).await,
+            other => {
+                tracing::warn!(
+                    effect = %other,
+                    "plugin declared a host result the host does not know"
+                );
             }
         }
     }
-
-    let canonical = match &owning_plugin {
-        Some(ns) => canonicalize_sources_for(state, ns, raw).await,
-        None => raw.iter().map(|u| trim_url(u)).collect(),
-    };
-    let mut canonical = canonical.into_iter();
-    let Some(needle) = canonical.next() else {
-        return Value::Null;
-    };
-    for (archive_id, source) in owners.into_iter().zip(canonical) {
-        if source == needle {
-            return json!(archive_id);
-        }
-    }
-    Value::Null
 }
 
-/// `plugins/script/nhentaisourceconverter.ts`'s one real need: every archive's `id`/`tags`, so it
-/// can compute its own tag rewrite purely in JS and hand the result back rather than touching
-/// storage directly — resolved host-side the same way the other two `script/*`-specific helpers
-/// above are. Deliberately whole-library (not scoped to one archive, unlike every `metadata`-type
-/// helper), matching what `nHentaiSourceConverter.pm::run_script` itself operates over.
-async fn get_all_archive_tags_for_script(state: &AppState, plugin: &str) -> Value {
-    if plugin != "script/nhentaisourceconverter" {
-        return Value::Null;
-    }
-    match state.repos.archives.list_all().await {
-        Ok(archives) => json!(archives
-            .into_iter()
-            .map(|a| json!({ "id": a.id, "tags": a.tags }))
-            .collect::<Vec<_>>()),
-        Err(_) => Value::Null,
-    }
-}
-
-/// Applies `plugins/script/nhentaisourceconverter.ts`'s returned `updates` (see `ScriptResult` in
-/// `plugin-sdk.ts`) back onto real archive records — the host's half of the read-compute-write
-/// split described in that same SDK doc comment, since the plugin itself only ever returns its
-/// *intended* rewrites, never writes storage directly.
-async fn apply_script_tag_updates(state: &AppState, plugin: &str, data: &Value) {
-    if plugin != "script/nhentaisourceconverter" {
-        return;
-    }
+/// Applies the returned `updates` (see `ScriptResult` in `plugin-sdk.ts`) back onto real archive
+/// records.
+async fn script_tag_updates(state: &AppState, data: &Value) {
     let Some(updates) = data.get("updates").and_then(Value::as_array) else {
         return;
     };
@@ -1477,44 +1620,17 @@ async fn apply_script_tag_updates(state: &AppState, plugin: &str, data: &Value) 
     }
 }
 
-/// `plugins/script/foldertocat.ts`'s two real needs, resolved host-side since a Deno-sandboxed
-/// plugin has no direct storage access: the library's own archive-directory root (so it can walk
-/// the real filesystem itself via `Deno.readDir` — see that file's own docs for why the host
-/// doesn't pre-walk it instead), and a `path -> archive id` map (so the plugin can resolve the
-/// files it finds back to real archive IDs before returning its computed category groupings).
-async fn get_foldertocat_args(state: &AppState, plugin: &str) -> (Value, Value) {
-    if plugin != "script/foldertocat" {
-        return (Value::Null, Value::Null);
-    }
-    let library_path = json!(state.library.archive_dir.display().to_string());
-    let archive_id_by_path = match state.repos.archives.list_all().await {
-        Ok(archives) => {
-            let map: serde_json::Map<String, Value> = archives
-                .into_iter()
-                .map(|a| (a.file, json!(a.id)))
-                .collect();
-            Value::Object(map)
-        }
-        Err(_) => Value::Null,
-    };
-    (library_path, archive_id_by_path)
-}
-
-/// Applies `plugins/script/foldertocat.ts`'s returned `categories_to_create`/
-/// `delete_old_categories` (see `ScriptResult` in `plugin-sdk.ts`) — the host's half of the
-/// read-compute-return-write-to-host split, mirroring
-/// `lanrurugi-api::scripts::subfolders_to_categories`'s own category-creation logic exactly (same
-/// `SET_<unix-seconds>` catid generation) so the two implementations produce identical results,
-/// differing only in how the directory walk itself was performed.
-async fn apply_foldertocat_categories(state: &AppState, plugin: &str, data: &Value) {
-    if plugin != "script/foldertocat" {
-        return;
-    }
-    if data.get("delete_old_categories").and_then(Value::as_bool) == Some(true) {
-        if let Ok(categories) = state.repos.categories.list_all().await {
-            for category in categories.iter().filter(|c| c.search.is_none()) {
-                let _ = state.repos.categories.delete(&category.catid).await;
-            }
+/// Applies the returned `categories_to_create`/`delete_old_categories` (see `ScriptResult` in
+/// `plugin-sdk.ts`), mirroring `lanrurugi-api::scripts::subfolders_to_categories`'s own
+/// category-creation logic exactly (same `SET_<unix-seconds>` catid generation) so the two
+/// implementations produce identical results, differing only in how the directory walk itself was
+/// performed.
+async fn foldertocat_categories(state: &AppState, data: &Value) {
+    if data.get("delete_old_categories").and_then(Value::as_bool) == Some(true)
+        && let Ok(categories) = state.repos.categories.list_all().await
+    {
+        for category in categories.iter().filter(|c| c.search.is_none()) {
+            let _ = state.repos.categories.delete(&category.catid).await;
         }
     }
 
@@ -1582,12 +1698,21 @@ pub struct AutoPluginSummary {
     pub new_title: Option<String>,
 }
 
+/// Sorts plugins by the chain position they asked for (`pluginInfo().run_order`, highest first).
+///
+/// Legacy always ran its filename-parsing plugin ahead of the rest because everything downstream
+/// reads the title and tags it derives; that plugin now states the value itself instead of the
+/// host matching a namespace. Stable, so otherwise-equal plugins keep their discovery order.
+fn order_by_run_order(namespaces: &mut [(String, PluginInfo)]) {
+    namespaces.sort_by_key(|(_, info)| std::cmp::Reverse(info.run_order));
+}
+
 /// Legacy's real, load-bearing "自动运行"/"Run Automatically" mechanism (`Model::Plugins::
 /// exec_enabled_plugins_on_file`, called by `Model::Upload.pm` right after every new upload/
 /// download is cataloged, and by the watcher after every scanned file) — runs every metadata
-/// plugin with `enabled: true` against a freshly-cataloged archive, in priority order, with the
-/// filename-parsing plugin (`regexplugin`) always bumped to run first when present (legacy's own
-/// `TODO: Make plugin exec order configurable` comment, preserved verbatim — it still isn't).
+/// plugin with `enabled: true` against a freshly-cataloged archive, highest `pluginInfo().priority`
+/// first (legacy's own `TODO: Make plugin exec order configurable` comment, preserved verbatim —
+/// it still isn't; the plugin now states the order it needs instead of the host hardcoding one).
 /// This closes a real Phase 1 gap: nothing in this port called anything like this at all, so
 /// every enabled metadata plugin's "auto-run" checkbox was silently inert on every ingestion path
 /// (confirmed live: two fully-downloaded E-Hentai archives never got a `source:` tag or any other
@@ -1599,9 +1724,19 @@ pub struct AutoPluginSummary {
 /// selection/ordering and the tag/title merge-and-persist step `use_plugin_sync` deliberately
 /// leaves to its caller (its own callers include the interactive "Fetch Metadata" button, which
 /// must NOT auto-persist before the user reviews the result).
+/// Whether this plugin's own output is already on the queue row (spec 029 FR-005) — calling it
+/// again would be a second round trip for the answer the row has carried since start time.
+fn skip_metadata_plugin(namespace: &str, skip: Option<&str>) -> bool {
+    skip.is_some_and(|skipped| skipped == namespace)
+}
+
+/// `skip` names the one plugin that must not run: the metadata plugin whose output the queue item
+/// already carries from start time (spec 029 FR-005). Every other enabled plugin still runs —
+/// they cover different sites, and a different plugin may well describe this archive better.
 pub async fn run_enabled_metadata_plugins_on_archive(
     state: &AppState,
     archive_id: &str,
+    skip: Option<&str>,
 ) -> AutoPluginSummary {
     let mut summary = AutoPluginSummary {
         successes: 0,
@@ -1624,18 +1759,35 @@ pub async fn run_enabled_metadata_plugins_on_archive(
         }
         namespaces.push((ns, info));
     }
-    // `regexplugin` (declared namespace, not necessarily `metadata/regexparse` — a custom-
-    // installed clone could sit at a different file path) always runs first when enabled, exactly
-    // matching legacy's own reordering.
-    if let Some(regex_pos) = namespaces
-        .iter()
-        .position(|(_, info)| info.namespace == "regexplugin")
-    {
-        let regex_entry = namespaces.remove(regex_pos);
-        namespaces.insert(0, regex_entry);
-    }
+    order_by_run_order(&mut namespaces);
+
+    // Both of these are properties of the archive, not of the plugin about to run: an earlier
+    // plugin in this loop can rewrite `title`/`tags`, but never the file's location or mtime, so
+    // re-stat'ing the same file once per plugin was pure repetition.
+    let file_modified_time = {
+        let archive = state
+            .repos
+            .archives
+            .get(&lanrurugi_core::ids::ArchiveId(archive_id.to_string()))
+            .await
+            .ok()
+            .flatten();
+        archive.as_ref().map(|a| a.file.clone()).and_then(|p| {
+            std::fs::metadata(p)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+        })
+    };
+    // Likewise one config read for the whole loop rather than two `HGETALL`s per plugin.
+    let config = PluginRunConfig::read(state).await;
 
     for (ns, info) in namespaces {
+        if skip_metadata_plugin(&ns, skip) {
+            tracing::debug!(%archive_id, plugin = %ns, "skipping the metadata plugin whose output the queue item already applied");
+            continue;
+        }
         // Fetched fresh on every plugin iteration (not hoisted above the loop) since an earlier
         // plugin in this same run may have just updated `title`/`tags` — the next plugin should
         // see that plugin's own output as its "existing" state, matching legacy's own sequential
@@ -1648,25 +1800,30 @@ pub async fn run_enabled_metadata_plugins_on_archive(
             .ok()
             .flatten();
         let file_path = archive.as_ref().map(|a| a.file.clone());
-        let file_modified_time = file_path.as_deref().and_then(|p| {
-            std::fs::metadata(p)
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-        });
         let customargs = get_plugin_customargs(state, &ns, &info.parameters).await;
-        let args = json!({
-            "archive_id": archive_id,
-            "arg": null,
-            "oneshot_param": null,
-            "customargs": customargs,
-            "file_path": file_path,
-            "file_modified_time": file_modified_time,
-            "settings": get_plugin_relevant_settings(state).await,
-            "existing_tags": archive.as_ref().map(|a| a.tags.clone()).unwrap_or_default(),
-            "archive_title": archive.as_ref().map(|a| a.title.clone()).unwrap_or_default(),
-        });
+        let mut args = serde_json::Map::new();
+        args.insert("archive_id".to_string(), json!(archive_id));
+        args.insert("arg".to_string(), Value::Null);
+        args.insert("oneshot_param".to_string(), Value::Null);
+        args.insert("customargs".to_string(), json!(customargs));
+        args.insert("file_path".to_string(), json!(file_path));
+        args.insert("file_modified_time".to_string(), json!(file_modified_time));
+        args.insert("settings".to_string(), config.settings.clone());
+        args.insert(
+            "existing_tags".to_string(),
+            json!(archive.as_ref().map(|a| a.tags.clone()).unwrap_or_default()),
+        );
+        args.insert(
+            "archive_title".to_string(),
+            json!(archive
+                .as_ref()
+                .map(|a| a.title.clone())
+                .unwrap_or_default()),
+        );
+        // A plugin that declared host arguments gets them here too: auto-run has no oneshot `arg`
+        // to resolve `other_archive_tags` from, but `library_path`-style arguments are just as
+        // valid on this path as on a manual call.
+        let args = with_host_arguments(state, &info, None, args).await;
         let args = with_sidecar_files(&info, args, file_path.as_deref());
         let args = with_login_cookies(state, &info, args).await;
 
@@ -1702,12 +1859,10 @@ pub async fn run_enabled_metadata_plugins_on_archive(
         // `Model/Plugins.pm:292-296` — tag rules run on the plugin's freshly returned tags only,
         // before they're merged into the record's, and only when `tagruleson` is set.
         let new_tags = match data.get("tags").and_then(Value::as_str) {
-            Some(tags) if !tags.trim().is_empty() => {
-                Some(match get_computed_tagrules(state).await {
-                    Some(rules_text) => tag_rules::apply_tag_rules(tags, &rules_text),
-                    None => tags.to_string(),
-                })
-            }
+            Some(tags) if !tags.trim().is_empty() => Some(match config.tagrules.as_deref() {
+                Some(rules_text) => tag_rules::apply_tag_rules(tags, rules_text),
+                None => tags.to_string(),
+            }),
             _ => None,
         };
         let new_title = data
@@ -1894,35 +2049,39 @@ async fn use_plugin_sync(
     });
 
     let customargs = get_plugin_customargs(&state, &plugin, &info.parameters).await;
-    let other_archive_tags = get_other_archive_tags(&state, &plugin, params.arg.as_deref()).await;
-    let existing_archive_id =
-        get_existing_archive_id_for_url(&state, &plugin, params.arg.as_deref()).await;
-    let archives_for_script = get_all_archive_tags_for_script(&state, &plugin).await;
-    let (library_path, archive_id_by_path) = get_foldertocat_args(&state, &plugin).await;
-    let args = json!({
-        "archive_id": params.id,
-        "arg": params.arg,
-        "oneshot_param": params.arg,
-        "customargs": customargs,
-        "file_path": file_path,
-        "file_modified_time": file_modified_time,
-        "settings": get_plugin_relevant_settings(&state).await,
-        "other_archive_tags": other_archive_tags,
-        "existing_archive_id": existing_archive_id,
-        "archives": archives_for_script,
-        "library_path": library_path,
-        "archive_id_by_path": archive_id_by_path,
-        "existing_tags": queried_archive.as_ref().map(|a| a.tags.clone()).unwrap_or_default(),
-        "archive_title": queried_archive.as_ref().map(|a| a.title.clone()).unwrap_or_default(),
-    });
+    let mut args = serde_json::Map::new();
+    args.insert("archive_id".to_string(), json!(params.id));
+    args.insert("arg".to_string(), json!(params.arg));
+    args.insert("oneshot_param".to_string(), json!(params.arg));
+    args.insert("customargs".to_string(), json!(customargs));
+    args.insert("file_path".to_string(), json!(file_path));
+    args.insert("file_modified_time".to_string(), json!(file_modified_time));
+    args.insert(
+        "settings".to_string(),
+        get_plugin_relevant_settings(&state).await,
+    );
+    args.insert(
+        "existing_tags".to_string(),
+        json!(queried_archive
+            .as_ref()
+            .map(|a| a.tags.clone())
+            .unwrap_or_default()),
+    );
+    args.insert(
+        "archive_title".to_string(),
+        json!(queried_archive
+            .as_ref()
+            .map(|a| a.title.clone())
+            .unwrap_or_default()),
+    );
+    let args = with_host_arguments(&state, &info, params.arg.as_deref(), args).await;
     let args = with_sidecar_files(&info, args, file_path.as_deref());
     let args = with_login_cookies(&state, &info, args).await;
     let method = plugin_method(&info.kind);
 
     match state.plugins.execute(&plugin, method, args).await {
         Ok(data) => {
-            apply_script_tag_updates(&state, &plugin, &data).await;
-            apply_foldertocat_categories(&state, &plugin, &data).await;
+            apply_host_results(&state, &info, &data).await;
             crate::activity::record_manual(
                 &state,
                 auth.as_ref().map(|e| &e.0),
@@ -2034,28 +2193,18 @@ async fn use_plugin_async(
         };
         let method = plugin_method(&info.kind);
         let customargs = get_plugin_customargs(&state_for_task, &plugin, &info.parameters).await;
-        let existing_archive_id =
-            get_existing_archive_id_for_url(&state_for_task, &plugin, arg.as_deref()).await;
-        let archives_for_script = get_all_archive_tags_for_script(&state_for_task, &plugin).await;
-        let (library_path, archive_id_by_path) =
-            get_foldertocat_args(&state_for_task, &plugin).await;
-        let args = json!({
-            "archive_id": archive_id,
-            "arg": arg,
-            "oneshot_param": arg,
-            "customargs": customargs,
-            "file_path": file_path,
-            "existing_archive_id": existing_archive_id,
-            "archives": archives_for_script,
-            "library_path": library_path,
-            "archive_id_by_path": archive_id_by_path,
-        });
+        let mut args = serde_json::Map::new();
+        args.insert("archive_id".to_string(), json!(archive_id));
+        args.insert("arg".to_string(), json!(arg));
+        args.insert("oneshot_param".to_string(), json!(arg));
+        args.insert("customargs".to_string(), json!(customargs));
+        args.insert("file_path".to_string(), json!(file_path));
+        let args = with_host_arguments(&state_for_task, &info, arg.as_deref(), args).await;
         let args = with_sidecar_files(&info, args, file_path.as_deref());
         let args = with_login_cookies(&state_for_task, &info, args).await;
         match plugins.execute(&plugin, method, args).await {
             Ok(data) => {
-                apply_script_tag_updates(&state_for_task, &plugin, &data).await;
-                apply_foldertocat_categories(&state_for_task, &plugin, &data).await;
+                apply_host_results(&state_for_task, &info, &data).await;
                 jobs.finish(&job_id_for_task, data).await
             }
             Err(e) => jobs.fail(&job_id_for_task, e.to_string()).await,
@@ -2172,11 +2321,11 @@ async fn download_url(
     let namespaces = discover_namespaces(&state.plugins_dir).await;
     let mut download_plugin = None;
     for ns in namespaces {
-        if let Ok(info) = state.plugins.plugin_info(&ns).await {
-            if info.kind == "download" {
-                download_plugin = Some((ns, info));
-                break;
-            }
+        if let Ok(info) = state.plugins.plugin_info(&ns).await
+            && info.kind == "download"
+        {
+            download_plugin = Some((ns, info));
+            break;
         }
     }
 
@@ -2343,6 +2492,11 @@ pub(crate) async fn start_download(
     // captures a referenced variable by move regardless of whether it's only ever borrowed inside.
     let queue_item_id_for_task = queue_link.as_ref().map(|(_, id)| id.clone());
     let state_for_cleanup = state.clone();
+    // 029 US2/T015: the ingest half of this task runs through `download_manager`, which has no job
+    // id of its own — the clock is how its phase marks (T014) reach this job.
+    let clock_jobs = state.jobs.clone();
+    let clock_job_id = job_id.clone();
+    let clock_queue_item_id = queue_item_id_for_task.clone();
 
     tokio::spawn(async move {
         // The real task body is wrapped in its own async block (rather than being this whole
@@ -2354,8 +2508,24 @@ pub(crate) async fn start_download(
         // there's a real (harmless) possible race where both this cleanup and a fresh stop
         // request try to remove the same now-finished entry — `HashMap::remove` on a
         // no-longer-present key is simply a no-op either way.
-        (async move {
+        crate::ingest_clock::with_clock(
+            async move {
             jobs.mark_active(&job_id_for_task).await;
+            // 029 US4: one trace per task, finished by the guard however this body ends. Every
+            // boundary below advances it next to the job's own phase timeline.
+            let _trace_guard = crate::diagnostics::download_trace::begin(
+                &job_id_for_task,
+                queue_item_id_for_task.as_deref(),
+                &plugin_namespace_for_task,
+                &url,
+            );
+            // 029 US2: the job exists but its task has not run yet — that gap is real queue time
+            // the user waits through, and it used to be folded into whatever came next.
+            jobs.begin_phase(&job_id_for_task, lanrurugi_core::jobs::PHASE_QUEUED).await;
+            crate::diagnostics::download_trace::phase(
+                &job_id_for_task,
+                lanrurugi_core::jobs::PHASE_QUEUED,
+            );
             if let Some((repo, item_id)) = &queue_link {
                 // `Starting` covers the plugin's own `exec_download` call — resolving the real
                 // download URL(s), e.g. `ehentai.ts`'s own archiver.php round-trip, which can
@@ -2462,8 +2632,8 @@ pub(crate) async fn start_download(
             // it unconditionally would flicker every download through `Waiting` for no reason (most
             // plugins declare no rule at all, and an uncontended one has a free slot).
             let negotiation_waits = negotiation_manager.is_job_saturated(job_capacity).await;
-            if negotiation_waits {
-                if let Some((repo, item_id)) = &queue_link {
+            if negotiation_waits
+                && let Some((repo, item_id)) = &queue_link {
                     update_queue_item_state(
                         repo,
                         state_for_task.download_queue_tx.as_ref(),
@@ -2475,7 +2645,6 @@ pub(crate) async fn start_download(
                     )
                     .await;
                 }
-            }
             let args = json!({ "url": url, "category": category, "customargs": customargs });
             let args = with_login_cookies(&state_for_task, &info, args).await;
             // Diagnostic only: this call covers the whole `Starting` phase (the plugin's own
@@ -2514,8 +2683,17 @@ pub(crate) async fn start_download(
                         return;
                     }
                 };
-                if negotiation_waits {
-                    if let Some((repo, item_id)) = &queue_link {
+                // Holding the plugin's own slot means the queuing is over: what follows is the
+                // plugin's negotiation with the source site, not a wait this host imposed.
+                jobs.end_phase(&job_id_for_task).await;
+                jobs.begin_phase(&job_id_for_task, lanrurugi_core::jobs::PHASE_NEGOTIATE)
+                    .await;
+                crate::diagnostics::download_trace::phase(
+                    &job_id_for_task,
+                    lanrurugi_core::jobs::PHASE_NEGOTIATE,
+                );
+                if negotiation_waits
+                    && let Some((repo, item_id)) = &queue_link {
                         update_queue_item_state(
                             repo,
                             state_for_task.download_queue_tx.as_ref(),
@@ -2527,7 +2705,6 @@ pub(crate) async fn start_download(
                         )
                         .await;
                     }
-                }
                 plugins
                     .execute(&plugin_namespace_for_task, "exec_download", args)
                     .await
@@ -2558,10 +2735,21 @@ pub(crate) async fn start_download(
                         )
                         .await;
                     }
+                    crate::diagnostics::download_trace::fail(&job_id_for_task, &e.to_string());
                     jobs.fail(&job_id_for_task, e.to_string()).await;
                     return;
                 }
             };
+
+            // The plugin has answered: any further wait is this host's own per-domain permit, not
+            // the source site's latency.
+            jobs.end_phase(&job_id_for_task).await;
+            jobs.begin_phase(&job_id_for_task, lanrurugi_core::jobs::PHASE_WAITING)
+                .await;
+            crate::diagnostics::download_trace::phase(
+                &job_id_for_task,
+                lanrurugi_core::jobs::PHASE_WAITING,
+            );
 
             let parsed: PluginDownloadResult = match serde_json::from_value(plugin_result) {
                 Ok(p) => p,
@@ -2605,6 +2793,7 @@ pub(crate) async fn start_download(
                     )
                     .await;
                 }
+                crate::diagnostics::download_trace::fail(&job_id_for_task, &err.error_code);
                 jobs.fail(&job_id_for_task, err.error_code).await;
                 return;
             }
@@ -2626,8 +2815,8 @@ pub(crate) async fn start_download(
                 // Recorded on the queue item before anything else uses it: whichever path ends up
                 // cataloguing this download (here, or a filename-conflict resolution minutes later)
                 // then stores the chain onto the archive without re-asking the site for it.
-                if let Some((repo, item_id)) = &queue_link {
-                    if let Ok(Some(mut item)) = repo.get(item_id).await {
+                if let Some((repo, item_id)) = &queue_link
+                    && let Ok(Some(mut item)) = repo.get(item_id).await {
                         item.version_history = Some(
                             history
                                 .iter()
@@ -2638,7 +2827,6 @@ pub(crate) async fn start_download(
                             tracing::warn!(item_id, error = %e, "could not record the revision chain on the queue item");
                         }
                     }
-                }
                 use crate::download_manager::version_history::RevisionRelation;
                 let relation = classify_revision(
                     &state_for_task,
@@ -2984,6 +3172,10 @@ const MAX_DOWNLOAD_RETRIES: u32 = 4;
                                     // completed row can still report how fast it ran after the
                                     // job is gone (a restart drops the whole registry).
                                     item.average_bytes_per_sec = job.average_bytes_per_sec;
+                                    // Same reason as the rate: the timeline is what lets a
+                                    // finished row say how much of its elapsed time was actually
+                                    // transfer instead of counting the plugin's own waiting.
+                                    item.phases = job.phases.clone();
                                     if let Err(e) = repo.update(&item).await {
                                         tracing::warn!(item_id, error = %e, "failed to persist completed download size");
                                     }
@@ -3051,6 +3243,10 @@ const MAX_DOWNLOAD_RETRIES: u32 = 4;
                             )
                             .await;
                         }
+                        crate::diagnostics::download_trace::fail(
+                            &job_id_for_task,
+                            &format!("{e:?}"),
+                        );
                         jobs.fail(&job_id_for_task, format!("{e:?}")).await
                     }
                 }
@@ -3103,7 +3299,11 @@ const MAX_DOWNLOAD_RETRIES: u32 = 4;
                 "plugin returned neither downloads, file_path, nor error",
             )
             .await;
-        })
+            },
+            &clock_jobs,
+            &clock_job_id,
+            clock_queue_item_id,
+        )
         .await;
 
         if let Some((_, item_id)) = &queue_link_for_cleanup {
@@ -3148,14 +3348,15 @@ fn queue_error_from_pool_error(
 ) -> lanrurugi_core::queue_error::QueueError {
     use lanrurugi_core::queue_error::QueueError;
     tracing::warn!(plugin, error = %e, "plugin execution failed");
-    if let lanrurugi_plugin::pool::PoolError::PluginError(err) = e {
-        if let Some(error_code) = &err.error_code {
-            return QueueError::PluginReported {
-                plugin: plugin.to_string(),
-                error_code: error_code.clone(),
-                data: err.data.clone().unwrap_or_default(),
-            };
-        }
+    if let lanrurugi_plugin::pool::PoolError::PluginError(err) = e
+        && let Some(error_code) = &err.error_code
+    {
+        return QueueError::PluginReported {
+            plugin: plugin.to_string(),
+            error_code: error_code.clone(),
+            data: err.data.clone().unwrap_or_default(),
+            settings: err.settings,
+        };
     }
     QueueError::PluginExecutionFailed {
         plugin: plugin.to_string(),
@@ -3173,6 +3374,7 @@ fn queue_error_from_plugin_error(
         plugin: plugin.to_string(),
         error_code: err.error_code.clone(),
         data: err.data.clone().unwrap_or_default(),
+        settings: err.settings,
     }
 }
 
@@ -3209,6 +3411,7 @@ pub(crate) async fn update_queue_item_state(
         match repo.get(item_id).await {
             Ok(Some(mut item)) => {
                 item.state = new_state;
+                crate::download_queue::settle_transferring(&mut item);
                 // Terminal states get an end stamp (and a fresh start drops any stale one, so a
                 // retried item reports its own run). The size is written by the completion paths
                 // themselves, which are the only places that know the job's final byte count.
@@ -3252,6 +3455,7 @@ pub(crate) async fn update_queue_item_state(
                                 "finished_at": &item.finished_at,
                                 "file_size": &item.file_size,
                                 "average_bytes_per_sec": &item.average_bytes_per_sec,
+                                "phases": &item.phases,
                                 // Included so a client's delta merge (a plain field spread) can
                                 // never keep showing a stale older-revision banner after the item
                                 // has moved on to some other state.
@@ -3420,14 +3624,12 @@ pub(crate) async fn find_matching_plugin(
 ) -> Option<(String, lanrurugi_plugin::protocol::PluginInfo)> {
     let ordered = sort_namespaces_by_priority(state, namespaces).await;
     for ns in &ordered {
-        if let Ok(info) = state.plugins.plugin_info(ns).await {
-            if let Some(ref pattern) = info.url_pattern {
-                if let Ok(re) = regex::Regex::new(pattern) {
-                    if re.is_match(url) {
-                        return Some((ns.clone(), info));
-                    }
-                }
-            }
+        if let Ok(info) = state.plugins.plugin_info(ns).await
+            && let Some(ref pattern) = info.url_pattern
+            && let Ok(re) = regex::Regex::new(pattern)
+            && re.is_match(url)
+        {
+            return Some((ns.clone(), info));
         }
     }
     None
@@ -3496,10 +3698,10 @@ pub(crate) async fn pick_redownload_source(
         .primary_source
         .as_deref()
         .and_then(|p| sources.iter().find(|u| trim_url(u) == p));
-    if let Some(url) = primary {
-        if let Some((ns, _)) = find_matching_plugin(state, &namespaces, url).await {
-            return Some((url.clone(), ns));
-        }
+    if let Some(url) = primary
+        && let Some((ns, _)) = find_matching_plugin(state, &namespaces, url).await
+    {
+        return Some((url.clone(), ns));
     }
     for ns in namespaces {
         let Ok(info) = state.plugins.plugin_info(&ns).await else {
@@ -3520,12 +3722,17 @@ pub(crate) async fn pick_redownload_source(
 }
 
 async fn download_namespaces(state: &AppState) -> Vec<String> {
+    namespaces_of_kind(state, "download").await
+}
+
+/// Every installed namespace declaring `type: kind`, in `discover_namespaces` order.
+async fn namespaces_of_kind(state: &AppState, kind: &str) -> Vec<String> {
     let mut out = Vec::new();
     for ns in discover_namespaces(&state.plugins_dir).await {
-        if let Ok(info) = state.plugins.plugin_info(&ns).await {
-            if info.kind == "download" {
-                out.push(ns);
-            }
+        if let Ok(info) = state.plugins.plugin_info(&ns).await
+            && info.kind == kind
+        {
+            out.push(ns);
         }
     }
     out
@@ -3607,10 +3814,10 @@ pub(crate) async fn find_plugin_by_domain(
 ) -> Option<(String, lanrurugi_plugin::protocol::PluginInfo)> {
     let ordered = sort_namespaces_by_priority(state, namespaces).await;
     for ns in &ordered {
-        if let Ok(info) = state.plugins.plugin_info(ns).await {
-            if domain_covers(&info, domain) {
-                return Some((ns.clone(), info));
-            }
+        if let Ok(info) = state.plugins.plugin_info(ns).await
+            && domain_covers(&info, domain)
+        {
+            return Some((ns.clone(), info));
         }
     }
     None
@@ -3642,36 +3849,38 @@ pub(crate) async fn ensure_metadata_cached(
         .unwrap_or(0);
 
     // Cache hit — still within the 10-min window.
-    if let Some(at) = item.metadata_preview_at {
-        if now - at < METADATA_CACHE_TTL_MS {
-            // Still owes the archive its tags: this preview may have been fetched at start time,
-            // before there was an archive, and the caller is the one that now supplies
-            // `archive_ids`.
-            if item.auto_fetch_metadata {
-                if let (Some(tags), Some(archive_ids)) = (
-                    item.metadata_preview
-                        .as_ref()
-                        .and_then(|p| p.get("tags"))
-                        .and_then(|v| v.as_str()),
-                    item.archive_ids.as_ref(),
-                ) {
-                    for aid in archive_ids {
-                        apply_metadata_tags(state, aid, tags).await;
-                    }
-                }
+    if let Some(at) = item.metadata_preview_at
+        && now - at < METADATA_CACHE_TTL_MS
+    {
+        crate::resources::note_metadata_cache(true);
+        // Still owes the archive its tags: this preview may have been fetched at start time,
+        // before there was an archive, and the caller is the one that now supplies
+        // `archive_ids`.
+        if item.auto_fetch_metadata
+            && let (Some(tags), Some(archive_ids)) = (
+                item.metadata_preview
+                    .as_ref()
+                    .and_then(|p| p.get("tags"))
+                    .and_then(|v| v.as_str()),
+                item.archive_ids.as_ref(),
+            )
+        {
+            for aid in archive_ids {
+                apply_metadata_tags(state, aid, tags).await;
             }
-            return item.metadata_preview.clone();
         }
+        return item.metadata_preview.clone();
     }
 
     // No cache or expired — find a metadata plugin and call it.
+    crate::resources::note_metadata_cache(false);
     let namespaces = discover_namespaces(&state.plugins_dir).await;
     let mut metadata_ns = Vec::new();
     for ns in &namespaces {
-        if let Ok(info) = state.plugins.plugin_info(ns).await {
-            if info.kind == "metadata" {
-                metadata_ns.push(ns.clone());
-            }
+        if let Ok(info) = state.plugins.plugin_info(ns).await
+            && info.kind == "metadata"
+        {
+            metadata_ns.push(ns.clone());
         }
     }
 
@@ -3712,6 +3921,9 @@ pub(crate) async fn ensure_metadata_cached(
 
     item.metadata_preview = Some(result.clone());
     item.metadata_preview_at = Some(now);
+    // Recorded only on success, and only here: cataloguing skips exactly this plugin, so a value
+    // written without a real plugin result behind it would skip a plugin nobody ran.
+    item.metadata_preview_namespace = Some(plugin_ns.clone());
     if let Some(ref t) = title {
         item.title = Some(t.clone());
     }
@@ -3730,6 +3942,7 @@ pub(crate) async fn ensure_metadata_cached(
         persisted = fresh;
         persisted.metadata_preview = item.metadata_preview.clone();
         persisted.metadata_preview_at = item.metadata_preview_at;
+        persisted.metadata_preview_namespace = item.metadata_preview_namespace.clone();
         if let Some(ref t) = title {
             persisted.title = Some(t.clone());
         }
@@ -3752,13 +3965,12 @@ pub(crate) async fn ensure_metadata_cached(
     }
 
     // Apply tags to already-catalogued archive(s) when auto_fetch_metadata is on.
-    if item.auto_fetch_metadata {
-        if let Some(ref tags) = tags {
-            if let Some(ref archive_ids) = item.archive_ids {
-                for aid in archive_ids {
-                    apply_metadata_tags(state, aid, tags).await;
-                }
-            }
+    if item.auto_fetch_metadata
+        && let Some(ref tags) = tags
+        && let Some(ref archive_ids) = item.archive_ids
+    {
+        for aid in archive_ids {
+            apply_metadata_tags(state, aid, tags).await;
         }
     }
 
@@ -3864,56 +4076,52 @@ async fn run_managed_downloads(
     // When an exact rule omits the rate limit and a wildcard supplies it, the two can name
     // different rules — an acceptable display-only approximation; fixing it would touch the
     // rate-limiter map's grouping key, out of scope here.
-    if let Some(first) = downloads.first() {
-        if let Ok(parsed) = url::Url::parse(&first.url) {
-            let first_hostname = parsed.host_str().unwrap_or("");
-            let resolved = crate::download_manager::domain_rules::resolve(&rules, first_hostname);
-            let matched =
-                crate::download_manager::domain_rules::resolved_key(&rules, first_hostname);
-            state
-                .jobs
-                .set_rate_limit(
-                    &job_id,
-                    resolved.max_bytes_per_sec,
-                    // Only record the pattern when a real hostname was matched, so a malformed
-                    // (host-less) URL doesn't write a misleading catch-all "*".
-                    if first_hostname.is_empty() {
-                        None
-                    } else {
-                        Some(matched)
-                    },
-                )
-                .await;
-        }
+    if let Some(first) = downloads.first()
+        && let Ok(parsed) = url::Url::parse(&first.url)
+    {
+        let first_hostname = parsed.host_str().unwrap_or("");
+        let resolved = crate::download_manager::domain_rules::resolve(&rules, first_hostname);
+        let matched = crate::download_manager::domain_rules::resolved_key(&rules, first_hostname);
+        state
+            .jobs
+            .set_rate_limit(
+                &job_id,
+                resolved.max_bytes_per_sec,
+                // Only record the pattern when a real hostname was matched, so a malformed
+                // (host-less) URL doesn't write a misleading catch-all "*".
+                if first_hostname.is_empty() {
+                    None
+                } else {
+                    Some(matched)
+                },
+            )
+            .await;
     }
 
     // Learn before any bytes move: if this domain-rule pattern has ever refused a resume, the row
     // can warn before the user pauses instead of only after it happens. The first resource is the
     // representative, the same one the rate-limit snapshot above uses.
-    if let (Some((repo, item_id)), Some(first)) = (&queue_link, downloads.first()) {
-        if let Ok(parsed) = url::Url::parse(&first.url) {
-            let host = parsed.host_str().unwrap_or("");
-            if !host.is_empty() {
-                let pattern = crate::download_manager::resume_support::pattern_for(&rules, host);
-                if let Some(supported) =
-                    crate::download_manager::resume_support::get(&state.redis.config, &pattern)
-                        .await
-                {
-                    if let Ok(Some(mut item)) = repo.get(item_id).await {
-                        if item.resume_support != Some(supported) {
-                            item.resume_support = Some(supported);
-                            if let Err(e) = repo.update(&item).await {
-                                tracing::warn!(item_id, error = %e, "could not record known resume support");
-                            }
-                            if let Some(tx) = &state.download_queue_tx {
-                                let _ = tx.send(serde_json::json!({
-                                    "kind": "update",
-                                    "id": item_id,
-                                    "resume_support": supported,
-                                }));
-                            }
-                        }
-                    }
+    if let (Some((repo, item_id)), Some(first)) = (&queue_link, downloads.first())
+        && let Ok(parsed) = url::Url::parse(&first.url)
+    {
+        let host = parsed.host_str().unwrap_or("");
+        if !host.is_empty() {
+            let pattern = crate::download_manager::resume_support::pattern_for(&rules, host);
+            if let Some(supported) =
+                crate::download_manager::resume_support::get(&state.redis.config, &pattern).await
+                && let Ok(Some(mut item)) = repo.get(item_id).await
+                && item.resume_support != Some(supported)
+            {
+                item.resume_support = Some(supported);
+                if let Err(e) = repo.update(&item).await {
+                    tracing::warn!(item_id, error = %e, "could not record known resume support");
+                }
+                if let Some(tx) = &state.download_queue_tx {
+                    let _ = tx.send(serde_json::json!({
+                        "kind": "update",
+                        "id": item_id,
+                        "resume_support": supported,
+                    }));
                 }
             }
         }
@@ -4019,12 +4227,12 @@ async fn run_managed_downloads(
                             accepted,
                         )
                         .await;
-                        if let Some((repo, item_id)) = &queue_link_for_drain {
-                            if let Ok(Some(mut item)) = repo.get(item_id).await {
-                                item.resume_support = Some(accepted);
-                                if let Err(e) = repo.update(&item).await {
-                                    tracing::warn!(item_id, error = %e, "could not persist resume support");
-                                }
+                        if let Some((repo, item_id)) = &queue_link_for_drain
+                            && let Ok(Some(mut item)) = repo.get(item_id).await
+                        {
+                            item.resume_support = Some(accepted);
+                            if let Err(e) = repo.update(&item).await {
+                                tracing::warn!(item_id, error = %e, "could not persist resume support");
                             }
                         }
                         if let (Some(tx), Some(item_id)) = (&queue_tx, &queue_item_id_for_drain) {
@@ -4049,6 +4257,22 @@ async fn run_managed_downloads(
                 if downloading_state_set.swap(true, std::sync::atomic::Ordering::SeqCst) {
                     return;
                 }
+                // 029 US2: bytes are finally moving. Marked for every job, not just a queue-tracked
+                // one — the phase timeline belongs to the job, while the `Downloading` queue state
+                // below is the row's own concern.
+                let phase_state = state.clone();
+                let phase_job_id = job_id.clone();
+                tokio::spawn(async move {
+                    phase_state.jobs.end_phase(&phase_job_id).await;
+                    phase_state
+                        .jobs
+                        .begin_phase(&phase_job_id, lanrurugi_core::jobs::PHASE_TRANSFER)
+                        .await;
+                    crate::diagnostics::download_trace::phase(
+                        &phase_job_id,
+                        lanrurugi_core::jobs::PHASE_TRANSFER,
+                    );
+                });
                 let Some((repo, item_id)) = queue_link.clone() else {
                     return;
                 };
@@ -4096,19 +4320,19 @@ async fn run_managed_downloads(
         // `Downloading` for an earlier resource in the same multi-resource job (`downloading_state_
         // set`'s own docs) — a later resource's own wait for its permit is real, but the job as a
         // whole already has bytes moving, so it must stay `Downloading`, not revert to `Waiting`.
-        if !downloading_state_set.load(std::sync::atomic::Ordering::SeqCst) {
-            if let Some((repo, item_id)) = &queue_link {
-                update_queue_item_state(
-                    repo,
-                    state.download_queue_tx.as_ref(),
-                    item_id,
-                    lanrurugi_storage::download_queue::DownloadQueueState::Waiting,
-                    Some(job_id.clone()),
-                    None,
-                    None,
-                )
-                .await;
-            }
+        if !downloading_state_set.load(std::sync::atomic::Ordering::SeqCst)
+            && let Some((repo, item_id)) = &queue_link
+        {
+            update_queue_item_state(
+                repo,
+                state.download_queue_tx.as_ref(),
+                item_id,
+                lanrurugi_storage::download_queue::DownloadQueueState::Waiting,
+                Some(job_id.clone()),
+                None,
+                None,
+            )
+            .await;
         }
 
         let downloaded_result = download_one(
@@ -4142,6 +4366,14 @@ async fn run_managed_downloads(
     if let Some((repo, item_id)) = &queue_link {
         set_queue_item_transferring(repo, state.download_queue_tx.as_ref(), item_id, false).await;
     }
+    // 029 US2: every resource's bytes have landed; bundling and cataloguing from here on is the
+    // ingest phase (the metadata plugin chain's own call is marked `publish` inside it, T014).
+    state.jobs.end_phase(&job_id).await;
+    state
+        .jobs
+        .begin_phase(&job_id, lanrurugi_core::jobs::PHASE_INGEST)
+        .await;
+    crate::diagnostics::download_trace::phase(&job_id, lanrurugi_core::jobs::PHASE_INGEST);
 
     let mut archive_ids = Vec::new();
     if should_bundle {
@@ -4533,29 +4765,48 @@ pub(crate) mod tests {
         use lanrurugi_plugin::pool::PoolError;
         use lanrurugi_plugin::protocol::ResponseError;
 
-        let declined = PoolError::PluginError(ResponseError {
+        let declined = PoolError::PluginError(Box::new(ResponseError {
             message: "Skipping archive without connecting to EH".to_string(),
             kind: "plugin_error".to_string(),
             error_code: Some(PLUGIN_SKIP_CODE.to_string()),
             data: None,
-        });
+            settings: None,
+        }));
         assert!(plugin_declined(&declined));
 
         // Everything else stays a failure: a plugin's own real error, and a crash.
-        let failed = PoolError::PluginError(ResponseError {
+        let failed = PoolError::PluginError(Box::new(ResponseError {
             message: "Search gallery by title failed".to_string(),
             kind: "plugin_error".to_string(),
             error_code: Some("Search gallery by title failed".to_string()),
             data: None,
-        });
+            settings: None,
+        }));
         assert!(!plugin_declined(&failed));
-        let crashed = PoolError::PluginError(ResponseError {
+        let crashed = PoolError::PluginError(Box::new(ResponseError {
             message: "boom".to_string(),
             kind: "internal".to_string(),
             error_code: None,
             data: None,
-        });
+            settings: None,
+        }));
         assert!(!plugin_declined(&crashed));
+    }
+
+    #[test]
+    fn only_the_recorded_plugin_is_skipped_and_a_bare_preview_skips_nothing() {
+        // 029 FR-005: the row records *which* plugin answered; every other enabled plugin still
+        // runs (they cover different sites), and a preview with no recorded namespace — an older
+        // row, a failed fetch, auto-fetch off — must not skip anything at all.
+        assert!(skip_metadata_plugin(
+            "metadata/ehentai",
+            Some("metadata/ehentai")
+        ));
+        assert!(
+            !skip_metadata_plugin("metadata/chaika", Some("metadata/ehentai")),
+            "a different metadata plugin still has something to say about this archive"
+        );
+        assert!(!skip_metadata_plugin("metadata/ehentai", None));
     }
 
     #[test]
@@ -4570,6 +4821,27 @@ pub(crate) mod tests {
             ]
         );
         assert!(source_urls("artist:x").is_empty());
+    }
+
+    #[test]
+    fn auto_run_order_follows_the_declared_chain_position_and_keeps_discovery_order() {
+        let mut plugins = vec![
+            ("metadata/a".to_string(), plugin_info_with_run_order(0)),
+            (
+                "metadata/regexparse".to_string(),
+                plugin_info_with_run_order(100),
+            ),
+            ("metadata/b".to_string(), plugin_info_with_run_order(0)),
+        ];
+        order_by_run_order(&mut plugins);
+        let order: Vec<&str> = plugins.iter().map(|(ns, _)| ns.as_str()).collect();
+        assert_eq!(order, ["metadata/regexparse", "metadata/a", "metadata/b"]);
+    }
+
+    fn plugin_info_with_run_order(run_order: i64) -> PluginInfo {
+        let mut info = plugin_info_with_parameters(Vec::new());
+        info.run_order = run_order;
+        info
     }
 
     fn plugin_info_with_parameters(parameters: Vec<PluginParameter>) -> PluginInfo {
@@ -4593,6 +4865,9 @@ pub(crate) mod tests {
             domain_match: Vec::new(),
             generated_by_wizard: false,
             sidecar_files: Vec::new(),
+            host_arguments: Vec::new(),
+            host_results: Vec::new(),
+            run_order: 0,
             data_version: 1,
             capabilities: Vec::new(),
         }
@@ -4693,6 +4968,18 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn trim_typed_source_keeps_the_query() {
+        assert_eq!(
+            trim_typed_source("https://www.example.org/view.php?id=5512#top"),
+            "example.org/view.php?id=5512"
+        );
+        assert_eq!(
+            trim_typed_source("https://e-hentai.org/g/2074808/1df3b73b2b/"),
+            "e-hentai.org/g/2074808/1df3b73b2b"
+        );
+    }
+
+    #[test]
     fn trim_url_strips_scheme_www_query_and_trailing_slash() {
         assert_eq!(
             trim_url("https://www.e-hentai.org/g/123/abc/?p=1"),
@@ -4770,6 +5057,7 @@ pub(crate) mod tests {
         let redis = lanrurugi_storage::test_support::test_redis_dbs().await?;
         let repos = crate::Repositories::new(&redis);
         Some(AppState {
+            restore_gate: lanrurugi_core::restore_gate::RestoreGate::new(),
         equivalence: std::sync::Arc::new(lanrurugi_search::Equivalence::default()),
         discovery_singleflight: std::sync::Arc::new(
             lanrurugi_core::singleflight::Singleflight::new(8),

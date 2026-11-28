@@ -16,7 +16,7 @@ export function pluginInfo() {
       { name: "param1", description: "Assume english", required: false, type: "bool" },
       { name: "param2", description: "Add 'Released' tag", required: false, type: "bool" },
     ],
-    declared_permissions: { net: [], read: false, write: true },
+    declared_permissions: { net: [], read: false, write: false },
     name: "Koushoku/Koharu.yaml",
     author: "thelastfantasy",
     description: "Collects metadata embedded into your archives as koushoku.yaml/info.yaml files.",

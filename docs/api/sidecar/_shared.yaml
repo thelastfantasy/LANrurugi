@@ -77,6 +77,33 @@ components:
         error:
           type: string
           description: Failure message. Present only for a `failed` job.
+        phases:
+          type: array
+          description: >-
+            This job's own phase timeline, oldest first, in the order the phases actually ran.
+            Absent — not an empty array — for every job that reports no phases: maintenance jobs,
+            and any build predating this field. A frontend must fall back to its own coarser
+            display in that case rather than rendering a zero-length timeline.
+          items:
+            type: object
+            required: [name, started_at]
+            properties:
+              name:
+                type: string
+                description: >-
+                  One of `queued`, `negotiate`, `waiting`, `transfer`, `ingest`, `publish`. The same
+                  vocabulary is used for this job's trace spans, so the two timelines line up.
+              started_at:
+                type: integer
+                format: int64
+                description: Epoch milliseconds, the same unit as the job's own `started_at`.
+              ended_at:
+                type: integer
+                format: int64
+                nullable: true
+                description: >-
+                  Epoch milliseconds, or `null` for the phase still running. A phase's end and the
+                  next phase's start are the same timestamp; a terminal job closes every phase.
 
     Session:
       type: object

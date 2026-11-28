@@ -17,20 +17,39 @@ function tagSortKey(tag: string): [number, string] {
   return [1, tag]
 }
 
+function splitTags(value: string): string[] {
+  return value
+    .split(/,\s?/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+}
+
+/** How long a touch must stay on a tag before it opens for editing. */
+const LONG_PRESS_MS = 500
+
 export function TagInput({
   value,
   onChange,
   suggestions = [],
   disabled,
+  formatTag,
 }: {
   value: string
   onChange: (next: string) => void
   suggestions?: string[]
   disabled?: boolean
+  /** Rewrites a tag the user just added or edited (e.g. a `source:` URL into its stored form).
+   * The tag goes in as typed and is swapped once this resolves; failures keep it as typed. */
+  formatTag?: (tag: string) => Promise<string>
 }) {
   const { t } = useTranslation()
   const [draft, setDraft] = useState("")
   const inputRef = useRef<HTMLInputElement>(null)
+  const [editing, setEditing] = useState<{ original: string; draft: string } | null>(null)
+  const pressTimerRef = useRef<number | undefined>(undefined)
+  const touchPressRef = useRef(false)
+  // Set once an edit is committed or cancelled, so the blur that follows its unmount is ignored.
+  const closingRef = useRef(false)
 
   const historyRef = useRef<{ past: string[]; future: string[] }>({ past: [], future: [] })
   const skipHistoryRef = useRef(false)
@@ -66,15 +85,11 @@ export function TagInput({
 
   const tags = useMemo(
     () =>
-      value
-        .split(/,\s?/)
-        .map((t) => t.trim())
-        .filter(Boolean)
-        .sort((a, b) => {
-          const [tierA, keyA] = tagSortKey(a)
-          const [tierB, keyB] = tagSortKey(b)
-          return tierA !== tierB ? tierA - tierB : keyA.localeCompare(keyB)
-        }),
+      splitTags(value).sort((a, b) => {
+        const [tierA, keyA] = tagSortKey(a)
+        const [tierB, keyB] = tagSortKey(b)
+        return tierA !== tierB ? tierA - tierB : keyA.localeCompare(keyB)
+      }),
     [value],
   )
 
@@ -86,10 +101,53 @@ export function TagInput({
       .slice(0, 8)
   }, [draft, suggestions, tags])
 
+  /** Swaps `tag` for its `formatTag` form in whatever the value is by the time that answers. Kept
+   * out of undo history, so one undo still removes the tag as a whole. */
+  function reformat(tag: string) {
+    if (!formatTag) return
+    formatTag(tag)
+      .then((formatted) => {
+        const next = normalizeTag(formatted)
+        if (!next || next === tag) return
+        const current = splitTags(lastValueRef.current)
+        if (!current.includes(tag)) return
+        const replaced = current.includes(next) ? current.filter((t) => t !== tag) : current.map((t) => (t === tag ? next : t))
+        // Recorded as already seen, so the history effect does not push it, and a second
+        // reformat answering before the re-render builds on this one instead of overwriting it.
+        lastValueRef.current = replaced.join(", ")
+        onChange(lastValueRef.current)
+      })
+      .catch(() => {})
+  }
+
   function commit(raw: string) {
     const next = normalizeTag(raw)
     if (!next || tags.includes(next)) return
     onChange([...tags, next].join(", "))
+    reformat(next)
+  }
+
+  function startEdit(tag: string) {
+    if (disabled) return
+    closingRef.current = false
+    setEditing({ original: tag, draft: tag })
+  }
+
+  /** An emptied tag is removed; one edited into an existing tag merges into it. */
+  function finishEdit() {
+    if (!editing || closingRef.current) return
+    closingRef.current = true
+    const { original } = editing
+    const next = normalizeTag(editing.draft)
+    setEditing(null)
+    if (next === original) return
+    const others = tags.filter((t) => t !== original)
+    onChange((!next || others.includes(next) ? others : [...others, next]).join(", "))
+    if (next) reformat(next)
+  }
+
+  function cancelLongPress() {
+    window.clearTimeout(pressTimerRef.current)
   }
 
   function removeTag(tag: string) {
@@ -136,12 +194,17 @@ export function TagInput({
     if (!text.includes(",")) return
     e.preventDefault()
     const next = [...tags]
+    const added: string[] = []
     for (const piece of text.split(/,\s?/)) {
       const tag = normalizeTag(piece)
-      if (tag && !next.includes(tag)) next.push(tag)
+      if (tag && !next.includes(tag)) {
+        next.push(tag)
+        added.push(tag)
+      }
     }
     onChange(next.join(", "))
     setDraft("")
+    added.forEach(reformat)
   }
 
   return (
@@ -172,41 +235,95 @@ export function TagInput({
         >
           {tags.map((tag) => (
             <li key={tag} style={{ margin: "0.4rem 0", paddingLeft: 10, display: "flex" }}>
-              <a
-                style={{
-                  padding: disabled ? "4px 8px" : "4px 4px 4px 8px",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  // Taller than either font's line box, so a tag whose CJK value falls back to a
-                  // font with different metrics is no taller than a Latin one; long tags still wrap.
-                  lineHeight: 1.25,
-                  minHeight: "1.5em",
-                  gap: 4,
-                  wordBreak: "break-all",
-                  textDecoration: "none",
-                }}
-              >
-                {tag}
-                {!disabled && (
-                  <button
-                    type="button"
-                    onClick={() => removeTag(tag)}
-                    aria-label={t("common.removeTag") ?? undefined}
-                    style={{
-                      background: "none",
-                      border: "none",
-                      padding: 0,
-                      margin: 0,
-                      cursor: "pointer",
-                      color: "inherit",
-                      lineHeight: 1,
-                      fontSize: "1em",
+              {editing?.original === tag ? (
+                <a style={{ padding: "4px 8px", display: "inline-flex", alignItems: "center", lineHeight: 1.25, minHeight: "1.5em" }}>
+                  <input
+                    autoFocus
+                    value={editing.draft}
+                    size={Math.max(editing.draft.length, 4)}
+                    aria-label={t("common.editTag") ?? undefined}
+                    onChange={(e) => setEditing({ original: tag, draft: e.target.value })}
+                    onKeyDown={(e) => {
+                      // Keeps Ctrl+Z on this field's own text rather than the tag list's history.
+                      e.stopPropagation()
+                      if (e.key === "Enter") {
+                        e.preventDefault()
+                        finishEdit()
+                      } else if (e.key === "Escape") {
+                        e.preventDefault()
+                        closingRef.current = true
+                        setEditing(null)
+                      }
                     }}
-                  >
-                    ×
-                  </button>
-                )}
-              </a>
+                    onBlur={finishEdit}
+                    style={{
+                      border: "none",
+                      outline: "none",
+                      boxShadow: "none",
+                      background: "transparent",
+                      color: "inherit",
+                      font: "inherit",
+                      padding: 0,
+                      maxWidth: "100%",
+                    }}
+                  />
+                </a>
+              ) : (
+                <a
+                  title={disabled ? undefined : (t("common.editTagHint") ?? undefined)}
+                  onDoubleClick={(e) => {
+                    if ((e.target as HTMLElement).closest("button")) return
+                    startEdit(tag)
+                  }}
+                  onPointerDown={(e) => {
+                    touchPressRef.current = e.pointerType !== "mouse"
+                    if (e.pointerType === "mouse" || disabled) return
+                    cancelLongPress()
+                    pressTimerRef.current = window.setTimeout(() => startEdit(tag), LONG_PRESS_MS)
+                  }}
+                  onPointerUp={cancelLongPress}
+                  onPointerLeave={cancelLongPress}
+                  onPointerCancel={cancelLongPress}
+                  onContextMenu={(e) => {
+                    // A long press would otherwise also raise the browser's own touch menu.
+                    if (!disabled && touchPressRef.current) e.preventDefault()
+                  }}
+                  style={{
+                    WebkitTouchCallout: "none",
+                    padding: disabled ? "4px 8px" : "4px 4px 4px 8px",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    // Taller than either font's line box, so a tag whose CJK value falls back to a
+                    // font with different metrics is no taller than a Latin one; long tags still wrap.
+                    lineHeight: 1.25,
+                    minHeight: "1.5em",
+                    gap: 4,
+                    wordBreak: "break-all",
+                    textDecoration: "none",
+                  }}
+                >
+                  {tag}
+                  {!disabled && (
+                    <button
+                      type="button"
+                      onClick={() => removeTag(tag)}
+                      aria-label={t("common.removeTag") ?? undefined}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        padding: 0,
+                        margin: 0,
+                        cursor: "pointer",
+                        color: "inherit",
+                        lineHeight: 1,
+                        fontSize: "1em",
+                      }}
+                    >
+                      ×
+                    </button>
+                  )}
+                </a>
+              )}
             </li>
           ))}
           {!disabled && (

@@ -74,12 +74,14 @@ const NAMESPACE_PREFIX = /^-?([^:\s"*?]+):"?(.*)$/
  * row would build a query that can never match — and because picking a row consumes Enter, the
  * symptom a reader sees is "Enter does nothing, and my quotes moved".
  *
- * Deliberately *not* here: `bookmark:`, `category:` and `phrase:`, whose values are names or
- * phrases that legitimately contain spaces, and every other namespace (tags, `title:`,
+ * Deliberately *not* here: `bookmark:`, `stamp:`, `category:` and `phrase:`, whose values are
+ * names or phrases that legitimately contain spaces, and every other namespace (tags, `title:`,
  * `filename:`), which is what this module's phrase feature exists for.
  */
 const OPERATOR_NAMESPACES = new Set([
   "date_added",
+  "timestamp",
+  "time",
   "pages",
   "read",
   "progress",
@@ -329,6 +331,7 @@ export const QUICK_FILTERS: readonly QuickFilter[] = [
   // `has:` — associated state.
   { token: "has:patch", hint: "library.quickFilterHintHasPatch" },
   { token: "has:bookmark", hint: "library.quickFilterHintHasBookmark" },
+  { token: "has:stamp", hint: "library.quickFilterHintHasStamp" },
   { token: "has:category", hint: "library.quickFilterHintHasCategory" },
   { token: "has:split-suggestion", hint: "library.quickFilterHintHasSplitSuggestion" },
   { token: "has:source", hint: "library.quickFilterHintHasSource" },
@@ -350,12 +353,41 @@ export const QUICK_FILTERS: readonly QuickFilter[] = [
     caret: 10,
     hint: "library.quickFilterHintBookmarkName",
   },
+  {
+    token: 'stamp:""',
+    label: 'stamp:"…"',
+    namespace: "stamp",
+    caret: 7,
+    hint: "library.quickFilterHintStampText",
+  },
   { token: "rating:<3", hint: "library.quickFilterHintRatingBelow3" },
   { token: "rating:>=4", hint: "library.quickFilterHintRatingAtLeast4" },
+  // The two text fields that are *not* plain tag search. Both take a reader-supplied value, so they
+  // follow the `bookmark:` chip's placeholder shape rather than carrying a fixed token.
+  // No quotes in the inserted token: quoting is a *phrase* operator, and a chip that pre-quotes
+  // turns the natural `work:生活 12` (two words, ANDed) into "the exact string 生活 12", which no
+  // real title contains. Words are separated by spaces; a phrase is something the user types.
+  {
+    token: "title:",
+    label: "title:…",
+    namespace: "title",
+    caret: 6,
+    hint: "library.quickFilterHintTitleField",
+  },
+  {
+    token: "work:",
+    label: "work:…",
+    namespace: "work",
+    caret: 5,
+    hint: "library.quickFilterHintWorkField",
+  },
 ]
 
 /** The chips' tokens as plain strings — what the search bar's Enter-action map needs. */
 export const QUICK_FILTER_TOKENS: readonly string[] = QUICK_FILTERS.map((chip) => chip.token)
+
+/** Which date field an "add range" applies to — see {@link buildDateRangeToken}. */
+export type DateRangeNamespace = "date_added" | "timestamp" | "time"
 
 /**
  * Builds the filter text for an "added between" range — `date_added:>=2026-01-01
@@ -363,17 +395,25 @@ export const QUICK_FILTER_TOKENS: readonly string[] = QUICK_FILTERS.map((chip) =
  * produces. Returns `null` when neither bound is usable, and skips an unusable bound rather than
  * emitting a token that would match nothing; an inverted range is swapped rather than silently
  * returning zero results, since that is what a user who typed the two dates backwards meant.
+ *
+ * `namespace` selects which date the range means: `date_added` (when this library got the file,
+ * the default and the only field legacy had), `timestamp` (when the source posted the work) or
+ * `time` (either of the two — the engine unions them per archive).
  */
-export function buildDateRangeToken(from: string, to: string): string | null {
+export function buildDateRangeToken(
+  from: string,
+  to: string,
+  namespace: DateRangeNamespace = "date_added",
+): string | null {
   const valid = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value)
   const hasFrom = valid(from)
   const hasTo = valid(to)
   if (!hasFrom && !hasTo) return null
   if (hasFrom && hasTo) {
     const [start, end] = from <= to ? [from, to] : [to, from]
-    return `date_added:>=${start} date_added:<=${end}`
+    return `${namespace}:>=${start} ${namespace}:<=${end}`
   }
-  return hasFrom ? `date_added:>=${from}` : `date_added:<=${to}`
+  return hasFrom ? `${namespace}:>=${from}` : `${namespace}:<=${to}`
 }
 
 /**

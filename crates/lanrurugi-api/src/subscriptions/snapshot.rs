@@ -259,10 +259,10 @@ pub fn diff_with(
             continue;
         }
         // Aged out of the window: the listing stops before it, which says nothing about the source.
-        if let (Some(cutoff), Some(posted)) = (ctx.window_cutoff, posted_secs(prior)) {
-            if posted < cutoff {
-                continue;
-            }
+        if let (Some(cutoff), Some(posted)) = (ctx.window_cutoff, posted_secs(prior))
+            && posted < cutoff
+        {
+            continue;
         }
 
         let missing_count = prior.missing_count + 1;
