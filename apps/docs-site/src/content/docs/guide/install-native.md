@@ -10,7 +10,7 @@ description: 不用容器，直接在 Linux、Apple Silicon Mac 或 FreeBSD 上�
 | `lanrurugi-<版本>-linux-x86_64.tar.gz` | 64 位 Linux（glibc 2.35 及以上：Debian 12、Ubuntu 22.04、Fedora 36、Arch 等） |
 | `lanrurugi-<版本>-linux-aarch64.tar.gz` | ARM64 Linux（同上，例如树莓派 5、ARM 服务器） |
 | `lanrurugi-<版本>-macos-arm64.tar.gz` | Apple Silicon Mac（macOS 13 及以上） |
-| `lanrurugi-<版本>-freebsd-x86_64.tar.gz` | FreeBSD 14 |
+| `lanrurugi-<版本>-freebsd-x86_64.tar.gz` | FreeBSD 14.4 及以上 |
 
 安装包在 GitHub 的 [Releases](https://github.com/thelastfantasy/LANrurugi/releases) 页面，`SHA256SUMS` 里有每个文件的校验值。
 
