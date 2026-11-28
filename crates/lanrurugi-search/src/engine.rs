@@ -36,6 +36,9 @@ pub enum SearchError {
     Bookmarks(#[from] lanrurugi_storage::bookmarks::BookmarksError),
     #[error("repository error: {0}")]
     Repository(#[from] lanrurugi_storage::repository::RepositoryError),
+    /// A blocking read (`filename:`'s sidecars) panicked or was cancelled.
+    #[error("background task failed: {0}")]
+    Task(String),
 }
 
 type Result<T> = std::result::Result<T, SearchError>;
@@ -903,6 +906,8 @@ async fn attribute_filter(
         "in" => Ok(Some(in_filter(search_conn, &value, scope).await?)),
         "size" => Ok(Some(size_filter(archive_conn, &value, scope).await?)),
         "bookmark" => Ok(Some(bookmark_name_filter(ctx, &value, scope).await?)),
+        "stamp" => Ok(Some(stamp_text_filter(ctx, &value, scope).await?)),
+        "filename" => Ok(Some(filename_filter(ctx, &value, scope).await?)),
         "phrase" => Ok(Some(
             phrase_filter(archive_conn, ctx.eq, &value, scope).await?,
         )),
@@ -1007,8 +1012,9 @@ async fn state_filter(
 
 /// `has:` — a piece of associated state rather than text.
 ///
-/// `patch` reads the archive hash directly. `bookmark` is the one operator here that needs another
-/// repository (see its own arm below for why that is still one lookup and not a new index).
+/// `patch` reads the archive hash directly, `stamp` the stamps it lists. `bookmark` is the one
+/// operator here that needs another repository (see its own arm below for why that is still one
+/// lookup and not a new index).
 /// `category` (static membership only — see that arm) and `split-suggestion` (a caller-supplied id
 /// set, since split-suggestion records live on the config DB) complete the set.
 async fn has_filter(
@@ -1070,6 +1076,13 @@ async fn has_filter(
                 .cloned()
                 .collect())
         }
+        // "This archive has at least one stamp." Read from the stamps themselves rather than the
+        // archive's `stamps` list alone: that list can still name a stamp whose hash is gone (#102).
+        // Guests see the same thing they could already read per archive (`/api/archives/:id/stamps`).
+        "stamp" => Ok(stamp_contents(archive_conn, scope)
+            .await?
+            .into_keys()
+            .collect()),
         // "This archive has at least one `source:` tag." A maintained set rather than a per-archive
         // `HGET tags` walk: the point of `has:source` is sweeping a whole library for missing
         // sources, which is exactly when a per-id round trip would hurt most. Negation composes
@@ -1252,17 +1265,11 @@ async fn phrase_filter(
     Ok(ids)
 }
 
-/// `bookmark:"name"` — archives with a bookmarked page whose *name* matches. The mirror image of
-/// `has:bookmark` (which only asks whether a bookmark exists at all): this one is a text match, so
-/// it deliberately reuses every other text token's semantics — one HGETALL of the bookmark data,
-/// both sides pushed through the same canonical folding the tag/title indexes use, `?`/`*` globs
-/// preserved by the grammar's own escaping, multi-word names kept together only by quoting.
-///
-/// Quoting does *not* narrow this to a whole-name equality, matching the rule the title half
-/// already follows: for a free-text field, quotes mean "these words stay one contiguous phrase",
-/// which is what makes `bookmark:"chapter 1"` different from two separate `bookmark:` terms. An
-/// empty value (`bookmark:`) therefore means "some *named* bookmark exists" — unnamed bookmarks
-/// never match, since there is no text to match against.
+/// `bookmark:"name"` — archives with a bookmarked page whose *name* matches. The text counterpart of
+/// `has:bookmark`. The quoted value is a small query over each name ([`TextMatcher`]): words AND,
+/// `|` ORs, `-` negates, all within the *same* name; the quotes are the value's boundary, so a word
+/// after them is an ordinary term. An empty value (`bookmark:`) means
+/// "some *named* bookmark exists" — unnamed bookmarks never match.
 ///
 /// Tankoubon aggregates are skipped like every other per-archive attribute.
 async fn bookmark_name_filter(
@@ -1270,8 +1277,7 @@ async fn bookmark_name_filter(
     value: &str,
     scope: &HashSet<String>,
 ) -> Result<HashSet<String>> {
-    let folded = ctx.eq.fold_pattern(value);
-    let pattern = format!("*{folded}*");
+    let matcher = TextMatcher::parse(ctx.eq, value);
     let bookmarks = ctx.bookmarks.list_all().await?;
     Ok(bookmarks
         .into_iter()
@@ -1283,10 +1289,189 @@ async fn bookmark_name_filter(
             // capitalised bookmark name unmatchable.
             b.name
                 .as_deref()
-                .is_some_and(|name| glob_match(&pattern, &ctx.eq.fold(&name.to_lowercase())))
+                .is_some_and(|name| matcher.matches(ctx.eq, name))
         })
         .map(|b| b.archive_id)
         .collect())
+}
+
+/// `stamp:"text"` — archives with a stamp whose text matches the value's query ([`TextMatcher`]),
+/// evaluated per stamp like `bookmark:`. An empty value means "some stamp with text exists".
+async fn stamp_text_filter(
+    ctx: &mut EvalCtx<'_>,
+    value: &str,
+    scope: &HashSet<String>,
+) -> Result<HashSet<String>> {
+    let matcher = TextMatcher::parse(ctx.eq, value);
+    let stamps = stamp_contents(ctx.archive_conn, scope).await?;
+    Ok(stamps
+        .into_iter()
+        .filter(|(_, contents)| {
+            contents
+                .iter()
+                .any(|text| !text.is_empty() && matcher.matches(ctx.eq, text))
+        })
+        .map(|(id, _)| id)
+        .collect())
+}
+
+/// A `bookmark:`/`stamp:` value as a query over *one* text (one bookmark name, one stamp): the value
+/// is parsed with the search box's own grammar, so spaces AND, `|` ORs, `-` negates and parentheses
+/// group, while every word is a substring test with the tag/title folding and `?`/`*` globs.
+/// `stamp:"a -b"` is therefore "a stamp with a and without b", not two independent archive tests.
+/// An empty value matches any text.
+enum TextMatcher {
+    All(Vec<TextMatcher>),
+    Any(Vec<TextMatcher>),
+    Not(Box<TextMatcher>),
+    Word(String),
+}
+
+impl TextMatcher {
+    fn parse(eq: &Equivalence, value: &str) -> Self {
+        fn build(eq: &Equivalence, expr: Expr) -> TextMatcher {
+            match expr {
+                Expr::And(children) => {
+                    TextMatcher::All(children.into_iter().map(|e| build(eq, e)).collect())
+                }
+                Expr::Or(children) => {
+                    TextMatcher::Any(children.into_iter().map(|e| build(eq, e)).collect())
+                }
+                Expr::Not(child) => TextMatcher::Not(Box::new(build(eq, *child))),
+                Expr::Term(token) => {
+                    TextMatcher::Word(format!("*{}*", eq.fold_pattern(&token.tag)))
+                }
+            }
+        }
+        build(eq, parse_query(value))
+    }
+
+    /// Lowercased *before* folding, exactly like `indexer::folded_tag_key` does for tag text:
+    /// `fold` handles CJK/kana equivalences, not case, and the query side arrives lowercased by
+    /// `grammar::normalize`.
+    fn matches(&self, eq: &Equivalence, text: &str) -> bool {
+        let lower = text.to_lowercase();
+        self.matches_folded(&eq.fold(&lower))
+    }
+
+    fn matches_folded(&self, folded: &str) -> bool {
+        match self {
+            Self::All(children) => children.iter().all(|c| c.matches_folded(folded)),
+            Self::Any(children) => children.iter().any(|c| c.matches_folded(folded)),
+            Self::Not(child) => !child.matches_folded(folded),
+            Self::Word(pattern) => glob_match(pattern, folded),
+        }
+    }
+}
+
+/// `filename:"…"` — the archive's actual file name, extension included, matched like `stamp:`'s
+/// text ([`TextMatcher`]). Under `_byname/` that is the name on disk; under the hash layout
+/// (`<bucket>/<id>.<ext>`) the disk name is the id, so the user's own name comes from the sidecar
+/// beside it (`<id>.json`'s `original_filename`), falling back to the disk name when there is none.
+/// A percent-encoded name (legacy uploads kept `%20`-style names on disk) also matches decoded.
+async fn filename_filter(
+    ctx: &mut EvalCtx<'_>,
+    value: &str,
+    scope: &HashSet<String>,
+) -> Result<HashSet<String>> {
+    const BATCH: usize = 512;
+    let matcher = TextMatcher::parse(ctx.eq, value);
+    let ids: Vec<&String> = scope.iter().filter(|id| !id.starts_with("TANK")).collect();
+    let mut files: Vec<(String, String)> = Vec::with_capacity(ids.len());
+    for chunk in ids.chunks(BATCH) {
+        let mut pipe = deadpool_redis::redis::pipe();
+        for id in chunk {
+            pipe.hget(id.as_str(), "file");
+        }
+        let paths: Vec<Option<String>> = pipe.query_async(&mut *ctx.archive_conn).await?;
+        for (id, path) in chunk.iter().zip(paths) {
+            if let Some(path) = path.filter(|p| !p.is_empty()) {
+                files.push(((*id).clone(), path));
+            }
+        }
+    }
+    // Sidecars are small files beside the archives; reading a library's worth is blocking IO.
+    let names = tokio::task::spawn_blocking(move || {
+        files
+            .into_iter()
+            .map(|(id, path)| {
+                let name = file_name_of(&id, std::path::Path::new(&path));
+                (id, name)
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|e| SearchError::Task(e.to_string()))?;
+    Ok(names
+        .into_iter()
+        .filter(|(_, name)| {
+            let decoded = percent_encoding::percent_decode_str(name).decode_utf8_lossy();
+            matcher.matches(ctx.eq, name)
+                || (decoded != name.as_str() && matcher.matches(ctx.eq, &decoded))
+        })
+        .map(|(id, _)| id)
+        .collect())
+}
+
+/// The user's file name for an archive at `path`: the sidecar's `original_filename` when the file
+/// is hash-named after `id`, else the name on disk.
+fn file_name_of(id: &str, path: &std::path::Path) -> String {
+    let on_disk = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if path.file_stem().and_then(|s| s.to_str()) == Some(id) {
+        let sidecar = path.with_file_name(format!("{id}.json"));
+        if let Some(original) = std::fs::read(&sidecar)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .and_then(|json| json.get("original_filename")?.as_str().map(str::to_string))
+            .filter(|name| !name.is_empty())
+        {
+            return original;
+        }
+    }
+    on_disk
+}
+
+/// Every archive in `scope` that has at least one stamp, with each existing stamp's text. Two
+/// pipelined passes — the archives' `stamps` lists, then those stamps' `content` — so a whole-library
+/// scope costs two round trips per batch, not one per archive. A listed stamp whose hash is gone is
+/// skipped. Tankoubon aggregates have no stamps of their own.
+async fn stamp_contents(
+    archive_conn: &mut deadpool_redis::Connection,
+    scope: &HashSet<String>,
+) -> Result<HashMap<String, Vec<String>>> {
+    const BATCH: usize = 512;
+    let ids: Vec<&String> = scope.iter().filter(|id| !id.starts_with("TANK")).collect();
+    let mut listed: Vec<(String, String)> = Vec::new();
+    for chunk in ids.chunks(BATCH) {
+        let mut pipe = deadpool_redis::redis::pipe();
+        for id in chunk {
+            pipe.hget(id.as_str(), "stamps");
+        }
+        let lists: Vec<Option<String>> = pipe.query_async(&mut *archive_conn).await?;
+        for (id, raw) in chunk.iter().zip(lists) {
+            let stamp_ids: Vec<String> = raw
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or_default();
+            listed.extend(stamp_ids.into_iter().map(|stamp| ((*id).clone(), stamp)));
+        }
+    }
+    let mut contents: HashMap<String, Vec<String>> = HashMap::new();
+    for chunk in listed.chunks(BATCH) {
+        let mut pipe = deadpool_redis::redis::pipe();
+        for (_, stamp) in chunk {
+            pipe.hget(stamp.as_str(), "content");
+        }
+        let texts: Vec<Option<String>> = pipe.query_async(&mut *archive_conn).await?;
+        for ((archive, _), text) in chunk.iter().zip(texts) {
+            if let Some(text) = text {
+                contents.entry(archive.clone()).or_default().push(text);
+            }
+        }
+    }
+    Ok(contents)
 }
 
 /// `smembers(key) ∩ scope`.
@@ -4563,7 +4748,7 @@ mod tests {
         assert_eq!(
             search_ids(r#"bookmark:"Fixture Chapter""#).await,
             vec![id_b.clone()],
-            "quoted multi-word name must stay one contiguous phrase"
+            "every word of a quoted value must be in the name"
         );
         assert_eq!(
             search_ids("bookmark:chapter").await,
@@ -4587,6 +4772,185 @@ mod tests {
 
         bookmarks.remove_all_for_archive(&id_b).await.unwrap();
         assert!(search_ids("artist:beta has:bookmark").await.is_empty());
+
+        // Boxed: this test is one long future, and inline it overflowed the test thread's stack.
+        Box::pin(async {
+            // `has:stamp` / `stamp:"text"` — read from the stamps the archive lists, with `bookmark:`'s
+            // text semantics. Synthetic text, and cleaned up again for a repeat run.
+            let stamps = lanrurugi_storage::repository::StampRepository::new(archive_pool.clone());
+            assert!(search_ids("artist:beta has:stamp").await.is_empty());
+            let stamp = stamps
+                .create(
+                    &ArchiveId(id_b.clone()),
+                    3,
+                    "Fixture Twist Ending",
+                    "10,10",
+                    "",
+                    "",
+                    1_700_000_000_000,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                search_ids("artist:beta has:stamp").await,
+                vec![id_b.clone()]
+            );
+            assert!(search_ids("artist:alpha has:stamp").await.is_empty());
+            assert_eq!(
+                search_ids(r#"stamp:"twist ending""#).await,
+                vec![id_b.clone()],
+                "every word, case-insensitively"
+            );
+            assert_eq!(
+                search_ids(r#"stamp:"ending twist""#).await,
+                vec![id_b.clone()],
+                "in any order"
+            );
+            assert!(
+                search_ids(r#"stamp:"ending" twist"#).await.is_empty(),
+                "a word after the closing quote is an ordinary term, not stamp text"
+            );
+            assert_eq!(search_ids("stamp:fixture*ending").await, vec![id_b.clone()]);
+            assert!(search_ids("artist:beta -has:stamp").await.is_empty());
+            // The words must share one stamp: split across two stamps, they do not match.
+            let other = stamps
+                .create(
+                    &ArchiveId(id_b.clone()),
+                    5,
+                    "Second Remark",
+                    "20,20",
+                    "",
+                    "",
+                    1_700_000_000_500,
+                )
+                .await
+                .unwrap();
+            assert!(search_ids(r#"stamp:"twist remark""#).await.is_empty());
+            assert_eq!(
+                search_ids(r#"stamp:"second remark""#).await,
+                vec![id_b.clone()]
+            );
+            // Inside the quotes the search box's own operators apply, per stamp.
+            assert_eq!(
+                search_ids(r#"stamp:"nosuchword | remark""#).await,
+                vec![id_b.clone()],
+                "| is an OR"
+            );
+            assert!(
+                search_ids(r#"stamp:"twist -ending""#).await.is_empty(),
+                "the one stamp with twist also has ending"
+            );
+            assert_eq!(
+                search_ids(r#"stamp:"remark -twist""#).await,
+                vec![id_b.clone()],
+                "- excludes within the same stamp, so Second Remark still matches"
+            );
+            assert_eq!(
+                search_ids(r#"stamp:"(nosuchword | second) remark""#).await,
+                vec![id_b.clone()],
+                "parentheses group"
+            );
+            stamps.delete(&other).await.unwrap();
+            // A stamp still listed on the archive but whose hash is gone (#102) is not a stamp.
+            {
+                let mut conn = archive_pool.get().await.unwrap();
+                let _: () = deadpool_redis::redis::AsyncCommands::del(&mut conn, stamp.as_str())
+                    .await
+                    .unwrap();
+            }
+            assert!(search_ids("artist:beta has:stamp").await.is_empty());
+            assert!(search_ids("stamp:twist").await.is_empty());
+            {
+                let mut conn = archive_pool.get().await.unwrap();
+                let _: () = deadpool_redis::redis::AsyncCommands::hdel(&mut conn, &id_b, "stamps")
+                    .await
+                    .unwrap();
+            }
+        })
+        .await;
+
+        // `filename:` — the actual file name: the disk name under `_byname/` (percent-encoded names
+        // match decoded too), the sidecar's `original_filename` under the hash layout. Boxed for the
+        // same stack reason as the stamp block.
+        Box::pin(async {
+            let dir = std::env::temp_dir().join(format!("lrr-filename-{}", std::process::id()));
+            let bucket = dir.join(&id_b[..2]);
+            std::fs::create_dir_all(&bucket).unwrap();
+            let hashed = bucket.join(format!("{id_b}.cbz"));
+            std::fs::write(&hashed, b"").unwrap();
+            std::fs::write(
+                bucket.join(format!("{id_b}.json")),
+                br#"{"original_filename":"Other Volume 02.cbz"}"#,
+            )
+            .unwrap();
+            let mut conn = archive_pool.get().await.unwrap();
+            let before_a: Option<String> =
+                deadpool_redis::redis::AsyncCommands::hget(&mut conn, &id_a, "file")
+                    .await
+                    .unwrap();
+            let before_b: Option<String> =
+                deadpool_redis::redis::AsyncCommands::hget(&mut conn, &id_b, "file")
+                    .await
+                    .unwrap();
+            let _: () = deadpool_redis::redis::AsyncCommands::hset(
+                &mut conn,
+                &id_a,
+                "file",
+                "/library/_byname/sub/%5BCircle%5D%20Fixture%20Book.zip",
+            )
+            .await
+            .unwrap();
+            let _: () = deadpool_redis::redis::AsyncCommands::hset(
+                &mut conn,
+                &id_b,
+                "file",
+                hashed.to_string_lossy().as_ref(),
+            )
+            .await
+            .unwrap();
+            drop(conn);
+
+            assert_eq!(
+                search_ids(r#"filename:"fixture book""#).await,
+                vec![id_a.clone()]
+            );
+            assert_eq!(
+                search_ids("filename:%5bcircle%5d").await,
+                vec![id_a.clone()]
+            );
+            assert_eq!(
+                search_ids(r#"filename:"volume 02""#).await,
+                vec![id_b.clone()]
+            );
+            assert_eq!(search_ids("filename:.cbz").await, vec![id_b.clone()]);
+            assert!(search_ids(r#"filename:"other -volume""#).await.is_empty());
+            let mut both = vec![id_a.clone(), id_b.clone()];
+            both.sort();
+            assert_eq!(search_ids(r#"filename:"book | volume""#).await, both);
+            // The hash-layout disk name is the id, never the user's name…
+            let by_disk_name: &'static str =
+                Box::leak(format!("filename:{}", &id_b[..12]).into_boxed_str());
+            assert!(search_ids(by_disk_name).await.is_empty());
+            // …unless there is no sidecar to say otherwise.
+            std::fs::remove_file(bucket.join(format!("{id_b}.json"))).unwrap();
+            assert_eq!(search_ids(by_disk_name).await, vec![id_b.clone()]);
+
+            let mut conn = archive_pool.get().await.unwrap();
+            for (id, before) in [(&id_a, before_a), (&id_b, before_b)] {
+                let _: () = match before {
+                    Some(file) => {
+                        deadpool_redis::redis::AsyncCommands::hset(&mut conn, id, "file", file)
+                            .await
+                            .unwrap()
+                    }
+                    None => deadpool_redis::redis::AsyncCommands::hdel(&mut conn, id, "file")
+                        .await
+                        .unwrap(),
+                };
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        })
+        .await;
 
         // `phrase:` — ordered adjacency across the archive's whole text (title + tags), which no
         // quoting spelling can express. `id_a`'s title is "Orword Fixture" and `id_b`'s tag is

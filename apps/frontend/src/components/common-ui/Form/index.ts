@@ -18,6 +18,8 @@ export * from "./StarRating";
 
 export * from "./Switch";
 
+export * from "./Slider";
+
 export * from "./SplitButton";
 
 export * from "./ToggleButtonMenu";

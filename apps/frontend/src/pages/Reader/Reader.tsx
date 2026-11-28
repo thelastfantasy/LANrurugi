@@ -38,7 +38,7 @@ import {
 } from "@/components/common-ui/Display";
 import { Badge } from "@/components/common-ui/Display"
 import { Keycap as Key } from "@/components/common-ui/Display/Keycap";
-import { IconButton, ToggleButtonMenu } from "@/components/common-ui/Form";
+import { IconButton, Slider, ToggleButtonMenu } from "@/components/common-ui/Form";
 import { currentRating,RatingWidget } from "@/components/common-ui/Form/RatingWidget";
 import { isPlainLinkClick } from "@/components/common-ui/Link"
 import {
@@ -688,6 +688,10 @@ export function Reader() {
   const [showHeadlessFileInfo, setShowHeadlessFileInfo] = useState(false);
   // The chapter OSD's own scroll container, so opening it can centre the current chapter.
   const chapterOsdRef = useRef<HTMLDivElement | null>(null);
+  // The go-to OSD's page field, and the page its scrubber is being dragged to (null when idle):
+  // the drag only previews; the jump happens on release.
+  const gotoInputRef = useRef<HTMLInputElement | null>(null);
+  const [scrubPage, setScrubPage] = useState<number | null>(null);
   // Opening the OSD should land on the chapter being read, not at the top of the list — the same
   // "bring the current item into view" behaviour the archive overview's grid has.
   useEffect(() => {
@@ -2880,6 +2884,7 @@ export function Reader() {
         case "g":
           // `preventDefault` so the "g" itself is not typed into the field that opens with focus.
           e.preventDefault();
+          setScrubPage(null);
           setOverlay("goto");
           return;
         case "h":
@@ -5153,6 +5158,7 @@ export function Reader() {
               <div className="reader-goto-osd-title">{t("reader.goToPageTitle")}</div>
               <div className="reader-goto-osd-row">
                 <input
+                  ref={gotoInputRef}
                   name="page"
                   type="text"
                   inputMode="numeric"
@@ -5188,6 +5194,29 @@ export function Reader() {
               </div>
               <div className="reader-goto-osd-hint">{t("reader.goToPageHint")}</div>
             </form>
+            {/* Desktop only: a page scrubber along the bottom. Dragging previews the page (in the
+                field above too); releasing, or a plain click on the track, jumps there. */}
+            {supportsHover && totalPages > 1 && (
+              <div className="reader-goto-scrubber">
+                <span className="reader-goto-scrubber-end">1</span>
+                <Slider
+                  min={1}
+                  max={totalPages}
+                  value={scrubPage ?? currentPage}
+                  onValueChange={(page) => {
+                    setScrubPage(page);
+                    if (gotoInputRef.current) gotoInputRef.current.value = String(page);
+                  }}
+                  onValueCommitted={(page) => {
+                    setScrubPage(null);
+                    jumpToTypedPage(String(page));
+                  }}
+                  thumbLabel={`${scrubPage ?? currentPage} / ${totalPages}`}
+                  aria-label={t("reader.goToPageTitle") ?? undefined}
+                />
+                <span className="reader-goto-scrubber-end">{totalPages}</span>
+              </div>
+            )}
           </>
         )}
 

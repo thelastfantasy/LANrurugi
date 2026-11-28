@@ -74,8 +74,8 @@ const NAMESPACE_PREFIX = /^-?([^:\s"*?]+):"?(.*)$/
  * row would build a query that can never match — and because picking a row consumes Enter, the
  * symptom a reader sees is "Enter does nothing, and my quotes moved".
  *
- * Deliberately *not* here: `bookmark:`, `category:` and `phrase:`, whose values are names or
- * phrases that legitimately contain spaces, and every other namespace (tags, `title:`,
+ * Deliberately *not* here: `bookmark:`, `stamp:`, `category:` and `phrase:`, whose values are
+ * names or phrases that legitimately contain spaces, and every other namespace (tags, `title:`,
  * `filename:`), which is what this module's phrase feature exists for.
  */
 const OPERATOR_NAMESPACES = new Set([
@@ -331,6 +331,7 @@ export const QUICK_FILTERS: readonly QuickFilter[] = [
   // `has:` — associated state.
   { token: "has:patch", hint: "library.quickFilterHintHasPatch" },
   { token: "has:bookmark", hint: "library.quickFilterHintHasBookmark" },
+  { token: "has:stamp", hint: "library.quickFilterHintHasStamp" },
   { token: "has:category", hint: "library.quickFilterHintHasCategory" },
   { token: "has:split-suggestion", hint: "library.quickFilterHintHasSplitSuggestion" },
   { token: "has:source", hint: "library.quickFilterHintHasSource" },
@@ -351,6 +352,13 @@ export const QUICK_FILTERS: readonly QuickFilter[] = [
     namespace: "bookmark",
     caret: 10,
     hint: "library.quickFilterHintBookmarkName",
+  },
+  {
+    token: 'stamp:""',
+    label: 'stamp:"…"',
+    namespace: "stamp",
+    caret: 7,
+    hint: "library.quickFilterHintStampText",
   },
   { token: "rating:<3", hint: "library.quickFilterHintRatingBelow3" },
   { token: "rating:>=4", hint: "library.quickFilterHintRatingAtLeast4" },

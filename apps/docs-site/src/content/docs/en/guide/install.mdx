@@ -32,6 +32,11 @@ describe, then start it:
 
 <div class="lr-code-tabs">
 
+{/*
+  stable is commented out for now: `:latest` is only pushed by a final release, so it does not exist
+  before 1.0 and copying this would fail to pull. Restore it (ahead of beta, as the default tab) at the
+  1.0 release and switch this page's other `:beta` references back to `:latest`; see docs/dev/release.md.
+
 ```yaml title="stable"
 services:
   lanrurugi:
@@ -49,6 +54,7 @@ services:
       - LANRURUGI_FORCE_SECURE_COOKIES=false
     restart: unless-stopped
 ```
+*/}
 ```yaml title="beta"
 services:
   lanrurugi:
@@ -98,7 +104,7 @@ docker run -d --name lanrurugi -p 3000:3000 \
   -v /path/to/library:/home/koyomi/lanrurugi/content \
   -v /path/to/thumb:/home/koyomi/lanrurugi/thumb \
   -v /path/to/database:/home/koyomi/lanrurugi/database \
-  ghcr.io/thelastfantasy/lanrurugi:latest
+  ghcr.io/thelastfantasy/lanrurugi:beta
 ```
 
 ## Using a different port
@@ -116,7 +122,7 @@ To change the port inside the container too (`network_mode: host`, or something 
 command-line flag beats an environment variable, so `-e LANRURUGI_BIND=0.0.0.0:8080` **does not work**:
 
 ```sh
-docker run -d -p 8080:8080 ... ghcr.io/thelastfantasy/lanrurugi:latest \
+docker run -d -p 8080:8080 ... ghcr.io/thelastfantasy/lanrurugi:beta \
   serve --bind 0.0.0.0:8080
 ```
 
@@ -142,7 +148,8 @@ The same image, for amd64 and arm64, is published to two registries:
 
 The examples above use GitHub's registry. Docker Hub limits how often anonymous users can pull; if
 your NAS panel only searches Docker Hub, or you simply prefer it, use `jade913/lanrurugi` instead.
-`latest` points at the newest release; a specific version number works too.
+`beta` points at the newest pre-release; a specific version number works too. `latest` points at the
+newest final release and does not exist until 1.0 ships, which is why this page's examples use `beta` for now.
 
 ## Build the image from source
 

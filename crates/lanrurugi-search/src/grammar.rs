@@ -51,7 +51,7 @@
 pub enum Field {
     /// Tags and title — legacy's own behavior for a bare token.
     Any,
-    /// Title only (`title:` / `filename:` prefixes) — the one thing legacy's syntax had no way to
+    /// Title only (`title:` prefix) — the one thing legacy's syntax had no way to
     /// express at all, since a bare token always searched both.
     Title,
     /// The archive as a *work*: its title plus the namespaces that say who made it
@@ -237,22 +237,10 @@ fn lex(filter: &str) -> Vec<Piece> {
     let filter = filter.trim_end().trim_end_matches('\\');
     let quoted = ascii_quotes(filter);
     let mut chars = quoted.chars().peekable();
-    // `title:`/`work:` scope the *remaining words of their comma-separated segment*: real titles
-    // contain spaces, and `work:fate zero` has to mean "both words in the work fields" rather than
-    // "fate in the work fields, zero anywhere". A comma is the explicit reset — it is the one
-    // delimiter a user writes deliberately, where a space is just how titles are spelled.
-    let mut carried: Option<Field> = None;
-
     loop {
-        // Delimiters are separators, not pieces: juxtaposition is the AND. A comma *ends* a field
-        // scope, a space does not — see `carried` below.
-        let mut comma = false;
+        // Delimiters are separators, not pieces: juxtaposition is the AND.
         while matches!(chars.peek(), Some(',') | Some(' ')) {
-            comma |= chars.peek() == Some(&',');
             chars.next();
-        }
-        if comma {
-            carried = None;
         }
         let Some(&first) = chars.peek() else { break };
 
@@ -304,46 +292,34 @@ fn lex(filter: &str) -> Vec<Piece> {
 
         let (raw, isexact) = read_term(&mut chars);
         let (field, raw) = split_field_prefix(&raw);
-        // A term with its own `namespace:` (`artist:x`, `pages:>20`, `date:…`) ends the scope
-        // instead of being searched for as title text.
-        let field = if field == Field::Any && raw.contains(':') {
-            carried = None;
-            Field::Any
-        } else if field == Field::Any {
-            carried.unwrap_or(Field::Any)
-        } else {
-            carried = Some(field);
-            field
-        };
-        // `work:"fate zero"` / `title:"fate zero"` are not phrases: these fields are looked up as
-        // title/creator substrings, and a real title almost never contains the words a user types
-        // with the same spacing. The quotes there are just how people spell a value with spaces, so
-        // the words stay separate and all of them keep the field scope — same result as the
-        // unquoted form. A phrase is still available without a prefix (`"fate zero"` searches both
-        // the titles and the tags). A negated multi-word quote becomes `-(a b)` so the whole
-        // conjunction is negated, not just the first word.
+        // `title:`/`work:` values end where the value does: at the closing quote, or at the first
+        // space when unquoted (`title:fate zero` is title `fate` plus an ordinary `zero`). Inside the
+        // quotes the search box's own syntax applies to that field — spaces AND, `|` ORs, `-`
+        // negates, parentheses group — so the quoted text is lexed again and every term in it takes
+        // the field. The quotes are a boundary, not a phrase: a real title rarely spells the words
+        // with the same spacing. One plain word keeps the exact-tag reading (`work:"zeta"`), so a
+        // single creator name still goes through the literal key lookup.
         if matches!(field, Field::Work | Field::Title) && isexact {
-            let words: Vec<&str> = raw.split_whitespace().collect();
-            if words.len() > 1 {
-                if negated {
-                    pieces.push(Piece::Minus);
-                    pieces.push(Piece::Open);
-                }
-                for word in words {
-                    let tag = normalize(word);
-                    if !tag.is_empty() {
-                        pieces.push(Piece::Term(Token {
-                            tag,
-                            isexact: false,
-                            field,
-                        }));
+            let mut inner = lex(raw);
+            let single_word = inner.len() == 1 && matches!(inner[0], Piece::Term(_));
+            for piece in &mut inner {
+                if let Piece::Term(token) = piece {
+                    token.field = field;
+                    if single_word {
+                        token.isexact = true;
                     }
                 }
-                if negated {
-                    pieces.push(Piece::Close);
-                }
+            }
+            if inner.is_empty() {
                 continue;
             }
+            if negated {
+                pieces.push(Piece::Minus);
+            }
+            pieces.push(Piece::Open);
+            pieces.extend(inner);
+            pieces.push(Piece::Close);
+            continue;
         }
         let tag = normalize(raw);
         if !tag.is_empty() {
@@ -389,8 +365,33 @@ fn read_term(chars: &mut std::iter::Peekable<std::str::Chars>) -> (String, bool)
             // or the whole-token `"female:anal intercourse"` form the branch above already handles)
             // — this is purely an *additional accepted spelling*, not a new distinct semantic.
             Some(':') => {
+                let namespace = s.to_ascii_lowercase();
                 s.push(':');
                 chars.next();
+                // `stamp:` / `bookmark:` / `title:` / `filename:` / `work:`: single quotes (straight,
+                // curly or full-width) also delimit these values, whose text is typed by hand.
+                // Nowhere else — an apostrophe in a tag (`girl's`) must stay text.
+                let single_quote = chars
+                    .peek()
+                    .copied()
+                    .filter(|c| matches!(c, '\'' | '\u{2018}' | '\u{ff07}'));
+                if let (Some(open), true) = (
+                    single_quote,
+                    matches!(
+                        namespace.as_str(),
+                        "stamp" | "bookmark" | "title" | "filename" | "work"
+                    ),
+                ) {
+                    chars.next();
+                    let close: &[char] = match open {
+                        '\u{2018}' => &['\u{2019}', '\''],
+                        '\u{ff07}' => &['\u{ff07}'],
+                        _ => &['\''],
+                    };
+                    s.push_str(&read_delimited(chars, close));
+                    isexact = true;
+                    break;
+                }
                 if chars.peek() == Some(&'"') {
                     chars.next();
                     s.push_str(&read_quoted_body(chars));
@@ -419,15 +420,13 @@ fn read_term(chars: &mut std::iter::Peekable<std::str::Chars>) -> (String, bool)
     }
 }
 
-/// Recognizes the `title:` (or `filename:`, same thing — the stored `title` is what legacy calls
-/// both) field prefix, returning the remaining text. Any other namespace is left alone, so a real
-/// tagged namespace can't be shadowed by accident.
+/// Recognizes the `title:` and `work:` field prefixes, returning the remaining text. Any other
+/// namespace is left alone, so a real tagged namespace can't be shadowed by accident. (`filename:`
+/// is not one of them: it is the archive's actual file name, an engine operator like `stamp:`.)
 fn split_field_prefix(raw: &str) -> (Field, &str) {
     let lower = raw.to_ascii_lowercase();
-    for prefix in ["title:", "filename:"] {
-        if lower.starts_with(prefix) {
-            return (Field::Title, &raw[prefix.len()..]);
-        }
+    if lower.starts_with("title:") {
+        return (Field::Title, &raw["title:".len()..]);
     }
     if lower.starts_with("work:") {
         return (Field::Work, &raw["work:".len()..]);
@@ -441,12 +440,22 @@ fn split_field_prefix(raw: &str) -> (Field, &str) {
 /// erroring, matching every other malformed-input case in this parser (e.g. a trailing bare `-`),
 /// which all degrade gracefully instead of rejecting the whole query.
 fn read_quoted_body(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
+    read_delimited(chars, &['"'])
+}
+
+/// [`read_quoted_body`] for any closing character set; a backslash escapes a closing character or
+/// itself.
+fn read_delimited(chars: &mut std::iter::Peekable<std::str::Chars>, close: &[char]) -> String {
     let mut s = String::new();
     while let Some(c) = chars.next() {
+        if close.contains(&c) {
+            break;
+        }
         match c {
-            '"' => break,
             '\\' => match chars.peek() {
-                Some('"') | Some('\\') => s.push(chars.next().expect("peeked Some above")),
+                Some(&next) if next == '\\' || close.contains(&next) => {
+                    s.push(chars.next().expect("peeked Some above"))
+                }
                 _ => s.push('\\'),
             },
             other => s.push(other),
@@ -486,6 +495,40 @@ mod tests {
             isexact,
             field: Field::Title,
         })
+    }
+
+    #[test]
+    fn bookmark_and_stamp_values_end_at_their_quotes() {
+        // The quotes are the value: its words stay one token for the engine to split, and a word
+        // after the closing quote is an ordinary term again.
+        assert_eq!(parse_query(r#"stamp:"a b""#), tok("stamp:a b", true));
+        assert_eq!(parse_query(r#"bookmark:"A B""#), tok("bookmark:a b", true));
+        assert_eq!(
+            parse_query(r#"stamp:"a b" c"#),
+            Expr::And(vec![tok("stamp:a b", true), tok("c", false)])
+        );
+        // Single quotes (straight, curly, full-width) delimit these two values as well…
+        assert_eq!(
+            parse_query("stamp:'a b' c"),
+            Expr::And(vec![tok("stamp:a b", true), tok("c", false)])
+        );
+        assert_eq!(
+            parse_query("bookmark:\u{2018}a b\u{2019}"),
+            tok("bookmark:a b", true)
+        );
+        assert_eq!(
+            parse_query("stamp:\u{ff07}a b\u{ff07}"),
+            tok("stamp:a b", true)
+        );
+        // …and nothing else: an apostrophe elsewhere is text.
+        assert_eq!(parse_query("artist:o'neil"), tok("artist:o'neil", false));
+        // Operators inside the quotes are the value's own, left for the engine to parse.
+        assert_eq!(parse_query(r#"stamp:"a | -b""#), tok("stamp:a | -b", true));
+        // Unquoted, only the first word is the value.
+        assert_eq!(
+            parse_query("stamp:a b"),
+            Expr::And(vec![tok("stamp:a", false), tok("b", false)])
+        );
     }
 
     fn and(children: Vec<Expr>) -> Expr {
@@ -760,7 +803,13 @@ mod tests {
     #[test]
     fn title_prefix_scopes_a_token_to_the_title_half() {
         assert_eq!(parse_query("title:tari"), title("tari", false));
-        assert_eq!(parse_query("filename:tari$"), title("tari", true));
+        assert_eq!(parse_query("title:tari$"), title("tari", true));
+        // `filename:` is the file's own name, left whole for the engine.
+        assert_eq!(parse_query("filename:tari$"), tok("filename:tari", true));
+        assert_eq!(
+            parse_query("filename:'a | b.zip'"),
+            tok("filename:a | b.zip", true)
+        );
         // Spaces inside a `title:"…"` are word separators, not a phrase — see
         // `quoted_field_values_split_on_spaces` for why quoting a title is not "an exact title".
         assert_eq!(
@@ -817,12 +866,11 @@ mod tests {
         );
         // Without a prefix, quotes keep their phrase meaning (title and tag halves alike).
         assert_eq!(parse_query(r#""fate zero""#), tok("fate zero", true));
-        // The scope still ends at a comma.
+        // The value ends at the closing quote.
         assert_eq!(
             parse_query(r#"work:"fate zero", kana"#),
             and(vec![
-                work("fate", false),
-                work("zero", false),
+                and(vec![work("fate", false), work("zero", false)]),
                 tok("kana", false)
             ])
         );
@@ -842,28 +890,20 @@ mod tests {
     }
 
     #[test]
-    fn a_field_prefix_carries_across_spaces_but_stops_at_a_comma() {
-        // Real titles contain spaces — `work:fate zero` must scope *both* words, or the second one
-        // silently widens the search back to every tag in the library.
+    fn an_unquoted_field_value_ends_at_the_first_space() {
+        // Only the first word belongs to the prefix; the rest are ordinary terms.
         assert_eq!(
             parse_query("work:fate zero"),
-            and(vec![work("fate", false), work("zero", false)])
+            and(vec![work("fate", false), tok("zero", false)])
         );
         assert_eq!(
             parse_query("title:a b"),
-            and(vec![title("a", false), title("b", false)])
+            and(vec![title("a", false), tok("b", false)])
         );
-        // A comma is the explicit end of the scope: the caller wants `zero` unrestricted.
-        assert_eq!(
-            parse_query("work:fate, zero"),
-            and(vec![work("fate", false), tok("zero", false)])
-        );
-        // `|` is still AND's separator inside the scope, and the scope spans both branches.
         assert_eq!(
             parse_query("work:a|b"),
-            Expr::Or(vec![work("a", false), work("b", false)])
+            Expr::Or(vec![work("a", false), tok("b", false)])
         );
-        // A namespaced term keeps its own meaning and ends the scope.
         assert_eq!(
             parse_query("title:fate artist:takeuchi zero"),
             and(vec![
@@ -871,6 +911,37 @@ mod tests {
                 tok("artist:takeuchi", false),
                 tok("zero", false)
             ])
+        );
+    }
+
+    #[test]
+    fn a_quoted_field_value_carries_the_search_syntax() {
+        // Inside the quotes `|`, `-` and grouping apply, every term scoped to the field.
+        assert_eq!(
+            parse_query(r#"title:"a | -b""#),
+            Expr::Or(vec![title("a", false), not(title("b", false))])
+        );
+        assert_eq!(
+            parse_query(r#"work:"(a | b) c" d"#),
+            and(vec![
+                and(vec![
+                    Expr::Or(vec![work("a", false), work("b", false)]),
+                    work("c", false)
+                ]),
+                tok("d", false)
+            ])
+        );
+        // Single quotes, straight, curly or full-width, delimit the value the same way.
+        assert_eq!(
+            parse_query("title:'fate zero' kana"),
+            and(vec![
+                and(vec![title("fate", false), title("zero", false)]),
+                tok("kana", false)
+            ])
+        );
+        assert_eq!(
+            parse_query("work:\u{2018}fate zero\u{2019}"),
+            and(vec![work("fate", false), work("zero", false)])
         );
     }
 
