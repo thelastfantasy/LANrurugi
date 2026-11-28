@@ -4509,17 +4509,22 @@ mod tests {
         assert_eq!(search_ids("work:sword").await, vec![id_a.clone()]);
         assert_eq!(search_ids("work:goblin").await, vec![id_b.clone()]);
 
-        // Words after the prefix keep the scope, so `common` is looked for *in the work fields*
-        // and finds only a's `parody:common`… nothing: classification tags are out of scope.
-        assert!(search_ids("work:maiden common").await.is_empty());
-        // A comma ends the scope: now `common` is an ordinary token again, and a has it.
+        // Quoted, every word keeps the scope, so `common` is looked for *in the work fields* and
+        // finds nothing: classification tags are out of scope.
+        assert!(search_ids(r#"work:"maiden common""#).await.is_empty());
+        // Unquoted, the value ends at the space: `common` is an ordinary token again, and a has it.
+        assert_eq!(search_ids("work:maiden common").await, vec![id_a.clone()]);
         assert_eq!(search_ids("work:maiden, common").await, vec![id_a.clone()]);
 
-        // `title:` is strictly the title — no creator tags, and the same carry-across-spaces rule.
+        // `title:` is strictly the title — no creator tags, and the same quoting rule.
         assert!(search_ids("title:zeta").await.is_empty());
         assert_eq!(search_ids("title:sword").await, vec![id_a.clone()]);
-        assert_eq!(search_ids("title:sword maiden").await, vec![id_a.clone()]);
-        assert!(search_ids("title:sword zeta").await.is_empty());
+        assert_eq!(
+            search_ids(r#"title:"sword maiden""#).await,
+            vec![id_a.clone()]
+        );
+        assert!(search_ids(r#"title:"sword zeta""#).await.is_empty());
+        assert_eq!(search_ids("title:sword zeta").await, vec![id_a.clone()]);
 
         // Unscoped search still sees every tag, so the deviation is only inside `work:`/`title:`.
         let mut with_common = vec![id_a.clone(), id_b.clone(), id_d.clone()];
