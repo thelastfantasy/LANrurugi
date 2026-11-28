@@ -397,6 +397,10 @@ cp apps/docs-site/public/_headers "$out/_headers"
 echo "wrote $out (SDK $latest at the root) and $out/versions.json: $(cat "$out/versions.json")"
 """
 
+[tasks.docs-check-indexing]
+description = "Search-engine indexing gate over the built docs, Swagger UI, SDK and homepage directories (self canonicals, sitemaps, no redirecting or broken links, old versions out of the index). Run after docs-build + assemble-versions, docs-swagger, docs-sdk and `node homepage/build.mjs`; CI runs it before publishing."
+run = "node apps/docs-site/scripts/check-indexing.mjs"
+
 [tasks.docs-swagger]
 description = "Build deliverable 2 of 3: a standalone Swagger UI page over the same openapi.json, into apps/docs-site/dist-swagger/ — browsable schemas and a request panel, neither of which the prose reference can offer. Two locales: `/` is Chinese, `/en/` English. Deployed as its own Cloudflare Pages project."
 run = "pnpm --filter lanrurugi-docs run build:swagger"

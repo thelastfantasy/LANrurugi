@@ -17,6 +17,7 @@
 
    改完版本号后不再往 `dev` 合并别的东西，否则就要回到第 2 步。
 4. **`dev` → `main` 的 PR**：标题 `release: <版本号>`，正文列出这次合入 `dev` 的 PR。CI 全部通过后合并。
+   - 这个 PR 上会额外跑 `Docs (build + publish all three)`：按正式部署的方式构建文档站、API、SDK 和首页，再用 `mise run docs-check-indexing` 检查搜索引擎收录信号（规范地址、站点地图、会跳转或不存在的链接、旧版本是否退出索引）。它不通过就不要合并，否则问题会直接发布到线上。
    - 推送到 `main` 时 `ci.yml` 会发布三个 Cloudflare Pages 站点：docs（`docs.lrrg.dev`）、API（`api.lrrg.dev`）、SDK（`sdk.lrrg.dev`）。docs 的最新版本放在根路径，`/v<版本号>/` 301 到根路径的同一页；旧版本在 `/v<旧版本号>/` 下，最近几个是静态文件，更早的由 Pages Function 从 R2 里的发布 zip 读出（#305）。
    - 这时还没有 tag，但构建时会把正在构建的版本放进版本列表，「版本历史」页和版本选择器都已经有新版本。
 5. **打 tag**：在 `main` 的合并提交上打 `v<版本号>` 并推送：

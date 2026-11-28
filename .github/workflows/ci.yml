@@ -403,8 +403,12 @@ jobs:
     needs: [docs-generate, rust, frontend]
     # Publishing only ever happened on `main`; building the three sites on every PR was minutes of
     # Astro/SDK/Swagger work for output nobody read. The `docs-generate` gate (required on `dev`
-    # too) still catches a route table the reference no longer matches.
-    if: always() && github.ref == 'refs/heads/main' && needs.docs-generate.result == 'success'
+    # too) still catches a route table the reference no longer matches. A PR *into* `main` (a
+    # release) builds too, without publishing, so the indexing check below fails it before anything
+    # is deployed.
+    if: >-
+      always() && needs.docs-generate.result == 'success' &&
+      (github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && github.base_ref == 'main'))
     # Job-level so the `if:` on the deploy step below can see it: a step's own `env` is not
     # available to that step's `if` condition, but the job-level `env` context is.
     env:
@@ -557,6 +561,17 @@ jobs:
       - name: Build — Swagger UI
         run: mise run docs-swagger
 
+      # The project homepage: plain HTML/CSS/JS pre-rendered per language by a dependency-free
+      # Node script (so crawlers get real text and hreflang alternates without running JS).
+      - name: Build homepage
+        run: node homepage/build.mjs
+
+      # Exactly the four directories about to be deployed: every page canonical to itself and in its
+      # sitemap, no link or sitemap entry that redirects or 404s, old versions out of the index.
+      # Each rule is a Search Console report this project has had; see the script's header.
+      - name: Check indexing signals
+        run: mise run docs-check-indexing
+
       # Publishing is skipped, never failed, when the deployment credentials are absent — a fork, a
       # pull request, or anyone else's clone must still get a green pipeline from the build alone.
       # Cloudflare Pages receives prebuilt directories: it is not asked to build anything, because it
@@ -618,11 +633,6 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: pages deploy apps/docs-site/dist-sdk --project-name=lanrurugi-sdk
-
-      # The project homepage: plain HTML/CSS/JS pre-rendered per language by a dependency-free
-      # Node script (so crawlers get real text and hreflang alternates without running JS).
-      - name: Build homepage
-        run: node homepage/build.mjs
 
       - name: Publish homepage
         if: >-
