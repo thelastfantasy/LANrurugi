@@ -4545,8 +4545,25 @@ mod tests {
     // operators: OR (`|`), grouping, `title:`, `is:`, `has:`, `in:` and `size:` — all through the
     // public `search()` entry point against real Redis indexes. Deliberately its own synthetic ids
     // (never a single-character repeat, per this file's own collision history).
-    #[tokio::test]
-    async fn boolean_structure_and_attribute_operators() {
+    // One long future that outgrows the default 2 MiB test-thread stack in a debug build, so it
+    // runs on a thread of its own with room to spare.
+    #[test]
+    fn boolean_structure_and_attribute_operators() {
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(boolean_structure_and_attribute_operators_body())
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    async fn boolean_structure_and_attribute_operators_body() {
         let Some((archive_pool, search_pool, bookmarks)) = test_pools().await else {
             eprintln!("skipping: LANRURUGI_TEST_REDIS_URL not set");
             return;
