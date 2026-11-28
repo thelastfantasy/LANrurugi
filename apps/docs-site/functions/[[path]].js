@@ -64,6 +64,8 @@ export async function onRequestGet(context) {
 
   const key = `${version}.zip`
   let path = rest.slice(1)
+  // An old version's sitemap lists the URLs its pages now canonicalize away from.
+  if (/^sitemap[^/]*\.xml$/.test(path)) return notFound(context)
   if (path === '' || path.endsWith('/')) path += 'index.html'
   let bytes = await readEntry(bucket, key, path)
   if (!bytes && !path.includes('.', path.lastIndexOf('/') + 1)) {

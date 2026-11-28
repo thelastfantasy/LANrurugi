@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { markArchived } from '../functions/[[path]].js'
+import { markArchived, onRequestGet } from '../functions/[[path]].js'
 import { centralDirectory, clearCache, readEntry } from '../functions/_lib/zip.js'
 
 function makeZip() {
@@ -75,4 +75,15 @@ test('an archived page points search engines at the latest copy', () => {
   assert.ok(out.includes('<meta name="robots" content="noindex">'))
   assert.ok(out.includes('<link rel="canonical" href="https://docs.lrrg.dev/guide/a/">'))
   assert.equal(out.match(/rel="canonical"/g).length, 1)
+})
+
+test("an archived version's sitemap is not served", async () => {
+  globalThis.caches = { default: { match: async () => undefined, put: async () => {} } }
+  const response = await onRequestGet({
+    request: new Request('https://docs.lrrg.dev/v1.0.0/sitemap-0.xml'),
+    env: { DOCS_VERSIONS: fakeBucket(makeZip()), ASSETS: { fetch: async () => new Response('not found') } },
+    next: () => assert.fail('an archived path must not fall through'),
+    waitUntil: () => {},
+  })
+  assert.equal(response.status, 404)
 })

@@ -383,6 +383,7 @@ cat > "$out/404.html" <<'HTMLEOF'
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
+    <meta name="robots" content="noindex" />
     <title>404 — LANrurugi Plugin SDK</title>
   </head>
   <body style="font-family: system-ui, sans-serif; padding: 4rem 2rem; text-align: center">

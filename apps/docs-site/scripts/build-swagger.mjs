@@ -172,11 +172,17 @@ writeFileSync(
 
 // ── The two pages ───────────────────────────────────────────────────────────────────────────────
 
+// Where this build is published. Both pages render their content with script, so to a crawler they
+// are the same empty shell; without a canonical and language alternates each search engine picks
+// one of them as the canonical for both.
+const siteUrl = (process.env.SWAGGER_SITE_URL || 'https://api.lrrg.dev/').replace(/\/?$/, '/')
+
 const LOCALES = [
   {
     dir: '',
     lang: 'zh-CN',
-    title: 'LANrurugi API — Swagger UI',
+    title: 'LANrurugi HTTP API 参考 — Swagger UI',
+    description: 'LANrurugi 服务端全部 HTTP 接口的 Swagger UI：按分组浏览请求参数与返回结构，并可直接向自己的实例发送请求。',
     themeLabel: '配色',
     // Asset prefix: the root page sits next to the assets, the English page one level down.
     prefix: './',
@@ -186,7 +192,8 @@ const LOCALES = [
   {
     dir: 'en',
     lang: 'en',
-    title: 'LANrurugi API — Swagger UI',
+    title: 'LANrurugi HTTP API reference — Swagger UI',
+    description: 'Swagger UI for every HTTP endpoint a LANrurugi server serves: browse parameters and response schemas by group, and send requests to your own instance.',
     themeLabel: 'Color theme',
     prefix: '../',
     // Relative to the *page*, not the site root: this page lives at `/en/`, so a bare
@@ -203,6 +210,10 @@ function page(locale) {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${locale.title}</title>
+    <meta name="description" content="${locale.description}" />
+    <link rel="canonical" href="${siteUrl}${locale.dir ? `${locale.dir}/` : ''}" />
+${LOCALES.map((other) => `    <link rel="alternate" hreflang="${other.lang}" href="${siteUrl}${other.dir ? `${other.dir}/` : ''}" />`).join('\n')}
+    <link rel="alternate" hreflang="x-default" href="${siteUrl}" />
     <link rel="icon" type="image/svg+xml" href="${locale.prefix}lanrurugi.svg" />
     <link rel="stylesheet" href="${locale.prefix}swagger-ui.css" />
     <link rel="stylesheet" href="${locale.prefix}swagger-custom.css" />
@@ -253,6 +264,7 @@ writeFileSync(
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
+    <meta name="robots" content="noindex" />
     <title>404 — LANrurugi API</title>
     <link rel="stylesheet" href="/swagger-custom.css" />
     <link rel="stylesheet" href="/lanrurugi-tokens.css" />
@@ -263,6 +275,19 @@ writeFileSync(
     <p>没有这个页面。<a href="/">回到 API 参考</a>，或 <a href="/en/">看英文版</a>。</p>
   </body>
 </html>
+`,
+)
+
+writeFileSync(join(outDir, 'robots.txt'), `User-agent: *\nAllow: /\n\nSitemap: ${siteUrl}sitemap.xml\n`)
+writeFileSync(
+  join(outDir, 'sitemap.xml'),
+  `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+${LOCALES.map((locale) => `  <url>
+    <loc>${siteUrl}${locale.dir ? `${locale.dir}/` : ''}</loc>
+${LOCALES.map((other) => `    <xhtml:link rel="alternate" hreflang="${other.lang}" href="${siteUrl}${other.dir ? `${other.dir}/` : ''}" />`).join('\n')}
+  </url>`).join('\n')}
+</urlset>
 `,
 )
 

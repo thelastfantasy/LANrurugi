@@ -163,6 +163,7 @@ function extensionlessLinks(html) {
 }
 
 let themed = 0
+const indexable = []
 for (const entry of walk(outDir)) {
   const file = entry.path
   if (entry.dir || !file.endsWith('.html')) continue
@@ -177,6 +178,7 @@ for (const entry of walk(outDir)) {
     pagePath === null ? '' : `<link rel="canonical" href="${sdkSiteUrl}${versionDir ? `${versionDir}/` : ''}${pagePath}">`
   // An old version stays readable but out of search results: it would compete with the current one.
   const robots = isOld ? '<meta name="robots" content="noindex">' : ''
+  if (pagePath !== null && !isOld && !versionDir) indexable.push(`${sdkSiteUrl}${pagePath}`)
   const links =
     canonical +
     robots +
@@ -230,6 +232,17 @@ for (const entry of walk(outDir)) {
   // Last, so the index page's own generated links and the rewritten ones are covered too.
   writeFileSync(file, extensionlessLinks(html))
   themed++
+}
+
+// The current version, at the root, is the only one meant for search results: list exactly its
+// pages, which are also exactly the pages whose canonical points at themselves.
+if (!isOld && !versionDir && indexable.length) {
+  const urls = indexable.sort().map((url) => `  <url><loc>${escapeHtml(url)}</loc></url>`).join('\n')
+  writeFileSync(
+    join(outDir, 'sitemap.xml'),
+    `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`,
+  )
+  writeFileSync(join(outDir, 'robots.txt'), `User-agent: *\nAllow: /\n\nSitemap: ${sdkSiteUrl}sitemap.xml\n`)
 }
 
 console.log(`theme-sdk: themed ${themed} page(s) in ${outDir}`)
