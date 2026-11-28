@@ -342,6 +342,11 @@ describe("QUICK_FILTER_TOKENS", () => {
       /^size:(>=|<=|>|<)\d+[KMG]?$/,
       /^(pages|read):(>=|<=|>|<)\d+%?$/,
       /^bookmark:"[^"]*"$/,
+      // The quoted `stamp:` text match (`stamp_text_filter`), a placeholder chip like `bookmark:`.
+      /^stamp:"[^"]*"$/,
+      // The `title:`/`work:` field prefixes (`grammar.rs::split_field_prefix`), bare for the reader
+      // to type after.
+      /^(title|work):$/,
     ]
     for (const token of QUICK_FILTER_TOKENS) {
       expect(

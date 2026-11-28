@@ -123,7 +123,7 @@ describe("FirstRunWizard", () => {
     expect(screen.getByRole("heading", { name: "DeepSeek API key" })).toBeInTheDocument()
 
     click("Skip this step")
-    expect(screen.getByText("Import from a LANraragi backup")).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "Import from LANraragi" })).toBeInTheDocument()
 
     click("Next")
     expect(screen.getByRole("heading", { name: "You're all set" })).toBeInTheDocument()

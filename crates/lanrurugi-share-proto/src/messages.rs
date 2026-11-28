@@ -22,7 +22,7 @@ pub const SHARE_ENGINE_VERSION: u16 = 4;
 /// settings page shows this string so two administrators can compare. A mismatch here cannot even
 /// reach the version handshake — the connection itself fails — which is why the unreachable message
 /// points at both values.
-pub const SHARE_TRANSPORT: &str = "iroh 1.4.1";
+pub const SHARE_TRANSPORT: &str = "iroh 1.5.0";
 
 /// Everything two instances must agree on before one imports from the other: a value with one field
 /// per independent compatibility axis, not a single integer. The protocol epoch covers the message

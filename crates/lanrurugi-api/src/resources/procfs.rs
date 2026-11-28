@@ -441,6 +441,8 @@ pub fn network_totals() -> (u64, u64) {
 }
 
 /// Free/total bytes and free inodes for the filesystem holding `path`.
+// `statvfs`'s counters are `u64` on Linux but `u32` on macOS.
+#[allow(clippy::unnecessary_cast)]
 pub fn disk(path: &std::path::Path) -> Option<DiskStat> {
     use std::os::unix::ffi::OsStrExt;
     let mut buffer = std::mem::MaybeUninit::<libc::statvfs>::uninit();
@@ -453,11 +455,11 @@ pub fn disk(path: &std::path::Path) -> Option<DiskStat> {
     }
     // SAFETY: initialised by the successful call above.
     let stats = unsafe { buffer.assume_init() };
-    let block = stats.f_frsize;
+    let block = stats.f_frsize as u64;
     Some(DiskStat {
-        free_bytes: stats.f_bavail * block,
-        total_bytes: stats.f_blocks * block,
-        free_inodes: stats.f_favail,
+        free_bytes: stats.f_bavail as u64 * block,
+        total_bytes: stats.f_blocks as u64 * block,
+        free_inodes: stats.f_favail as u64,
     })
 }
 
