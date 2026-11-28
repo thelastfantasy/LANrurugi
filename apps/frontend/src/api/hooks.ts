@@ -2774,6 +2774,7 @@ export function useRecycleBin() {
 
 function invalidateAfterBinChange(queryClient: ReturnType<typeof useQueryClient>) {
   void queryClient.invalidateQueries({ queryKey: ["recycle-bin"] })
+  void queryClient.invalidateQueries({ queryKey: ["deletions"] })
   void queryClient.invalidateQueries({ queryKey: ["archives"] })
   void queryClient.invalidateQueries({ queryKey: ["backups"] })
   void queryClient.invalidateQueries({ queryKey: ["bookmarks"] })
@@ -2858,6 +2859,7 @@ export function invalidateAfterDataRestore(queryClient: ReturnType<typeof useQue
   void queryClient.invalidateQueries({ queryKey: ["bookmarks"] })
   void queryClient.invalidateQueries({ queryKey: ["categories"] })
   void queryClient.invalidateQueries({ queryKey: ["deletions"] })
+  void queryClient.invalidateQueries({ queryKey: ["recycle-bin"] })
   void queryClient.invalidateQueries({ queryKey: ["library-status"] })
   void queryClient.invalidateQueries({ queryKey: ["stats"] })
   void queryClient.invalidateQueries({ queryKey: ["tankoubon"] })

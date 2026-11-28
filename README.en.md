@@ -40,9 +40,10 @@ differences), see [docs/comparison-with-lanraragi.md](./docs/comparison-with-lan
   resettable with the login password or from the CLI.
 - **Backups and a deletion safety net**: scheduled RDB snapshots and JSON exports, driven by cron
   expressions (down to seconds) in the instance's own timezone; the list shows what each file contains,
-  lets you add a note and pin one against cleanup. Every batch delete records a ledger first, so a deleted
-  archive's record — with its tags, categories, bookmarks and reading progress — can be restored from the
-  backup page, and a cleanup touching more than a quarter of the library asks for confirmation first.
+  lets you add a note and pin one against cleanup. Every delete records a ledger first, so an archive record
+  removed without passing through the recycle bin (a database clean, for one) can be restored from the
+  recycle bin page with its tags, summary and reading progress (categories and bookmarks come back from a
+  snapshot), and a cleanup touching more than a quarter of the library asks for confirmation first.
 - **Resource monitor**: a live panel in Settings that samples only while it is open and stops the
   moment it closes — server and plugin-process CPU/memory, the cgroup's anon/file/slab and memory PSI,
   the real process tree, local model usage, queue phase timings and Redis counters on one screen. Every

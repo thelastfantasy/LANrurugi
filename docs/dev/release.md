@@ -32,7 +32,7 @@
 6. **发布后检查**：
    - GitHub Release：`SHA256SUMS`、`docs-<版本号>.zip`、四个平台的 `lanrurugi-<版本号>-*.tar.gz` 都在（`release.yml` 最后一步也会核对）；
    - 镜像：`ghcr.io/thelastfantasy/lanrurugi` 和 Docker Hub 上有 `<版本号>` 和 `beta`/`latest`；
-   - **第一个正式版（1.0）**：`latest` 这时才第一次出现。在 `latest` 能拉取之后，把文档里暂时写成 `:beta` 的示例改回 `:latest`：三份 README 的「快速开始」（并删掉旁边的注释）、文档站中英文 `guide/install.mdx`（取消 stable 那段的注释，放回 beta 前面作为默认页）和 `guide/reverse-proxy.md`；
+   - **第一个正式版（1.0）**：`latest` 这时才第一次出现。在 `latest` 能拉取之后，把文档里暂时写成 `:beta` 的示例改回 `:latest`：三份 README 的「快速开始」（并删掉旁边的注释）、文档站中英文 `guide/install.mdx`（取消 stable 那段的注释，放回 beta 前面作为默认页）、`guide/reverse-proxy.md`，以及首页（`homepage/src/index.html` 取消 stable 标签页的注释并设为默认，`homepage/src/copy.mjs` 三种语言 compose 里的 `:beta`）；
    - 文档站：`docs.lrrg.dev/` 是新版本（版本选择器选中它），`/v<新版本号>/` 跳到根路径，上一个版本在 `/v<上一版本号>/` 可以打开；API 和 SDK 站点显示新版本号。
 
 ## 出问题时

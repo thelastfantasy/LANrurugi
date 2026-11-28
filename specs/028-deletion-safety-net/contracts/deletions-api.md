@@ -19,13 +19,15 @@
       "deleted_at": "2026-11-23T05:12:33Z",
       "source": "clean",
       "path": "/home/koyomi/lanrurugi/content/a1/a105….zip",
-      "file_exists": true
+      "file_exists": true,
+      "record_exists": false
     }
   ]
 }
 ```
 
 - `file_exists` 是读取时 `stat` 的结果，用于前端提示「恢复后是否需要补文件」。
+- `record_exists`：同 id 的记录已经回来了（从回收站恢复、重新扫描到同一文件）。这样的条目再恢复只会得到 `already_exists`，回收站页面不显示它们。
 - 损坏条目（JSON 解析失败 / id 不一致）不返回，只计入日志。
 
 ## POST `/api/deletions/{id}/restore`

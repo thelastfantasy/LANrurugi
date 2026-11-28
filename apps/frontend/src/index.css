@@ -3158,12 +3158,14 @@ input[type="number"].number-input-no-native-spinner::-webkit-outer-spin-button {
 }
 
 
-/* The backup page's tab strip: three equal segments, one row down to a 375px phone. */
-.backup-tabs {
+/* The backup and recycle-bin pages' tab strips: equal segments, one row down to a 375px phone. */
+.backup-tabs,
+.recycle-tabs {
   margin-bottom: 12px;
 }
 
-.backup-tabs > .stdbtn.common-tab {
+.backup-tabs > .stdbtn.common-tab,
+.recycle-tabs > .stdbtn.common-tab {
   flex: 1 1 0;
   min-width: 0;
 }
@@ -4678,6 +4680,12 @@ div.gt.gt-single > span {
   max-width: 960px;
   margin: 0 auto;
   text-align: left;
+}
+
+/* The recycle bin's tabs and lists share the Backup page's column width. */
+.recycle-content {
+  max-width: 960px;
+  margin: 0 auto;
 }
 
 .backup-block-title {

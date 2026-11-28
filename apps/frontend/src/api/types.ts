@@ -2019,6 +2019,8 @@ export interface DeletionEntry {
   path: string
   /** A `stat` at read time — false means restoring leaves the record without its file. */
   file_exists: boolean
+  /** The record is back already (a recycle-bin restore, a rescan); restoring would be refused. */
+  record_exists: boolean
 }
 
 export interface DeletionsResponse {

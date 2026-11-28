@@ -7,6 +7,8 @@ import { IconButton } from "@/components/common-ui/Form"
 import { formatBytes } from "@/lib/formatBytes"
 import { absoluteTimestamp, formatRelativeTime } from "@/lib/relativeTime"
 
+import { RecycleRowRegion, RecycleTitle } from "./RecycleTitle"
+
 const CELL: CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -44,7 +46,7 @@ export function RecycleRow({
 
   if (isTank && narrow) {
     return (
-      <div
+      <RecycleRowRegion
         style={{
           padding: "10px 0",
           borderBottom: "1px solid rgba(128,128,128,0.25)",
@@ -104,13 +106,13 @@ export function RecycleRow({
             />
           </div>
         </div>
-      </div>
+      </RecycleRowRegion>
     )
   }
 
   if (isTank && !narrow) {
     return (
-      <>
+      <RecycleRowRegion style={{ display: "contents" }}>
         <div style={CELL}>
           <div className="recycle-thumb">
             {entry.has_thumbnail ? (
@@ -125,9 +127,7 @@ export function RecycleRow({
           </div>
         </div>
         <div style={{ ...CELL, flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
-          <div style={{ fontWeight: "bold", maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {entry.title}
-          </div>
+          <RecycleTitle title={entry.title} />
           <div style={{ fontSize: "8pt", opacity: 0.8 }}>
             {t("recycleBin.tankoubon")} · {t("recycleBin.tankVolumeCount", { count: entry.member_count })}
           </div>
@@ -167,13 +167,13 @@ export function RecycleRow({
             <TankMemberList members={entry.members} />
           </div>
         )}
-      </>
+      </RecycleRowRegion>
     )
   }
 
   if (narrow) {
     return (
-      <div
+      <RecycleRowRegion
         style={{
           display: "flex",
           gap: 10,
@@ -199,20 +199,7 @@ export function RecycleRow({
           )}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              fontWeight: "bold",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-            title={entry.title}
-          >
-            {entry.title || entry.name}
-          </div>
-          <div className="recycle-path" style={{ maxWidth: "100%" }} title={entry.original_path}>
-            {entry.original_path}
-          </div>
+          <RecycleTitle title={entry.title || entry.name} path={entry.original_path} />
           {!entry.restorable && entry.conflict && (
             <div className="recycle-conflict">
               <i className="fa fa-exclamation-circle" aria-hidden="true"></i>{" "}
@@ -252,12 +239,12 @@ export function RecycleRow({
             onClick={() => onPurge(entry)}
           />
         </div>
-      </div>
+      </RecycleRowRegion>
     )
   }
 
   return (
-    <>
+    <RecycleRowRegion style={{ display: "contents" }}>
       <div style={CELL}>
         <div className="recycle-thumb">
           {entry.has_thumbnail ? (
@@ -275,26 +262,12 @@ export function RecycleRow({
         </div>
       </div>
       <div style={{ ...CELL, flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
-        <div
-          style={{
-            fontWeight: "bold",
-            maxWidth: "100%",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-          title={entry.title}
-        >
-          {entry.title || entry.name}
-        </div>
+        <RecycleTitle title={entry.title || entry.name} path={entry.original_path} />
         {!entry.restorable && entry.conflict && (
           <div className="recycle-conflict">
             <i className="fa fa-exclamation-circle" aria-hidden="true"></i> {conflictLabel(entry, t)}
           </div>
         )}
-        <div className="recycle-path" style={{ maxWidth: "100%" }} title={entry.original_path}>
-          {entry.original_path}
-        </div>
       </div>
       <div style={{ ...CELL, whiteSpace: "nowrap" }}>{formatBytes(entry.size)}</div>
       <div style={{ ...CELL, whiteSpace: "nowrap" }} title={deletedAtExact}>
@@ -318,7 +291,7 @@ export function RecycleRow({
           onClick={() => onPurge(entry)}
         />
       </div>
-    </>
+    </RecycleRowRegion>
   )
 }
 

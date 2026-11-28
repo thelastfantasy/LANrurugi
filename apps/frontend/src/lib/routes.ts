@@ -15,6 +15,8 @@ export const routes = {
   /** Deep link to one Backup tab. The snapshot tab is the bare `/backup` path. */
   backupTab: (tab: "snapshot" | "import-export" | "legacy-import") =>
     tab === "snapshot" ? "/backup" : `/backup/${tab}`,
+  /** The recycle bin's two tabs; the bin itself is the bare `/recycle-bin` path. */
+  recycleBinTab: (tab: "bin" | "journal") => (tab === "bin" ? "/recycle-bin" : "/recycle-bin/other-deletions"),
   logs: () => "/logs",
   jobs: () => "/jobs",
   resources: () => "/resources",
