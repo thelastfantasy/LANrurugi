@@ -113,6 +113,7 @@ RUN pnpm --filter lanrurugi-frontend run build
 
 FROM frontend-builder AS third-party-licenses
 COPY scripts/third-party-licenses.mjs ./scripts/
+COPY LICENSE-APACHE ./
 COPY --from=rust-builder /build/cargo-metadata.json /build/cargo-metadata.json
 COPY --from=rust-builder /licenses-src /licenses-src
 RUN node scripts/third-party-licenses.mjs --out /build/THIRD_PARTY_LICENSES.txt \
