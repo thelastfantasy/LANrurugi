@@ -59,11 +59,12 @@ try {
 
 const SWAGGER_DIR = join(docsRoot, 'swagger')
 
+// No `oauth2-redirect.html`: it only serves an OAuth2 login flow, which this API does not have, and
+// shipped on its own it was an indexable empty page whose script was never copied.
 const ASSETS = [
   'swagger-ui.css',
   'swagger-ui-bundle.js',
   'swagger-ui-standalone-preset.js',
-  'oauth2-redirect.html',
 ]
 
 rmSync(outDir, { recursive: true, force: true })
